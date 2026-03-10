@@ -124,8 +124,15 @@ class WorkspaceService:
         include_preview: bool = True,
         max_file_size_mb: float = 50.0,
         use_llm: bool = True,
+        max_files: int = 5000,
     ) -> ScanManifest:
         """Scan a folder and classify files for ingestion.
+
+        Args:
+            max_files: Safety cap — stop accepting files after this many
+                       (default 5 000).  Files beyond the cap are counted
+                       but not classified, keeping memory and LLM calls
+                       bounded even for very large workspaces.
 
         Returns a ScanManifest (ephemeral, not stored in DB).
         """
@@ -141,6 +148,7 @@ class WorkspaceService:
         files: list[ScannedFile] = []
         warnings: list[str] = []
         total_found = 0
+        cap_reached = False
 
         for path in sorted(root.rglob("*")):
             if not path.is_file():
@@ -152,6 +160,17 @@ class WorkspaceService:
 
             if path.stat().st_size > max_bytes:
                 warnings.append(f"Skipped (too large): {path.relative_to(root)}")
+                continue
+
+            # Safety cap — stop classifying to keep memory bounded
+            if len(files) >= max_files:
+                if not cap_reached:
+                    cap_reached = True
+                    warnings.append(
+                        f"File cap reached ({max_files}). "
+                        f"Remaining files are counted but not classified. "
+                        f"Use ignore_patterns or max_files to adjust."
+                    )
                 continue
 
             try:
@@ -847,20 +866,45 @@ class WorkspaceService:
         return False
 
     @staticmethod
-    def _hash_file(path: Path) -> str:
-        """Compute SHA-256 hash of a file."""
+    def _hash_file(path: Path, full_hash_limit: int = 10 * 1024 * 1024) -> str:
+        """Compute SHA-256 hash of a file.
+
+        For files larger than *full_hash_limit* (default 10 MB), use a fast
+        composite hash: size + first 64 KB + last 64 KB.  This avoids reading
+        multi-GB data files byte-by-byte while still detecting duplicates with
+        high confidence.
+        """
+        size = path.stat().st_size
+        if size <= full_hash_limit:
+            h = hashlib.sha256()
+            with open(path, "rb") as f:
+                for chunk in iter(lambda: f.read(8192), b""):
+                    h.update(chunk)
+            return h.hexdigest()
+
+        # Fast composite hash for large files
+        CHUNK = 64 * 1024
         h = hashlib.sha256()
+        h.update(f"size:{size}".encode())
         with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                h.update(chunk)
+            h.update(f.read(CHUNK))            # first 64 KB
+            if size > CHUNK:
+                f.seek(max(0, size - CHUNK))
+                h.update(f.read(CHUNK))        # last 64 KB
         return h.hexdigest()
 
     @staticmethod
     def _safe_read_text(
         path: Path,
         capabilities: ScanCapabilities | None = None,
+        max_chars: int = 200_000,
     ) -> str | None:
-        """Safely read file as text. Returns None on failure."""
+        """Safely read file as text, capped at *max_chars* characters.
+
+        For files larger than *max_chars* the returned string is truncated
+        and a trailing ``\\n[…truncated]`` marker is appended.  This prevents
+        multi-hundred-MB text/CSV files from being loaded entirely into memory.
+        """
         # Handle DOCX files
         if path.suffix.lower() == ".docx":
             if capabilities and capabilities.python_docx_available:
@@ -870,10 +914,16 @@ class WorkspaceService:
                     return None
             return None
 
-        # Standard text files
+        # Standard text files — read with cap
         for encoding in ("utf-8", "latin-1"):
             try:
-                return path.read_text(encoding=encoding)
+                size = path.stat().st_size
+                if size <= max_chars:
+                    return path.read_text(encoding=encoding)
+                # Large file: stream-read only what we need
+                with open(path, encoding=encoding, errors="replace") as f:
+                    text = f.read(max_chars)
+                return text + "\n[…truncated]"
             except (UnicodeDecodeError, PermissionError):
                 continue
         return None

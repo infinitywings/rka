@@ -369,6 +369,19 @@ class TestScan:
         assert len(dup_files) > 0
 
     @pytest.mark.asyncio
+    async def test_scan_max_files_cap(self, ws_svc: WorkspaceService, tmp_path: Path):
+        """Scan should respect max_files and emit a warning."""
+        ws = tmp_path / "many_files"
+        ws.mkdir()
+        for i in range(20):
+            (ws / f"note_{i:03d}.md").write_text(f"## Note {i}\n\nContent {i}.")
+
+        manifest = await ws_svc.scan(str(ws), use_llm=False, max_files=5)
+        assert len(manifest.files) == 5
+        assert manifest.total_files_found == 20
+        assert any("File cap reached" in w for w in manifest.warnings)
+
+    @pytest.mark.asyncio
     async def test_scan_not_a_directory(self, ws_svc: WorkspaceService, tmp_path: Path):
         """Scanning a non-existent path should raise ValueError."""
         with pytest.raises(ValueError, match="Not a directory"):
@@ -572,6 +585,20 @@ class TestHelpers:
         f2.write_text("world")
         assert WorkspaceService._hash_file(f1) != WorkspaceService._hash_file(f2)
 
+    def test_hash_file_large_uses_fast_composite(self, tmp_path: Path):
+        """Files above the threshold should use fast composite hash."""
+        f = tmp_path / "big.bin"
+        # Write a 100 KB file but set threshold to 50 KB
+        data = b"A" * 100_000
+        f.write_bytes(data)
+        h_fast = WorkspaceService._hash_file(f, full_hash_limit=50_000)
+        h_full = WorkspaceService._hash_file(f, full_hash_limit=200_000)
+        # Fast and full hashes should differ (different algorithm)
+        assert h_fast != h_full
+        # Fast hash should still be deterministic
+        assert h_fast == WorkspaceService._hash_file(f, full_hash_limit=50_000)
+        assert len(h_fast) == 64
+
     def test_should_ignore_git(self, tmp_path: Path):
         """Files inside .git should be ignored."""
         root = tmp_path
@@ -607,6 +634,23 @@ class TestHelpers:
         result = WorkspaceService._safe_read_text(f)
         assert result is not None
         assert "rld" in result
+
+    def test_safe_read_text_truncates_large_file(self, tmp_path: Path):
+        """Large text files should be truncated at max_chars."""
+        f = tmp_path / "huge.txt"
+        f.write_text("x" * 1000)
+        result = WorkspaceService._safe_read_text(f, max_chars=100)
+        assert result is not None
+        assert len(result) < 200  # 100 chars + truncation marker
+        assert result.endswith("[…truncated]")
+
+    def test_safe_read_text_small_file_not_truncated(self, tmp_path: Path):
+        """Small files should be returned in full, no truncation marker."""
+        f = tmp_path / "small.txt"
+        f.write_text("short content")
+        result = WorkspaceService._safe_read_text(f, max_chars=1000)
+        assert result == "short content"
+        assert "[…truncated]" not in result
 
     def test_extract_module_docstring(self):
         """Should extract Python module docstrings."""
