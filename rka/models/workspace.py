@@ -103,6 +103,7 @@ class WorkspaceScanRequest(BaseModel):
     include_preview: bool = True
     max_file_size_mb: float = 50.0
     use_llm: bool = True
+    max_files: int = 5000
 
 
 class WorkspaceIngestRequest(BaseModel):

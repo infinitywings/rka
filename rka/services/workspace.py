@@ -778,7 +778,7 @@ class WorkspaceService:
             added_by="import",
             tags=tags,
         )
-        lit = await self.lit.create(data, actor="import")
+        lit = await self.lit.create(data, actor="system")
 
         await self._log_bootstrap(
             scan_id, scanned.file_hash, scanned.relative_path,

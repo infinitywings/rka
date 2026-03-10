@@ -34,6 +34,7 @@ async def scan_workspace(
             include_preview=data.include_preview,
             max_file_size_mb=data.max_file_size_mb,
             use_llm=data.use_llm,
+            max_files=data.max_files,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc))
