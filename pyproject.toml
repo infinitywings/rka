@@ -1,0 +1,58 @@
+[project]
+name = "rka"
+version = "1.0.0"
+description = "Research Knowledge Agent — MCP server + REST API for AI-assisted research orchestration"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.26.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "aiosqlite>=0.22",
+    "pydantic>=2.5",
+    "pydantic-settings>=2.0",
+    "httpx>=0.27",
+    "click>=8.1",
+    "python-dotenv>=1.0",
+    "python-ulid>=3.0.0",
+]
+
+[project.optional-dependencies]
+llm = [
+    "litellm>=1.60",
+    "instructor>=1.7",
+    "fastembed>=0.5",
+    "sqlite-vec>=0.1.6",
+]
+academic = [
+    "bibtexparser>=2.0.0b7",
+    "pyzotero>=1.10",
+    "habanero>=1.2",
+    "semanticscholar>=0.11",
+    "arxiv>=2.4",
+]
+workspace = [
+    "pymupdf>=1.24",
+    "python-docx>=1.1",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+]
+
+[project.scripts]
+rka = "rka.cli:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["rka*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+.venv/
+venv/
+
+# Database
+*.db
+*.db-wal
+*.db-shm
+
+# Environment
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Node (web UI)
+web/node_modules/
+web/dist/
+
+# Backups
+rka_backup_*.db
+
+# Storage
+storage/
