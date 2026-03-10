@@ -307,15 +307,16 @@ async def rka_get_mission(id: str | None = None) -> str:
     async with _client() as c:
         if id:
             r = await c.get(f"/api/missions/{id}")
-        else:
-            r = await c.get("/api/missions", params={"status": "active", "limit": 1})
+            r.raise_for_status()
+            return json.dumps(r.json(), indent=2)
+        # No ID given: prefer active, fall back to most recent pending
+        for status in ("active", "pending"):
+            r = await c.get("/api/missions", params={"status": status, "limit": 1})
             r.raise_for_status()
             missions = r.json()
-            if not missions:
-                return "No active mission."
-            return json.dumps(missions[0], indent=2)
-        r.raise_for_status()
-        return json.dumps(r.json(), indent=2)
+            if missions:
+                return json.dumps(missions[0], indent=2)
+        return "No active or pending mission."
 
 
 @mcp.tool()
