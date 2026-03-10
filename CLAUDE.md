@@ -46,6 +46,24 @@ cd web && npm run build
 Always rebuild before testing: `cd web && npm run build`
 The FastAPI server serves `web/dist/` as static files — changes are not live-reloaded.
 
+## Deployment (Claude Desktop / Claude Code MCP config)
+
+The CLI registered in Claude Desktop/Code must NOT be the venv binary from `Desktop/`:
+macOS sandbox blocks Desktop-resident apps from reading `.venv/pyvenv.cfg`.
+Use the **pipx-installed binary** instead:
+
+```bash
+# Install / re-install after code changes:
+pipx install . --force        # from repo root
+# Binary lands at: ~/.local/bin/rka
+# Venv at: ~/.local/pipx/venvs/rka/  (outside Desktop — no sandbox block)
+```
+
+`~/Library/Application Support/Claude/claude_desktop_config.json`:
+```json
+"rka": { "command": "/Users/cfu6/.local/bin/rka", "args": ["mcp"] }
+```
+
 ## Common Pitfalls
 
 - `actor="import"` is not a valid actor — use `actor="system"` for programmatic ingestion
@@ -53,3 +71,4 @@ The FastAPI server serves `web/dist/` as static files — changes are not live-r
 - `web/` previously had a nested `.git` — do not re-introduce submodule state there
 - Large files (>10 MB) use fast composite hashing; text files are capped at 200K chars in scan
 - The venv has a dependency conflict between `pyzotero` (needs `bibtexparser<2`) and RKA (needs `bibtexparser>=2`); use `.venv/bin/pytest` directly rather than `uv sync`
+- After any code change to `rka/mcp/server.py` or other source files, run `pipx install . --force` to update the Claude Desktop/Code binary
