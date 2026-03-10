@@ -1514,10 +1514,13 @@ The **PI** (human researcher) supervises both.
 ## Session Start Protocol
 
 1. `rka_get_context()` — load current project state
-2. `rka_get_mission(id)` if you have an assigned mission — read the objective and tasks carefully
-3. Check the mission's `tasks` list and work through them in order
+2. `rka_get_mission()` — finds the active or most recent pending mission automatically
+3. If a pending mission is found, call `rka_update_mission_status(id, "active")` to claim it
+4. Read the mission's `objective` and `tasks` list carefully before starting
 
-If no mission is active, ask the Brain or PI for direction before starting.
+If no mission exists, ask the Brain or PI for direction before starting.
+
+**Mission status lifecycle**: `pending` (Brain created, not started) → `active` (you are working on it) → `complete` (done via `rka_submit_report`). Always activate a pending mission before starting work.
 
 ---
 
