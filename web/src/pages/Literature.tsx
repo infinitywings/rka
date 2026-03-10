@@ -24,7 +24,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { StatusBadge } from "@/components/shared/StatusBadge"
 import { TagList } from "@/components/shared/TagList"
 import { useLiterature, useCreateLiterature } from "@/hooks/useLiterature"
-import { Plus, ExternalLink } from "lucide-react"
+import { Plus, ExternalLink, FileText, Calendar, User } from "lucide-react"
 import type { Literature as LiteratureType, LiteratureCreate } from "@/api/types"
 
 const STATUSES: { value: string; label: string }[] = [
@@ -144,67 +144,167 @@ export default function Literature() {
   )
 }
 
-function LiteratureDetail({ lit }: { lit: LiteratureType }) {
+function DetailSection({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="space-y-4 mt-4">
+    <div>
+      <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">{label}</h4>
+      {children}
+    </div>
+  )
+}
+
+function LiteratureDetail({ lit }: { lit: LiteratureType }) {
+  const pdfFilename = lit.pdf_path?.split("/").pop()
+
+  return (
+    <div className="space-y-5 mt-4">
+      {/* Header */}
       <div>
-        <h3 className="text-base font-semibold">{lit.title}</h3>
-        <p className="text-sm text-muted-foreground">
-          {lit.authors?.join(", ")}
-          {lit.year && ` (${lit.year})`}
-          {lit.venue && ` — ${lit.venue}`}
-        </p>
+        <h3 className="text-base font-semibold leading-tight">{lit.title}</h3>
+        {(lit.authors || lit.year || lit.venue) && (
+          <p className="text-sm text-muted-foreground mt-1">
+            {lit.authors?.join(", ")}
+            {lit.year && ` (${lit.year})`}
+            {lit.venue && ` — ${lit.venue}`}
+          </p>
+        )}
       </div>
 
-      <StatusBadge status={lit.status} />
+      {/* Status + Score row */}
+      <div className="flex items-center gap-3">
+        <StatusBadge status={lit.status} />
+        {lit.relevance_score != null && (
+          <span className="text-xs text-muted-foreground">
+            Relevance: {lit.relevance_score}/10
+          </span>
+        )}
+      </div>
 
-      {lit.abstract && (
-        <div>
-          <h4 className="text-sm font-semibold mb-1">Abstract</h4>
-          <p className="text-sm text-muted-foreground">{lit.abstract}</p>
-        </div>
+      {/* PDF path */}
+      {lit.pdf_path && (
+        <DetailSection label="PDF File">
+          <div className="flex items-center gap-2 text-sm">
+            <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+            <span className="text-muted-foreground break-all" title={lit.pdf_path}>
+              {pdfFilename}
+            </span>
+          </div>
+        </DetailSection>
       )}
 
+      {/* Abstract */}
+      {lit.abstract && (
+        <DetailSection label="Abstract">
+          <p className="text-sm text-muted-foreground whitespace-pre-wrap">{lit.abstract}</p>
+        </DetailSection>
+      )}
+
+      {/* Key Findings */}
       {lit.key_findings && lit.key_findings.length > 0 && (
-        <div>
-          <h4 className="text-sm font-semibold mb-1">Key Findings</h4>
+        <DetailSection label="Key Findings">
           <ul className="text-sm text-muted-foreground list-disc pl-4 space-y-1">
             {lit.key_findings.map((f, i) => (
               <li key={i}>{f}</li>
             ))}
           </ul>
-        </div>
+        </DetailSection>
       )}
 
+      {/* Methodology Notes */}
+      {lit.methodology_notes && (
+        <DetailSection label="Methodology Notes">
+          <p className="text-sm text-muted-foreground whitespace-pre-wrap">{lit.methodology_notes}</p>
+        </DetailSection>
+      )}
+
+      {/* Relevance */}
       {lit.relevance && (
-        <div>
-          <h4 className="text-sm font-semibold mb-1">Relevance</h4>
+        <DetailSection label="Relevance">
           <p className="text-sm text-muted-foreground">{lit.relevance}</p>
-        </div>
+        </DetailSection>
       )}
 
+      {/* Notes */}
       {lit.notes && (
-        <div>
-          <h4 className="text-sm font-semibold mb-1">Notes</h4>
-          <p className="text-sm text-muted-foreground">{lit.notes}</p>
-        </div>
+        <DetailSection label="Notes">
+          <p className="text-sm text-muted-foreground whitespace-pre-wrap">{lit.notes}</p>
+        </DetailSection>
       )}
 
-      {lit.doi && (
-        <div>
-          <h4 className="text-sm font-semibold mb-1">DOI</h4>
-          <a
-            href={`https://doi.org/${lit.doi}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-sm text-blue-600 hover:underline flex items-center gap-1"
-          >
-            {lit.doi} <ExternalLink className="h-3 w-3" />
-          </a>
-        </div>
+      {/* Links: DOI / URL */}
+      {(lit.doi || lit.url) && (
+        <DetailSection label="Links">
+          <div className="space-y-1">
+            {lit.doi && (
+              <a
+                href={`https://doi.org/${lit.doi}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm text-blue-600 hover:underline flex items-center gap-1"
+              >
+                DOI: {lit.doi} <ExternalLink className="h-3 w-3" />
+              </a>
+            )}
+            {lit.url && (
+              <a
+                href={lit.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm text-blue-600 hover:underline flex items-center gap-1"
+              >
+                {lit.url} <ExternalLink className="h-3 w-3" />
+              </a>
+            )}
+          </div>
+        </DetailSection>
       )}
 
-      <TagList tags={lit.tags} />
+      {/* Related Decisions */}
+      {lit.related_decisions && lit.related_decisions.length > 0 && (
+        <DetailSection label="Related Decisions">
+          <div className="flex flex-wrap gap-1">
+            {lit.related_decisions.map((d) => (
+              <span key={d} className="text-xs bg-muted px-2 py-0.5 rounded font-mono">{d}</span>
+            ))}
+          </div>
+        </DetailSection>
+      )}
+
+      {/* Tags */}
+      {lit.tags.length > 0 && (
+        <DetailSection label="Tags">
+          <TagList tags={lit.tags} />
+        </DetailSection>
+      )}
+
+      {/* Metadata footer */}
+      <div className="pt-3 border-t space-y-1">
+        {lit.added_by && (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <User className="h-3 w-3" />
+            Added by: {lit.added_by}
+          </div>
+        )}
+        {lit.created_at && (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Calendar className="h-3 w-3" />
+            Created: {new Date(lit.created_at).toLocaleDateString("en-US", {
+              year: "numeric", month: "short", day: "numeric",
+              hour: "2-digit", minute: "2-digit",
+            })}
+          </div>
+        )}
+        {lit.updated_at && lit.updated_at !== lit.created_at && (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Calendar className="h-3 w-3" />
+            Updated: {new Date(lit.updated_at).toLocaleDateString("en-US", {
+              year: "numeric", month: "short", day: "numeric",
+              hour: "2-digit", minute: "2-digit",
+            })}
+          </div>
+        )}
+        <div className="text-xs text-muted-foreground/50 font-mono pt-1">{lit.id}</div>
+      </div>
     </div>
   )
 }
