@@ -294,7 +294,18 @@ async def rka_create_mission(
         r.raise_for_status()
         d = r.json()
         n_tasks = len(d.get("tasks") or [])
-        return f"Created mission {d['id']}: {d['objective'][:80]} ({n_tasks} tasks)"
+        mid = d["id"]
+        lines = [
+            f"MISSION CREATED",
+            f"",
+            f"  ID:        {mid}",
+            f"  Status:    {d.get('status', 'pending')}",
+            f"  Objective: {d['objective'][:120]}",
+            f"  Tasks:     {n_tasks}",
+            f"",
+            f"Pass this ID to the Executor: {mid}",
+        ]
+        return "\n".join(lines)
 
 
 @mcp.tool()
@@ -1451,7 +1462,7 @@ If there are open checkpoints, resolve them before continuing new work.
 ## Core Workflow
 
 ### Directing the Executor
-- `rka_create_mission(title, objective, tasks, priority)` — assign work
+- `rka_create_mission(phase, objective, tasks, context, acceptance_criteria)` — assign work; returns the full mission ID to pass to the Executor
 - `rka_get_mission(id)` — check progress
 - `rka_resolve_checkpoint(id, resolution)` — unblock the Executor
 
