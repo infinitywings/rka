@@ -193,7 +193,7 @@ export default function KnowledgeGraph() {
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
 
   useEffect(() => {
-    if (decisions.length === 0) return
+    if (decisions.length === 0 && missions.length === 0 && literature.length === 0) return
 
     // ── Build ELK input ────────────────────────────────────────────────────
     type ElkNode = { id: string; width: number; height: number }
@@ -234,53 +234,51 @@ export default function KnowledgeGraph() {
       if (dec.parent_id && nodeIds.has(dec.parent_id)) addEdge(dec.parent_id, dec.id)
     }
 
-    // 2. Literature → Decision
+    // 2. Literature — show all; unlinked lit appears as its own cluster
     if (showLiterature) {
       for (const lit of literature) {
-        const linked = (lit.related_decisions ?? []).filter(id => nodeIds.has(id))
-        if (linked.length === 0) continue  // skip unlinked literature
         addNode(lit.id, DIM.lit.w, DIM.lit.h)
       }
       for (const lit of literature) {
-        if (!nodeIds.has(lit.id)) continue
         for (const decId of lit.related_decisions ?? []) addEdge(lit.id, decId)
       }
     }
 
-    // 3. Decision → Mission
+    // 3. Missions — show ALL non-cancelled missions regardless of decision linkage.
+    // In practice dec.related_missions is often unpopulated, so we cannot require it.
     if (showMissions) {
       for (const mis of missions) {
         if (mis.status === "cancelled") continue
-        const parentDec = decisions.find(d => (d.related_missions ?? []).includes(mis.id))
-        if (!parentDec) continue  // orphan mission — skip
         addNode(mis.id, DIM.mission.w, DIM.mission.h)
       }
       for (const mis of missions) {
         if (!nodeIds.has(mis.id)) continue
+        // Link from decision when explicitly recorded
         const parentDec = decisions.find(d => (d.related_missions ?? []).includes(mis.id))
         if (parentDec) addEdge(parentDec.id, mis.id)
-        if (mis.depends_on) addEdge(mis.depends_on, mis.id)
+        // Mission dependency chain
+        if (mis.depends_on && nodeIds.has(mis.depends_on)) addEdge(mis.depends_on, mis.id)
       }
     }
 
-    // 4. Mission/Decision → Finding
+    // 4. Findings — show any important note that has at least one connection
     const importantTypes = new Set(["finding", "hypothesis", "insight", "observation", "exploration", "methodology"])
     if (showFindings) {
       for (const note of notes) {
         if (!importantTypes.has(note.type)) continue
-        if (showMissions && note.related_mission && nodeIds.has(note.related_mission)) {
-          addNode(note.id, DIM.finding.w, DIM.finding.h)
-        } else if (!showMissions) {
-          const linked = (note.related_decisions ?? []).filter(id => nodeIds.has(id))
-          if (linked.length > 0) addNode(note.id, DIM.finding.w, DIM.finding.h)
-        }
+        const hasMission = note.related_mission != null && nodeIds.has(note.related_mission)
+        const hasDec = (note.related_decisions ?? []).some(id => nodeIds.has(id))
+        if (!hasMission && !hasDec) continue
+        addNode(note.id, DIM.finding.w, DIM.finding.h)
       }
       for (const note of notes) {
         if (!nodeIds.has(note.id)) continue
-        if (showMissions && note.related_mission) {
+        // Prefer mission→finding edge; also add decision edges if present
+        if (note.related_mission && nodeIds.has(note.related_mission)) {
           addEdge(note.related_mission, note.id)
-        } else {
-          for (const decId of note.related_decisions ?? []) addEdge(decId, note.id)
+        }
+        for (const decId of note.related_decisions ?? []) {
+          if (nodeIds.has(decId)) addEdge(decId, note.id)
         }
       }
     }
@@ -404,9 +402,9 @@ export default function KnowledgeGraph() {
       </div>
 
       <div className="h-[calc(100vh-190px)] rounded-lg border bg-background">
-        {decisions.length === 0 ? (
+        {nodes.length === 0 ? (
           <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-            No decisions yet. The map appears once decisions are created.
+            No data yet. The map appears once missions, decisions, or literature are created.
           </div>
         ) : (
           <ReactFlow
