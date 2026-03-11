@@ -260,7 +260,8 @@ CREATE TABLE IF NOT EXISTS entity_links (
     target_type TEXT NOT NULL,
     target_id   TEXT NOT NULL,
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    created_by  TEXT
+    created_by  TEXT,
+    UNIQUE(source_id, link_type, target_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_entity_links_source ON entity_links(source_type, source_id);
