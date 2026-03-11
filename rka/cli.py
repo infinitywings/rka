@@ -168,10 +168,56 @@ def backup(output: str | None):
     click.echo(f"✅ Backed up to {dst}")
 
 
+@main.command()
+def migrate():
+    """Run pending database migrations."""
+    from rka.config import RKAConfig
+    from rka.infra.database import Database
+
+    config = RKAConfig()
+
+    async def _migrate():
+        db = Database(config.database_url)
+        await db.connect()
+        # initialize_schema runs the base schema + migrations;
+        # run_migrations() returns 0 if already applied (idempotent)
+        await db.initialize_schema()
+        count = await db.run_migrations()
+        await db.close()
+        return count
+
+    count = asyncio.run(_migrate())
+    click.echo(f"Applied {count} migration(s).")
+
+
 @main.group()
 def bootstrap():
     """Workspace bootstrap — scan and ingest research files."""
     pass
+
+
+@main.command()
+def backfill():
+    """Backfill entity_links from legacy JSON arrays in existing entries."""
+    from rka.config import RKAConfig
+    from rka.infra.database import Database
+    from rka.services.backfill import backfill_entity_links
+
+    config = RKAConfig()
+
+    async def _backfill():
+        db = Database(config.database_url)
+        await db.connect()
+        await db.initialize_schema()
+        counts = await backfill_entity_links(db)
+        await db.close()
+        return counts
+
+    counts = asyncio.run(_backfill())
+    click.echo("Entity links backfill complete:")
+    for source, count in counts.items():
+        click.echo(f"  {source}: {count} links created")
+    click.echo(f"  Total: {sum(counts.values())}")
 
 
 @bootstrap.command("scan")

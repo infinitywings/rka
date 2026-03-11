@@ -166,19 +166,15 @@ class BaseService:
     # ---- Auto-enrichment ----
 
     async def _auto_enrich_tags(self, content: str, existing_tags: list[str]) -> list[str] | None:
-        """Auto-generate tags via LLM if available. Returns None to skip."""
+        """Auto-generate tags via LLM. Returns None if LLM not configured on this service."""
         if not self.llm:
             return None
-        try:
-            # Get existing project tags for reuse hints
-            rows = await self.db.fetchall(
-                "SELECT DISTINCT tag FROM tags ORDER BY tag LIMIT 50"
-            )
-            project_tags = [r["tag"] for r in rows]
-            return await self.llm.auto_tag(content, project_tags)
-        except Exception as exc:
-            logger.debug("Auto-tagging failed: %s", exc)
-            return None
+        # Get existing project tags for reuse hints
+        rows = await self.db.fetchall(
+            "SELECT DISTINCT tag FROM tags ORDER BY tag LIMIT 50"
+        )
+        project_tags = [r["tag"] for r in rows]
+        return await self.llm.auto_tag(content, project_tags)
 
     async def add_link(
         self,
@@ -204,40 +200,32 @@ class BaseService:
 
         Fetches recent decisions, literature, and missions as candidates,
         then asks the LLM to identify which are related to this entry.
-        Returns a SemanticLinks object or None if LLM unavailable.
+        Returns a SemanticLinks object or None if LLM not configured.
         """
         if not self.llm:
             return None
-        try:
-            decisions = await self.db.fetchall(
-                "SELECT id, question FROM decisions WHERE status != 'superseded' ORDER BY created_at DESC LIMIT 30"
-            )
-            literature = await self.db.fetchall(
-                "SELECT id, title FROM literature ORDER BY created_at DESC LIMIT 30"
-            )
-            missions = await self.db.fetchall(
-                "SELECT id, objective FROM missions WHERE status != 'cancelled' ORDER BY created_at DESC LIMIT 20"
-            )
-            return await self.llm.semantic_link(
-                content=content,
-                current_type=current_type,
-                decisions=[dict(r) for r in decisions],
-                literature=[dict(r) for r in literature],
-                missions=[dict(r) for r in missions],
-            )
-        except Exception as exc:
-            logger.debug("Auto-link failed: %s", exc)
-            return None
+        decisions = await self.db.fetchall(
+            "SELECT id, question FROM decisions WHERE status != 'superseded' ORDER BY created_at DESC LIMIT 30"
+        )
+        literature = await self.db.fetchall(
+            "SELECT id, title FROM literature ORDER BY created_at DESC LIMIT 30"
+        )
+        missions = await self.db.fetchall(
+            "SELECT id, objective FROM missions WHERE status != 'cancelled' ORDER BY created_at DESC LIMIT 20"
+        )
+        return await self.llm.semantic_link(
+            content=content,
+            current_type=current_type,
+            decisions=[dict(r) for r in decisions],
+            literature=[dict(r) for r in literature],
+            missions=[dict(r) for r in missions],
+        )
 
     async def _auto_summarize(self, content: str) -> str | None:
-        """Generate a one-line summary via LLM if available."""
+        """Generate a one-line summary via LLM. Returns None if LLM not configured."""
         if not self.llm:
             return None
-        try:
-            return await self.llm.summarize_entry(content)
-        except Exception as exc:
-            logger.debug("Auto-summarize failed: %s", exc)
-            return None
+        return await self.llm.summarize_entry(content)
 
     # ---- JSON helpers ----
 

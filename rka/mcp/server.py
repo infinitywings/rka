@@ -533,24 +533,50 @@ async def rka_search(
 
 @mcp.tool()
 async def rka_get_decision_tree(
+    root_id: str | None = None,
     phase: str | None = None,
     active_only: bool = False,
 ) -> str:
-    """Get the decision tree structure.
+    """Get the decision tree with linked entities at each node.
+
+    Shows hierarchical decisions with children, chosen options,
+    and linked missions/journal entries/literature from entity_links.
 
     Args:
+        root_id: Optional decision ID to get subtree only
         phase: Filter by phase
         active_only: Only show active decisions
     """
     async with _client() as c:
         params = {}
-        if phase:
-            params["phase"] = phase
-        if active_only:
-            params["active_only"] = "true"
-        r = await c.get("/api/decisions/tree", params=params)
+        if root_id:
+            params["root_id"] = root_id
+        r = await c.get("/api/graph/decision-tree", params=params)
         r.raise_for_status()
-        return json.dumps(r.json(), indent=2)
+        tree = r.json()
+
+        def fmt_node(node, indent=0):
+            prefix = "  " * indent
+            status = node.get("status", "?")
+            chosen = node.get("chosen", "?")
+            # Filter by phase/active if requested
+            if phase and node.get("phase") != phase:
+                return []
+            if active_only and status != "active":
+                return []
+            lines = [f"{prefix}[{status}] {node['id']}: {node['question'][:100]}"]
+            if chosen:
+                lines.append(f"{prefix}  → Chosen: {chosen}")
+            for le in node.get("linked_entities", []):
+                lines.append(f"{prefix}  ↔ [{le['type']}] {le['id']} ({le['link_type']})")
+            for child in node.get("children", []):
+                lines.extend(fmt_node(child, indent + 1))
+            return lines
+
+        output = []
+        for root in tree:
+            output.extend(fmt_node(root))
+        return "\n".join(output) if output else "No decisions found."
 
 
 @mcp.tool()
@@ -1455,6 +1481,180 @@ async def rka_enrich(limit: int = 50, fix_types: bool = True) -> str:
             f"  Updated:    {d['updated']} entries got new links\n"
             f"  Type fixes: {d['type_fixes']} entries had their type corrected\n"
         )
+
+
+# ============================================================
+# Graph & Research Map
+# ============================================================
+
+@mcp.tool()
+async def rka_get_graph(
+    include_types: str | None = None,
+    phase: str | None = None,
+    limit: int = 500,
+) -> str:
+    """Get the full knowledge graph as nodes and edges for the research map.
+
+    Returns all entities and their relationships from entity_links.
+
+    Args:
+        include_types: Comma-separated entity types to include (e.g. "decision,mission,journal")
+        phase: Filter by research phase
+        limit: Max entities per type (default 500)
+    """
+    async with _client() as c:
+        params = {"limit": limit}
+        if include_types:
+            params["include_types"] = include_types
+        if phase:
+            params["phase"] = phase
+        r = await c.get("/api/graph", params=params)
+        r.raise_for_status()
+        d = r.json()
+        return (
+            f"Knowledge graph: {len(d['nodes'])} nodes, {len(d['edges'])} edges\n\n"
+            f"Nodes by type:\n"
+            + "\n".join(f"  {t}: {sum(1 for n in d['nodes'] if n['type'] == t)}"
+                       for t in sorted(set(n['type'] for n in d['nodes'])))
+            + f"\n\nEdges by type:\n"
+            + "\n".join(f"  {t}: {sum(1 for e in d['edges'] if e['link_type'] == t)}"
+                       for t in sorted(set(e['link_type'] for e in d['edges'])))
+        )
+
+
+@mcp.tool()
+async def rka_get_ego_graph(entity_id: str, depth: int = 1) -> str:
+    """Get the neighborhood subgraph around a specific entity.
+
+    Shows all entities connected to the given entity within `depth` hops.
+
+    Args:
+        entity_id: The entity to center on (e.g. dec_01H..., jrn_01H...)
+        depth: Number of hops to traverse (1-3, default 1)
+    """
+    async with _client() as c:
+        r = await c.get(f"/api/graph/ego/{entity_id}", params={"depth": depth})
+        r.raise_for_status()
+        d = r.json()
+        lines = [f"Ego graph for {entity_id}: {len(d['nodes'])} nodes, {len(d['edges'])} edges\n"]
+        for node in d["nodes"]:
+            marker = " ← CENTER" if node["id"] == entity_id else ""
+            lines.append(f"  [{node['type']}] {node['id']}: {node['label'][:80]}{marker}")
+        lines.append("\nEdges:")
+        for edge in d["edges"]:
+            lines.append(f"  {edge['source']} --{edge['link_type']}--> {edge['target']}")
+        return "\n".join(lines)
+
+
+
+@mcp.tool()
+async def rka_graph_stats() -> str:
+    """Get knowledge graph statistics: entity counts, edge counts by type."""
+    async with _client() as c:
+        r = await c.get("/api/graph/stats")
+        r.raise_for_status()
+        d = r.json()
+        lines = [f"Knowledge graph: {d['total_nodes']} nodes, {d['total_edges']} edges\n"]
+        lines.append("Nodes:")
+        for etype, count in d["node_counts"].items():
+            lines.append(f"  {etype}: {count}")
+        lines.append("\nEdges by type:")
+        for ltype, count in d.get("edge_counts_by_type", {}).items():
+            lines.append(f"  {ltype}: {count}")
+        return "\n".join(lines)
+
+
+# ============================================================
+# Summaries & QA (NotebookLM-style)
+# ============================================================
+
+@mcp.tool()
+async def rka_generate_summary(
+    scope_type: str = "project",
+    scope_id: str | None = None,
+    granularity: str = "paragraph",
+) -> str:
+    """Generate a multi-granularity summary of research progress.
+
+    Gathers evidence from the knowledge base and produces a summary
+    with source citations and identified knowledge gaps.
+
+    Args:
+        scope_type: What to summarize — project | phase | mission | tag
+        scope_id: Scope ID (e.g. phase name, mission ID, tag name). None for project-wide.
+        granularity: Detail level — one_line | paragraph | narrative
+    """
+    async with _client() as c:
+        r = await c.post("/api/summaries/generate", json={
+            "scope_type": scope_type,
+            "scope_id": scope_id,
+            "granularity": granularity,
+        })
+        r.raise_for_status()
+        d = r.json()
+        if "error" in d:
+            return f"Summary generation failed: {d['error']}"
+        lines = [f"Summary ({d.get('granularity', granularity)}) — confidence: {d.get('confidence', '?')}\n"]
+        if d.get("one_line"):
+            lines.append(f"One-line: {d['one_line']}\n")
+        if d.get("paragraph"):
+            lines.append(f"Paragraph:\n{d['paragraph']}\n")
+        if d.get("narrative"):
+            lines.append(f"Narrative:\n{d['narrative']}\n")
+        if d.get("key_questions"):
+            lines.append("Open questions:")
+            for q in d["key_questions"]:
+                lines.append(f"  - {q}")
+        if d.get("sources"):
+            lines.append(f"\nSources cited: {len(d['sources'])}")
+            for s in d["sources"][:5]:
+                lines.append(f"  [{s['entity_type']}:{s['entity_id']}] {s.get('excerpt', '')[:80]}")
+        return "\n".join(lines)
+
+
+@mcp.tool()
+async def rka_ask(
+    question: str,
+    session_id: str | None = None,
+    scope_type: str | None = None,
+    scope_id: str | None = None,
+) -> str:
+    """Ask a research question and get an answer grounded in knowledge base evidence.
+
+    Like NotebookLM: answers cite specific sources and suggest follow-up questions.
+    Use session_id for multi-turn Q&A conversations.
+
+    Args:
+        question: Your research question
+        session_id: Optional session ID for follow-up questions
+        scope_type: Optional scope filter (phase, tag)
+        scope_id: Optional scope ID
+    """
+    async with _client() as c:
+        r = await c.post("/api/qa/ask", json={
+            "question": question,
+            "session_id": session_id,
+            "scope_type": scope_type,
+            "scope_id": scope_id,
+        })
+        r.raise_for_status()
+        d = r.json()
+        if "error" in d:
+            return f"QA failed: {d['error']}"
+        lines = [
+            f"Answer (confidence: {d.get('confidence', '?')}):\n",
+            d.get("answer", "No answer"),
+        ]
+        if d.get("sources"):
+            lines.append(f"\n\nSources ({len(d['sources'])}):")
+            for i, s in enumerate(d["sources"]):
+                lines.append(f"  [{i}] [{s['entity_type']}:{s['entity_id']}] \"{s.get('excerpt', '')[:100]}\"")
+        if d.get("followups"):
+            lines.append("\nSuggested follow-ups:")
+            for f in d["followups"]:
+                lines.append(f"  → {f}")
+        lines.append(f"\nSession: {d.get('session_id', 'N/A')}")
+        return "\n".join(lines)
 
 
 # ============================================================

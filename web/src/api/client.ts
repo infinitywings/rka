@@ -92,6 +92,15 @@ import type {
   AuditEntry,
   BibtexImportResult,
   MermaidExport,
+  GraphData,
+  GraphStats,
+  SummaryResult,
+  ExplorationSummary,
+  QAResult,
+  QASession,
+  LLMStatus,
+  LLMConfigUpdate,
+  LLMModel,
 } from "./types"
 
 export const api = {
@@ -221,6 +230,45 @@ export const api = {
     const qs = phase ? `?phase=${phase}` : ""
     return get<MermaidExport>(`/decisions/mermaid${qs}`)
   },
+
+  // Graph
+  getGraph: (params?: { include_types?: string; phase?: string; limit?: number }) => {
+    const search = new URLSearchParams()
+    if (params?.include_types) search.set("include_types", params.include_types)
+    if (params?.phase) search.set("phase", params.phase)
+    if (params?.limit) search.set("limit", String(params.limit))
+    const qs = search.toString()
+    return get<GraphData>(`/graph${qs ? `?${qs}` : ""}`)
+  },
+  getEgoGraph: (entityId: string, depth?: number) => {
+    const qs = depth ? `?depth=${depth}` : ""
+    return get<GraphData>(`/graph/ego/${entityId}${qs}`)
+  },
+  getGraphStats: () => get<GraphStats>("/graph/stats"),
+
+  // Summaries
+  generateSummary: (data: { scope_type: string; scope_id?: string; granularity?: string }) =>
+    post<SummaryResult>("/summaries/generate", data),
+  listSummaries: (params?: { scope_type?: string; blessed_only?: boolean }) => {
+    const search = new URLSearchParams()
+    if (params?.scope_type) search.set("scope_type", params.scope_type)
+    if (params?.blessed_only) search.set("blessed_only", "true")
+    const qs = search.toString()
+    return get<ExplorationSummary[]>(`/summaries${qs ? `?${qs}` : ""}`)
+  },
+  blessSummary: (id: string) => post<ExplorationSummary>(`/summaries/${id}/bless`, { actor: "pi" }),
+
+  // QA
+  askQuestion: (data: { question: string; session_id?: string; scope_type?: string; scope_id?: string }) =>
+    post<QAResult>("/qa/ask", data),
+  listQASessions: () => get<QASession[]>("/qa/sessions"),
+  getQASession: (id: string) => get<QASession>(`/qa/sessions/${id}`),
+
+  // LLM
+  getLLMStatus: () => get<LLMStatus>("/llm/status"),
+  updateLLMConfig: (data: LLMConfigUpdate) => put<LLMStatus>("/llm/config", data),
+  checkLLM: () => post<LLMStatus>("/llm/check"),
+  getLLMModels: () => get<LLMModel[]>("/llm/models"),
 }
 
 export { ApiError }

@@ -1,6 +1,17 @@
+import { useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
+import { Switch } from "@/components/ui/switch"
 import { useProjectStatus } from "@/hooks/useProject"
 import { useHealth } from "@/hooks/useProject"
 import { useNotes } from "@/hooks/useNotes"
@@ -9,6 +20,8 @@ import { useLiterature } from "@/hooks/useLiterature"
 import { useMissions } from "@/hooks/useMissions"
 import { useCheckpoints } from "@/hooks/useCheckpoints"
 import { useTags } from "@/hooks/useSearch"
+import { useLLMStatus, useUpdateLLMConfig, useCheckLLM, useLLMModels } from "@/hooks/useLLM"
+import { toast } from "sonner"
 import {
   Settings as SettingsIcon,
   Database,
@@ -17,6 +30,9 @@ import {
   Tag,
   CheckCircle2,
   XCircle,
+  Brain,
+  RefreshCw,
+  Loader2,
 } from "lucide-react"
 
 export default function Settings() {
@@ -66,6 +82,9 @@ export default function Settings() {
           System configuration, health, and database statistics
         </p>
       </div>
+
+      {/* LLM Configuration — full width, prominent */}
+      <LLMConfigCard />
 
       <div className="grid gap-4 md:grid-cols-2">
         {/* API Health */}
@@ -270,5 +289,241 @@ export default function Settings() {
         </Card>
       )}
     </div>
+  )
+}
+
+// ── LLM Configuration Card ─────────────────────────────────────────────────
+
+function LLMConfigCard() {
+  const { data: llm, isLoading } = useLLMStatus()
+  const { data: availableModels, refetch: refetchModels } = useLLMModels()
+  const updateMutation = useUpdateLLMConfig()
+  const checkMutation = useCheckLLM()
+
+  const [editModel, setEditModel] = useState("")
+  const [editApiBase, setEditApiBase] = useState("")
+  const [editApiKey, setEditApiKey] = useState("")
+  const [dirty, setDirty] = useState(false)
+
+  // Initialize form from server data
+  const initForm = () => {
+    if (llm) {
+      setEditModel(llm.model)
+      setEditApiBase(llm.api_base ?? "")
+      setEditApiKey("")
+      setDirty(false)
+    }
+  }
+
+  // Initialize on first load
+  if (llm && !dirty && editModel === "" && editApiBase === "") {
+    setEditModel(llm.model)
+    setEditApiBase(llm.api_base ?? "")
+  }
+
+  const handleSave = () => {
+    updateMutation.mutate(
+      {
+        enabled: true,
+        model: editModel,
+        api_base: editApiBase || undefined,
+        api_key: editApiKey || undefined,
+      },
+      {
+        onSuccess: (data) => {
+          setDirty(false)
+          refetchModels()
+          if (data.available) {
+            toast.success("LLM connected successfully")
+          } else {
+            toast.error("LLM config saved but connection failed. Check that your LLM server is running.")
+          }
+        },
+        onError: () => toast.error("Failed to update LLM config"),
+      }
+    )
+  }
+
+  const handleDisable = () => {
+    updateMutation.mutate(
+      { enabled: false },
+      {
+        onSuccess: () => {
+          toast.success("LLM disabled")
+        },
+      }
+    )
+  }
+
+  const handleCheck = () => {
+    checkMutation.mutate(undefined, {
+      onSuccess: (data) => {
+        if (data.available) {
+          toast.success("LLM is reachable")
+        } else {
+          toast.error("LLM is not reachable. Check that your LLM server is running.")
+        }
+      },
+    })
+  }
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardContent className="pt-6">
+          <div className="h-24 bg-muted rounded animate-pulse" />
+        </CardContent>
+      </Card>
+    )
+  }
+
+  const isAvailable = llm?.enabled && llm?.available
+
+  return (
+    <Card className={!isAvailable ? "border-amber-200" : "border-green-200"}>
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <Brain className="h-4 w-4" />
+            Local LLM
+          </CardTitle>
+          <div className="flex items-center gap-3">
+            {llm?.enabled && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleCheck}
+                disabled={checkMutation.isPending}
+                className="h-7 text-xs gap-1"
+              >
+                {checkMutation.isPending ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3 w-3" />
+                )}
+                Test
+              </Button>
+            )}
+            <Badge
+              variant="outline"
+              className={
+                isAvailable
+                  ? "bg-green-100 text-green-800 border-green-200"
+                  : llm?.enabled
+                  ? "bg-red-100 text-red-800 border-red-200"
+                  : "bg-gray-100 text-gray-600 border-gray-200"
+              }
+            >
+              {isAvailable ? "connected" : llm?.enabled ? "disconnected" : "disabled"}
+            </Badge>
+          </div>
+        </div>
+        {!isAvailable && (
+          <p className="text-xs text-amber-600 mt-1">
+            Q&A, summaries, and smart classification require a local LLM.
+            {!llm?.enabled
+              ? " Enable it below and point to your LM Studio or Ollama server."
+              : " Check that your LLM server is running."}
+          </p>
+        )}
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <span className="text-sm font-medium">Enabled</span>
+            <p className="text-[11px] text-muted-foreground">Required for AI-powered features</p>
+          </div>
+          <Switch
+            checked={llm?.enabled ?? false}
+            onCheckedChange={(checked) => {
+              if (checked) {
+                updateMutation.mutate({ enabled: true })
+              } else {
+                handleDisable()
+              }
+            }}
+          />
+        </div>
+
+        {llm?.enabled && (
+          <>
+            <Separator />
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <label className="text-xs font-medium">API Base URL</label>
+                <Input
+                  value={editApiBase}
+                  onChange={(e) => { setEditApiBase(e.target.value); setDirty(true) }}
+                  placeholder="http://localhost:1234/v1"
+                  className="text-xs h-8"
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  LM Studio: http://localhost:1234/v1 — Ollama: leave empty
+                </p>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium">Model</label>
+                {availableModels && availableModels.length > 0 ? (
+                  <Select
+                    value={editModel}
+                    onValueChange={(v) => { if (v) { setEditModel(v); setDirty(true) } }}
+                  >
+                    <SelectTrigger className="text-xs h-8">
+                      <SelectValue placeholder="Select a model…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {availableModels.map((m) => {
+                        const value = m.id.startsWith("openai/") ? m.id : `openai/${m.id}`
+                        return (
+                          <SelectItem key={m.id} value={value} className="text-xs">
+                            {m.id}
+                          </SelectItem>
+                        )
+                      })}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Input
+                    value={editModel}
+                    onChange={(e) => { setEditModel(e.target.value); setDirty(true) }}
+                    placeholder="openai/qwen3-32b"
+                    className="text-xs h-8"
+                  />
+                )}
+                <p className="text-[10px] text-muted-foreground">
+                  {availableModels && availableModels.length > 0
+                    ? `${availableModels.length} models available from LM Studio`
+                    : "LM Studio: openai/model-name — Ollama: ollama/model:tag"}
+                </p>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium">API Key</label>
+                <Input
+                  value={editApiKey}
+                  onChange={(e) => { setEditApiKey(e.target.value); setDirty(true) }}
+                  placeholder={llm?.api_key_set ? "••••••••  (key is set)" : "Not required for local LM Studio / Ollama"}
+                  type="password"
+                  className="text-xs h-8"
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  Only needed for remote APIs (OpenAI, Together, etc.). Leave blank for local LM Studio / Ollama.
+                </p>
+              </div>
+              {dirty && (
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={handleSave} disabled={updateMutation.isPending} className="h-7 text-xs">
+                    {updateMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+                    Save & Connect
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={initForm} className="h-7 text-xs">
+                    Cancel
+                  </Button>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
   )
 }

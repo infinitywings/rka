@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 import aiosqlite
@@ -39,11 +40,66 @@ class Database:
             self._conn = None
 
     async def initialize_schema(self) -> None:
-        """Create tables from schema.sql if they don't exist."""
+        """Create tables from schema.sql if they don't exist, then run migrations."""
         schema_path = Path(__file__).parent.parent / "db" / "schema.sql"
         schema_sql = schema_path.read_text()
         await self._conn.executescript(schema_sql)
         await self._conn.commit()
+        await self.run_migrations()
+
+    async def run_migrations(self) -> int:
+        """Run pending SQL migrations from rka/db/migrations/.
+
+        Returns the number of newly applied migrations.
+        """
+        # Ensure the tracking table exists
+        await self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "  filename TEXT PRIMARY KEY,"
+            "  applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))"
+            ")"
+        )
+        await self._conn.commit()
+
+        migrations_dir = Path(__file__).parent.parent / "db" / "migrations"
+        if not migrations_dir.exists():
+            return 0
+
+        # Gather .sql files sorted by name
+        sql_files = sorted(f for f in migrations_dir.iterdir() if f.suffix == ".sql")
+        if not sql_files:
+            return 0
+
+        # Fetch already-applied filenames
+        cursor = await self._conn.execute("SELECT filename FROM schema_migrations")
+        applied = {row[0] for row in await cursor.fetchall()}
+
+        count = 0
+        for sql_file in sql_files:
+            if sql_file.name in applied:
+                continue
+
+            sql = sql_file.read_text()
+
+            # Skip vec0 virtual tables if sqlite-vec is not loaded
+            if "USING vec0(" in sql and not self._vec_loaded:
+                logger.info(
+                    "Skipping migration %s (sqlite-vec not available)", sql_file.name
+                )
+                continue
+
+            logger.info("Applying migration: %s", sql_file.name)
+            await self._conn.executescript(sql)
+            await self._conn.execute(
+                "INSERT INTO schema_migrations (filename) VALUES (?)",
+                [sql_file.name],
+            )
+            await self._conn.commit()
+            count += 1
+
+        if count:
+            logger.info("Applied %d migration(s)", count)
+        return count
 
     async def initialize_phase2_schema(self) -> None:
         """Load sqlite-vec extension and create Phase 2 tables (FTS5 + vec)."""

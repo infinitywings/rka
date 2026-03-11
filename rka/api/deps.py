@@ -21,6 +21,9 @@ from rka.services.context import ContextEngine
 from rka.services.audit import AuditService
 from rka.services.academic import AcademicImportService
 from rka.services.workspace import WorkspaceService
+from rka.services.graph import GraphService
+from rka.services.summary import SummaryService, QAService
+from rka.services.artifacts import ArtifactService
 
 logger = logging.getLogger(__name__)
 
@@ -130,3 +133,19 @@ def get_workspace_service() -> WorkspaceService:
         literature_service=get_literature_service(),
         llm=_llm,
     )
+
+
+def get_graph_service() -> GraphService:
+    return GraphService(get_db())
+
+
+def get_summary_service() -> SummaryService:
+    return SummaryService(get_db(), llm=_llm, embeddings=_embeddings)
+
+
+def get_qa_service() -> QAService:
+    return QAService(get_db(), llm=_llm, embeddings=_embeddings)
+
+
+def get_artifact_service() -> ArtifactService:
+    return ArtifactService(get_db(), llm=_llm, embeddings=_embeddings)

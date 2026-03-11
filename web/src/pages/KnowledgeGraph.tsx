@@ -22,7 +22,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { Badge } from "@/components/ui/badge"
 import { StatusBadge } from "@/components/shared/StatusBadge"
 import { TagList } from "@/components/shared/TagList"
-import type { Decision, Mission, JournalEntry, Literature } from "@/api/types"
+import type { Decision, Mission, JournalEntry, Literature, GraphData } from "@/api/types"
 
 const elk = new ELK()
 
@@ -181,20 +181,28 @@ const nodeTypes = {
 export default function KnowledgeGraph() {
   const [showMissions, setShowMissions] = useState(true)
   const [showFindings, setShowFindings] = useState(true)
+  const [showOrphans, setShowOrphans] = useState(false)
   const [selected, setSelected] = useState<{ id: string; kind: string } | null>(null)
 
+  // Fetch entity data for detail sheets
   const { data: decisions  = [] } = useQuery({ queryKey: ["decisions"],              queryFn: () => api.listDecisions() })
   const { data: missions   = [] } = useQuery({ queryKey: ["missions"],               queryFn: () => api.listMissions() })
   const { data: notes      = [] } = useQuery({ queryKey: ["notes", { limit: 200 }],  queryFn: () => api.listNotes({ limit: 200 }) })
   const { data: literature = [] } = useQuery({ queryKey: ["literature"],             queryFn: () => api.listLiterature() })
 
+  // Fetch graph from entity_links (the source of truth for edges)
+  const { data: graphData } = useQuery<GraphData>({
+    queryKey: ["graph"],
+    queryFn: () => api.getGraph({ limit: 500 }),
+  })
+
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
 
   useEffect(() => {
-    if (decisions.length === 0 && missions.length === 0) return
+    if (!graphData || graphData.nodes.length === 0) return
 
-    // ── Build ELK input ────────────────────────────────────────────────────
+    // ── Build ELK input from graph API data ────────────────────────────
     type ElkNode = { id: string; width: number; height: number }
     type ElkEdge = { id: string; sources: string[]; targets: string[] }
     const elkNodes: ElkNode[] = []
@@ -202,10 +210,20 @@ export default function KnowledgeGraph() {
     const nodeIds  = new Set<string>()
     const edgeKeys = new Set<string>()
 
-    function addNode(id: string, w: number, h: number) {
+    function getDim(type: string) {
+      switch (type) {
+        case "decision":   return DIM.decision
+        case "mission":    return DIM.mission
+        case "literature": return DIM.lit
+        default:           return DIM.finding
+      }
+    }
+
+    function addNode(id: string, type: string) {
       if (nodeIds.has(id)) return
       nodeIds.add(id)
-      elkNodes.push({ id, width: w, height: h })
+      const dim = getDim(type)
+      elkNodes.push({ id, width: dim.w, height: dim.h })
     }
 
     function addEdge(src: string, tgt: string) {
@@ -216,82 +234,25 @@ export default function KnowledgeGraph() {
       elkEdges.push({ id: key, sources: [src], targets: [tgt] })
     }
 
-    // Which decisions have missions? Check both explicit link and phase-implied
-    const missionPhases = new Set(missions.map(m => m.phase?.toLowerCase()))
-    const exploredSet = new Set<string>()
-    for (const dec of decisions) {
-      const explicitLink = (dec.related_missions ?? []).length > 0
-      const phaseMatch = missionPhases.has(dec.phase?.toLowerCase())
-      if (explicitLink || phaseMatch) exploredSet.add(dec.id)
+    // Build set of connected node IDs (nodes that have at least one edge)
+    const connectedIds = new Set<string>()
+    for (const ge of graphData.edges) {
+      connectedIds.add(ge.source)
+      connectedIds.add(ge.target)
     }
 
-    // Active missions (for animated edges)
-    const activeMissions = new Set(missions.filter(m => m.status === "active").map(m => m.id))
-
-    // 1. Decisions (always shown) — add nodes first, then edges
-    for (const dec of decisions) {
-      addNode(dec.id, DIM.decision.w, DIM.decision.h)
-    }
-    for (const dec of decisions) {
-      if (dec.parent_id && nodeIds.has(dec.parent_id)) addEdge(dec.parent_id, dec.id)
+    // Add nodes, filtered by layer toggles and orphan toggle
+    for (const gn of graphData.nodes) {
+      if (gn.type === "mission" && !showMissions) continue
+      if (gn.type === "journal" && !showFindings) continue
+      if (gn.type === "literature" && !showFindings) continue
+      if (!showOrphans && !connectedIds.has(gn.id)) continue
+      addNode(gn.id, gn.type)
     }
 
-    // 2. Missions — show ALL non-cancelled missions.
-    // Connect via explicit link if present; otherwise use phase as implied link.
-    // This keeps decisions and missions in one connected graph.
-    if (showMissions) {
-      for (const mis of missions) {
-        if (mis.status === "cancelled") continue
-        addNode(mis.id, DIM.mission.w, DIM.mission.h)
-      }
-      for (const mis of missions) {
-        if (!nodeIds.has(mis.id)) continue
-        const explicitParent = decisions.find(d => (d.related_missions ?? []).includes(mis.id))
-        if (explicitParent) {
-          addEdge(explicitParent.id, mis.id)
-        } else {
-          // Implied: connect to decisions in the same phase (case-insensitive)
-          const misPhase = mis.phase?.toLowerCase() ?? ""
-          const phaseDecisions = decisions.filter(d =>
-            d.phase?.toLowerCase() === misPhase
-          )
-          // If no phase match, connect to root decisions (no parent) as fallback
-          const targets = phaseDecisions.length > 0
-            ? phaseDecisions
-            : decisions.filter(d => !d.parent_id).slice(0, 2)
-          for (const dec of targets) addEdge(dec.id, mis.id)
-        }
-        // Mission dependency chain
-        if (mis.depends_on && nodeIds.has(mis.depends_on)) addEdge(mis.depends_on, mis.id)
-      }
-    }
-
-    // 3. Findings/notes — show important types + any note tagged for context (survey, summary)
-    // "summary" and "idea" types added to catch literature surveys and context entries
-    const importantTypes = new Set([
-      "finding", "hypothesis", "insight", "observation",
-      "exploration", "methodology", "summary", "idea",
-    ])
-    const contextTags = new Set(["literature-survey", "survey", "context", "review", "context-entry"])
-    if (showFindings) {
-      for (const note of notes) {
-        const isImportantType = importantTypes.has(note.type)
-        const isContextTagged = note.tags.some(t => contextTags.has(t))
-        if (!isImportantType && !isContextTagged) continue
-        const hasMission = note.related_mission != null && nodeIds.has(note.related_mission)
-        const hasDec = (note.related_decisions ?? []).some(id => nodeIds.has(id))
-        if (!hasMission && !hasDec) continue
-        addNode(note.id, DIM.finding.w, DIM.finding.h)
-      }
-      for (const note of notes) {
-        if (!nodeIds.has(note.id)) continue
-        if (note.related_mission && nodeIds.has(note.related_mission)) {
-          addEdge(note.related_mission, note.id)
-        }
-        for (const decId of note.related_decisions ?? []) {
-          if (nodeIds.has(decId)) addEdge(decId, note.id)
-        }
-      }
+    // Add all edges from entity_links
+    for (const ge of graphData.edges) {
+      addEdge(ge.source, ge.target)
     }
 
     if (elkNodes.length === 0) return
@@ -304,80 +265,89 @@ export default function KnowledgeGraph() {
       layoutOptions: {
         "elk.algorithm": "layered",
         "elk.direction": "RIGHT",
-        "elk.spacing.nodeNode": "40",
-        "elk.layered.spacing.nodeNodeBetweenLayers": "72",
-        "elk.layered.nodePlacement.strategy": "BRANDES_KOEPF",
+        "elk.spacing.nodeNode": "30",
+        "elk.layered.spacing.nodeNodeBetweenLayers": "60",
+        "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
         "elk.separateConnectedComponents": "true",
-        "elk.spacing.componentComponent": "60",
+        "elk.spacing.componentComponent": "40",
+        "elk.layered.compaction.connectedComponents": "true",
+        "elk.layered.crossingMinimization.strategy": "LAYER_SWEEP",
       },
     }).then(layout => {
       const posMap = new Map<string, { x: number; y: number }>()
       for (const n of layout.children ?? []) posMap.set(n.id, { x: n.x ?? 0, y: n.y ?? 0 })
 
-      // ── Build React Flow nodes ───────────────────────────────────────────
+      // ── Build React Flow nodes from graph data ───────────────────────────
       const flowNodes: Node[] = []
+      const decMap = new Map(decisions.map(d => [d.id, d]))
+      const misMap = new Map(missions.map(m => [m.id, m]))
+      const noteMap = new Map(notes.map(n => [n.id, n]))
+      const litMap = new Map(literature.map(l => [l.id, l]))
 
-      for (const dec of decisions) {
-        const pos = posMap.get(dec.id)
+      for (const gn of graphData.nodes) {
+        const pos = posMap.get(gn.id)
         if (!pos) continue
-        flowNodes.push({
-          id: dec.id, type: "decisionNode", position: pos,
-          data: {
-            question: dec.question, status: dec.status,
-            chosen: dec.chosen, phase: dec.phase,
-            explored: exploredSet.has(dec.id),
-          },
-        })
-      }
 
-      if (showMissions) {
-        for (const mis of missions) {
-          const pos = posMap.get(mis.id)
-          if (!pos) continue
-          flowNodes.push({ id: mis.id, type: "missionNode", position: pos, data: { objective: mis.objective, status: mis.status } })
+        if (gn.type === "decision") {
+          const dec = decMap.get(gn.id)
+          flowNodes.push({
+            id: gn.id, type: "decisionNode", position: pos,
+            data: {
+              question: dec?.question ?? gn.label,
+              status: gn.status ?? "active",
+              chosen: dec?.chosen ?? null,
+              phase: gn.phase,
+              explored: true,
+            },
+          })
+        } else if (gn.type === "mission" && showMissions) {
+          const mis = misMap.get(gn.id)
+          flowNodes.push({
+            id: gn.id, type: "missionNode", position: pos,
+            data: { objective: mis?.objective ?? gn.label, status: gn.status ?? "pending" },
+          })
+        } else if (gn.type === "journal" && showFindings) {
+          const note = noteMap.get(gn.id)
+          flowNodes.push({
+            id: gn.id, type: "findingNode", position: pos,
+            data: { content: note?.content ?? gn.label, type: note?.type ?? "finding" },
+          })
+        } else if (gn.type === "literature" && showFindings) {
+          const lit = litMap.get(gn.id)
+          flowNodes.push({
+            id: gn.id, type: "litNode", position: pos,
+            data: { title: lit?.title ?? gn.label },
+          })
         }
       }
 
-      if (showFindings) {
-        for (const note of notes) {
-          const pos = posMap.get(note.id)
-          if (!pos) continue
-          flowNodes.push({ id: note.id, type: "findingNode", position: pos, data: { content: note.content, type: note.type } })
-        }
+      // ── Build React Flow edges with semantic styling based on link_type ──
+      const edgeTypeStyles: Record<string, { stroke: string; width: number; dash?: string }> = {
+        triggered:    { stroke: "#3b82f6", width: 2 },
+        produced:     { stroke: "#10b981", width: 1.5 },
+        references:   { stroke: "#0d9488", width: 1.5 },
+        cites:        { stroke: "#8b5cf6", width: 1, dash: "4,3" },
+        supersedes:   { stroke: "#f59e0b", width: 1, dash: "6,4" },
+        resolved_as:  { stroke: "#6366f1", width: 1.5 },
+        evidence_for: { stroke: "#10b981", width: 1, dash: "4,3" },
       }
 
-      // ── Build React Flow edges with semantic styling ─────────────────────
-      const missionIds = new Set(missions.map(m => m.id))
-      const flowEdges: Edge[] = elkEdges
-        .map(ee => {
-          const src = ee.sources[0], tgt = ee.targets[0]
-          if (!posMap.has(src) || !posMap.has(tgt)) return null!
-
-          const tgtIsMis = missionIds.has(tgt)
-          const srcIsMis = missionIds.has(src)
-          // Implied edge = mission had no explicit parent (detected by checking explicit links)
-          const isImplied = tgtIsMis && !decisions.some(d => (d.related_missions ?? []).includes(tgt))
-
-          let style: React.CSSProperties
-          let animated = false
-
-          if (tgtIsMis) {
-            // Decision → Mission: solid teal; dashed gray if implied by phase
-            style = isImplied
-              ? { strokeWidth: 1.5, stroke: "#94a3b8", strokeDasharray: "6,4" }
-              : { strokeWidth: 1.5, stroke: "#0d9488" }
-          } else if (srcIsMis) {
-            // Mission → Finding: solid green, animated for active missions
-            style = { strokeWidth: 1, stroke: "#10b981" }
-            animated = activeMissions.has(src)
-          } else {
-            // Decision → Decision: solid blue (hierarchy)
-            style = { strokeWidth: 2, stroke: "#3b82f6" }
-          }
-
+      const flowEdges: Edge[] = graphData.edges
+        .map(ge => {
+          if (!posMap.has(ge.source) || !posMap.has(ge.target)) return null!
+          const key = `${ge.source}→${ge.target}`
+          const es = edgeTypeStyles[ge.link_type] ?? { stroke: "#94a3b8", width: 1 }
           return {
-            id: ee.id, source: src, target: tgt,
-            type: "smoothstep", animated, style,
+            id: key,
+            source: ge.source,
+            target: ge.target,
+            type: "smoothstep",
+            animated: false,
+            style: {
+              strokeWidth: es.width,
+              stroke: es.stroke,
+              ...(es.dash ? { strokeDasharray: es.dash } : {}),
+            },
             markerEnd: { type: MarkerType.ArrowClosed, width: 10, height: 10 },
           }
         })
@@ -386,7 +356,7 @@ export default function KnowledgeGraph() {
       setNodes(flowNodes)
       setEdges(flowEdges)
     }).catch(console.error)
-  }, [decisions, missions, notes, literature, showMissions, showFindings, setNodes, setEdges])
+  }, [graphData, decisions, missions, notes, literature, showMissions, showFindings, showOrphans, setNodes, setEdges])
 
   const handleNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
     const kind =
@@ -439,6 +409,7 @@ export default function KnowledgeGraph() {
                 {([
                   { label: "Missions",  color: "#0d9488", val: showMissions, set: setShowMissions },
                   { label: "Findings",  color: "#10b981", val: showFindings, set: setShowFindings },
+                  { label: "Orphan nodes", color: "#94a3b8", val: showOrphans, set: setShowOrphans },
                 ] as const).map(({ label, color, val, set }) => (
                   <label key={label} className="flex items-center gap-2 cursor-pointer select-none">
                     <input
@@ -454,14 +425,15 @@ export default function KnowledgeGraph() {
                 <div className="border-t pt-2 space-y-1 text-muted-foreground text-[10px]">
                   <div className="space-y-px">
                     <div>🟢 active · ⬜ abandoned</div>
-                    <div className="text-amber-600 font-medium">amber = unexplored</div>
                   </div>
                   <div className="border-t pt-1 space-y-px">
-                    <div className="flex items-center gap-1"><span className="inline-block w-4 h-0 border-t-2 border-teal-500" /> explicit mission link</div>
-                    <div className="flex items-center gap-1"><span className="inline-block w-4 h-0 border-t-2 border-slate-400 border-dashed" /> phase-implied link</div>
-                    <div className="flex items-center gap-1"><span className="inline-block w-4 h-0 border-t border-green-500" /> mission → finding</div>
+                    <div className="flex items-center gap-1"><span className="inline-block w-4 h-0 border-t-2" style={{borderColor:"#3b82f6"}} /> triggered</div>
+                    <div className="flex items-center gap-1"><span className="inline-block w-4 h-0 border-t-2" style={{borderColor:"#10b981"}} /> produced</div>
+                    <div className="flex items-center gap-1"><span className="inline-block w-4 h-0 border-t-2" style={{borderColor:"#0d9488"}} /> references</div>
+                    <div className="flex items-center gap-1"><span className="inline-block w-4 h-0 border-t border-dashed" style={{borderColor:"#8b5cf6"}} /> cites</div>
+                    <div className="flex items-center gap-1"><span className="inline-block w-4 h-0 border-t border-dashed" style={{borderColor:"#f59e0b"}} /> supersedes</div>
                   </div>
-                  <p className="border-t pt-1 text-[9px]">Click a finding to see literature</p>
+                  <p className="border-t pt-1 text-[9px]">Edges from entity_links table</p>
                 </div>
               </div>
             </Panel>

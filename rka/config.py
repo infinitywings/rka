@@ -26,11 +26,12 @@ class RKAConfig(BaseSettings):
     host: str = Field(default="127.0.0.1", description="API server host")
     port: int = Field(default=9712, description="API server port")
 
-    # LLM (Phase 2)
-    llm_model: str = Field(default="ollama/qwen3.5:35b-a3b", description="LiteLLM model identifier")
-    llm_api_base: str | None = Field(default=None, description="Custom API base URL")
-    llm_api_key: str | None = Field(default=None, description="API key for cloud LLM")
-    llm_enabled: bool = Field(default=False, description="Enable LLM auto-enrichment")
+    # LLM — required for Q&A, summaries, classification
+    # Default: LM Studio on localhost:1234 (OpenAI-compatible)
+    llm_model: str = Field(default="openai/qwen3-32b", description="LiteLLM model identifier (openai/* for LM Studio, ollama/* for Ollama)")
+    llm_api_base: str | None = Field(default="http://localhost:1234/v1", description="LLM API base URL (LM Studio default: http://localhost:1234/v1)")
+    llm_api_key: str | None = Field(default=None, description="API key (not needed for local LM Studio / Ollama)")
+    llm_enabled: bool = Field(default=True, description="Enable LLM (required for Q&A, summaries, classification)")
     llm_think: bool = Field(
         default=False,
         description="Enable thinking mode for reasoning models (disable for structured extraction)",

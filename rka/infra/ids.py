@@ -13,6 +13,12 @@ _PREFIXES = {
     "checkpoint": "chk",
     "event": "evt",
     "scan": "scn",
+    "link": "lnk",
+    "artifact": "art",
+    "figure": "fig",
+    "summary": "sum",
+    "qa_session": "qas",
+    "qa_log": "qal",
 }
 
 

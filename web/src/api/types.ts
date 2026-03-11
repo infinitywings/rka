@@ -388,6 +388,32 @@ export interface HealthStatus {
   status: string
   version: string
   vec_available: boolean
+  llm_status: string
+  llm_model: string | null
+}
+
+// ---- LLM ----
+
+export interface LLMStatus {
+  enabled: boolean
+  available: boolean
+  model: string
+  api_base: string | null
+  api_key_set: boolean
+  think: boolean
+}
+
+export interface LLMConfigUpdate {
+  enabled?: boolean
+  model?: string
+  api_base?: string
+  api_key?: string
+  think?: boolean
+}
+
+export interface LLMModel {
+  id: string
+  owned_by: string | null
 }
 
 // ---- Academic Import ----
@@ -401,4 +427,89 @@ export interface BibtexImportResult {
 
 export interface MermaidExport {
   mermaid: string
+}
+
+// ---- Graph ----
+
+export interface GraphNode {
+  id: string
+  type: string
+  label: string
+  status: string | null
+  phase: string
+  created_at: string
+}
+
+export interface GraphEdge {
+  source: string
+  target: string
+  link_type: string
+  created_at: string
+}
+
+export interface GraphData {
+  nodes: GraphNode[]
+  edges: GraphEdge[]
+}
+
+export interface GraphStats {
+  node_counts: Record<string, number>
+  total_nodes: number
+  total_edges: number
+  edge_counts_by_type: Record<string, number>
+}
+
+// ---- Summaries ----
+
+export interface SummaryResult {
+  id: string
+  scope_type: string
+  scope_id: string | null
+  granularity: string
+  one_line: string
+  paragraph: string
+  narrative: string | null
+  key_questions: string[]
+  sources: Array<{ entity_type: string; entity_id: string; excerpt: string }>
+  confidence: number
+}
+
+export interface ExplorationSummary {
+  id: string
+  scope_type: string
+  scope_id: string | null
+  granularity: string
+  content: string
+  produced_by: string | null
+  confidence: number | null
+  blessed: number
+  source_refs: string | null
+  created_at: string
+  updated_at: string
+}
+
+// ---- QA ----
+
+export interface QAResult {
+  session_id: string
+  log_id: string
+  answer: string
+  answer_type: string
+  sources: Array<{ entity_type: string; entity_id: string; excerpt: string }>
+  confidence: number
+  followups: string[]
+}
+
+export interface QASession {
+  id: string
+  title: string | null
+  created_by: string | null
+  created_at: string
+  logs: Array<{
+    id: string
+    question: string
+    answer: string
+    confidence: number | null
+    created_at: string
+  }>
 }

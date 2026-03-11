@@ -267,3 +267,12 @@ CREATE TABLE IF NOT EXISTS entity_links (
 CREATE INDEX IF NOT EXISTS idx_entity_links_source ON entity_links(source_type, source_id);
 CREATE INDEX IF NOT EXISTS idx_entity_links_target ON entity_links(target_type, target_id);
 CREATE INDEX IF NOT EXISTS idx_entity_links_type   ON entity_links(link_type);
+
+-- ============================================================
+-- 12. Key-Value Store (runtime settings persisted across restarts)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS kv_store (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);

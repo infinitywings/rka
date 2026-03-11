@@ -131,11 +131,16 @@ class PDFMetadataExtraction(BaseModel):
 
 # ---------- LLM Client ----------
 
+class LLMUnavailableError(Exception):
+    """Raised when a required LLM call cannot be fulfilled."""
+
+
 class LLMClient:
     """Unified LLM interface via LiteLLM + Instructor.
 
-    Designed for graceful degradation: every public method returns None
-    when the LLM is unavailable, and callers treat None as "skip enrichment".
+    The LLM is a required dependency — services should fail loudly
+    if the LLM is unreachable rather than silently degrading.
+    Supports any OpenAI-compatible backend: Ollama, LM Studio, vLLM, cloud APIs.
     """
 
     def __init__(self, config: RKAConfig):
@@ -144,17 +149,29 @@ class LLMClient:
         self._instructor_client = None
         self._available: bool | None = None
 
+    @property
+    def _api_key(self) -> str | None:
+        """Resolve API key: use configured key, or dummy key for openai/ prefix."""
+        if self.config.llm_api_key:
+            return self.config.llm_api_key
+        # LiteLLM requires an API key for openai/ prefixed models even when
+        # the backend (LM Studio) doesn't need one.
+        if self.model.startswith("openai/"):
+            return "lm-studio"
+        return None
+
     def _get_instructor(self):
-        """Lazy-init Instructor client."""
+        """Lazy-init Instructor client.
+
+        Uses JSON_SCHEMA mode instead of tool/function-calling mode because
+        local backends (LM Studio, Ollama) don't support tool_choice objects.
+        """
         if self._instructor_client is None:
             import litellm
             import instructor
-            # Configure LiteLLM api_base if set
-            if self.config.llm_api_base:
-                litellm.api_base = self.config.llm_api_base
-            if self.config.llm_api_key:
-                litellm.api_key = self.config.llm_api_key
-            self._instructor_client = instructor.from_litellm(litellm.acompletion)
+            self._instructor_client = instructor.from_litellm(
+                litellm.acompletion, mode=instructor.Mode.JSON_SCHEMA,
+            )
         return self._instructor_client
 
     async def is_available(self) -> bool:
@@ -163,16 +180,16 @@ class LLMClient:
             return False
         try:
             import litellm
-            if self.config.llm_api_base:
-                litellm.api_base = self.config.llm_api_base
-            if self.config.llm_api_key:
-                litellm.api_key = self.config.llm_api_key
-            await litellm.acompletion(
+            kwargs: dict = dict(
                 model=self.model,
                 messages=[{"role": "user", "content": "ping"}],
-                max_tokens=256,  # thinking models need room beyond 1 token
-                think=self.config.llm_think,  # disable thinking for faster health checks
+                max_tokens=256,
             )
+            if self.config.llm_api_base:
+                kwargs["api_base"] = self.config.llm_api_base
+            if self._api_key:
+                kwargs["api_key"] = self._api_key
+            await litellm.acompletion(**kwargs)
             self._available = True
             return True
         except Exception as exc:
@@ -186,10 +203,13 @@ class LLMClient:
         messages: list[dict],
         temperature: float = 0.1,
         max_retries: int = 2,
-    ) -> T | None:
-        """Structured extraction via Instructor. Returns None on failure."""
+    ) -> T:
+        """Structured extraction via Instructor. Raises LLMUnavailableError on failure."""
         if not self.config.llm_enabled:
-            return None
+            raise LLMUnavailableError(
+                "LLM is not enabled. Configure it in Settings or set "
+                "RKA_LLM_ENABLED=true with RKA_LLM_API_BASE pointing to your LM Studio / Ollama."
+            )
         try:
             client = self._get_instructor()
             kwargs: dict = dict(
@@ -198,19 +218,28 @@ class LLMClient:
                 messages=messages,
                 temperature=temperature,
                 max_retries=max_retries,
-                think=self.config.llm_think,  # disable thinking for structured extraction
+                think=self.config.llm_think,
             )
             if self.config.llm_api_base:
                 kwargs["api_base"] = self.config.llm_api_base
-            return await client.chat.completions.create(**kwargs)
+            if self._api_key:
+                kwargs["api_key"] = self._api_key
+            result = await client.chat.completions.create(**kwargs)
+            self._available = True
+            return result
+        except LLMUnavailableError:
+            raise
         except Exception as exc:
-            logger.warning("LLM extraction failed for %s: %s", response_model.__name__, exc)
-            return None
+            self._available = False
+            raise LLMUnavailableError(
+                f"LLM call failed: {exc}. "
+                f"Ensure your LM Studio / Ollama is running and the model is loaded."
+            ) from exc
 
     async def auto_tag(
         self, content: str, existing_tags: list[str] | None = None,
-    ) -> list[str] | None:
-        """Generate tags for content. Returns None if LLM unavailable."""
+    ) -> list[str]:
+        """Generate tags for content."""
         existing_hint = ""
         if existing_tags:
             existing_hint = f"\n\nExisting tags in the project (reuse when applicable): {', '.join(existing_tags[:30])}"
@@ -226,10 +255,10 @@ class LLMClient:
                 ),
             }],
         )
-        return result.tags if result else None
+        return result.tags
 
-    async def auto_classify(self, content: str) -> AutoClassification | None:
-        """Classify confidence and importance. Returns None if LLM unavailable."""
+    async def auto_classify(self, content: str) -> AutoClassification:
+        """Classify confidence and importance."""
         return await self.extract(
             AutoClassification,
             messages=[{
@@ -264,8 +293,8 @@ class LLMClient:
             }],
         )
 
-    async def summarize_entry(self, content: str) -> str | None:
-        """Generate a one-line summary. Returns None if LLM unavailable."""
+    async def summarize_entry(self, content: str) -> str:
+        """Generate a one-line summary."""
         result = await self.extract(
             EntrySummary,
             messages=[{
@@ -273,11 +302,11 @@ class LLMClient:
                 "content": f"Summarize this research entry in one concise sentence:\n\n{content[:2000]}",
             }],
         )
-        return result.summary if result else None
+        return result.summary
 
     async def summarize_entries(
         self, entries: list[dict], max_tokens: int = 500,
-    ) -> str | None:
+    ) -> str:
         """Produce a narrative combining multiple entries."""
         entries_text = "\n\n".join(
             f"[{e.get('type', 'entry')}] {e.get('content', e.get('title', ''))[:300]}"
@@ -293,9 +322,9 @@ class LLMClient:
                 ),
             }],
         )
-        return result.narrative if result else None
+        return result.narrative
 
-    async def produce_narrative(self, package_dict: dict) -> str | None:
+    async def produce_narrative(self, package_dict: dict) -> str:
         """Produce a full narrative for a context package."""
         import json
         return await self.summarize_entries(
@@ -310,14 +339,12 @@ class LLMClient:
         decisions: list[dict],
         literature: list[dict],
         missions: list[dict],
-    ) -> SemanticLinks | None:
+    ) -> SemanticLinks:
         """Infer relationships between a new entry and existing entities.
 
-        Returns SemanticLinks with IDs of related entities, or None if LLM unavailable.
+        Returns SemanticLinks with IDs of related entities.
         Only IDs that appear in the provided candidate lists will be returned.
         """
-        if not self.config.llm_enabled:
-            return None
 
         def fmt(items: list[dict], id_key: str, text_key: str) -> str:
             return "\n".join(
@@ -349,8 +376,6 @@ class LLMClient:
                 ),
             }],
         )
-        if result is None:
-            return None
         # Filter to only valid IDs (LLM may hallucinate)
         result.related_decision_ids = [i for i in result.related_decision_ids if i in valid_dec_ids]
         result.related_literature_ids = [i for i in result.related_literature_ids if i in valid_lit_ids]
@@ -360,11 +385,8 @@ class LLMClient:
 
     async def classify_file(
         self, filename: str, content_preview: str, extension: str,
-    ) -> FileClassification | None:
-        """Classify a research file's content for workspace bootstrap.
-
-        Returns None if LLM unavailable or classification fails.
-        """
+    ) -> FileClassification:
+        """Classify a research file's content for workspace bootstrap."""
         return await self.extract(
             FileClassification,
             messages=[{
@@ -380,13 +402,143 @@ class LLMClient:
             }],
         )
 
+    async def extract_figure(
+        self,
+        context_text: str,
+        page: int | None = None,
+        artifact_id: str | None = None,
+    ):
+        """Extract structured data from a figure/image context.
+
+        Returns FigureExtraction or None if LLM unavailable.
+        """
+        from rka.infra.llm_models import FigureExtraction
+
+        loc_hint = ""
+        if page is not None:
+            loc_hint = f" (from page {page})"
+        if artifact_id:
+            loc_hint += f" [artifact: {artifact_id}]"
+
+        return await self.extract(
+            FigureExtraction,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Extract structured data from this figure/image{loc_hint}.\n\n"
+                    f"Provide: a caption (if visible), a one-paragraph summary, "
+                    f"factual claims with numeric values and confidence scores, "
+                    f"whether it's table-like, and suggested journal entries for notable findings.\n\n"
+                    f"Context:\n{context_text[:3000]}"
+                ),
+            }],
+        )
+
+    async def extract_table(
+        self,
+        table_text: str,
+        context_text: str | None = None,
+    ):
+        """Extract structured table data from text.
+
+        Returns TableExtraction or None if LLM unavailable.
+        """
+        from rka.infra.llm_models import TableExtraction
+
+        ctx = ""
+        if context_text:
+            ctx = f"\n\nSurrounding context:\n{context_text[:1000]}"
+
+        return await self.extract(
+            TableExtraction,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Parse this table into structured data. Extract headers, rows, "
+                    f"a one-sentence summary, and key factual claims.{ctx}\n\n"
+                    f"Table:\n{table_text[:3000]}"
+                ),
+            }],
+        )
+
+    async def generate_summary(
+        self,
+        evidence_blocks: list[dict],
+        scope_label: str = "project",
+        granularity: str = "paragraph",
+    ):
+        """Generate a multi-granularity summary from evidence blocks.
+
+        Each evidence block: {entity_type, entity_id, text, loc?}
+        Returns SummaryOutput or None if LLM unavailable.
+        """
+        from rka.infra.llm_models import SummaryOutput
+
+        evidence_text = "\n\n".join(
+            f"[{b.get('entity_type', 'unknown')}:{b.get('entity_id', '?')}] "
+            f"{b.get('text', '')[:500]}"
+            for b in evidence_blocks[:30]
+        )
+
+        granularity_instr = {
+            "one_line": "Provide only a one-line summary.",
+            "paragraph": "Provide a one-line summary and a one-paragraph summary with key points.",
+            "narrative": "Provide all three: one-line, paragraph, and a multi-paragraph narrative.",
+        }.get(granularity, "Provide a one-line summary and a one-paragraph summary.")
+
+        return await self.extract(
+            SummaryOutput,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Summarize these research evidence blocks for scope '{scope_label}'.\n"
+                    f"{granularity_instr}\n"
+                    f"Cite sources using entity IDs. Identify open questions or gaps.\n\n"
+                    f"Evidence:\n{evidence_text}"
+                ),
+            }],
+        )
+
+    async def answer_qa(
+        self,
+        question: str,
+        evidence_blocks: list[dict],
+        session_context: str | None = None,
+    ):
+        """Answer a research question grounded in evidence blocks (NotebookLM-style).
+
+        Each evidence block: {entity_type, entity_id, text, loc?}
+        Returns QAAnswer or None if LLM unavailable.
+        """
+        from rka.infra.llm_models import QAAnswer
+
+        evidence_text = "\n\n".join(
+            f"[{b.get('entity_type', 'unknown')}:{b.get('entity_id', '?')}] "
+            f"{b.get('text', '')[:500]}"
+            for b in evidence_blocks[:30]
+        )
+
+        ctx = ""
+        if session_context:
+            ctx = f"\n\nSession context:\n{session_context[:500]}"
+
+        return await self.extract(
+            QAAnswer,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Answer this research question using ONLY the provided evidence. "
+                    f"Quote exact excerpts from sources. Suggest follow-up questions.{ctx}\n\n"
+                    f"Question: {question}\n\n"
+                    f"Evidence:\n{evidence_text}"
+                ),
+            }],
+        )
+
     async def extract_pdf_metadata(
         self, first_page_text: str,
-    ) -> PDFMetadataExtraction | None:
-        """Extract title, authors, abstract from PDF first-page text.
-
-        Returns None if LLM unavailable or extraction fails.
-        """
+    ) -> PDFMetadataExtraction:
+        """Extract title, authors, abstract from PDF first-page text."""
         return await self.extract(
             PDFMetadataExtraction,
             messages=[{

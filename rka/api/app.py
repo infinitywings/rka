@@ -6,10 +6,10 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from rka.config import RKAConfig
 from rka.infra.database import Database
@@ -36,6 +36,10 @@ from rka.api.routes import (
     academic as academic_routes,
     workspace as workspace_routes,
     enrich as enrich_routes,
+    graph as graph_routes,
+    summary as summary_routes,
+    artifacts as artifact_routes,
+    llm as llm_routes,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,11 +59,30 @@ async def lifespan(app: FastAPI):
     # Phase 2: Schema extensions (FTS5 + optionally sqlite-vec)
     await db.initialize_phase2_schema()
 
-    # Phase 2: LLM client (lazy — doesn't connect until first use)
+    # Apply any DB-persisted LLM config overrides (from web UI settings)
+    from rka.api.routes.llm import _load_llm_overrides
+    await _load_llm_overrides(config)
+
+    # LLM client — required for Q&A, summaries, and classification
     llm: LLMClient | None = None
     if config.llm_enabled:
         llm = LLMClient(config)
-        logger.info("LLM enrichment enabled (model=%s)", config.llm_model)
+        logger.info("LLM enabled (model=%s, base=%s)", config.llm_model, config.llm_api_base or "default")
+        # Validate LLM is reachable at startup
+        if await llm.is_available():
+            logger.info("LLM health check passed")
+        else:
+            logger.warning(
+                "LLM health check FAILED — Q&A, summaries, and classification "
+                "will error until the LLM backend is reachable. Ensure your "
+                "LM Studio / Ollama instance is running."
+            )
+    else:
+        logger.warning(
+            "LLM is DISABLED (RKA_LLM_ENABLED=false). Q&A, summaries, "
+            "and classification features will not work. Set RKA_LLM_ENABLED=true "
+            "and configure RKA_LLM_API_BASE to your LM Studio / Ollama endpoint."
+        )
     set_llm(llm)
 
     # Phase 2: Embedding service
@@ -102,6 +125,21 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
         lifespan=lifespan,
     )
 
+    # Global error handler for LLM unavailability
+    from rka.infra.llm import LLMUnavailableError
+
+    @app.exception_handler(LLMUnavailableError)
+    async def llm_unavailable_handler(request: Request, exc: LLMUnavailableError):
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": str(exc),
+                "error": "llm_unavailable",
+                "hint": "Ensure your LM Studio / Ollama instance is running and "
+                        "RKA_LLM_ENABLED=true with RKA_LLM_API_BASE set correctly.",
+            },
+        )
+
     # CORS for local web UI development
     app.add_middleware(
         CORSMiddleware,
@@ -129,15 +167,25 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
     app.include_router(academic_routes.router, prefix="/api", tags=["academic"])
     app.include_router(workspace_routes.router, prefix="/api", tags=["workspace"])
     app.include_router(enrich_routes.router, prefix="/api", tags=["enrich"])
+    app.include_router(graph_routes.router, prefix="/api", tags=["graph"])
+    app.include_router(summary_routes.router, prefix="/api", tags=["summary"])
+    app.include_router(artifact_routes.router, prefix="/api", tags=["artifacts"])
+    app.include_router(llm_routes.router, prefix="/api", tags=["llm"])
 
     @app.get("/api/health")
     async def health():
-        from rka.api.deps import get_db
+        from rka.api.deps import get_db, get_llm
         db = get_db()
+        llm = get_llm()
+        llm_status = "disabled"
+        if llm:
+            llm_status = "available" if llm._available else "unavailable"
         return {
             "status": "ok",
             "version": "0.2.0",
             "vec_available": db.vec_available,
+            "llm_status": llm_status,
+            "llm_model": get_config().llm_model if llm else None,
         }
 
     # Phase 3: Static file serving for web UI
