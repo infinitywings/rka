@@ -180,6 +180,25 @@ class BaseService:
             logger.debug("Auto-tagging failed: %s", exc)
             return None
 
+    async def add_link(
+        self,
+        source_type: str,
+        source_id: str,
+        link_type: str,
+        target_type: str,
+        target_id: str,
+        created_by: str = "system",
+    ) -> None:
+        """Record a typed edge in entity_links (idempotent — skips duplicates)."""
+        link_id = generate_id("link")
+        await self.db.execute(
+            """INSERT OR IGNORE INTO entity_links
+               (id, source_type, source_id, link_type, target_type, target_id, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            [link_id, source_type, source_id, link_type, target_type, target_id, created_by],
+        )
+        await self.db.commit()
+
     async def _auto_link(self, content: str, current_type: str):
         """Infer entity links for a new entry using the LLM.
 

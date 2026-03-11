@@ -247,3 +247,22 @@ CREATE TABLE IF NOT EXISTS bootstrap_log (
 
 CREATE INDEX IF NOT EXISTS idx_bootstrap_hash ON bootstrap_log(file_hash);
 CREATE INDEX IF NOT EXISTS idx_bootstrap_scan ON bootstrap_log(scan_id);
+
+-- ============================================================
+-- 11. Entity Links (normalized typed edges for graph queries)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS entity_links (
+    id TEXT PRIMARY KEY,
+    source_type TEXT NOT NULL,  -- 'decision','mission','journal','literature','checkpoint'
+    source_id   TEXT NOT NULL,
+    link_type   TEXT NOT NULL,  -- 'triggered','produced','references','resolved_as','cites','supersedes','evidence_for'
+    target_type TEXT NOT NULL,
+    target_id   TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    created_by  TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_entity_links_source ON entity_links(source_type, source_id);
+CREATE INDEX IF NOT EXISTS idx_entity_links_target ON entity_links(target_type, target_id);
+CREATE INDEX IF NOT EXISTS idx_entity_links_type   ON entity_links(link_type);

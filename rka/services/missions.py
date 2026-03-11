@@ -9,6 +9,7 @@ from rka.models.mission import (
     Mission, MissionCreate, MissionUpdate, MissionTask,
     MissionReport, MissionReportCreate,
 )
+from rka.models.journal import JournalEntryCreate
 from rka.services.base import BaseService, _now
 
 
@@ -178,7 +179,65 @@ class MissionService(BaseService):
             summary=f"Report submitted with {len(data.findings or [])} findings",
         )
         await self.audit("update", "mission", mis_id, actor, {"action": "submit_report"})
+
+        # Auto-materialize report sections as first-class journal entries
+        # so outcomes are searchable, indexable, and visible in the research map.
+        mission = await self.get(mis_id)
+        phase = mission.phase if mission else None
+        await self._materialize_report(mis_id, phase, data, actor)
+
         return await self.get(mis_id)
+
+    async def _materialize_report(
+        self,
+        mis_id: str,
+        phase: str | None,
+        data: MissionReportCreate,
+        actor: str,
+    ) -> None:
+        """Create journal entries from each section of a mission report.
+
+        Uses NoteService so entries get auto-tags, auto-links, FTS indexing,
+        and events — exactly as if the Executor had called rka_add_note manually.
+        Deduplication: skips creation if an identical content+mission entry exists.
+        """
+        # Lazy import to avoid circular dependency
+        from rka.services.notes import NoteService
+
+        note_svc = NoteService(self.db, llm=self.llm, embeddings=self.embeddings)
+
+        async def _create(note_type: str, text: str, confidence: str = "hypothesis") -> None:
+            text = text.strip()
+            if not text:
+                return
+            # Deduplicate: skip if identical content already linked to this mission
+            existing = await self.db.fetchone(
+                "SELECT id FROM journal WHERE related_mission = ? AND content = ?",
+                [mis_id, text],
+            )
+            if existing:
+                return
+            note_in = JournalEntryCreate(
+                type=note_type,
+                content=text,
+                source=actor,
+                phase=phase,
+                related_mission=mis_id,
+                confidence=confidence,
+            )
+            await note_svc.create(note_in, actor=actor)
+
+        for finding in data.findings or []:
+            await _create("finding", finding, confidence="tested")
+
+        for anomaly in data.anomalies or []:
+            await _create("observation", anomaly, confidence="hypothesis")
+
+        for question in data.questions or []:
+            await _create("pi_instruction", question, confidence="hypothesis")
+
+        if data.recommended_next:
+            await _create("idea", data.recommended_next, confidence="hypothesis")
 
     async def get_report(self, mis_id: str | None = None) -> MissionReport | None:
         """Get report for a mission. Defaults to latest complete mission."""

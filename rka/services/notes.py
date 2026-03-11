@@ -76,6 +76,20 @@ class NoteService(BaseService):
                     )
                     await self.db.commit()
 
+        # Write entity_links for whatever related_* fields ended up on the entry
+        # (includes both caller-provided and auto-linked values)
+        final_row = await self.db.fetchone(
+            "SELECT related_decisions, related_literature, related_mission FROM journal WHERE id = ?",
+            [entry_id],
+        )
+        if final_row:
+            for dec_id in self._json_loads(final_row.get("related_decisions"), []):
+                await self.add_link("journal", entry_id, "references", "decision", dec_id, created_by=source or "system")
+            for lit_id in self._json_loads(final_row.get("related_literature"), []):
+                await self.add_link("journal", entry_id, "cites", "literature", lit_id, created_by=source or "system")
+            if final_row.get("related_mission"):
+                await self.add_link("mission", final_row["related_mission"], "produced", "journal", entry_id, created_by=source or "system")
+
         # Auto-generate summary via LLM
         summary = await self._auto_summarize(data.content)
         if summary:
