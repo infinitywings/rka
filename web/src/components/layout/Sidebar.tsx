@@ -21,7 +21,7 @@ const navItems = [
   { to: "/literature", icon: Library, label: "Literature" },
   { to: "/missions", icon: Rocket, label: "Missions" },
   { to: "/timeline", icon: Clock, label: "Timeline" },
-  { to: "/graph", icon: Share2, label: "Graph" },
+  { to: "/graph", icon: Share2, label: "Research Map" },
   { to: "/audit", icon: Shield, label: "Audit Log" },
   { to: "/context", icon: Telescope, label: "Context" },
   { to: "/settings", icon: Settings, label: "Settings" },
