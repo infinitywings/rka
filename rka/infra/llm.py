@@ -63,6 +63,32 @@ class NarrativeSummary(BaseModel):
     )
 
 
+class SemanticLinks(BaseModel):
+    """Semantically inferred links between a new entry and existing entities."""
+    related_decision_ids: list[str] = Field(
+        default_factory=list,
+        description="IDs of decisions this entry is directly related to or produced by.",
+    )
+    related_literature_ids: list[str] = Field(
+        default_factory=list,
+        description="IDs of literature entries this entry references, supports, or is informed by.",
+    )
+    related_mission_id: str | None = Field(
+        None,
+        description="ID of the mission that produced or is most relevant to this entry, or null.",
+    )
+    suggested_type: Literal[
+        "finding", "insight", "methodology", "idea", "observation",
+        "hypothesis", "exploration", "pi_instruction", "summary",
+    ] | None = Field(
+        None,
+        description="Corrected journal entry type based on content, if the provided type appears wrong.",
+    )
+    reasoning: str = Field(
+        ..., description="One sentence explaining the inferred links.",
+    )
+
+
 class FileClassification(BaseModel):
     """LLM classification of a research file's content."""
     content_type: Literal[
@@ -276,6 +302,61 @@ class LLMClient:
             [{"content": json.dumps(package_dict, default=str)}],
             max_tokens=1000,
         )
+
+    async def semantic_link(
+        self,
+        content: str,
+        current_type: str,
+        decisions: list[dict],
+        literature: list[dict],
+        missions: list[dict],
+    ) -> SemanticLinks | None:
+        """Infer relationships between a new entry and existing entities.
+
+        Returns SemanticLinks with IDs of related entities, or None if LLM unavailable.
+        Only IDs that appear in the provided candidate lists will be returned.
+        """
+        if not self.config.llm_enabled:
+            return None
+
+        def fmt(items: list[dict], id_key: str, text_key: str) -> str:
+            return "\n".join(
+                f"  {it[id_key]}: {str(it.get(text_key, ''))[:120]}"
+                for it in items[:20]
+            ) or "  (none)"
+
+        dec_text = fmt(decisions, "id", "question")
+        lit_text = fmt(literature, "id", "title")
+        mis_text = fmt(missions, "id", "objective")
+
+        valid_dec_ids = {d["id"] for d in decisions}
+        valid_lit_ids = {l["id"] for l in literature}
+        valid_mis_ids = {m["id"] for m in missions}
+
+        result = await self.extract(
+            SemanticLinks,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"You are organizing a research knowledge base. Given the entry below, "
+                    f"identify which existing decisions, literature, and missions it is related to. "
+                    f"Only return IDs that appear in the candidate lists. "
+                    f"Also suggest a corrected type if '{current_type}' seems wrong.\n\n"
+                    f"Entry (type={current_type}):\n{content[:1500]}\n\n"
+                    f"Candidate decisions:\n{dec_text}\n\n"
+                    f"Candidate literature:\n{lit_text}\n\n"
+                    f"Candidate missions:\n{mis_text}"
+                ),
+            }],
+        )
+        if result is None:
+            return None
+        # Filter to only valid IDs (LLM may hallucinate)
+        result.related_decision_ids = [i for i in result.related_decision_ids if i in valid_dec_ids]
+        result.related_literature_ids = [i for i in result.related_literature_ids if i in valid_lit_ids]
+        if result.related_mission_id and result.related_mission_id not in valid_mis_ids:
+            result.related_mission_id = None
+        return result
 
     async def classify_file(
         self, filename: str, content_preview: str, extension: str,

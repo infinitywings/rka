@@ -49,6 +49,33 @@ class NoteService(BaseService):
         if tags:
             await self._set_tags("journal", entry_id, tags)
 
+        # Auto-link to related entities via LLM (only when caller didn't specify links)
+        no_links_provided = (
+            not data.related_decisions
+            and not data.related_literature
+            and not data.related_mission
+        )
+        if no_links_provided:
+            links = await self._auto_link(data.content, data.type)
+            if links:
+                link_updates: dict = {}
+                if links.related_decision_ids:
+                    link_updates["related_decisions"] = self._json_dumps(links.related_decision_ids)
+                if links.related_literature_ids:
+                    link_updates["related_literature"] = self._json_dumps(links.related_literature_ids)
+                if links.related_mission_id:
+                    link_updates["related_mission"] = links.related_mission_id
+                # Correct type if LLM suggests a better one
+                if links.suggested_type and links.suggested_type != data.type:
+                    link_updates["type"] = links.suggested_type
+                if link_updates:
+                    set_clause = ", ".join(f"{k} = ?" for k in link_updates)
+                    await self.db.execute(
+                        f"UPDATE journal SET {set_clause} WHERE id = ?",
+                        list(link_updates.values()) + [entry_id],
+                    )
+                    await self.db.commit()
+
         # Auto-generate summary via LLM
         summary = await self._auto_summarize(data.content)
         if summary:

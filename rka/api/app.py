@@ -35,6 +35,7 @@ from rka.api.routes import (
     audit as audit_routes,
     academic as academic_routes,
     workspace as workspace_routes,
+    enrich as enrich_routes,
 )
 
 logger = logging.getLogger(__name__)
@@ -127,6 +128,7 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
     app.include_router(audit_routes.router, prefix="/api", tags=["audit"])
     app.include_router(academic_routes.router, prefix="/api", tags=["academic"])
     app.include_router(workspace_routes.router, prefix="/api", tags=["workspace"])
+    app.include_router(enrich_routes.router, prefix="/api", tags=["enrich"])
 
     @app.get("/api/health")
     async def health():

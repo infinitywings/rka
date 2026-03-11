@@ -180,6 +180,36 @@ class BaseService:
             logger.debug("Auto-tagging failed: %s", exc)
             return None
 
+    async def _auto_link(self, content: str, current_type: str):
+        """Infer entity links for a new entry using the LLM.
+
+        Fetches recent decisions, literature, and missions as candidates,
+        then asks the LLM to identify which are related to this entry.
+        Returns a SemanticLinks object or None if LLM unavailable.
+        """
+        if not self.llm:
+            return None
+        try:
+            decisions = await self.db.fetchall(
+                "SELECT id, question FROM decisions WHERE status != 'superseded' ORDER BY created_at DESC LIMIT 30"
+            )
+            literature = await self.db.fetchall(
+                "SELECT id, title FROM literature ORDER BY created_at DESC LIMIT 30"
+            )
+            missions = await self.db.fetchall(
+                "SELECT id, objective FROM missions WHERE status != 'cancelled' ORDER BY created_at DESC LIMIT 20"
+            )
+            return await self.llm.semantic_link(
+                content=content,
+                current_type=current_type,
+                decisions=[dict(r) for r in decisions],
+                literature=[dict(r) for r in literature],
+                missions=[dict(r) for r in missions],
+            )
+        except Exception as exc:
+            logger.debug("Auto-link failed: %s", exc)
+            return None
+
     async def _auto_summarize(self, content: str) -> str | None:
         """Generate a one-line summary via LLM if available."""
         if not self.llm:

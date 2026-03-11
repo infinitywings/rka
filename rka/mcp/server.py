@@ -1423,6 +1423,41 @@ async def rka_review_bootstrap(scan_id: str) -> str:
 
 
 # ============================================================
+# LLM Enrichment
+# ============================================================
+
+@mcp.tool()
+async def rka_enrich(limit: int = 50, fix_types: bool = True) -> str:
+    """Run LLM semantic linking on journal entries that have no relationships set.
+
+    Scans unlinked journal entries and uses the local LLM to infer:
+    - Which decisions each entry is related to
+    - Which literature it references
+    - Which mission produced it
+    - Whether the entry type is correct (and fixes it if fix_types=True)
+
+    Call this after a batch of notes have been added without explicit links,
+    or periodically to keep the research map accurate.
+
+    Args:
+        limit: Max number of entries to process (default 50)
+        fix_types: Also correct misclassified entry types (default True)
+    """
+    async with _client() as c:
+        r = await c.post("/api/enrich", params={"limit": limit, "fix_types": fix_types})
+        r.raise_for_status()
+        d = r.json()
+        if d.get("status") == "skipped":
+            return f"Enrichment skipped: {d.get('reason', 'LLM not enabled')}"
+        return (
+            f"Enrichment complete\n"
+            f"  Scanned:    {d['scanned']} unlinked entries\n"
+            f"  Updated:    {d['updated']} entries got new links\n"
+            f"  Type fixes: {d['type_fixes']} entries had their type corrected\n"
+        )
+
+
+# ============================================================
 # MCP Prompts — orientation guides for Brain and Executor
 # ============================================================
 
