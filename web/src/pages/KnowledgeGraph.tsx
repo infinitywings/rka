@@ -179,9 +179,8 @@ const nodeTypes = {
 // ── Main component ──────────────────────────────────────────────────────────
 
 export default function KnowledgeGraph() {
-  const [showMissions,   setShowMissions]   = useState(true)
-  const [showFindings,   setShowFindings]   = useState(true)
-  const [showLiterature, setShowLiterature] = useState(true)
+  const [showMissions, setShowMissions] = useState(true)
+  const [showFindings, setShowFindings] = useState(true)
   const [selected, setSelected] = useState<{ id: string; kind: string } | null>(null)
 
   const { data: decisions  = [] } = useQuery({ queryKey: ["decisions"],              queryFn: () => api.listDecisions() })
@@ -193,7 +192,7 @@ export default function KnowledgeGraph() {
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
 
   useEffect(() => {
-    if (decisions.length === 0 && missions.length === 0 && literature.length === 0) return
+    if (decisions.length === 0 && missions.length === 0) return
 
     // ── Build ELK input ────────────────────────────────────────────────────
     type ElkNode = { id: string; width: number; height: number }
@@ -217,10 +216,13 @@ export default function KnowledgeGraph() {
       elkEdges.push({ id: key, sources: [src], targets: [tgt] })
     }
 
-    // Which decisions have missions? (explored = at least one mission)
+    // Which decisions have missions? Check both explicit link and phase-implied
+    const missionPhases = new Set(missions.map(m => m.phase?.toLowerCase()))
     const exploredSet = new Set<string>()
     for (const dec of decisions) {
-      if ((dec.related_missions ?? []).length > 0) exploredSet.add(dec.id)
+      const explicitLink = (dec.related_missions ?? []).length > 0
+      const phaseMatch = missionPhases.has(dec.phase?.toLowerCase())
+      if (explicitLink || phaseMatch) exploredSet.add(dec.id)
     }
 
     // Active missions (for animated edges)
@@ -234,18 +236,9 @@ export default function KnowledgeGraph() {
       if (dec.parent_id && nodeIds.has(dec.parent_id)) addEdge(dec.parent_id, dec.id)
     }
 
-    // 2. Literature — show all; unlinked lit appears as its own cluster
-    if (showLiterature) {
-      for (const lit of literature) {
-        addNode(lit.id, DIM.lit.w, DIM.lit.h)
-      }
-      for (const lit of literature) {
-        for (const decId of lit.related_decisions ?? []) addEdge(lit.id, decId)
-      }
-    }
-
-    // 3. Missions — show ALL non-cancelled missions regardless of decision linkage.
-    // In practice dec.related_missions is often unpopulated, so we cannot require it.
+    // 2. Missions — show ALL non-cancelled missions.
+    // Connect via explicit link if present; otherwise use phase as implied link.
+    // This keeps decisions and missions in one connected graph.
     if (showMissions) {
       for (const mis of missions) {
         if (mis.status === "cancelled") continue
@@ -253,19 +246,38 @@ export default function KnowledgeGraph() {
       }
       for (const mis of missions) {
         if (!nodeIds.has(mis.id)) continue
-        // Link from decision when explicitly recorded
-        const parentDec = decisions.find(d => (d.related_missions ?? []).includes(mis.id))
-        if (parentDec) addEdge(parentDec.id, mis.id)
+        const explicitParent = decisions.find(d => (d.related_missions ?? []).includes(mis.id))
+        if (explicitParent) {
+          addEdge(explicitParent.id, mis.id)
+        } else {
+          // Implied: connect to decisions in the same phase (case-insensitive)
+          const misPhase = mis.phase?.toLowerCase() ?? ""
+          const phaseDecisions = decisions.filter(d =>
+            d.phase?.toLowerCase() === misPhase
+          )
+          // If no phase match, connect to root decisions (no parent) as fallback
+          const targets = phaseDecisions.length > 0
+            ? phaseDecisions
+            : decisions.filter(d => !d.parent_id).slice(0, 2)
+          for (const dec of targets) addEdge(dec.id, mis.id)
+        }
         // Mission dependency chain
         if (mis.depends_on && nodeIds.has(mis.depends_on)) addEdge(mis.depends_on, mis.id)
       }
     }
 
-    // 4. Findings — show any important note that has at least one connection
-    const importantTypes = new Set(["finding", "hypothesis", "insight", "observation", "exploration", "methodology"])
+    // 3. Findings/notes — show important types + any note tagged for context (survey, summary)
+    // "summary" and "idea" types added to catch literature surveys and context entries
+    const importantTypes = new Set([
+      "finding", "hypothesis", "insight", "observation",
+      "exploration", "methodology", "summary", "idea",
+    ])
+    const contextTags = new Set(["literature-survey", "survey", "context", "review", "context-entry"])
     if (showFindings) {
       for (const note of notes) {
-        if (!importantTypes.has(note.type)) continue
+        const isImportantType = importantTypes.has(note.type)
+        const isContextTagged = note.tags.some(t => contextTags.has(t))
+        if (!isImportantType && !isContextTagged) continue
         const hasMission = note.related_mission != null && nodeIds.has(note.related_mission)
         const hasDec = (note.related_decisions ?? []).some(id => nodeIds.has(id))
         if (!hasMission && !hasDec) continue
@@ -273,7 +285,6 @@ export default function KnowledgeGraph() {
       }
       for (const note of notes) {
         if (!nodeIds.has(note.id)) continue
-        // Prefer mission→finding edge; also add decision edges if present
         if (note.related_mission && nodeIds.has(note.related_mission)) {
           addEdge(note.related_mission, note.id)
         }
@@ -319,14 +330,6 @@ export default function KnowledgeGraph() {
         })
       }
 
-      if (showLiterature) {
-        for (const lit of literature) {
-          const pos = posMap.get(lit.id)
-          if (!pos) continue
-          flowNodes.push({ id: lit.id, type: "litNode", position: pos, data: { title: lit.title } })
-        }
-      }
-
       if (showMissions) {
         for (const mis of missions) {
           const pos = posMap.get(mis.id)
@@ -344,24 +347,25 @@ export default function KnowledgeGraph() {
       }
 
       // ── Build React Flow edges with semantic styling ─────────────────────
+      const missionIds = new Set(missions.map(m => m.id))
       const flowEdges: Edge[] = elkEdges
         .map(ee => {
           const src = ee.sources[0], tgt = ee.targets[0]
           if (!posMap.has(src) || !posMap.has(tgt)) return null!
 
-          const srcIsLit = literature.some(l => l.id === src)
-          const tgtIsMis = missions.some(m => m.id === tgt)
-          const srcIsMis = missions.some(m => m.id === src)
+          const tgtIsMis = missionIds.has(tgt)
+          const srcIsMis = missionIds.has(src)
+          // Implied edge = mission had no explicit parent (detected by checking explicit links)
+          const isImplied = tgtIsMis && !decisions.some(d => (d.related_missions ?? []).includes(tgt))
 
           let style: React.CSSProperties
           let animated = false
 
-          if (srcIsLit) {
-            // Literature → Decision: dashed indigo
-            style = { strokeWidth: 1.5, stroke: "#6366f1", strokeDasharray: "5,4" }
-          } else if (tgtIsMis) {
-            // Decision → Mission: solid teal
-            style = { strokeWidth: 1.5, stroke: "#0d9488" }
+          if (tgtIsMis) {
+            // Decision → Mission: solid teal; dashed gray if implied by phase
+            style = isImplied
+              ? { strokeWidth: 1.5, stroke: "#94a3b8", strokeDasharray: "6,4" }
+              : { strokeWidth: 1.5, stroke: "#0d9488" }
           } else if (srcIsMis) {
             // Mission → Finding: solid green, animated for active missions
             style = { strokeWidth: 1, stroke: "#10b981" }
@@ -382,7 +386,7 @@ export default function KnowledgeGraph() {
       setNodes(flowNodes)
       setEdges(flowEdges)
     }).catch(console.error)
-  }, [decisions, missions, notes, literature, showMissions, showFindings, showLiterature, setNodes, setEdges])
+  }, [decisions, missions, notes, literature, showMissions, showFindings, setNodes, setEdges])
 
   const handleNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
     const kind =
@@ -422,7 +426,6 @@ export default function KnowledgeGraph() {
                 if (n.type === "decisionNode") return "#3b82f6"
                 if (n.type === "missionNode")  return "#0d9488"
                 if (n.type === "findingNode")  return "#10b981"
-                if (n.type === "litNode")      return "#6366f1"
                 return "#94a3b8"
               }}
               style={{ height: 100, width: 160 }}
@@ -434,9 +437,8 @@ export default function KnowledgeGraph() {
               <div className="bg-background/95 backdrop-blur border rounded-lg p-3 shadow text-[11px] space-y-2 min-w-[160px]">
                 <p className="text-xs font-semibold">Layers</p>
                 {([
-                  { label: "Literature",  color: "#6366f1", val: showLiterature,  set: setShowLiterature },
-                  { label: "Missions",    color: "#0d9488", val: showMissions,    set: setShowMissions   },
-                  { label: "Findings",    color: "#10b981", val: showFindings,    set: setShowFindings   },
+                  { label: "Missions",  color: "#0d9488", val: showMissions, set: setShowMissions },
+                  { label: "Findings",  color: "#10b981", val: showFindings, set: setShowFindings },
                 ] as const).map(({ label, color, val, set }) => (
                   <label key={label} className="flex items-center gap-2 cursor-pointer select-none">
                     <input
@@ -450,19 +452,16 @@ export default function KnowledgeGraph() {
                 ))}
 
                 <div className="border-t pt-2 space-y-1 text-muted-foreground text-[10px]">
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-full bg-blue-500 shrink-0" />
-                    <span>Decisions (always)</span>
-                  </div>
-                  <div className="pl-1 space-y-px">
-                    <div>🟢 active  ·  ⬜ abandoned</div>
+                  <div className="space-y-px">
+                    <div>🟢 active · ⬜ abandoned</div>
                     <div className="text-amber-600 font-medium">amber = unexplored</div>
                   </div>
                   <div className="border-t pt-1 space-y-px">
-                    <div className="flex items-center gap-1"><span className="inline-block w-4 h-0 border-t-2 border-indigo-400 border-dashed" /> lit informs</div>
-                    <div className="flex items-center gap-1"><span className="inline-block w-4 h-0 border-t-2 border-teal-500" /> guides mission</div>
+                    <div className="flex items-center gap-1"><span className="inline-block w-4 h-0 border-t-2 border-teal-500" /> explicit mission link</div>
+                    <div className="flex items-center gap-1"><span className="inline-block w-4 h-0 border-t-2 border-slate-400 border-dashed" /> phase-implied link</div>
                     <div className="flex items-center gap-1"><span className="inline-block w-4 h-0 border-t border-green-500" /> mission → finding</div>
                   </div>
+                  <p className="border-t pt-1 text-[9px]">Click a finding to see literature</p>
                 </div>
               </div>
             </Panel>
@@ -504,7 +503,7 @@ function NodeDetailSheet({
         <div className="space-y-4 mt-4 text-sm">
           {decision && <DecisionDetail dec={decision} />}
           {mission  && <MissionDetail  mis={mission} />}
-          {note     && <FindingDetail  note={note} />}
+          {note     && <FindingDetail  note={note} literature={literature} />}
           {lit      && <LitDetail      lit={lit} />}
         </div>
       </SheetContent>
@@ -607,7 +606,11 @@ function MissionDetail({ mis }: { mis: Mission }) {
   )
 }
 
-function FindingDetail({ note }: { note: JournalEntry }) {
+function FindingDetail({ note, literature }: { note: JournalEntry; literature: Literature[] }) {
+  const relatedLit = (note.related_literature ?? [])
+    .map(id => literature.find(l => l.id === id))
+    .filter(Boolean) as Literature[]
+
   return (
     <>
       <div className="flex items-center gap-2 flex-wrap">
@@ -621,6 +624,21 @@ function FindingDetail({ note }: { note: JournalEntry }) {
         <p className="whitespace-pre-wrap">{note.content}</p>
       </Section>
       {note.phase && <p className="text-xs text-muted-foreground">Phase: {note.phase}</p>}
+      {relatedLit.length > 0 && (
+        <Section label="Related Literature">
+          <ul className="space-y-1">
+            {relatedLit.map(lit => (
+              <li key={lit.id} className="text-xs">
+                <span className="font-medium">{lit.title}</span>
+                {lit.year && <span className="text-muted-foreground ml-1">({lit.year})</span>}
+                {lit.authors && lit.authors.length > 0 && (
+                  <span className="text-muted-foreground block">{lit.authors.slice(0, 3).join(", ")}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
       <TagList tags={note.tags} />
       <p className="text-[10px] text-muted-foreground font-mono">{note.id}</p>
     </>
