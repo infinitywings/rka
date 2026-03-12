@@ -19,6 +19,8 @@ _PREFIXES = {
     "summary": "sum",
     "qa_session": "qas",
     "qa_log": "qal",
+    "keynode": "knd",
+    "graphview": "gvw",
 }
 
 

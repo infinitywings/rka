@@ -136,6 +136,28 @@ class TestStats:
         assert stats["edge_counts_by_type"]["cites"] == 1
 
 
+class TestCondensedView:
+    @pytest.mark.asyncio
+    async def test_refresh_condensed_view_materializes_keynodes(self, graph_svc: GraphService, db: Database):
+        payload = await graph_svc.refresh_condensed_view(top_per_kind=3, min_importance=0.4)
+
+        assert payload["view"] == "condensed"
+        assert payload["nodes"]
+
+        rows = await db.fetchall("SELECT id, kind, node_refs FROM keynodes")
+        assert rows
+        assert any(r["kind"] == "decision" for r in rows)
+
+    @pytest.mark.asyncio
+    async def test_get_condensed_view_uses_cached_graph_view(self, graph_svc: GraphService):
+        await graph_svc.refresh_condensed_view(top_per_kind=3, min_importance=0.4)
+        payload = await graph_svc.get_graph_view(view="condensed")
+
+        assert payload["view"] == "condensed"
+        assert isinstance(payload["nodes"], list)
+        assert isinstance(payload["edges"], list)
+
+
 class TestGuessType:
     def test_known_prefixes(self):
         assert GraphService._guess_type_from_id("jrn_001") == "journal"

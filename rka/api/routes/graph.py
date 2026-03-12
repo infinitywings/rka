@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Query
 
 from rka.api.deps import get_graph_service
@@ -12,14 +14,27 @@ router = APIRouter()
 
 @router.get("/graph")
 async def get_full_graph(
+    view: Literal["full", "condensed", "keynodes"] = Query(
+        "full", description="Graph view: full, condensed, or keynodes"
+    ),
     include_types: str | None = Query(None, description="Comma-separated entity types to include"),
     phase: str | None = None,
     limit: int = Query(500, le=2000),
     svc: GraphService = Depends(get_graph_service),
 ):
-    """Return the full knowledge graph as {nodes, edges}."""
+    """Return graph payload for full or condensed keynode-centric views."""
     types = [t.strip() for t in include_types.split(",")] if include_types else None
-    return await svc.get_full_graph(include_types=types, phase=phase, limit=limit)
+    return await svc.get_graph_view(view=view, include_types=types, phase=phase, limit=limit)
+
+
+@router.post("/graph/refresh")
+async def refresh_graph_view(
+    top_per_kind: int = Query(8, ge=2, le=30),
+    min_importance: float = Query(0.45, ge=0.0, le=1.0),
+    svc: GraphService = Depends(get_graph_service),
+):
+    """Rebuild condensed keynode view for research-map focus mode."""
+    return await svc.refresh_condensed_view(top_per_kind=top_per_kind, min_importance=min_importance)
 
 
 @router.get("/graph/ego/{entity_id}")
