@@ -14,38 +14,44 @@ async def graph_svc(db: Database) -> GraphService:
     """GraphService with seed data: journal, decision, mission, literature, entity_links."""
     # Seed entities
     await db.execute(
-        "INSERT INTO journal (id, type, content, source, confidence, phase) VALUES (?, ?, ?, ?, ?, ?)",
-        ["jrn_001", "finding", "Side-channel observation on IoT", "pi", "hypothesis", "phase_1"],
+        "INSERT INTO journal (id, type, content, source, confidence, phase, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ["jrn_001", "finding", "Side-channel observation on IoT", "pi", "hypothesis", "phase_1", "proj_default"],
     )
     await db.execute(
-        "INSERT INTO journal (id, type, content, source, confidence, phase) VALUES (?, ?, ?, ?, ?, ?)",
-        ["jrn_002", "insight", "Amplification factor is sqrt(n)", "brain", "tested", "phase_1"],
+        "INSERT INTO journal (id, type, content, source, confidence, phase, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ["jrn_002", "insight", "Amplification factor is sqrt(n)", "brain", "tested", "phase_1", "proj_default"],
     )
     await db.execute(
-        "INSERT INTO decisions (id, question, rationale, decided_by, status, phase) VALUES (?, ?, ?, ?, ?, ?)",
-        ["dec_001", "Statistical vs ML approach", "Balance accuracy", "brain", "active", "phase_1"],
+        "INSERT INTO decisions (id, question, rationale, decided_by, status, phase, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ["dec_001", "Statistical vs ML approach", "Balance accuracy", "brain", "active", "phase_1", "proj_default"],
     )
     await db.execute(
-        "INSERT INTO missions (id, objective, phase, status) VALUES (?, ?, ?, ?)",
-        ["mis_001", "Survey timing methodologies", "phase_1", "active"],
+        "INSERT INTO missions (id, objective, phase, status, project_id) VALUES (?, ?, ?, ?, ?)",
+        ["mis_001", "Survey timing methodologies", "phase_1", "active", "proj_default"],
     )
     await db.execute(
-        "INSERT INTO literature (id, title, status) VALUES (?, ?, ?)",
-        ["lit_001", "Remote Timing Attacks", "reading"],
+        "INSERT INTO literature (id, title, status, project_id) VALUES (?, ?, ?, ?)",
+        ["lit_001", "Remote Timing Attacks", "reading", "proj_default"],
     )
 
     # Seed entity_links
     await db.execute(
-        "INSERT INTO entity_links (id, source_type, source_id, link_type, target_type, target_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        ["lnk_001", "journal", "jrn_001", "references", "decision", "dec_001", "brain"],
+        "INSERT INTO entity_links (id, source_type, source_id, link_type, target_type, target_id, created_by, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ["lnk_001", "journal", "jrn_001", "references", "decision", "dec_001", "brain", "proj_default"],
     )
     await db.execute(
-        "INSERT INTO entity_links (id, source_type, source_id, link_type, target_type, target_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        ["lnk_002", "journal", "jrn_001", "cites", "literature", "lit_001", "brain"],
+        "INSERT INTO entity_links (id, source_type, source_id, link_type, target_type, target_id, created_by, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ["lnk_002", "journal", "jrn_001", "cites", "literature", "lit_001", "brain", "proj_default"],
     )
     await db.execute(
-        "INSERT INTO entity_links (id, source_type, source_id, link_type, target_type, target_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        ["lnk_003", "decision", "dec_001", "triggered", "mission", "mis_001", "brain"],
+        "INSERT INTO entity_links (id, source_type, source_id, link_type, target_type, target_id, created_by, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ["lnk_003", "decision", "dec_001", "triggered", "mission", "mis_001", "brain", "proj_default"],
+    )
+
+    # Different project data for isolation checks
+    await db.execute(
+        "INSERT INTO decisions (id, question, rationale, decided_by, status, phase, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ["dec_999", "Other project only", "N/A", "brain", "active", "phase_x", "proj_other"],
     )
     await db.commit()
 
@@ -86,6 +92,12 @@ class TestFullGraph:
         assert "references" in link_types
         assert "cites" in link_types
         assert "triggered" in link_types
+
+    @pytest.mark.asyncio
+    async def test_scopes_rows_by_project_id(self, graph_svc: GraphService):
+        result = await graph_svc.get_full_graph(project_id="proj_default")
+        node_ids = {n["id"] for n in result["nodes"]}
+        assert "dec_999" not in node_ids
 
 
 class TestEgoGraph:

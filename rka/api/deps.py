@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from functools import lru_cache
 
+from fastapi import Depends, Header, HTTPException, Query
+
 from rka.config import RKAConfig
 from rka.infra.database import Database
 from rka.infra.llm import LLMClient
@@ -43,10 +45,29 @@ _embeddings: EmbeddingService | None = None
 _search: SearchService | None = None
 _context: ContextEngine | None = None
 
+DEFAULT_PROJECT_ID = "proj_default"
+
 
 def set_config(config: RKAConfig) -> None:
     global _config
     _config = config
+
+
+def get_project_id(
+    x_rka_project: str | None = Header(default=None, alias="X-RKA-Project"),
+    project_id: str | None = Query(default=None),
+) -> str:
+    """Resolve project id from header/query with legacy-compatible default."""
+    return (x_rka_project or project_id or DEFAULT_PROJECT_ID).strip()
+
+
+async def require_project(project_id: str = Depends(get_project_id)) -> str:
+    """Validate project exists before executing project-scoped operations."""
+    db = get_db()
+    row = await db.fetchone("SELECT id FROM projects WHERE id = ?", [project_id])
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+    return project_id
 
 
 def get_db() -> Database:

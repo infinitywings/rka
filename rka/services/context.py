@@ -8,7 +8,7 @@ from typing import Literal
 
 from rka.infra.database import Database
 from rka.infra.llm import LLMClient
-from rka.models.context import ContextPackage, ContextRequest
+from rka.models.context import ContextPackage
 from rka.services.search import SearchService
 
 logger = logging.getLogger(__name__)
@@ -270,9 +270,14 @@ class ContextEngine:
 
         return candidates
 
-    async def _get_current_phase(self) -> str | None:
+    async def _get_current_phase(self, project_id: str = "proj_default") -> str | None:
         """Get the current project phase."""
-        row = await self.db.fetchone("SELECT current_phase FROM project_state LIMIT 1")
+        row = await self.db.fetchone(
+            "SELECT current_phase FROM project_states WHERE project_id = ?",
+            [project_id],
+        )
+        if row is None and project_id == "proj_default":
+            row = await self.db.fetchone("SELECT current_phase FROM project_state LIMIT 1")
         return row["current_phase"] if row else None
 
     def _render_entry(self, entry: dict, max_len: int | None = None) -> str:
