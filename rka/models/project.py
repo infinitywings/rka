@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -35,3 +34,23 @@ class ProjectStateUpdate(BaseModel):
     summary: str | None = None
     blockers: str | None = None
     metrics: dict[str, Any] | None = None
+
+
+class ProjectInfo(BaseModel):
+    """Project metadata."""
+
+    id: str
+    name: str
+    description: str | None = None
+    created_by: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class ProjectCreate(BaseModel):
+    """Create a new project container."""
+
+    id: str | None = None
+    name: str
+    description: str | None = None
+    phases_config: list[str] | None = None

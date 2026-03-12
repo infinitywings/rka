@@ -16,6 +16,11 @@ class GraphService:
     def __init__(self, db: Database):
         self.db = db
 
+    @staticmethod
+    def _project_clause(alias: str = "") -> str:
+        prefix = f"{alias}." if alias else ""
+        return f"({prefix}project_id = ? OR {prefix}project_id IS NULL)"
+
     # ------------------------------------------------------------------
     # Full graph (all entity_links + nodes)
     # ------------------------------------------------------------------
@@ -23,6 +28,7 @@ class GraphService:
     async def get_full_graph(
         self,
         *,
+        project_id: str = "proj_default",
         include_types: list[str] | None = None,
         phase: str | None = None,
         limit: int = 500,
@@ -38,8 +44,8 @@ class GraphService:
         # Fetch all entity links
         link_rows = await self.db.fetchall(
             "SELECT source_type, source_id, link_type, target_type, target_id, created_at "
-            "FROM entity_links ORDER BY created_at DESC LIMIT ?",
-            [limit],
+            f"FROM entity_links WHERE {self._project_clause()} ORDER BY created_at DESC LIMIT ?",
+            [project_id, limit],
         )
 
         # Collect unique entity IDs we need to look up
@@ -67,7 +73,8 @@ class GraphService:
             if include_types and etype not in include_types:
                 continue
             conditions = []
-            params: list = []
+            params: list = [project_id]
+            conditions.append(self._project_clause())
             if phase and has_phase:
                 conditions.append("phase = ?")
                 params.append(phase)
@@ -93,7 +100,7 @@ class GraphService:
                 entity_ids.setdefault(etype, set()).add(nid)
 
         # Fill in any linked nodes that weren't fetched as orphans
-        await self._fill_missing_nodes(nodes, entity_ids)
+        await self._fill_missing_nodes(nodes, entity_ids, project_id=project_id)
 
         # Filter by type if requested
         if include_types:
@@ -106,6 +113,7 @@ class GraphService:
     async def get_graph_view(
         self,
         *,
+        project_id: str = "proj_default",
         view: str = "full",
         include_types: list[str] | None = None,
         phase: str | None = None,
@@ -117,22 +125,27 @@ class GraphService:
         - condensed/keynodes: precomputed keynode view (or auto-build if absent)
         """
         if view == "full":
-            return await self.get_full_graph(include_types=include_types, phase=phase, limit=limit)
+            return await self.get_full_graph(
+                project_id=project_id,
+                include_types=include_types,
+                phase=phase,
+                limit=limit,
+            )
 
         if view not in {"condensed", "keynodes"}:
             raise ValueError("Unsupported graph view. Use one of: full, condensed, keynodes")
 
         cached = await self.db.fetchone(
             "SELECT nodes, edges, id, created_at FROM graph_views "
-            "WHERE name = ? ORDER BY created_at DESC LIMIT 1",
-            ["condensed"],
+            f"WHERE name = ? AND {self._project_clause()} ORDER BY created_at DESC LIMIT 1",
+            ["condensed", project_id],
         )
         if not cached:
-            await self.refresh_condensed_view()
+            await self.refresh_condensed_view(project_id=project_id)
             cached = await self.db.fetchone(
                 "SELECT nodes, edges, id, created_at FROM graph_views "
-                "WHERE name = ? ORDER BY created_at DESC LIMIT 1",
-                ["condensed"],
+                f"WHERE name = ? AND {self._project_clause()} ORDER BY created_at DESC LIMIT 1",
+                ["condensed", project_id],
             )
 
         if not cached:
@@ -149,6 +162,7 @@ class GraphService:
     async def refresh_condensed_view(
         self,
         *,
+        project_id: str = "proj_default",
         top_per_kind: int = 8,
         min_importance: float = 0.45,
     ) -> dict[str, Any]:
@@ -156,10 +170,13 @@ class GraphService:
 
         Heuristic ranking is used so this works even without LLM dependencies.
         """
-        candidates = await self._collect_keynode_candidates(top_per_kind=top_per_kind)
+        candidates = await self._collect_keynode_candidates(project_id=project_id, top_per_kind=top_per_kind)
         selected = [c for c in candidates if c["importance"] >= min_importance]
 
-        await self.db.execute("DELETE FROM keynodes WHERE blessed = 0")
+        await self.db.execute(
+            f"DELETE FROM keynodes WHERE blessed = 0 AND {self._project_clause()}",
+            [project_id],
+        )
 
         nodes: list[dict[str, Any]] = []
         ref_to_keynode: dict[tuple[str, str], str] = {}
@@ -169,8 +186,8 @@ class GraphService:
             node_refs = [{"entity_type": item["entity_type"], "entity_id": item["entity_id"]}]
             await self.db.execute(
                 """INSERT INTO keynodes
-                   (id, kind, title, summary, produced_by, importance, node_refs, blessed)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 0)""",
+                   (id, kind, title, summary, produced_by, importance, node_refs, blessed, project_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)""",
                 [
                     keynode_id,
                     item["kind"],
@@ -179,6 +196,7 @@ class GraphService:
                     "system",
                     item["importance"],
                     json.dumps(node_refs),
+                    project_id,
                 ],
             )
             ref_to_keynode[(item["entity_type"], item["entity_id"])] = keynode_id
@@ -196,14 +214,14 @@ class GraphService:
                 }
             )
 
-        edges = await self._build_condensed_edges(ref_to_keynode)
+        edges = await self._build_condensed_edges(project_id=project_id, ref_to_keynode=ref_to_keynode)
 
         view_id = generate_id("graphview")
         params = {"top_per_kind": top_per_kind, "min_importance": min_importance}
         await self.db.execute(
-            """INSERT INTO graph_views (id, name, params, nodes, edges)
-               VALUES (?, ?, ?, ?, ?)""",
-            [view_id, "condensed", json.dumps(params), json.dumps(nodes), json.dumps(edges)],
+            """INSERT INTO graph_views (id, name, params, nodes, edges, project_id)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            [view_id, "condensed", json.dumps(params), json.dumps(nodes), json.dumps(edges), project_id],
         )
         await self.db.commit()
 
@@ -219,7 +237,7 @@ class GraphService:
     # Ego graph (neighborhood of a single entity)
     # ------------------------------------------------------------------
 
-    async def get_ego_graph(self, entity_id: str, depth: int = 1) -> dict[str, Any]:
+    async def get_ego_graph(self, entity_id: str, depth: int = 1, project_id: str = "proj_default") -> dict[str, Any]:
         """Return the subgraph centered on entity_id up to `depth` hops."""
         visited: set[str] = set()
         frontier: set[str] = {entity_id}
@@ -232,8 +250,8 @@ class GraphService:
             rows = await self.db.fetchall(
                 f"SELECT source_type, source_id, link_type, target_type, target_id, created_at "
                 f"FROM entity_links "
-                f"WHERE source_id IN ({placeholders}) OR target_id IN ({placeholders})",
-                list(frontier) + list(frontier),
+                f"WHERE {self._project_clause()} AND (source_id IN ({placeholders}) OR target_id IN ({placeholders}))",
+                [project_id] + list(frontier) + list(frontier),
             )
             visited |= frontier
             next_frontier: set[str] = set()
@@ -270,7 +288,7 @@ class GraphService:
             entity_ids.setdefault(etype, set()).add(nid)
 
         nodes: dict[str, dict] = {}
-        await self._fill_missing_nodes(nodes, entity_ids)
+        await self._fill_missing_nodes(nodes, entity_ids, project_id=project_id)
 
         return {"nodes": list(nodes.values()), "edges": unique_edges}
 
@@ -278,7 +296,7 @@ class GraphService:
     # Decision tree (hierarchical)
     # ------------------------------------------------------------------
 
-    async def get_decision_tree(self, root_id: str | None = None) -> list[dict]:
+    async def get_decision_tree(self, root_id: str | None = None, project_id: str = "proj_default") -> list[dict]:
         """Return decisions as a tree structure.
 
         If root_id is given, return only that subtree.
@@ -287,7 +305,8 @@ class GraphService:
         rows = await self.db.fetchall(
             "SELECT id, parent_id, question, chosen, status, phase, rationale, "
             "related_missions, related_literature, created_at "
-            "FROM decisions ORDER BY created_at"
+            f"FROM decisions WHERE {self._project_clause()} ORDER BY created_at",
+            [project_id],
         )
 
         # Build lookup
@@ -313,8 +332,8 @@ class GraphService:
             links = await self.db.fetchall(
                 f"SELECT source_type, source_id, link_type, target_type, target_id "
                 f"FROM entity_links "
-                f"WHERE source_id IN ({placeholders}) OR target_id IN ({placeholders})",
-                dec_ids + dec_ids,
+                f"WHERE {self._project_clause()} AND (source_id IN ({placeholders}) OR target_id IN ({placeholders}))",
+                [project_id] + dec_ids + dec_ids,
             )
             for link in links:
                 for dec_id in dec_ids:
@@ -347,13 +366,14 @@ class GraphService:
 
     async def get_timeline(
         self,
+        project_id: str = "proj_default",
         phase: str | None = None,
         since: str | None = None,
         limit: int = 100,
     ) -> list[dict]:
         """Return a chronological timeline of events with linked context."""
-        conditions = []
-        params: list = []
+        conditions = [self._project_clause()]
+        params: list = [project_id]
         if phase:
             conditions.append("phase = ?")
             params.append(phase)
@@ -375,7 +395,7 @@ class GraphService:
     # Stats
     # ------------------------------------------------------------------
 
-    async def get_stats(self) -> dict[str, Any]:
+    async def get_stats(self, project_id: str = "proj_default") -> dict[str, Any]:
         """Return graph statistics: node/edge counts by type."""
         node_counts = {}
         for etype, table in [
@@ -385,14 +405,21 @@ class GraphService:
             ("literature", "literature"),
             ("checkpoint", "checkpoints"),
         ]:
-            row = await self.db.fetchone(f"SELECT COUNT(*) as cnt FROM {table}")
+            row = await self.db.fetchone(
+                f"SELECT COUNT(*) as cnt FROM {table} WHERE {self._project_clause()}",
+                [project_id],
+            )
             node_counts[etype] = row["cnt"] if row else 0
 
-        edge_row = await self.db.fetchone("SELECT COUNT(*) as cnt FROM entity_links")
+        edge_row = await self.db.fetchone(
+            f"SELECT COUNT(*) as cnt FROM entity_links WHERE {self._project_clause()}",
+            [project_id],
+        )
         total_edges = edge_row["cnt"] if edge_row else 0
 
         edge_type_rows = await self.db.fetchall(
-            "SELECT link_type, COUNT(*) as cnt FROM entity_links GROUP BY link_type"
+            f"SELECT link_type, COUNT(*) as cnt FROM entity_links WHERE {self._project_clause()} GROUP BY link_type",
+            [project_id],
         )
         edge_counts = {r["link_type"]: r["cnt"] for r in edge_type_rows}
 
@@ -408,7 +435,10 @@ class GraphService:
     # ------------------------------------------------------------------
 
     async def _fill_missing_nodes(
-        self, nodes: dict[str, dict], entity_ids: dict[str, set[str]]
+        self,
+        nodes: dict[str, dict],
+        entity_ids: dict[str, set[str]],
+        project_id: str = "proj_default",
     ) -> None:
         """Look up entity metadata for IDs not already in the nodes dict."""
         table_map: dict[str, tuple[str, str, str, bool]] = {
@@ -433,8 +463,8 @@ class GraphService:
             rows = await self.db.fetchall(
                 f"SELECT id, {label_col}, {status_col}, "
                 f"{phase_col}, created_at "
-                f"FROM {table} WHERE id IN ({placeholders})",
-                missing,
+                f"FROM {table} WHERE {self._project_clause()} AND id IN ({placeholders})",
+                [project_id] + missing,
             )
             for r in rows:
                 label_text = r[label_col] or ""
@@ -452,17 +482,23 @@ class GraphService:
                 if eid not in fetched:
                     nodes[eid] = {"id": eid, "type": etype, "label": eid, "status": None, "phase": "", "created_at": ""}
 
-    async def _collect_keynode_candidates(self, *, top_per_kind: int) -> list[dict[str, Any]]:
+    async def _collect_keynode_candidates(
+        self,
+        *,
+        project_id: str = "proj_default",
+        top_per_kind: int,
+    ) -> list[dict[str, Any]]:
         """Collect and score likely key nodes for condensed graph mode."""
         candidates: list[dict[str, Any]] = []
 
         journal_rows = await self.db.fetchall(
             """SELECT id, type, content, summary, confidence, created_at
                FROM journal
-               WHERE type IN ('finding', 'insight', 'hypothesis', 'methodology', 'summary')
+               WHERE (project_id = ? OR project_id IS NULL)
+                 AND type IN ('finding', 'insight', 'hypothesis', 'methodology', 'summary')
                ORDER BY created_at DESC
                LIMIT ?""",
-            [top_per_kind * 6],
+            [project_id, top_per_kind * 6],
         )
         confidence_bonus = {"verified": 0.28, "tested": 0.18, "hypothesis": 0.10}
         for row in journal_rows:
@@ -481,9 +517,10 @@ class GraphService:
         lit_rows = await self.db.fetchall(
             """SELECT id, title, abstract, status, relevance_score, created_at
                FROM literature
+               WHERE (project_id = ? OR project_id IS NULL)
                ORDER BY created_at DESC
                LIMIT ?""",
-            [top_per_kind * 8],
+            [project_id, top_per_kind * 8],
         )
         status_bonus = {"cited": 0.30, "read": 0.22, "reading": 0.12, "to_read": 0.05}
         for row in lit_rows:
@@ -504,9 +541,10 @@ class GraphService:
         dec_rows = await self.db.fetchall(
             """SELECT id, question, rationale, status, created_at
                FROM decisions
+               WHERE (project_id = ? OR project_id IS NULL)
                ORDER BY created_at DESC
                LIMIT ?""",
-            [top_per_kind * 5],
+            [project_id, top_per_kind * 5],
         )
         dec_bonus = {"active": 0.30, "merged": 0.20, "revisit": 0.16, "superseded": 0.10, "abandoned": 0.08}
         for row in dec_rows:
@@ -525,10 +563,11 @@ class GraphService:
         mission_rows = await self.db.fetchall(
             """SELECT id, objective, report, status, completed_at, created_at
                FROM missions
-               WHERE status IN ('complete', 'partial', 'blocked', 'active')
+               WHERE (project_id = ? OR project_id IS NULL)
+                 AND status IN ('complete', 'partial', 'blocked', 'active')
                ORDER BY COALESCE(completed_at, created_at) DESC
                LIMIT ?""",
-            [top_per_kind * 6],
+            [project_id, top_per_kind * 6],
         )
         milestone_bonus = {"complete": 0.35, "partial": 0.26, "blocked": 0.22, "active": 0.16}
         for row in mission_rows:
@@ -556,6 +595,7 @@ class GraphService:
 
     async def _build_condensed_edges(
         self,
+        project_id: str,
         ref_to_keynode: dict[tuple[str, str], str],
     ) -> list[dict[str, Any]]:
         """Aggregate entity links into condensed keynode edges."""
@@ -566,7 +606,9 @@ class GraphService:
             """SELECT source_type, source_id, target_type, target_id, link_type,
                       COALESCE(link_weight, 0.0) as link_weight,
                       link_reason
-               FROM entity_links"""
+               FROM entity_links
+               WHERE (project_id = ? OR project_id IS NULL)""",
+            [project_id],
         )
 
         aggregated: dict[tuple[str, str, str], dict[str, Any]] = {}
