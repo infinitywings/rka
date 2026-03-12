@@ -155,6 +155,11 @@ class LLMClient:
         return self.config.llm_context_window
 
     @property
+    def available(self) -> bool:
+        """Latest known availability status from health checks."""
+        return bool(self._available)
+
+    @property
     def _content_limit(self) -> int:
         """Max chars for a single content block sent to LLM.
         With 256k context → ~200k chars; with 4k → ~3k chars."""
@@ -399,7 +404,7 @@ class LLMClient:
         mis_text = fmt(missions, "id", "objective")
 
         valid_dec_ids = {d["id"] for d in decisions}
-        valid_lit_ids = {l["id"] for l in literature}
+        valid_lit_ids = {lit["id"] for lit in literature}
         valid_mis_ids = {m["id"] for m in missions}
 
         result = await self.extract(
