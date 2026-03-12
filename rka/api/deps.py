@@ -30,15 +30,23 @@ logger = logging.getLogger(__name__)
 
 @lru_cache()
 def get_config() -> RKAConfig:
+    if _config is not None:
+        return _config
     return RKAConfig()
 
 
 # Singleton instances (initialized in app lifespan)
 _db: Database | None = None
+_config: RKAConfig | None = None
 _llm: LLMClient | None = None
 _embeddings: EmbeddingService | None = None
 _search: SearchService | None = None
 _context: ContextEngine | None = None
+
+
+def set_config(config: RKAConfig) -> None:
+    global _config
+    _config = config
 
 
 def get_db() -> Database:
