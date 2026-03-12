@@ -70,11 +70,6 @@ async def require_project(project_id: str = Depends(get_project_id)) -> str:
     return project_id
 
 
-def set_config(config: RKAConfig) -> None:
-    global _config
-    _config = config
-
-
 def get_db() -> Database:
     if _db is None:
         raise RuntimeError("Database not initialized")
