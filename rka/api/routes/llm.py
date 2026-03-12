@@ -92,7 +92,7 @@ async def get_llm_status() -> LLMStatus:
     llm = get_llm()
     return LLMStatus(
         enabled=config.llm_enabled,
-        available=bool(llm and llm._available),
+        available=bool(llm and llm.available),
         model=config.llm_model,
         api_base=config.llm_api_base,
         api_key_set=bool(config.llm_api_key),
@@ -124,7 +124,7 @@ async def update_llm_config(data: LLMConfigUpdate) -> LLMStatus:
         await llm.is_available()
 
         # Auto-detect context window from backend
-        if config.llm_api_base and llm._available:
+        if config.llm_api_base and llm.available:
             ctx = await _detect_context_window(config.llm_api_base, config.llm_model)
             if ctx:
                 config.llm_context_window = ctx
@@ -135,7 +135,7 @@ async def update_llm_config(data: LLMConfigUpdate) -> LLMStatus:
 
     return LLMStatus(
         enabled=config.llm_enabled,
-        available=bool(llm and llm._available),
+        available=bool(llm and llm.available),
         model=config.llm_model,
         api_base=config.llm_api_base,
         api_key_set=bool(config.llm_api_key),
@@ -256,7 +256,7 @@ async def check_llm() -> LLMStatus:
         await llm.is_available()
     return LLMStatus(
         enabled=config.llm_enabled,
-        available=bool(llm and llm._available),
+        available=bool(llm and llm.available),
         model=config.llm_model,
         api_base=config.llm_api_base,
         api_key_set=bool(config.llm_api_key),

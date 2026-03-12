@@ -26,19 +26,18 @@ class RKAConfig(BaseSettings):
     host: str = Field(default="127.0.0.1", description="API server host")
     port: int = Field(default=9712, description="API server port")
 
-    # LLM — required for Q&A, summaries, classification
-    # Default: LM Studio on localhost:1234 (OpenAI-compatible)
-    llm_model: str = Field(default="openai/qwen3-32b", description="LiteLLM model identifier (openai/* for LM Studio, ollama/* for Ollama)")
-    llm_api_base: str | None = Field(default="http://localhost:1234/v1", description="LLM API base URL (LM Studio default: http://localhost:1234/v1)")
-    llm_api_key: str | None = Field(default=None, description="API key (not needed for local LM Studio / Ollama)")
-    llm_enabled: bool = Field(default=True, description="Enable LLM (required for Q&A, summaries, classification)")
+    # LLM — configured at runtime from Settings page or env vars.
+    llm_model: str = Field(default="", description="LiteLLM model identifier")
+    llm_api_base: str | None = Field(default=None, description="LLM API base URL")
+    llm_api_key: str | None = Field(default=None, description="Optional API key")
+    llm_enabled: bool = Field(default=False, description="Enable LLM features")
     llm_think: bool = Field(
         default=False,
         description="Enable thinking mode for reasoning models (disable for structured extraction)",
     )
 
     # LLM context window — auto-detected from backend, or set manually
-    llm_context_window: int = Field(default=4096, description="Model context window in tokens (auto-detected from LM Studio)")
+    llm_context_window: int = Field(default=0, description="Model context window in tokens (0 = unknown/auto)")
 
     # Embeddings (Phase 2)
     embedding_model: str = Field(

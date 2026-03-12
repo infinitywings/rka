@@ -19,7 +19,7 @@ from rka.services.search import SearchService
 from rka.services.context import ContextEngine
 from rka.api.deps import (
     set_db, set_llm, set_embeddings, set_search_service, set_context_engine,
-    get_config,
+    get_config, set_config,
 )
 from rka.api.routes import (
     project as project_routes,
@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize and tear down database + Phase 2 services on startup/shutdown."""
-    config = get_config()
+    config = getattr(app.state, "config", None) or get_config()
 
     # Phase 1: Database
     db = Database(config.database_url)
@@ -82,13 +82,13 @@ async def lifespan(app: FastAPI):
             logger.warning(
                 "LLM health check FAILED — Q&A, summaries, and classification "
                 "will error until the LLM backend is reachable. Ensure your "
-                "LM Studio / Ollama instance is running."
+                "configured LLM backend is running."
             )
     else:
         logger.warning(
             "LLM is DISABLED (RKA_LLM_ENABLED=false). Q&A, summaries, "
             "and classification features will not work. Set RKA_LLM_ENABLED=true "
-            "and configure RKA_LLM_API_BASE to your LM Studio / Ollama endpoint."
+            "and configure model/backend settings from the Settings page or environment."
         )
     set_llm(llm)
 
@@ -125,12 +125,16 @@ async def lifespan(app: FastAPI):
 
 def create_app(config: RKAConfig | None = None) -> FastAPI:
     """Create and configure the FastAPI application."""
+    effective_config = config or get_config()
+    set_config(effective_config)
+
     app = FastAPI(
         title="Research Knowledge Agent",
         description="REST API for AI-assisted research orchestration",
         version="1.1.0",
         lifespan=lifespan,
     )
+    app.state.config = effective_config
 
     # Global error handler for LLM unavailability
     from rka.infra.llm import LLMUnavailableError
@@ -142,8 +146,7 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
             content={
                 "detail": str(exc),
                 "error": "llm_unavailable",
-                "hint": "Ensure your LM Studio / Ollama instance is running and "
-                        "RKA_LLM_ENABLED=true with RKA_LLM_API_BASE set correctly.",
+                "hint": "Ensure LLM is enabled and model/backend settings are configured correctly.",
             },
         )
 
@@ -186,7 +189,7 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
         llm = get_llm()
         llm_status = "disabled"
         if llm:
-            llm_status = "available" if llm._available else "unavailable"
+            llm_status = "available" if llm.available else "unavailable"
         return {
             "status": "ok",
             "version": "1.1.0",

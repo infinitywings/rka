@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 from pathlib import Path
 
 import click
@@ -22,7 +21,6 @@ def main():
 @click.option("--dir", "directory", default=".", help="Project directory")
 def init(name: str, description: str | None, directory: str):
     """Initialize a new RKA project."""
-    from rka.config import RKAConfig
     from rka.infra.database import Database
     from rka.services.project import ProjectService
 
@@ -43,7 +41,7 @@ def init(name: str, description: str | None, directory: str):
     click.echo(f"✅ Initialized RKA project: {state.project_name}")
     click.echo(f"   Database: {db_path}")
     click.echo(f"   Phase: {state.current_phase}")
-    click.echo(f"\nRun 'rka serve' to start the API server.")
+    click.echo("\nRun 'rka serve' to start the API server.")
 
     # Create .env file if it doesn't exist
     env_path = project_dir / ".env"
@@ -56,11 +54,12 @@ def init(name: str, description: str | None, directory: str):
             f"RKA_PORT=9712\n"
             f"\n"
             f"# LLM (Phase 2 — uncomment when ready)\n"
-            f"# RKA_LLM_MODEL=ollama/qwen3:32b\n"
+            f"# RKA_LLM_MODEL=<provider/model>\n"
+            f"# RKA_LLM_API_BASE=<your_openai_compatible_endpoint>\n"
             f"# RKA_LLM_ENABLED=true\n"
             f"# RKA_EMBEDDINGS_ENABLED=true\n"
         )
-        click.echo(f"   Created .env file")
+        click.echo("   Created .env file")
 
 
 @main.command()
@@ -280,7 +279,7 @@ def bootstrap_scan(folder: str, ignore: tuple, no_llm: bool, json_output: bool):
         click.echo(f"  {f.relative_path} [{f.category.value}→{f.proposed_type}]{dup}{llm_tag}")
 
     if manifest.warnings:
-        click.echo(f"\n⚠️  Warnings:")
+        click.echo("\n⚠️  Warnings:")
         for w in manifest.warnings:
             click.echo(f"  - {w}")
 
