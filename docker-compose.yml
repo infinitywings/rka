@@ -1,0 +1,51 @@
+# =============================================================
+# RKA — Research Knowledge Agent
+# One-click deployment: docker compose up -d
+# =============================================================
+#
+# Prerequisites:
+#   - Docker Desktop (macOS/Windows) or Docker Engine (Linux)
+#   - LM Studio running on host at http://localhost:1234
+#     (or Ollama — change LLM env vars below)
+#
+# Usage:
+#   docker compose up -d          # start
+#   docker compose logs -f rka    # view logs
+#   docker compose down           # stop
+#
+# Web UI:  http://localhost:9712
+# API:     http://localhost:9712/api/docs
+#
+# Claude Desktop MCP config (~/.config/Claude/claude_desktop_config.json):
+#   {
+#     "mcpServers": {
+#       "rka": {
+#         "command": "docker",
+#         "args": ["exec", "-i", "rka-server", "rka", "mcp"]
+#       }
+#     }
+#   }
+# =============================================================
+
+services:
+  rka:
+    build: .
+    container_name: rka-server
+    ports:
+      - "9712:9712"
+    volumes:
+      - rka-data:/data
+    environment:
+      # --- LLM Backend ---
+      # LM Studio (default): runs on your host machine
+      RKA_LLM_API_BASE: http://host.docker.internal:1234/v1
+      RKA_LLM_MODEL: openai/qwen3-32b
+      # Ollama (alternative): uncomment and comment out LM Studio lines
+      # RKA_LLM_API_BASE: http://host.docker.internal:11434/v1
+      # RKA_LLM_MODEL: ollama/qwen3:32b
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  rka-data:

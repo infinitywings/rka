@@ -46,7 +46,17 @@ cd web && npm run build
 Always rebuild before testing: `cd web && npm run build`
 The FastAPI server serves `web/dist/` as static files — changes are not live-reloaded.
 
-## Deployment (Claude Desktop / Claude Code MCP config)
+## Deployment
+
+### Docker (production)
+
+```bash
+docker compose up -d
+# MCP config for Claude Desktop:
+# "rka": { "command": "docker", "args": ["exec", "-i", "rka-server", "rka", "mcp"] }
+```
+
+### pipx (development)
 
 The CLI registered in Claude Desktop/Code must NOT be the venv binary from `Desktop/`:
 macOS sandbox blocks Desktop-resident apps from reading `.venv/pyvenv.cfg`.

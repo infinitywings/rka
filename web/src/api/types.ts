@@ -401,6 +401,7 @@ export interface LLMStatus {
   api_base: string | null
   api_key_set: boolean
   think: boolean
+  context_window: number
 }
 
 export interface LLMConfigUpdate {
@@ -414,6 +415,7 @@ export interface LLMConfigUpdate {
 export interface LLMModel {
   id: string
   owned_by: string | null
+  context_length: number | null
 }
 
 // ---- Academic Import ----

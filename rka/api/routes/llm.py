@@ -22,6 +22,7 @@ class LLMStatus(BaseModel):
     api_base: str | None
     api_key_set: bool
     think: bool
+    context_window: int
 
 
 class LLMConfigUpdate(BaseModel):
@@ -55,6 +56,11 @@ async def _load_llm_overrides(config) -> None:
             config.llm_api_key = v or None
         elif k == "think":
             config.llm_think = v.lower() == "true"
+        elif k == "context_window":
+            try:
+                config.llm_context_window = int(v)
+            except ValueError:
+                pass
 
 
 async def _persist_llm_kv(config) -> None:
@@ -66,6 +72,7 @@ async def _persist_llm_kv(config) -> None:
         "llm.api_base": config.llm_api_base or "",
         "llm.api_key": config.llm_api_key or "",
         "llm.think": str(config.llm_think).lower(),
+        "llm.context_window": str(config.llm_context_window),
     }
     for key, value in pairs.items():
         await db.execute(
@@ -90,6 +97,7 @@ async def get_llm_status() -> LLMStatus:
         api_base=config.llm_api_base,
         api_key_set=bool(config.llm_api_key),
         think=config.llm_think,
+        context_window=config.llm_context_window,
     )
 
 
@@ -114,6 +122,12 @@ async def update_llm_config(data: LLMConfigUpdate) -> LLMStatus:
     if config.llm_enabled:
         llm = LLMClient(config)
         await llm.is_available()
+
+        # Auto-detect context window from backend
+        if config.llm_api_base and llm._available:
+            ctx = await _detect_context_window(config.llm_api_base, config.llm_model)
+            if ctx:
+                config.llm_context_window = ctx
     set_llm(llm)
 
     # Persist to database so changes survive server restarts
@@ -126,12 +140,68 @@ async def update_llm_config(data: LLMConfigUpdate) -> LLMStatus:
         api_base=config.llm_api_base,
         api_key_set=bool(config.llm_api_key),
         think=config.llm_think,
+        context_window=config.llm_context_window,
     )
 
 
 class LLMModel(BaseModel):
     id: str
     owned_by: str | None = None
+    context_length: int | None = None
+
+
+def _normalize_base(api_base: str) -> str:
+    """Strip trailing /v1 from base URL."""
+    base = api_base.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3]
+    return base
+
+
+async def _detect_context_window(api_base: str, model_id: str) -> int | None:
+    """Auto-detect model context window from LM Studio native API or Ollama API.
+
+    LM Studio: GET /api/v0/models → data[].max_context_length / loaded_context_length
+    Ollama:    POST /api/show {name} → model_info.context_length
+    Falls back to None if unavailable.
+    """
+    base = _normalize_base(api_base)
+    # Strip the openai/ prefix used by LiteLLM routing
+    bare_model = model_id.removeprefix("openai/").removeprefix("ollama/")
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            # Try LM Studio native API first
+            try:
+                resp = await client.get(f"{base}/api/v0/models")
+                if resp.is_success:
+                    data = resp.json()
+                    models = data if isinstance(data, list) else data.get("data", [])
+                    for m in models:
+                        if m.get("id") == bare_model or bare_model in str(m.get("id", "")):
+                            ctx = m.get("loaded_context_length") or m.get("max_context_length")
+                            if ctx:
+                                logger.info("Detected context window %d for %s via LM Studio", ctx, bare_model)
+                                return int(ctx)
+            except Exception:
+                pass
+
+            # Try Ollama API
+            try:
+                resp = await client.post(f"{base}/api/show", json={"name": bare_model})
+                if resp.is_success:
+                    info = resp.json()
+                    ctx = (info.get("model_info") or {}).get("context_length")
+                    if ctx:
+                        logger.info("Detected context window %d for %s via Ollama", ctx, bare_model)
+                        return int(ctx)
+            except Exception:
+                pass
+
+    except Exception as exc:
+        logger.debug("Context window detection failed: %s", exc)
+
+    return None
 
 
 @router.get("/llm/models")
@@ -142,15 +212,29 @@ async def list_models() -> list[LLMModel]:
     if not api_base:
         return []
 
-    # Normalize: strip trailing /v1 if present, then append /v1/models
-    base = api_base.rstrip("/")
-    if base.endswith("/v1"):
-        base = base[:-3]
-    url = f"{base}/v1/models"
+    base = _normalize_base(api_base)
 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(url)
+            # Try LM Studio native API first (has context_length info)
+            try:
+                resp = await client.get(f"{base}/api/v0/models")
+                if resp.is_success:
+                    data = resp.json()
+                    models = data if isinstance(data, list) else data.get("data", [])
+                    return [
+                        LLMModel(
+                            id=m["id"],
+                            owned_by=m.get("publisher") or m.get("owned_by"),
+                            context_length=m.get("loaded_context_length") or m.get("max_context_length"),
+                        )
+                        for m in models
+                    ]
+            except Exception:
+                pass
+
+            # Fallback to standard OpenAI /v1/models
+            resp = await client.get(f"{base}/v1/models")
             resp.raise_for_status()
             data = resp.json()
             models = data.get("data", [])
@@ -159,7 +243,7 @@ async def list_models() -> list[LLMModel]:
                 for m in models
             ]
     except Exception as exc:
-        logger.debug("Failed to fetch models from %s: %s", url, exc)
+        logger.debug("Failed to fetch models: %s", exc)
         return []
 
 
@@ -177,4 +261,5 @@ async def check_llm() -> LLMStatus:
         api_base=config.llm_api_base,
         api_key_set=bool(config.llm_api_key),
         think=config.llm_think,
+        context_window=config.llm_context_window,
     )

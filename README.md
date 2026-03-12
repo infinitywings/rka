@@ -53,10 +53,16 @@ RKA implements a three-actor collaboration:
                           │  ┌──────────▼─────────────┐  │
                           │  │ Infrastructure Layer     │  │
                           │  │ SQLite + sqlite-vec      │  │
-                          │  │ LLM (Ollama/LiteLLM)    │  │
+                          │  │ LLM (LiteLLM+Instructor) │  │
                           │  │ Embeddings (FastEmbed)   │  │
-                          │  └─────────────────────────┘  │
-                          └──────────────────────────────┘
+                          │  └──────────┬──────────────┘  │
+                          └─────────────┼──────────────────┘
+                                        │
+                          ┌─────────────▼──────────────────┐
+                          │   LM Studio / Ollama (local)    │
+                          │   OpenAI-compatible API          │
+                          │   Context window auto-detected   │
+                          └─────────────────────────────────┘
 ```
 
 - **Brain** (Claude Desktop): Strategic decisions — what to research, which direction to take, how to interpret findings. Communicates via MCP tools.
@@ -127,119 +133,108 @@ The Context Engine uses these temperatures to build focused context packages wit
 
 ## Installation
 
-### Prerequisites
+### Option A: Docker (Recommended — One-Click)
 
-- Python 3.11+
-- [uv](https://docs.astral.sh/uv/) (recommended) or pip
-- Node.js 18+ (for web dashboard, optional)
-- [Ollama](https://ollama.com/) (for LLM features, optional)
-
-### Install from Source
+Prerequisites: [Docker Desktop](https://www.docker.com/products/docker-desktop/) + [LM Studio](https://lmstudio.ai/) (or Ollama)
 
 ```bash
-# Clone
-git clone <repository-url>
+git clone https://github.com/infinitywings/rka.git
 cd rka
-
-# Install with uv (recommended)
-uv sync
-
-# Or install with pip
-pip install -e .
-
-# For LLM + semantic search features (includes fastembed + sqlite-vec)
-uv sync --extra llm
-
-# For academic API integrations (BibTeX, Zotero, DOI, etc.)
-uv sync --extra academic
-
-# For workspace bootstrap (PDF + DOCX extraction)
-uv sync --extra workspace
-
-# For everything
-uv sync --all-extras
+docker compose up -d
 ```
 
-### Install Ollama Model (Optional)
+That's it. Open `http://localhost:9712` in your browser.
 
-If using LLM enrichment:
+**Connect Claude Desktop (MCP):**
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `~/.config/Claude/claude_desktop_config.json` (Linux):
+
+```json
+{
+  "mcpServers": {
+    "rka": {
+      "command": "docker",
+      "args": ["exec", "-i", "rka-server", "rka", "mcp"]
+    }
+  }
+}
+```
+
+**LLM Setup:** Start LM Studio on your host machine, load a model, and configure it from the web UI Settings page (`http://localhost:9712/settings`). The default API base is `http://localhost:1234/v1`. Context window is auto-detected.
+
+### Option B: From Source (Development)
+
+Prerequisites:
+- Python 3.11+
+- Node.js 18+ (for web dashboard)
+- [LM Studio](https://lmstudio.ai/) or [Ollama](https://ollama.com/) (for LLM features)
 
 ```bash
-ollama pull qwen3.5:35b-a3b
+git clone https://github.com/infinitywings/rka.git
+cd rka
+
+# Create venv and install
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[llm,academic,workspace]"
+
+# Build web UI
+cd web && npm install && npm run build && cd ..
+
+# Start the server
+rka serve
+```
+
+**Connect Claude Desktop/Code (MCP):**
+
+```bash
+# Install the MCP binary via pipx (avoids macOS sandbox issues)
+pipx install . --force
+```
+
+```json
+{
+  "mcpServers": {
+    "rka": {
+      "command": "/Users/<you>/.local/bin/rka",
+      "args": ["mcp"]
+    }
+  }
+}
 ```
 
 ---
 
 ## Quick Start
 
-### 1. Initialize a Project
+### 1. Start the Server
 
 ```bash
-rka init "My Research Project" --description "Investigating X in domain Y"
-```
+# Docker
+docker compose up -d
 
-This creates:
-- `rka.db` — SQLite database with full schema
-- `.env` — Configuration file with sensible defaults
-
-### 2. Start the API Server
-
-```bash
+# Or from source
 rka serve
 ```
 
-The server starts at `http://localhost:9712`. If you've built the web dashboard, it's served at the same URL.
+The web dashboard is at `http://localhost:9712`. API docs at `http://localhost:9712/api/docs`.
 
-### 3. Connect Claude Desktop (MCP)
+### 2. Configure LLM
 
-Add to your Claude Desktop MCP configuration (`claude_desktop_config.json`):
+Open the **Settings** page in the web UI. Set your LLM backend:
 
-```json
-{
-  "mcpServers": {
-    "rka": {
-      "command": "rka",
-      "args": ["mcp"],
-      "env": {
-        "RKA_PROJECT_DIR": "/path/to/your/project"
-      }
-    }
-  }
-}
-```
+- **LM Studio**: API Base = `http://localhost:1234/v1`, Model = select from dropdown
+- **Ollama**: API Base = leave empty, Model = `ollama/qwen3:32b`
 
-Claude Desktop now has access to all `rka_*` tools.
+The model's context window is auto-detected. All LLM-dependent features (Q&A, summaries, smart classification) are disabled until an LLM is connected.
 
-### 4. Connect Claude Code (MCP)
+### 3. Connect Claude Desktop
 
-In your `.claude/settings.json` or project MCP config:
+Add the MCP config (see Installation above). Claude Desktop now has access to all `rka_*` tools for the Brain/Executor workflow.
 
-```json
-{
-  "mcpServers": {
-    "rka": {
-      "command": "rka",
-      "args": ["mcp"],
-      "env": {
-        "RKA_PROJECT_DIR": "/path/to/your/project"
-      }
-    }
-  }
-}
-```
+### 4. Start Researching
 
-### 5. Enable LLM Features (Optional)
-
-Edit `.env` in your project directory:
-
-```env
-RKA_LLM_ENABLED=true
-RKA_LLM_MODEL=ollama/qwen3.5:35b-a3b
-RKA_EMBEDDINGS_ENABLED=true
-RKA_EMBEDDING_MODEL=nomic-ai/nomic-embed-text-v1.5
-```
-
-Restart the server. Auto-enrichment (tagging, classification, supersession detection) and semantic search are now active.
+Use the web UI for browsing and Q&A, or use Claude Desktop/Code with MCP tools for the full Brain/Executor workflow.
 
 ---
 
@@ -352,13 +347,16 @@ All settings use environment variables with the `RKA_` prefix. Place them in a `
 
 ### LLM Settings
 
+LLM configuration is managed from the **web UI Settings page**. Changes persist in the database and survive restarts without touching `.env`. Environment variables serve as initial defaults.
+
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `RKA_LLM_ENABLED` | `false` | Enable LLM auto-enrichment |
-| `RKA_LLM_MODEL` | `ollama/qwen3.5:35b-a3b` | LiteLLM model identifier |
-| `RKA_LLM_API_BASE` | `None` | Custom API base URL (for cloud LLM providers) |
-| `RKA_LLM_API_KEY` | `None` | API key (for cloud LLM providers) |
+| `RKA_LLM_ENABLED` | `true` | Enable LLM features |
+| `RKA_LLM_MODEL` | `openai/qwen3-32b` | LiteLLM model identifier (`openai/*` for LM Studio, `ollama/*` for Ollama) |
+| `RKA_LLM_API_BASE` | `http://localhost:1234/v1` | LLM API base URL |
+| `RKA_LLM_API_KEY` | `None` | API key (not needed for local backends) |
 | `RKA_LLM_THINK` | `false` | Enable thinking/reasoning mode |
+| `RKA_LLM_CONTEXT_WINDOW` | `4096` | Context window in tokens (auto-detected from LM Studio/Ollama) |
 
 ### Embedding Settings
 
@@ -377,21 +375,16 @@ All settings use environment variables with the `RKA_` prefix. Place them in a `
 
 ### LLM Provider Examples
 
-**Ollama (local, default):**
+**LM Studio (recommended, local):**
 ```env
-RKA_LLM_MODEL=ollama/qwen3.5:35b-a3b
-```
-
-**LM Studio:**
-```env
-RKA_LLM_MODEL=lm_studio/your-model
+RKA_LLM_MODEL=openai/qwen3-32b
 RKA_LLM_API_BASE=http://localhost:1234/v1
 ```
 
-**Claude API:**
+**Ollama (local):**
 ```env
-RKA_LLM_MODEL=anthropic/claude-sonnet-4-20250514
-RKA_LLM_API_KEY=sk-ant-...
+RKA_LLM_MODEL=ollama/qwen3:32b
+# No API base needed — LiteLLM routes to Ollama's default port
 ```
 
 **OpenAI-compatible (vLLM, etc.):**
@@ -400,6 +393,8 @@ RKA_LLM_MODEL=openai/your-model
 RKA_LLM_API_BASE=http://localhost:8000/v1
 RKA_LLM_API_KEY=token-xxx
 ```
+
+> **Tip:** You can change all LLM settings at runtime from the web UI Settings page without restarting the server. The model dropdown auto-populates from your LM Studio/Ollama instance.
 
 ---
 
@@ -559,6 +554,32 @@ Interactive API docs available at `http://localhost:9712/docs` (Swagger UI).
 | `PUT` | `/status` | Update project state |
 | `GET` | `/health` | Health check (version, sqlite-vec status) |
 
+### LLM Configuration
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/llm/status` | LLM config, availability, model, context window |
+| `PUT` | `/llm/config` | Update LLM settings at runtime (persisted to DB) |
+| `POST` | `/llm/check` | Re-check LLM connectivity |
+| `GET` | `/llm/models` | List models from LM Studio/Ollama backend |
+
+### Notebook (Q&A + Summaries)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/notebook/qa` | Ask a question grounded in the knowledge base |
+| `GET` | `/notebook/qa/sessions` | List Q&A sessions |
+| `POST` | `/notebook/summary` | Generate a summary (scope: project, phase, mission, tag) |
+| `GET` | `/notebook/summaries` | List generated summaries |
+
+### Knowledge Graph
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/graph` | Get full entity relationship graph |
+| `GET` | `/graph/ego/{entity_id}` | Get ego graph centered on an entity |
+| `GET` | `/graph/stats` | Graph statistics |
+
 ### Events and Tags
 
 | Method | Endpoint | Description |
@@ -630,11 +651,12 @@ The Vite dev server runs at `http://localhost:5173` and proxies API calls to `:9
 | **Decisions** | `/decisions` | Interactive decision tree (React Flow + elkjs), click nodes for detail panel |
 | **Literature** | `/literature` | Table view with reading pipeline status tabs, add/update papers |
 | **Missions** | `/missions` | Active mission with task checklist, checkpoint badges, report viewer |
+| **Notebook** | `/notebook` | Q&A chat (ask questions grounded in your knowledge base) + summary generation |
 | **Timeline** | `/timeline` | Event stream grouped by date, entity/actor filters, causal chain visualization |
-| **Knowledge Graph** | `/graph` | Entity relationship graph (React Flow), nodes colored by type, relationship edges |
+| **Research Map** | `/graph` | Entity relationship graph (React Flow), nodes colored by type, relationship edges |
 | **Audit Log** | `/audit` | System audit trail table with action/entity/actor filters, action counts summary |
 | **Context Inspector** | `/context` | Generate context packages, view temperature badges (HOT/WARM/COLD), copy JSON |
-| **Settings** | `/settings` | API health, DB stats, LLM status, project configuration |
+| **Settings** | `/settings` | LLM configuration + status, API health, DB stats, project configuration |
 
 ### Tech Stack
 
@@ -767,7 +789,7 @@ uv run pytest
 .venv/bin/pytest -v
 ```
 
-All 89 tests cover: database schema, CRUD operations, FTS5 search, context engine, LLM enrichment, event emission, API endpoints, and workspace bootstrap (scan, classify, ingest).
+All 129 tests cover: database schema, CRUD operations, FTS5 search, context engine, LLM enrichment, event emission, API endpoints, workspace bootstrap, graph service, backfill service, and summary/QA services.
 
 ### Project Structure
 
@@ -835,6 +857,7 @@ rka/
 | **Phase 4** | Exploration Visualizations — Timeline page (event stream + causal chains), Knowledge Graph page (entity relationships with React Flow) | Complete |
 | **Phase 5** | Academic APIs + Audit — BibTeX import, DOI enrichment (CrossRef), Semantic Scholar + arXiv search, Mermaid decision tree export, batch import, document ingestion, Audit Log viewer + API | Complete |
 | **Phase 6** | Workspace Bootstrap — Folder scanning with regex + LLM classification, batch ingestion pipeline, duplicate detection, Brain handoff review (34 MCP tools total) | Complete |
+| **Phase 7** | Notebook + LLM Config — Q&A chat, summary generation, runtime LLM configuration, context window auto-detection, knowledge graph, Docker deployment | Complete |
 
 ---
 

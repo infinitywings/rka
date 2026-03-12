@@ -71,6 +71,13 @@ async def lifespan(app: FastAPI):
         # Validate LLM is reachable at startup
         if await llm.is_available():
             logger.info("LLM health check passed")
+            # Auto-detect context window if not already set from DB
+            if config.llm_api_base and config.llm_context_window <= 4096:
+                from rka.api.routes.llm import _detect_context_window
+                ctx = await _detect_context_window(config.llm_api_base, config.llm_model)
+                if ctx:
+                    config.llm_context_window = ctx
+                    logger.info("Auto-detected context window: %d tokens", ctx)
         else:
             logger.warning(
                 "LLM health check FAILED — Q&A, summaries, and classification "
@@ -189,10 +196,13 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
         }
 
     # Phase 3: Static file serving for web UI
-    # Look for web/dist relative to the project root (where pyproject.toml lives)
-    _project_root = Path(__file__).resolve().parent.parent.parent
-    _web_dist = _project_root / "web" / "dist"
-    if _web_dist.is_dir():
+    # Search multiple locations: CWD, project root (dev), package dir (Docker)
+    _candidates = [
+        Path.cwd() / "web" / "dist",                            # CWD (Docker: /app)
+        Path(__file__).resolve().parent.parent.parent / "web" / "dist",  # dev: repo root
+    ]
+    _web_dist = next((p for p in _candidates if p.is_dir()), None)
+    if _web_dist and _web_dist.is_dir():
         _index_html = _web_dist / "index.html"
 
         # Mount static assets (JS, CSS, fonts) at /assets
@@ -215,7 +225,7 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
 
         logger.info("Web UI served from %s", _web_dist)
     else:
-        logger.info("No web UI build found at %s (run 'cd web && npm run build')", _web_dist)
+        logger.info("No web UI build found (run 'cd web && npm run build'). Searched: %s", [str(p) for p in _candidates])
 
     return app
 

@@ -1,0 +1,29 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.venv
+venv
+.pytest_cache
+.ruff_cache
+
+# Node
+web/node_modules
+
+# Data
+*.db
+*.db-shm
+*.db-wal
+data/
+
+# Dev
+.env
+.claude
+tests/
+scripts/
+build/

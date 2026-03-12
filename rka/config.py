@@ -37,6 +37,9 @@ class RKAConfig(BaseSettings):
         description="Enable thinking mode for reasoning models (disable for structured extraction)",
     )
 
+    # LLM context window — auto-detected from backend, or set manually
+    llm_context_window: int = Field(default=4096, description="Model context window in tokens (auto-detected from LM Studio)")
+
     # Embeddings (Phase 2)
     embedding_model: str = Field(
         default="nomic-ai/nomic-embed-text-v1.5", description="FastEmbed model"

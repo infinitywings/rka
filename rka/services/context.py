@@ -37,14 +37,24 @@ class ContextEngine:
         self.hot_days = hot_days
         self.warm_days = warm_days
 
+    @property
+    def _default_max_tokens(self) -> int:
+        """Default context budget, scaled to LLM context window."""
+        if self.llm:
+            # Use ~25% of context window for context packages
+            return max(2000, self.llm.ctx // 4)
+        return 2000
+
     async def get_context(
         self,
         topic: str | None = None,
         phase: str | None = None,
         depth: Literal["summary", "detailed"] = "summary",
-        max_tokens: int = 2000,
+        max_tokens: int | None = None,
     ) -> ContextPackage:
         """Build a context package within token budget."""
+        if max_tokens is None:
+            max_tokens = self._default_max_tokens
         # 1. Gather candidates
         if topic:
             hits = await self.search.search(topic, limit=50)
@@ -224,30 +234,37 @@ class ContextEngine:
         phase_filter = "AND phase = ?" if phase else ""
         phase_params = [phase] if phase else []
 
+        # Scale limits based on LLM context window
+        entries_limit = self.llm._entries_limit if self.llm else 20
+        dec_limit = max(10, entries_limit * 3 // 4)
+        lit_limit = max(5, entries_limit // 2)
+        msn_limit = max(3, entries_limit // 4)
+
         # Recent journal entries
         rows = await self.db.fetchall(
-            f"SELECT *, 'journal' as entity_type FROM journal WHERE confidence != 'superseded' {phase_filter} ORDER BY created_at DESC LIMIT 20",
-            phase_params,
+            f"SELECT *, 'journal' as entity_type FROM journal WHERE confidence != 'superseded' {phase_filter} ORDER BY created_at DESC LIMIT ?",
+            phase_params + [entries_limit],
         )
         candidates.extend(rows)
 
         # Active decisions
         rows = await self.db.fetchall(
-            f"SELECT *, 'decision' as entity_type FROM decisions WHERE status = 'active' {phase_filter} ORDER BY created_at DESC LIMIT 15",
-            phase_params,
+            f"SELECT *, 'decision' as entity_type FROM decisions WHERE status = 'active' {phase_filter} ORDER BY created_at DESC LIMIT ?",
+            phase_params + [dec_limit],
         )
         candidates.extend(rows)
 
         # Recent literature
         rows = await self.db.fetchall(
-            "SELECT *, 'literature' as entity_type FROM literature WHERE status IN ('to_read', 'reading', 'read') ORDER BY created_at DESC LIMIT 10",
+            "SELECT *, 'literature' as entity_type FROM literature WHERE status IN ('to_read', 'reading', 'read') ORDER BY created_at DESC LIMIT ?",
+            [lit_limit],
         )
         candidates.extend(rows)
 
         # Active missions
         rows = await self.db.fetchall(
-            f"SELECT *, 'mission' as entity_type FROM missions WHERE status IN ('active', 'pending') {phase_filter} ORDER BY created_at DESC LIMIT 5",
-            phase_params,
+            f"SELECT *, 'mission' as entity_type FROM missions WHERE status IN ('active', 'pending') {phase_filter} ORDER BY created_at DESC LIMIT ?",
+            phase_params + [msn_limit],
         )
         candidates.extend(rows)
 
@@ -258,9 +275,10 @@ class ContextEngine:
         row = await self.db.fetchone("SELECT current_phase FROM project_state LIMIT 1")
         return row["current_phase"] if row else None
 
-    @staticmethod
-    def _render_entry(entry: dict, max_len: int = 400) -> str:
+    def _render_entry(self, entry: dict, max_len: int | None = None) -> str:
         """Render an entry as a concise text block."""
+        if max_len is None:
+            max_len = self.llm._evidence_block_limit if self.llm else 400
         etype = entry.get("entity_type", "unknown")
         eid = entry.get("id", "?")
 

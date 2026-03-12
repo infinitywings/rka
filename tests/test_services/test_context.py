@@ -169,34 +169,37 @@ class TestClassifyTemperatureDirect:
 class TestRenderEntry:
     """Test entry rendering."""
 
+    def _engine(self):
+        return ContextEngine(db=None, search=None, llm=None)
+
     def test_render_journal(self):
         entry = {"entity_type": "journal", "id": "jrn_1", "type": "finding", "confidence": "hypothesis", "content": "Test content"}
-        text = ContextEngine._render_entry(entry)
+        text = self._engine()._render_entry(entry)
         assert "finding" in text
         assert "hypothesis" in text
         assert "jrn_1" in text
 
     def test_render_decision(self):
         entry = {"entity_type": "decision", "id": "dec_1", "status": "active", "question": "Which approach?", "chosen": "A"}
-        text = ContextEngine._render_entry(entry)
+        text = self._engine()._render_entry(entry)
         assert "decision" in text
         assert "→ A" in text
 
     def test_render_literature(self):
         entry = {"entity_type": "literature", "id": "lit_1", "status": "reading", "title": "Some Paper"}
-        text = ContextEngine._render_entry(entry)
+        text = self._engine()._render_entry(entry)
         assert "lit" in text
         assert "Some Paper" in text
 
     def test_render_mission(self):
         entry = {"entity_type": "mission", "id": "mis_1", "status": "active", "objective": "Do something"}
-        text = ContextEngine._render_entry(entry)
+        text = self._engine()._render_entry(entry)
         assert "mission" in text
         assert "Do something" in text
 
     def test_render_truncates(self):
         entry = {"entity_type": "journal", "id": "j1", "type": "note", "confidence": "?", "content": "x" * 1000}
-        text = ContextEngine._render_entry(entry, max_len=50)
+        text = self._engine()._render_entry(entry, max_len=50)
         assert len(text) < 200  # Should be truncated
 
 

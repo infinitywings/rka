@@ -150,6 +150,48 @@ class LLMClient:
         self._available: bool | None = None
 
     @property
+    def ctx(self) -> int:
+        """Model context window in tokens."""
+        return self.config.llm_context_window
+
+    @property
+    def _content_limit(self) -> int:
+        """Max chars for a single content block sent to LLM.
+        With 256k context → ~200k chars; with 4k → ~3k chars."""
+        return max(2000, self.ctx * 3 // 4)
+
+    @property
+    def _evidence_block_limit(self) -> int:
+        """Max chars per evidence block in Q&A/summary."""
+        if self.ctx >= 128_000:
+            return 4000
+        elif self.ctx >= 32_000:
+            return 2000
+        elif self.ctx >= 8_000:
+            return 1000
+        return 500
+
+    @property
+    def _max_evidence_blocks(self) -> int:
+        """Max evidence blocks for Q&A/summary."""
+        if self.ctx >= 128_000:
+            return 200
+        elif self.ctx >= 32_000:
+            return 80
+        elif self.ctx >= 8_000:
+            return 40
+        return 30
+
+    @property
+    def _entries_limit(self) -> int:
+        """Max entries to include in summarize_entries."""
+        if self.ctx >= 128_000:
+            return 100
+        elif self.ctx >= 32_000:
+            return 50
+        return 20
+
+    @property
     def _api_key(self) -> str | None:
         """Resolve API key: use configured key, or dummy key for openai/ prefix."""
         if self.config.llm_api_key:
@@ -251,7 +293,7 @@ class LLMClient:
                 "content": (
                     f"Generate 2-7 lowercase topic tags for this research entry. "
                     f"Tags should capture key concepts, methods, and domains.{existing_hint}"
-                    f"\n\nEntry:\n{content[:2000]}"
+                    f"\n\nEntry:\n{content[:self._content_limit]}"
                 ),
             }],
         )
@@ -265,7 +307,7 @@ class LLMClient:
                 "role": "user",
                 "content": (
                     f"Classify this research entry's confidence level and importance.\n\n"
-                    f"Entry:\n{content[:2000]}"
+                    f"Entry:\n{content[:self._content_limit]}"
                 ),
             }],
         )
@@ -277,8 +319,8 @@ class LLMClient:
         if not candidates:
             return None
         cand_text = "\n".join(
-            f"- ID: {c['id']}, Content: {c['content'][:200]}"
-            for c in candidates[:10]
+            f"- ID: {c['id']}, Content: {c['content'][:self._evidence_block_limit]}"
+            for c in candidates[:self._max_evidence_blocks // 3]
         )
         return await self.extract(
             SupersessionCheck,
@@ -286,7 +328,7 @@ class LLMClient:
                 "role": "user",
                 "content": (
                     f"Does this new entry supersede (replace/update/invalidate) any of the existing entries?\n\n"
-                    f"New entry:\n{new_content[:1000]}\n\n"
+                    f"New entry:\n{new_content[:self._content_limit]}\n\n"
                     f"Existing entries:\n{cand_text}\n\n"
                     f"If the new entry supersedes one, return its ID. Otherwise return null."
                 ),
@@ -299,7 +341,7 @@ class LLMClient:
             EntrySummary,
             messages=[{
                 "role": "user",
-                "content": f"Summarize this research entry in one concise sentence:\n\n{content[:2000]}",
+                "content": f"Summarize this research entry in one concise sentence:\n\n{content[:self._content_limit]}",
             }],
         )
         return result.summary
@@ -309,8 +351,8 @@ class LLMClient:
     ) -> str:
         """Produce a narrative combining multiple entries."""
         entries_text = "\n\n".join(
-            f"[{e.get('type', 'entry')}] {e.get('content', e.get('title', ''))[:300]}"
-            for e in entries[:20]
+            f"[{e.get('type', 'entry')}] {e.get('content', e.get('title', ''))[:self._evidence_block_limit]}"
+            for e in entries[:self._entries_limit]
         )
         result = await self.extract(
             NarrativeSummary,
@@ -348,8 +390,8 @@ class LLMClient:
 
         def fmt(items: list[dict], id_key: str, text_key: str) -> str:
             return "\n".join(
-                f"  {it[id_key]}: {str(it.get(text_key, ''))[:120]}"
-                for it in items[:20]
+                f"  {it[id_key]}: {str(it.get(text_key, ''))[:self._evidence_block_limit // 2]}"
+                for it in items[:self._entries_limit]
             ) or "  (none)"
 
         dec_text = fmt(decisions, "id", "question")
@@ -369,7 +411,7 @@ class LLMClient:
                     f"identify which existing decisions, literature, and missions it is related to. "
                     f"Only return IDs that appear in the candidate lists. "
                     f"Also suggest a corrected type if '{current_type}' seems wrong.\n\n"
-                    f"Entry (type={current_type}):\n{content[:1500]}\n\n"
+                    f"Entry (type={current_type}):\n{content[:self._content_limit]}\n\n"
                     f"Candidate decisions:\n{dec_text}\n\n"
                     f"Candidate literature:\n{lit_text}\n\n"
                     f"Candidate missions:\n{mis_text}"
@@ -395,7 +437,7 @@ class LLMClient:
                     f"Classify this research file for ingestion into a knowledge base.\n\n"
                     f"Filename: {filename}\n"
                     f"Extension: {extension}\n\n"
-                    f"Content preview:\n{content_preview[:2000]}\n\n"
+                    f"Content preview:\n{content_preview[:self._content_limit]}\n\n"
                     f"Determine the content type, best-fit journal entry type, "
                     f"2-7 lowercase tags, a short title, and your confidence (0-1)."
                 ),
@@ -429,7 +471,7 @@ class LLMClient:
                     f"Provide: a caption (if visible), a one-paragraph summary, "
                     f"factual claims with numeric values and confidence scores, "
                     f"whether it's table-like, and suggested journal entries for notable findings.\n\n"
-                    f"Context:\n{context_text[:3000]}"
+                    f"Context:\n{context_text[:self._content_limit]}"
                 ),
             }],
         )
@@ -447,7 +489,7 @@ class LLMClient:
 
         ctx = ""
         if context_text:
-            ctx = f"\n\nSurrounding context:\n{context_text[:1000]}"
+            ctx = f"\n\nSurrounding context:\n{context_text[:self._evidence_block_limit]}"
 
         return await self.extract(
             TableExtraction,
@@ -456,7 +498,7 @@ class LLMClient:
                 "content": (
                     f"Parse this table into structured data. Extract headers, rows, "
                     f"a one-sentence summary, and key factual claims.{ctx}\n\n"
-                    f"Table:\n{table_text[:3000]}"
+                    f"Table:\n{table_text[:self._content_limit]}"
                 ),
             }],
         )
@@ -476,8 +518,8 @@ class LLMClient:
 
         evidence_text = "\n\n".join(
             f"[{b.get('entity_type', 'unknown')}:{b.get('entity_id', '?')}] "
-            f"{b.get('text', '')[:500]}"
-            for b in evidence_blocks[:30]
+            f"{b.get('text', '')[:self._evidence_block_limit]}"
+            for b in evidence_blocks[:self._max_evidence_blocks]
         )
 
         granularity_instr = {
@@ -514,13 +556,13 @@ class LLMClient:
 
         evidence_text = "\n\n".join(
             f"[{b.get('entity_type', 'unknown')}:{b.get('entity_id', '?')}] "
-            f"{b.get('text', '')[:500]}"
-            for b in evidence_blocks[:30]
+            f"{b.get('text', '')[:self._evidence_block_limit]}"
+            for b in evidence_blocks[:self._max_evidence_blocks]
         )
 
         ctx = ""
         if session_context:
-            ctx = f"\n\nSession context:\n{session_context[:500]}"
+            ctx = f"\n\nSession context:\n{session_context[:self._evidence_block_limit]}"
 
         return await self.extract(
             QAAnswer,
@@ -546,7 +588,7 @@ class LLMClient:
                 "content": (
                     f"Extract the paper title, author names, abstract, and year "
                     f"from this PDF first page text. Return null for fields "
-                    f"you cannot identify.\n\n{first_page_text[:3000]}"
+                    f"you cannot identify.\n\n{first_page_text[:self._content_limit]}"
                 ),
             }],
         )

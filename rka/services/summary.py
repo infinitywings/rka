@@ -124,37 +124,45 @@ class SummaryService(BaseService):
         await self.audit("update", "summary", summary_id, actor, {"action": "bless"})
         return await self.get(summary_id)
 
+    def _evidence_limit(self) -> int:
+        """Max evidence entries to gather, scaled to LLM context window."""
+        if self.llm:
+            return self.llm._max_evidence_blocks
+        return 30
+
     async def _gather_evidence(
         self, scope_type: str, scope_id: str | None
     ) -> list[dict]:
         """Gather evidence blocks for the given scope."""
         evidence: list[dict] = []
+        limit = self._evidence_limit()
 
         if scope_type == "phase":
             # All journal entries + decisions in this phase
             rows = await self.db.fetchall(
-                "SELECT id, content, summary FROM journal WHERE phase = ? ORDER BY created_at DESC LIMIT 30",
-                [scope_id],
+                "SELECT id, content, summary FROM journal WHERE phase = ? ORDER BY created_at DESC LIMIT ?",
+                [scope_id, limit],
             )
             for r in rows:
                 evidence.append({"entity_type": "journal", "entity_id": r["id"], "text": r["content"] or r.get("summary", "")})
             dec_rows = await self.db.fetchall(
-                "SELECT id, question, rationale FROM decisions WHERE phase = ? ORDER BY created_at DESC LIMIT 20",
-                [scope_id],
+                "SELECT id, question, rationale FROM decisions WHERE phase = ? ORDER BY created_at DESC LIMIT ?",
+                [scope_id, limit * 2 // 3],
             )
             for r in dec_rows:
                 evidence.append({"entity_type": "decision", "entity_id": r["id"], "text": f"{r['question']} — {r.get('rationale', '')}"})
 
         elif scope_type == "mission":
             # Mission + its journal entries
+            content_limit = self.llm._content_limit if self.llm else 2000
             msn = await self.db.fetchone("SELECT id, objective, context, report FROM missions WHERE id = ?", [scope_id])
             if msn:
                 evidence.append({"entity_type": "mission", "entity_id": msn["id"], "text": f"{msn['objective']}\n{msn.get('context', '')}"})
                 if msn.get("report"):
-                    evidence.append({"entity_type": "mission", "entity_id": msn["id"], "text": msn["report"][:2000], "loc": "report"})
+                    evidence.append({"entity_type": "mission", "entity_id": msn["id"], "text": msn["report"][:content_limit], "loc": "report"})
             journal_rows = await self.db.fetchall(
-                "SELECT id, content FROM journal WHERE related_mission = ? ORDER BY created_at LIMIT 20",
-                [scope_id],
+                "SELECT id, content FROM journal WHERE related_mission = ? ORDER BY created_at LIMIT ?",
+                [scope_id, limit * 2 // 3],
             )
             for r in journal_rows:
                 evidence.append({"entity_type": "journal", "entity_id": r["id"], "text": r["content"]})
@@ -162,8 +170,8 @@ class SummaryService(BaseService):
         elif scope_type == "tag":
             # All entities with this tag
             tag_rows = await self.db.fetchall(
-                "SELECT entity_type, entity_id FROM tags WHERE tag = ? LIMIT 30",
-                [scope_id],
+                "SELECT entity_type, entity_id FROM tags WHERE tag = ? LIMIT ?",
+                [scope_id, limit],
             )
             for tr in tag_rows:
                 text = await self._fetch_entity_text(tr["entity_type"], tr["entity_id"])
@@ -172,13 +180,15 @@ class SummaryService(BaseService):
 
         else:
             # Project-wide: recent entries across all types
+            per_type_limit = limit // 2
             for table, etype, text_col in [
                 ("journal", "journal", "content"),
                 ("decisions", "decision", "question"),
                 ("literature", "literature", "title"),
             ]:
                 rows = await self.db.fetchall(
-                    f"SELECT id, {text_col} FROM {table} ORDER BY created_at DESC LIMIT 15",
+                    f"SELECT id, {text_col} FROM {table} ORDER BY created_at DESC LIMIT ?",
+                    [per_type_limit],
                 )
                 for r in rows:
                     evidence.append({"entity_type": etype, "entity_id": r["id"], "text": r[text_col] or ""})
@@ -349,6 +359,10 @@ class QAService(BaseService):
         Uses FTS5 search if available, falls back to recent entries.
         """
         evidence: list[dict] = []
+        block_limit = self.llm._evidence_block_limit if self.llm else 500
+        max_blocks = self.llm._max_evidence_blocks if self.llm else 30
+        per_type_fts = max(10, max_blocks // 3)
+        fallback_limit = max(15, max_blocks // 2)
 
         # Try FTS5 search first
         try:
@@ -362,15 +376,15 @@ class QAService(BaseService):
                 rows = await self.db.fetchall(
                     f"SELECT j.id, j.* FROM {table} j "
                     f"JOIN {fts_table} f ON j.id = f.id "
-                    f"WHERE {fts_table} MATCH ? LIMIT 10",
-                    [search_terms],
+                    f"WHERE {fts_table} MATCH ? LIMIT ?",
+                    [search_terms, per_type_fts],
                 )
                 text_col = {"journal": "content", "decision": "question", "literature": "title"}.get(etype, "id")
                 for r in rows:
                     evidence.append({
                         "entity_type": etype,
                         "entity_id": r["id"],
-                        "text": (r.get(text_col) or "")[:500],
+                        "text": (r.get(text_col) or "")[:block_limit],
                     })
         except Exception:
             # FTS5 not available or query failed, fall back to recent entries
@@ -380,18 +394,19 @@ class QAService(BaseService):
         if len(evidence) < 5:
             if scope_type == "phase" and scope_id:
                 rows = await self.db.fetchall(
-                    "SELECT id, content FROM journal WHERE phase = ? ORDER BY created_at DESC LIMIT 15",
-                    [scope_id],
+                    "SELECT id, content FROM journal WHERE phase = ? ORDER BY created_at DESC LIMIT ?",
+                    [scope_id, fallback_limit],
                 )
             else:
                 rows = await self.db.fetchall(
-                    "SELECT id, content FROM journal ORDER BY created_at DESC LIMIT 15",
+                    "SELECT id, content FROM journal ORDER BY created_at DESC LIMIT ?",
+                    [fallback_limit],
                 )
             for r in rows:
                 if not any(e["entity_id"] == r["id"] for e in evidence):
-                    evidence.append({"entity_type": "journal", "entity_id": r["id"], "text": (r["content"] or "")[:500]})
+                    evidence.append({"entity_type": "journal", "entity_id": r["id"], "text": (r["content"] or "")[:block_limit]})
 
-        return evidence[:30]
+        return evidence[:max_blocks]
 
     async def _get_session_context(self, session_id: str) -> str | None:
         """Get previous Q&A in this session as context."""
@@ -403,5 +418,6 @@ class QAService(BaseService):
             return None
         parts = []
         for r in reversed(rows):
-            parts.append(f"Q: {r['question']}\nA: {r['answer'][:200]}")
+            answer_limit = self.llm._evidence_block_limit if self.llm else 200
+            parts.append(f"Q: {r['question']}\nA: {r['answer'][:answer_limit]}")
         return "\n\n".join(parts)

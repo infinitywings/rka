@@ -509,6 +509,23 @@ function LLMConfigCard() {
                   Only needed for remote APIs (OpenAI, Together, etc.). Leave blank for local LM Studio / Ollama.
                 </p>
               </div>
+              <Separator />
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-medium">Thinking Mode</span>
+                  <p className="text-[10px] text-muted-foreground">
+                    Enable chain-of-thought reasoning for better Q&A quality (slower)
+                  </p>
+                </div>
+                <Switch
+                  checked={llm?.think ?? false}
+                  onCheckedChange={(checked) => {
+                    updateMutation.mutate({ think: checked }, {
+                      onSuccess: () => toast.success(checked ? "Thinking mode enabled" : "Thinking mode disabled"),
+                    })
+                  }}
+                />
+              </div>
               {dirty && (
                 <div className="flex gap-2">
                   <Button size="sm" onClick={handleSave} disabled={updateMutation.isPending} className="h-7 text-xs">

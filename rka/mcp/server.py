@@ -20,6 +20,17 @@ def _client() -> httpx.AsyncClient:
     return httpx.AsyncClient(base_url=API_URL, timeout=30.0)
 
 
+def _raise_with_detail(r: httpx.Response) -> None:
+    """Like _raise_with_detail(r) but includes the response body in the error."""
+    if r.is_success:
+        return
+    try:
+        detail = r.json().get("detail", r.text)
+    except Exception:
+        detail = r.text
+    raise Exception(f"API error {r.status_code}: {detail}")
+
+
 # ============================================================
 # Knowledge Management
 # ============================================================
@@ -42,14 +53,14 @@ async def rka_add_note(
 
     Args:
         content: The note content
-        type: Entry type — finding | insight | pi_instruction | exploration | idea | observation | hypothesis | methodology
-        source: Who created this — brain | executor | pi
+        type: Entry type — finding | insight | pi_instruction | exploration | idea | observation | hypothesis | methodology | summary
+        source: Who created this — brain | executor | pi | llm | web_ui | system
         phase: Research phase (uses current if omitted)
         related_decisions: Decision IDs this note relates to
         related_literature: Literature IDs this note references
         related_mission: Mission ID this note belongs to
         supersedes: ID of an older note this one replaces
-        confidence: hypothesis | tested | verified
+        confidence: hypothesis | tested | verified | superseded | retracted
         importance: critical | high | normal | low
         tags: Optional tags for categorization (e.g. ["anomaly-detection", "methodology"])
     """
@@ -63,7 +74,7 @@ async def rka_add_note(
             "tags": tags,
         }
         r = await c.post("/api/notes", json={k: v for k, v in body.items() if v is not None})
-        r.raise_for_status()
+        _raise_with_detail(r)
         d = r.json()
         return f"Created {d['id']} [{d['type']}] confidence={d['confidence']}"
 
@@ -75,6 +86,10 @@ async def rka_update_note(
     type: str | None = None,
     confidence: str | None = None,
     importance: str | None = None,
+    related_decisions: list[str] | None = None,
+    related_literature: list[str] | None = None,
+    related_mission: str | None = None,
+    tags: list[str] | None = None,
 ) -> str:
     """Update an existing journal entry.
 
@@ -82,13 +97,22 @@ async def rka_update_note(
         id: The note ID to update
         content: New content
         type: New type
-        confidence: New confidence level
-        importance: New importance level
+        confidence: New confidence level — hypothesis | tested | verified | superseded | retracted
+        importance: New importance level — critical | high | normal | low
+        related_decisions: Decision IDs this note relates to
+        related_literature: Literature IDs this note references
+        related_mission: Mission ID this note belongs to
+        tags: Tags for categorization
     """
     async with _client() as c:
-        body = {"content": content, "type": type, "confidence": confidence, "importance": importance}
+        body = {
+            "content": content, "type": type, "confidence": confidence,
+            "importance": importance, "related_decisions": related_decisions,
+            "related_literature": related_literature,
+            "related_mission": related_mission, "tags": tags,
+        }
         r = await c.put(f"/api/notes/{id}", json={k: v for k, v in body.items() if v is not None})
-        r.raise_for_status()
+        _raise_with_detail(r)
         return f"Updated {id}"
 
 
@@ -131,7 +155,7 @@ async def rka_add_literature(
             "pdf_path": pdf_path, "added_by": added_by,
         }
         r = await c.post("/api/literature", json={k: v for k, v in body.items() if v is not None})
-        r.raise_for_status()
+        _raise_with_detail(r)
         d = r.json()
         return f"Created {d['id']}: {d['title']}"
 
@@ -189,7 +213,7 @@ async def rka_update_literature(
             "related_decisions": related_decisions, "notes": notes, "tags": tags,
         }
         r = await c.put(f"/api/literature/{id}", json={k: v for k, v in body.items() if v is not None})
-        r.raise_for_status()
+        _raise_with_detail(r)
         return f"Updated {id}"
 
 
@@ -223,7 +247,7 @@ async def rka_add_decision(
             "parent_id": parent_id, "related_literature": related_literature,
         }
         r = await c.post("/api/decisions", json={k: v for k, v in body.items() if v is not None})
-        r.raise_for_status()
+        _raise_with_detail(r)
         d = r.json()
         return f"Created decision {d['id']}: {d['question'][:80]}"
 
@@ -251,7 +275,7 @@ async def rka_update_decision(
             "abandonment_reason": abandonment_reason,
         }
         r = await c.put(f"/api/decisions/{id}", json={k: v for k, v in body.items() if v is not None})
-        r.raise_for_status()
+        _raise_with_detail(r)
         return f"Updated decision {id}"
 
 
@@ -291,7 +315,7 @@ async def rka_create_mission(
             "depends_on": depends_on,
         }
         r = await c.post("/api/missions", json={k: v for k, v in body.items() if v is not None})
-        r.raise_for_status()
+        _raise_with_detail(r)
         d = r.json()
         n_tasks = len(d.get("tasks") or [])
         mid = d["id"]
@@ -318,12 +342,12 @@ async def rka_get_mission(id: str | None = None) -> str:
     async with _client() as c:
         if id:
             r = await c.get(f"/api/missions/{id}")
-            r.raise_for_status()
+            _raise_with_detail(r)
             return json.dumps(r.json(), indent=2)
         # No ID given: prefer active, fall back to most recent pending
         for status in ("active", "pending"):
             r = await c.get("/api/missions", params={"status": status, "limit": 1})
-            r.raise_for_status()
+            _raise_with_detail(r)
             missions = r.json()
             if missions:
                 return json.dumps(missions[0], indent=2)
@@ -348,42 +372,55 @@ async def rka_update_mission_status(
         if tasks:
             body["tasks"] = tasks
         r = await c.put(f"/api/missions/{id}", json=body)
-        r.raise_for_status()
+        _raise_with_detail(r)
         return f"Mission {id} → {status}"
 
 
 @mcp.tool()
 async def rka_submit_report(
     mission_id: str,
-    tasks_completed: list[str] | None = None,
-    findings: list[str] | None = None,
-    anomalies: list[str] | None = None,
-    questions: list[str] | None = None,
-    codebase_state: str | None = None,
-    recommended_next: str | None = None,
+    summary: str,
+    findings: str = "",
+    anomalies: str = "",
+    questions: str = "",
+    codebase_state: str = "",
+    recommended_next: str = "",
 ) -> str:
     """Submit an execution report for a completed mission.
 
+    The summary is the main report body — put the full narrative there.
+    Other fields are optional structured sections (one item per line).
+
     Args:
         mission_id: Mission ID
-        tasks_completed: What was accomplished
-        findings: Key findings
-        anomalies: Unexpected issues
-        questions: Questions for Brain/PI
-        codebase_state: Current state of the codebase
-        recommended_next: Suggested next steps
+        summary: Full report text (methodology, results, what was done)
+        findings: Key findings, one per line (optional)
+        anomalies: Unexpected observations or issues, one per line (optional)
+        questions: Open questions for the PI, one per line (optional)
+        codebase_state: Description of codebase state after mission (optional)
+        recommended_next: Suggested next steps as a single string (optional)
     """
+    def _split(text: str) -> list[str] | None:
+        if not text or not text.strip():
+            return None
+        return [line.strip() for line in text.strip().splitlines() if line.strip()]
+
+    body: dict = {
+        "tasks_completed": [summary],
+        "findings": _split(findings),
+        "anomalies": _split(anomalies),
+        "questions": _split(questions),
+        "codebase_state": codebase_state.strip() or None,
+        "recommended_next": recommended_next.strip() or None,
+    }
+    body = {k: v for k, v in body.items() if v is not None}
+
     async with _client() as c:
-        body = {
-            "tasks_completed": tasks_completed, "findings": findings,
-            "anomalies": anomalies, "questions": questions,
-            "codebase_state": codebase_state, "recommended_next": recommended_next,
-        }
         r = await c.post(
             f"/api/missions/{mission_id}/report",
-            json={k: v for k, v in body.items() if v is not None},
+            json=body,
         )
-        r.raise_for_status()
+        _raise_with_detail(r)
         return f"Report submitted for mission {mission_id}"
 
 
@@ -400,12 +437,12 @@ async def rka_get_report(mission_id: str | None = None) -> str:
         else:
             # Get latest complete mission
             r = await c.get("/api/missions", params={"status": "complete", "limit": 1})
-            r.raise_for_status()
+            _raise_with_detail(r)
             missions = r.json()
             if not missions:
                 return "No completed missions."
             r = await c.get(f"/api/missions/{missions[0]['id']}/report")
-        r.raise_for_status()
+        _raise_with_detail(r)
         data = r.json()
         if data is None:
             return "No report found."
@@ -447,7 +484,7 @@ async def rka_submit_checkpoint(
             "blocking": blocking,
         }
         r = await c.post("/api/checkpoints", json={k: v for k, v in body.items() if v is not None})
-        r.raise_for_status()
+        _raise_with_detail(r)
         d = r.json()
         return f"Checkpoint {d['id']} created ({type}, {'blocking' if blocking else 'non-blocking'})"
 
@@ -461,7 +498,7 @@ async def rka_get_checkpoints(status: str = "open") -> str:
     """
     async with _client() as c:
         r = await c.get("/api/checkpoints", params={"status": status})
-        r.raise_for_status()
+        _raise_with_detail(r)
         chks = r.json()
         if not chks:
             return f"No {status} checkpoints."
@@ -495,7 +532,7 @@ async def rka_resolve_checkpoint(
             "rationale": rationale, "create_decision": create_decision,
         }
         r = await c.put(f"/api/checkpoints/{id}/resolve", json=body)
-        r.raise_for_status()
+        _raise_with_detail(r)
         return f"Checkpoint {id} resolved by {resolved_by}"
 
 
@@ -519,7 +556,7 @@ async def rka_search(
     async with _client() as c:
         body = {"query": query, "entity_types": entity_types, "limit": limit}
         r = await c.post("/api/search", json=body)
-        r.raise_for_status()
+        _raise_with_detail(r)
         results = r.json()
         if not results:
             return f"No results for '{query}'"
@@ -552,7 +589,7 @@ async def rka_get_decision_tree(
         if root_id:
             params["root_id"] = root_id
         r = await c.get("/api/graph/decision-tree", params=params)
-        r.raise_for_status()
+        _raise_with_detail(r)
         tree = r.json()
 
         def fmt_node(node, indent=0):
@@ -599,7 +636,7 @@ async def rka_get_literature(
         if query:
             params["query"] = query
         r = await c.get("/api/literature", params=params)
-        r.raise_for_status()
+        _raise_with_detail(r)
         entries = r.json()
         if not entries:
             return "No literature entries found."
@@ -623,9 +660,9 @@ async def rka_get_journal(
     """Get journal entries.
 
     Args:
-        type: finding | insight | pi_instruction | exploration | idea | observation | hypothesis | methodology
+        type: finding | insight | pi_instruction | exploration | idea | observation | hypothesis | methodology | summary
         phase: Filter by phase
-        confidence: hypothesis | tested | verified
+        confidence: hypothesis | tested | verified | superseded | retracted
         since: ISO date to filter from
         limit: Max results
     """
@@ -640,7 +677,7 @@ async def rka_get_journal(
         if since:
             params["since"] = since
         r = await c.get("/api/notes", params=params)
-        r.raise_for_status()
+        _raise_with_detail(r)
         entries = r.json()
         if not entries:
             return "No journal entries found."
@@ -660,7 +697,7 @@ async def rka_get_status() -> str:
     async with _client() as c:
         # Gather all status info in parallel-ish (sequential for simplicity)
         status_r = await c.get("/api/status")
-        status_r.raise_for_status()
+        _raise_with_detail(status_r)
         status = status_r.json()
 
         missions_r = await c.get("/api/missions", params={"status": "active", "limit": 1})
@@ -715,7 +752,7 @@ async def rka_update_status(
             "blockers": blockers, "metrics": metrics,
         }
         r = await c.put("/api/status", json={k: v for k, v in body.items() if v is not None})
-        r.raise_for_status()
+        _raise_with_detail(r)
         return f"Status updated"
 
 
@@ -748,7 +785,7 @@ async def rka_import_bibtex(
             "skip_duplicates": skip_duplicates,
         }
         r = await c.post("/api/import/bibtex", json=body)
-        r.raise_for_status()
+        _raise_with_detail(r)
         data = r.json()
         imported = data.get("imported", [])
         skipped = data.get("skipped", [])
@@ -776,7 +813,7 @@ async def rka_enrich_doi(lit_id: str) -> str:
     """
     async with _client() as c:
         r = await c.post(f"/api/literature/{lit_id}/enrich-doi")
-        r.raise_for_status()
+        _raise_with_detail(r)
         data = r.json()
         if data.get("status") == "enriched":
             return f"Enriched {lit_id}: updated {', '.join(data['fields_updated'])}"
@@ -803,7 +840,7 @@ async def rka_export_mermaid(
         if active_only:
             params["active_only"] = "true"
         r = await c.get("/api/decisions/mermaid", params=params)
-        r.raise_for_status()
+        _raise_with_detail(r)
         data = r.json()
         return data.get("mermaid", "graph TD\n    empty[No decisions yet]")
 
@@ -824,7 +861,7 @@ async def rka_batch_import(
     async with _client() as c:
         body = {"entries": entries, "actor": actor}
         r = await c.post("/api/import/batch", json=body)
-        r.raise_for_status()
+        _raise_with_detail(r)
         data = r.json()
         imported = data.get("imported", [])
         errors = data.get("errors", [])
@@ -877,7 +914,7 @@ async def rka_ingest_document(
             "split_by_headings": split_by_headings,
         }
         r = await c.post("/api/ingest/document", json={k: v for k, v in body.items() if v is not None})
-        r.raise_for_status()
+        _raise_with_detail(r)
         data = r.json()
         created = data.get("created", [])
         errors = data.get("errors", [])
@@ -906,7 +943,7 @@ async def rka_export(format: str = "markdown", scope: str = "state") -> str:
     async with _client() as c:
         if scope == "state":
             r = await c.get("/api/status")
-            r.raise_for_status()
+            _raise_with_detail(r)
             if format == "json":
                 return json.dumps(r.json(), indent=2)
             s = r.json()
@@ -915,15 +952,15 @@ async def rka_export(format: str = "markdown", scope: str = "state") -> str:
         elif scope == "decisions":
             if format == "mermaid":
                 r = await c.get("/api/decisions/mermaid")
-                r.raise_for_status()
+                _raise_with_detail(r)
                 return r.json().get("mermaid", "")
             r = await c.get("/api/decisions/tree")
-            r.raise_for_status()
+            _raise_with_detail(r)
             return json.dumps(r.json(), indent=2)
 
         elif scope == "literature":
             r = await c.get("/api/literature", params={"limit": 200})
-            r.raise_for_status()
+            _raise_with_detail(r)
             if format == "json":
                 return json.dumps(r.json(), indent=2)
             entries = r.json()
@@ -966,7 +1003,7 @@ async def rka_get_context(
             "depth": depth, "max_tokens": max_tokens,
         }
         r = await c.post("/api/context", json={k: v for k, v in body.items() if v is not None})
-        r.raise_for_status()
+        _raise_with_detail(r)
         pkg = r.json()
 
         lines = []
@@ -1016,7 +1053,7 @@ async def rka_summarize(
     async with _client() as c:
         body = {"topic": topic, "phase": phase, "entity_ids": entity_ids}
         r = await c.post("/api/summarize", json={k: v for k, v in body.items() if v is not None})
-        r.raise_for_status()
+        _raise_with_detail(r)
         data = r.json()
         return (
             f"Summary created: {data.get('summary_id', 'unknown')}\n"
@@ -1037,7 +1074,7 @@ async def rka_eviction_sweep(dry_run: bool = True) -> str:
     """
     async with _client() as c:
         r = await c.post("/api/eviction-sweep", params={"dry_run": str(dry_run).lower()})
-        r.raise_for_status()
+        _raise_with_detail(r)
         data = r.json()
         proposed = data.get("proposed", [])
         if not proposed:
@@ -1085,7 +1122,7 @@ async def rka_search_semantic_scholar(
                 "https://api.semanticscholar.org/graph/v1/paper/search",
                 params=params,
             )
-            r.raise_for_status()
+            _raise_with_detail(r)
             data = r.json()
     except Exception as exc:
         return f"Semantic Scholar search failed: {exc}"
@@ -1166,7 +1203,7 @@ async def rka_search_arxiv(
     try:
         async with hx.AsyncClient(timeout=15.0) as client:
             r = await client.get("http://export.arxiv.org/api/query", params=params)
-            r.raise_for_status()
+            _raise_with_detail(r)
             xml_text = r.text
     except Exception as exc:
         return f"arXiv search failed: {exc}"
@@ -1269,7 +1306,7 @@ async def rka_scan_workspace(
             "use_llm": use_llm,
         }
         r = await c.post("/api/workspace/scan", json=body, timeout=120.0)
-        r.raise_for_status()
+        _raise_with_detail(r)
         data = r.json()
 
     # Format summary for the Brain
@@ -1356,7 +1393,7 @@ async def rka_bootstrap_workspace(
             "use_llm": use_llm,
         }
         r = await c.post("/api/workspace/scan", json=scan_body, timeout=120.0)
-        r.raise_for_status()
+        _raise_with_detail(r)
         manifest = r.json()
 
     # Step 2: Ingest
@@ -1370,7 +1407,7 @@ async def rka_bootstrap_workspace(
             "dry_run": dry_run,
         }
         r = await c.post("/api/workspace/ingest", json=ingest_body, timeout=300.0)
-        r.raise_for_status()
+        _raise_with_detail(r)
         result = r.json()
 
     # Format response
@@ -1413,7 +1450,7 @@ async def rka_review_bootstrap(scan_id: str) -> str:
     """
     async with _client() as c:
         r = await c.get(f"/api/workspace/review/{scan_id}", timeout=60.0)
-        r.raise_for_status()
+        _raise_with_detail(r)
         data = r.json()
 
     lines = [
@@ -1471,7 +1508,7 @@ async def rka_enrich(limit: int = 50, fix_types: bool = True) -> str:
     """
     async with _client() as c:
         r = await c.post("/api/enrich", params={"limit": limit, "fix_types": fix_types})
-        r.raise_for_status()
+        _raise_with_detail(r)
         d = r.json()
         if d.get("status") == "skipped":
             return f"Enrichment skipped: {d.get('reason', 'LLM not enabled')}"
@@ -1509,7 +1546,7 @@ async def rka_get_graph(
         if phase:
             params["phase"] = phase
         r = await c.get("/api/graph", params=params)
-        r.raise_for_status()
+        _raise_with_detail(r)
         d = r.json()
         return (
             f"Knowledge graph: {len(d['nodes'])} nodes, {len(d['edges'])} edges\n\n"
@@ -1534,7 +1571,7 @@ async def rka_get_ego_graph(entity_id: str, depth: int = 1) -> str:
     """
     async with _client() as c:
         r = await c.get(f"/api/graph/ego/{entity_id}", params={"depth": depth})
-        r.raise_for_status()
+        _raise_with_detail(r)
         d = r.json()
         lines = [f"Ego graph for {entity_id}: {len(d['nodes'])} nodes, {len(d['edges'])} edges\n"]
         for node in d["nodes"]:
@@ -1552,7 +1589,7 @@ async def rka_graph_stats() -> str:
     """Get knowledge graph statistics: entity counts, edge counts by type."""
     async with _client() as c:
         r = await c.get("/api/graph/stats")
-        r.raise_for_status()
+        _raise_with_detail(r)
         d = r.json()
         lines = [f"Knowledge graph: {d['total_nodes']} nodes, {d['total_edges']} edges\n"]
         lines.append("Nodes:")
@@ -1590,7 +1627,7 @@ async def rka_generate_summary(
             "scope_id": scope_id,
             "granularity": granularity,
         })
-        r.raise_for_status()
+        _raise_with_detail(r)
         d = r.json()
         if "error" in d:
             return f"Summary generation failed: {d['error']}"
@@ -1637,7 +1674,7 @@ async def rka_ask(
             "scope_type": scope_type,
             "scope_id": scope_id,
         })
-        r.raise_for_status()
+        _raise_with_detail(r)
         d = r.json()
         if "error" in d:
             return f"QA failed: {d['error']}"
@@ -1783,7 +1820,8 @@ If no mission exists, ask the Brain or PI for direction before starting.
 - Do not continue past a blocking decision; wait for `rka_resolve_checkpoint`
 
 ### On Completion
-- `rka_submit_report(mission_id, summary, findings, methodology_notes, next_steps)` — required at mission end
+- `rka_submit_report(mission_id, summary, findings, anomalies, questions, codebase_state, recommended_next)` — required at mission end
+- `summary`: full narrative report. `findings`/`anomalies`/`questions`: one item per line. `codebase_state`/`recommended_next`: plain strings.
 - Include concrete findings, not just "task completed"
 
 ### Literature (when relevant)
