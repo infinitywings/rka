@@ -12,6 +12,7 @@ _PREFIXES = {
     "mission": "mis",
     "checkpoint": "chk",
     "event": "evt",
+    "project": "prj",
     "scan": "scn",
     "link": "lnk",
     "artifact": "art",

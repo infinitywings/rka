@@ -225,6 +225,10 @@ class LLMClient:
         """Health check — can we reach the LLM?"""
         if not self.config.llm_enabled:
             return False
+        if not self.model:
+            self._available = False
+            logger.debug("LLM health check skipped: no model configured")
+            return False
         try:
             import litellm
             kwargs: dict = dict(
@@ -255,7 +259,11 @@ class LLMClient:
         if not self.config.llm_enabled:
             raise LLMUnavailableError(
                 "LLM is not enabled. Configure it in Settings or set "
-                "RKA_LLM_ENABLED=true with RKA_LLM_API_BASE pointing to your LM Studio / Ollama."
+                "RKA_LLM_ENABLED=true and provide model/backend settings."
+            )
+        if not self.model:
+            raise LLMUnavailableError(
+                "LLM model is not configured. Set a model in Settings before using LLM features."
             )
         try:
             client = self._get_instructor()
@@ -280,7 +288,7 @@ class LLMClient:
             self._available = False
             raise LLMUnavailableError(
                 f"LLM call failed: {exc}. "
-                f"Ensure your LM Studio / Ollama is running and the model is loaded."
+                f"Ensure your configured LLM backend is reachable and the selected model is available."
             ) from exc
 
     async def auto_tag(

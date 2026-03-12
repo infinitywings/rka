@@ -82,13 +82,13 @@ async def lifespan(app: FastAPI):
             logger.warning(
                 "LLM health check FAILED — Q&A, summaries, and classification "
                 "will error until the LLM backend is reachable. Ensure your "
-                "LM Studio / Ollama instance is running."
+                "configured LLM backend is running."
             )
     else:
         logger.warning(
             "LLM is DISABLED (RKA_LLM_ENABLED=false). Q&A, summaries, "
             "and classification features will not work. Set RKA_LLM_ENABLED=true "
-            "and configure RKA_LLM_API_BASE to your LM Studio / Ollama endpoint."
+            "and configure model/backend settings from the Settings page or environment."
         )
     set_llm(llm)
 
@@ -146,8 +146,7 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
             content={
                 "detail": str(exc),
                 "error": "llm_unavailable",
-                "hint": "Ensure your LM Studio / Ollama instance is running and "
-                        "RKA_LLM_ENABLED=true with RKA_LLM_API_BASE set correctly.",
+                "hint": "Ensure LLM is enabled and model/backend settings are configured correctly.",
             },
         )
 
