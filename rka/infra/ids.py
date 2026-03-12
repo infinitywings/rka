@@ -12,6 +12,7 @@ _PREFIXES = {
     "mission": "mis",
     "checkpoint": "chk",
     "event": "evt",
+    "project": "prj",
     "scan": "scn",
     "link": "lnk",
     "artifact": "art",
@@ -19,6 +20,8 @@ _PREFIXES = {
     "summary": "sum",
     "qa_session": "qas",
     "qa_log": "qal",
+    "keynode": "knd",
+    "graphview": "gvw",
 }
 
 

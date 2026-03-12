@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from rka.infra.database import Database
+from rka.infra.ids import generate_id
 
 
 class GraphService:
@@ -15,6 +16,11 @@ class GraphService:
     def __init__(self, db: Database):
         self.db = db
 
+    @staticmethod
+    def _project_clause(alias: str = "") -> str:
+        prefix = f"{alias}." if alias else ""
+        return f"({prefix}project_id = ? OR {prefix}project_id IS NULL)"
+
     # ------------------------------------------------------------------
     # Full graph (all entity_links + nodes)
     # ------------------------------------------------------------------
@@ -22,6 +28,7 @@ class GraphService:
     async def get_full_graph(
         self,
         *,
+        project_id: str = "proj_default",
         include_types: list[str] | None = None,
         phase: str | None = None,
         limit: int = 500,
@@ -37,8 +44,8 @@ class GraphService:
         # Fetch all entity links
         link_rows = await self.db.fetchall(
             "SELECT source_type, source_id, link_type, target_type, target_id, created_at "
-            "FROM entity_links ORDER BY created_at DESC LIMIT ?",
-            [limit],
+            f"FROM entity_links WHERE {self._project_clause()} ORDER BY created_at DESC LIMIT ?",
+            [project_id, limit],
         )
 
         # Collect unique entity IDs we need to look up
@@ -66,7 +73,8 @@ class GraphService:
             if include_types and etype not in include_types:
                 continue
             conditions = []
-            params: list = []
+            params: list = [project_id]
+            conditions.append(self._project_clause())
             if phase and has_phase:
                 conditions.append("phase = ?")
                 params.append(phase)
@@ -92,7 +100,7 @@ class GraphService:
                 entity_ids.setdefault(etype, set()).add(nid)
 
         # Fill in any linked nodes that weren't fetched as orphans
-        await self._fill_missing_nodes(nodes, entity_ids)
+        await self._fill_missing_nodes(nodes, entity_ids, project_id=project_id)
 
         # Filter by type if requested
         if include_types:
@@ -102,11 +110,134 @@ class GraphService:
 
         return {"nodes": list(nodes.values()), "edges": edges}
 
+    async def get_graph_view(
+        self,
+        *,
+        project_id: str = "proj_default",
+        view: str = "full",
+        include_types: list[str] | None = None,
+        phase: str | None = None,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        """Return graph payload for different map modes.
+
+        - full: existing entity graph
+        - condensed/keynodes: precomputed keynode view (or auto-build if absent)
+        """
+        if view == "full":
+            return await self.get_full_graph(
+                project_id=project_id,
+                include_types=include_types,
+                phase=phase,
+                limit=limit,
+            )
+
+        if view not in {"condensed", "keynodes"}:
+            raise ValueError("Unsupported graph view. Use one of: full, condensed, keynodes")
+
+        cached = await self.db.fetchone(
+            "SELECT nodes, edges, id, created_at FROM graph_views "
+            f"WHERE name = ? AND {self._project_clause()} ORDER BY created_at DESC LIMIT 1",
+            ["condensed", project_id],
+        )
+        if not cached:
+            await self.refresh_condensed_view(project_id=project_id)
+            cached = await self.db.fetchone(
+                "SELECT nodes, edges, id, created_at FROM graph_views "
+                f"WHERE name = ? AND {self._project_clause()} ORDER BY created_at DESC LIMIT 1",
+                ["condensed", project_id],
+            )
+
+        if not cached:
+            return {"nodes": [], "edges": [], "view": view}
+
+        return {
+            "view": "condensed",
+            "view_id": cached["id"],
+            "created_at": cached["created_at"],
+            "nodes": json.loads(cached["nodes"] or "[]"),
+            "edges": json.loads(cached["edges"] or "[]"),
+        }
+
+    async def refresh_condensed_view(
+        self,
+        *,
+        project_id: str = "proj_default",
+        top_per_kind: int = 8,
+        min_importance: float = 0.45,
+    ) -> dict[str, Any]:
+        """Build a condensed keynode-centric graph view and persist it.
+
+        Heuristic ranking is used so this works even without LLM dependencies.
+        """
+        candidates = await self._collect_keynode_candidates(project_id=project_id, top_per_kind=top_per_kind)
+        selected = [c for c in candidates if c["importance"] >= min_importance]
+
+        await self.db.execute(
+            f"DELETE FROM keynodes WHERE blessed = 0 AND {self._project_clause()}",
+            [project_id],
+        )
+
+        nodes: list[dict[str, Any]] = []
+        ref_to_keynode: dict[tuple[str, str], str] = {}
+
+        for item in selected:
+            keynode_id = generate_id("keynode")
+            node_refs = [{"entity_type": item["entity_type"], "entity_id": item["entity_id"]}]
+            await self.db.execute(
+                """INSERT INTO keynodes
+                   (id, kind, title, summary, produced_by, importance, node_refs, blessed, project_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)""",
+                [
+                    keynode_id,
+                    item["kind"],
+                    item["title"],
+                    item.get("summary"),
+                    "system",
+                    item["importance"],
+                    json.dumps(node_refs),
+                    project_id,
+                ],
+            )
+            ref_to_keynode[(item["entity_type"], item["entity_id"])] = keynode_id
+            nodes.append(
+                {
+                    "id": keynode_id,
+                    "type": item["kind"],
+                    "label": item["title"],
+                    "importance": item["importance"],
+                    "summary": item.get("summary"),
+                    "source": {
+                        "entity_type": item["entity_type"],
+                        "entity_id": item["entity_id"],
+                    },
+                }
+            )
+
+        edges = await self._build_condensed_edges(project_id=project_id, ref_to_keynode=ref_to_keynode)
+
+        view_id = generate_id("graphview")
+        params = {"top_per_kind": top_per_kind, "min_importance": min_importance}
+        await self.db.execute(
+            """INSERT INTO graph_views (id, name, params, nodes, edges, project_id)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            [view_id, "condensed", json.dumps(params), json.dumps(nodes), json.dumps(edges), project_id],
+        )
+        await self.db.commit()
+
+        return {
+            "view": "condensed",
+            "view_id": view_id,
+            "params": params,
+            "nodes": nodes,
+            "edges": edges,
+        }
+
     # ------------------------------------------------------------------
     # Ego graph (neighborhood of a single entity)
     # ------------------------------------------------------------------
 
-    async def get_ego_graph(self, entity_id: str, depth: int = 1) -> dict[str, Any]:
+    async def get_ego_graph(self, entity_id: str, depth: int = 1, project_id: str = "proj_default") -> dict[str, Any]:
         """Return the subgraph centered on entity_id up to `depth` hops."""
         visited: set[str] = set()
         frontier: set[str] = {entity_id}
@@ -119,8 +250,8 @@ class GraphService:
             rows = await self.db.fetchall(
                 f"SELECT source_type, source_id, link_type, target_type, target_id, created_at "
                 f"FROM entity_links "
-                f"WHERE source_id IN ({placeholders}) OR target_id IN ({placeholders})",
-                list(frontier) + list(frontier),
+                f"WHERE {self._project_clause()} AND (source_id IN ({placeholders}) OR target_id IN ({placeholders}))",
+                [project_id] + list(frontier) + list(frontier),
             )
             visited |= frontier
             next_frontier: set[str] = set()
@@ -157,7 +288,7 @@ class GraphService:
             entity_ids.setdefault(etype, set()).add(nid)
 
         nodes: dict[str, dict] = {}
-        await self._fill_missing_nodes(nodes, entity_ids)
+        await self._fill_missing_nodes(nodes, entity_ids, project_id=project_id)
 
         return {"nodes": list(nodes.values()), "edges": unique_edges}
 
@@ -165,7 +296,7 @@ class GraphService:
     # Decision tree (hierarchical)
     # ------------------------------------------------------------------
 
-    async def get_decision_tree(self, root_id: str | None = None) -> list[dict]:
+    async def get_decision_tree(self, root_id: str | None = None, project_id: str = "proj_default") -> list[dict]:
         """Return decisions as a tree structure.
 
         If root_id is given, return only that subtree.
@@ -174,7 +305,8 @@ class GraphService:
         rows = await self.db.fetchall(
             "SELECT id, parent_id, question, chosen, status, phase, rationale, "
             "related_missions, related_literature, created_at "
-            "FROM decisions ORDER BY created_at"
+            f"FROM decisions WHERE {self._project_clause()} ORDER BY created_at",
+            [project_id],
         )
 
         # Build lookup
@@ -200,8 +332,8 @@ class GraphService:
             links = await self.db.fetchall(
                 f"SELECT source_type, source_id, link_type, target_type, target_id "
                 f"FROM entity_links "
-                f"WHERE source_id IN ({placeholders}) OR target_id IN ({placeholders})",
-                dec_ids + dec_ids,
+                f"WHERE {self._project_clause()} AND (source_id IN ({placeholders}) OR target_id IN ({placeholders}))",
+                [project_id] + dec_ids + dec_ids,
             )
             for link in links:
                 for dec_id in dec_ids:
@@ -234,13 +366,14 @@ class GraphService:
 
     async def get_timeline(
         self,
+        project_id: str = "proj_default",
         phase: str | None = None,
         since: str | None = None,
         limit: int = 100,
     ) -> list[dict]:
         """Return a chronological timeline of events with linked context."""
-        conditions = []
-        params: list = []
+        conditions = [self._project_clause()]
+        params: list = [project_id]
         if phase:
             conditions.append("phase = ?")
             params.append(phase)
@@ -262,7 +395,7 @@ class GraphService:
     # Stats
     # ------------------------------------------------------------------
 
-    async def get_stats(self) -> dict[str, Any]:
+    async def get_stats(self, project_id: str = "proj_default") -> dict[str, Any]:
         """Return graph statistics: node/edge counts by type."""
         node_counts = {}
         for etype, table in [
@@ -272,14 +405,21 @@ class GraphService:
             ("literature", "literature"),
             ("checkpoint", "checkpoints"),
         ]:
-            row = await self.db.fetchone(f"SELECT COUNT(*) as cnt FROM {table}")
+            row = await self.db.fetchone(
+                f"SELECT COUNT(*) as cnt FROM {table} WHERE {self._project_clause()}",
+                [project_id],
+            )
             node_counts[etype] = row["cnt"] if row else 0
 
-        edge_row = await self.db.fetchone("SELECT COUNT(*) as cnt FROM entity_links")
+        edge_row = await self.db.fetchone(
+            f"SELECT COUNT(*) as cnt FROM entity_links WHERE {self._project_clause()}",
+            [project_id],
+        )
         total_edges = edge_row["cnt"] if edge_row else 0
 
         edge_type_rows = await self.db.fetchall(
-            "SELECT link_type, COUNT(*) as cnt FROM entity_links GROUP BY link_type"
+            f"SELECT link_type, COUNT(*) as cnt FROM entity_links WHERE {self._project_clause()} GROUP BY link_type",
+            [project_id],
         )
         edge_counts = {r["link_type"]: r["cnt"] for r in edge_type_rows}
 
@@ -295,7 +435,10 @@ class GraphService:
     # ------------------------------------------------------------------
 
     async def _fill_missing_nodes(
-        self, nodes: dict[str, dict], entity_ids: dict[str, set[str]]
+        self,
+        nodes: dict[str, dict],
+        entity_ids: dict[str, set[str]],
+        project_id: str = "proj_default",
     ) -> None:
         """Look up entity metadata for IDs not already in the nodes dict."""
         table_map: dict[str, tuple[str, str, str, bool]] = {
@@ -320,8 +463,8 @@ class GraphService:
             rows = await self.db.fetchall(
                 f"SELECT id, {label_col}, {status_col}, "
                 f"{phase_col}, created_at "
-                f"FROM {table} WHERE id IN ({placeholders})",
-                missing,
+                f"FROM {table} WHERE {self._project_clause()} AND id IN ({placeholders})",
+                [project_id] + missing,
             )
             for r in rows:
                 label_text = r[label_col] or ""
@@ -338,6 +481,160 @@ class GraphService:
             for eid in missing:
                 if eid not in fetched:
                     nodes[eid] = {"id": eid, "type": etype, "label": eid, "status": None, "phase": "", "created_at": ""}
+
+    async def _collect_keynode_candidates(
+        self,
+        *,
+        project_id: str = "proj_default",
+        top_per_kind: int,
+    ) -> list[dict[str, Any]]:
+        """Collect and score likely key nodes for condensed graph mode."""
+        candidates: list[dict[str, Any]] = []
+
+        journal_rows = await self.db.fetchall(
+            """SELECT id, type, content, summary, confidence, created_at
+               FROM journal
+               WHERE (project_id = ? OR project_id IS NULL)
+                 AND type IN ('finding', 'insight', 'hypothesis', 'methodology', 'summary')
+               ORDER BY created_at DESC
+               LIMIT ?""",
+            [project_id, top_per_kind * 6],
+        )
+        confidence_bonus = {"verified": 0.28, "tested": 0.18, "hypothesis": 0.10}
+        for row in journal_rows:
+            imp = 0.48 + confidence_bonus.get((row.get("confidence") or "").lower(), 0.05)
+            candidates.append(
+                {
+                    "kind": "finding",
+                    "entity_type": "journal",
+                    "entity_id": row["id"],
+                    "title": (row.get("summary") or row.get("content") or "Finding")[:90],
+                    "summary": (row.get("summary") or row.get("content") or "")[:240],
+                    "importance": min(1.0, imp),
+                }
+            )
+
+        lit_rows = await self.db.fetchall(
+            """SELECT id, title, abstract, status, relevance_score, created_at
+               FROM literature
+               WHERE (project_id = ? OR project_id IS NULL)
+               ORDER BY created_at DESC
+               LIMIT ?""",
+            [project_id, top_per_kind * 8],
+        )
+        status_bonus = {"cited": 0.30, "read": 0.22, "reading": 0.12, "to_read": 0.05}
+        for row in lit_rows:
+            rel = float(row.get("relevance_score") or 0.0)
+            base = 0.40 + status_bonus.get((row.get("status") or "").lower(), 0.04)
+            imp = min(1.0, base + max(0.0, min(rel, 1.0)) * 0.25)
+            candidates.append(
+                {
+                    "kind": "literature",
+                    "entity_type": "literature",
+                    "entity_id": row["id"],
+                    "title": (row.get("title") or "Literature")[:90],
+                    "summary": (row.get("abstract") or "")[:240],
+                    "importance": imp,
+                }
+            )
+
+        dec_rows = await self.db.fetchall(
+            """SELECT id, question, rationale, status, created_at
+               FROM decisions
+               WHERE (project_id = ? OR project_id IS NULL)
+               ORDER BY created_at DESC
+               LIMIT ?""",
+            [project_id, top_per_kind * 5],
+        )
+        dec_bonus = {"active": 0.30, "merged": 0.20, "revisit": 0.16, "superseded": 0.10, "abandoned": 0.08}
+        for row in dec_rows:
+            imp = 0.52 + dec_bonus.get((row.get("status") or "").lower(), 0.1)
+            candidates.append(
+                {
+                    "kind": "decision",
+                    "entity_type": "decision",
+                    "entity_id": row["id"],
+                    "title": (row.get("question") or "Decision")[:90],
+                    "summary": (row.get("rationale") or "")[:240],
+                    "importance": min(1.0, imp),
+                }
+            )
+
+        mission_rows = await self.db.fetchall(
+            """SELECT id, objective, report, status, completed_at, created_at
+               FROM missions
+               WHERE (project_id = ? OR project_id IS NULL)
+                 AND status IN ('complete', 'partial', 'blocked', 'active')
+               ORDER BY COALESCE(completed_at, created_at) DESC
+               LIMIT ?""",
+            [project_id, top_per_kind * 6],
+        )
+        milestone_bonus = {"complete": 0.35, "partial": 0.26, "blocked": 0.22, "active": 0.16}
+        for row in mission_rows:
+            imp = 0.42 + milestone_bonus.get((row.get("status") or "").lower(), 0.1)
+            candidates.append(
+                {
+                    "kind": "milestone",
+                    "entity_type": "mission",
+                    "entity_id": row["id"],
+                    "title": (row.get("objective") or "Milestone")[:90],
+                    "summary": (row.get("report") or "")[:240],
+                    "importance": min(1.0, imp),
+                }
+            )
+
+        per_kind: dict[str, list[dict[str, Any]]] = {"finding": [], "literature": [], "decision": [], "milestone": []}
+        for candidate in candidates:
+            per_kind[candidate["kind"]].append(candidate)
+
+        selected: list[dict[str, Any]] = []
+        for kind, items in per_kind.items():
+            ranked = sorted(items, key=lambda candidate: candidate["importance"], reverse=True)
+            selected.extend(ranked[:top_per_kind])
+        return selected
+
+    async def _build_condensed_edges(
+        self,
+        project_id: str,
+        ref_to_keynode: dict[tuple[str, str], str],
+    ) -> list[dict[str, Any]]:
+        """Aggregate entity links into condensed keynode edges."""
+        if not ref_to_keynode:
+            return []
+
+        rows = await self.db.fetchall(
+            """SELECT source_type, source_id, target_type, target_id, link_type,
+                      COALESCE(link_weight, 0.0) as link_weight,
+                      link_reason
+               FROM entity_links
+               WHERE (project_id = ? OR project_id IS NULL)""",
+            [project_id],
+        )
+
+        aggregated: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for row in rows:
+            source_key = (row["source_type"], row["source_id"])
+            target_key = (row["target_type"], row["target_id"])
+            src_keynode = ref_to_keynode.get(source_key)
+            tgt_keynode = ref_to_keynode.get(target_key)
+            if not src_keynode or not tgt_keynode or src_keynode == tgt_keynode:
+                continue
+
+            agg_key = (src_keynode, tgt_keynode, row["link_type"])
+            current = aggregated.get(agg_key)
+            weight = float(row.get("link_weight") or 0.0)
+            if current is None:
+                aggregated[agg_key] = {
+                    "source": src_keynode,
+                    "target": tgt_keynode,
+                    "link_type": row["link_type"],
+                    "weight": max(0.2, weight),
+                    "reason": row.get("link_reason") or "Aggregated from linked supporting entities.",
+                }
+            else:
+                current["weight"] = max(current["weight"], weight)
+
+        return list(aggregated.values())
 
     @staticmethod
     def _guess_type_from_id(entity_id: str) -> str:
