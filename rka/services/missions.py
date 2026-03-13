@@ -11,10 +11,39 @@ from rka.models.mission import (
 )
 from rka.models.journal import JournalEntryCreate
 from rka.services.base import BaseService, _now
+from rka.services.jobs import JobQueue
 
 
 class MissionService(BaseService):
     """Manages mission lifecycle."""
+
+    def _job_dedupe_key(self, mis_id: str, operation: str) -> str:
+        return f"{self.project_id}:mission:{mis_id}:{operation}"
+
+    async def _enqueue_enrichment_jobs(
+        self,
+        mis_id: str,
+        *,
+        include_auto_tags: bool,
+        include_embedding: bool,
+    ) -> None:
+        queue = JobQueue(self.db)
+        if include_auto_tags:
+            await queue.enqueue(
+                "mission_auto_tag",
+                project_id=self.project_id,
+                entity_type="mission",
+                entity_id=mis_id,
+                dedupe_key=self._job_dedupe_key(mis_id, "auto_tag"),
+            )
+        if include_embedding:
+            await queue.enqueue(
+                "mission_embed",
+                project_id=self.project_id,
+                entity_type="mission",
+                entity_id=mis_id,
+                dedupe_key=self._job_dedupe_key(mis_id, "embed"),
+            )
 
     async def create(self, data: MissionCreate, actor: str = "brain") -> Mission:
         """Create a new mission."""
@@ -38,19 +67,22 @@ class MissionService(BaseService):
         )
         await self.db.commit()
 
-        # Save tags (user-provided or auto-generated)
+        # Save user-provided tags immediately. Derived tags are eventual.
         tags = data.tags
-        if not tags:
-            auto_tags = await self._auto_enrich_tags(data.objective, [])
-            if auto_tags:
-                tags = auto_tags
         if tags:
             await self._set_tags("mission", mis_id, tags)
 
-        # Sync FTS5 + embedding indexes
-        await self._sync_indexes("mission", mis_id, {
-            "objective": data.objective, "context": data.context,
-        })
+        # Keep cheap deterministic FTS updates synchronous; derived enrichment is queued.
+        await self._sync_fts(
+            "mission",
+            mis_id,
+            {"objective": data.objective, "context": data.context},
+        )
+        await self._enqueue_enrichment_jobs(
+            mis_id,
+            include_auto_tags=bool(self.llm) and not tags,
+            include_embedding=bool(self.embeddings),
+        )
 
         await self.emit_event(
             event_type="mission_created",
@@ -150,14 +182,19 @@ class MissionService(BaseService):
                 summary=f"Mission status → {data.status}",
             )
 
-        # Re-sync FTS5 + embedding on content changes
+        # Re-sync cheap FTS now; defer embeddings and optional tag enrichment.
         if "objective" in updates:
             row = await self.db.fetchone(
                 "SELECT objective, context FROM missions WHERE id = ? AND project_id = ?",
                 [mis_id, self.project_id],
             )
             if row:
-                await self._sync_indexes("mission", mis_id, dict(row))
+                await self._sync_fts("mission", mis_id, dict(row))
+                await self._enqueue_enrichment_jobs(
+                    mis_id,
+                    include_auto_tags=bool(self.llm),
+                    include_embedding=bool(self.embeddings),
+                )
 
         await self.audit("update", "mission", mis_id, actor, {"fields": list(updates.keys())})
         return await self.get(mis_id)
@@ -274,6 +311,7 @@ class MissionService(BaseService):
 
     async def _row_to_model(self, row: dict) -> Mission:
         tags = await self._get_tags("mission", row["id"])
+        enrichment_status = await self._get_enrichment_status("mission", row["id"])
 
         tasks = None
         if row.get("tasks"):
@@ -300,6 +338,48 @@ class MissionService(BaseService):
             depends_on=row.get("depends_on"),
             report=report,
             tags=tags,
+            enrichment_status=enrichment_status,
             created_at=row.get("created_at"),
             completed_at=row.get("completed_at"),
         )
+
+    async def process_auto_tag_job(self, mis_id: str) -> dict[str, str | int]:
+        """Generate tags for an existing mission when none are present."""
+        row = await self.db.fetchone(
+            "SELECT objective FROM missions WHERE id = ? AND project_id = ?",
+            [mis_id, self.project_id],
+        )
+        if row is None:
+            return {"outcome": "missing"}
+        if not self.llm:
+            return {"outcome": "skipped", "reason": "llm_disabled"}
+
+        existing_tags = await self._get_tags("mission", mis_id)
+        if existing_tags:
+            return {"outcome": "skipped", "reason": "tags_present"}
+
+        auto_tags = await self._auto_enrich_tags(row["objective"], existing_tags)
+        if not auto_tags:
+            return {"outcome": "noop"}
+
+        await self._set_tags("mission", mis_id, auto_tags)
+        return {"outcome": "updated", "tag_count": len(auto_tags)}
+
+    async def process_embedding_job(self, mis_id: str) -> dict[str, str | int]:
+        """Generate or refresh the mission embedding."""
+        row = await self.db.fetchone(
+            "SELECT objective, context FROM missions WHERE id = ? AND project_id = ?",
+            [mis_id, self.project_id],
+        )
+        if row is None:
+            return {"outcome": "missing"}
+        if not self.embeddings:
+            return {"outcome": "skipped", "reason": "embeddings_disabled"}
+
+        parts = [str(row.get("objective") or "").strip(), str(row.get("context") or "").strip()]
+        text = " ".join(part for part in parts if part).strip()
+        if not text:
+            return {"outcome": "skipped", "reason": "empty"}
+
+        await self.embeddings.embed_and_store("mission", mis_id, text, project_id=self.project_id)
+        return {"outcome": "updated", "char_count": len(text)}

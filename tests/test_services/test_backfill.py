@@ -78,10 +78,9 @@ class TestBackfill:
     @pytest.mark.asyncio
     async def test_idempotent(self, seeded_db: Database):
         counts1 = await backfill_entity_links(seeded_db)
-        counts2 = await backfill_entity_links(seeded_db)
+        await backfill_entity_links(seeded_db)
         # Second run should still succeed (INSERT OR IGNORE)
         total1 = sum(counts1.values())
-        total2 = sum(counts2.values())
         assert total1 > 0
         # The actual link rows shouldn't double
         rows = await seeded_db.fetchall("SELECT * FROM entity_links")

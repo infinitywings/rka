@@ -38,6 +38,7 @@ class RKAConfig(BaseSettings):
 
     # LLM context window — auto-detected from backend, or set manually
     llm_context_window: int = Field(default=0, description="Model context window in tokens (0 = unknown/auto)")
+    llm_request_timeout: int = Field(default=120, description="Timeout for LLM requests in seconds")
 
     # Embeddings (Phase 2)
     embedding_model: str = Field(
@@ -49,6 +50,11 @@ class RKAConfig(BaseSettings):
     context_hot_days: int = Field(default=3, description="Days to consider entries HOT")
     context_warm_days: int = Field(default=14, description="Days before entries go COLD")
     context_default_max_tokens: int = Field(default=2000, description="Default context budget")
+
+    # Background jobs
+    job_poll_interval: float = Field(default=1.0, description="Worker poll interval in seconds")
+    job_lease_seconds: int = Field(default=300, description="Job lease duration before recovery")
+    job_max_attempts: int = Field(default=5, description="Max attempts before a job is marked failed")
 
     @property
     def database_url(self) -> str:

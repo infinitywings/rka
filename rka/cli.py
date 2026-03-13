@@ -9,7 +9,7 @@ import click
 
 
 @click.group()
-@click.version_option(version="1.3.0")
+@click.version_option(version="1.4.0")
 def main():
     """Research Knowledge Agent — AI-assisted research orchestration."""
     pass
@@ -94,6 +94,67 @@ def mcp():
     """Start the MCP stdio server (for Claude Desktop / Claude Code)."""
     from rka.mcp.server import mcp as mcp_server
     mcp_server.run()
+
+
+@main.command()
+@click.option("--poll-interval", default=None, type=float, help="Override worker poll interval")
+@click.option("--lease-seconds", default=None, type=int, help="Override job lease duration")
+@click.option("--max-attempts", default=None, type=int, help="Override max attempts per job")
+@click.option("--once", is_flag=True, help="Process at most one available job and exit")
+def worker(
+    poll_interval: float | None,
+    lease_seconds: int | None,
+    max_attempts: int | None,
+    once: bool,
+):
+    """Run the background enrichment worker."""
+    from rka.api.routes.llm import _load_llm_overrides
+    from rka.config import RKAConfig
+    from rka.infra.database import Database
+    from rka.infra.embeddings import EmbeddingService
+    from rka.infra.llm import LLMClient
+    from rka.services.worker import EnrichmentWorker
+
+    config = RKAConfig()
+
+    async def _worker():
+        db = Database(config.database_url)
+        await db.connect()
+        await db.initialize_schema()
+        await db.initialize_phase2_schema()
+
+        try:
+            await _load_llm_overrides(config, db)
+
+            llm = LLMClient(config) if config.llm_enabled else None
+            embeddings = (
+                EmbeddingService(model_name=config.embedding_model, db=db)
+                if config.embeddings_enabled
+                else None
+            )
+            runner = EnrichmentWorker(
+                db=db,
+                llm=llm,
+                embeddings=embeddings,
+                poll_interval=poll_interval or config.job_poll_interval,
+                lease_seconds=lease_seconds or config.job_lease_seconds,
+                max_attempts=max_attempts or config.job_max_attempts,
+            )
+
+            if once:
+                handled = await runner.run_once()
+                click.echo("Processed 1 job." if handled else "No jobs available.")
+                return
+
+            click.echo(f"Starting worker for {config.database_url}")
+            await runner.run_forever()
+        finally:
+            await db.close()
+
+    try:
+        asyncio.run(_worker())
+    except KeyboardInterrupt:
+        click.echo("Worker stopped.")
 
 
 @main.command()

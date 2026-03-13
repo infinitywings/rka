@@ -153,7 +153,7 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
     app = FastAPI(
         title="Research Knowledge Agent",
         description="REST API for AI-assisted research orchestration",
-        version="1.3.0",
+        version="1.4.0",
         lifespan=lifespan,
     )
     app.state.config = effective_config
@@ -218,7 +218,7 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
 
         return {
             "status": "ok",
-            "version": "1.3.0",
+            "version": "1.4.0",
             "vec_available": db.vec_available,
             "llm_status": llm_status,
             "llm_model": config.llm_model if llm else None,

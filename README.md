@@ -20,7 +20,7 @@ The result is continuity across the full arc of a project. A session in month si
 - Multi-project isolation with project packs for export and import
 - REST API, MCP server, CLI, and web dashboard over a shared service layer
 
-Current release: `v1.3.0` adds app-state dependency injection for the API, MCP session digests and compact output, and revised research-oriented documentation and About text.
+Current release: `v1.4.0` adds a durable enrichment jobs queue and worker, fast mission creation with eventual enrichment, typed MCP mission task inputs, and explicit LLM request timeouts for background processing.
 
 Built for CS/IoT/CPS security research at UNC Charlotte.
 

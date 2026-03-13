@@ -136,6 +136,41 @@ class BaseService:
             )
         await self.db.commit()
 
+    async def _get_enrichment_status(
+        self,
+        entity_type: str,
+        entity_id: str,
+        project_id: str | None = None,
+    ) -> str:
+        """Return pending/failed/ready based on queued enrichment work."""
+        resolved_project_id = self._resolve_project_id(project_id)
+        try:
+            pending = await self.db.fetchone(
+                """SELECT 1
+                   FROM jobs
+                   WHERE project_id = ? AND entity_type = ? AND entity_id = ?
+                     AND status IN ('pending', 'running')
+                   LIMIT 1""",
+                [resolved_project_id, entity_type, entity_id],
+            )
+            if pending:
+                return "pending"
+
+            failed = await self.db.fetchone(
+                """SELECT 1
+                   FROM jobs
+                   WHERE project_id = ? AND entity_type = ? AND entity_id = ?
+                     AND status = 'failed'
+                   LIMIT 1""",
+                [resolved_project_id, entity_type, entity_id],
+            )
+            if failed:
+                return "failed"
+        except Exception:
+            return "ready"
+
+        return "ready"
+
     # ---- FTS5 sync ----
 
     # Maps entity types to FTS5 table and columns

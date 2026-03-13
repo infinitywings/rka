@@ -13,7 +13,6 @@ from rka.models.workspace import (
     ContentHint,
     FileCategory,
     IngestionTarget,
-    ScanManifest,
     WorkspaceIngestRequest,
 )
 from rka.services.workspace import WorkspaceService
@@ -531,7 +530,7 @@ class TestIngest:
         manifest = await ws_svc.scan(str(workspace), use_llm=False)
         manifest.files = [f for f in manifest.files if f.filename == "analysis.py"]
         request = WorkspaceIngestRequest(manifest=manifest, source="pi")
-        result = await ws_svc.ingest(request)
+        await ws_svc.ingest(request)
 
         log_rows = await db.fetchall("SELECT * FROM bootstrap_log")
         assert len(log_rows) >= 1

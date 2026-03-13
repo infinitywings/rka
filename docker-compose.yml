@@ -46,6 +46,22 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
+  rka-worker:
+    build: .
+    container_name: rka-worker
+    command: ["rka", "worker"]
+    healthcheck:
+      disable: true
+    volumes:
+      - rka-data:/data
+    environment:
+      RKA_LLM_API_BASE: http://host.docker.internal:1234/v1
+      RKA_LLM_MODEL: openai/qwen3-32b
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - rka
+    restart: unless-stopped
 
 volumes:
   rka-data:

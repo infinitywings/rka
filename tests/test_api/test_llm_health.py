@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from pydantic import BaseModel
 
 from rka.config import RKAConfig
 from rka.infra import llm as llm_module
@@ -119,3 +120,41 @@ async def test_is_available_falls_back_to_minimal_completion(monkeypatch: pytest
             "api_key": "lm-studio",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_extract_uses_configured_timeout(monkeypatch: pytest.MonkeyPatch):
+    captured: dict = {}
+
+    class _Response(BaseModel):
+        answer: str
+
+    class _FakeCompletions:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return _Response(answer="ok")
+
+    class _FakeChat:
+        completions = _FakeCompletions()
+
+    class _FakeInstructor:
+        chat = _FakeChat()
+
+    monkeypatch.setattr(LLMClient, "_get_instructor", lambda self: _FakeInstructor())
+
+    client = LLMClient(
+        RKAConfig(
+            llm_enabled=True,
+            llm_model="openai/test-model",
+            llm_api_base="http://example.test/v1",
+            llm_request_timeout=37,
+        )
+    )
+
+    result = await client.extract(
+        _Response,
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    assert result.answer == "ok"
+    assert captured["timeout"] == 37

@@ -16,6 +16,8 @@ from functools import wraps
 from mcp.server.fastmcp import FastMCP
 import httpx
 
+from rka.models.mission import MissionTask
+
 mcp = FastMCP("Research Knowledge Agent")
 API_URL = os.environ.get("RKA_API_URL", "http://localhost:9712")
 
@@ -343,12 +345,13 @@ async def rka_update_decision(
 async def rka_create_mission(
     phase: str,
     objective: str,
-    tasks: list[dict] | None = None,
+    tasks: list[MissionTask] | None = None,
     context: str | None = None,
     acceptance_criteria: str | None = None,
     scope_boundaries: str | None = None,
     checkpoint_triggers: str | None = None,
     depends_on: str | None = None,
+    tags: list[str] | None = None,
 ) -> str:
     """Create a new mission for the Executor.
 
@@ -361,14 +364,18 @@ async def rka_create_mission(
         scope_boundaries: What NOT to do
         checkpoint_triggers: When to escalate
         depends_on: Mission ID this depends on
+        tags: Optional explicit tags. Providing tags skips delayed auto-tag enrichment.
     """
     async with _client() as c:
         body = {
-            "phase": phase, "objective": objective, "tasks": tasks,
+            "phase": phase,
+            "objective": objective,
+            "tasks": [task.model_dump() for task in tasks] if tasks else None,
             "context": context, "acceptance_criteria": acceptance_criteria,
             "scope_boundaries": scope_boundaries,
             "checkpoint_triggers": checkpoint_triggers,
             "depends_on": depends_on,
+            "tags": tags,
         }
         r = await c.post("/api/missions", json={k: v for k, v in body.items() if v is not None})
         _raise_with_detail(r)
@@ -381,6 +388,7 @@ async def rka_create_mission(
             "",
             f"  ID:        {mid}",
             f"  Status:    {d.get('status', 'pending')}",
+            f"  Enrich:    {d.get('enrichment_status', 'ready')}",
             f"  Objective: {d['objective'][:120]}",
             f"  Tasks:     {n_tasks}",
             "",
@@ -415,7 +423,7 @@ async def rka_get_mission(id: str | None = None) -> str:
 async def rka_update_mission_status(
     id: str,
     status: str,
-    tasks: list[dict] | None = None,
+    tasks: list[MissionTask] | None = None,
 ) -> str:
     """Update mission status and task progress.
 
@@ -427,7 +435,7 @@ async def rka_update_mission_status(
     async with _client() as c:
         body = {"status": status}
         if tasks:
-            body["tasks"] = tasks
+            body["tasks"] = [task.model_dump() for task in tasks]
         r = await c.put(f"/api/missions/{id}", json=body)
         _raise_with_detail(r)
         return f"Mission {id} → {status}"

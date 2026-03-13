@@ -77,5 +77,6 @@ class Mission(BaseModel):
     depends_on: str | None = None
     report: MissionReport | None = None
     tags: list[str] = Field(default_factory=list)
+    enrichment_status: Literal["pending", "ready", "failed"] = "ready"
     created_at: str | None = None
     completed_at: str | None = None

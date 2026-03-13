@@ -345,6 +345,7 @@ class LLMClient:
                 messages=messages,
                 temperature=temperature,
                 max_retries=max_retries,
+                timeout=self.config.llm_request_timeout,
                 think=self.config.llm_think,
             )
             if self.config.llm_api_base:
