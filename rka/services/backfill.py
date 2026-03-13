@@ -6,7 +6,9 @@ import json
 import logging
 
 from rka.infra.database import Database
+from rka.infra.embeddings import EmbeddingService
 from rka.infra.ids import generate_id
+from rka.services.artifacts import build_artifact_text, build_figure_text
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +97,38 @@ async def backfill_entity_links(db: Database) -> dict[str, int]:
     return counts
 
 
+async def backfill_embeddings(
+    db: Database,
+    embeddings: EmbeddingService,
+    project_id: str = "proj_default",
+    batch_size: int = 50,
+    *,
+    include_artifacts: bool = True,
+    include_figures: bool = True,
+    force: bool = False,
+) -> dict[str, int]:
+    """Backfill artifact and figure embeddings for a project."""
+    counts = {"artifact": 0, "figure": 0}
+    if include_artifacts:
+        counts["artifact"] = await _backfill_artifact_embeddings(
+            db,
+            embeddings,
+            project_id=project_id,
+            batch_size=batch_size,
+            force=force,
+        )
+    if include_figures:
+        counts["figure"] = await _backfill_figure_embeddings(
+            db,
+            embeddings,
+            project_id=project_id,
+            batch_size=batch_size,
+            force=force,
+        )
+    logger.info("Embedding backfill complete for %s: %s", project_id, counts)
+    return counts
+
+
 def _parse_json_list(val) -> list[str]:
     """Parse a JSON array string into a list of strings."""
     if not val:
@@ -131,3 +165,76 @@ async def _insert_link(
     except Exception as exc:
         logger.debug("Link insert failed: %s", exc)
         return False
+
+
+async def _backfill_artifact_embeddings(
+    db: Database,
+    embeddings: EmbeddingService,
+    *,
+    project_id: str,
+    batch_size: int,
+    force: bool,
+) -> int:
+    count = 0
+    offset = 0
+    while True:
+        rows = await db.fetchall(
+            """SELECT id, filename, filetype, mime, metadata
+               FROM artifacts
+               WHERE project_id = ?
+               ORDER BY created_at
+               LIMIT ? OFFSET ?""",
+            [project_id, batch_size, offset],
+        )
+        if not rows:
+            break
+        for row in rows:
+            text = build_artifact_text(
+                filename=row.get("filename") or "",
+                filetype=row.get("filetype"),
+                mime=row.get("mime"),
+                metadata=row.get("metadata"),
+            )
+            if not text:
+                continue
+            if force or await embeddings.needs_reembed("artifact", row["id"], text, project_id=project_id):
+                await embeddings.embed_and_store("artifact", row["id"], text, project_id=project_id)
+                count += 1
+        offset += len(rows)
+    return count
+
+
+async def _backfill_figure_embeddings(
+    db: Database,
+    embeddings: EmbeddingService,
+    *,
+    project_id: str,
+    batch_size: int,
+    force: bool,
+) -> int:
+    count = 0
+    offset = 0
+    while True:
+        rows = await db.fetchall(
+            """SELECT id, caption, summary, claims
+               FROM figures
+               WHERE project_id = ?
+               ORDER BY created_at
+               LIMIT ? OFFSET ?""",
+            [project_id, batch_size, offset],
+        )
+        if not rows:
+            break
+        for row in rows:
+            text = build_figure_text(
+                caption=row.get("caption"),
+                summary=row.get("summary"),
+                claims=row.get("claims"),
+            )
+            if not text:
+                continue
+            if force or await embeddings.needs_reembed("figure", row["id"], text, project_id=project_id):
+                await embeddings.embed_and_store("figure", row["id"], text, project_id=project_id)
+                count += 1
+        offset += len(rows)
+    return count

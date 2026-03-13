@@ -11,7 +11,9 @@ import json
 from rka.infra.database import Database
 from rka.infra.ids import generate_id
 from rka.infra.llm import LLMUnavailableError
+from rka.services.artifacts import build_figure_text
 from rka.services.base import BaseService, _now
+from rka.services.search import SearchService
 
 
 class SummaryService(BaseService):
@@ -137,6 +139,7 @@ class SummaryService(BaseService):
         """Gather evidence blocks for the given scope."""
         evidence: list[dict] = []
         limit = self._evidence_limit()
+        figure_limit = max(3, limit // 5)
 
         if scope_type == "phase":
             # All journal entries + decisions in this phase
@@ -152,6 +155,7 @@ class SummaryService(BaseService):
             )
             for r in dec_rows:
                 evidence.append({"entity_type": "decision", "entity_id": r["id"], "text": f"{r['question']} — {r.get('rationale', '')}"})
+            evidence.extend(await self._gather_recent_figure_evidence(figure_limit))
 
         elif scope_type == "mission":
             # Mission + its journal entries
@@ -170,6 +174,7 @@ class SummaryService(BaseService):
             )
             for r in journal_rows:
                 evidence.append({"entity_type": "journal", "entity_id": r["id"], "text": r["content"]})
+            evidence.extend(await self._gather_recent_figure_evidence(figure_limit))
 
         elif scope_type == "tag":
             # All entities with this tag
@@ -178,9 +183,9 @@ class SummaryService(BaseService):
                 [scope_id, self.project_id, limit],
             )
             for tr in tag_rows:
-                text = await self._fetch_entity_text(tr["entity_type"], tr["entity_id"])
-                if text:
-                    evidence.append({"entity_type": tr["entity_type"], "entity_id": tr["entity_id"], "text": text})
+                block = await self._fetch_entity_block(tr["entity_type"], tr["entity_id"])
+                if block:
+                    evidence.append(block)
 
         else:
             # Project-wide: recent entries across all types
@@ -196,26 +201,113 @@ class SummaryService(BaseService):
                 )
                 for r in rows:
                     evidence.append({"entity_type": etype, "entity_id": r["id"], "text": r[text_col] or ""})
+            evidence.extend(await self._gather_recent_figure_evidence(figure_limit))
 
-        return evidence
+        return evidence[:limit]
 
     async def _fetch_entity_text(self, entity_type: str, entity_id: str) -> str | None:
         """Fetch the primary text of an entity."""
-        table_map = {
-            "journal": ("journal", "content"),
-            "decision": ("decisions", "question"),
-            "literature": ("literature", "title"),
-            "mission": ("missions", "objective"),
-        }
-        info = table_map.get(entity_type)
-        if not info:
+        block = await self._fetch_entity_block(entity_type, entity_id)
+        return block["text"] if block else None
+
+    async def _fetch_entity_block(self, entity_type: str, entity_id: str) -> dict | None:
+        """Fetch an evidence block for a supported entity type."""
+        if entity_type == "journal":
+            row = await self.db.fetchone(
+                "SELECT id, content, summary FROM journal WHERE id = ? AND project_id = ?",
+                [entity_id, self.project_id],
+            )
+            if row:
+                return {
+                    "entity_type": "journal",
+                    "entity_id": row["id"],
+                    "text": row.get("content") or row.get("summary") or "",
+                }
             return None
-        table, col = info
-        row = await self.db.fetchone(
-            f"SELECT {col} FROM {table} WHERE id = ? AND project_id = ?",
-            [entity_id, self.project_id],
+
+        if entity_type == "decision":
+            row = await self.db.fetchone(
+                "SELECT id, question, rationale FROM decisions WHERE id = ? AND project_id = ?",
+                [entity_id, self.project_id],
+            )
+            if row:
+                return {
+                    "entity_type": "decision",
+                    "entity_id": row["id"],
+                    "text": f"{row.get('question') or ''} — {row.get('rationale') or ''}".strip(" —"),
+                }
+            return None
+
+        if entity_type == "literature":
+            row = await self.db.fetchone(
+                "SELECT id, title, abstract FROM literature WHERE id = ? AND project_id = ?",
+                [entity_id, self.project_id],
+            )
+            if row:
+                return {
+                    "entity_type": "literature",
+                    "entity_id": row["id"],
+                    "text": "\n".join(
+                        part for part in [row.get("title"), row.get("abstract")] if part
+                    ),
+                }
+            return None
+
+        if entity_type == "mission":
+            row = await self.db.fetchone(
+                "SELECT id, objective, context FROM missions WHERE id = ? AND project_id = ?",
+                [entity_id, self.project_id],
+            )
+            if row:
+                return {
+                    "entity_type": "mission",
+                    "entity_id": row["id"],
+                    "text": "\n".join(
+                        part for part in [row.get("objective"), row.get("context")] if part
+                    ),
+                }
+            return None
+
+        if entity_type == "figure":
+            row = await self.db.fetchone(
+                """SELECT id, artifact_id, page, caption, summary, claims
+                   FROM figures WHERE id = ? AND project_id = ?""",
+                [entity_id, self.project_id],
+            )
+            if row:
+                loc = f"artifact:{row['artifact_id']}"
+                if row.get("page") is not None:
+                    loc += f"|page:{row['page']}"
+                return {
+                    "entity_type": "figure",
+                    "entity_id": row["id"],
+                    "text": build_figure_text(
+                        caption=row.get("caption"),
+                        summary=row.get("summary"),
+                        claims=row.get("claims"),
+                    ),
+                    "loc": loc,
+                }
+            return None
+
+        return None
+
+    async def _gather_recent_figure_evidence(self, limit: int) -> list[dict]:
+        """Gather recent figures as additional evidence blocks."""
+        rows = await self.db.fetchall(
+            """SELECT id
+               FROM figures
+               WHERE project_id = ?
+               ORDER BY created_at DESC
+               LIMIT ?""",
+            [self.project_id, limit],
         )
-        return row[col] if row else None
+        blocks: list[dict] = []
+        for row in rows:
+            block = await self._fetch_entity_block("figure", row["id"])
+            if block and block.get("text"):
+                blocks.append(block)
+        return blocks
 
 
 class QAService(BaseService):
@@ -341,23 +433,10 @@ class QAService(BaseService):
         entity_id = source.get("entity_id")
         excerpt = source.get("excerpt", "")
 
-        # Look up the actual entity text
-        table_map = {
-            "journal": ("journal", "content"),
-            "decision": ("decisions", "question"),
-            "literature": ("literature", "abstract"),
-            "mission": ("missions", "objective"),
-        }
-        info = table_map.get(entity_type)
-        if not info:
+        block = await self._fetch_entity_block(entity_type, entity_id)
+        if not block:
             return {"verified": False, "reason": f"Unknown entity type: {entity_type}"}
-
-        table, col = info
-        entity_row = await self.db.fetchone(f"SELECT {col} FROM {table} WHERE id = ?", [entity_id])
-        if not entity_row:
-            return {"verified": False, "reason": f"Entity {entity_id} not found"}
-
-        actual_text = entity_row[col] or ""
+        actual_text = block["text"] or ""
         # Simple substring check
         verified = excerpt.lower().strip() in actual_text.lower()
 
@@ -375,38 +454,34 @@ class QAService(BaseService):
     ) -> list[dict]:
         """Gather evidence relevant to a question.
 
-        Uses FTS5 search if available, falls back to recent entries.
+        Uses hybrid search where available, falls back to recent entries.
         """
         evidence: list[dict] = []
         block_limit = self.llm._evidence_block_limit if self.llm else 500
         max_blocks = self.llm._max_evidence_blocks if self.llm else 30
-        per_type_fts = max(10, max_blocks // 3)
         fallback_limit = max(15, max_blocks // 2)
+        search_service = SearchService(
+            db=self.db,
+            embeddings=self.embeddings,
+            project_id=self.project_id,
+        )
 
-        # Try FTS5 search first
         try:
-            for table, etype, fts_table in [
-                ("journal", "journal", "fts_journal"),
-                ("decisions", "decision", "fts_decisions"),
-                ("literature", "literature", "fts_literature"),
-            ]:
-                # Simple keyword search using first few words of question
-                search_terms = " OR ".join(question.split()[:5])
-                rows = await self.db.fetchall(
-                    f"SELECT j.id, j.* FROM {table} j "
-                    f"JOIN {fts_table} f ON j.id = f.id "
-                    f"WHERE j.project_id = ? AND {fts_table} MATCH ? LIMIT ?",
-                    [self.project_id, search_terms, per_type_fts],
-                )
-                text_col = {"journal": "content", "decision": "question", "literature": "title"}.get(etype, "id")
-                for r in rows:
-                    evidence.append({
-                        "entity_type": etype,
-                        "entity_id": r["id"],
-                        "text": (r.get(text_col) or "")[:block_limit],
-                    })
+            hits = await search_service.search(
+                question,
+                entity_types=["journal", "decision", "literature", "figure", "artifact"],
+                limit=max_blocks,
+            )
+            for hit in hits:
+                block = await self._fetch_entity_block(hit.entity_type, hit.entity_id)
+                if not block:
+                    continue
+                block["text"] = (block.get("text") or "")[:block_limit]
+                if not block["text"]:
+                    continue
+                evidence.append(block)
         except Exception:
-            # FTS5 not available or query failed, fall back to recent entries
+            # Search backend unavailable, fall back to recent entries
             pass
 
         # If not enough evidence from FTS, add recent entries
@@ -425,7 +500,130 @@ class QAService(BaseService):
                 if not any(e["entity_id"] == r["id"] for e in evidence):
                     evidence.append({"entity_type": "journal", "entity_id": r["id"], "text": (r["content"] or "")[:block_limit]})
 
+            figure_rows = await self.db.fetchall(
+                """SELECT id
+                   FROM figures
+                   WHERE project_id = ?
+                   ORDER BY created_at DESC
+                   LIMIT ?""",
+                [self.project_id, max(5, fallback_limit // 3)],
+            )
+            for row in figure_rows:
+                if any(e["entity_type"] == "figure" and e["entity_id"] == row["id"] for e in evidence):
+                    continue
+                block = await self._fetch_entity_block("figure", row["id"])
+                if not block:
+                    continue
+                block["text"] = (block.get("text") or "")[:block_limit]
+                if block["text"]:
+                    evidence.append(block)
+
         return evidence[:max_blocks]
+
+    async def _fetch_entity_block(self, entity_type: str, entity_id: str) -> dict | None:
+        """Fetch a grounded evidence block for QA and verification."""
+        if entity_type == "journal":
+            row = await self.db.fetchone(
+                "SELECT id, content, summary FROM journal WHERE id = ? AND project_id = ?",
+                [entity_id, self.project_id],
+            )
+            if row:
+                return {
+                    "entity_type": "journal",
+                    "entity_id": row["id"],
+                    "text": row.get("content") or row.get("summary") or "",
+                }
+            return None
+
+        if entity_type == "decision":
+            row = await self.db.fetchone(
+                "SELECT id, question, rationale FROM decisions WHERE id = ? AND project_id = ?",
+                [entity_id, self.project_id],
+            )
+            if row:
+                return {
+                    "entity_type": "decision",
+                    "entity_id": row["id"],
+                    "text": f"{row.get('question') or ''} — {row.get('rationale') or ''}".strip(" —"),
+                }
+            return None
+
+        if entity_type == "literature":
+            row = await self.db.fetchone(
+                "SELECT id, title, abstract FROM literature WHERE id = ? AND project_id = ?",
+                [entity_id, self.project_id],
+            )
+            if row:
+                return {
+                    "entity_type": "literature",
+                    "entity_id": row["id"],
+                    "text": "\n".join(
+                        part for part in [row.get("title"), row.get("abstract")] if part
+                    ),
+                }
+            return None
+
+        if entity_type == "mission":
+            row = await self.db.fetchone(
+                "SELECT id, objective, context FROM missions WHERE id = ? AND project_id = ?",
+                [entity_id, self.project_id],
+            )
+            if row:
+                return {
+                    "entity_type": "mission",
+                    "entity_id": row["id"],
+                    "text": "\n".join(
+                        part for part in [row.get("objective"), row.get("context")] if part
+                    ),
+                }
+            return None
+
+        if entity_type == "artifact":
+            row = await self.db.fetchone(
+                """SELECT id, filename, filetype, mime, metadata
+                   FROM artifacts WHERE id = ? AND project_id = ?""",
+                [entity_id, self.project_id],
+            )
+            if row:
+                return {
+                    "entity_type": "artifact",
+                    "entity_id": row["id"],
+                    "text": "\n".join(
+                        part
+                        for part in [
+                            row.get("filename"),
+                            row.get("filetype"),
+                            row.get("mime"),
+                            row.get("metadata"),
+                        ]
+                        if part
+                    ),
+                }
+            return None
+
+        if entity_type == "figure":
+            row = await self.db.fetchone(
+                """SELECT id, artifact_id, page, caption, summary, claims
+                   FROM figures WHERE id = ? AND project_id = ?""",
+                [entity_id, self.project_id],
+            )
+            if row:
+                loc = f"artifact:{row['artifact_id']}"
+                if row.get("page") is not None:
+                    loc += f"|page:{row['page']}"
+                return {
+                    "entity_type": "figure",
+                    "entity_id": row["id"],
+                    "text": build_figure_text(
+                        caption=row.get("caption"),
+                        summary=row.get("summary"),
+                        claims=row.get("claims"),
+                    ),
+                    "loc": loc,
+                }
+            return None
+
+        return None
 
     async def _get_session_context(self, session_id: str) -> str | None:
         """Get previous Q&A in this session as context."""

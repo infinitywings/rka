@@ -80,6 +80,14 @@ class Database:
                 continue
 
             sql = sql_file.read_text()
+            required_tables = self._migration_required_tables(sql)
+            if required_tables and not await self._tables_exist(required_tables):
+                logger.info(
+                    "Skipping migration %s (waiting for tables: %s)",
+                    sql_file.name,
+                    ", ".join(required_tables),
+                )
+                continue
 
             # Skip vec0 virtual tables if sqlite-vec is not loaded
             if "USING vec0(" in sql and not self._vec_loaded:
@@ -136,6 +144,9 @@ class Database:
 
         await self._conn.executescript(schema_sql)
         await self._conn.commit()
+        # Re-run migrations after Phase 2 schema exists so migrations that depend
+        # on embedding_metadata or other Phase 2 tables can apply on fresh DBs.
+        await self.run_migrations()
         logger.info("Phase 2 schema initialized (vec=%s)", self._vec_loaded)
 
     async def _load_sqlite_vec(self) -> None:
@@ -237,6 +248,38 @@ class Database:
     async def commit(self) -> None:
         """Commit the current transaction."""
         await self._conn.commit()
+
+    async def _tables_exist(self, table_names: list[str]) -> bool:
+        """Return True when all named tables exist."""
+        for table_name in table_names:
+            row = await self.fetchone(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                [table_name],
+            )
+            if row is None:
+                return False
+        return True
+
+    @staticmethod
+    def _migration_required_tables(sql: str) -> list[str]:
+        """Parse migration prerequisites from leading SQL comments.
+
+        Supports comment lines like:
+          -- requires-table: embedding_metadata
+          -- requires-table: foo, bar
+        """
+        tables: list[str] = []
+        for raw_line in sql.splitlines():
+            line = raw_line.strip()
+            if not line.startswith("-- requires-table:"):
+                continue
+            _, _, raw_tables = line.partition(":")
+            tables.extend(
+                table.strip()
+                for table in raw_tables.split(",")
+                if table.strip()
+            )
+        return tables
 
     @property
     def conn(self) -> aiosqlite.Connection:

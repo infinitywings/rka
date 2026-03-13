@@ -189,7 +189,12 @@ class BaseService:
         if not text:
             return
         try:
-            await self.embeddings.embed_and_store(entity_type, entity_id, text)
+            await self.embeddings.embed_and_store(
+                entity_type,
+                entity_id,
+                text,
+                project_id=self.project_id,
+            )
         except Exception as exc:
             logger.debug("Embedding sync failed for %s/%s: %s", entity_type, entity_id, exc)
 

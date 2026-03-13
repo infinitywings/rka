@@ -14,6 +14,61 @@ from rka.services.base import BaseService, _now
 logger = logging.getLogger(__name__)
 
 
+def _parse_claims(claims: str | list[dict] | None) -> list[dict]:
+    """Parse stored figure claims into a list."""
+    if claims is None:
+        return []
+    if isinstance(claims, list):
+        return [claim for claim in claims if isinstance(claim, dict)]
+    try:
+        parsed = json.loads(claims)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    return [claim for claim in parsed if isinstance(claim, dict)] if isinstance(parsed, list) else []
+
+
+def build_artifact_text(
+    filename: str,
+    filetype: str | None = None,
+    mime: str | None = None,
+    metadata: dict | str | None = None,
+) -> str:
+    """Build a text representation suitable for artifact search embeddings."""
+    parts = [filename]
+    if filetype:
+        parts.append(f"filetype: {filetype}")
+    if mime:
+        parts.append(f"mime: {mime}")
+    if metadata:
+        if isinstance(metadata, str):
+            metadata_text = metadata
+        else:
+            metadata_text = json.dumps(metadata, sort_keys=True)
+        parts.append(f"metadata: {metadata_text}")
+    return "\n".join(part for part in parts if part).strip()
+
+
+def build_figure_text(
+    caption: str | None,
+    summary: str | None,
+    claims: str | list[dict] | None,
+) -> str:
+    """Build a text representation suitable for figure search embeddings."""
+    parts: list[str] = []
+    if caption:
+        parts.append(f"caption: {caption}")
+    if summary:
+        parts.append(f"summary: {summary}")
+    claim_texts = [
+        claim.get("claim", "").strip()
+        for claim in _parse_claims(claims)
+        if claim.get("claim")
+    ]
+    if claim_texts:
+        parts.append("claims: " + "; ".join(claim_texts[:5]))
+    return "\n".join(parts).strip()
+
+
 class ArtifactService(BaseService):
     """Manages file artifacts and figure extraction pipeline."""
 
@@ -62,6 +117,13 @@ class ArtifactService(BaseService):
         )
         await self.db.commit()
         await self.audit("create", "artifact", artifact_id, created_by)
+        await self._embed_artifact(
+            artifact_id=artifact_id,
+            filename=fname,
+            filetype=ftype,
+            mime=mime,
+            metadata=metadata,
+        )
 
         return {"id": artifact_id, "duplicate": False}
 
@@ -261,6 +323,12 @@ class ArtifactService(BaseService):
 
         # Create entity_link from artifact to figure
         await self.add_link("artifact", artifact_id, "produced", "figure", figure_id, created_by="system")
+        await self._embed_figure(
+            figure_id=figure_id,
+            caption=caption,
+            summary=summary,
+            claims=claims,
+        )
 
         return {
             "id": figure_id,
@@ -282,3 +350,55 @@ class ArtifactService(BaseService):
                     break
                 h.update(chunk)
         return h.hexdigest()
+
+    async def _embed_artifact(
+        self,
+        artifact_id: str,
+        filename: str,
+        filetype: str | None,
+        mime: str | None,
+        metadata: dict | None,
+    ) -> None:
+        """Best-effort artifact text embedding for search and backfill."""
+        if not self.embeddings:
+            return
+        text = build_artifact_text(
+            filename=filename,
+            filetype=filetype,
+            mime=mime,
+            metadata=metadata,
+        )
+        if not text:
+            return
+        try:
+            await self.embeddings.embed_and_store(
+                "artifact",
+                artifact_id,
+                text,
+                project_id=self.project_id,
+            )
+        except Exception as exc:
+            logger.debug("Embedding sync failed for artifact %s: %s", artifact_id, exc)
+
+    async def _embed_figure(
+        self,
+        figure_id: str,
+        caption: str | None,
+        summary: str | None,
+        claims: list[dict] | None,
+    ) -> None:
+        """Best-effort figure text embedding for search and backfill."""
+        if not self.embeddings:
+            return
+        text = build_figure_text(caption=caption, summary=summary, claims=claims)
+        if not text:
+            return
+        try:
+            await self.embeddings.embed_and_store(
+                "figure",
+                figure_id,
+                text,
+                project_id=self.project_id,
+            )
+        except Exception as exc:
+            logger.debug("Embedding sync failed for figure %s: %s", figure_id, exc)

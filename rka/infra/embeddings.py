@@ -60,24 +60,41 @@ class EmbeddingService:
         return [e.tolist() for e in embeddings]
 
     @staticmethod
-    def content_hash(text: str) -> str:
+    def content_hash(content: str | bytes) -> str:
         """Hash content to detect changes for re-embedding."""
-        return hashlib.sha256(text.encode()).hexdigest()[:16]
+        if isinstance(content, bytes):
+            raw = content
+        else:
+            raw = content.encode()
+        return hashlib.sha256(raw).hexdigest()[:16]
 
-    async def needs_reembed(self, entity_type: str, entity_id: str, text: str) -> bool:
+    async def needs_reembed(
+        self,
+        entity_type: str,
+        entity_id: str,
+        text: str,
+        project_id: str = "proj_default",
+    ) -> bool:
         """Check if stored embedding is stale (content changed)."""
         if self.db is None:
             return True
         meta = await self.db.fetchone(
-            "SELECT content_hash FROM embedding_metadata WHERE entity_type = ? AND entity_id = ?",
-            [entity_type, entity_id],
+            """SELECT content_hash
+               FROM embedding_metadata
+               WHERE project_id = ? AND entity_type = ? AND entity_id = ?""",
+            [project_id, entity_type, entity_id],
         )
         if meta is None:
             return True
         return meta["content_hash"] != self.content_hash(text)
 
     async def store_embedding(
-        self, entity_type: str, entity_id: str, text: str, embedding: list[float],
+        self,
+        entity_type: str,
+        entity_id: str,
+        text: str,
+        embedding: list[float] | None = None,
+        project_id: str = "proj_default",
     ) -> None:
         """Store embedding in sqlite-vec virtual table and update metadata."""
         if self.db is None:
@@ -88,13 +105,15 @@ class EmbeddingService:
             "literature": "vec_literature",
             "journal": "vec_journal",
             "mission": "vec_missions",
+            "artifact": "vec_artifacts",
+            "figure": "vec_artifacts",
         }
         table = table_map.get(entity_type)
-        if not table:
-            return
+        if embedding is None:
+            embedding = await self.embed_document(text)
 
         # Upsert into vec table (only if sqlite-vec is loaded)
-        if self.db.vec_available:
+        if self.db.vec_available and table:
             import struct
             vec_blob = struct.pack(f"{len(embedding)}f", *embedding)
             await self.db.execute(
@@ -105,18 +124,23 @@ class EmbeddingService:
         # Always upsert metadata (tracks what needs embedding, useful for batch re-embed)
         await self.db.execute(
             """INSERT OR REPLACE INTO embedding_metadata
-               (entity_type, entity_id, content_hash, model_name, dimensions)
-               VALUES (?, ?, ?, ?, ?)""",
-            [entity_type, entity_id, self.content_hash(text), self.model_name, self._dim],
+               (project_id, entity_type, entity_id, content_hash, model_name, dimensions)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            [project_id, entity_type, entity_id, self.content_hash(text), self.model_name, self._dim],
         )
         await self.db.commit()
 
-    async def embed_and_store(self, entity_type: str, entity_id: str, text: str) -> None:
+    async def embed_and_store(
+        self,
+        entity_type: str,
+        entity_id: str,
+        text: str,
+        project_id: str = "proj_default",
+    ) -> None:
         """Convenience: embed text and store result if content changed."""
         if not text.strip():
             return
-        if not await self.needs_reembed(entity_type, entity_id, text):
+        if not await self.needs_reembed(entity_type, entity_id, text, project_id=project_id):
             return
-        embedding = await self.embed_document(text)
-        await self.store_embedding(entity_type, entity_id, text, embedding)
+        await self.store_embedding(entity_type, entity_id, text, project_id=project_id)
         logger.debug("Embedded %s/%s (%d chars)", entity_type, entity_id, len(text))

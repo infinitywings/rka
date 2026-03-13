@@ -602,8 +602,7 @@ class LLMClient:
         from rka.infra.llm_models import SummaryOutput
 
         evidence_text = "\n\n".join(
-            f"[{b.get('entity_type', 'unknown')}:{b.get('entity_id', '?')}] "
-            f"{b.get('text', '')[:self._evidence_block_limit]}"
+            self._format_evidence_block(b)
             for b in evidence_blocks[:self._max_evidence_blocks]
         )
 
@@ -620,7 +619,9 @@ class LLMClient:
                 "content": (
                     f"Summarize these research evidence blocks for scope '{scope_label}'.\n"
                     f"{granularity_instr}\n"
-                    f"Cite sources using entity IDs. Identify open questions or gaps.\n\n"
+                    f"Cite sources using entity IDs and preserve loc when provided. "
+                    f"If a figure supports a claim, prefer citing the figure directly. "
+                    f"Identify open questions or gaps.\n\n"
                     f"Evidence:\n{evidence_text}"
                 ),
             }],
@@ -640,8 +641,7 @@ class LLMClient:
         from rka.infra.llm_models import QAAnswer
 
         evidence_text = "\n\n".join(
-            f"[{b.get('entity_type', 'unknown')}:{b.get('entity_id', '?')}] "
-            f"{b.get('text', '')[:self._evidence_block_limit]}"
+            self._format_evidence_block(b)
             for b in evidence_blocks[:self._max_evidence_blocks]
         )
 
@@ -655,12 +655,22 @@ class LLMClient:
                 "role": "user",
                 "content": (
                     f"Answer this research question using ONLY the provided evidence. "
-                    f"Quote exact excerpts from sources. Suggest follow-up questions.{ctx}\n\n"
+                    f"Quote exact excerpts from sources. Preserve loc when available. "
+                    f"If a figure contains the strongest evidence, cite it directly. "
+                    f"Suggest follow-up questions.{ctx}\n\n"
                     f"Question: {question}\n\n"
                     f"Evidence:\n{evidence_text}"
                 ),
             }],
         )
+
+    def _format_evidence_block(self, block: dict) -> str:
+        """Render an evidence block for QA/summary prompts."""
+        header = f"[{block.get('entity_type', 'unknown')}:{block.get('entity_id', '?')}]"
+        loc = block.get("loc")
+        if loc:
+            header = f"{header} ({loc})"
+        return f"{header} {str(block.get('text', ''))[:self._evidence_block_limit]}"
 
     async def extract_pdf_metadata(
         self, first_page_text: str,

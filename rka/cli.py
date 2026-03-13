@@ -219,6 +219,51 @@ def backfill():
     click.echo(f"  Total: {sum(counts.values())}")
 
 
+@main.command("backfill-embeddings")
+@click.option("--project", "project_id", default="proj_default", help="Project id to backfill")
+@click.option("--batch-size", default=50, show_default=True, type=int, help="Rows per batch")
+@click.option("--figures/--no-figures", default=True, help="Backfill figure embeddings")
+@click.option("--artifacts/--no-artifacts", default=True, help="Backfill artifact embeddings")
+@click.option("--force", is_flag=True, help="Re-embed even if metadata is current")
+def backfill_embeddings_cmd(
+    project_id: str,
+    batch_size: int,
+    figures: bool,
+    artifacts: bool,
+    force: bool,
+):
+    """Backfill artifact and figure embeddings for a project."""
+    from rka.config import RKAConfig
+    from rka.infra.database import Database
+    from rka.infra.embeddings import EmbeddingService
+    from rka.services.backfill import backfill_embeddings
+
+    config = RKAConfig()
+
+    async def _run():
+        db = Database(config.database_url)
+        await db.connect()
+        await db.initialize_schema()
+        await db.initialize_phase2_schema()
+        embeddings = EmbeddingService(model_name=config.embedding_model, db=db)
+        counts = await backfill_embeddings(
+            db,
+            embeddings,
+            project_id=project_id,
+            batch_size=batch_size,
+            include_artifacts=artifacts,
+            include_figures=figures,
+            force=force,
+        )
+        await db.close()
+        return counts
+
+    counts = asyncio.run(_run())
+    click.echo(f"Embedding backfill complete for {project_id}:")
+    for entity_type, count in counts.items():
+        click.echo(f"  {entity_type}: {count}")
+
+
 @bootstrap.command("scan")
 @click.argument("folder")
 @click.option("--ignore", "-i", multiple=True, help="Additional ignore patterns")

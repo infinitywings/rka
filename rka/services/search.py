@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import struct
 from dataclasses import dataclass, field
 
 from rka.infra.database import Database
 from rka.infra.embeddings import EmbeddingService
+from rka.services.artifacts import build_artifact_text, build_figure_text
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +74,17 @@ class SearchService:
         "decision": "vec_decisions",
         "literature": "vec_literature",
         "mission": "vec_missions",
+        "artifact": "vec_artifacts",
+        "figure": "vec_artifacts",
+    }
+
+    SOURCE_MAP = {
+        "journal": "journal",
+        "decision": "decisions",
+        "literature": "literature",
+        "mission": "missions",
+        "artifact": "artifacts",
+        "figure": "figures",
     }
 
     def __init__(
@@ -102,7 +115,7 @@ class SearchService:
           - No FTS5 data → LIKE fallback
           - No sqlite-vec → keyword only
         """
-        types = entity_types or ["decision", "literature", "journal", "mission"]
+        types = entity_types or ["decision", "literature", "journal", "mission", "artifact", "figure"]
 
         # 1. FTS5 keyword search
         fts_results = await self._fts_search(query, types, limit * 2)
@@ -116,19 +129,28 @@ class SearchService:
             except Exception as exc:
                 logger.warning("Vector search failed, using keyword only: %s", exc)
 
-        # 3. If both are empty, fall back to LIKE search
+        # 3. Supplemental LIKE search for entity types without dedicated FTS tables.
+        supplemental = await self._like_fallback(
+            query,
+            [etype for etype in types if etype not in self.FTS_MAP],
+            limit,
+        )
+
+        # 4. If both are empty, fall back to LIKE search
         if not fts_results and not vec_results:
+            if supplemental:
+                return supplemental[:limit]
             return await self._like_fallback(query, types, limit)
 
-        # 4. If only one source has results, return that
+        # 5. If only one source has results, return that
         if not vec_results:
-            return fts_results[:limit]
+            return self._merge_ranked_hits(fts_results, supplemental)[:limit]
         if not fts_results:
-            return vec_results[:limit]
+            return self._merge_ranked_hits(vec_results, supplemental)[:limit]
 
-        # 5. Reciprocal Rank Fusion
+        # 6. Reciprocal Rank Fusion
         fused = self._rrf_merge(fts_results, vec_results, keyword_weight, semantic_weight)
-        return fused[:limit]
+        return self._merge_ranked_hits(fused, supplemental)[:limit]
 
     @staticmethod
     def _sanitize_fts_query(query: str) -> str:
@@ -210,7 +232,9 @@ class SearchService:
             if not table:
                 continue
 
-            source = self.FTS_MAP[etype]["source"]
+            source = self.SOURCE_MAP.get(etype)
+            if not source:
+                continue
 
             try:
                 rows = await self.db.fetchall(
@@ -341,7 +365,61 @@ class SearchService:
                     title=row["objective"][:100], snippet=row["objective"][:200],
                 ))
 
+        if "artifact" in entity_types:
+            rows = await self.db.fetchall(
+                """SELECT * FROM artifacts
+                   WHERE project_id = ?
+                     AND (filename LIKE ? OR filepath LIKE ? OR mime LIKE ? OR metadata LIKE ?)
+                   LIMIT ?""",
+                [self.project_id, q, q, q, q, limit],
+            )
+            for row in rows:
+                results.append(SearchHit(
+                    entity_type="artifact",
+                    entity_id=row["id"],
+                    title=(row.get("filename") or "")[:100],
+                    snippet=build_artifact_text(
+                        filename=row.get("filename") or "",
+                        filetype=row.get("filetype"),
+                        mime=row.get("mime"),
+                        metadata=row.get("metadata"),
+                    )[:200],
+                ))
+
+        if "figure" in entity_types:
+            rows = await self.db.fetchall(
+                """SELECT * FROM figures
+                   WHERE project_id = ?
+                     AND (caption LIKE ? OR summary LIKE ? OR claims LIKE ?)
+                   LIMIT ?""",
+                [self.project_id, q, q, q, limit],
+            )
+            for row in rows:
+                results.append(SearchHit(
+                    entity_type="figure",
+                    entity_id=row["id"],
+                    title=(row.get("caption") or f"Figure {row['id']}")[:100],
+                    snippet=build_figure_text(
+                        caption=row.get("caption"),
+                        summary=row.get("summary"),
+                        claims=row.get("claims"),
+                    )[:200],
+                ))
+
         return results[:limit]
+
+    @staticmethod
+    def _merge_ranked_hits(primary: list[SearchHit], secondary: list[SearchHit]) -> list[SearchHit]:
+        """Append secondary hits after primary hits while removing duplicates."""
+        merged: list[SearchHit] = []
+        seen: set[str] = set()
+        for hit in [*primary, *secondary]:
+            key = f"{hit.entity_type}:{hit.entity_id}"
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(hit)
+        return merged
 
     @staticmethod
     def _extract_title_snippet(etype: str, row: dict) -> tuple[str, str]:
@@ -354,4 +432,19 @@ class SearchService:
             return (row.get("title") or "")[:100], (row.get("abstract") or "")[:200]
         elif etype == "mission":
             return (row.get("objective") or "")[:100], (row.get("context") or row.get("objective") or "")[:200]
+        elif etype == "artifact":
+            text = build_artifact_text(
+                filename=row.get("filename") or "",
+                filetype=row.get("filetype"),
+                mime=row.get("mime"),
+                metadata=row.get("metadata"),
+            )
+            return (row.get("filename") or "")[:100], text[:200]
+        elif etype == "figure":
+            text = build_figure_text(
+                caption=row.get("caption"),
+                summary=row.get("summary"),
+                claims=row.get("claims"),
+            )
+            return (row.get("caption") or f"Figure {row.get('id', '')}")[:100], text[:200]
         return "", ""

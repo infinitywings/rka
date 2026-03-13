@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 import pytest_asyncio
 
@@ -29,6 +31,26 @@ async def seeded_db(db: Database) -> Database:
     await db.execute(
         "INSERT INTO literature (id, title, abstract, status, project_id) VALUES (?, ?, ?, ?, ?)",
         ["lit_001", "Paper on Models", "Abstract text here", "reading", "proj_default"],
+    )
+    await db.execute(
+        """INSERT INTO artifacts
+           (id, filename, filepath, filetype, extraction_status, project_id)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        ["artifact_001", "packet-loss.png", "/tmp/packet-loss.png", "png", "complete", "proj_default"],
+    )
+    await db.execute(
+        """INSERT INTO figures
+           (id, artifact_id, page, caption, summary, claims, project_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        [
+            "figure_001",
+            "artifact_001",
+            1,
+            "Packet loss over time",
+            "Packet loss drops sharply after tuning.",
+            json.dumps([{"claim": "Packet loss decreases after tuning", "confidence": 0.9}]),
+            "proj_default",
+        ],
     )
     # Insert FTS entries
     for i in range(5):
@@ -93,6 +115,7 @@ class TestSummaryEvidenceGathering:
         assert len(evidence) > 0
         types = {e["entity_type"] for e in evidence}
         assert "journal" in types
+        assert "figure" in types
 
     @pytest.mark.asyncio
     async def test_gather_mission_evidence(self, summary_svc: SummaryService):
@@ -134,6 +157,11 @@ class TestQAEvidenceGathering:
         evidence = await qa_svc._gather_qa_evidence("xyzzy nonsense query", None, None)
         assert len(evidence) > 0  # Should have recent entries as fallback
 
+    @pytest.mark.asyncio
+    async def test_gather_qa_evidence_includes_figures(self, qa_svc: QAService):
+        evidence = await qa_svc._gather_qa_evidence("packet loss", None, None)
+        assert any(e["entity_type"] == "figure" for e in evidence)
+
 
 class TestQAVerifySource:
     @pytest.mark.asyncio
@@ -141,3 +169,34 @@ class TestQAVerifySource:
         result = await qa_svc.verify_source("qal_nonexistent", 0)
         assert result["verified"] is False
         assert "not found" in result["reason"]
+
+    @pytest.mark.asyncio
+    async def test_verify_figure_source(self, qa_svc: QAService, db: Database):
+        await db.execute(
+            "INSERT INTO qa_sessions (id, project_id, created_by, title) VALUES (?, ?, ?, ?)",
+            ["qas_figure", "proj_default", "pi", "Figure QA"],
+        )
+        await db.execute(
+            """INSERT INTO qa_logs
+               (id, session_id, question, answer, sources)
+               VALUES (?, ?, ?, ?, ?)""",
+            [
+                "qal_figure",
+                "qas_figure",
+                "What happened to packet loss?",
+                "It decreased.",
+                json.dumps([
+                    {
+                        "entity_type": "figure",
+                        "entity_id": "figure_001",
+                        "excerpt": "Packet loss drops sharply after tuning.",
+                        "loc": "artifact:artifact_001|page:1",
+                    }
+                ]),
+            ],
+        )
+        await db.commit()
+
+        result = await qa_svc.verify_source("qal_figure", 0)
+        assert result["verified"] is True
+        assert result["entity_type"] == "figure"

@@ -41,4 +41,4 @@ async def test_initialize_phase2_schema_reruns_migrations_after_vec_load(
     finally:
         await db.close()
 
-    assert run_states == [True]
+    assert run_states == [True, True]

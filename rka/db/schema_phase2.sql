@@ -60,11 +60,14 @@ CREATE VIRTUAL TABLE IF NOT EXISTS vec_missions USING vec0(
 -- Tracks which content was embedded (for staleness detection).
 
 CREATE TABLE IF NOT EXISTS embedding_metadata (
+    project_id TEXT NOT NULL DEFAULT 'proj_default',
     entity_type TEXT NOT NULL,
     entity_id   TEXT NOT NULL,
     content_hash TEXT NOT NULL,
     model_name  TEXT NOT NULL,
     dimensions  INTEGER NOT NULL DEFAULT 768,
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    PRIMARY KEY (entity_type, entity_id)
+    PRIMARY KEY (project_id, entity_type, entity_id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_embedding_metadata_project ON embedding_metadata(project_id);
