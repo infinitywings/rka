@@ -14,7 +14,7 @@
 #   docker compose down           # stop
 #
 # Web UI:  http://localhost:9712
-# API:     http://localhost:9712/api/docs
+# API:     http://localhost:9712/docs
 #
 # Claude Desktop MCP config (~/.config/Claude/claude_desktop_config.json):
 #   {

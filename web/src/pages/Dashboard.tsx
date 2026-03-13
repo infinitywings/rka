@@ -249,7 +249,7 @@ export default function Dashboard() {
               Import Knowledge Pack
             </DialogTitle>
             <DialogDescription>
-              Import a previously exported project pack. Leave the optional ID and name blank to reuse the values from the pack.
+              Import a previously exported project pack into a new project. Leave the optional ID and name blank to reuse the metadata from the pack.
             </DialogDescription>
           </DialogHeader>
 
@@ -286,7 +286,7 @@ export default function Dashboard() {
             </div>
 
             <p className="text-xs text-muted-foreground">
-              Import preserves the original entity IDs. If those IDs or literature DOIs already exist in this database, the import will be rejected instead of merging over existing data.
+              Import creates a separate project, remaps project-scoped entity IDs, and rewrites internal references. If the target project ID or project name already exists, the import is rejected instead of merging data.
             </p>
           </div>
 

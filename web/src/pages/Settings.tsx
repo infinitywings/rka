@@ -240,12 +240,12 @@ export default function Settings() {
                   /api/health
                 </a>
                 <a
-                  href="/api/docs"
+                  href="/docs"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-xs text-blue-600 hover:underline"
                 >
-                  /api/docs (OpenAPI)
+                  /docs (OpenAPI)
                 </a>
               </div>
             </div>

@@ -1,6 +1,8 @@
 # Research Knowledge Agent (RKA)
 
-An MCP server and REST API for AI-assisted research orchestration. RKA gives AI assistants a persistent, structured knowledge base for managing research decisions, literature, findings, missions, and checkpoints — enabling a collaborative Brain/Executor workflow between a human researcher (PI), a strategic AI (Brain), and an implementation AI (Executor).
+An MCP server and REST API for AI-assisted research orchestration. RKA gives AI assistants a persistent, structured knowledge base for managing research decisions, literature, findings, missions, checkpoints, and project-scoped artifacts — enabling a collaborative Brain/Executor workflow between a human researcher (PI), a strategic AI (Brain), and an implementation AI (Executor).
+
+Current release: `v1.2.0` adds multi-project isolation, project knowledge-pack export/import, and a project-aware web dashboard.
 
 Built for CS/IoT/CPS security research at UNC Charlotte.
 
@@ -12,6 +14,7 @@ Built for CS/IoT/CPS security research at UNC Charlotte.
 - [Key Concepts](#key-concepts)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
+- [Multi-Project and Project Packs](#multi-project-and-project-packs)
 - [CLI Reference](#cli-reference)
 - [Configuration](#configuration)
 - [MCP Tools Reference](#mcp-tools-reference)
@@ -71,7 +74,7 @@ RKA implements a three-actor collaboration:
 
 ### Four-Layer Design
 
-1. **MCP Tools Layer** — Thin adapter exposing 34 `rka_*` tools over stdio. Stateless proxy, no business logic.
+1. **MCP Tools Layer** — Thin adapter exposing `rka_*` tools over stdio. Stateless proxy, no business logic.
 2. **REST API Layer** — FastAPI endpoints under `/api`. Same thin-adapter pattern, delegates to services.
 3. **Service Layer** — All business logic. CRUD operations, auto-enrichment, event emission, context preparation. Shared identically by MCP and REST.
 4. **Infrastructure Layer** — Database (SQLite + FTS5 + sqlite-vec), LLM gateway (LiteLLM + Instructor), embeddings (FastEmbed), file storage.
@@ -87,6 +90,8 @@ RKA runs as two separate processes:
 
 Both processes share the same SQLite database file and service layer code. The MCP server communicates via stdio (stdin/stdout), while the REST server listens on HTTP.
 
+The REST API and web dashboard are project-aware. The current MCP server is stateless and operates against the default server project, so use the dashboard or REST API when you need strict per-project routing.
+
 ---
 
 ## Key Concepts
@@ -101,7 +106,7 @@ Both processes share the same SQLite database file and service layer code. The M
 | **Mission** | `mis_` | Task packages assigned to the Executor with objectives and acceptance criteria |
 | **Checkpoint** | `chk_` | Escalation points where Executor needs Brain/PI input |
 | **Event** | `evt_` | Audit trail of all state changes with causal chain links |
-| **Project State** | — | Singleton: current phase, summary, blockers, metrics |
+| **Project State** | — | Singleton per project: current phase, summary, blockers, metrics |
 
 ### ULID-Based IDs
 
@@ -217,7 +222,7 @@ docker compose up -d
 rka serve
 ```
 
-The web dashboard is at `http://localhost:9712`. API docs at `http://localhost:9712/api/docs`.
+The web dashboard is at `http://localhost:9712`. API docs are at `http://localhost:9712/docs`.
 
 ### 2. Configure LLM
 
@@ -234,7 +239,20 @@ Add the MCP config (see Installation above). Claude Desktop now has access to al
 
 ### 4. Start Researching
 
-Use the web UI for browsing and Q&A, or use Claude Desktop/Code with MCP tools for the full Brain/Executor workflow.
+Use the web UI for browsing and Q&A, or use Claude Desktop/Code with MCP tools for the full Brain/Executor workflow. The dashboard lets you select the active project, create/import projects, and export the active project as a knowledge pack.
+
+For end-to-end task walkthroughs, see [USAGE_GUIDE.md](USAGE_GUIDE.md).
+
+---
+
+## Multi-Project and Project Packs
+
+- The REST API and web dashboard are project-aware. The dashboard stores the active project locally and injects `X-RKA-Project` on API requests automatically.
+- List/create projects with `GET /api/projects` and `POST /api/projects`.
+- Export the active project with `GET /api/projects/export`.
+- Import a previously exported pack with `POST /api/projects/import`. Import creates a separate project, remaps project-scoped entity IDs, and rewrites internal references.
+- MCP tools currently target the default server project. For strict multi-project workflows, use the dashboard or REST API.
+- The CLI bootstrap commands also operate on the current database/default project. For project-specific workspace bootstrap in a multi-project database, use the REST workspace endpoints with `X-RKA-Project`.
 
 ---
 
@@ -242,7 +260,7 @@ Use the web UI for browsing and Q&A, or use Claude Desktop/Code with MCP tools f
 
 ### `rka init <name>`
 
-Initialize a new RKA project.
+Initialize a new RKA workspace and seed the default project.
 
 ```bash
 rka init "IoT Security Analysis" --description "Systematic review of CPS vulnerabilities"
@@ -299,6 +317,14 @@ rka backup --output ./backups/rka-backup.db
 |--------|---------|-------------|
 | `--output` | Timestamped file | Output path for backup |
 
+### `rka migrate`
+
+Run pending database migrations.
+
+```bash
+rka migrate
+```
+
 ### `rka bootstrap scan <folder>`
 
 Scan a workspace folder and classify files for ingestion into the knowledge base.
@@ -329,6 +355,8 @@ rka bootstrap ingest ~/research/project_files --phase phase_1 --tags bootstrap -
 | `--no-llm` | `false` | Disable LLM-enhanced classification |
 | `--dry-run` | `false` | Preview without creating entries |
 | `--yes` | `false` | Skip confirmation prompt |
+
+These CLI bootstrap commands target the current database/default project. In a multi-project deployment, use `POST /api/workspace/scan` and `POST /api/workspace/ingest` with `X-RKA-Project` to bootstrap a specific project.
 
 ---
 
@@ -489,6 +517,8 @@ Base URL: `http://localhost:9712/api`
 
 Interactive API docs available at `http://localhost:9712/docs` (Swagger UI).
 
+Most entity endpoints are project-scoped. Pass `X-RKA-Project: <project_id>` to target a specific project. If omitted, the server falls back to `proj_default`.
+
 ### Notes (Journal Entries)
 
 | Method | Endpoint | Description |
@@ -546,12 +576,16 @@ Interactive API docs available at `http://localhost:9712/docs` (Swagger UI).
 | `POST` | `/summarize` | On-demand summarization |
 | `POST` | `/eviction-sweep` | Propose entries for archival |
 
-### Project
+### Project and Knowledge Packs
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| `GET` | `/projects` | List project metadata |
+| `POST` | `/projects` | Create a project |
 | `GET` | `/status` | Get project state |
 | `PUT` | `/status` | Update project state |
+| `GET` | `/projects/export` | Export the active project as a knowledge-pack zip |
+| `POST` | `/projects/import` | Import a knowledge-pack zip into a new project |
 | `GET` | `/health` | Health check (version, sqlite-vec status) |
 
 ### LLM Configuration
@@ -580,6 +614,17 @@ Interactive API docs available at `http://localhost:9712/docs` (Swagger UI).
 | `GET` | `/graph/ego/{entity_id}` | Get ego graph centered on an entity |
 | `GET` | `/graph/stats` | Graph statistics |
 
+### Artifacts and Figures
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/artifacts` | Register an artifact file for the active project |
+| `GET` | `/artifacts` | List artifacts |
+| `GET` | `/artifacts/{artifact_id}` | Get an artifact |
+| `POST` | `/artifacts/{artifact_id}/extract` | Extract figures and tables from an artifact |
+| `GET` | `/artifacts/{artifact_id}/figures` | List figures for an artifact |
+| `GET` | `/figures/{figure_id}` | Get a single extracted figure |
+
 ### Events and Tags
 
 | Method | Endpoint | Description |
@@ -602,6 +647,8 @@ Interactive API docs available at `http://localhost:9712/docs` (Swagger UI).
 | `POST` | `/workspace/ingest` | Ingest files from a scan manifest into the knowledge base |
 | `GET` | `/workspace/review/{scan_id}` | Review a completed bootstrap (entry counts, suggestions) |
 
+Use `X-RKA-Project` with these endpoints when bootstrapping a specific project in a multi-project deployment.
+
 ### Academic Import (Phase 5)
 
 | Method | Endpoint | Description |
@@ -617,7 +664,7 @@ Interactive API docs available at `http://localhost:9712/docs` (Swagger UI).
 
 ## Web Dashboard
 
-The web dashboard provides a visual interface for inspecting project state without using MCP tools or raw API calls.
+The web dashboard provides a visual interface for inspecting project state without using MCP tools or raw API calls. It is project-aware and includes project selection plus knowledge-pack export/import controls.
 
 ### Building the Dashboard
 
@@ -646,7 +693,7 @@ The Vite dev server runs at `http://localhost:5173` and proxies API calls to `:9
 
 | Page | Path | Features |
 |------|------|----------|
-| **Dashboard** | `/` | Project overview, active missions, open checkpoints, recent entries, entity counts |
+| **Dashboard** | `/` | Project overview, active missions, open checkpoints, recent entries, project selection, knowledge-pack export/import |
 | **Journal** | `/journal` | Timeline view grouped by date, type/confidence filters, create/edit entries |
 | **Decisions** | `/decisions` | Interactive decision tree (React Flow + elkjs), click nodes for detail panel |
 | **Literature** | `/literature` | Table view with reading pipeline status tabs, add/update papers |
@@ -656,7 +703,7 @@ The Vite dev server runs at `http://localhost:5173` and proxies API calls to `:9
 | **Research Map** | `/graph` | Entity relationship graph (React Flow), nodes colored by type, relationship edges |
 | **Audit Log** | `/audit` | System audit trail table with action/entity/actor filters, action counts summary |
 | **Context Inspector** | `/context` | Generate context packages, view temperature badges (HOT/WARM/COLD), copy JSON |
-| **Settings** | `/settings` | LLM configuration + status, API health, DB stats, project configuration |
+| **Settings** | `/settings` | LLM configuration + status, API health, DB stats, project configuration, quick links to `/docs` and `/api/health` |
 
 ### Tech Stack
 
@@ -673,7 +720,7 @@ The Vite dev server runs at `http://localhost:5173` and proxies API calls to `:9
 
 All data lives in a single `rka.db` file. The schema includes:
 
-- **Core tables**: `decisions`, `literature`, `journal_entries`, `missions`, `checkpoints`, `project_state`, `events`
+- **Core tables**: `projects`, `project_states`, `decisions`, `literature`, `journal_entries`, `missions`, `checkpoints`, `events`, `artifacts`
 - **Junction table**: `tags` — entity-type/entity-id/tag triples for cross-entity tag queries
 - **JSON columns**: `options` (decisions), `authors` (literature), `tasks` (missions), `key_findings` (literature)
 - **FTS5 virtual tables**: Full-text search indexes on content fields (Phase 2)
@@ -789,18 +836,19 @@ uv run pytest
 .venv/bin/pytest -v
 ```
 
-All 129 tests cover: database schema, CRUD operations, FTS5 search, context engine, LLM enrichment, event emission, API endpoints, workspace bootstrap, graph service, backfill service, and summary/QA services.
+The test suite covers database schema, CRUD operations, FTS5 search, context engine, LLM enrichment, event emission, multi-project scoping, knowledge-pack import/export, API endpoints, workspace bootstrap, graph service, backfill service, and summary/QA services.
 
 ### Project Structure
 
 ```
 rka/
 ├── rka/                    # Python package
-│   ├── cli.py              # Click CLI (init, serve, mcp, status, backup)
+│   ├── cli.py              # Click CLI (init, serve, mcp, status, backup, migrate, bootstrap, backfill)
 │   ├── config.py           # Pydantic settings (RKAConfig)
 │   ├── models/             # Pydantic models for all entities
 │   ├── services/           # Business logic (shared by MCP + REST)
 │   │   ├── base.py         # BaseService with emit_event()
+│   │   ├── project.py      # Project metadata + per-project status
 │   │   ├── notes.py        # Journal entry CRUD + enrichment
 │   │   ├── decisions.py    # Decision tree CRUD
 │   │   ├── literature.py   # Literature CRUD
@@ -810,6 +858,8 @@ rka/
 │   │   ├── context.py      # Context engine (temperature, token budgeting)
 │   │   ├── audit.py        # Audit log queries and counts
 │   │   ├── academic.py     # BibTeX import, DOI enrichment, Mermaid export
+│   │   ├── artifacts.py    # Artifact registration + figure extraction
+│   │   ├── knowledge_pack.py # Project export/import packs
 │   │   └── workspace.py    # Workspace bootstrap (scan, classify, ingest)
 │   ├── infra/              # Infrastructure
 │   │   ├── database.py     # SQLite + FTS5 + sqlite-vec
@@ -825,7 +875,7 @@ rka/
 │   │   ├── api/            # Fetch client + TypeScript types
 │   │   ├── hooks/          # TanStack Query hooks
 │   │   ├── components/     # UI components (shadcn + layout + shared)
-│   │   ├── pages/          # Page components (10 pages)
+│   │   ├── pages/          # Page components (11 pages)
 │   │   └── lib/            # Utilities
 │   └── dist/               # Production build (served by FastAPI)
 ├── tests/                  # Pytest test suite
@@ -856,8 +906,9 @@ rka/
 | **Phase 3** | Web Dashboard — React + Vite, 7 core pages, decision tree visualization, static serving | Complete |
 | **Phase 4** | Exploration Visualizations — Timeline page (event stream + causal chains), Knowledge Graph page (entity relationships with React Flow) | Complete |
 | **Phase 5** | Academic APIs + Audit — BibTeX import, DOI enrichment (CrossRef), Semantic Scholar + arXiv search, Mermaid decision tree export, batch import, document ingestion, Audit Log viewer + API | Complete |
-| **Phase 6** | Workspace Bootstrap — Folder scanning with regex + LLM classification, batch ingestion pipeline, duplicate detection, Brain handoff review (34 MCP tools total) | Complete |
+| **Phase 6** | Workspace Bootstrap — Folder scanning with regex + LLM classification, batch ingestion pipeline, duplicate detection, Brain handoff review | Complete |
 | **Phase 7** | Notebook + LLM Config — Q&A chat, summary generation, runtime LLM configuration, context window auto-detection, knowledge graph, Docker deployment | Complete |
+| **Phase 8** | Multi-Project + Knowledge Packs — project isolation, dashboard project management, portable project export/import, artifact-safe import remapping | Complete |
 
 ---
 

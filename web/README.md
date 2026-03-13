@@ -1,6 +1,6 @@
 # RKA Web Dashboard
 
-The web dashboard for the Research Knowledge Agent. Provides a visual interface for inspecting project state, managing entities, visualizing relationships, and debugging the context engine — without needing MCP tools or raw API calls.
+The web dashboard for the Research Knowledge Agent. It provides a project-aware interface for inspecting project state, managing entities, exporting/importing project packs, visualizing relationships, and debugging the context engine without raw API calls.
 
 ## Quick Start
 
@@ -43,20 +43,21 @@ The build output goes to `web/dist/`. When `rka serve` starts, it automatically 
 | elkjs | — | Layered graph layout for decision trees |
 | Lucide React | — | Icon library |
 
-## Pages (10)
+## Pages (11)
 
 | Page | Route | Description |
 |------|-------|-------------|
-| **Dashboard** | `/` | Project overview — active missions, open checkpoints, recent entries, entity counts |
+| **Dashboard** | `/` | Project overview, project selector, knowledge-pack export/import, active missions, open checkpoints, recent entries |
 | **Journal** | `/journal` | Timeline of journal entries grouped by date with type/confidence/source filters |
 | **Decisions** | `/decisions` | Interactive decision tree (React Flow + elkjs) with side panel details |
 | **Literature** | `/literature` | Table view with reading pipeline status tabs (to_read → cited) |
 | **Missions** | `/missions` | Active missions with task checklists, checkpoints, and report viewer |
 | **Timeline** | `/timeline` | Event stream with causal chain visualization, entity/actor filters |
 | **Knowledge Graph** | `/graph` | Entity relationship graph — nodes colored by type, edges by relationship |
+| **Notebook** | `/notebook` | Grounded Q&A and summary generation across the active project |
 | **Audit Log** | `/audit` | Audit trail table with action/entity/actor filters and action counts |
 | **Context Inspector** | `/context` | Generate context packages with temperature badges and token budgets |
-| **Settings** | `/settings` | API health, DB stats, LLM status, project configuration |
+| **Settings** | `/settings` | API health, DB stats, LLM status, project configuration, quick links to `/docs` |
 
 ## Project Structure
 
@@ -73,7 +74,7 @@ web/
 │   ├── main.tsx                 # Entry point
 │   ├── App.tsx                  # Router + QueryClientProvider + layout
 │   ├── api/
-│   │   ├── client.ts            # Typed fetch wrapper (base URL, error handling)
+│   │   ├── client.ts            # Typed fetch wrapper (base URL, error handling, X-RKA-Project injection)
 │   │   └── types.ts             # TypeScript interfaces matching Pydantic models
 │   ├── hooks/
 │   │   ├── useNotes.ts          # TanStack Query hooks for journal entries
@@ -82,7 +83,8 @@ web/
 │   │   ├── useMissions.ts       # Mission lifecycle queries
 │   │   ├── useCheckpoints.ts    # Checkpoint queries
 │   │   ├── useEvents.ts         # Event stream queries
-│   │   ├── useProject.ts        # Project status queries
+│   │   ├── useProject.ts        # Project status, list, and knowledge-pack queries
+│   │   ├── useProjectSelection.tsx # Active-project state and persistence
 │   │   ├── useSearch.ts         # Search queries
 │   │   └── useContext.ts        # Context engine queries
 │   ├── components/
@@ -103,6 +105,7 @@ web/
 │   │   ├── Missions.tsx
 │   │   ├── Timeline.tsx         # Phase 4
 │   │   ├── KnowledgeGraph.tsx   # Phase 4
+│   │   ├── Notebook.tsx
 │   │   ├── AuditLog.tsx         # Phase 5
 │   │   ├── ContextInspector.tsx
 │   │   └── Settings.tsx
@@ -115,14 +118,21 @@ web/
 
 ## API Client
 
-The API client (`src/api/client.ts`) provides typed methods for all backend endpoints:
+The API client (`src/api/client.ts`) provides typed methods for all backend endpoints and automatically injects the active project as `X-RKA-Project`:
 
 ```typescript
 import { api } from "@/api/client"
+import { setApiProjectId } from "@/api/client"
+
+setApiProjectId("proj_alpha")
 
 // Entity CRUD
 const notes = await api.listNotes({ phase: "experiment", limit: 50 })
 const lit = await api.createLiterature({ title: "Paper X", authors: ["A"], year: 2024 })
+
+// Projects
+const projects = await api.listProjects()
+const pack = await api.exportKnowledgePack()
 
 // Search
 const results = await api.search("anomaly detection", ["literature", "decision"])

@@ -15,6 +15,7 @@ This guide supplements the [README](README.md) with end-to-end usage examples fo
 - [Batch Import Techniques](#batch-import-techniques)
 - [Academic Import Tools (Phase 5)](#academic-import-tools-phase-5)
 - [Workspace Bootstrap](#workspace-bootstrap)
+- [Knowledge Pack Export and Import](#knowledge-pack-export-and-import)
 - [Web Dashboard Pages](#web-dashboard-pages)
 - [Tips for Maintaining the Knowledge Base](#tips-for-maintaining-the-knowledge-base)
 
@@ -36,6 +37,11 @@ rka serve
 ```
 
 Ensure Claude Desktop and/or Claude Code have RKA configured as an MCP server (see [README — Quick Start](README.md#quick-start)).
+
+Two operational constraints matter for current releases:
+
+1. In Docker, workspace bootstrap can only see folders mounted into the container. Add a bind mount for any host folder you want to scan.
+2. MCP tools are currently stateless and operate against the default server project. For strict multi-project workflows, use the REST API or web dashboard so `X-RKA-Project` is set correctly.
 
 ---
 
@@ -1096,6 +1102,8 @@ The workspace bootstrap feature lets you drop all your existing research files (
 2. **Brain** reviews the bootstrap via `rka_review_bootstrap()` and reorganizes entries
 3. **Executor** is delegated deep analysis tasks (e.g., reading complex PDFs, cross-referencing)
 
+If you are using multiple projects, treat the MCP bootstrap tools as default-project helpers. Use the REST workflow below for a specific project.
+
 ### Supported File Types
 
 | Extension | Category | What Happens |
@@ -1110,7 +1118,7 @@ The workspace bootstrap feature lets you drop all your existing research files (
 
 ### Quick Bootstrap (One-Shot via MCP)
 
-The fastest way to bootstrap — Brain calls a single tool:
+The fastest way to bootstrap the default project — Brain calls a single tool:
 
 ```
 rka_bootstrap_workspace(
@@ -1228,6 +1236,108 @@ rka bootstrap ingest ~/research/files --dry-run
 rka bootstrap ingest ~/research/files -y
 ```
 
+The CLI bootstrap commands also target the current database/default project. They are not the right tool for importing into a non-default project inside a shared multi-project database.
+
+### Project-Aware Bootstrap via REST
+
+Use this flow when you need to bootstrap a specific project from an existing folder of code, PDFs, notes, or data.
+
+**Step 0: Mount the folder if you run Docker**
+
+Add a bind mount in `docker-compose.yml`, for example:
+
+```yaml
+services:
+  rka:
+    volumes:
+      - rka-data:/data
+      - /Users/you/research/project_files:/workspace/project_files:ro
+```
+
+Restart the container after changing mounts.
+
+**Step 1: Create the target project**
+
+```bash
+curl -sS -X POST http://localhost:9712/api/projects \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "id": "proj_bootstrap",
+    "name": "Bootstrap Project",
+    "description": "Imported from existing files"
+  }'
+```
+
+**Step 2: Scan the mounted folder**
+
+```bash
+curl -sS -X POST http://localhost:9712/api/workspace/scan \
+  -H 'X-RKA-Project: proj_bootstrap' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "folder_path": "/workspace/project_files",
+    "use_llm": true,
+    "max_files": 5000
+  }' > /tmp/rka-scan.json
+```
+
+**Step 3: Ingest the scan manifest**
+
+```bash
+jq '{
+  manifest: .,
+  phase: "planning",
+  override_tags: ["bootstrap"],
+  source: "web_ui",
+  dry_run: false
+}' /tmp/rka-scan.json \
+| curl -sS -X POST http://localhost:9712/api/workspace/ingest \
+    -H 'X-RKA-Project: proj_bootstrap' \
+    -H 'Content-Type: application/json' \
+    --data @-
+```
+
+**Step 4: Hand the result to Brain**
+
+```bash
+scan_id=$(jq -r .scan_id /tmp/rka-scan.json)
+
+curl -sS \
+  -H 'X-RKA-Project: proj_bootstrap' \
+  "http://localhost:9712/api/workspace/review/$scan_id"
+```
+
+At that point the handoff is:
+
+1. **RKA** has ingested the folder into the project knowledge base.
+2. **Brain** reads the bootstrap review, creates decisions, and issues missions.
+3. **Executor** reads important artifacts in depth, runs code, and submits reports/checkpoints.
+
+### Registering Raw Files as Artifacts
+
+Workspace bootstrap creates notes and literature records. It does **not** automatically register raw files in the `artifacts` table.
+
+If you want raw files tracked as artifacts too, do a second pass:
+
+```bash
+curl -sS -X POST http://localhost:9712/api/artifacts \
+  -H 'X-RKA-Project: proj_bootstrap' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "filepath": "/workspace/project_files/paper.pdf",
+    "filename": "paper.pdf",
+    "created_by": "web_ui"
+  }'
+```
+
+Then extract figures if needed:
+
+```bash
+curl -sS -X POST \
+  -H 'X-RKA-Project: proj_bootstrap' \
+  http://localhost:9712/api/artifacts/<artifact_id>/extract
+```
+
 ### LLM-Enhanced Classification
 
 When `RKA_LLM_ENABLED=true` and the local LLM is available, the scanner uses it for:
@@ -1244,12 +1354,54 @@ Files are identified by SHA-256 hash. Once a file is ingested, re-scanning the s
 
 ---
 
+## Knowledge Pack Export and Import
+
+Knowledge packs let you move an entire project, including project state, notes, decisions, literature, missions, checkpoints, artifacts, and related metadata.
+
+### From the Web Dashboard
+
+1. Open the Dashboard.
+2. Select the source project in the Projects card.
+3. Click `Export Active`.
+4. To import, click `Import Pack`, choose the `.zip`, and optionally set a new project ID or name.
+
+Import creates a new project. Project-scoped entity IDs are remapped and internal references are rewritten so the imported pack can coexist with the source project in the same database.
+
+### Via REST API
+
+Export the active project:
+
+```bash
+curl -sS -OJ \
+  -H 'X-RKA-Project: proj_bootstrap' \
+  http://localhost:9712/api/projects/export
+```
+
+Import into a new project:
+
+```bash
+curl -sS -X POST http://localhost:9712/api/projects/import \
+  -F 'file=@proj_bootstrap.rka-pack.zip' \
+  -F 'project_id=proj_bootstrap_clone' \
+  -F 'project_name=Bootstrap Project Clone'
+```
+
+Use packs when:
+
+- you want to snapshot a project before a risky refactor
+- you want to move a project between machines
+- you want to fork an existing project into a new line of investigation
+
+Do **not** use packs as an in-place merge mechanism. Import intentionally creates a separate project instead of overlaying data onto an existing one.
+
+---
+
 ## Web Dashboard Pages
 
 The web dashboard at `http://localhost:9712` provides visual interfaces for all RKA data. Here's what each page offers:
 
 ### Dashboard (`/`)
-Project overview with active missions, open checkpoints, recent journal entries, and entity counts. This is your starting point for understanding project state at a glance.
+Project overview with active missions, open checkpoints, recent journal entries, and project controls. The Projects card lets you switch the active project, export the current project as a knowledge pack, or import a pack into a new project.
 
 ### Journal (`/journal`)
 Timeline view of all journal entries grouped by date. Filter by entry type (finding, insight, idea, etc.), confidence level, and source. Create and edit entries inline. A "hide superseded" toggle (on by default) keeps the view clean.
@@ -1282,7 +1434,7 @@ System audit trail displayed as a sortable table. Filter by action type (create,
 Generate context packages by specifying a topic, phase, depth, and max token budget. The split view shows raw entries with temperature badges (HOT/WARM/COLD) on the left and the generated narrative on the right. Token count display and "Copy to Clipboard" for the full context package JSON.
 
 ### Settings (`/settings`)
-Project configuration display, LLM status (enabled/disabled, model name), database stats (entity counts per type), and health endpoint status.
+Project configuration display, LLM status (enabled/disabled, model name), database stats (entity counts per type), health endpoint status, and quick links to `/docs` and `/api/health`.
 
 ---
 
