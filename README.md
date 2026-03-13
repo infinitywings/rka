@@ -1,6 +1,24 @@
 # Research Knowledge Agent (RKA)
 
-An MCP server and REST API for AI-assisted research orchestration. RKA gives AI assistants a persistent, structured knowledge base for managing research decisions, literature, findings, missions, checkpoints, and project-scoped artifacts — enabling a collaborative Brain/Executor workflow between a human researcher (PI), a strategic AI (Brain), and an implementation AI (Executor).
+An MCP server and REST API for AI-assisted research orchestration. RKA provides a persistent, structured research memory for managing literature, hypotheses, findings, decisions, missions, checkpoints, and project-scoped artifacts across long-running investigations. It is designed for a collaborative workflow between a human principal investigator (PI), a strategic AI research assistant (Brain), and an implementation-focused AI assistant (Executor).
+
+## Why RKA Exists
+
+Modern research increasingly involves iterative collaboration between humans and AI systems, but most AI interfaces remain session-bound. Research questions, working hypotheses, literature interpretations, negative results, methodological choices, and the reasoning behind key decisions disappear between sessions. At the same time, research artifacts accumulate across papers, notes, code, datasets, experiment outputs, and meeting records without a unified structure for retrieval, provenance, or longitudinal reasoning.
+
+RKA addresses this by acting as a persistent knowledge layer for the research lifecycle. It stores findings with explicit confidence states from hypothesis through verification, records decisions together with alternatives and rationale, links literature to the questions and claims it informed, and maintains an event-sourced audit trail that preserves how a project evolved across weeks or months. The Brain/Executor model separates strategic interpretation from implementation: one AI can support synthesis, framing, and research direction, while another carries out coding, experiments, extraction, and reporting against the same shared research memory.
+
+The result is continuity across the full arc of a project. A session in month six can access the accumulated context of month one: what was tried, what failed, what evidence supported a decision, what was abandoned and why, and which questions remain unresolved.
+
+## What RKA Provides
+
+- Persistent research memory across sessions, phases, and projects
+- Structured entities for literature, findings, decisions, missions, checkpoints, artifacts, and events
+- Traceable provenance linking papers, findings, decisions, experiments, and outcomes
+- Brain/Executor coordination for strategic planning, execution, reporting, and escalation
+- Hybrid retrieval with keyword search, embeddings, summaries, and grounded Q&A
+- Multi-project isolation with project packs for export and import
+- REST API, MCP server, CLI, and web dashboard over a shared service layer
 
 Current release: `v1.2.0` adds multi-project isolation, project knowledge-pack export/import, and a project-aware web dashboard.
 
@@ -74,7 +92,7 @@ RKA implements a three-actor collaboration:
 
 ### Four-Layer Design
 
-1. **MCP Tools Layer** — Thin adapter exposing `rka_*` tools over stdio. Stateless proxy, no business logic.
+1. **MCP Tools Layer** — Thin adapter exposing `rka_*` tools over stdio. Keeps lightweight per-session state for output compaction and digests, but no core business logic.
 2. **REST API Layer** — FastAPI endpoints under `/api`. Same thin-adapter pattern, delegates to services.
 3. **Service Layer** — All business logic. CRUD operations, auto-enrichment, event emission, context preparation. Shared identically by MCP and REST.
 4. **Infrastructure Layer** — Database (SQLite + FTS5 + sqlite-vec), LLM gateway (LiteLLM + Instructor), embeddings (FastEmbed), file storage.
@@ -90,7 +108,7 @@ RKA runs as two separate processes:
 
 Both processes share the same SQLite database file and service layer code. The MCP server communicates via stdio (stdin/stdout), while the REST server listens on HTTP.
 
-The REST API and web dashboard are project-aware. The current MCP server is stateless and operates against the default server project, so use the dashboard or REST API when you need strict per-project routing.
+The REST API and web dashboard are project-aware. The current MCP server keeps lightweight per-session state but still operates against the default server project, so use the dashboard or REST API when you need strict per-project routing.
 
 ---
 

@@ -1,8 +1,8 @@
 # RKA Usage Guide — Scenario-Based Walkthrough
 
-This guide supplements the [README](README.md) with end-to-end usage examples for three common research scenarios. Each scenario shows the exact tool calls (Brain or Executor side), the order of operations, and how to rapidly build a populated knowledge base.
+This guide supplements the [README](README.md) with end-to-end usage examples for common research scenarios. It is written around the RKA design philosophy: the PI supervises the project, the Brain handles synthesis and research direction, and the Executor handles implementation, ingestion, experimentation, and reporting. Each scenario shows how that collaboration is recorded in a persistent research memory rather than scattered across ephemeral chat sessions.
 
-> **Convention**: Tool calls shown as `rka_tool_name(...)` represent what Claude Desktop (Brain) or Claude Code (Executor) would call through MCP. You can also make equivalent REST calls via `curl` or the web dashboard.
+> **Convention**: Tool calls shown as `rka_tool_name(...)` represent what Claude Desktop (Brain) or Claude Code (Executor) would call through MCP. You can also make equivalent REST calls via `curl` or the web dashboard. MCP examples assume the default server project; for project-specific workflows, use the REST API or the dashboard so `X-RKA-Project` is applied.
 
 ---
 
@@ -41,7 +41,12 @@ Ensure Claude Desktop and/or Claude Code have RKA configured as an MCP server (s
 Two operational constraints matter for current releases:
 
 1. In Docker, workspace bootstrap can only see folders mounted into the container. Add a bind mount for any host folder you want to scan.
-2. MCP tools are currently stateless and operate against the default server project. For strict multi-project workflows, use the REST API or web dashboard so `X-RKA-Project` is set correctly.
+2. MCP tools keep lightweight per-session state for output compaction and session digests, but they still operate against the default server project. For strict multi-project workflows, use the REST API or web dashboard so `X-RKA-Project` is set correctly.
+
+For longer MCP sessions, two tools are useful:
+
+- `rka_session_digest()` compresses the current MCP session into a compact summary so the Brain or Executor does not need to retain earlier tool output manually.
+- `rka_reset_session()` clears the MCP session tracker when you are starting a new logical work session without restarting the MCP server.
 
 ---
 
@@ -244,25 +249,19 @@ Brain → rka_update_status(
 ```
 Executor → rka_submit_report(
     mission_id="mis_01XYZ...",
-    tasks_completed=[
-        "Searched IEEE Xplore, ACM DL, arXiv — 14 papers cataloged",
-        "Key techniques identified: RF, CNN, LSTM, Autoencoder, GNN",
-        "Top datasets: CICIDS2017, NSL-KDD, IoT-23",
-        "Comparison table with detection rates compiled"
-    ],
-    findings=[
-        "97% of papers use synthetic or outdated datasets",
-        "Only 2 papers evaluate on real IoT deployments",
-        "MQTT-specific features outperform generic network features in 3 studies",
-        "No paper compares more than 2 IDS frameworks on the same real traffic"
-    ],
-    anomalies=[
-        "Several papers report >99% accuracy but use train/test split from same capture session (data leakage risk)"
-    ],
-    questions=[
-        "Should we collect our own MQTT traffic or use an existing IoT testbed?",
-        "Which 3 IDS frameworks should we compare?"
-    ],
+    summary="Cataloged 14 papers from IEEE Xplore, ACM DL, and arXiv. Identified
+             Random Forest, CNN, LSTM, Autoencoder, and GNN as the dominant
+             approaches. The most common datasets were CICIDS2017, NSL-KDD, and
+             IoT-23. Compiled a comparison table of techniques and reported
+             detection rates for Brain review.",
+    findings="97% of papers use synthetic or outdated datasets
+              Only 2 papers evaluate on real IoT deployments
+              MQTT-specific features outperform generic network features in 3 studies
+              No paper compares more than 2 IDS frameworks on the same real traffic",
+    anomalies="Several papers report >99% accuracy but use train/test split from
+               the same capture session, suggesting data leakage risk",
+    questions="Should we collect our own MQTT traffic or use an existing IoT testbed?
+               Which 3 IDS frameworks should we compare?",
     recommended_next="Design the evaluation framework: select IDS tools, define metrics, plan traffic collection"
 )
 ```
@@ -544,19 +543,17 @@ The Executor reads through the files and submits a report:
 ```
 Executor → rka_submit_report(
     mission_id="mis_01ABC...",
-    tasks_completed=["Full inventory of 23 files completed"],
-    findings=[
-        "3 meeting notes (advisor meetings Jan-Mar) with action items",
-        "7 PDFs — 5 relevant papers, 2 tangential",
-        "1 rough outline (Google Doc export) for a workshop paper",
-        "2 email threads with collaborator discussing dataset access",
-        "4 Python notebooks with prototype federated averaging code",
-        "6 misc text files with scattered ideas and TODO lists"
-    ],
-    questions=[
-        "Should I ingest the email threads or just the actionable items from them?",
-        "The prototype code is messy — should I log its architecture decisions or skip?"
-    ],
+    summary="Completed a full inventory of 23 files in the project folder and
+             classified each artifact by research role: meeting notes, literature,
+             manuscript structure, code, collaborator communication, and loose ideas.",
+    findings="3 meeting notes (advisor meetings Jan-Mar) with action items
+              7 PDFs — 5 relevant papers, 2 tangential
+              1 rough outline (Google Doc export) for a workshop paper
+              2 email threads with collaborator discussing dataset access
+              4 Python notebooks with prototype federated averaging code
+              6 misc text files with scattered ideas and TODO lists",
+    questions="Should I ingest the email threads or only the actionable items from them?
+               The prototype code is messy — should I log its architecture decisions or skip?",
     recommended_next="Ingest in order: (1) meeting notes as PI instructions,
                      (2) papers as literature, (3) outline as decisions,
                      (4) ideas as journal entries"
@@ -1445,8 +1442,9 @@ Project configuration display, LLM status (enabled/disabled, model name), databa
 1. **Start of session**: Brain calls `rka_get_status()` and `rka_get_context(topic="current work")` to orient. Or open the Dashboard (`/`) in the web UI for a visual overview.
 2. **During work**: Log findings and insights as you go — small frequent entries are better than rare large ones
 3. **End of session**: Executor calls `rka_submit_report()` even for informal progress updates
-4. **Weekly**: Brain calls `rka_eviction_sweep(dry_run=true)` to review stale entries. Check the Timeline (`/timeline`) to review the event stream and the Audit Log (`/audit`) for a complete activity trail.
-5. **Periodically**: Visit the Knowledge Graph (`/graph`) to visualize how entities connect. Use Mermaid export (`rka_export_mermaid()`) for including decision trees in documents.
+4. **Compress long sessions**: Brain or Executor calls `rka_session_digest()` when tool output is getting lengthy. If you are switching to a new logical task, call `rka_reset_session()` before continuing.
+5. **Weekly**: Brain calls `rka_eviction_sweep(dry_run=true)` to review stale entries. Check the Timeline (`/timeline`) to review the event stream and the Audit Log (`/audit`) for a complete activity trail.
+6. **Periodically**: Visit the Knowledge Graph (`/graph`) to visualize how entities connect. Use Mermaid export (`rka_export_mermaid()`) for including decision trees in documents.
 
 ### Keep Entries Atomic
 

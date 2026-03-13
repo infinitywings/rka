@@ -28,6 +28,7 @@ import {
   Activity,
   Server,
   Tag,
+  BookOpen,
   CheckCircle2,
   XCircle,
   Brain,
@@ -79,9 +80,70 @@ export default function Settings() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
         <p className="text-muted-foreground text-sm">
-          System configuration, health, and database statistics
+          About, system configuration, health, and database statistics
         </p>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <BookOpen className="h-4 w-4" />
+            About RKA
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4 text-sm text-muted-foreground">
+          <p>
+            RKA is a persistent research memory for long-running, AI-assisted investigations.
+            It organizes literature, hypotheses, findings, decisions, missions, checkpoints,
+            artifacts, and events so that research context survives across sessions, phases,
+            and projects.
+          </p>
+          <p>
+            Its design separates strategic interpretation from implementation. The Brain
+            supports framing, synthesis, and research direction. The Executor carries out
+            coding, experiments, extraction, and reporting. The PI remains the supervising
+            researcher. All three collaborate against the same structured knowledge base.
+          </p>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="rounded-md border p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-foreground">
+                Research Memory
+              </p>
+              <p className="mt-1 text-xs">
+                Preserve hypotheses, negative results, methodological choices, and evolving
+                project state instead of losing them between chat sessions.
+              </p>
+            </div>
+            <div className="rounded-md border p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-foreground">
+                Provenance
+              </p>
+              <p className="mt-1 text-xs">
+                Link papers, findings, decisions, experiments, and outcomes through an
+                event-sourced audit trail and explicit cross-references.
+              </p>
+            </div>
+            <div className="rounded-md border p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-foreground">
+                Brain / Executor Workflow
+              </p>
+              <p className="mt-1 text-xs">
+                Coordinate strategic planning, implementation, reporting, and escalation
+                through missions and checkpoints rather than informal chat memory.
+              </p>
+            </div>
+            <div className="rounded-md border p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-foreground">
+                Project Scope
+              </p>
+              <p className="mt-1 text-xs">
+                Keep work isolated per project while supporting export and import through
+                portable knowledge packs.
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* LLM Configuration — full width, prominent */}
       <LLMConfigCard />
