@@ -9,7 +9,7 @@ import click
 
 
 @click.group()
-@click.version_option(version="1.2.0")
+@click.version_option(version="1.3.0")
 def main():
     """Research Knowledge Agent — AI-assisted research orchestration."""
     pass

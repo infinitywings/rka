@@ -129,7 +129,7 @@ class KnowledgePackService(BaseService):
         manifest: dict[str, Any] = {
             "schema_version": PACK_SCHEMA_VERSION,
             "exported_at": _now(),
-            "rka_version": "1.2.0",
+            "rka_version": "1.3.0",
             "project": dict(project),
             "project_state": dict(project_state) if project_state else None,
             "tables": {},

@@ -20,7 +20,7 @@ The result is continuity across the full arc of a project. A session in month si
 - Multi-project isolation with project packs for export and import
 - REST API, MCP server, CLI, and web dashboard over a shared service layer
 
-Current release: `v1.2.0` adds multi-project isolation, project knowledge-pack export/import, and a project-aware web dashboard.
+Current release: `v1.3.0` adds app-state dependency injection for the API, MCP session digests and compact output, and revised research-oriented documentation and About text.
 
 Built for CS/IoT/CPS security research at UNC Charlotte.
 
