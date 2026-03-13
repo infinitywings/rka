@@ -27,14 +27,15 @@ class DecisionService(BaseService):
         await self.db.execute(
             """INSERT INTO decisions
                (id, parent_id, phase, question, options, chosen, rationale,
-                decided_by, status, related_missions, related_literature)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                decided_by, status, related_missions, related_literature, project_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 dec_id, data.parent_id, data.phase, data.question,
                 options_json, data.chosen, data.rationale,
                 data.decided_by, data.status,
                 self._json_dumps(data.related_missions),
                 self._json_dumps(data.related_literature),
+                self.project_id,
             ],
         )
         await self.db.commit()
@@ -66,7 +67,10 @@ class DecisionService(BaseService):
 
     async def get(self, dec_id: str) -> Decision | None:
         """Get a single decision by ID."""
-        row = await self.db.fetchone("SELECT * FROM decisions WHERE id = ?", [dec_id])
+        row = await self.db.fetchone(
+            "SELECT * FROM decisions WHERE id = ? AND project_id = ?",
+            [dec_id, self.project_id],
+        )
         if row is None:
             return None
         return await self._row_to_model(row)
@@ -81,7 +85,9 @@ class DecisionService(BaseService):
     ) -> list[Decision]:
         """List decisions with filters."""
         conditions = []
-        params = []
+        params = [self.project_id]
+
+        conditions.append("project_id = ?")
 
         if phase:
             conditions.append("phase = ?")
@@ -129,7 +135,10 @@ class DecisionService(BaseService):
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         values = list(updates.values()) + [dec_id]
 
-        await self.db.execute(f"UPDATE decisions SET {set_clause} WHERE id = ?", values)
+        await self.db.execute(
+            f"UPDATE decisions SET {set_clause} WHERE id = ? AND project_id = ?",
+            values + [self.project_id],
+        )
         await self.db.commit()
 
         # Emit event for status changes
@@ -147,7 +156,10 @@ class DecisionService(BaseService):
 
         # Re-sync FTS5 + embedding on content changes
         if "question" in updates or "rationale" in updates:
-            row = await self.db.fetchone("SELECT question, rationale FROM decisions WHERE id = ?", [dec_id])
+            row = await self.db.fetchone(
+                "SELECT question, rationale FROM decisions WHERE id = ? AND project_id = ?",
+                [dec_id, self.project_id],
+            )
             if row:
                 await self._sync_indexes("decision", dec_id, dict(row))
 
@@ -156,8 +168,8 @@ class DecisionService(BaseService):
 
     async def get_tree(self, phase: str | None = None, active_only: bool = False) -> list[DecisionTreeNode]:
         """Build the decision tree as nested nodes."""
-        conditions = []
-        params = []
+        conditions = ["project_id = ?"]
+        params = [self.project_id]
         if phase:
             conditions.append("phase = ?")
             params.append(phase)

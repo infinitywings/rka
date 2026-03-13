@@ -1,17 +1,20 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { api } from "@/api/client"
 import type { MissionCreate, MissionUpdate, MissionReportCreate } from "@/api/types"
+import { useActiveProjectId } from "@/hooks/useProjectSelection"
 
 export function useMissions(params?: { status?: string }) {
+  const projectId = useActiveProjectId()
   return useQuery({
-    queryKey: ["missions", params],
+    queryKey: ["missions", projectId, params],
     queryFn: () => api.listMissions(params),
   })
 }
 
 export function useMission(id: string) {
+  const projectId = useActiveProjectId()
   return useQuery({
-    queryKey: ["missions", id],
+    queryKey: ["missions", projectId, id],
     queryFn: () => api.getMission(id),
     enabled: !!id,
   })

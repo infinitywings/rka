@@ -78,9 +78,14 @@ class SearchService:
         self,
         db: Database,
         embeddings: EmbeddingService | None = None,
+        project_id: str = "proj_default",
     ):
         self.db = db
         self.embeddings = embeddings
+        self.project_id = project_id
+
+    def with_project(self, project_id: str) -> "SearchService":
+        return SearchService(db=self.db, embeddings=self.embeddings, project_id=project_id)
 
     async def search(
         self,
@@ -175,8 +180,8 @@ class SearchService:
             placeholders = ",".join("?" for _ in ids)
 
             data_rows = await self.db.fetchall(
-                f"SELECT * FROM {info['source']} WHERE id IN ({placeholders})",
-                ids,
+                f"SELECT * FROM {info['source']} WHERE id IN ({placeholders}) AND project_id = ?",
+                ids + [self.project_id],
             )
 
             for row in data_rows:
@@ -228,8 +233,8 @@ class SearchService:
             placeholders = ",".join("?" for _ in ids)
 
             data_rows = await self.db.fetchall(
-                f"SELECT * FROM {source} WHERE id IN ({placeholders})",
-                ids,
+                f"SELECT * FROM {source} WHERE id IN ({placeholders}) AND project_id = ?",
+                ids + [self.project_id],
             )
 
             for row in data_rows:
@@ -294,8 +299,8 @@ class SearchService:
 
         if "decision" in entity_types:
             rows = await self.db.fetchall(
-                "SELECT * FROM decisions WHERE question LIKE ? OR rationale LIKE ? LIMIT ?",
-                [q, q, limit],
+                "SELECT * FROM decisions WHERE project_id = ? AND (question LIKE ? OR rationale LIKE ?) LIMIT ?",
+                [self.project_id, q, q, limit],
             )
             for row in rows:
                 results.append(SearchHit(
@@ -305,8 +310,8 @@ class SearchService:
 
         if "literature" in entity_types:
             rows = await self.db.fetchall(
-                "SELECT * FROM literature WHERE title LIKE ? OR abstract LIKE ? LIMIT ?",
-                [q, q, limit],
+                "SELECT * FROM literature WHERE project_id = ? AND (title LIKE ? OR abstract LIKE ?) LIMIT ?",
+                [self.project_id, q, q, limit],
             )
             for row in rows:
                 results.append(SearchHit(
@@ -316,8 +321,8 @@ class SearchService:
 
         if "journal" in entity_types:
             rows = await self.db.fetchall(
-                "SELECT * FROM journal WHERE content LIKE ? LIMIT ?",
-                [q, limit],
+                "SELECT * FROM journal WHERE project_id = ? AND content LIKE ? LIMIT ?",
+                [self.project_id, q, limit],
             )
             for row in rows:
                 results.append(SearchHit(
@@ -327,8 +332,8 @@ class SearchService:
 
         if "mission" in entity_types:
             rows = await self.db.fetchall(
-                "SELECT * FROM missions WHERE objective LIKE ? LIMIT ?",
-                [q, limit],
+                "SELECT * FROM missions WHERE project_id = ? AND objective LIKE ? LIMIT ?",
+                [self.project_id, q, limit],
             )
             for row in rows:
                 results.append(SearchHit(

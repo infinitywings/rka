@@ -112,6 +112,7 @@ class WorkspaceService:
         self.notes = note_service
         self.lit = literature_service
         self.llm = llm
+        self.project_id = note_service.project_id
 
     # ================================================================
     # Public: Scan
@@ -274,8 +275,8 @@ class WorkspaceService:
         """Produce a bootstrap review for the Brain to start reorganization."""
         # Query bootstrap_log for all entities from this scan
         rows = await self.db.fetchall(
-            "SELECT entity_type, entity_id, category FROM bootstrap_log WHERE scan_id = ?",
-            [scan_id],
+            "SELECT entity_type, entity_id, category FROM bootstrap_log WHERE scan_id = ? AND project_id = ?",
+            [scan_id, self.project_id],
         )
         if not rows:
             return BootstrapReview(
@@ -301,21 +302,21 @@ class WorkspaceService:
         for eid in entity_ids:
             # Check journal entries
             jrow = await self.db.fetchone(
-                "SELECT type FROM journal WHERE id = ?", [eid],
+                "SELECT type FROM journal WHERE id = ? AND project_id = ?", [eid, self.project_id],
             )
             if jrow:
                 type_counter[jrow["type"]] += 1
 
             # Check literature entries
             lrow = await self.db.fetchone(
-                "SELECT abstract FROM literature WHERE id = ?", [eid],
+                "SELECT abstract FROM literature WHERE id = ? AND project_id = ?", [eid, self.project_id],
             )
             if lrow is not None and not lrow["abstract"]:
                 needs_attention.append(eid)
 
             # Gather tags
             tag_rows = await self.db.fetchall(
-                "SELECT tag FROM tags WHERE entity_id = ?", [eid],
+                "SELECT tag FROM tags WHERE entity_id = ? AND project_id = ?", [eid, self.project_id],
             )
             for tr in tag_rows:
                 all_tags_counter[tr["tag"]] += 1
@@ -805,9 +806,9 @@ class WorkspaceService:
         """Record a successful ingestion in the bootstrap_log table."""
         await self.db.execute(
             """INSERT INTO bootstrap_log
-               (scan_id, file_hash, file_path, category, entity_type, entity_id)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            [scan_id, file_hash, file_path, category, entity_type, entity_id],
+               (scan_id, file_hash, file_path, category, entity_type, entity_id, project_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            [scan_id, file_hash, file_path, category, entity_type, entity_id, self.project_id],
         )
         await self.db.commit()
 
@@ -815,7 +816,8 @@ class WorkspaceService:
         """Mark files that have already been ingested (by hash)."""
         for f in files:
             row = await self.db.fetchone(
-                "SELECT 1 FROM bootstrap_log WHERE file_hash = ?", [f.file_hash],
+                "SELECT 1 FROM bootstrap_log WHERE file_hash = ? AND project_id = ?",
+                [f.file_hash, self.project_id],
             )
             if row:
                 f.is_duplicate = True

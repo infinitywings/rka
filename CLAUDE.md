@@ -80,5 +80,4 @@ pipx install . --force        # from repo root
 - The MCP server is stateless; it proxies all calls to the REST API at `RKA_API_URL` (default: `http://localhost:9712`)
 - `web/` previously had a nested `.git` — do not re-introduce submodule state there
 - Large files (>10 MB) use fast composite hashing; text files are capped at 200K chars in scan
-- The venv has a dependency conflict between `pyzotero` (needs `bibtexparser<2`) and RKA (needs `bibtexparser>=2`); use `.venv/bin/pytest` directly rather than `uv sync`
 - After any code change to `rka/mcp/server.py` or other source files, run `pipx install . --force` to update the Claude Desktop/Code binary

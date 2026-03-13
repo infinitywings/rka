@@ -316,6 +316,22 @@ export interface ProjectState {
   updated_at: string | null
 }
 
+export interface ProjectInfo {
+  id: string
+  name: string
+  description: string | null
+  created_by: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface ProjectCreate {
+  id?: string
+  name: string
+  description?: string
+  phases_config?: string[]
+}
+
 export interface ProjectStateUpdate {
   project_name?: string
   project_description?: string
@@ -324,6 +340,19 @@ export interface ProjectStateUpdate {
   summary?: string
   blockers?: string
   metrics?: Record<string, unknown>
+}
+
+export interface KnowledgePackImportResult {
+  project_id: string
+  project_name: string
+  source_project_id: string
+  imported_counts: Record<string, number>
+  artifact_files_restored: number
+}
+
+export interface KnowledgePackDownload {
+  blob: Blob
+  filename: string
 }
 
 // ---- Context ----

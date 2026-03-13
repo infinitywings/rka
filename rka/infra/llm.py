@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 from typing import Literal, TypeVar
 
+import httpx
 from pydantic import BaseModel, Field
 
 from rka.config import RKAConfig
@@ -221,6 +223,71 @@ class LLMClient:
             )
         return self._instructor_client
 
+    @property
+    def _bare_model(self) -> str:
+        """Model ID without LiteLLM provider prefixes."""
+        return self.model.removeprefix("openai/").removeprefix("ollama/")
+
+    def _models_probe_headers(self) -> dict[str, str]:
+        """Headers for model-list probing."""
+        headers: dict[str, str] = {}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        return headers
+
+    def _model_matches(self, model_id: str | None) -> bool:
+        """Best-effort model ID matching across OpenAI-compatible backends."""
+        if not model_id:
+            return False
+        bare_model = self._bare_model
+        return model_id in {self.model, bare_model} or model_id.endswith(f"/{bare_model}")
+
+    async def _probe_models_endpoint(self) -> bool | None:
+        """Check backend reachability via model-list endpoints before generating tokens.
+
+        Returns True when the backend is reachable and the configured model is listed.
+        Returns None when the probe is inconclusive and a completion fallback should be tried.
+        """
+        if not self.config.llm_api_base:
+            return None
+
+        base = self.config.llm_api_base.rstrip("/")
+        if base.endswith("/v1"):
+            normalized_base = base[:-3]
+        else:
+            normalized_base = base
+
+        endpoints = [
+            f"{normalized_base}/api/v0/models",
+            f"{normalized_base}/v1/models",
+        ]
+        headers = self._models_probe_headers()
+
+        try:
+            async with httpx.AsyncClient(timeout=5.0, headers=headers) as client:
+                for url in endpoints:
+                    try:
+                        response = await client.get(url)
+                        response.raise_for_status()
+                    except Exception as exc:
+                        logger.debug("LLM model probe failed for %s: %s", url, exc)
+                        continue
+
+                    data: Any = response.json()
+                    models = data if isinstance(data, list) else data.get("data", [])
+                    if any(self._model_matches(str(model.get("id", ""))) for model in models):
+                        return True
+                    logger.debug(
+                        "LLM model probe reached %s but did not find configured model %s",
+                        url,
+                        self.model,
+                    )
+                    return None
+        except Exception as exc:
+            logger.debug("LLM model probe setup failed: %s", exc)
+
+        return None
+
     async def is_available(self) -> bool:
         """Health check — can we reach the LLM?"""
         if not self.config.llm_enabled:
@@ -229,12 +296,17 @@ class LLMClient:
             self._available = False
             logger.debug("LLM health check skipped: no model configured")
             return False
+        probed = await self._probe_models_endpoint()
+        if probed is True:
+            self._available = True
+            return True
         try:
             import litellm
             kwargs: dict = dict(
                 model=self.model,
                 messages=[{"role": "user", "content": "ping"}],
-                max_tokens=256,
+                max_tokens=1,
+                timeout=60,
             )
             if self.config.llm_api_base:
                 kwargs["api_base"] = self.config.llm_api_base

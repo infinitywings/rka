@@ -15,6 +15,8 @@ if TYPE_CHECKING:
     from rka.infra.llm import LLMClient
 
 logger = logging.getLogger(__name__)
+DEFAULT_PROJECT_ID = "proj_default"
+VALID_ACTORS = frozenset({"brain", "executor", "pi", "llm", "web_ui", "system"})
 
 
 def _now() -> str:
@@ -31,10 +33,24 @@ class BaseService:
         db: Database,
         llm: "LLMClient | None" = None,
         embeddings: "EmbeddingService | None" = None,
+        project_id: str = DEFAULT_PROJECT_ID,
     ):
         self.db = db
         self.llm = llm
         self.embeddings = embeddings
+        self.project_id = project_id
+
+    def _resolve_project_id(self, project_id: str | None = None) -> str:
+        return (project_id or self.project_id).strip()
+
+    @staticmethod
+    def _validate_actor(actor: str | None, *, allow_none: bool = False) -> str | None:
+        if actor is None and allow_none:
+            return None
+        if actor not in VALID_ACTORS:
+            allowed = ", ".join(sorted(VALID_ACTORS))
+            raise ValueError(f"Invalid actor '{actor}'. Expected one of: {allowed}")
+        return actor
 
     async def emit_event(
         self,
@@ -47,18 +63,21 @@ class BaseService:
         caused_by_entity: str | None = None,
         phase: str | None = None,
         details: dict | None = None,
+        project_id: str | None = None,
     ) -> str:
         """Record a cross-entity event for the exploration timeline."""
+        actor = self._validate_actor(actor)
         event_id = generate_id("event")
+        resolved_project_id = self._resolve_project_id(project_id)
         await self.db.execute(
             """INSERT INTO events
                (id, event_type, entity_type, entity_id, actor, summary,
-                caused_by_event, caused_by_entity, phase, details)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                caused_by_event, caused_by_entity, phase, details, project_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 event_id, event_type, entity_type, entity_id,
                 actor, summary, caused_by_event, caused_by_entity,
-                phase, json.dumps(details) if details else None,
+                phase, json.dumps(details) if details else None, resolved_project_id,
             ],
         )
         await self.db.commit()
@@ -71,33 +90,49 @@ class BaseService:
         entity_id: str | None = None,
         actor: str = "system",
         details: dict | None = None,
+        project_id: str | None = None,
     ) -> None:
         """Record an audit log entry."""
+        actor = self._validate_actor(actor, allow_none=True)
+        resolved_project_id = self._resolve_project_id(project_id)
         await self.db.execute(
-            """INSERT INTO audit_log (action, entity_type, entity_id, actor, details)
-               VALUES (?, ?, ?, ?, ?)""",
-            [action, entity_type, entity_id, actor, json.dumps(details) if details else None],
+            """INSERT INTO audit_log (action, entity_type, entity_id, actor, details, project_id)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            [action, entity_type, entity_id, actor, json.dumps(details) if details else None, resolved_project_id],
         )
         await self.db.commit()
 
-    async def _get_tags(self, entity_type: str, entity_id: str) -> list[str]:
+    async def _get_tags(
+        self,
+        entity_type: str,
+        entity_id: str,
+        project_id: str | None = None,
+    ) -> list[str]:
         """Get all tags for an entity."""
+        resolved_project_id = self._resolve_project_id(project_id)
         rows = await self.db.fetchall(
-            "SELECT tag FROM tags WHERE entity_type = ? AND entity_id = ?",
-            [entity_type, entity_id],
+            "SELECT tag FROM tags WHERE entity_type = ? AND entity_id = ? AND project_id = ?",
+            [entity_type, entity_id, resolved_project_id],
         )
         return [row["tag"] for row in rows]
 
-    async def _set_tags(self, entity_type: str, entity_id: str, tags: list[str]) -> None:
+    async def _set_tags(
+        self,
+        entity_type: str,
+        entity_id: str,
+        tags: list[str],
+        project_id: str | None = None,
+    ) -> None:
         """Replace all tags for an entity."""
+        resolved_project_id = self._resolve_project_id(project_id)
         await self.db.execute(
-            "DELETE FROM tags WHERE entity_type = ? AND entity_id = ?",
-            [entity_type, entity_id],
+            "DELETE FROM tags WHERE entity_type = ? AND entity_id = ? AND project_id = ?",
+            [entity_type, entity_id, resolved_project_id],
         )
         for tag in tags:
             await self.db.execute(
-                "INSERT OR IGNORE INTO tags (tag, entity_type, entity_id) VALUES (?, ?, ?)",
-                [tag.lower().strip(), entity_type, entity_id],
+                "INSERT OR IGNORE INTO tags (tag, entity_type, entity_id, project_id) VALUES (?, ?, ?, ?)",
+                [tag.lower().strip(), entity_type, entity_id, resolved_project_id],
             )
         await self.db.commit()
 
@@ -165,13 +200,20 @@ class BaseService:
 
     # ---- Auto-enrichment ----
 
-    async def _auto_enrich_tags(self, content: str, existing_tags: list[str]) -> list[str] | None:
+    async def _auto_enrich_tags(
+        self,
+        content: str,
+        existing_tags: list[str],
+        project_id: str | None = None,
+    ) -> list[str] | None:
         """Auto-generate tags via LLM. Returns None if LLM not configured on this service."""
         if not self.llm:
             return None
+        resolved_project_id = self._resolve_project_id(project_id)
         # Get existing project tags for reuse hints
         rows = await self.db.fetchall(
-            "SELECT DISTINCT tag FROM tags ORDER BY tag LIMIT 50"
+            "SELECT DISTINCT tag FROM tags WHERE project_id = ? ORDER BY tag LIMIT 50",
+            [resolved_project_id],
         )
         project_tags = [r["tag"] for r in rows]
         return await self.llm.auto_tag(content, project_tags)
@@ -184,18 +226,25 @@ class BaseService:
         target_type: str,
         target_id: str,
         created_by: str = "system",
+        project_id: str | None = None,
     ) -> None:
         """Record a typed edge in entity_links (idempotent — skips duplicates)."""
         link_id = generate_id("link")
+        resolved_project_id = self._resolve_project_id(project_id)
         await self.db.execute(
             """INSERT OR IGNORE INTO entity_links
-               (id, source_type, source_id, link_type, target_type, target_id, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            [link_id, source_type, source_id, link_type, target_type, target_id, created_by],
+               (id, source_type, source_id, link_type, target_type, target_id, created_by, project_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            [link_id, source_type, source_id, link_type, target_type, target_id, created_by, resolved_project_id],
         )
         await self.db.commit()
 
-    async def _auto_link(self, content: str, current_type: str):
+    async def _auto_link(
+        self,
+        content: str,
+        current_type: str,
+        project_id: str | None = None,
+    ):
         """Infer entity links for a new entry using the LLM.
 
         Fetches recent decisions, literature, and missions as candidates,
@@ -204,14 +253,18 @@ class BaseService:
         """
         if not self.llm:
             return None
+        resolved_project_id = self._resolve_project_id(project_id)
         decisions = await self.db.fetchall(
-            "SELECT id, question FROM decisions WHERE status != 'superseded' ORDER BY created_at DESC LIMIT 30"
+            "SELECT id, question FROM decisions WHERE project_id = ? AND status != 'superseded' ORDER BY created_at DESC LIMIT 30",
+            [resolved_project_id],
         )
         literature = await self.db.fetchall(
-            "SELECT id, title FROM literature ORDER BY created_at DESC LIMIT 30"
+            "SELECT id, title FROM literature WHERE project_id = ? ORDER BY created_at DESC LIMIT 30",
+            [resolved_project_id],
         )
         missions = await self.db.fetchall(
-            "SELECT id, objective FROM missions WHERE status != 'cancelled' ORDER BY created_at DESC LIMIT 20"
+            "SELECT id, objective FROM missions WHERE project_id = ? AND status != 'cancelled' ORDER BY created_at DESC LIMIT 20",
+            [resolved_project_id],
         )
         return await self.llm.semantic_link(
             content=content,

@@ -38,24 +38,24 @@ async def search_svc(db: Database) -> SearchService:
 
     # Also insert source rows so SearchService can fetch full data
     await db.execute(
-        "INSERT INTO journal (id, type, content, source, confidence) VALUES (?, ?, ?, ?, ?)",
-        ["jrn_001", "finding", "Timing side-channel attacks on IoT protocols", "pi", "hypothesis"],
+        "INSERT INTO journal (id, type, content, source, confidence, project_id) VALUES (?, ?, ?, ?, ?, ?)",
+        ["jrn_001", "finding", "Timing side-channel attacks on IoT protocols", "pi", "hypothesis", "proj_default"],
     )
     await db.execute(
-        "INSERT INTO journal (id, type, content, source, confidence) VALUES (?, ?, ?, ?, ?)",
-        ["jrn_002", "insight", "Multi-hop amplification factor is sqrt(n)", "pi", "tested"],
+        "INSERT INTO journal (id, type, content, source, confidence, project_id) VALUES (?, ?, ?, ?, ?, ?)",
+        ["jrn_002", "insight", "Multi-hop amplification factor is sqrt(n)", "pi", "tested", "proj_default"],
     )
     await db.execute(
-        "INSERT INTO literature (id, title, abstract, status) VALUES (?, ?, ?, ?)",
-        ["lit_001", "Remote Timing Attacks on IoT Devices", "AES key recovery via timing", "reading"],
+        "INSERT INTO literature (id, title, abstract, status, project_id) VALUES (?, ?, ?, ?, ?)",
+        ["lit_001", "Remote Timing Attacks on IoT Devices", "AES key recovery via timing", "reading", "proj_default"],
     )
     await db.execute(
-        "INSERT INTO decisions (id, question, rationale, decided_by, status, phase) VALUES (?, ?, ?, ?, ?, ?)",
-        ["dec_001", "Statistical vs ML approach for timing analysis", "Balance accuracy and interpretability", "brain", "active", "phase_1"],
+        "INSERT INTO decisions (id, question, rationale, decided_by, status, phase, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ["dec_001", "Statistical vs ML approach for timing analysis", "Balance accuracy and interpretability", "brain", "active", "phase_1", "proj_default"],
     )
     await db.execute(
-        "INSERT INTO missions (id, objective, phase, status) VALUES (?, ?, ?, ?)",
-        ["mis_001", "Survey timing side-channel attack methodologies", "phase_1", "active"],
+        "INSERT INTO missions (id, objective, phase, status, project_id) VALUES (?, ?, ?, ?, ?)",
+        ["mis_001", "Survey timing side-channel attack methodologies", "phase_1", "active", "proj_default"],
     )
     await db.commit()
 

@@ -19,7 +19,7 @@ class GraphService:
     @staticmethod
     def _project_clause(alias: str = "") -> str:
         prefix = f"{alias}." if alias else ""
-        return f"({prefix}project_id = ? OR {prefix}project_id IS NULL)"
+        return f"{prefix}project_id = ?"
 
     # ------------------------------------------------------------------
     # Full graph (all entity_links + nodes)
@@ -494,7 +494,7 @@ class GraphService:
         journal_rows = await self.db.fetchall(
             """SELECT id, type, content, summary, confidence, created_at
                FROM journal
-               WHERE (project_id = ? OR project_id IS NULL)
+               WHERE project_id = ?
                  AND type IN ('finding', 'insight', 'hypothesis', 'methodology', 'summary')
                ORDER BY created_at DESC
                LIMIT ?""",
@@ -517,7 +517,7 @@ class GraphService:
         lit_rows = await self.db.fetchall(
             """SELECT id, title, abstract, status, relevance_score, created_at
                FROM literature
-               WHERE (project_id = ? OR project_id IS NULL)
+               WHERE project_id = ?
                ORDER BY created_at DESC
                LIMIT ?""",
             [project_id, top_per_kind * 8],
@@ -541,7 +541,7 @@ class GraphService:
         dec_rows = await self.db.fetchall(
             """SELECT id, question, rationale, status, created_at
                FROM decisions
-               WHERE (project_id = ? OR project_id IS NULL)
+               WHERE project_id = ?
                ORDER BY created_at DESC
                LIMIT ?""",
             [project_id, top_per_kind * 5],
@@ -563,7 +563,7 @@ class GraphService:
         mission_rows = await self.db.fetchall(
             """SELECT id, objective, report, status, completed_at, created_at
                FROM missions
-               WHERE (project_id = ? OR project_id IS NULL)
+               WHERE project_id = ?
                  AND status IN ('complete', 'partial', 'blocked', 'active')
                ORDER BY COALESCE(completed_at, created_at) DESC
                LIMIT ?""",
@@ -607,7 +607,7 @@ class GraphService:
                       COALESCE(link_weight, 0.0) as link_weight,
                       link_reason
                FROM entity_links
-               WHERE (project_id = ? OR project_id IS NULL)""",
+               WHERE project_id = ?""",
             [project_id],
         )
 

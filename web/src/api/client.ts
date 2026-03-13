@@ -3,6 +3,11 @@
  */
 
 const BASE_URL = "/api"
+let activeProjectId = "proj_default"
+
+export function setApiProjectId(projectId: string | null) {
+  activeProjectId = projectId?.trim() || "proj_default"
+}
 
 class ApiError extends Error {
   status: number
@@ -15,28 +20,44 @@ class ApiError extends Error {
   }
 }
 
+function buildHeaders(headers?: HeadersInit, includeJsonContentType = true): Headers {
+  const result = new Headers(headers)
+  if (includeJsonContentType && !result.has("Content-Type")) {
+    result.set("Content-Type", "application/json")
+  }
+  result.set("X-RKA-Project", activeProjectId)
+  return result
+}
+
+async function parseApiError(res: Response): Promise<never> {
+  let detail = res.statusText
+  try {
+    const body = await res.json()
+    detail = body.detail || JSON.stringify(body)
+  } catch {
+    // use statusText
+  }
+  throw new ApiError(res.status, detail)
+}
+
+function getFilenameFromDisposition(disposition: string | null, fallback: string): string {
+  if (!disposition) return fallback
+  const match = disposition.match(/filename=\"?([^\";]+)\"?/)
+  return match?.[1] ?? fallback
+}
+
 async function request<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
   const url = `${BASE_URL}${path}`
   const res = await fetch(url, {
-    headers: {
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
+    headers: buildHeaders(options.headers),
     ...options,
   })
 
   if (!res.ok) {
-    let detail = res.statusText
-    try {
-      const body = await res.json()
-      detail = body.detail || JSON.stringify(body)
-    } catch {
-      // use statusText
-    }
-    throw new ApiError(res.status, detail)
+    await parseApiError(res)
   }
 
   if (res.status === 204) return undefined as T
@@ -82,6 +103,8 @@ import type {
   Checkpoint,
   CheckpointResolve,
   Event,
+  ProjectCreate,
+  ProjectInfo,
   ProjectState,
   ProjectStateUpdate,
   ContextRequest,
@@ -101,6 +124,8 @@ import type {
   LLMStatus,
   LLMConfigUpdate,
   LLMModel,
+  KnowledgePackDownload,
+  KnowledgePackImportResult,
 } from "./types"
 
 export const api = {
@@ -108,8 +133,44 @@ export const api = {
   health: () => get<HealthStatus>("/health"),
 
   // Project
+  listProjects: () => get<ProjectInfo[]>("/projects"),
+  createProject: (data: ProjectCreate) => post<ProjectInfo>("/projects", data),
   getStatus: () => get<ProjectState>("/status"),
   updateStatus: (data: ProjectStateUpdate) => put<ProjectState>("/status", data),
+  exportKnowledgePack: async (): Promise<KnowledgePackDownload> => {
+    const res = await fetch(`${BASE_URL}/projects/export`, {
+      headers: buildHeaders(undefined, false),
+    })
+    if (!res.ok) {
+      await parseApiError(res)
+    }
+    return {
+      blob: await res.blob(),
+      filename: getFilenameFromDisposition(
+        res.headers.get("Content-Disposition"),
+        "knowledge-pack.rka-pack.zip",
+      ),
+    }
+  },
+  importKnowledgePack: async (
+    file: File,
+    options?: { project_id?: string; project_name?: string },
+  ) => {
+    const form = new FormData()
+    form.append("file", file)
+    if (options?.project_id) form.append("project_id", options.project_id)
+    if (options?.project_name) form.append("project_name", options.project_name)
+
+    const res = await fetch(`${BASE_URL}/projects/import`, {
+      method: "POST",
+      headers: buildHeaders(undefined, false),
+      body: form,
+    })
+    if (!res.ok) {
+      await parseApiError(res)
+    }
+    return res.json() as Promise<KnowledgePackImportResult>
+  },
 
   // Notes / Journal
   listNotes: (params?: { phase?: string; type?: string; since?: string; limit?: number }) => {

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from rka.models.journal import JournalEntry, JournalEntryCreate, JournalEntryUpdate
 from rka.services.notes import NoteService
-from rka.api.deps import get_note_service
+from rka.api.deps import get_scoped_note_service
 
 router = APIRouter()
 
@@ -14,7 +14,7 @@ router = APIRouter()
 @router.post("/notes", response_model=JournalEntry, status_code=201)
 async def create_note(
     data: JournalEntryCreate,
-    svc: NoteService = Depends(get_note_service),
+    svc: NoteService = Depends(get_scoped_note_service),
 ):
     return await svc.create(data)
 
@@ -30,7 +30,7 @@ async def list_notes(
     hide_superseded: bool = True,
     limit: int = Query(50, le=200),
     offset: int = 0,
-    svc: NoteService = Depends(get_note_service),
+    svc: NoteService = Depends(get_scoped_note_service),
 ):
     return await svc.list(
         type=type, phase=phase, confidence=confidence,
@@ -40,7 +40,7 @@ async def list_notes(
 
 
 @router.get("/notes/{note_id}", response_model=JournalEntry)
-async def get_note(note_id: str, svc: NoteService = Depends(get_note_service)):
+async def get_note(note_id: str, svc: NoteService = Depends(get_scoped_note_service)):
     entry = await svc.get(note_id)
     if entry is None:
         raise HTTPException(404, f"Note {note_id} not found")
@@ -51,7 +51,7 @@ async def get_note(note_id: str, svc: NoteService = Depends(get_note_service)):
 async def update_note(
     note_id: str,
     data: JournalEntryUpdate,
-    svc: NoteService = Depends(get_note_service),
+    svc: NoteService = Depends(get_scoped_note_service),
 ):
     entry = await svc.get(note_id)
     if entry is None:

@@ -27,13 +27,13 @@ class MissionService(BaseService):
         await self.db.execute(
             """INSERT INTO missions
                (id, phase, objective, tasks, context, acceptance_criteria,
-                scope_boundaries, checkpoint_triggers, depends_on)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                scope_boundaries, checkpoint_triggers, depends_on, project_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 mis_id, data.phase, data.objective, tasks_json,
                 data.context, data.acceptance_criteria,
                 data.scope_boundaries, data.checkpoint_triggers,
-                data.depends_on,
+                data.depends_on, self.project_id,
             ],
         )
         await self.db.commit()
@@ -66,10 +66,14 @@ class MissionService(BaseService):
     async def get(self, mis_id: str | None = None) -> Mission | None:
         """Get a mission. If no ID, return the currently active mission."""
         if mis_id:
-            row = await self.db.fetchone("SELECT * FROM missions WHERE id = ?", [mis_id])
+            row = await self.db.fetchone(
+                "SELECT * FROM missions WHERE id = ? AND project_id = ?",
+                [mis_id, self.project_id],
+            )
         else:
             row = await self.db.fetchone(
-                "SELECT * FROM missions WHERE status = 'active' ORDER BY created_at DESC LIMIT 1"
+                "SELECT * FROM missions WHERE project_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1",
+                [self.project_id],
             )
         if row is None:
             return None
@@ -84,7 +88,9 @@ class MissionService(BaseService):
     ) -> list[Mission]:
         """List missions with filters."""
         conditions = []
-        params = []
+        params = [self.project_id]
+
+        conditions.append("project_id = ?")
 
         if phase:
             conditions.append("phase = ?")
@@ -123,7 +129,10 @@ class MissionService(BaseService):
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         values = list(updates.values()) + [mis_id]
 
-        await self.db.execute(f"UPDATE missions SET {set_clause} WHERE id = ?", values)
+        await self.db.execute(
+            f"UPDATE missions SET {set_clause} WHERE id = ? AND project_id = ?",
+            values + [self.project_id],
+        )
         await self.db.commit()
 
         # Emit events for status changes
@@ -143,7 +152,10 @@ class MissionService(BaseService):
 
         # Re-sync FTS5 + embedding on content changes
         if "objective" in updates:
-            row = await self.db.fetchone("SELECT objective, context FROM missions WHERE id = ?", [mis_id])
+            row = await self.db.fetchone(
+                "SELECT objective, context FROM missions WHERE id = ? AND project_id = ?",
+                [mis_id, self.project_id],
+            )
             if row:
                 await self._sync_indexes("mission", mis_id, dict(row))
 
@@ -166,8 +178,8 @@ class MissionService(BaseService):
         )
 
         await self.db.execute(
-            "UPDATE missions SET report = ?, status = 'complete', completed_at = ? WHERE id = ?",
-            [report.model_dump_json(), _now(), mis_id],
+            "UPDATE missions SET report = ?, status = 'complete', completed_at = ? WHERE id = ? AND project_id = ?",
+            [report.model_dump_json(), _now(), mis_id, self.project_id],
         )
         await self.db.commit()
 
@@ -204,7 +216,12 @@ class MissionService(BaseService):
         # Lazy import to avoid circular dependency
         from rka.services.notes import NoteService
 
-        note_svc = NoteService(self.db, llm=self.llm, embeddings=self.embeddings)
+        note_svc = NoteService(
+            self.db,
+            llm=self.llm,
+            embeddings=self.embeddings,
+            project_id=self.project_id,
+        )
 
         async def _create(note_type: str, text: str, confidence: str = "hypothesis") -> None:
             text = text.strip()
@@ -212,8 +229,8 @@ class MissionService(BaseService):
                 return
             # Deduplicate: skip if identical content already linked to this mission
             existing = await self.db.fetchone(
-                "SELECT id FROM journal WHERE related_mission = ? AND content = ?",
-                [mis_id, text],
+                "SELECT id FROM journal WHERE related_mission = ? AND content = ? AND project_id = ?",
+                [mis_id, text, self.project_id],
             )
             if existing:
                 return
@@ -243,11 +260,13 @@ class MissionService(BaseService):
         """Get report for a mission. Defaults to latest complete mission."""
         if mis_id:
             row = await self.db.fetchone(
-                "SELECT report FROM missions WHERE id = ?", [mis_id]
+                "SELECT report FROM missions WHERE id = ? AND project_id = ?",
+                [mis_id, self.project_id],
             )
         else:
             row = await self.db.fetchone(
-                "SELECT report FROM missions WHERE status = 'complete' ORDER BY completed_at DESC LIMIT 1"
+                "SELECT report FROM missions WHERE project_id = ? AND status = 'complete' ORDER BY completed_at DESC LIMIT 1",
+                [self.project_id],
             )
         if not row or not row.get("report"):
             return None

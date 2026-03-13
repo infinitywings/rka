@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from rka.models.decision import Decision, DecisionCreate, DecisionUpdate, DecisionTreeNode
 from rka.services.decisions import DecisionService
-from rka.api.deps import get_decision_service
+from rka.api.deps import get_scoped_decision_service
 
 router = APIRouter()
 
@@ -14,7 +14,7 @@ router = APIRouter()
 @router.post("/decisions", response_model=Decision, status_code=201)
 async def create_decision(
     data: DecisionCreate,
-    svc: DecisionService = Depends(get_decision_service),
+    svc: DecisionService = Depends(get_scoped_decision_service),
 ):
     return await svc.create(data)
 
@@ -26,7 +26,7 @@ async def list_decisions(
     parent_id: str | None = None,
     limit: int = Query(50, le=200),
     offset: int = 0,
-    svc: DecisionService = Depends(get_decision_service),
+    svc: DecisionService = Depends(get_scoped_decision_service),
 ):
     return await svc.list(phase=phase, status=status, parent_id=parent_id, limit=limit, offset=offset)
 
@@ -35,13 +35,13 @@ async def list_decisions(
 async def get_decision_tree(
     phase: str | None = None,
     active_only: bool = False,
-    svc: DecisionService = Depends(get_decision_service),
+    svc: DecisionService = Depends(get_scoped_decision_service),
 ):
     return await svc.get_tree(phase=phase, active_only=active_only)
 
 
 @router.get("/decisions/{dec_id}", response_model=Decision)
-async def get_decision(dec_id: str, svc: DecisionService = Depends(get_decision_service)):
+async def get_decision(dec_id: str, svc: DecisionService = Depends(get_scoped_decision_service)):
     dec = await svc.get(dec_id)
     if dec is None:
         raise HTTPException(404, f"Decision {dec_id} not found")
@@ -53,7 +53,7 @@ async def update_decision(
     dec_id: str,
     data: DecisionUpdate,
     actor: str = "web_ui",
-    svc: DecisionService = Depends(get_decision_service),
+    svc: DecisionService = Depends(get_scoped_decision_service),
 ):
     dec = await svc.get(dec_id)
     if dec is None:

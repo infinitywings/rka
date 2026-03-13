@@ -1,6 +1,6 @@
 [project]
 name = "rka"
-version = "1.1.0"
+version = "1.2.0"
 description = "Research Knowledge Agent — MCP server + REST API for AI-assisted research orchestration"
 requires-python = ">=3.11"
 dependencies = [
@@ -25,7 +25,6 @@ llm = [
 ]
 academic = [
     "bibtexparser>=2.0.0b7",
-    "pyzotero>=1.10",
     "habanero>=1.2",
     "semanticscholar>=0.11",
     "arxiv>=2.4",

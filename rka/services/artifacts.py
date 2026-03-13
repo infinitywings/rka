@@ -31,6 +31,7 @@ class ArtifactService(BaseService):
         Does not extract figures — call extract_figures() separately.
         Returns the artifact record.
         """
+        created_by = self._validate_actor(created_by)
         path = Path(filepath)
         if not path.exists():
             raise FileNotFoundError(f"File not found: {filepath}")
@@ -44,7 +45,8 @@ class ArtifactService(BaseService):
 
         # Check for duplicate
         existing = await self.db.fetchone(
-            "SELECT id FROM artifacts WHERE content_hash = ?", [content_hash]
+            "SELECT id FROM artifacts WHERE content_hash = ? AND project_id = ?",
+            [content_hash, self.project_id],
         )
         if existing:
             return {"id": existing["id"], "duplicate": True}
@@ -53,10 +55,10 @@ class ArtifactService(BaseService):
         await self.db.execute(
             """INSERT INTO artifacts
                (id, filename, filepath, filetype, file_size, mime, content_hash,
-                extraction_status, created_by, metadata)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
+                extraction_status, created_by, metadata, project_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
             [artifact_id, fname, str(path.resolve()), ftype, file_size, mime,
-             content_hash, created_by, json.dumps(metadata) if metadata else None],
+             content_hash, created_by, json.dumps(metadata) if metadata else None, self.project_id],
         )
         await self.db.commit()
         await self.audit("create", "artifact", artifact_id, created_by)
@@ -65,7 +67,10 @@ class ArtifactService(BaseService):
 
     async def get(self, artifact_id: str) -> dict | None:
         """Get an artifact by ID."""
-        row = await self.db.fetchone("SELECT * FROM artifacts WHERE id = ?", [artifact_id])
+        row = await self.db.fetchone(
+            "SELECT * FROM artifacts WHERE id = ? AND project_id = ?",
+            [artifact_id, self.project_id],
+        )
         return dict(row) if row else None
 
     async def list_artifacts(
@@ -76,12 +81,13 @@ class ArtifactService(BaseService):
         """List artifacts with optional status filter."""
         if status:
             rows = await self.db.fetchall(
-                "SELECT * FROM artifacts WHERE extraction_status = ? ORDER BY created_at DESC LIMIT ?",
-                [status, limit],
+                "SELECT * FROM artifacts WHERE project_id = ? AND extraction_status = ? ORDER BY created_at DESC LIMIT ?",
+                [self.project_id, status, limit],
             )
         else:
             rows = await self.db.fetchall(
-                "SELECT * FROM artifacts ORDER BY created_at DESC LIMIT ?", [limit]
+                "SELECT * FROM artifacts WHERE project_id = ? ORDER BY created_at DESC LIMIT ?",
+                [self.project_id, limit],
             )
         return [dict(r) for r in rows]
 
@@ -98,8 +104,8 @@ class ArtifactService(BaseService):
 
         # Mark as processing
         await self.db.execute(
-            "UPDATE artifacts SET extraction_status = 'processing' WHERE id = ?",
-            [artifact_id],
+            "UPDATE artifacts SET extraction_status = 'processing' WHERE id = ? AND project_id = ?",
+            [artifact_id, self.project_id],
         )
         await self.db.commit()
 
@@ -117,16 +123,16 @@ class ArtifactService(BaseService):
 
             # Mark as complete
             await self.db.execute(
-                "UPDATE artifacts SET extraction_status = 'complete' WHERE id = ?",
-                [artifact_id],
+                "UPDATE artifacts SET extraction_status = 'complete' WHERE id = ? AND project_id = ?",
+                [artifact_id, self.project_id],
             )
             await self.db.commit()
 
         except Exception as exc:
             logger.error("Figure extraction failed for %s: %s", artifact_id, exc)
             await self.db.execute(
-                "UPDATE artifacts SET extraction_status = 'failed' WHERE id = ?",
-                [artifact_id],
+                "UPDATE artifacts SET extraction_status = 'failed' WHERE id = ? AND project_id = ?",
+                [artifact_id, self.project_id],
             )
             await self.db.commit()
 
@@ -135,13 +141,17 @@ class ArtifactService(BaseService):
     async def get_figures(self, artifact_id: str) -> list[dict]:
         """Get all figures for an artifact."""
         rows = await self.db.fetchall(
-            "SELECT * FROM figures WHERE artifact_id = ? ORDER BY page", [artifact_id]
+            "SELECT * FROM figures WHERE artifact_id = ? AND project_id = ? ORDER BY page",
+            [artifact_id, self.project_id],
         )
         return [dict(r) for r in rows]
 
     async def get_figure(self, figure_id: str) -> dict | None:
         """Get a single figure by ID."""
-        row = await self.db.fetchone("SELECT * FROM figures WHERE id = ?", [figure_id])
+        row = await self.db.fetchone(
+            "SELECT * FROM figures WHERE id = ? AND project_id = ?",
+            [figure_id, self.project_id],
+        )
         return dict(row) if row else None
 
     # ------------------------------------------------------------------
@@ -242,10 +252,10 @@ class ArtifactService(BaseService):
         figure_id = generate_id("figure")
         await self.db.execute(
             """INSERT INTO figures
-               (id, artifact_id, page, caption, caption_confidence, summary, claims)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+               (id, artifact_id, page, caption, caption_confidence, summary, claims, project_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             [figure_id, artifact_id, page, caption, caption_confidence,
-             summary, json.dumps(claims)],
+             summary, json.dumps(claims), self.project_id],
         )
         await self.db.commit()
 

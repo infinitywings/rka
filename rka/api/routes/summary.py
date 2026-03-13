@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
-from rka.api.deps import get_summary_service, get_qa_service
+from rka.api.deps import get_scoped_summary_service, get_scoped_qa_service
 from rka.services.summary import SummaryService, QAService
 
 router = APIRouter()
@@ -37,7 +37,7 @@ class BlessRequest(BaseModel):
 @router.post("/summaries/generate")
 async def generate_summary(
     req: GenerateSummaryRequest,
-    svc: SummaryService = Depends(get_summary_service),
+    svc: SummaryService = Depends(get_scoped_summary_service),
 ):
     """Generate a multi-granularity summary for a scope."""
     result = await svc.generate(
@@ -57,7 +57,7 @@ async def list_summaries(
     scope_id: str | None = None,
     blessed_only: bool = False,
     limit: int = Query(20, le=100),
-    svc: SummaryService = Depends(get_summary_service),
+    svc: SummaryService = Depends(get_scoped_summary_service),
 ):
     """List exploration summaries."""
     return await svc.list_summaries(
@@ -69,7 +69,7 @@ async def list_summaries(
 @router.get("/summaries/{summary_id}")
 async def get_summary(
     summary_id: str,
-    svc: SummaryService = Depends(get_summary_service),
+    svc: SummaryService = Depends(get_scoped_summary_service),
 ):
     """Get a single summary."""
     result = await svc.get(summary_id)
@@ -82,7 +82,7 @@ async def get_summary(
 async def bless_summary(
     summary_id: str,
     req: BlessRequest,
-    svc: SummaryService = Depends(get_summary_service),
+    svc: SummaryService = Depends(get_scoped_summary_service),
 ):
     """Mark a summary as blessed (human-approved)."""
     result = await svc.bless(summary_id, actor=req.actor)
@@ -96,7 +96,7 @@ async def bless_summary(
 @router.post("/qa/ask")
 async def ask_question(
     req: AskRequest,
-    svc: QAService = Depends(get_qa_service),
+    svc: QAService = Depends(get_scoped_qa_service),
 ):
     """Ask a research question grounded in knowledge base evidence."""
     result = await svc.ask(
@@ -114,7 +114,7 @@ async def ask_question(
 @router.get("/qa/sessions")
 async def list_qa_sessions(
     limit: int = Query(20, le=100),
-    svc: QAService = Depends(get_qa_service),
+    svc: QAService = Depends(get_scoped_qa_service),
 ):
     """List QA sessions."""
     return await svc.list_sessions(limit=limit)
@@ -123,7 +123,7 @@ async def list_qa_sessions(
 @router.get("/qa/sessions/{session_id}")
 async def get_qa_session(
     session_id: str,
-    svc: QAService = Depends(get_qa_service),
+    svc: QAService = Depends(get_scoped_qa_service),
 ):
     """Get a QA session with all its logs."""
     result = await svc.get_session(session_id)
@@ -136,7 +136,7 @@ async def get_qa_session(
 async def verify_qa_source(
     qa_log_id: str,
     source_index: int,
-    svc: QAService = Depends(get_qa_service),
+    svc: QAService = Depends(get_scoped_qa_service),
 ):
     """Verify a cited source in a QA answer."""
     return await svc.verify_source(qa_log_id, source_index)

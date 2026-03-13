@@ -25,69 +25,69 @@ async def backfill_entity_links(db: Database) -> dict[str, int]:
 
     # 1. Journal entries → decisions, literature, missions
     rows = await db.fetchall(
-        "SELECT id, source, related_decisions, related_literature, related_mission FROM journal"
+        "SELECT id, source, related_decisions, related_literature, related_mission, project_id FROM journal"
     )
     for r in rows:
         created_by = r.get("source") or "system"
 
         for dec_id in _parse_json_list(r.get("related_decisions")):
-            if await _insert_link(db, "journal", r["id"], "references", "decision", dec_id, created_by):
+            if await _insert_link(db, "journal", r["id"], "references", "decision", dec_id, created_by, r.get("project_id")):
                 counts["journal"] += 1
 
         for lit_id in _parse_json_list(r.get("related_literature")):
-            if await _insert_link(db, "journal", r["id"], "cites", "literature", lit_id, created_by):
+            if await _insert_link(db, "journal", r["id"], "cites", "literature", lit_id, created_by, r.get("project_id")):
                 counts["journal"] += 1
 
         if r.get("related_mission"):
-            if await _insert_link(db, "mission", r["related_mission"], "produced", "journal", r["id"], created_by):
+            if await _insert_link(db, "mission", r["related_mission"], "produced", "journal", r["id"], created_by, r.get("project_id")):
                 counts["journal"] += 1
 
     # 2. Decisions → missions, literature
     rows = await db.fetchall(
-        "SELECT id, decided_by, related_missions, related_literature FROM decisions"
+        "SELECT id, decided_by, related_missions, related_literature, project_id FROM decisions"
     )
     for r in rows:
         created_by = r.get("decided_by") or "system"
 
         for mis_id in _parse_json_list(r.get("related_missions")):
-            if await _insert_link(db, "decision", r["id"], "triggered", "mission", mis_id, created_by):
+            if await _insert_link(db, "decision", r["id"], "triggered", "mission", mis_id, created_by, r.get("project_id")):
                 counts["decision"] += 1
 
         for lit_id in _parse_json_list(r.get("related_literature")):
-            if await _insert_link(db, "decision", r["id"], "cites", "literature", lit_id, created_by):
+            if await _insert_link(db, "decision", r["id"], "cites", "literature", lit_id, created_by, r.get("project_id")):
                 counts["decision"] += 1
 
     # 3. Decisions parent-child → entity_links
     rows = await db.fetchall(
-        "SELECT id, parent_id, decided_by FROM decisions WHERE parent_id IS NOT NULL"
+        "SELECT id, parent_id, decided_by, project_id FROM decisions WHERE parent_id IS NOT NULL"
     )
     for r in rows:
-        if await _insert_link(db, "decision", r["parent_id"], "triggered", "decision", r["id"], r.get("decided_by") or "system"):
+        if await _insert_link(db, "decision", r["parent_id"], "triggered", "decision", r["id"], r.get("decided_by") or "system", r.get("project_id")):
             counts["decision"] += 1
 
     # 4. Missions depends_on
     rows = await db.fetchall(
-        "SELECT id, depends_on FROM missions WHERE depends_on IS NOT NULL"
+        "SELECT id, depends_on, project_id FROM missions WHERE depends_on IS NOT NULL"
     )
     for r in rows:
-        if await _insert_link(db, "mission", r["depends_on"], "triggered", "mission", r["id"], "system"):
+        if await _insert_link(db, "mission", r["depends_on"], "triggered", "mission", r["id"], "system", r.get("project_id")):
             counts["mission"] += 1
 
     # 5. Checkpoints → decisions
     rows = await db.fetchall(
-        "SELECT id, mission_id, linked_decision_id FROM checkpoints WHERE linked_decision_id IS NOT NULL"
+        "SELECT id, mission_id, linked_decision_id, project_id FROM checkpoints WHERE linked_decision_id IS NOT NULL"
     )
     for r in rows:
-        if await _insert_link(db, "checkpoint", r["id"], "resolved_as", "decision", r["linked_decision_id"], "system"):
+        if await _insert_link(db, "checkpoint", r["id"], "resolved_as", "decision", r["linked_decision_id"], "system", r.get("project_id")):
             counts.setdefault("checkpoint", 0)
             counts["checkpoint"] += 1
 
     # 6. Journal supersedes
     rows = await db.fetchall(
-        "SELECT id, supersedes, source FROM journal WHERE supersedes IS NOT NULL"
+        "SELECT id, supersedes, source, project_id FROM journal WHERE supersedes IS NOT NULL"
     )
     for r in rows:
-        if await _insert_link(db, "journal", r["id"], "supersedes", "journal", r["supersedes"], r.get("source") or "system"):
+        if await _insert_link(db, "journal", r["id"], "supersedes", "journal", r["supersedes"], r.get("source") or "system", r.get("project_id")):
             counts["journal"] += 1
 
     await db.commit()
@@ -116,15 +116,16 @@ async def _insert_link(
     target_type: str,
     target_id: str,
     created_by: str,
+    project_id: str | None,
 ) -> bool:
     """Insert a link, returning True if actually inserted (not duplicate)."""
     link_id = generate_id("link")
     try:
         await db.execute(
             """INSERT OR IGNORE INTO entity_links
-               (id, source_type, source_id, link_type, target_type, target_id, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            [link_id, source_type, source_id, link_type, target_type, target_id, created_by],
+               (id, source_type, source_id, link_type, target_type, target_id, created_by, project_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            [link_id, source_type, source_id, link_type, target_type, target_id, created_by, project_id or "proj_default"],
         )
         return True
     except Exception as exc:

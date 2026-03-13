@@ -25,13 +25,13 @@ class CheckpointService(BaseService):
         await self.db.execute(
             """INSERT INTO checkpoints
                (id, mission_id, task_reference, type, description, context,
-                options, recommendation, blocking)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                options, recommendation, blocking, project_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 chk_id, data.mission_id, data.task_reference,
                 data.type, data.description, data.context,
                 options_json, data.recommendation,
-                1 if data.blocking else 0,
+                1 if data.blocking else 0, self.project_id,
             ],
         )
         await self.db.commit()
@@ -48,7 +48,10 @@ class CheckpointService(BaseService):
 
     async def get(self, chk_id: str) -> Checkpoint | None:
         """Get a single checkpoint."""
-        row = await self.db.fetchone("SELECT * FROM checkpoints WHERE id = ?", [chk_id])
+        row = await self.db.fetchone(
+            "SELECT * FROM checkpoints WHERE id = ? AND project_id = ?",
+            [chk_id, self.project_id],
+        )
         if row is None:
             return None
         return self._row_to_model(row)
@@ -62,7 +65,9 @@ class CheckpointService(BaseService):
     ) -> list[Checkpoint]:
         """List checkpoints with filters."""
         conditions = []
-        params = []
+        params = [self.project_id]
+
+        conditions.append("project_id = ?")
 
         if status:
             conditions.append("status = ?")
@@ -95,12 +100,16 @@ class CheckpointService(BaseService):
             chk = await self.get(chk_id)
             if chk:
                 from rka.models.decision import DecisionCreate
+                project_row = await self.db.fetchone(
+                    "SELECT current_phase FROM project_states WHERE project_id = ?",
+                    [self.project_id],
+                )
                 dec_data = DecisionCreate(
                     question=chk.description,
                     chosen=data.resolution,
                     rationale=data.rationale or "",
                     decided_by=data.resolved_by,
-                    phase="",  # Will be filled from current project state
+                    phase=(project_row or {}).get("current_phase") or "",
                 )
                 dec = await decision_service.create(dec_data, actor=data.resolved_by)
                 linked_decision_id = dec.id
@@ -109,9 +118,9 @@ class CheckpointService(BaseService):
             """UPDATE checkpoints
                SET resolution = ?, resolved_by = ?, resolution_rationale = ?,
                    linked_decision_id = ?, status = 'resolved', resolved_at = ?
-               WHERE id = ?""",
+               WHERE id = ? AND project_id = ?""",
             [data.resolution, data.resolved_by, data.rationale,
-             linked_decision_id, now, chk_id],
+             linked_decision_id, now, chk_id, self.project_id],
         )
         await self.db.commit()
 

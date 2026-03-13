@@ -36,6 +36,14 @@ async def db(tmp_path: Path):
 async def db_with_project(db: Database):
     """Database with project_state initialized."""
     await db.execute(
+        """UPDATE project_states
+           SET project_name = 'Test Project',
+               project_description = 'Unit test project',
+               current_phase = 'phase_1',
+               phases_config = '["phase_1", "phase_2", "phase_3"]'
+           WHERE project_id = 'proj_default'"""
+    )
+    await db.execute(
         """INSERT INTO project_state (id, project_name, project_description, current_phase, phases_config)
            VALUES (1, 'Test Project', 'Unit test project', 'phase_1',
                    '["phase_1", "phase_2", "phase_3"]')"""

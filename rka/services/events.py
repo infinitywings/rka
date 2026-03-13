@@ -21,7 +21,9 @@ class EventService(BaseService):
     ) -> list[Event]:
         """List events with filters."""
         conditions = []
-        params = []
+        params = [self.project_id]
+
+        conditions.append("project_id = ?")
 
         if phase:
             conditions.append("phase = ?")

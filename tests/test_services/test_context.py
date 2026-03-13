@@ -24,38 +24,38 @@ async def context_engine(db_with_project: Database) -> ContextEngine:
 
     # HOT: active + current phase + recent
     await db.execute(
-        f"""INSERT INTO journal (id, type, content, source, confidence, phase, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, {NOW}, {NOW})""",
-        ["jrn_hot", "finding", "Hot finding about timing attacks", "pi", "hypothesis", "phase_1"],
+        f"""INSERT INTO journal (id, type, content, source, confidence, phase, project_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, {NOW}, {NOW})""",
+        ["jrn_hot", "finding", "Hot finding about timing attacks", "pi", "hypothesis", "phase_1", "proj_default"],
     )
 
     # Also HOT: active decision in current phase
     await db.execute(
-        f"""INSERT INTO decisions (id, question, decided_by, status, phase, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, {NOW}, {NOW})""",
-        ["dec_hot", "Should we use approach A or B?", "brain", "active", "phase_1"],
+        f"""INSERT INTO decisions (id, question, decided_by, status, phase, project_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, {NOW}, {NOW})""",
+        ["dec_hot", "Should we use approach A or B?", "brain", "active", "phase_1", "proj_default"],
     )
 
     # WARM: active but different phase
     await db.execute(
-        f"""INSERT INTO missions (id, objective, phase, status, created_at)
-           VALUES (?, ?, ?, ?, {NOW})""",
-        ["mis_warm", "Future phase mission", "phase_2", "active"],
+        f"""INSERT INTO missions (id, objective, phase, status, project_id, created_at)
+           VALUES (?, ?, ?, ?, ?, {NOW})""",
+        ["mis_warm", "Future phase mission", "phase_2", "active", "proj_default"],
     )
 
     # COLD: abandoned (note: _get_overview_candidates only fetches active decisions,
     #        so this won't appear in overview — but useful for direct classification tests)
     await db.execute(
-        f"""INSERT INTO decisions (id, question, decided_by, status, phase, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, {OLD}, {OLD})""",
-        ["dec_cold", "Old abandoned question", "brain", "abandoned", "phase_1"],
+        f"""INSERT INTO decisions (id, question, decided_by, status, phase, project_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, {OLD}, {OLD})""",
+        ["dec_cold", "Old abandoned question", "brain", "abandoned", "phase_1", "proj_default"],
     )
 
     # COLD: completed long ago (verified + old → cold)
     await db.execute(
-        f"""INSERT INTO journal (id, type, content, source, confidence, phase, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, {OLD}, {OLD})""",
-        ["jrn_cold", "finding", "Very old verified entry", "pi", "verified", "phase_1"],
+        f"""INSERT INTO journal (id, type, content, source, confidence, phase, project_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, {OLD}, {OLD})""",
+        ["jrn_cold", "finding", "Very old verified entry", "pi", "verified", "phase_1", "proj_default"],
     )
 
     # FTS5 entries for search
@@ -70,9 +70,9 @@ async def context_engine(db_with_project: Database) -> ContextEngine:
 
     # Active literature
     await db.execute(
-        f"""INSERT INTO literature (id, title, status, created_at, updated_at)
-           VALUES (?, ?, ?, {NOW}, {NOW})""",
-        ["lit_warm", "Some paper", "to_read"],
+        f"""INSERT INTO literature (id, title, status, project_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, {NOW}, {NOW})""",
+        ["lit_warm", "Some paper", "to_read", "proj_default"],
     )
 
     await db.commit()

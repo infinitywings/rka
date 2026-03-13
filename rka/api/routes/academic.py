@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 
 from rka.services.academic import AcademicImportService
-from rka.api.deps import get_academic_service
+from rka.api.deps import get_scoped_academic_service
 
 router = APIRouter()
 
@@ -23,7 +23,7 @@ class BibtexImportRequest(BaseModel):
 @router.post("/import/bibtex")
 async def import_bibtex(
     data: BibtexImportRequest,
-    svc: AcademicImportService = Depends(get_academic_service),
+    svc: AcademicImportService = Depends(get_scoped_academic_service),
 ):
     """Import literature entries from BibTeX content."""
     return await svc.import_bibtex(
@@ -40,7 +40,7 @@ async def import_bibtex_file(
     default_status: str = "to_read",
     added_by: str = "import",
     skip_duplicates: bool = True,
-    svc: AcademicImportService = Depends(get_academic_service),
+    svc: AcademicImportService = Depends(get_scoped_academic_service),
 ):
     """Import literature entries from an uploaded .bib file."""
     content = await file.read()
@@ -57,7 +57,7 @@ async def import_bibtex_file(
 @router.post("/literature/{lit_id}/enrich-doi")
 async def enrich_from_doi(
     lit_id: str,
-    svc: AcademicImportService = Depends(get_academic_service),
+    svc: AcademicImportService = Depends(get_scoped_academic_service),
 ):
     """Enrich a literature entry by looking up its DOI via CrossRef."""
     result = await svc.enrich_from_doi(lit_id)
@@ -72,7 +72,7 @@ async def enrich_from_doi(
 async def export_mermaid(
     phase: str | None = None,
     active_only: bool = False,
-    svc: AcademicImportService = Depends(get_academic_service),
+    svc: AcademicImportService = Depends(get_scoped_academic_service),
 ):
     """Export the decision tree as a Mermaid flowchart diagram."""
     mermaid = await svc.export_decisions_mermaid(phase=phase, active_only=active_only)
@@ -96,7 +96,7 @@ class IngestDocumentRequest(BaseModel):
 @router.post("/ingest/document")
 async def ingest_document(
     data: IngestDocumentRequest,
-    svc: AcademicImportService = Depends(get_academic_service),
+    svc: AcademicImportService = Depends(get_scoped_academic_service),
 ):
     """Ingest a markdown document by splitting into journal entries."""
     return await svc.ingest_document(
@@ -128,7 +128,7 @@ class BatchImportRequest(BaseModel):
 @router.post("/import/batch")
 async def batch_import(
     req: BatchImportRequest,
-    svc: AcademicImportService = Depends(get_academic_service),
+    svc: AcademicImportService = Depends(get_scoped_academic_service),
 ):
     """Batch import multiple entries of different types.
 
@@ -140,8 +140,8 @@ async def batch_import(
     from rka.models.decision import DecisionCreate
 
     results = {"imported": [], "errors": []}
-    note_svc = get_note_service()
-    dec_svc = get_decision_service()
+    note_svc = get_note_service(project_id=svc.lit.project_id)
+    dec_svc = get_decision_service(project_id=svc.lit.project_id)
 
     for i, entry in enumerate(req.entries):
         try:

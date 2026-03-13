@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -49,6 +50,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Initialize and tear down database + Phase 2 services on startup/shutdown."""
     config = getattr(app.state, "config", None) or get_config()
+    background_tasks: list[asyncio.Task] = []
 
     # Phase 1: Database
     db = Database(config.database_url)
@@ -68,22 +70,47 @@ async def lifespan(app: FastAPI):
     if config.llm_enabled:
         llm = LLMClient(config)
         logger.info("LLM enabled (model=%s, base=%s)", config.llm_model, config.llm_api_base or "default")
-        # Validate LLM is reachable at startup
-        if await llm.is_available():
-            logger.info("LLM health check passed")
-            # Auto-detect context window if not already set from DB
-            if config.llm_api_base and config.llm_context_window <= 4096:
-                from rka.api.routes.llm import _detect_context_window
-                ctx = await _detect_context_window(config.llm_api_base, config.llm_model)
-                if ctx:
-                    config.llm_context_window = ctx
-                    logger.info("Auto-detected context window: %d tokens", ctx)
-        else:
+
+        async def _probe_llm() -> None:
+            max_attempts = 6
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    if await llm.is_available():
+                        logger.info("LLM health check passed on attempt %d/%d", attempt, max_attempts)
+                        # Auto-detect context window if not already set from DB
+                        if config.llm_api_base and config.llm_context_window <= 4096:
+                            from rka.api.routes.llm import _detect_context_window
+
+                            ctx = await _detect_context_window(config.llm_api_base, config.llm_model)
+                            if ctx:
+                                config.llm_context_window = ctx
+                                logger.info("Auto-detected context window: %d tokens", ctx)
+                        return
+                except Exception:
+                    logger.exception(
+                        "Background LLM startup probe failed on attempt %d/%d",
+                        attempt,
+                        max_attempts,
+                    )
+
+                if attempt < max_attempts:
+                    delay_seconds = min(5 * attempt, 20)
+                    logger.warning(
+                        "LLM health check attempt %d/%d failed; retrying in %ds",
+                        attempt,
+                        max_attempts,
+                        delay_seconds,
+                    )
+                    await asyncio.sleep(delay_seconds)
+
             logger.warning(
-                "LLM health check FAILED — Q&A, summaries, and classification "
-                "will error until the LLM backend is reachable. Ensure your "
-                "configured LLM backend is running."
+                "LLM health check FAILED after %d attempts — Q&A, summaries, and classification "
+                "will error until the LLM backend is reachable. Ensure your configured LLM "
+                "backend is running.",
+                max_attempts,
             )
+
+        background_tasks.append(asyncio.create_task(_probe_llm()))
     else:
         logger.warning(
             "LLM is DISABLED (RKA_LLM_ENABLED=false). Q&A, summaries, "
@@ -120,6 +147,12 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    for task in background_tasks:
+        if not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
     await db.close()
 
 
@@ -131,7 +164,7 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
     app = FastAPI(
         title="Research Knowledge Agent",
         description="REST API for AI-assisted research orchestration",
-        version="1.1.0",
+        version="1.2.0",
         lifespan=lifespan,
     )
     app.state.config = effective_config
@@ -192,7 +225,7 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
             llm_status = "available" if llm.available else "unavailable"
         return {
             "status": "ok",
-            "version": "1.1.0",
+            "version": "1.2.0",
             "vec_available": db.vec_available,
             "llm_status": llm_status,
             "llm_model": get_config().llm_model if llm else None,

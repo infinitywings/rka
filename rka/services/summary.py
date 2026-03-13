@@ -57,10 +57,10 @@ class SummaryService(BaseService):
         await self.db.execute(
             """INSERT INTO exploration_summaries
                (id, scope_type, scope_id, granularity, content, produced_by,
-                confidence, source_refs)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                confidence, source_refs, project_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [summary_id, scope_type, scope_id, granularity, content,
-             produced_by, result.confidence, source_refs],
+             produced_by, result.confidence, source_refs, self.project_id],
         )
         await self.db.commit()
 
@@ -82,7 +82,8 @@ class SummaryService(BaseService):
     async def get(self, summary_id: str) -> dict | None:
         """Get a single summary by ID."""
         row = await self.db.fetchone(
-            "SELECT * FROM exploration_summaries WHERE id = ?", [summary_id]
+            "SELECT * FROM exploration_summaries WHERE id = ? AND project_id = ?",
+            [summary_id, self.project_id],
         )
         if not row:
             return None
@@ -96,8 +97,8 @@ class SummaryService(BaseService):
         limit: int = 20,
     ) -> list[dict]:
         """List summaries with optional filters."""
-        conditions: list[str] = []
-        params: list = []
+        conditions: list[str] = ["project_id = ?"]
+        params: list = [self.project_id]
         if scope_type:
             conditions.append("scope_type = ?")
             params.append(scope_type)
@@ -117,8 +118,8 @@ class SummaryService(BaseService):
     async def bless(self, summary_id: str, actor: str = "pi") -> dict | None:
         """Mark a summary as blessed (human-approved)."""
         await self.db.execute(
-            "UPDATE exploration_summaries SET blessed = 1, updated_at = ? WHERE id = ?",
-            [_now(), summary_id],
+            "UPDATE exploration_summaries SET blessed = 1, updated_at = ? WHERE id = ? AND project_id = ?",
+            [_now(), summary_id, self.project_id],
         )
         await self.db.commit()
         await self.audit("update", "summary", summary_id, actor, {"action": "bless"})
@@ -140,14 +141,14 @@ class SummaryService(BaseService):
         if scope_type == "phase":
             # All journal entries + decisions in this phase
             rows = await self.db.fetchall(
-                "SELECT id, content, summary FROM journal WHERE phase = ? ORDER BY created_at DESC LIMIT ?",
-                [scope_id, limit],
+                "SELECT id, content, summary FROM journal WHERE project_id = ? AND phase = ? ORDER BY created_at DESC LIMIT ?",
+                [self.project_id, scope_id, limit],
             )
             for r in rows:
                 evidence.append({"entity_type": "journal", "entity_id": r["id"], "text": r["content"] or r.get("summary", "")})
             dec_rows = await self.db.fetchall(
-                "SELECT id, question, rationale FROM decisions WHERE phase = ? ORDER BY created_at DESC LIMIT ?",
-                [scope_id, limit * 2 // 3],
+                "SELECT id, question, rationale FROM decisions WHERE project_id = ? AND phase = ? ORDER BY created_at DESC LIMIT ?",
+                [self.project_id, scope_id, limit * 2 // 3],
             )
             for r in dec_rows:
                 evidence.append({"entity_type": "decision", "entity_id": r["id"], "text": f"{r['question']} — {r.get('rationale', '')}"})
@@ -155,14 +156,17 @@ class SummaryService(BaseService):
         elif scope_type == "mission":
             # Mission + its journal entries
             content_limit = self.llm._content_limit if self.llm else 2000
-            msn = await self.db.fetchone("SELECT id, objective, context, report FROM missions WHERE id = ?", [scope_id])
+            msn = await self.db.fetchone(
+                "SELECT id, objective, context, report FROM missions WHERE id = ? AND project_id = ?",
+                [scope_id, self.project_id],
+            )
             if msn:
                 evidence.append({"entity_type": "mission", "entity_id": msn["id"], "text": f"{msn['objective']}\n{msn.get('context', '')}"})
                 if msn.get("report"):
                     evidence.append({"entity_type": "mission", "entity_id": msn["id"], "text": msn["report"][:content_limit], "loc": "report"})
             journal_rows = await self.db.fetchall(
-                "SELECT id, content FROM journal WHERE related_mission = ? ORDER BY created_at LIMIT ?",
-                [scope_id, limit * 2 // 3],
+                "SELECT id, content FROM journal WHERE related_mission = ? AND project_id = ? ORDER BY created_at LIMIT ?",
+                [scope_id, self.project_id, limit * 2 // 3],
             )
             for r in journal_rows:
                 evidence.append({"entity_type": "journal", "entity_id": r["id"], "text": r["content"]})
@@ -170,8 +174,8 @@ class SummaryService(BaseService):
         elif scope_type == "tag":
             # All entities with this tag
             tag_rows = await self.db.fetchall(
-                "SELECT entity_type, entity_id FROM tags WHERE tag = ? LIMIT ?",
-                [scope_id, limit],
+                "SELECT entity_type, entity_id FROM tags WHERE tag = ? AND project_id = ? LIMIT ?",
+                [scope_id, self.project_id, limit],
             )
             for tr in tag_rows:
                 text = await self._fetch_entity_text(tr["entity_type"], tr["entity_id"])
@@ -187,8 +191,8 @@ class SummaryService(BaseService):
                 ("literature", "literature", "title"),
             ]:
                 rows = await self.db.fetchall(
-                    f"SELECT id, {text_col} FROM {table} ORDER BY created_at DESC LIMIT ?",
-                    [per_type_limit],
+                    f"SELECT id, {text_col} FROM {table} WHERE project_id = ? ORDER BY created_at DESC LIMIT ?",
+                    [self.project_id, per_type_limit],
                 )
                 for r in rows:
                     evidence.append({"entity_type": etype, "entity_id": r["id"], "text": r[text_col] or ""})
@@ -207,7 +211,10 @@ class SummaryService(BaseService):
         if not info:
             return None
         table, col = info
-        row = await self.db.fetchone(f"SELECT {col} FROM {table} WHERE id = ?", [entity_id])
+        row = await self.db.fetchone(
+            f"SELECT {col} FROM {table} WHERE id = ? AND project_id = ?",
+            [entity_id, self.project_id],
+        )
         return row[col] if row else None
 
 
@@ -233,10 +240,17 @@ class QAService(BaseService):
         if not session_id:
             session_id = generate_id("qa_session")
             await self.db.execute(
-                "INSERT INTO qa_sessions (id, created_by, title) VALUES (?, ?, ?)",
-                [session_id, actor, question[:100]],
+                "INSERT INTO qa_sessions (id, project_id, created_by, title) VALUES (?, ?, ?, ?)",
+                [session_id, self.project_id, actor, question[:100]],
             )
             await self.db.commit()
+        else:
+            existing_session = await self.db.fetchone(
+                "SELECT id FROM qa_sessions WHERE id = ? AND project_id = ?",
+                [session_id, self.project_id],
+            )
+            if not existing_session:
+                return {"error": f"QA session {session_id} not found for this project."}
 
         # Gather evidence
         evidence = await self._gather_qa_evidence(question, scope_type, scope_id)
@@ -282,7 +296,8 @@ class QAService(BaseService):
     async def get_session(self, session_id: str) -> dict | None:
         """Get a QA session with all its logs."""
         session = await self.db.fetchone(
-            "SELECT * FROM qa_sessions WHERE id = ?", [session_id]
+            "SELECT * FROM qa_sessions WHERE id = ? AND project_id = ?",
+            [session_id, self.project_id],
         )
         if not session:
             return None
@@ -298,8 +313,8 @@ class QAService(BaseService):
     async def list_sessions(self, limit: int = 20) -> list[dict]:
         """List QA sessions."""
         rows = await self.db.fetchall(
-            "SELECT * FROM qa_sessions ORDER BY created_at DESC LIMIT ?",
-            [limit],
+            "SELECT * FROM qa_sessions WHERE project_id = ? ORDER BY created_at DESC LIMIT ?",
+            [self.project_id, limit],
         )
         return [dict(r) for r in rows]
 
@@ -308,7 +323,11 @@ class QAService(BaseService):
     ) -> dict:
         """Verify a cited source in a QA answer against actual stored data."""
         row = await self.db.fetchone(
-            "SELECT sources FROM qa_logs WHERE id = ?", [qa_log_id]
+            """SELECT l.sources
+               FROM qa_logs l
+               JOIN qa_sessions s ON s.id = l.session_id
+               WHERE l.id = ? AND s.project_id = ?""",
+            [qa_log_id, self.project_id],
         )
         if not row or not row["sources"]:
             return {"verified": False, "reason": "QA log not found"}
@@ -376,8 +395,8 @@ class QAService(BaseService):
                 rows = await self.db.fetchall(
                     f"SELECT j.id, j.* FROM {table} j "
                     f"JOIN {fts_table} f ON j.id = f.id "
-                    f"WHERE {fts_table} MATCH ? LIMIT ?",
-                    [search_terms, per_type_fts],
+                    f"WHERE j.project_id = ? AND {fts_table} MATCH ? LIMIT ?",
+                    [self.project_id, search_terms, per_type_fts],
                 )
                 text_col = {"journal": "content", "decision": "question", "literature": "title"}.get(etype, "id")
                 for r in rows:
@@ -394,13 +413,13 @@ class QAService(BaseService):
         if len(evidence) < 5:
             if scope_type == "phase" and scope_id:
                 rows = await self.db.fetchall(
-                    "SELECT id, content FROM journal WHERE phase = ? ORDER BY created_at DESC LIMIT ?",
-                    [scope_id, fallback_limit],
+                    "SELECT id, content FROM journal WHERE project_id = ? AND phase = ? ORDER BY created_at DESC LIMIT ?",
+                    [self.project_id, scope_id, fallback_limit],
                 )
             else:
                 rows = await self.db.fetchall(
-                    "SELECT id, content FROM journal ORDER BY created_at DESC LIMIT ?",
-                    [fallback_limit],
+                    "SELECT id, content FROM journal WHERE project_id = ? ORDER BY created_at DESC LIMIT ?",
+                    [self.project_id, fallback_limit],
                 )
             for r in rows:
                 if not any(e["entity_id"] == r["id"] for e in evidence):
@@ -411,8 +430,12 @@ class QAService(BaseService):
     async def _get_session_context(self, session_id: str) -> str | None:
         """Get previous Q&A in this session as context."""
         rows = await self.db.fetchall(
-            "SELECT question, answer FROM qa_logs WHERE session_id = ? ORDER BY created_at DESC LIMIT 5",
-            [session_id],
+            """SELECT l.question, l.answer
+               FROM qa_logs l
+               JOIN qa_sessions s ON s.id = l.session_id
+               WHERE l.session_id = ? AND s.project_id = ?
+               ORDER BY l.created_at DESC LIMIT 5""",
+            [session_id, self.project_id],
         )
         if not rows:
             return None

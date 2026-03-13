@@ -11,7 +11,26 @@ RUN npm ci
 COPY web/ .
 RUN npm run build
 
-# --- Stage 2: Python runtime ---
+# --- Stage 2: Build sqlite-vec from source ---
+FROM python:3.13-slim AS vec-builder
+
+ARG SQLITE_VEC_VERSION=0.1.6
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    unzip \
+    gcc \
+    libsqlite3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tmp/sqlite-vec
+
+RUN curl -fsSL -o sqlite-vec.zip \
+      "https://github.com/asg017/sqlite-vec/releases/download/v${SQLITE_VEC_VERSION}/sqlite-vec-${SQLITE_VEC_VERSION}-amalgamation.zip" \
+    && unzip sqlite-vec.zip \
+    && gcc -O3 -fPIC -shared sqlite-vec.c -o vec0.so -lm
+
+# --- Stage 3: Python runtime ---
 FROM python:3.13-slim AS runtime
 
 # System deps for sqlite-vec, fastembed, and PDF support
@@ -22,13 +41,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Install Python dependencies
-# Note: pyzotero conflicts with bibtexparser>=2, so we install
-# academic extras individually (excluding pyzotero)
 COPY pyproject.toml .
 COPY rka/ rka/
 COPY --from=web-builder /build/dist/ web/dist/
-RUN pip install --no-cache-dir ".[llm,workspace]" \
-    bibtexparser habanero semanticscholar arxiv
+COPY --from=vec-builder /tmp/sqlite-vec/vec0.so /usr/local/lib/vec0.so
+RUN pip install --no-cache-dir ".[llm,academic,workspace]"
 
 # Data volume
 RUN mkdir -p /data
@@ -40,7 +57,8 @@ ENV RKA_DB_PATH=/data/rka.db \
     RKA_PORT=9712 \
     RKA_LLM_ENABLED=true \
     RKA_LLM_MODEL=openai/qwen3-32b \
-    RKA_LLM_API_BASE=http://host.docker.internal:1234/v1
+    RKA_LLM_API_BASE=http://host.docker.internal:1234/v1 \
+    RKA_SQLITE_VEC_PATH=/usr/local/lib/vec0.so
 
 EXPOSE 9712
 

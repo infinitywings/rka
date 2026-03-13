@@ -23,6 +23,14 @@ class ProjectService(BaseService):
 
     async def create_project(self, data: ProjectCreate, actor: str = "system") -> ProjectInfo:
         project_id = (data.id or generate_id("project")).strip()
+        existing_id = await self.db.fetchone("SELECT id FROM projects WHERE id = ?", [project_id])
+        if existing_id:
+            raise ValueError(f"Project '{project_id}' already exists")
+
+        existing_name = await self.db.fetchone("SELECT id FROM projects WHERE name = ?", [data.name])
+        if existing_name:
+            raise ValueError(f"Project name '{data.name}' already exists")
+
         now = _now()
         await self.db.execute(
             """INSERT INTO projects (id, name, description, created_by, created_at, updated_at)
@@ -40,7 +48,7 @@ class ProjectService(BaseService):
             [project_id, data.name, data.description, phases[0], json.dumps(phases), now, now],
         )
         await self.db.commit()
-        await self.audit("create", "project", project_id, actor, {"name": data.name})
+        await self.audit("create", "project", project_id, actor, {"name": data.name}, project_id=project_id)
         row = await self.db.fetchone("SELECT * FROM projects WHERE id = ?", [project_id])
         return ProjectInfo(**dict(row))
 
@@ -81,7 +89,7 @@ class ProjectService(BaseService):
             [project_id, name, description, default_phases[0], json.dumps(default_phases), project_id, _now(), _now()],
         )
         await self.db.commit()
-        await self.audit("create", "project", project_id, "system", {"name": name})
+        await self.audit("create", "project", project_id, "system", {"name": name}, project_id=project_id)
         return await self.get(project_id=project_id)
 
     async def update(
@@ -126,9 +134,10 @@ class ProjectService(BaseService):
                 actor=actor,
                 summary=f"Phase changed: {current.current_phase} → {data.current_phase}",
                 phase=data.current_phase,
+                project_id=project_id,
             )
 
-        await self.audit("update", "project", project_id, actor, {"fields": list(updates.keys())})
+        await self.audit("update", "project", project_id, actor, {"fields": list(updates.keys())}, project_id=project_id)
         return await self.get(project_id=project_id)
 
     def _row_to_model(self, row: dict) -> ProjectState:

@@ -6,7 +6,7 @@ import logging
 
 from fastapi import APIRouter, Depends
 
-from rka.api.deps import get_note_service, get_db, get_llm
+from rka.api.deps import get_db, get_llm, get_scoped_note_service, require_project
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 async def enrich_all(
     limit: int = 50,
     fix_types: bool = True,
-    note_svc=Depends(get_note_service),
+    project_id: str = Depends(require_project),
+    note_svc=Depends(get_scoped_note_service),
     db=Depends(get_db),
     llm=Depends(get_llm),
 ):
@@ -36,9 +37,10 @@ async def enrich_all(
            WHERE (related_decisions IS NULL OR related_decisions = '[]')
              AND (related_literature IS NULL OR related_literature = '[]')
              AND related_mission IS NULL
+             AND project_id = ?
              AND confidence != 'superseded'
            ORDER BY created_at DESC LIMIT ?""",
-        [limit],
+        [project_id, limit],
     )
 
     updated = 0
@@ -65,8 +67,8 @@ async def enrich_all(
             updates["updated_at"] = _now()
             set_clause = ", ".join(f"{k} = ?" for k in updates)
             await db.execute(
-                f"UPDATE journal SET {set_clause} WHERE id = ?",
-                list(updates.values()) + [row["id"]],
+                f"UPDATE journal SET {set_clause} WHERE id = ? AND project_id = ?",
+                list(updates.values()) + [row["id"], project_id],
             )
             await db.commit()
             updated += 1

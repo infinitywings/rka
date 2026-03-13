@@ -51,19 +51,20 @@ class ContextEngine:
         phase: str | None = None,
         depth: Literal["summary", "detailed"] = "summary",
         max_tokens: int | None = None,
+        project_id: str = "proj_default",
     ) -> ContextPackage:
         """Build a context package within token budget."""
         if max_tokens is None:
             max_tokens = self._default_max_tokens
         # 1. Gather candidates
         if topic:
-            hits = await self.search.search(topic, limit=50)
-            candidates = await self._hydrate_hits(hits)
+            hits = await self.search.with_project(project_id).search(topic, limit=50)
+            candidates = await self._hydrate_hits(hits, project_id=project_id)
         else:
-            candidates = await self._get_overview_candidates(phase)
+            candidates = await self._get_overview_candidates(phase, project_id=project_id)
 
         # 2. Classify by temperature
-        current_phase = phase or await self._get_current_phase()
+        current_phase = phase or await self._get_current_phase(project_id=project_id)
         hot, warm, cold = self._classify_temperature(candidates, current_phase)
 
         # 3. Build context within token budget
@@ -209,7 +210,7 @@ class ContextEngine:
 
         return hot, warm, cold
 
-    async def _hydrate_hits(self, hits) -> list[dict]:
+    async def _hydrate_hits(self, hits, project_id: str = "proj_default") -> list[dict]:
         """Convert search hits to full entity dicts."""
         table_map = {
             "journal": "journal",
@@ -222,17 +223,26 @@ class ContextEngine:
             table = table_map.get(hit.entity_type)
             if not table:
                 continue
-            row = await self.db.fetchone(f"SELECT * FROM {table} WHERE id = ?", [hit.entity_id])
+            row = await self.db.fetchone(
+                f"SELECT * FROM {table} WHERE id = ? AND project_id = ?",
+                [hit.entity_id, project_id],
+            )
             if row:
                 row["entity_type"] = hit.entity_type
                 results.append(row)
         return results
 
-    async def _get_overview_candidates(self, phase: str | None = None) -> list[dict]:
+    async def _get_overview_candidates(
+        self,
+        phase: str | None = None,
+        project_id: str = "proj_default",
+    ) -> list[dict]:
         """Get general overview candidates when no topic is specified."""
         candidates = []
         phase_filter = "AND phase = ?" if phase else ""
-        phase_params = [phase] if phase else []
+        phase_params = [project_id]
+        if phase:
+            phase_params.append(phase)
 
         # Scale limits based on LLM context window
         entries_limit = self.llm._entries_limit if self.llm else 20
@@ -242,28 +252,28 @@ class ContextEngine:
 
         # Recent journal entries
         rows = await self.db.fetchall(
-            f"SELECT *, 'journal' as entity_type FROM journal WHERE confidence != 'superseded' {phase_filter} ORDER BY created_at DESC LIMIT ?",
+            f"SELECT *, 'journal' as entity_type FROM journal WHERE project_id = ? AND confidence != 'superseded' {phase_filter} ORDER BY created_at DESC LIMIT ?",
             phase_params + [entries_limit],
         )
         candidates.extend(rows)
 
         # Active decisions
         rows = await self.db.fetchall(
-            f"SELECT *, 'decision' as entity_type FROM decisions WHERE status = 'active' {phase_filter} ORDER BY created_at DESC LIMIT ?",
+            f"SELECT *, 'decision' as entity_type FROM decisions WHERE project_id = ? AND status = 'active' {phase_filter} ORDER BY created_at DESC LIMIT ?",
             phase_params + [dec_limit],
         )
         candidates.extend(rows)
 
         # Recent literature
         rows = await self.db.fetchall(
-            "SELECT *, 'literature' as entity_type FROM literature WHERE status IN ('to_read', 'reading', 'read') ORDER BY created_at DESC LIMIT ?",
-            [lit_limit],
+            "SELECT *, 'literature' as entity_type FROM literature WHERE project_id = ? AND status IN ('to_read', 'reading', 'read') ORDER BY created_at DESC LIMIT ?",
+            [project_id, lit_limit],
         )
         candidates.extend(rows)
 
         # Active missions
         rows = await self.db.fetchall(
-            f"SELECT *, 'mission' as entity_type FROM missions WHERE status IN ('active', 'pending') {phase_filter} ORDER BY created_at DESC LIMIT ?",
+            f"SELECT *, 'mission' as entity_type FROM missions WHERE project_id = ? AND status IN ('active', 'pending') {phase_filter} ORDER BY created_at DESC LIMIT ?",
             phase_params + [msn_limit],
         )
         candidates.extend(rows)

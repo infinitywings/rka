@@ -20,22 +20,22 @@ class NoteService(BaseService):
         await self.db.execute(
             """INSERT INTO journal
                (id, type, content, source, phase, related_decisions, related_literature,
-                related_mission, supersedes, confidence, importance)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                related_mission, supersedes, confidence, importance, project_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 entry_id, data.type, data.content, source, data.phase,
                 self._json_dumps(data.related_decisions),
                 self._json_dumps(data.related_literature),
                 data.related_mission, data.supersedes,
-                data.confidence, data.importance,
+                data.confidence, data.importance, self.project_id,
             ],
         )
 
         # If superseding another entry, update the back-reference
         if data.supersedes:
             await self.db.execute(
-                "UPDATE journal SET superseded_by = ?, confidence = 'superseded', updated_at = ? WHERE id = ?",
-                [entry_id, _now(), data.supersedes],
+                "UPDATE journal SET superseded_by = ?, confidence = 'superseded', updated_at = ? WHERE id = ? AND project_id = ?",
+                [entry_id, _now(), data.supersedes, self.project_id],
             )
 
         await self.db.commit()
@@ -71,16 +71,16 @@ class NoteService(BaseService):
                 if link_updates:
                     set_clause = ", ".join(f"{k} = ?" for k in link_updates)
                     await self.db.execute(
-                        f"UPDATE journal SET {set_clause} WHERE id = ?",
-                        list(link_updates.values()) + [entry_id],
+                        f"UPDATE journal SET {set_clause} WHERE id = ? AND project_id = ?",
+                        list(link_updates.values()) + [entry_id, self.project_id],
                     )
                     await self.db.commit()
 
         # Write entity_links for whatever related_* fields ended up on the entry
         # (includes both caller-provided and auto-linked values)
         final_row = await self.db.fetchone(
-            "SELECT related_decisions, related_literature, related_mission FROM journal WHERE id = ?",
-            [entry_id],
+            "SELECT related_decisions, related_literature, related_mission FROM journal WHERE id = ? AND project_id = ?",
+            [entry_id, self.project_id],
         )
         if final_row:
             for dec_id in self._json_loads(final_row.get("related_decisions"), []):
@@ -93,7 +93,10 @@ class NoteService(BaseService):
         # Auto-generate summary via LLM
         summary = await self._auto_summarize(data.content)
         if summary:
-            await self.db.execute("UPDATE journal SET summary = ? WHERE id = ?", [summary, entry_id])
+            await self.db.execute(
+                "UPDATE journal SET summary = ? WHERE id = ? AND project_id = ?",
+                [summary, entry_id, self.project_id],
+            )
             await self.db.commit()
 
         # Sync FTS5 + embedding indexes
@@ -122,7 +125,10 @@ class NoteService(BaseService):
 
     async def get(self, entry_id: str) -> JournalEntry | None:
         """Get a single journal entry by ID."""
-        row = await self.db.fetchone("SELECT * FROM journal WHERE id = ?", [entry_id])
+        row = await self.db.fetchone(
+            "SELECT * FROM journal WHERE id = ? AND project_id = ?",
+            [entry_id, self.project_id],
+        )
         if row is None:
             return None
         return await self._row_to_model(row)
@@ -141,7 +147,9 @@ class NoteService(BaseService):
     ) -> list[JournalEntry]:
         """List journal entries with filters."""
         conditions = []
-        params = []
+        params = [self.project_id]
+
+        conditions.append("project_id = ?")
 
         if type:
             conditions.append("type = ?")
@@ -196,14 +204,17 @@ class NoteService(BaseService):
         values = list(updates.values()) + [entry_id]
 
         await self.db.execute(
-            f"UPDATE journal SET {set_clause} WHERE id = ?",
-            values,
+            f"UPDATE journal SET {set_clause} WHERE id = ? AND project_id = ?",
+            values + [self.project_id],
         )
         await self.db.commit()
 
         # Re-sync FTS5 + embedding on content changes
         if "content" in updates or "summary" in updates:
-            row = await self.db.fetchone("SELECT content, summary FROM journal WHERE id = ?", [entry_id])
+            row = await self.db.fetchone(
+                "SELECT content, summary FROM journal WHERE id = ? AND project_id = ?",
+                [entry_id, self.project_id],
+            )
             if row:
                 await self._sync_indexes("journal", entry_id, dict(row))
 

@@ -1,17 +1,20 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { api } from "@/api/client"
 import type { LiteratureCreate, LiteratureUpdate } from "@/api/types"
+import { useActiveProjectId } from "@/hooks/useProjectSelection"
 
 export function useLiterature(params?: { status?: string }) {
+  const projectId = useActiveProjectId()
   return useQuery({
-    queryKey: ["literature", params],
+    queryKey: ["literature", projectId, params],
     queryFn: () => api.listLiterature(params),
   })
 }
 
 export function useLiteratureItem(id: string) {
+  const projectId = useActiveProjectId()
   return useQuery({
-    queryKey: ["literature", id],
+    queryKey: ["literature", projectId, id],
     queryFn: () => api.getLiterature(id),
     enabled: !!id,
   })

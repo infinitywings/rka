@@ -1,25 +1,29 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { api } from "@/api/client"
 import type { DecisionCreate, DecisionUpdate } from "@/api/types"
+import { useActiveProjectId } from "@/hooks/useProjectSelection"
 
 export function useDecisions(params?: { phase?: string; status?: string }) {
+  const projectId = useActiveProjectId()
   return useQuery({
-    queryKey: ["decisions", params],
+    queryKey: ["decisions", projectId, params],
     queryFn: () => api.listDecisions(params),
   })
 }
 
 export function useDecision(id: string) {
+  const projectId = useActiveProjectId()
   return useQuery({
-    queryKey: ["decisions", id],
+    queryKey: ["decisions", projectId, id],
     queryFn: () => api.getDecision(id),
     enabled: !!id,
   })
 }
 
 export function useDecisionTree(phase?: string) {
+  const projectId = useActiveProjectId()
   return useQuery({
-    queryKey: ["decisions", "tree", phase],
+    queryKey: ["decisions", projectId, "tree", phase],
     queryFn: () => api.getDecisionTree(phase),
   })
 }

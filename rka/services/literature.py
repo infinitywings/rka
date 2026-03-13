@@ -21,8 +21,8 @@ class LiteratureService(BaseService):
             """INSERT INTO literature
                (id, title, authors, year, venue, doi, url, bibtex, pdf_path, abstract,
                 status, key_findings, methodology_notes, relevance, relevance_score,
-                related_decisions, added_by, notes)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                related_decisions, added_by, notes, project_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 lit_id, data.title, self._json_dumps(data.authors),
                 data.year, data.venue, data.doi, data.url, data.bibtex,
@@ -30,7 +30,7 @@ class LiteratureService(BaseService):
                 self._json_dumps(data.key_findings), data.methodology_notes,
                 data.relevance, data.relevance_score,
                 self._json_dumps(data.related_decisions),
-                data.added_by, data.notes,
+                data.added_by, data.notes, self.project_id,
             ],
         )
         await self.db.commit()
@@ -62,7 +62,10 @@ class LiteratureService(BaseService):
 
     async def get(self, lit_id: str) -> Literature | None:
         """Get a single literature entry by ID."""
-        row = await self.db.fetchone("SELECT * FROM literature WHERE id = ?", [lit_id])
+        row = await self.db.fetchone(
+            "SELECT * FROM literature WHERE id = ? AND project_id = ?",
+            [lit_id, self.project_id],
+        )
         if row is None:
             return None
         return await self._row_to_model(row)
@@ -79,7 +82,9 @@ class LiteratureService(BaseService):
     ) -> list[Literature]:
         """List literature with filters."""
         conditions = []
-        params = []
+        params = [self.project_id]
+
+        conditions.append("project_id = ?")
 
         if status:
             conditions.append("status = ?")
@@ -128,7 +133,10 @@ class LiteratureService(BaseService):
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         values = list(updates.values()) + [lit_id]
 
-        await self.db.execute(f"UPDATE literature SET {set_clause} WHERE id = ?", values)
+        await self.db.execute(
+            f"UPDATE literature SET {set_clause} WHERE id = ? AND project_id = ?",
+            values + [self.project_id],
+        )
         await self.db.commit()
 
         # Emit event if status changed to cited
@@ -143,7 +151,10 @@ class LiteratureService(BaseService):
 
         # Re-sync FTS5 + embedding on content changes
         if any(f in updates for f in ("title", "abstract", "notes")):
-            row = await self.db.fetchone("SELECT title, abstract, notes FROM literature WHERE id = ?", [lit_id])
+            row = await self.db.fetchone(
+                "SELECT title, abstract, notes FROM literature WHERE id = ? AND project_id = ?",
+                [lit_id, self.project_id],
+            )
             if row:
                 await self._sync_indexes("literature", lit_id, dict(row))
 

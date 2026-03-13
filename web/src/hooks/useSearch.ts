@@ -1,6 +1,7 @@
 import { useMutation } from "@tanstack/react-query"
 import { useQuery } from "@tanstack/react-query"
 import { api } from "@/api/client"
+import { useActiveProjectId } from "@/hooks/useProjectSelection"
 
 export function useSearch() {
   return useMutation({
@@ -13,8 +14,9 @@ export function useSearch() {
 }
 
 export function useTags() {
+  const projectId = useActiveProjectId()
   return useQuery({
-    queryKey: ["tags"],
+    queryKey: ["tags", projectId],
     queryFn: api.listTags,
   })
 }

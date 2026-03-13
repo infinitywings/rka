@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from typing import Literal
 
-from rka.api.deps import get_context_engine, get_note_service, get_search_service
+from rka.api.deps import get_context_engine, get_note_service, get_search_service, require_project
 from rka.models.context import ContextPackage, ContextRequest
 
 router = APIRouter()
@@ -15,7 +15,10 @@ router = APIRouter()
 # ---- Context ----
 
 @router.post("/context", response_model=ContextPackage)
-async def get_context(data: ContextRequest):
+async def get_context(
+    data: ContextRequest,
+    project_id: str = Depends(require_project),
+):
     """Get a focused context package for Brain/Executor."""
     engine = get_context_engine()
     if engine is None:
@@ -25,6 +28,7 @@ async def get_context(data: ContextRequest):
         phase=data.phase,
         depth=data.depth,
         max_tokens=data.max_tokens,
+        project_id=project_id,
     )
 
 
@@ -43,14 +47,17 @@ class SummarizeResponse(BaseModel):
 
 
 @router.post("/summarize", response_model=SummarizeResponse)
-async def summarize(data: SummarizeRequest):
+async def summarize(
+    data: SummarizeRequest,
+    project_id: str = Depends(require_project),
+):
     """On-demand topic summarization, stored as journal entry."""
     from rka.api.deps import get_db, get_llm
     from rka.models.journal import JournalEntryCreate
 
     db = get_db()
     llm = get_llm()
-    search = get_search_service()
+    search = get_search_service(project_id=project_id)
 
     if llm is None:
         raise HTTPException(status_code=503, detail="LLM not available for summarization")
@@ -61,7 +68,10 @@ async def summarize(data: SummarizeRequest):
         # Fetch specific entities
         for eid in data.entity_ids:
             for table in ("journal", "decisions", "literature", "missions"):
-                row = await db.fetchone(f"SELECT * FROM {table} WHERE id = ?", [eid])
+                row = await db.fetchone(
+                    f"SELECT * FROM {table} WHERE id = ? AND project_id = ?",
+                    [eid, project_id],
+                )
                 if row:
                     entries.append(row)
                     break
@@ -72,6 +82,8 @@ async def summarize(data: SummarizeRequest):
             t = table_map.get(hit.entity_type)
             if t:
                 row = await db.fetchone(f"SELECT * FROM {t} WHERE id = ?", [hit.entity_id])
+                if row and row.get("project_id") != project_id:
+                    row = None
                 if row:
                     entries.append(row)
     else:
@@ -86,7 +98,7 @@ async def summarize(data: SummarizeRequest):
         raise HTTPException(status_code=502, detail="LLM failed to produce summary")
 
     # Store as a journal entry
-    svc = get_note_service()
+    svc = get_note_service(project_id=project_id)
     entry = await svc.create(
         JournalEntryCreate(
             type="insight",
@@ -122,7 +134,10 @@ class EvictionProposal(BaseModel):
 
 
 @router.post("/eviction-sweep", response_model=EvictionProposal)
-async def eviction_sweep(dry_run: bool = True):
+async def eviction_sweep(
+    dry_run: bool = True,
+    project_id: str = Depends(require_project),
+):
     """Rule-based eviction sweep — proposes entries for archival."""
     from rka.api.deps import get_db
     db = get_db()
@@ -133,8 +148,10 @@ async def eviction_sweep(dry_run: bool = True):
     rows = await db.fetchall(
         """SELECT id, content FROM journal
            WHERE confidence = 'superseded'
+           AND project_id = ?
            AND created_at < datetime('now', '-7 days')
            LIMIT 50""",
+        [project_id],
     )
     for row in rows:
         proposed.append(EvictionItem(
@@ -148,8 +165,10 @@ async def eviction_sweep(dry_run: bool = True):
     rows = await db.fetchall(
         """SELECT id, question FROM decisions
            WHERE status = 'abandoned'
+           AND project_id = ?
            AND updated_at < datetime('now', '-14 days')
            LIMIT 50""",
+        [project_id],
     )
     for row in rows:
         proposed.append(EvictionItem(
@@ -163,8 +182,10 @@ async def eviction_sweep(dry_run: bool = True):
     rows = await db.fetchall(
         """SELECT id, title FROM literature
            WHERE status = 'excluded'
+           AND project_id = ?
            AND related_decisions IS NULL
            LIMIT 50""",
+        [project_id],
     )
     for row in rows:
         proposed.append(EvictionItem(
@@ -178,8 +199,10 @@ async def eviction_sweep(dry_run: bool = True):
     rows = await db.fetchall(
         """SELECT id, objective FROM missions
            WHERE status = 'cancelled'
+           AND project_id = ?
            AND created_at < datetime('now', '-14 days')
            LIMIT 50""",
+        [project_id],
     )
     for row in rows:
         proposed.append(EvictionItem(

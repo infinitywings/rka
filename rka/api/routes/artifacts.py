@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
-from rka.api.deps import get_artifact_service
+from rka.api.deps import get_scoped_artifact_service
 from rka.services.artifacts import ArtifactService
 
 router = APIRouter()
@@ -16,14 +18,14 @@ class RegisterArtifactRequest(BaseModel):
     filename: str | None = None
     filetype: str | None = None
     mime: str | None = None
-    created_by: str = "system"
+    created_by: Literal["brain", "executor", "pi", "llm", "web_ui", "system"] = "system"
     metadata: dict | None = None
 
 
 @router.post("/artifacts")
 async def register_artifact(
     req: RegisterArtifactRequest,
-    svc: ArtifactService = Depends(get_artifact_service),
+    svc: ArtifactService = Depends(get_scoped_artifact_service),
 ):
     """Register a file artifact."""
     return await svc.register(
@@ -40,7 +42,7 @@ async def register_artifact(
 async def list_artifacts(
     status: str | None = None,
     limit: int = Query(50, le=200),
-    svc: ArtifactService = Depends(get_artifact_service),
+    svc: ArtifactService = Depends(get_scoped_artifact_service),
 ):
     """List artifacts."""
     return await svc.list_artifacts(status=status, limit=limit)
@@ -49,7 +51,7 @@ async def list_artifacts(
 @router.get("/artifacts/{artifact_id}")
 async def get_artifact(
     artifact_id: str,
-    svc: ArtifactService = Depends(get_artifact_service),
+    svc: ArtifactService = Depends(get_scoped_artifact_service),
 ):
     """Get an artifact by ID."""
     result = await svc.get(artifact_id)
@@ -61,7 +63,7 @@ async def get_artifact(
 @router.post("/artifacts/{artifact_id}/extract")
 async def extract_figures(
     artifact_id: str,
-    svc: ArtifactService = Depends(get_artifact_service),
+    svc: ArtifactService = Depends(get_scoped_artifact_service),
 ):
     """Extract figures and tables from an artifact."""
     return await svc.extract_figures(artifact_id)
@@ -70,7 +72,7 @@ async def extract_figures(
 @router.get("/artifacts/{artifact_id}/figures")
 async def get_figures(
     artifact_id: str,
-    svc: ArtifactService = Depends(get_artifact_service),
+    svc: ArtifactService = Depends(get_scoped_artifact_service),
 ):
     """Get all figures for an artifact."""
     return await svc.get_figures(artifact_id)
@@ -79,7 +81,7 @@ async def get_figures(
 @router.get("/figures/{figure_id}")
 async def get_figure(
     figure_id: str,
-    svc: ArtifactService = Depends(get_artifact_service),
+    svc: ArtifactService = Depends(get_scoped_artifact_service),
 ):
     """Get a single figure by ID."""
     result = await svc.get_figure(figure_id)

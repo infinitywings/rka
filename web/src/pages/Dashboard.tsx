@@ -1,27 +1,101 @@
+import { useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { StatusBadge } from "@/components/shared/StatusBadge"
 import { ConfidenceBadge } from "@/components/shared/ConfidenceBadge"
 import { TagList } from "@/components/shared/TagList"
-import { useProjectStatus } from "@/hooks/useProject"
+import {
+  useExportKnowledgePack,
+  useImportKnowledgePack,
+  useProjects,
+  useProjectStatus,
+} from "@/hooks/useProject"
 import { useMissions } from "@/hooks/useMissions"
 import { useCheckpoints } from "@/hooks/useCheckpoints"
 import { useNotes } from "@/hooks/useNotes"
+import { useProjectSelection } from "@/hooks/useProjectSelection"
 import { timeAgo } from "@/lib/utils"
+import { toast } from "sonner"
 import {
   Rocket,
   AlertTriangle,
   BookOpen,
   Target,
+  Layers3,
+  Download,
+  Loader2,
+  PackageOpen,
+  Upload,
 } from "lucide-react"
 
 export default function Dashboard() {
+  const { projectId, setProjectId } = useProjectSelection()
+  const [importOpen, setImportOpen] = useState(false)
+  const [importFile, setImportFile] = useState<File | null>(null)
+  const [importProjectId, setImportProjectId] = useState("")
+  const [importProjectName, setImportProjectName] = useState("")
   const { data: project, isLoading: projectLoading } = useProjectStatus()
+  const { data: projects } = useProjects()
   const { data: missions } = useMissions()
   const { data: checkpoints } = useCheckpoints({ status: "open" })
   const { data: notes } = useNotes({ limit: 10 })
+  const exportPack = useExportKnowledgePack()
+  const importPack = useImportKnowledgePack()
 
   const activeMissions = missions?.filter((m) => m.status === "active") ?? []
+
+  const resetImportForm = () => {
+    setImportFile(null)
+    setImportProjectId("")
+    setImportProjectName("")
+  }
+
+  const handleExportPack = async () => {
+    try {
+      const { blob, filename } = await exportPack.mutateAsync()
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement("a")
+      anchor.href = url
+      anchor.download = filename
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(url)
+      toast.success(`Exported ${project?.project_name ?? projectId}`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Export failed")
+    }
+  }
+
+  const handleImportPack = async () => {
+    if (!importFile) {
+      toast.error("Choose a knowledge-pack zip first")
+      return
+    }
+    try {
+      const result = await importPack.mutateAsync({
+        file: importFile,
+        project_id: importProjectId.trim() || undefined,
+        project_name: importProjectName.trim() || undefined,
+      })
+      setProjectId(result.project_id)
+      setImportOpen(false)
+      resetImportForm()
+      toast.success(`Imported ${result.project_name}`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Import failed")
+    }
+  }
 
   if (projectLoading) {
     return <DashboardSkeleton />
@@ -87,6 +161,151 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="space-y-1">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <Layers3 className="h-4 w-4" />
+              Projects
+            </CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Export the active project as a portable pack or import one into a new project.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleExportPack}
+              disabled={exportPack.isPending}
+            >
+              {exportPack.isPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="mr-2 h-4 w-4" />
+              )}
+              Export Active
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => setImportOpen(true)}
+            >
+              <Upload className="mr-2 h-4 w-4" />
+              Import Pack
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {!projects?.length ? (
+            <p className="text-sm text-muted-foreground">No projects found</p>
+          ) : (
+            <div className="grid gap-2 md:grid-cols-2">
+              {projects.map((item) => {
+                const active = item.id === projectId
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setProjectId(item.id)}
+                    className={`rounded-md border p-3 text-left transition-colors ${
+                      active
+                        ? "border-primary bg-primary/5"
+                        : "hover:bg-muted/50"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium">{item.name}</div>
+                        <div className="truncate text-[11px] text-muted-foreground">{item.id}</div>
+                      </div>
+                      {active && <Badge variant="default">Active</Badge>}
+                    </div>
+                    <p className="mt-2 text-xs text-muted-foreground line-clamp-2">
+                      {item.description || "No description"}
+                    </p>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Dialog
+        open={importOpen}
+        onOpenChange={(open) => {
+          setImportOpen(open)
+          if (!open) resetImportForm()
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <PackageOpen className="h-4 w-4" />
+              Import Knowledge Pack
+            </DialogTitle>
+            <DialogDescription>
+              Import a previously exported project pack. Leave the optional ID and name blank to reuse the values from the pack.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="knowledge-pack-file">Pack file</Label>
+              <Input
+                id="knowledge-pack-file"
+                type="file"
+                accept=".zip,application/zip"
+                onChange={(event) => setImportFile(event.target.files?.[0] ?? null)}
+              />
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="import-project-id">New project ID</Label>
+                <Input
+                  id="import-project-id"
+                  value={importProjectId}
+                  onChange={(event) => setImportProjectId(event.target.value)}
+                  placeholder="Reuse pack ID"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="import-project-name">New project name</Label>
+                <Input
+                  id="import-project-name"
+                  value={importProjectName}
+                  onChange={(event) => setImportProjectName(event.target.value)}
+                  placeholder="Reuse pack name"
+                />
+              </div>
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              Import preserves the original entity IDs. If those IDs or literature DOIs already exist in this database, the import will be rejected instead of merging over existing data.
+            </p>
+          </div>
+
+          <DialogFooter showCloseButton>
+            <Button
+              type="button"
+              onClick={handleImportPack}
+              disabled={importPack.isPending}
+            >
+              {importPack.isPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Upload className="mr-2 h-4 w-4" />
+              )}
+              Import Pack
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Bottom Row: Active Mission + Recent Journal */}
       <div className="grid gap-4 md:grid-cols-2">

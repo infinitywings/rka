@@ -47,7 +47,8 @@ class AcademicImportService:
                 # Check for duplicate by DOI
                 if skip_duplicates and entry.get("doi"):
                     existing = await self.lit.db.fetchone(
-                        "SELECT id FROM literature WHERE doi = ?", [entry["doi"]]
+                        "SELECT id FROM literature WHERE doi = ? AND project_id = ?",
+                        [entry["doi"], self.lit.project_id],
                     )
                     if existing:
                         results["skipped"].append({
@@ -59,8 +60,8 @@ class AcademicImportService:
                 # Check for duplicate by title (fuzzy)
                 if skip_duplicates and entry.get("title"):
                     existing = await self.lit.db.fetchone(
-                        "SELECT id FROM literature WHERE LOWER(title) = LOWER(?)",
-                        [entry["title"]],
+                        "SELECT id FROM literature WHERE LOWER(title) = LOWER(?) AND project_id = ?",
+                        [entry["title"], self.lit.project_id],
                     )
                     if existing:
                         results["skipped"].append({
@@ -283,7 +284,12 @@ class AcademicImportService:
         from rka.services.decisions import DecisionService
 
         # We need to access the decision service's DB
-        dec_svc = DecisionService(self.lit.db, llm=self.lit.llm, embeddings=self.lit.embeddings)
+        dec_svc = DecisionService(
+            self.lit.db,
+            llm=self.lit.llm,
+            embeddings=self.lit.embeddings,
+            project_id=self.lit.project_id,
+        )
         tree = await dec_svc.get_tree(phase=phase, active_only=active_only)
 
         lines = ["graph TD"]
@@ -348,7 +354,7 @@ class AcademicImportService:
         """
         if not self._note_svc:
             from rka.api.deps import get_note_service
-            self._note_svc = get_note_service()
+            self._note_svc = get_note_service(project_id=self.lit.project_id)
 
         sections = self._split_markdown(content) if split_by_headings else []
 

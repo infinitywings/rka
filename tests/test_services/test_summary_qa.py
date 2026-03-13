@@ -15,20 +15,20 @@ async def seeded_db(db: Database) -> Database:
     """DB with journal/decision data for summary evidence gathering."""
     for i in range(5):
         await db.execute(
-            "INSERT INTO journal (id, type, content, source, confidence, phase) VALUES (?, ?, ?, ?, ?, ?)",
-            [f"jrn_{i:03d}", "finding", f"Research finding number {i}", "pi", "hypothesis", "phase_1"],
+            "INSERT INTO journal (id, type, content, source, confidence, phase, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [f"jrn_{i:03d}", "finding", f"Research finding number {i}", "pi", "hypothesis", "phase_1", "proj_default"],
         )
     await db.execute(
-        "INSERT INTO decisions (id, question, rationale, decided_by, status, phase) VALUES (?, ?, ?, ?, ?, ?)",
-        ["dec_001", "Which model to use?", "Consider accuracy", "brain", "active", "phase_1"],
+        "INSERT INTO decisions (id, question, rationale, decided_by, status, phase, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ["dec_001", "Which model to use?", "Consider accuracy", "brain", "active", "phase_1", "proj_default"],
     )
     await db.execute(
-        "INSERT INTO missions (id, objective, phase, status, context) VALUES (?, ?, ?, ?, ?)",
-        ["mis_001", "Run experiment A", "phase_1", "active", "Experiment context"],
+        "INSERT INTO missions (id, objective, phase, status, context, project_id) VALUES (?, ?, ?, ?, ?, ?)",
+        ["mis_001", "Run experiment A", "phase_1", "active", "Experiment context", "proj_default"],
     )
     await db.execute(
-        "INSERT INTO literature (id, title, abstract, status) VALUES (?, ?, ?, ?)",
-        ["lit_001", "Paper on Models", "Abstract text here", "reading"],
+        "INSERT INTO literature (id, title, abstract, status, project_id) VALUES (?, ?, ?, ?, ?)",
+        ["lit_001", "Paper on Models", "Abstract text here", "reading", "proj_default"],
     )
     # Insert FTS entries
     for i in range(5):

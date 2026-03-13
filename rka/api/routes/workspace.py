@@ -12,7 +12,7 @@ from rka.models.workspace import (
     BootstrapReview,
 )
 from rka.services.workspace import WorkspaceService
-from rka.api.deps import get_workspace_service
+from rka.api.deps import get_scoped_workspace_service
 
 router = APIRouter()
 
@@ -20,7 +20,7 @@ router = APIRouter()
 @router.post("/workspace/scan", response_model=ScanManifest)
 async def scan_workspace(
     data: WorkspaceScanRequest,
-    svc: WorkspaceService = Depends(get_workspace_service),
+    svc: WorkspaceService = Depends(get_scoped_workspace_service),
 ):
     """Scan a workspace folder and classify files for ingestion.
 
@@ -43,7 +43,7 @@ async def scan_workspace(
 @router.post("/workspace/ingest", response_model=WorkspaceIngestResponse)
 async def ingest_workspace(
     data: WorkspaceIngestRequest,
-    svc: WorkspaceService = Depends(get_workspace_service),
+    svc: WorkspaceService = Depends(get_scoped_workspace_service),
 ):
     """Ingest files from a scan manifest into the knowledge base.
 
@@ -56,7 +56,7 @@ async def ingest_workspace(
 @router.get("/workspace/review/{scan_id}", response_model=BootstrapReview)
 async def review_bootstrap(
     scan_id: str,
-    svc: WorkspaceService = Depends(get_workspace_service),
+    svc: WorkspaceService = Depends(get_scoped_workspace_service),
 ):
     """Review a completed bootstrap for Brain handoff.
 

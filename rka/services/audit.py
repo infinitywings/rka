@@ -20,8 +20,8 @@ class AuditService(BaseService):
         offset: int = 0,
     ) -> list[AuditEntry]:
         """List audit log entries with filters."""
-        conditions = []
-        params: list = []
+        conditions = ["project_id = ?"]
+        params: list = [self.project_id]
 
         if action:
             conditions.append("action = ?")
@@ -51,7 +51,8 @@ class AuditService(BaseService):
     async def count(self) -> dict[str, int]:
         """Get counts by action type."""
         rows = await self.db.fetchall(
-            "SELECT action, COUNT(*) as cnt FROM audit_log GROUP BY action ORDER BY cnt DESC"
+            "SELECT action, COUNT(*) as cnt FROM audit_log WHERE project_id = ? GROUP BY action ORDER BY cnt DESC",
+            [self.project_id],
         )
         return {row["action"]: row["cnt"] for row in rows}
 
