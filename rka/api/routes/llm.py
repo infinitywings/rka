@@ -5,10 +5,10 @@ from __future__ import annotations
 import logging
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
-from rka.api.deps import get_llm, get_config, get_db, set_llm
+from rka.infra.database import Database
 from rka.infra.llm import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -33,13 +33,11 @@ class LLMConfigUpdate(BaseModel):
     think: bool | None = None
 
 
-# ---- KV helpers ----
-
 _KV_PREFIX = "llm."
 
-async def _load_llm_overrides(config) -> None:
+
+async def _load_llm_overrides(config, db: Database) -> None:
     """Apply any DB-persisted LLM settings over the .env defaults."""
-    db = get_db()
     rows = await db.fetchall(
         "SELECT key, value FROM kv_store WHERE key LIKE 'llm.%'",
     )
@@ -63,9 +61,8 @@ async def _load_llm_overrides(config) -> None:
                 pass
 
 
-async def _persist_llm_kv(config) -> None:
+async def _persist_llm_kv(config, db: Database) -> None:
     """Persist LLM settings to kv_store in the database."""
-    db = get_db()
     pairs = {
         "llm.enabled": str(config.llm_enabled).lower(),
         "llm.model": config.llm_model,
@@ -83,13 +80,11 @@ async def _persist_llm_kv(config) -> None:
     await db.commit()
 
 
-# ---- Routes ----
-
 @router.get("/llm/status")
-async def get_llm_status() -> LLMStatus:
+async def get_llm_status(request: Request) -> LLMStatus:
     """Get current LLM configuration and availability."""
-    config = get_config()
-    llm = get_llm()
+    config = request.app.state.config
+    llm = request.app.state.llm
     return LLMStatus(
         enabled=config.llm_enabled,
         available=bool(llm and llm.available),
@@ -102,9 +97,10 @@ async def get_llm_status() -> LLMStatus:
 
 
 @router.put("/llm/config")
-async def update_llm_config(data: LLMConfigUpdate) -> LLMStatus:
+async def update_llm_config(data: LLMConfigUpdate, request: Request) -> LLMStatus:
     """Update LLM configuration at runtime, re-check availability, and persist to DB."""
-    config = get_config()
+    config = request.app.state.config
+    db = request.app.state.db
 
     if data.enabled is not None:
         config.llm_enabled = data.enabled
@@ -117,21 +113,18 @@ async def update_llm_config(data: LLMConfigUpdate) -> LLMStatus:
     if data.think is not None:
         config.llm_think = data.think
 
-    # Re-create LLM client with updated config
     llm: LLMClient | None = None
     if config.llm_enabled:
         llm = LLMClient(config)
         await llm.is_available()
 
-        # Auto-detect context window from backend
         if config.llm_api_base and llm.available:
             ctx = await _detect_context_window(config.llm_api_base, config.llm_model)
             if ctx:
                 config.llm_context_window = ctx
-    set_llm(llm)
+    request.app.state.llm = llm
 
-    # Persist to database so changes survive server restarts
-    await _persist_llm_kv(config)
+    await _persist_llm_kv(config, db)
 
     return LLMStatus(
         enabled=config.llm_enabled,
@@ -166,12 +159,10 @@ async def _detect_context_window(api_base: str, model_id: str) -> int | None:
     Falls back to None if unavailable.
     """
     base = _normalize_base(api_base)
-    # Strip the openai/ prefix used by LiteLLM routing
     bare_model = model_id.removeprefix("openai/").removeprefix("ollama/")
 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            # Try LM Studio native API first
             try:
                 resp = await client.get(f"{base}/api/v0/models")
                 if resp.is_success:
@@ -186,7 +177,6 @@ async def _detect_context_window(api_base: str, model_id: str) -> int | None:
             except Exception:
                 pass
 
-            # Try Ollama API
             try:
                 resp = await client.post(f"{base}/api/show", json={"name": bare_model})
                 if resp.is_success:
@@ -205,9 +195,9 @@ async def _detect_context_window(api_base: str, model_id: str) -> int | None:
 
 
 @router.get("/llm/models")
-async def list_models() -> list[LLMModel]:
+async def list_models(request: Request) -> list[LLMModel]:
     """Fetch available models from the configured LLM backend (LM Studio / Ollama)."""
-    config = get_config()
+    config = request.app.state.config
     api_base = config.llm_api_base
     if not api_base:
         return []
@@ -216,7 +206,6 @@ async def list_models() -> list[LLMModel]:
 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            # Try LM Studio native API first (has context_length info)
             try:
                 resp = await client.get(f"{base}/api/v0/models")
                 if resp.is_success:
@@ -233,7 +222,6 @@ async def list_models() -> list[LLMModel]:
             except Exception:
                 pass
 
-            # Fallback to standard OpenAI /v1/models
             resp = await client.get(f"{base}/v1/models")
             resp.raise_for_status()
             data = resp.json()
@@ -248,10 +236,10 @@ async def list_models() -> list[LLMModel]:
 
 
 @router.post("/llm/check")
-async def check_llm() -> LLMStatus:
+async def check_llm(request: Request) -> LLMStatus:
     """Re-check LLM availability without changing config."""
-    config = get_config()
-    llm = get_llm()
+    config = request.app.state.config
+    llm = request.app.state.llm
     if llm:
         await llm.is_available()
     return LLMStatus(

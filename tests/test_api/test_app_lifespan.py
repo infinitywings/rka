@@ -9,7 +9,6 @@ from pathlib import Path
 import pytest
 
 import rka.api.app as app_module
-from rka.api.deps import get_llm
 from rka.api.app import create_app
 from rka.api.routes import llm as llm_routes
 from rka.config import RKAConfig
@@ -99,7 +98,7 @@ async def test_lifespan_retries_llm_startup_probe_until_available(
             await original_sleep(0)
 
         assert attempts >= 3
-        assert get_llm().available is True
+        assert app.state.llm.available is True
         assert config.llm_context_window == 262144
     finally:
         await lifespan.__aexit__(None, None, None)

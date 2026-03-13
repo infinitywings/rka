@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import struct
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from rka.infra.database import Database
 from rka.infra.embeddings import EmbeddingService

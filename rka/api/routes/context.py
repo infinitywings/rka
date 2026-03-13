@@ -4,23 +4,33 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from typing import Literal
 
-from rka.api.deps import get_context_engine, get_note_service, get_search_service, require_project
+from rka.api.deps import (
+    get_context_engine,
+    get_db,
+    get_llm,
+    get_scoped_note_service,
+    get_scoped_search_service,
+    require_project,
+)
+from rka.infra.database import Database
+from rka.infra.llm import LLMClient
 from rka.models.context import ContextPackage, ContextRequest
+from rka.models.journal import JournalEntryCreate
+from rka.services.context import ContextEngine
+from rka.services.notes import NoteService
+from rka.services.search import SearchService
 
 router = APIRouter()
 
-
-# ---- Context ----
 
 @router.post("/context", response_model=ContextPackage)
 async def get_context(
     data: ContextRequest,
     project_id: str = Depends(require_project),
+    engine: ContextEngine | None = Depends(get_context_engine),
 ):
     """Get a focused context package for Brain/Executor."""
-    engine = get_context_engine()
     if engine is None:
         raise HTTPException(status_code=503, detail="Context engine not initialized")
     return await engine.get_context(
@@ -31,8 +41,6 @@ async def get_context(
         project_id=project_id,
     )
 
-
-# ---- Summarize ----
 
 class SummarizeRequest(BaseModel):
     topic: str | None = None
@@ -50,22 +58,17 @@ class SummarizeResponse(BaseModel):
 async def summarize(
     data: SummarizeRequest,
     project_id: str = Depends(require_project),
+    db: Database = Depends(get_db),
+    llm: LLMClient | None = Depends(get_llm),
+    search: SearchService = Depends(get_scoped_search_service),
+    note_svc: NoteService = Depends(get_scoped_note_service),
 ):
     """On-demand topic summarization, stored as journal entry."""
-    from rka.api.deps import get_db, get_llm
-    from rka.models.journal import JournalEntryCreate
-
-    db = get_db()
-    llm = get_llm()
-    search = get_search_service(project_id=project_id)
-
     if llm is None:
         raise HTTPException(status_code=503, detail="LLM not available for summarization")
 
-    # Gather entries to summarize
     entries = []
     if data.entity_ids:
-        # Fetch specific entities
         for eid in data.entity_ids:
             for table in ("journal", "decisions", "literature", "missions"):
                 row = await db.fetchone(
@@ -75,31 +78,35 @@ async def summarize(
                 if row:
                     entries.append(row)
                     break
-    elif data.topic and search:
+    elif data.topic:
         hits = await search.search(data.topic, limit=20)
-        table_map = {"journal": "journal", "decision": "decisions", "literature": "literature", "mission": "missions"}
+        table_map = {
+            "journal": "journal",
+            "decision": "decisions",
+            "literature": "literature",
+            "mission": "missions",
+        }
         for hit in hits:
-            t = table_map.get(hit.entity_type)
-            if t:
-                row = await db.fetchone(f"SELECT * FROM {t} WHERE id = ?", [hit.entity_id])
-                if row and row.get("project_id") != project_id:
-                    row = None
-                if row:
-                    entries.append(row)
+            table = table_map.get(hit.entity_type)
+            if not table:
+                continue
+            row = await db.fetchone(
+                f"SELECT * FROM {table} WHERE id = ? AND project_id = ?",
+                [hit.entity_id, project_id],
+            )
+            if row:
+                entries.append(row)
     else:
         raise HTTPException(status_code=400, detail="Provide topic or entity_ids")
 
     if not entries:
         raise HTTPException(status_code=404, detail="No entries found to summarize")
 
-    # Produce summary via LLM
     narrative = await llm.summarize_entries(entries, max_tokens=800)
     if not narrative:
         raise HTTPException(status_code=502, detail="LLM failed to produce summary")
 
-    # Store as a journal entry
-    svc = get_note_service(project_id=project_id)
-    entry = await svc.create(
+    entry = await note_svc.create(
         JournalEntryCreate(
             type="insight",
             content=narrative,
@@ -119,8 +126,6 @@ async def summarize(
     )
 
 
-# ---- Eviction Sweep ----
-
 class EvictionItem(BaseModel):
     entity_type: str
     entity_id: str
@@ -137,14 +142,11 @@ class EvictionProposal(BaseModel):
 async def eviction_sweep(
     dry_run: bool = True,
     project_id: str = Depends(require_project),
+    db: Database = Depends(get_db),
 ):
     """Rule-based eviction sweep — proposes entries for archival."""
-    from rka.api.deps import get_db
-    db = get_db()
-
     proposed: list[EvictionItem] = []
 
-    # Rule 1: Superseded journal entries older than 7 days
     rows = await db.fetchall(
         """SELECT id, content FROM journal
            WHERE confidence = 'superseded'
@@ -161,7 +163,6 @@ async def eviction_sweep(
             reason="Superseded entry older than 7 days",
         ))
 
-    # Rule 2: Abandoned decisions older than 14 days
     rows = await db.fetchall(
         """SELECT id, question FROM decisions
            WHERE status = 'abandoned'
@@ -178,7 +179,6 @@ async def eviction_sweep(
             reason="Abandoned decision older than 14 days",
         ))
 
-    # Rule 3: Excluded literature with no cross-references
     rows = await db.fetchall(
         """SELECT id, title FROM literature
            WHERE status = 'excluded'
@@ -195,7 +195,6 @@ async def eviction_sweep(
             reason="Excluded literature with no cross-references",
         ))
 
-    # Rule 4: Cancelled missions older than 14 days
     rows = await db.fetchall(
         """SELECT id, objective FROM missions
            WHERE status = 'cancelled'

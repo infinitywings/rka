@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from rka.models.literature import Literature, LiteratureCreate
+from rka.models.literature import LiteratureCreate
 from rka.models.journal import JournalEntryCreate
 from rka.services.literature import LiteratureService
 
@@ -353,8 +352,14 @@ class AcademicImportService:
             Dict with created entries, total count, and any errors.
         """
         if not self._note_svc:
-            from rka.api.deps import get_note_service
-            self._note_svc = get_note_service(project_id=self.lit.project_id)
+            from rka.services.notes import NoteService
+
+            self._note_svc = NoteService(
+                self.lit.db,
+                llm=self.lit.llm,
+                embeddings=self.lit.embeddings,
+                project_id=self.lit.project_id,
+            )
 
         sections = self._split_markdown(content) if split_by_headings else []
 

@@ -9,39 +9,35 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
+from rka.api.routes import (
+    academic as academic_routes,
+    artifacts as artifact_routes,
+    audit as audit_routes,
+    checkpoints as checkpoints_routes,
+    context as context_routes,
+    decisions as decisions_routes,
+    enrich as enrich_routes,
+    events as events_routes,
+    graph as graph_routes,
+    literature as literature_routes,
+    llm as llm_routes,
+    missions as missions_routes,
+    notes as notes_routes,
+    project as project_routes,
+    search as search_routes,
+    summary as summary_routes,
+    tags as tags_routes,
+    workspace as workspace_routes,
+)
 from rka.config import RKAConfig
 from rka.infra.database import Database
-from rka.infra.llm import LLMClient
 from rka.infra.embeddings import EmbeddingService
-from rka.services.search import SearchService
+from rka.infra.llm import LLMClient
 from rka.services.context import ContextEngine
-from rka.api.deps import (
-    set_db, set_llm, set_embeddings, set_search_service, set_context_engine,
-    get_config, set_config,
-)
-from rka.api.routes import (
-    project as project_routes,
-    notes as notes_routes,
-    decisions as decisions_routes,
-    literature as literature_routes,
-    missions as missions_routes,
-    checkpoints as checkpoints_routes,
-    events as events_routes,
-    search as search_routes,
-    tags as tags_routes,
-    context as context_routes,
-    audit as audit_routes,
-    academic as academic_routes,
-    workspace as workspace_routes,
-    enrich as enrich_routes,
-    graph as graph_routes,
-    summary as summary_routes,
-    artifacts as artifact_routes,
-    llm as llm_routes,
-)
+from rka.services.search import SearchService
 
 logger = logging.getLogger(__name__)
 
@@ -49,23 +45,19 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize and tear down database + Phase 2 services on startup/shutdown."""
-    config = getattr(app.state, "config", None) or get_config()
+    config: RKAConfig = app.state.config
     background_tasks: list[asyncio.Task] = []
 
-    # Phase 1: Database
     db = Database(config.database_url)
     await db.connect()
     await db.initialize_schema()
-    set_db(db)
-
-    # Phase 2: Schema extensions (FTS5 + optionally sqlite-vec)
     await db.initialize_phase2_schema()
+    app.state.db = db
 
-    # Apply any DB-persisted LLM config overrides (from web UI settings)
     from rka.api.routes.llm import _load_llm_overrides
-    await _load_llm_overrides(config)
 
-    # LLM client — required for Q&A, summaries, and classification
+    await _load_llm_overrides(config, db)
+
     llm: LLMClient | None = None
     if config.llm_enabled:
         llm = LLMClient(config)
@@ -77,7 +69,6 @@ async def lifespan(app: FastAPI):
                 try:
                     if await llm.is_available():
                         logger.info("LLM health check passed on attempt %d/%d", attempt, max_attempts)
-                        # Auto-detect context window if not already set from DB
                         if config.llm_api_base and config.llm_context_window <= 4096:
                             from rka.api.routes.llm import _detect_context_window
 
@@ -117,20 +108,17 @@ async def lifespan(app: FastAPI):
             "and classification features will not work. Set RKA_LLM_ENABLED=true "
             "and configure model/backend settings from the Settings page or environment."
         )
-    set_llm(llm)
+    app.state.llm = llm
 
-    # Phase 2: Embedding service
     embeddings: EmbeddingService | None = None
     if config.embeddings_enabled:
         embeddings = EmbeddingService(model_name=config.embedding_model, db=db)
         logger.info("Embedding service enabled (model=%s)", config.embedding_model)
-    set_embeddings(embeddings)
+    app.state.embeddings = embeddings
 
-    # Phase 2: Search service (hybrid FTS5 + vector)
     search = SearchService(db=db, embeddings=embeddings)
-    set_search_service(search)
+    app.state.search = search
 
-    # Phase 2: Context engine
     context = ContextEngine(
         db=db,
         search=search,
@@ -138,11 +126,13 @@ async def lifespan(app: FastAPI):
         hot_days=config.context_hot_days,
         warm_days=config.context_warm_days,
     )
-    set_context_engine(context)
+    app.state.context = context
 
     logger.info(
         "RKA started — vec=%s, llm=%s, embeddings=%s",
-        db.vec_available, config.llm_enabled, config.embeddings_enabled,
+        db.vec_available,
+        config.llm_enabled,
+        config.embeddings_enabled,
     )
 
     yield
@@ -158,8 +148,7 @@ async def lifespan(app: FastAPI):
 
 def create_app(config: RKAConfig | None = None) -> FastAPI:
     """Create and configure the FastAPI application."""
-    effective_config = config or get_config()
-    set_config(effective_config)
+    effective_config = config or RKAConfig()
 
     app = FastAPI(
         title="Research Knowledge Agent",
@@ -168,8 +157,12 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.config = effective_config
+    app.state.db = None
+    app.state.llm = None
+    app.state.embeddings = None
+    app.state.search = None
+    app.state.context = None
 
-    # Global error handler for LLM unavailability
     from rka.infra.llm import LLMUnavailableError
 
     @app.exception_handler(LLMUnavailableError)
@@ -183,19 +176,17 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
             },
         )
 
-    # CORS for local web UI development
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[
             "http://localhost:9713",
             "http://127.0.0.1:9713",
-            "http://localhost:5173",  # Vite dev server
+            "http://localhost:5173",
         ],
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
-    # Register route modules
     app.include_router(project_routes.router, prefix="/api", tags=["project"])
     app.include_router(notes_routes.router, prefix="/api", tags=["notes"])
     app.include_router(decisions_routes.router, prefix="/api", tags=["decisions"])
@@ -216,32 +207,30 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
     app.include_router(llm_routes.router, prefix="/api", tags=["llm"])
 
     @app.get("/api/health")
-    async def health():
-        from rka.api.deps import get_db, get_llm
-        db = get_db()
-        llm = get_llm()
+    async def health(request: Request):
+        db = request.app.state.db
+        llm = request.app.state.llm
+        config = request.app.state.config
+
         llm_status = "disabled"
         if llm:
             llm_status = "available" if llm.available else "unavailable"
+
         return {
             "status": "ok",
             "version": "1.2.0",
             "vec_available": db.vec_available,
             "llm_status": llm_status,
-            "llm_model": get_config().llm_model if llm else None,
+            "llm_model": config.llm_model if llm else None,
         }
 
-    # Phase 3: Static file serving for web UI
-    # Search multiple locations: CWD, project root (dev), package dir (Docker)
     _candidates = [
-        Path.cwd() / "web" / "dist",                            # CWD (Docker: /app)
-        Path(__file__).resolve().parent.parent.parent / "web" / "dist",  # dev: repo root
+        Path.cwd() / "web" / "dist",
+        Path(__file__).resolve().parent.parent.parent / "web" / "dist",
     ]
     _web_dist = next((p for p in _candidates if p.is_dir()), None)
     if _web_dist and _web_dist.is_dir():
         _index_html = _web_dist / "index.html"
-
-        # Mount static assets (JS, CSS, fonts) at /assets
         _assets_dir = _web_dist / "assets"
         if _assets_dir.is_dir():
             app.mount(
@@ -250,10 +239,8 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
                 name="static-assets",
             )
 
-        # SPA catch-all: any non-API route returns index.html for client-side routing
         @app.get("/{full_path:path}")
         async def spa_fallback(full_path: str):
-            # Serve actual files from dist if they exist (e.g. favicon, robots.txt)
             file_path = _web_dist / full_path
             if full_path and file_path.is_file():
                 return FileResponse(str(file_path))
@@ -266,5 +253,4 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
     return app
 
 
-# Module-level instance for uvicorn (e.g. `uvicorn rka.api.app:app`)
 app = create_app()

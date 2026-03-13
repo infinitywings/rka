@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 
-from rka.infra.database import Database
 from rka.infra.ids import generate_id
 from rka.infra.llm import LLMUnavailableError
 from rka.services.artifacts import build_figure_text
@@ -399,7 +398,7 @@ class QAService(BaseService):
         )
         return {
             **dict(session),
-            "logs": [dict(l) for l in logs],
+            "logs": [dict(log_row) for log_row in logs],
         }
 
     async def list_sessions(self, limit: int = 20) -> list[dict]:

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 from rka.infra.ids import generate_id
 from rka.models.literature import Literature, LiteratureCreate, LiteratureUpdate
 from rka.services.base import BaseService, _now
@@ -146,7 +144,7 @@ class LiteratureService(BaseService):
                 entity_type="literature",
                 entity_id=lit_id,
                 actor=actor,
-                summary=f"Literature cited",
+                summary="Literature cited",
             )
 
         # Re-sync FTS5 + embedding on content changes

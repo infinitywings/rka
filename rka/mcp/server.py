@@ -1,19 +1,72 @@
 """MCP server — thin HTTP proxy to the RKA REST API.
 
 All tools are prefixed with `rka_` for namespace isolation.
-The MCP server is stateless; all state lives in the FastAPI server.
+The server keeps lightweight per-session state to reduce token waste
+and provide a compact session digest during long MCP conversations.
 """
 
 from __future__ import annotations
 
 import os
 import json
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from functools import wraps
 
 from mcp.server.fastmcp import FastMCP
 import httpx
 
 mcp = FastMCP("Research Knowledge Agent")
 API_URL = os.environ.get("RKA_API_URL", "http://localhost:9712")
+
+
+@dataclass
+class MCPSessionState:
+    """Tracks state across tool calls in a single MCP stdio session."""
+
+    tool_calls: int = 0
+    session_start: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    )
+    entities_created: list[dict[str, str]] = field(default_factory=list)
+    decisions_made: list[str] = field(default_factory=list)
+    checkpoints_raised: list[str] = field(default_factory=list)
+
+    @property
+    def verbosity(self) -> str:
+        if self.tool_calls <= 5:
+            return "full"
+        if self.tool_calls <= 15:
+            return "compact"
+        return "minimal"
+
+
+_session = MCPSessionState()
+
+
+def _tick() -> MCPSessionState:
+    _session.tool_calls += 1
+    return _session
+
+
+def _record_entity(entity_type: str, entity_id: str, summary: str) -> None:
+    _session.entities_created.append(
+        {"type": entity_type, "id": entity_id, "summary": summary[:80]}
+    )
+
+
+def tool():
+    """Register an MCP tool and increment session state on every invocation."""
+
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            _tick()
+            return await func(*args, **kwargs)
+
+        return mcp.tool()(wrapper)
+
+    return decorator
 
 
 def _client() -> httpx.AsyncClient:
@@ -35,7 +88,7 @@ def _raise_with_detail(r: httpx.Response) -> None:
 # Knowledge Management
 # ============================================================
 
-@mcp.tool()
+@tool()
 async def rka_add_note(
     content: str,
     type: str = "finding",
@@ -76,10 +129,11 @@ async def rka_add_note(
         r = await c.post("/api/notes", json={k: v for k, v in body.items() if v is not None})
         _raise_with_detail(r)
         d = r.json()
+        _record_entity("journal", d["id"], content)
         return f"Created {d['id']} [{d['type']}] confidence={d['confidence']}"
 
 
-@mcp.tool()
+@tool()
 async def rka_update_note(
     id: str,
     content: str | None = None,
@@ -116,7 +170,7 @@ async def rka_update_note(
         return f"Updated {id}"
 
 
-@mcp.tool()
+@tool()
 async def rka_add_literature(
     title: str,
     authors: list[str] | None = None,
@@ -157,10 +211,11 @@ async def rka_add_literature(
         r = await c.post("/api/literature", json={k: v for k, v in body.items() if v is not None})
         _raise_with_detail(r)
         d = r.json()
+        _record_entity("literature", d["id"], d["title"])
         return f"Created {d['id']}: {d['title']}"
 
 
-@mcp.tool()
+@tool()
 async def rka_update_literature(
     id: str,
     title: str | None = None,
@@ -217,7 +272,7 @@ async def rka_update_literature(
         return f"Updated {id}"
 
 
-@mcp.tool()
+@tool()
 async def rka_add_decision(
     question: str,
     phase: str,
@@ -249,10 +304,11 @@ async def rka_add_decision(
         r = await c.post("/api/decisions", json={k: v for k, v in body.items() if v is not None})
         _raise_with_detail(r)
         d = r.json()
+        _session.decisions_made.append(d["id"])
         return f"Created decision {d['id']}: {d['question'][:80]}"
 
 
-@mcp.tool()
+@tool()
 async def rka_update_decision(
     id: str,
     status: str | None = None,
@@ -283,7 +339,7 @@ async def rka_update_decision(
 # Mission Lifecycle
 # ============================================================
 
-@mcp.tool()
+@tool()
 async def rka_create_mission(
     phase: str,
     objective: str,
@@ -319,20 +375,21 @@ async def rka_create_mission(
         d = r.json()
         n_tasks = len(d.get("tasks") or [])
         mid = d["id"]
+        _record_entity("mission", mid, d["objective"])
         lines = [
-            f"MISSION CREATED",
-            f"",
+            "MISSION CREATED",
+            "",
             f"  ID:        {mid}",
             f"  Status:    {d.get('status', 'pending')}",
             f"  Objective: {d['objective'][:120]}",
             f"  Tasks:     {n_tasks}",
-            f"",
+            "",
             f"Pass this ID to the Executor: {mid}",
         ]
         return "\n".join(lines)
 
 
-@mcp.tool()
+@tool()
 async def rka_get_mission(id: str | None = None) -> str:
     """Get a mission. Returns the active mission if no ID given.
 
@@ -354,7 +411,7 @@ async def rka_get_mission(id: str | None = None) -> str:
         return "No active or pending mission."
 
 
-@mcp.tool()
+@tool()
 async def rka_update_mission_status(
     id: str,
     status: str,
@@ -376,7 +433,7 @@ async def rka_update_mission_status(
         return f"Mission {id} → {status}"
 
 
-@mcp.tool()
+@tool()
 async def rka_submit_report(
     mission_id: str,
     summary: str,
@@ -424,7 +481,7 @@ async def rka_submit_report(
         return f"Report submitted for mission {mission_id}"
 
 
-@mcp.tool()
+@tool()
 async def rka_get_report(mission_id: str | None = None) -> str:
     """Get mission report. Defaults to latest complete mission.
 
@@ -453,7 +510,7 @@ async def rka_get_report(mission_id: str | None = None) -> str:
 # Checkpoints
 # ============================================================
 
-@mcp.tool()
+@tool()
 async def rka_submit_checkpoint(
     mission_id: str,
     type: str,
@@ -486,10 +543,11 @@ async def rka_submit_checkpoint(
         r = await c.post("/api/checkpoints", json={k: v for k, v in body.items() if v is not None})
         _raise_with_detail(r)
         d = r.json()
+        _session.checkpoints_raised.append(d["id"])
         return f"Checkpoint {d['id']} created ({type}, {'blocking' if blocking else 'non-blocking'})"
 
 
-@mcp.tool()
+@tool()
 async def rka_get_checkpoints(status: str = "open") -> str:
     """Get checkpoints. Defaults to open checkpoints.
 
@@ -509,7 +567,7 @@ async def rka_get_checkpoints(status: str = "open") -> str:
         return "\n".join(lines)
 
 
-@mcp.tool()
+@tool()
 async def rka_resolve_checkpoint(
     id: str,
     resolution: str,
@@ -540,7 +598,7 @@ async def rka_resolve_checkpoint(
 # Retrieval & Search
 # ============================================================
 
-@mcp.tool()
+@tool()
 async def rka_search(
     query: str,
     entity_types: list[str] | None = None,
@@ -553,6 +611,7 @@ async def rka_search(
         entity_types: Filter by type — decision | literature | journal | mission
         limit: Max results
     """
+    session = _session
     async with _client() as c:
         body = {"query": query, "entity_types": entity_types, "limit": limit}
         r = await c.post("/api/search", json=body)
@@ -563,12 +622,18 @@ async def rka_search(
         lines = []
         for res in results:
             lines.append(f"[{res['entity_type']}] {res['entity_id']}: {res['title']}")
-            if res.get("snippet"):
+            if res.get("snippet") and session.verbosity == "full":
                 lines.append(f"  {res['snippet'][:150]}")
+            elif res.get("snippet") and session.verbosity == "compact":
+                lines.append(f"  {res['snippet'][:80]}")
+        if session.verbosity != "full":
+            lines.append(
+                f"\n({session.tool_calls} tool calls this session — using {session.verbosity} output)"
+            )
         return "\n".join(lines)
 
 
-@mcp.tool()
+@tool()
 async def rka_get_decision_tree(
     root_id: str | None = None,
     phase: str | None = None,
@@ -616,7 +681,7 @@ async def rka_get_decision_tree(
         return "\n".join(output) if output else "No decisions found."
 
 
-@mcp.tool()
+@tool()
 async def rka_get_literature(
     status: str | None = None,
     query: str | None = None,
@@ -649,7 +714,7 @@ async def rka_get_literature(
         return "\n".join(lines)
 
 
-@mcp.tool()
+@tool()
 async def rka_get_journal(
     type: str | None = None,
     phase: str | None = None,
@@ -691,7 +756,7 @@ async def rka_get_journal(
 # Project State
 # ============================================================
 
-@mcp.tool()
+@tool()
 async def rka_get_status() -> str:
     """Get full project state: phase, active mission, open checkpoints, metrics."""
     async with _client() as c:
@@ -731,7 +796,7 @@ async def rka_get_status() -> str:
         return "\n".join(lines)
 
 
-@mcp.tool()
+@tool()
 async def rka_update_status(
     current_phase: str | None = None,
     summary: str | None = None,
@@ -753,7 +818,7 @@ async def rka_update_status(
         }
         r = await c.put("/api/status", json={k: v for k, v in body.items() if v is not None})
         _raise_with_detail(r)
-        return f"Status updated"
+        return "Status updated"
 
 
 # ============================================================
@@ -764,7 +829,7 @@ async def rka_update_status(
 # Academic / Import Tools
 # ============================================================
 
-@mcp.tool()
+@tool()
 async def rka_import_bibtex(
     bibtex: str,
     default_status: str = "to_read",
@@ -801,7 +866,7 @@ async def rka_import_bibtex(
         return "\n".join(lines)
 
 
-@mcp.tool()
+@tool()
 async def rka_enrich_doi(lit_id: str) -> str:
     """Enrich a literature entry by looking up its DOI via CrossRef.
 
@@ -820,7 +885,7 @@ async def rka_enrich_doi(lit_id: str) -> str:
         return f"No updates needed for {lit_id}"
 
 
-@mcp.tool()
+@tool()
 async def rka_export_mermaid(
     phase: str | None = None,
     active_only: bool = False,
@@ -845,7 +910,7 @@ async def rka_export_mermaid(
         return data.get("mermaid", "graph TD\n    empty[No decisions yet]")
 
 
-@mcp.tool()
+@tool()
 async def rka_batch_import(
     entries: list[dict],
     actor: str = "import",
@@ -873,7 +938,7 @@ async def rka_batch_import(
         return "\n".join(lines)
 
 
-@mcp.tool()
+@tool()
 async def rka_ingest_document(
     content: str,
     source: str = "brain",
@@ -932,7 +997,7 @@ async def rka_ingest_document(
 # Export
 # ============================================================
 
-@mcp.tool()
+@tool()
 async def rka_export(format: str = "markdown", scope: str = "state") -> str:
     """Export research data.
 
@@ -978,7 +1043,7 @@ async def rka_export(format: str = "markdown", scope: str = "state") -> str:
 # Phase 2: Context, Summarization, Eviction
 # ============================================================
 
-@mcp.tool()
+@tool()
 async def rka_get_context(
     topic: str | None = None,
     phase: str | None = None,
@@ -1027,7 +1092,7 @@ async def rka_get_context(
             lines.extend(pkg["cold_entries"])
 
         if pkg.get("narrative"):
-            lines.append(f"\n### Narrative")
+            lines.append("\n### Narrative")
             lines.append(pkg["narrative"])
 
         if pkg.get("sources"):
@@ -1036,7 +1101,7 @@ async def rka_get_context(
         return "\n".join(lines)
 
 
-@mcp.tool()
+@tool()
 async def rka_summarize(
     topic: str | None = None,
     phase: str | None = None,
@@ -1062,7 +1127,7 @@ async def rka_summarize(
         )
 
 
-@mcp.tool()
+@tool()
 async def rka_eviction_sweep(dry_run: bool = True) -> str:
     """Propose entries for archival based on staleness rules.
 
@@ -1091,7 +1156,7 @@ async def rka_eviction_sweep(dry_run: bool = True) -> str:
 # Academic Search (Semantic Scholar + arXiv)
 # ============================================================
 
-@mcp.tool()
+@tool()
 async def rka_search_semantic_scholar(
     query: str,
     limit: int = 10,
@@ -1176,7 +1241,7 @@ async def rka_search_semantic_scholar(
     return "\n".join(lines)
 
 
-@mcp.tool()
+@tool()
 async def rka_search_arxiv(
     query: str,
     limit: int = 10,
@@ -1278,7 +1343,7 @@ def _xml_text(xml: str, tag: str) -> str:
 # Workspace Bootstrap
 # ============================================================
 
-@mcp.tool()
+@tool()
 async def rka_scan_workspace(
     folder_path: str,
     ignore_patterns: list[str] | None = None,
@@ -1360,7 +1425,7 @@ async def rka_scan_workspace(
     return "\n".join(lines)
 
 
-@mcp.tool()
+@tool()
 async def rka_bootstrap_workspace(
     folder_path: str,
     phase: str | None = None,
@@ -1438,7 +1503,7 @@ async def rka_bootstrap_workspace(
     return "\n".join(lines)
 
 
-@mcp.tool()
+@tool()
 async def rka_review_bootstrap(scan_id: str) -> str:
     """Review a completed bootstrap for reorganization.
 
@@ -1489,7 +1554,7 @@ async def rka_review_bootstrap(scan_id: str) -> str:
 # LLM Enrichment
 # ============================================================
 
-@mcp.tool()
+@tool()
 async def rka_enrich(limit: int = 50, fix_types: bool = True) -> str:
     """Run LLM semantic linking on journal entries that have no relationships set.
 
@@ -1524,7 +1589,7 @@ async def rka_enrich(limit: int = 50, fix_types: bool = True) -> str:
 # Graph & Research Map
 # ============================================================
 
-@mcp.tool()
+@tool()
 async def rka_get_graph(
     include_types: str | None = None,
     phase: str | None = None,
@@ -1553,13 +1618,13 @@ async def rka_get_graph(
             f"Nodes by type:\n"
             + "\n".join(f"  {t}: {sum(1 for n in d['nodes'] if n['type'] == t)}"
                        for t in sorted(set(n['type'] for n in d['nodes'])))
-            + f"\n\nEdges by type:\n"
+            + "\n\nEdges by type:\n"
             + "\n".join(f"  {t}: {sum(1 for e in d['edges'] if e['link_type'] == t)}"
                        for t in sorted(set(e['link_type'] for e in d['edges'])))
         )
 
 
-@mcp.tool()
+@tool()
 async def rka_get_ego_graph(entity_id: str, depth: int = 1) -> str:
     """Get the neighborhood subgraph around a specific entity.
 
@@ -1584,7 +1649,7 @@ async def rka_get_ego_graph(entity_id: str, depth: int = 1) -> str:
 
 
 
-@mcp.tool()
+@tool()
 async def rka_graph_stats() -> str:
     """Get knowledge graph statistics: entity counts, edge counts by type."""
     async with _client() as c:
@@ -1605,7 +1670,7 @@ async def rka_graph_stats() -> str:
 # Summaries & QA (NotebookLM-style)
 # ============================================================
 
-@mcp.tool()
+@tool()
 async def rka_generate_summary(
     scope_type: str = "project",
     scope_id: str | None = None,
@@ -1649,7 +1714,7 @@ async def rka_generate_summary(
         return "\n".join(lines)
 
 
-@mcp.tool()
+@tool()
 async def rka_ask(
     question: str,
     session_id: str | None = None,
@@ -1692,6 +1757,73 @@ async def rka_ask(
                 lines.append(f"  → {f}")
         lines.append(f"\nSession: {d.get('session_id', 'N/A')}")
         return "\n".join(lines)
+
+
+# ============================================================
+# Session State
+# ============================================================
+
+@tool()
+async def rka_session_digest() -> str:
+    """Get a compact summary of the current MCP session."""
+    session = _session
+
+    lines = [
+        "## Session Digest",
+        f"Tool calls: {session.tool_calls}",
+        f"Session started: {session.session_start}",
+    ]
+
+    if session.entities_created:
+        lines.append(f"\n### Entities Created ({len(session.entities_created)})")
+        for entry in session.entities_created:
+            lines.append(f"  [{entry['type']}] {entry['id']}: {entry['summary']}")
+
+    if session.decisions_made:
+        lines.append(f"\n### Decisions Recorded ({len(session.decisions_made)})")
+        for decision_id in session.decisions_made:
+            lines.append(f"  {decision_id}")
+
+    if session.checkpoints_raised:
+        lines.append(f"\n### Checkpoints Raised ({len(session.checkpoints_raised)})")
+        for checkpoint_id in session.checkpoints_raised:
+            lines.append(f"  {checkpoint_id}")
+
+    try:
+        async with _client() as c:
+            status_r = await c.get("/api/status")
+            if status_r.is_success:
+                status = status_r.json()
+                lines.append("\n### Current Project State")
+                lines.append(f"Phase: {status.get('current_phase', '?')}")
+                if status.get("summary"):
+                    lines.append(f"Summary: {status['summary'][:200]}")
+                if status.get("blockers"):
+                    lines.append(f"Blockers: {status['blockers']}")
+
+            chk_r = await c.get("/api/checkpoints", params={"status": "open"})
+            if chk_r.is_success:
+                checkpoints = chk_r.json()
+                if checkpoints:
+                    lines.append(f"\n### Open Checkpoints ({len(checkpoints)})")
+                    for chk in checkpoints[:5]:
+                        flag = "🔴" if chk.get("blocking") else "🟡"
+                        lines.append(f"  {flag} {chk['id']}: {chk['description'][:80]}")
+    except Exception:
+        pass
+
+    lines.append(
+        "\n---\nUse this digest as the compact session context instead of retaining earlier tool output."
+    )
+    return "\n".join(lines)
+
+
+@tool()
+async def rka_reset_session() -> str:
+    """Reset MCP session tracking state without restarting the MCP server."""
+    global _session
+    _session = MCPSessionState()
+    return "Session state reset. Output verbosity and digest history cleared."
 
 
 # ============================================================
@@ -1753,6 +1885,11 @@ If there are open checkpoints, resolve them before continuing new work.
 - `rka_update_status(phase, current_focus, next_steps, blockers)` — keep the dashboard current
 - `rka_summarize(scope="project")` — generate a full project summary
 
+### Session Management
+- Responses become more compact automatically in longer sessions to save tokens
+- `rka_session_digest()` gives you a compressed summary of the session so far
+- `rka_reset_session()` clears the session tracker when you want to start fresh
+
 ---
 
 ## Session End Protocol
@@ -1804,6 +1941,11 @@ The **PI** (human researcher) supervises both.
 If no mission exists, ask the Brain or PI for direction before starting.
 
 **Mission status lifecycle**: `pending` (Brain created, not started) → `active` (you are working on it) → `complete` (done via `rka_submit_report`). Always activate a pending mission before starting work.
+
+### Session Management
+- Responses become more compact automatically in longer sessions to save tokens
+- `rka_session_digest()` gives you a compressed summary of the session so far
+- `rka_reset_session()` clears the session tracker when you want to start fresh
 
 ---
 

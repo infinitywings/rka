@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 from rka.infra.ids import generate_id
 from rka.models.journal import JournalEntry, JournalEntryCreate, JournalEntryUpdate
 from rka.services.base import BaseService, _now

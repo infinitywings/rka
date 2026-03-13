@@ -7,9 +7,8 @@ import json
 import logging
 from pathlib import Path
 
-from rka.infra.database import Database
 from rka.infra.ids import generate_id
-from rka.services.base import BaseService, _now
+from rka.services.base import BaseService
 
 logger = logging.getLogger(__name__)
 

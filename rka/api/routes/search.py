@@ -5,7 +5,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from rka.api.deps import get_search_service, require_project
+from rka.api.deps import get_scoped_search_service
+from rka.services.search import SearchService
 
 router = APIRouter()
 
@@ -29,11 +30,9 @@ class SearchResult(BaseModel):
 @router.post("/search", response_model=list[SearchResult])
 async def search(
     data: SearchRequest,
-    project_id: str = Depends(require_project),
+    svc: SearchService = Depends(get_scoped_search_service),
 ):
     """Hybrid search across all entity types (FTS5 + vector + LIKE fallback)."""
-    svc = get_search_service(project_id=project_id)
-
     hits = await svc.search(
         query=data.query,
         entity_types=data.entity_types,

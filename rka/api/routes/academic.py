@@ -134,14 +134,25 @@ async def batch_import(
 
     Supports: note, literature, decision.
     """
-    from rka.api.deps import get_note_service, get_decision_service
     from rka.models.literature import LiteratureCreate
     from rka.models.journal import JournalEntryCreate
     from rka.models.decision import DecisionCreate
+    from rka.services.decisions import DecisionService
+    from rka.services.notes import NoteService
 
     results = {"imported": [], "errors": []}
-    note_svc = get_note_service(project_id=svc.lit.project_id)
-    dec_svc = get_decision_service(project_id=svc.lit.project_id)
+    note_svc = NoteService(
+        svc.lit.db,
+        llm=svc.lit.llm,
+        embeddings=svc.lit.embeddings,
+        project_id=svc.lit.project_id,
+    )
+    dec_svc = DecisionService(
+        svc.lit.db,
+        llm=svc.lit.llm,
+        embeddings=svc.lit.embeddings,
+        project_id=svc.lit.project_id,
+    )
 
     for i, entry in enumerate(req.entries):
         try:
