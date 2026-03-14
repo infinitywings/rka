@@ -60,5 +60,6 @@ class JournalEntry(BaseModel):
     confidence: str
     importance: str
     tags: list[str] = Field(default_factory=list)
+    enrichment_status: Literal["pending", "ready", "failed"] = "ready"
     created_at: str | None = None
     updated_at: str | None = None

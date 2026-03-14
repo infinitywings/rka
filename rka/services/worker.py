@@ -10,7 +10,6 @@ from typing import Any
 
 from rka.infra.database import Database
 from rka.services.jobs import JobQueue
-from rka.services.missions import MissionService
 
 logger = logging.getLogger(__name__)
 
@@ -66,16 +65,37 @@ class EnrichmentWorker:
         job_type = job["job_type"]
         project_id = job["project_id"]
         entity_id = job.get("entity_id")
-        mission_svc = MissionService(
-            self.db,
-            llm=self.llm,
-            embeddings=self.embeddings,
-            project_id=project_id,
-        )
 
-        if job_type == "mission_auto_tag":
-            return await mission_svc.process_auto_tag_job(entity_id)
-        if job_type == "mission_embed":
-            return await mission_svc.process_embedding_job(entity_id)
+        if job_type.startswith("mission_"):
+            from rka.services.missions import MissionService
+
+            svc = MissionService(
+                self.db,
+                llm=self.llm,
+                embeddings=self.embeddings,
+                project_id=project_id,
+            )
+            if job_type == "mission_auto_tag":
+                return await svc.process_auto_tag_job(entity_id)
+            if job_type == "mission_embed":
+                return await svc.process_embedding_job(entity_id)
+
+        if job_type.startswith("note_"):
+            from rka.services.notes import NoteService
+
+            svc = NoteService(
+                self.db,
+                llm=self.llm,
+                embeddings=self.embeddings,
+                project_id=project_id,
+            )
+            if job_type == "note_auto_tag":
+                return await svc.process_auto_tag_job(entity_id)
+            if job_type == "note_auto_link":
+                return await svc.process_auto_link_job(entity_id)
+            if job_type == "note_auto_summarize":
+                return await svc.process_auto_summarize_job(entity_id)
+            if job_type == "note_embed":
+                return await svc.process_embedding_job(entity_id)
 
         raise ValueError(f"Unsupported job_type '{job_type}'")
