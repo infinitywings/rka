@@ -10,10 +10,40 @@ from rka.models.decision import (
     Decision, DecisionCreate, DecisionUpdate, DecisionOption, DecisionTreeNode,
 )
 from rka.services.base import BaseService, _now
+from rka.services.jobs import JobQueue
 
 
 class DecisionService(BaseService):
     """Manages the decision tree."""
+
+    def _job_dedupe_key(self, dec_id: str, operation: str) -> str:
+        return f"{self.project_id}:decision:{dec_id}:{operation}"
+
+    async def _enqueue_enrichment_jobs(
+        self,
+        dec_id: str,
+        *,
+        include_auto_tags: bool,
+        include_embedding: bool,
+    ) -> None:
+        queue = JobQueue(self.db)
+        if include_auto_tags:
+            await queue.enqueue(
+                "decision_auto_tag",
+                project_id=self.project_id,
+                entity_type="decision",
+                entity_id=dec_id,
+                dedupe_key=self._job_dedupe_key(dec_id, "auto_tag"),
+            )
+        if include_embedding:
+            await queue.enqueue(
+                "decision_embed",
+                project_id=self.project_id,
+                entity_type="decision",
+                entity_id=dec_id,
+                dedupe_key=self._job_dedupe_key(dec_id, "embed"),
+                priority=110,
+            )
 
     async def create(self, data: DecisionCreate, actor: str | None = None) -> Decision:
         """Create a new decision node."""
@@ -40,19 +70,21 @@ class DecisionService(BaseService):
         )
         await self.db.commit()
 
-        # Save tags (user-provided or auto-generated)
-        tags = data.tags
-        if not tags:
-            auto_tags = await self._auto_enrich_tags(data.question, [])
-            if auto_tags:
-                tags = auto_tags
-        if tags:
-            await self._set_tags("decision", dec_id, tags)
+        # Save user-provided tags immediately; auto-tags are deferred
+        has_user_tags = bool(data.tags)
+        if has_user_tags:
+            await self._set_tags("decision", dec_id, data.tags)
 
-        # Sync FTS5 + embedding indexes
-        await self._sync_indexes("decision", dec_id, {
+        # Sync cheap deterministic FTS now; LLM enrichment + embedding are queued
+        await self._sync_fts("decision", dec_id, {
             "question": data.question, "rationale": data.rationale,
         })
+
+        await self._enqueue_enrichment_jobs(
+            dec_id,
+            include_auto_tags=bool(self.llm) and not has_user_tags,
+            include_embedding=bool(self.embeddings),
+        )
 
         await self.emit_event(
             event_type="decision_created",
@@ -154,14 +186,19 @@ class DecisionService(BaseService):
                 summary=f"Decision updated: status → {data.status}",
             )
 
-        # Re-sync FTS5 + embedding on content changes
+        # Re-sync FTS on content changes; defer embedding to job queue
         if "question" in updates or "rationale" in updates:
             row = await self.db.fetchone(
                 "SELECT question, rationale FROM decisions WHERE id = ? AND project_id = ?",
                 [dec_id, self.project_id],
             )
             if row:
-                await self._sync_indexes("decision", dec_id, dict(row))
+                await self._sync_fts("decision", dec_id, dict(row))
+                await self._enqueue_enrichment_jobs(
+                    dec_id,
+                    include_auto_tags=False,
+                    include_embedding=bool(self.embeddings),
+                )
 
         await self.audit("update", "decision", dec_id, actor, {"fields": list(updates.keys())})
         return await self.get(dec_id)
@@ -216,6 +253,7 @@ class DecisionService(BaseService):
 
     async def _row_to_model(self, row: dict) -> Decision:
         tags = await self._get_tags("decision", row["id"])
+        enrichment_status = await self._get_enrichment_status("decision", row["id"])
         options = None
         if row.get("options"):
             raw = self._json_loads(row["options"], [])
@@ -235,6 +273,50 @@ class DecisionService(BaseService):
             related_missions=self._json_loads(row.get("related_missions")),
             related_literature=self._json_loads(row.get("related_literature")),
             tags=tags,
+            enrichment_status=enrichment_status,
             created_at=row.get("created_at"),
             updated_at=row.get("updated_at"),
         )
+
+    # ---- Background job handlers ----
+
+    async def process_auto_tag_job(self, dec_id: str) -> dict[str, str | int]:
+        """Generate tags for a decision when none are present."""
+        row = await self.db.fetchone(
+            "SELECT question FROM decisions WHERE id = ? AND project_id = ?",
+            [dec_id, self.project_id],
+        )
+        if row is None:
+            return {"outcome": "missing"}
+        if not self.llm:
+            return {"outcome": "skipped", "reason": "llm_disabled"}
+
+        existing_tags = await self._get_tags("decision", dec_id)
+        if existing_tags:
+            return {"outcome": "skipped", "reason": "tags_present"}
+
+        auto_tags = await self._auto_enrich_tags(row["question"], existing_tags)
+        if not auto_tags:
+            return {"outcome": "noop"}
+
+        await self._set_tags("decision", dec_id, auto_tags)
+        return {"outcome": "updated", "tag_count": len(auto_tags)}
+
+    async def process_embedding_job(self, dec_id: str) -> dict[str, str | int]:
+        """Generate or refresh the decision embedding."""
+        row = await self.db.fetchone(
+            "SELECT question, rationale FROM decisions WHERE id = ? AND project_id = ?",
+            [dec_id, self.project_id],
+        )
+        if row is None:
+            return {"outcome": "missing"}
+        if not self.embeddings:
+            return {"outcome": "skipped", "reason": "embeddings_disabled"}
+
+        parts = [str(row.get("question") or "").strip(), str(row.get("rationale") or "").strip()]
+        text = " ".join(part for part in parts if part).strip()
+        if not text:
+            return {"outcome": "skipped", "reason": "empty"}
+
+        await self.embeddings.embed_and_store("decision", dec_id, text, project_id=self.project_id)
+        return {"outcome": "updated", "char_count": len(text)}

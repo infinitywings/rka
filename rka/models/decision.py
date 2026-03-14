@@ -61,6 +61,7 @@ class Decision(BaseModel):
     related_missions: list[str] | None = None
     related_literature: list[str] | None = None
     tags: list[str] = Field(default_factory=list)
+    enrichment_status: Literal["pending", "ready", "failed"] = "ready"
     created_at: str | None = None
     updated_at: str | None = None
 

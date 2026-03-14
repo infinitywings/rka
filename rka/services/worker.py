@@ -98,4 +98,32 @@ class EnrichmentWorker:
             if job_type == "note_embed":
                 return await svc.process_embedding_job(entity_id)
 
+        if job_type.startswith("decision_"):
+            from rka.services.decisions import DecisionService
+
+            svc = DecisionService(
+                self.db,
+                llm=self.llm,
+                embeddings=self.embeddings,
+                project_id=project_id,
+            )
+            if job_type == "decision_auto_tag":
+                return await svc.process_auto_tag_job(entity_id)
+            if job_type == "decision_embed":
+                return await svc.process_embedding_job(entity_id)
+
+        if job_type.startswith("literature_"):
+            from rka.services.literature import LiteratureService
+
+            svc = LiteratureService(
+                self.db,
+                llm=self.llm,
+                embeddings=self.embeddings,
+                project_id=project_id,
+            )
+            if job_type == "literature_auto_tag":
+                return await svc.process_auto_tag_job(entity_id)
+            if job_type == "literature_embed":
+                return await svc.process_embedding_job(entity_id)
+
         raise ValueError(f"Unsupported job_type '{job_type}'")
