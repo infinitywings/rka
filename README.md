@@ -20,7 +20,7 @@ The result is continuity across the full arc of a project. A session in month si
 - Multi-project isolation with project packs for export and import
 - REST API, MCP server, CLI, and web dashboard over a shared service layer
 
-Current release: `v1.4.0` adds a durable enrichment jobs queue and worker, fast mission creation with eventual enrichment, typed MCP mission task inputs, and explicit LLM request timeouts for background processing.
+Current release: `v1.5.0` moves all entity enrichment (notes, decisions, literature) to the background job queue, eliminating MCP timeouts caused by slow LLM backends. LLM features are now enabled by default.
 
 Built for CS/IoT/CPS security research at UNC Charlotte.
 
