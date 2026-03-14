@@ -30,7 +30,7 @@ class RKAConfig(BaseSettings):
     llm_model: str = Field(default="", description="LiteLLM model identifier")
     llm_api_base: str | None = Field(default=None, description="LLM API base URL")
     llm_api_key: str | None = Field(default=None, description="Optional API key")
-    llm_enabled: bool = Field(default=False, description="Enable LLM features")
+    llm_enabled: bool = Field(default=True, description="Enable LLM features")
     llm_think: bool = Field(
         default=False,
         description="Enable thinking mode for reasoning models (disable for structured extraction)",
