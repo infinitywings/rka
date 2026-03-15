@@ -3,7 +3,9 @@
  */
 
 const BASE_URL = "/api"
-let activeProjectId = "proj_default"
+let activeProjectId =
+  (typeof window !== "undefined" && window.localStorage.getItem("rka.activeProjectId")) ||
+  "proj_default"
 
 export function setApiProjectId(projectId: string | null) {
   activeProjectId = projectId?.trim() || "proj_default"
