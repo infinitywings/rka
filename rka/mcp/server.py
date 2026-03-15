@@ -18,7 +18,39 @@ import httpx
 
 from rka.models.mission import MissionTask
 
-mcp = FastMCP("Research Knowledge Agent")
+RKA_INSTRUCTIONS = """\
+Research Knowledge Agent (RKA) — a structured knowledge base for research projects.
+RKA tracks journal entries, decisions, literature, and missions across research phases,
+with a knowledge graph linking all entities.
+
+## Quick Start
+1. `rka_get_status()` — see current project state and phase
+2. `rka_get_context()` — get a focused context package with recent knowledge
+3. `rka_search(query)` — find anything in the knowledge base
+
+## Tool Categories
+- **Project**: `rka_list_projects`, `rka_set_project`, `rka_get_status`, `rka_update_status`
+- **Notes**: `rka_add_note`, `rka_update_note`, `rka_get_journal`
+- **Decisions**: `rka_add_decision`, `rka_update_decision`, `rka_get_decision_tree`
+- **Literature**: `rka_add_literature`, `rka_update_literature`, `rka_get_literature`, `rka_enrich_doi`
+- **Missions**: `rka_create_mission`, `rka_get_mission`, `rka_update_mission_status`, `rka_submit_report`
+- **Checkpoints**: `rka_submit_checkpoint`, `rka_get_checkpoints`, `rka_resolve_checkpoint`
+- **Search & Context**: `rka_search`, `rka_get_context`, `rka_ask`
+- **Graph**: `rka_get_graph`, `rka_get_ego_graph`, `rka_graph_stats`
+- **Academic**: `rka_search_semantic_scholar`, `rka_search_arxiv`, `rka_import_bibtex`
+- **Workspace**: `rka_scan_workspace`, `rka_bootstrap_workspace`
+- **Session**: `rka_session_digest`, `rka_reset_session`
+
+## Roles
+RKA supports a Brain/Executor/PI workflow. Use the `brain_orientation` or
+`executor_orientation` prompts for role-specific guidance.
+
+## Multi-Project
+Use `rka_list_projects()` and `rka_set_project(id)` to switch between projects.
+Default project is used if none is explicitly selected.
+"""
+
+mcp = FastMCP("Research Knowledge Agent", instructions=RKA_INSTRUCTIONS)
 API_URL = os.environ.get("RKA_API_URL", "http://localhost:9712")
 
 
@@ -29,6 +61,9 @@ class MCPSessionState:
     tool_calls: int = 0
     session_start: str = field(
         default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    )
+    project_id: str | None = field(
+        default_factory=lambda: os.environ.get("RKA_PROJECT") or None
     )
     entities_created: list[dict[str, str]] = field(default_factory=list)
     decisions_made: list[str] = field(default_factory=list)
@@ -72,7 +107,10 @@ def tool():
 
 
 def _client() -> httpx.AsyncClient:
-    return httpx.AsyncClient(base_url=API_URL, timeout=30.0)
+    headers = {}
+    if _session.project_id:
+        headers["X-RKA-Project"] = _session.project_id
+    return httpx.AsyncClient(base_url=API_URL, timeout=30.0, headers=headers)
 
 
 def _raise_with_detail(r: httpx.Response) -> None:
@@ -758,6 +796,63 @@ async def rka_get_journal(
         for e in entries:
             lines.append(f"{e['id']} [{e['type']}] ({e['confidence']}) {e['content'][:120]}")
         return "\n".join(lines)
+
+
+# ============================================================
+# Project Selection
+# ============================================================
+
+@tool()
+async def rka_list_projects() -> str:
+    """List all available projects. Shows which project is currently active."""
+    async with _client() as c:
+        r = await c.get("/api/projects")
+        _raise_with_detail(r)
+        projects = r.json()
+
+    active = _session.project_id or "proj_default"
+    lines = ["## Projects", ""]
+    for p in projects:
+        marker = " (active)" if p["id"] == active else ""
+        desc = f" — {p['description']}" if p.get("description") else ""
+        lines.append(f"- **{p['id']}**: {p['name']}{desc}{marker}")
+    if not projects:
+        lines.append("No projects found.")
+    return "\n".join(lines)
+
+
+@tool()
+async def rka_set_project(project_id: str) -> str:
+    """Switch the active project for this MCP session.
+
+    All subsequent tool calls will operate on the selected project.
+
+    Args:
+        project_id: Project ID to switch to (e.g. "proj_default", "proj_my_study")
+    """
+    # Validate project exists
+    async with _client() as c:
+        r = await c.get("/api/projects")
+        _raise_with_detail(r)
+        projects = r.json()
+
+    valid_ids = {p["id"] for p in projects}
+    if project_id not in valid_ids:
+        available = ", ".join(sorted(valid_ids))
+        return f"Project '{project_id}' not found. Available: {available}"
+
+    _session.project_id = project_id
+
+    # Fetch project status to confirm
+    async with _client() as c:
+        status_r = await c.get("/api/status")
+        if status_r.is_success:
+            status = status_r.json()
+            name = status.get("project_name", project_id)
+            phase = status.get("current_phase", "not set")
+            return f"Switched to project **{name}** (`{project_id}`). Phase: {phase}"
+
+    return f"Switched to project `{project_id}`."
 
 
 # ============================================================
@@ -1778,6 +1873,7 @@ async def rka_session_digest() -> str:
 
     lines = [
         "## Session Digest",
+        f"Active project: {session.project_id or 'proj_default (implicit)'}",
         f"Tool calls: {session.tool_calls}",
         f"Session started: {session.session_start}",
     ]
@@ -1828,10 +1924,15 @@ async def rka_session_digest() -> str:
 
 @tool()
 async def rka_reset_session() -> str:
-    """Reset MCP session tracking state without restarting the MCP server."""
+    """Reset MCP session tracking state without restarting the MCP server.
+
+    Preserves the active project selection.
+    """
     global _session
+    prev_project = _session.project_id
     _session = MCPSessionState()
-    return "Session state reset. Output verbosity and digest history cleared."
+    _session.project_id = prev_project
+    return f"Session state reset. Output verbosity and digest history cleared. Active project: {prev_project or 'proj_default (implicit)'}"
 
 
 # ============================================================
@@ -1863,9 +1964,10 @@ The **PI** (human researcher) supervises both of you.
 
 Always begin a session by loading context:
 
-1. `rka_get_context()` — full project state (phase, open missions, recent notes, decisions)
-2. `rka_get_status()` — current phase, focus, next steps
-3. `rka_get_checkpoints(status="open")` — check for unresolved Executor blockers
+1. If working with multiple projects, use `rka_list_projects()` to see available projects and `rka_set_project(id)` to select the right one. Skip if only one project exists or if the correct project is already active.
+2. `rka_get_context()` — full project state (phase, open missions, recent notes, decisions)
+3. `rka_get_status()` — current phase, focus, next steps
+4. `rka_get_checkpoints(status="open")` — check for unresolved Executor blockers
 
 If there are open checkpoints, resolve them before continuing new work.
 
@@ -1941,10 +2043,11 @@ The **PI** (human researcher) supervises both.
 
 ## Session Start Protocol
 
-1. `rka_get_context()` — load current project state
-2. `rka_get_mission()` — finds the active or most recent pending mission automatically
-3. If a pending mission is found, call `rka_update_mission_status(id, "active")` to claim it
-4. Read the mission's `objective` and `tasks` list carefully before starting
+1. If working with multiple projects, use `rka_list_projects()` to see available projects and `rka_set_project(id)` to select the right one. Skip if only one project exists or if the correct project is already active.
+2. `rka_get_context()` — load current project state
+3. `rka_get_mission()` — finds the active or most recent pending mission automatically
+4. If a pending mission is found, call `rka_update_mission_status(id, "active")` to claim it
+5. Read the mission's `objective` and `tasks` list carefully before starting
 
 If no mission exists, ask the Brain or PI for direction before starting.
 
