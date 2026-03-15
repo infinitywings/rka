@@ -13,8 +13,12 @@ import {
   Telescope,
   Settings,
   Plus,
+  Sun,
+  Moon,
+  Monitor,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { useTheme } from "@/hooks/useTheme"
 import { useProjectStatus, useProjects, useCreateProject } from "@/hooks/useProject"
 import { useProjectSelection } from "@/hooks/useProjectSelection"
 import {
@@ -148,7 +152,8 @@ export function Sidebar() {
       </nav>
 
       {/* Footer */}
-      <div className="border-t p-3">
+      <div className="border-t p-3 space-y-2">
+        <ThemeToggle />
         <p className="text-[10px] text-muted-foreground text-center">
           Research Knowledge Agent
         </p>
@@ -196,5 +201,35 @@ export function Sidebar() {
         </DialogContent>
       </Dialog>
     </aside>
+  )
+}
+
+function ThemeToggle() {
+  const { theme, setTheme } = useTheme()
+  const options = [
+    { value: "light" as const, icon: Sun, label: "Light" },
+    { value: "dark" as const, icon: Moon, label: "Dark" },
+    { value: "system" as const, icon: Monitor, label: "System" },
+  ]
+
+  return (
+    <div className="flex items-center justify-center gap-1 rounded-md bg-muted p-0.5">
+      {options.map(({ value, icon: Icon, label }) => (
+        <button
+          key={value}
+          onClick={() => setTheme(value)}
+          title={label}
+          className={cn(
+            "flex-1 flex items-center justify-center gap-1 rounded px-2 py-1 text-[10px] transition-colors",
+            theme === value
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <Icon className="h-3 w-3" />
+          {label}
+        </button>
+      ))}
+    </div>
   )
 }

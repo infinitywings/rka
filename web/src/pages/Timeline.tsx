@@ -11,6 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { ChevronDown, ChevronUp } from "lucide-react"
 
 const EVENT_TYPE_COLORS: Record<string, string> = {
   decision_created: "bg-blue-100 text-blue-800",
@@ -155,66 +156,86 @@ export default function Timeline() {
                 {formatDate(dateKey + "T00:00:00Z")}
               </h2>
               <div className="relative ml-4 border-l-2 border-muted space-y-3 pl-6">
-                {dayEvents.map((ev) => {
-                  const colorClass = EVENT_TYPE_COLORS[ev.event_type] ?? "bg-gray-100 text-gray-800"
-                  const actorIcon = ACTOR_ICONS[ev.actor] ?? "📌"
-                  const hasChildren = causalMap.has(ev.id)
-                  const hasCause = !!ev.caused_by_event
-
-                  return (
-                    <div key={ev.id} className="relative">
-                      {/* Timeline dot */}
-                      <div className="absolute -left-[31px] top-2 h-3 w-3 rounded-full border-2 border-background bg-primary" />
-
-                      <Card className={hasChildren ? "border-l-4 border-l-primary/30" : ""}>
-                        <CardContent className="py-3 px-4">
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <span className="text-lg" title={ev.actor}>
-                                  {actorIcon}
-                                </span>
-                                <Badge variant="outline" className={colorClass}>
-                                  {ev.event_type.replace(/_/g, " ")}
-                                </Badge>
-                                <Badge variant="secondary" className="text-xs">
-                                  {ev.entity_type}
-                                </Badge>
-                                {ev.phase && (
-                                  <Badge variant="outline" className="text-xs">
-                                    {ev.phase}
-                                  </Badge>
-                                )}
-                              </div>
-                              <p className="mt-1 text-sm">{ev.summary}</p>
-                              {hasCause && (
-                                <p className="mt-1 text-xs text-muted-foreground">
-                                  ↳ Caused by: {ev.caused_by_entity || ev.caused_by_event}
-                                </p>
-                              )}
-                              {hasChildren && (
-                                <p className="mt-1 text-xs text-blue-600">
-                                  → Triggered {causalMap.get(ev.id)!.length} follow-up event(s)
-                                </p>
-                              )}
-                            </div>
-                            <div className="text-xs text-muted-foreground whitespace-nowrap">
-                              {formatTime(ev.timestamp)}
-                            </div>
-                          </div>
-                          <div className="mt-1 text-xs text-muted-foreground font-mono">
-                            {ev.entity_id}
-                          </div>
-                        </CardContent>
-                      </Card>
-                    </div>
-                  )
-                })}
+                {dayEvents.map((ev) => (
+                  <TimelineCard key={ev.id} event={ev} causalMap={causalMap} />
+                ))}
               </div>
             </div>
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+function TimelineCard({ event: ev, causalMap }: { event: Event; causalMap: Map<string, string[]> }) {
+  const [expanded, setExpanded] = useState(false)
+  const colorClass = EVENT_TYPE_COLORS[ev.event_type] ?? "bg-gray-100 text-gray-800"
+  const actorIcon = ACTOR_ICONS[ev.actor] ?? "📌"
+  const hasChildren = causalMap.has(ev.id)
+  const hasCause = !!ev.caused_by_event
+  const isLong = (ev.summary?.length ?? 0) > 100
+
+  return (
+    <div className="relative">
+      {/* Timeline dot */}
+      <div className="absolute -left-[31px] top-2 h-3 w-3 rounded-full border-2 border-background bg-primary" />
+
+      <Card
+        className={`cursor-pointer transition-colors hover:bg-muted/50 ${hasChildren ? "border-l-4 border-l-primary/30" : ""} ${expanded ? "ring-1 ring-primary/20" : ""}`}
+        onClick={() => setExpanded(!expanded)}
+      >
+        <CardContent className="py-3 px-4">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-lg" title={ev.actor}>
+                  {actorIcon}
+                </span>
+                <Badge variant="outline" className={colorClass}>
+                  {ev.event_type.replace(/_/g, " ")}
+                </Badge>
+                <Badge variant="secondary" className="text-xs">
+                  {ev.entity_type}
+                </Badge>
+                {ev.phase && (
+                  <Badge variant="outline" className="text-xs">
+                    {ev.phase}
+                  </Badge>
+                )}
+                {isLong && (
+                  expanded
+                    ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
+                    : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                )}
+              </div>
+              <p className={`mt-1 text-sm whitespace-pre-wrap ${expanded ? "" : "line-clamp-2"}`}>
+                {ev.summary}
+              </p>
+              {expanded && (
+                <>
+                  {hasCause && (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      ↳ Caused by: {ev.caused_by_entity || ev.caused_by_event}
+                    </p>
+                  )}
+                  {hasChildren && (
+                    <p className="mt-1 text-xs text-blue-600">
+                      → Triggered {causalMap.get(ev.id)!.length} follow-up event(s)
+                    </p>
+                  )}
+                  <p className="mt-2 text-xs text-muted-foreground font-mono">
+                    {ev.entity_id}
+                  </p>
+                </>
+              )}
+            </div>
+            <div className="text-xs text-muted-foreground whitespace-nowrap">
+              {formatTime(ev.timestamp)}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }

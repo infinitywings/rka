@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { Toaster } from "@/components/ui/sonner"
 import { AppLayout } from "@/components/layout/AppLayout"
 import { ProjectSelectionProvider } from "@/hooks/useProjectSelection"
+import { ThemeProvider } from "@/hooks/useTheme"
 
 // Pages
 import Dashboard from "@/pages/Dashboard"
@@ -30,6 +31,7 @@ const queryClient = new QueryClient({
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
+      <ThemeProvider>
       <ProjectSelectionProvider>
         <BrowserRouter>
           <Routes>
@@ -49,6 +51,7 @@ export default function App() {
           </Routes>
         </BrowserRouter>
       </ProjectSelectionProvider>
+      </ThemeProvider>
       <Toaster position="bottom-right" richColors />
     </QueryClientProvider>
   )

@@ -23,8 +23,8 @@ import { ConfidenceBadge } from "@/components/shared/ConfidenceBadge"
 import { TagList } from "@/components/shared/TagList"
 import { useNotes, useCreateNote } from "@/hooks/useNotes"
 import { timeAgo } from "@/lib/utils"
-import { Plus, Filter } from "lucide-react"
-import type { JournalEntryCreate, JournalType, Confidence, Source } from "@/api/types"
+import { Plus, Filter, ChevronDown, ChevronUp } from "lucide-react"
+import type { JournalEntry, JournalEntryCreate, JournalType, Confidence, Source } from "@/api/types"
 
 const TYPES: JournalType[] = [
   "finding", "insight", "pi_instruction", "exploration",
@@ -117,31 +117,7 @@ export default function Journal() {
               </h3>
               <div className="space-y-2 ml-4 border-l-2 border-border pl-4">
                 {entries.map((entry) => (
-                  <Card key={entry.id} className="relative">
-                    {/* Timeline dot */}
-                    <div className="absolute -left-[25px] top-4 h-2.5 w-2.5 rounded-full border-2 border-primary bg-background" />
-                    <CardContent className="py-3 px-4">
-                      <div className="flex items-center gap-2 mb-1.5">
-                        <StatusBadge status={entry.type} />
-                        <ConfidenceBadge confidence={entry.confidence} />
-                        <span className="text-[10px] text-muted-foreground">
-                          via {entry.source}
-                        </span>
-                        {entry.created_at && (
-                          <span className="text-[10px] text-muted-foreground ml-auto">
-                            {timeAgo(entry.created_at)}
-                          </span>
-                        )}
-                      </div>
-                      {entry.summary && (
-                        <p className="text-sm font-medium mb-1">{entry.summary}</p>
-                      )}
-                      <p className="text-sm text-muted-foreground line-clamp-3">
-                        {entry.content}
-                      </p>
-                      <TagList tags={entry.tags} />
-                    </CardContent>
-                  </Card>
+                  <JournalCard key={entry.id} entry={entry} />
                 ))}
               </div>
             </div>
@@ -149,6 +125,50 @@ export default function Journal() {
         </div>
       )}
     </div>
+  )
+}
+
+function JournalCard({ entry }: { entry: JournalEntry }) {
+  const [expanded, setExpanded] = useState(false)
+  const isLong = entry.content.length > 200
+
+  return (
+    <Card
+      className={`relative cursor-pointer transition-colors hover:bg-muted/50 ${expanded ? "ring-1 ring-primary/20" : ""}`}
+      onClick={() => setExpanded(!expanded)}
+    >
+      {/* Timeline dot */}
+      <div className="absolute -left-[25px] top-4 h-2.5 w-2.5 rounded-full border-2 border-primary bg-background" />
+      <CardContent className="py-3 px-4">
+        <div className="flex items-center gap-2 mb-1.5">
+          <StatusBadge status={entry.type} />
+          <ConfidenceBadge confidence={entry.confidence} />
+          <span className="text-[10px] text-muted-foreground">
+            via {entry.source}
+          </span>
+          {entry.created_at && (
+            <span className="text-[10px] text-muted-foreground ml-auto">
+              {timeAgo(entry.created_at)}
+            </span>
+          )}
+          {isLong && (
+            expanded
+              ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
+              : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+          )}
+        </div>
+        {entry.summary && (
+          <p className="text-sm font-medium mb-1">{entry.summary}</p>
+        )}
+        <p className={`text-sm text-muted-foreground whitespace-pre-wrap ${expanded ? "" : "line-clamp-3"}`}>
+          {entry.content}
+        </p>
+        {expanded && entry.id && (
+          <p className="mt-2 text-xs text-muted-foreground font-mono">{entry.id}</p>
+        )}
+        <TagList tags={entry.tags} />
+      </CardContent>
+    </Card>
   )
 }
 
