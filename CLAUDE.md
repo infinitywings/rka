@@ -23,50 +23,44 @@ When working here you are modifying the tool itself, not using it for research.
 - **MCP tools**: all prefixed `rka_`, defined in `server.py` via `@mcp.tool()`
 - **MCP prompts**: defined at end of `server.py` via `@mcp.prompt()`
 - **API routes**: thin adapters only — no business logic, always delegate to service layer
-- **Tests**: `tests/` using pytest; run with `.venv/bin/pytest`
+- **Tests**: `tests/` using pytest; run with `docker compose exec rka pytest`
 
-## Running Locally
+## Running (Docker only)
 
 ```bash
-# Start REST API + web dashboard (port 9712)
-.venv/bin/rka serve
+# Start all services (API + web dashboard + background worker)
+docker compose up -d
 
-# MCP stdio server (used by Claude Desktop / Claude Code)
-.venv/bin/rka mcp
+# View logs
+docker compose logs -f rka
+
+# Rebuild after code changes
+docker compose up -d --build
 
 # Run tests
-.venv/bin/pytest
+docker compose exec rka pytest
 
-# Rebuild web UI after frontend changes
-cd web && npm run build
+# Rebuild web UI after frontend changes (done automatically during docker build)
+# For local iteration: cd web && npm run build, then rebuild container
 ```
 
 ## After Frontend Changes
 
-Always rebuild before testing: `cd web && npm run build`
-The FastAPI server serves `web/dist/` as static files — changes are not live-reloaded.
-
-## Deployment
-
-### Docker (production)
-
+The web UI is built during `docker build`. To apply frontend changes:
 ```bash
-docker compose up -d
-# MCP config for Claude Desktop:
-# "rka": { "command": "docker", "args": ["exec", "-i", "rka-server", "rka", "mcp"] }
+docker compose up -d --build
 ```
 
-### pipx (development)
+## MCP Configuration
 
-The CLI registered in Claude Desktop/Code must NOT be the venv binary from `Desktop/`:
-macOS sandbox blocks Desktop-resident apps from reading `.venv/pyvenv.cfg`.
-Use the **pipx-installed binary** instead:
+The MCP binary is installed via pipx (outside the Docker container) because
+Claude Desktop/Code needs a local stdio process. It proxies all calls to the
+Docker container's REST API.
 
 ```bash
 # Install / re-install after code changes:
 pipx install . --force        # from repo root
 # Binary lands at: ~/.local/bin/rka
-# Venv at: ~/.local/pipx/venvs/rka/  (outside Desktop — no sandbox block)
 ```
 
 `~/Library/Application Support/Claude/claude_desktop_config.json`:
@@ -74,10 +68,15 @@ pipx install . --force        # from repo root
 "rka": { "command": "/Users/cfu6/.local/bin/rka", "args": ["mcp"] }
 ```
 
+After code changes to `rka/mcp/server.py` or other source files:
+1. `pipx install . --force` — update the MCP binary
+2. `docker compose up -d --build` — update the API server + worker
+
 ## Common Pitfalls
 
 - `actor="import"` is not a valid actor — use `actor="system"` for programmatic ingestion
 - The MCP server is stateless; it proxies all calls to the REST API at `RKA_API_URL` (default: `http://localhost:9712`)
 - `web/` previously had a nested `.git` — do not re-introduce submodule state there
 - Large files (>10 MB) use fast composite hashing; text files are capped at 200K chars in scan
-- After any code change to `rka/mcp/server.py` or other source files, run `pipx install . --force` to update the Claude Desktop/Code binary
+- The database lives in the Docker volume `rka-data` at `/data/rka.db` — do not use a local `rka.db`
+- There is no local `.venv` — all server/worker processes run in Docker
