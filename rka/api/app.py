@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from rka import __version__
 from rka.api.routes import (
     academic as academic_routes,
     artifacts as artifact_routes,
@@ -153,7 +154,7 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
     app = FastAPI(
         title="Research Knowledge Agent",
         description="REST API for AI-assisted research orchestration",
-        version="1.5.0",
+        version=__version__,
         lifespan=lifespan,
     )
     app.state.config = effective_config
@@ -218,7 +219,7 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
 
         return {
             "status": "ok",
-            "version": "1.5.0",
+            "version": __version__,
             "vec_available": db.vec_available,
             "llm_status": llm_status,
             "llm_model": config.llm_model if llm else None,

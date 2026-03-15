@@ -7,9 +7,11 @@ from pathlib import Path
 
 import click
 
+from rka import __version__
+
 
 @click.group()
-@click.version_option(version="1.6.0")
+@click.version_option(version=__version__)
 def main():
     """Research Knowledge Agent — AI-assisted research orchestration."""
     pass
