@@ -828,31 +828,42 @@ async def rka_set_project(project_id: str) -> str:
     All subsequent tool calls will operate on the selected project.
 
     Args:
-        project_id: Project ID to switch to (e.g. "proj_default", "proj_my_study")
+        project_id: Project ID or name to switch to (e.g. "prj_01KK...", "rka_development")
     """
-    # Validate project exists
+    # Validate project exists — accept ID or name
     async with _client() as c:
         r = await c.get("/api/projects")
         _raise_with_detail(r)
         projects = r.json()
 
-    valid_ids = {p["id"] for p in projects}
-    if project_id not in valid_ids:
-        available = ", ".join(sorted(valid_ids))
-        return f"Project '{project_id}' not found. Available: {available}"
+    # Try exact ID match first, then name match
+    resolved_id = None
+    for p in projects:
+        if p["id"] == project_id:
+            resolved_id = p["id"]
+            break
+    if resolved_id is None:
+        for p in projects:
+            if p["name"].lower() == project_id.lower():
+                resolved_id = p["id"]
+                break
 
-    _session.project_id = project_id
+    if resolved_id is None:
+        available = "\n".join(f"  - `{p['id']}`: {p['name']}" for p in projects)
+        return f"Project '{project_id}' not found. Available:\n{available}"
+
+    _session.project_id = resolved_id
 
     # Fetch project status to confirm
     async with _client() as c:
         status_r = await c.get("/api/status")
         if status_r.is_success:
             status = status_r.json()
-            name = status.get("project_name", project_id)
+            name = status.get("project_name", resolved_id)
             phase = status.get("current_phase", "not set")
-            return f"Switched to project **{name}** (`{project_id}`). Phase: {phase}"
+            return f"Switched to project **{name}** (`{resolved_id}`). Phase: {phase}"
 
-    return f"Switched to project `{project_id}`."
+    return f"Switched to project `{resolved_id}`."
 
 
 @tool()
