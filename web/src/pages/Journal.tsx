@@ -26,10 +26,7 @@ import { timeAgo } from "@/lib/utils"
 import { Plus, Filter, ChevronDown, ChevronUp } from "lucide-react"
 import type { JournalEntry, JournalEntryCreate, JournalType, Confidence, Source } from "@/api/types"
 
-const TYPES: JournalType[] = [
-  "finding", "insight", "pi_instruction", "exploration",
-  "idea", "observation", "hypothesis", "methodology", "summary",
-]
+const TYPES: JournalType[] = ["note", "log", "directive"]
 const CONFIDENCES: Confidence[] = ["hypothesis", "tested", "verified"]
 const SOURCES: Source[] = ["pi", "brain", "executor", "web_ui"]
 
@@ -177,7 +174,7 @@ function CreateNoteDialog() {
   const createNote = useCreateNote()
   const [form, setForm] = useState<JournalEntryCreate>({
     content: "",
-    type: "finding",
+    type: "note",
     source: "web_ui",
     confidence: "hypothesis",
   })
@@ -187,7 +184,7 @@ function CreateNoteDialog() {
     if (!form.content.trim()) return
     await createNote.mutateAsync(form)
     setOpen(false)
-    setForm({ content: "", type: "finding", source: "web_ui", confidence: "hypothesis" })
+    setForm({ content: "", type: "note", source: "web_ui", confidence: "hypothesis" })
   }
 
   return (

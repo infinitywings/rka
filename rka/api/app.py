@@ -32,6 +32,11 @@ from rka.api.routes import (
     summary as summary_routes,
     tags as tags_routes,
     workspace as workspace_routes,
+    claims as claims_routes,
+    clusters as clusters_routes,
+    topics as topics_routes,
+    research_map as research_map_routes,
+    review_queue as review_queue_routes,
 )
 from rka.config import RKAConfig
 from rka.infra.database import Database
@@ -206,6 +211,11 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
     app.include_router(summary_routes.router, prefix="/api", tags=["summary"])
     app.include_router(artifact_routes.router, prefix="/api", tags=["artifacts"])
     app.include_router(llm_routes.router, prefix="/api", tags=["llm"])
+    app.include_router(claims_routes.router, prefix="/api", tags=["claims"])
+    app.include_router(clusters_routes.router, prefix="/api", tags=["clusters"])
+    app.include_router(topics_routes.router, prefix="/api", tags=["topics"])
+    app.include_router(research_map_routes.router, prefix="/api", tags=["research-map"])
+    app.include_router(review_queue_routes.router, prefix="/api", tags=["review-queue"])
 
     @app.get("/api/health")
     async def health(request: Request):

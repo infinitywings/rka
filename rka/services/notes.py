@@ -66,14 +66,15 @@ class NoteService(BaseService):
         await self.db.execute(
             """INSERT INTO journal
                (id, type, content, source, phase, related_decisions, related_literature,
-                related_mission, supersedes, confidence, importance, project_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                related_mission, supersedes, confidence, importance, status, pinned, project_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 entry_id, data.type, data.content, source, data.phase,
                 self._json_dumps(data.related_decisions),
                 self._json_dumps(data.related_literature),
                 data.related_mission, data.supersedes,
-                data.confidence, data.importance, self.project_id,
+                data.confidence, data.importance,
+                data.status, int(data.pinned), self.project_id,
             ],
         )
 
@@ -115,8 +116,24 @@ class NoteService(BaseService):
             include_embedding=bool(self.embeddings),
         )
 
+        # Enqueue claim extraction job (v2.0 distillation pipeline)
+        if self.llm:
+            queue = JobQueue(self.db)
+            await queue.enqueue(
+                "note_extract_claims",
+                project_id=self.project_id,
+                entity_type="journal",
+                entity_id=entry_id,
+                dedupe_key=self._job_dedupe_key(entry_id, "extract_claims"),
+                priority=120,
+            )
+
         # Determine event type based on journal type
         event_type_map = {
+            "note": "finding_recorded",
+            "log": "finding_recorded",
+            "directive": "pi_instruction",
+            # Legacy types (in case any slip through)
             "finding": "finding_recorded",
             "insight": "insight_recorded",
             "pi_instruction": "pi_instruction",
@@ -151,6 +168,7 @@ class NoteService(BaseService):
         confidence: str | None = None,
         importance: str | None = None,
         source: str | None = None,
+        status: str | None = None,
         since: str | None = None,
         hide_superseded: bool = True,
         limit: int = 50,
@@ -177,11 +195,14 @@ class NoteService(BaseService):
         if source:
             conditions.append("source = ?")
             params.append(source)
+        if status:
+            conditions.append("status = ?")
+            params.append(status)
         if since:
             conditions.append("created_at >= ?")
             params.append(since)
         if hide_superseded:
-            conditions.append("confidence != 'superseded'")
+            conditions.append("status != 'superseded'")
 
         where = " AND ".join(conditions) if conditions else "1=1"
         params.extend([limit, offset])
@@ -259,6 +280,8 @@ class NoteService(BaseService):
             superseded_by=row.get("superseded_by"),
             confidence=row["confidence"],
             importance=row["importance"],
+            status=row.get("status", "active"),
+            pinned=bool(row.get("pinned", 0)),
             tags=tags,
             enrichment_status=enrichment_status,
             created_at=row.get("created_at"),

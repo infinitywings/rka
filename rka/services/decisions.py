@@ -57,14 +57,17 @@ class DecisionService(BaseService):
         await self.db.execute(
             """INSERT INTO decisions
                (id, parent_id, phase, question, options, chosen, rationale,
-                decided_by, status, related_missions, related_literature, project_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                decided_by, status, related_missions, related_literature,
+                related_journal, kind, project_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 dec_id, data.parent_id, data.phase, data.question,
                 options_json, data.chosen, data.rationale,
                 data.decided_by, data.status,
                 self._json_dumps(data.related_missions),
                 self._json_dumps(data.related_literature),
+                self._json_dumps(data.related_journal),
+                data.kind,
                 self.project_id,
             ],
         )
@@ -74,6 +77,11 @@ class DecisionService(BaseService):
         has_user_tags = bool(data.tags)
         if has_user_tags:
             await self._set_tags("decision", dec_id, data.tags)
+
+        # Write entity_links for caller-provided related_journal (justified_by links)
+        if data.related_journal:
+            for jrn_id in data.related_journal:
+                await self.add_link("decision", dec_id, "justified_by", "journal", jrn_id, created_by=actor_val)
 
         # Sync cheap deterministic FTS now; LLM enrichment + embedding are queued
         await self._sync_fts("decision", dec_id, {
@@ -152,7 +160,7 @@ class DecisionService(BaseService):
         for field, value in dump.items():
             if field == "options":
                 updates[field] = json.dumps([o.model_dump() for o in value])
-            elif field in ("related_missions", "related_literature"):
+            elif field in ("related_missions", "related_literature", "related_journal"):
                 updates[field] = self._json_dumps(value)
             else:
                 updates[field] = value
@@ -202,6 +210,121 @@ class DecisionService(BaseService):
 
         await self.audit("update", "decision", dec_id, actor, {"fields": list(updates.keys())})
         return await self.get(dec_id)
+
+    async def supersede_decision(
+        self,
+        old_decision_id: str,
+        new_data: DecisionCreate,
+        actor: str = "brain",
+    ) -> Decision:
+        """Atomically supersede a decision and trigger re-distillation.
+
+        1. Mark old decision as superseded
+        2. Create new decision with incremented scope_version
+        3. Find journal entries linked to old decision
+        4. Mark claims from those entries as stale
+        5. Enqueue re_distill jobs for affected entries
+        """
+        old = await self.get(old_decision_id)
+        if old is None:
+            raise ValueError(f"Decision {old_decision_id} not found")
+
+        # Create new decision
+        new_decision = await self.create(new_data, actor=actor)
+
+        # Update new decision's scope_version
+        new_version = (old.scope_version or 1) + 1
+        await self.db.execute(
+            "UPDATE decisions SET scope_version = ? WHERE id = ? AND project_id = ?",
+            [new_version, new_decision.id, self.project_id],
+        )
+
+        # Mark old decision as superseded
+        await self.db.execute(
+            "UPDATE decisions SET status = 'superseded', superseded_by = ?, updated_at = ? WHERE id = ? AND project_id = ?",
+            [new_decision.id, _now(), old_decision_id, self.project_id],
+        )
+        await self.db.commit()
+
+        # Create supersedes entity link
+        await self.add_link(
+            "decision", new_decision.id, "supersedes", "decision", old_decision_id,
+            created_by=actor,
+        )
+
+        # Find journal entries linked to the old decision
+        linked_entries = await self.db.fetchall(
+            """SELECT source_id FROM entity_links
+               WHERE target_type = 'decision' AND target_id = ?
+                 AND link_type IN ('references', 'justified_by')""",
+            [old_decision_id],
+        )
+        # Also check related_decisions JSON field
+        json_linked = await self.db.fetchall(
+            "SELECT id FROM journal WHERE project_id = ? AND related_decisions LIKE ?",
+            [self.project_id, f'%{old_decision_id}%'],
+        )
+
+        affected_entry_ids = set()
+        for row in linked_entries:
+            affected_entry_ids.add(row["source_id"])
+        for row in json_linked:
+            affected_entry_ids.add(row["id"])
+
+        # Mark claims as stale and enqueue re-distillation
+        queue = JobQueue(self.db)
+        for entry_id in affected_entry_ids:
+            # Mark claims stale
+            await self.db.execute(
+                "UPDATE claims SET stale = 1, updated_at = ? WHERE source_entry_id = ? AND project_id = ?",
+                [_now(), entry_id, self.project_id],
+            )
+            # Mark clusters containing those claims as needs_reprocessing
+            await self.db.execute(
+                """UPDATE evidence_clusters SET needs_reprocessing = 1, updated_at = ?
+                   WHERE id IN (
+                       SELECT DISTINCT ce.cluster_id FROM claim_edges ce
+                       JOIN claims c ON ce.source_claim_id = c.id
+                       WHERE c.source_entry_id = ? AND ce.relation = 'member_of'
+                   ) AND project_id = ?""",
+                [_now(), entry_id, self.project_id],
+            )
+            # Enqueue re-distillation
+            await queue.enqueue(
+                "re_distill",
+                project_id=self.project_id,
+                entity_type="journal",
+                entity_id=entry_id,
+                dedupe_key=f"{self.project_id}:journal:{entry_id}:re_distill",
+                priority=115,
+            )
+        await self.db.commit()
+
+        await self.emit_event(
+            event_type="decision_superseded",
+            entity_type="decision",
+            entity_id=old_decision_id,
+            actor=actor,
+            summary=f"Decision superseded by {new_decision.id}: {new_data.question[:80]}",
+            details={"new_decision_id": new_decision.id, "affected_entries": len(affected_entry_ids)},
+        )
+
+        # Flag for review
+        if affected_entry_ids:
+            review_id = generate_id("review")
+            await self.db.execute(
+                """INSERT OR IGNORE INTO review_queue
+                   (id, item_type, item_id, flag, context, priority, project_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    review_id, "decision", new_decision.id, "re_distill_review",
+                    json.dumps({"old_decision_id": old_decision_id, "affected_entries": list(affected_entry_ids)}),
+                    60, self.project_id,
+                ],
+            )
+            await self.db.commit()
+
+        return await self.get(new_decision.id)
 
     async def get_tree(self, phase: str | None = None, active_only: bool = False) -> list[DecisionTreeNode]:
         """Build the decision tree as nested nodes."""
@@ -272,6 +395,10 @@ class DecisionService(BaseService):
             abandonment_reason=row.get("abandonment_reason"),
             related_missions=self._json_loads(row.get("related_missions")),
             related_literature=self._json_loads(row.get("related_literature")),
+            related_journal=self._json_loads(row.get("related_journal")),
+            superseded_by=row.get("superseded_by"),
+            scope_version=row.get("scope_version", 1),
+            kind=row.get("kind", "decision"),
             tags=tags,
             enrichment_status=enrichment_status,
             created_at=row.get("created_at"),

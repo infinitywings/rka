@@ -69,6 +69,8 @@ class GraphService:
             ("journal", "journal", "content", "confidence", True),
             ("literature", "literature", "title", "status", False),
             ("checkpoint", "checkpoints", "description", "status", False),
+            ("claim", "claims", "content", "claim_type", False),
+            ("cluster", "evidence_clusters", "label", "confidence", False),
         ]:
             if include_types and etype not in include_types:
                 continue
@@ -404,6 +406,8 @@ class GraphService:
             ("journal", "journal"),
             ("literature", "literature"),
             ("checkpoint", "checkpoints"),
+            ("claim", "claims"),
+            ("cluster", "evidence_clusters"),
         ]:
             row = await self.db.fetchone(
                 f"SELECT COUNT(*) as cnt FROM {table} WHERE {self._project_clause()}",
@@ -447,6 +451,8 @@ class GraphService:
             "journal": ("journal", "content", "confidence", True),
             "literature": ("literature", "title", "status", False),
             "checkpoint": ("checkpoints", "description", "status", False),
+            "claim": ("claims", "content", "claim_type", False),
+            "cluster": ("evidence_clusters", "label", "confidence", False),
         }
         for etype, ids in entity_ids.items():
             missing = [eid for eid in ids if eid not in nodes]
@@ -652,6 +658,10 @@ class GraphService:
             "qas": "qa_session",
             "qal": "qa_log",
             "lnk": "link",
+            "clm": "claim",
+            "ecl": "cluster",
+            "ced": "claim_edge",
+            "rev": "review",
         }
         prefix = entity_id.split("_")[0] if "_" in entity_id else ""
         return prefix_map.get(prefix, "unknown")

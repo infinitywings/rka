@@ -35,6 +35,8 @@ with a knowledge graph linking all entities.
 - **Literature**: `rka_add_literature`, `rka_update_literature`, `rka_get_literature`, `rka_enrich_doi`
 - **Missions**: `rka_create_mission`, `rka_get_mission`, `rka_update_mission_status`, `rka_submit_report`
 - **Checkpoints**: `rka_submit_checkpoint`, `rka_get_checkpoints`, `rka_resolve_checkpoint`
+- **Research Map**: `rka_get_research_map`, `rka_get_claims`, `rka_supersede_decision`, `rka_trace_provenance`
+- **Review Queue**: `rka_get_review_queue`, `rka_review_cluster`, `rka_review_claims`, `rka_resolve_contradiction`
 - **Search & Context**: `rka_search`, `rka_get_context`, `rka_ask`
 - **Graph**: `rka_get_graph`, `rka_get_ego_graph`, `rka_graph_stats`
 - **Academic**: `rka_search_semantic_scholar`, `rka_search_arxiv`, `rka_import_bibtex`
@@ -131,7 +133,7 @@ def _raise_with_detail(r: httpx.Response) -> None:
 @tool()
 async def rka_add_note(
     content: str,
-    type: str = "finding",
+    type: str = "note",
     source: str = "executor",
     phase: str | None = None,
     related_decisions: list[str] | None = None,
@@ -142,11 +144,11 @@ async def rka_add_note(
     importance: str = "normal",
     tags: list[str] | None = None,
 ) -> str:
-    """Add a research journal entry (finding, insight, idea, etc.).
+    """Add a research journal entry.
 
     Args:
         content: The note content
-        type: Entry type — finding | insight | pi_instruction | exploration | idea | observation | hypothesis | methodology | summary
+        type: Entry type — note | log | directive (legacy types like finding/insight/methodology are auto-mapped)
         source: Who created this — brain | executor | pi | llm | web_ui | system
         phase: Research phase (uses current if omitted)
         related_decisions: Decision IDs this note relates to
@@ -322,6 +324,8 @@ async def rka_add_decision(
     rationale: str | None = None,
     parent_id: str | None = None,
     related_literature: list[str] | None = None,
+    related_journal: list[str] | None = None,
+    kind: str = "decision",
 ) -> str:
     """Add a decision node to the research decision tree.
 
@@ -334,12 +338,15 @@ async def rka_add_decision(
         rationale: Why this was chosen
         parent_id: Parent decision ID for tree structure
         related_literature: Literature IDs informing this decision
+        related_journal: Journal entry IDs that justify this decision (creates justified_by links)
+        kind: research_question | design_choice | decision | operational
     """
     async with _client() as c:
         body = {
             "question": question, "phase": phase, "decided_by": decided_by,
             "options": options, "chosen": chosen, "rationale": rationale,
             "parent_id": parent_id, "related_literature": related_literature,
+            "related_journal": related_journal, "kind": kind,
         }
         r = await c.post("/api/decisions", json={k: v for k, v in body.items() if v is not None})
         _raise_with_detail(r)
@@ -355,6 +362,8 @@ async def rka_update_decision(
     chosen: str | None = None,
     rationale: str | None = None,
     abandonment_reason: str | None = None,
+    kind: str | None = None,
+    related_journal: list[str] | None = None,
 ) -> str:
     """Update a decision node.
 
@@ -364,11 +373,14 @@ async def rka_update_decision(
         chosen: Updated chosen option
         rationale: Updated rationale
         abandonment_reason: Why this branch was abandoned
+        kind: research_question | design_choice | decision | operational
+        related_journal: Journal entry IDs that justify this decision
     """
     async with _client() as c:
         body = {
             "status": status, "chosen": chosen, "rationale": rationale,
-            "abandonment_reason": abandonment_reason,
+            "abandonment_reason": abandonment_reason, "kind": kind,
+            "related_journal": related_journal,
         }
         r = await c.put(f"/api/decisions/{id}", json={k: v for k, v in body.items() if v is not None})
         _raise_with_detail(r)
@@ -389,6 +401,7 @@ async def rka_create_mission(
     scope_boundaries: str | None = None,
     checkpoint_triggers: str | None = None,
     depends_on: str | None = None,
+    motivated_by_decision: str | None = None,
     tags: list[str] | None = None,
 ) -> str:
     """Create a new mission for the Executor.
@@ -402,6 +415,7 @@ async def rka_create_mission(
         scope_boundaries: What NOT to do
         checkpoint_triggers: When to escalate
         depends_on: Mission ID this depends on
+        motivated_by_decision: Decision ID that triggered this mission (creates motivated link)
         tags: Optional explicit tags. Providing tags skips delayed auto-tag enrichment.
     """
     async with _client() as c:
@@ -413,6 +427,7 @@ async def rka_create_mission(
             "scope_boundaries": scope_boundaries,
             "checkpoint_triggers": checkpoint_triggers,
             "depends_on": depends_on,
+            "motivated_by_decision": motivated_by_decision,
             "tags": tags,
         }
         r = await c.post("/api/missions", json={k: v for k, v in body.items() if v is not None})
@@ -765,15 +780,17 @@ async def rka_get_journal(
     type: str | None = None,
     phase: str | None = None,
     confidence: str | None = None,
+    status: str | None = None,
     since: str | None = None,
     limit: int = 20,
 ) -> str:
     """Get journal entries.
 
     Args:
-        type: finding | insight | pi_instruction | exploration | idea | observation | hypothesis | methodology | summary
+        type: note | log | directive (legacy types like finding/insight also accepted)
         phase: Filter by phase
         confidence: hypothesis | tested | verified | superseded | retracted
+        status: draft | active | superseded | retracted
         since: ISO date to filter from
         limit: Max results
     """
@@ -785,6 +802,8 @@ async def rka_get_journal(
             params["phase"] = phase
         if confidence:
             params["confidence"] = confidence
+        if status:
+            params["status"] = status
         if since:
             params["since"] = since
         r = await c.get("/api/notes", params=params)
@@ -1972,6 +1991,335 @@ async def rka_reset_session() -> str:
     _session = MCPSessionState()
     _session.project_id = prev_project
     return f"Session state reset. Output verbosity and digest history cleared. Active project: {prev_project or 'proj_default (implicit)'}"
+
+
+# ============================================================
+# v2.0: Research Map, Claims, Provenance, Review Queue
+# ============================================================
+
+@tool()
+async def rka_get_research_map() -> str:
+    """Get the three-level research map: Research Questions → Evidence Clusters → Claims.
+
+    Returns a structured overview of all research questions with cluster counts,
+    confidence indicators, gap counts, and contradiction flags.
+    """
+    async with _client() as c:
+        r = await c.get("/api/research-map")
+        _raise_with_detail(r)
+    data = r.json()
+    lines = []
+    summary = data.get("summary", {})
+    lines.append(f"Research Map: {summary.get('total_rqs', 0)} RQs, "
+                 f"{summary.get('total_clusters', 0)} clusters, "
+                 f"{summary.get('total_claims', 0)} claims")
+    lines.append(f"Gaps: {summary.get('total_gaps', 0)} | "
+                 f"Contradictions: {summary.get('total_contradictions', 0)} | "
+                 f"Pending review: {summary.get('pending_review', 0)}")
+    lines.append("")
+    for rq in data.get("research_questions", []):
+        status_icon = "●" if rq.get("status") == "active" else "○"
+        lines.append(f"{status_icon} [{rq['id']}] {rq['question']}")
+        lines.append(f"  {rq.get('cluster_count', 0)} clusters, "
+                     f"{rq.get('total_claims', 0)} claims, "
+                     f"{rq.get('gap_count', 0)} gaps, "
+                     f"{rq.get('contradiction_count', 0)} contradictions")
+    unassigned = data.get("unassigned_clusters", [])
+    if unassigned:
+        lines.append(f"\nUnassigned clusters: {len(unassigned)}")
+        for uc in unassigned[:5]:
+            lines.append(f"  - [{uc['id']}] {uc['label']} ({uc.get('claim_count', 0)} claims)")
+    return "\n".join(lines)
+
+
+@tool()
+async def rka_get_claims(
+    source_entry_id: str | None = None,
+    cluster_id: str | None = None,
+    claim_type: str | None = None,
+    verified: bool | None = None,
+    stale: bool | None = None,
+    limit: int = 20,
+) -> str:
+    """Query claims with filters.
+
+    Args:
+        source_entry_id: Filter by source journal entry ID
+        cluster_id: Filter by evidence cluster ID
+        claim_type: Filter by type: hypothesis, evidence, method, result, observation, assumption
+        verified: Filter by verification status
+        stale: Filter by stale status (true = needs re-distillation)
+        limit: Max results (default 20)
+    """
+    params = {"limit": limit}
+    if source_entry_id:
+        params["source_entry_id"] = source_entry_id
+    if cluster_id:
+        params["cluster_id"] = cluster_id
+    if claim_type:
+        params["claim_type"] = claim_type
+    if verified is not None:
+        params["verified"] = verified
+    if stale is not None:
+        params["stale"] = stale
+    async with _client() as c:
+        r = await c.get("/api/claims", params=params)
+        _raise_with_detail(r)
+    claims = r.json()
+    if not claims:
+        return "No claims found matching filters."
+    lines = [f"Found {len(claims)} claims:"]
+    for cl in claims:
+        v = "✓" if cl.get("verified") else "○"
+        s = " [STALE]" if cl.get("stale") else ""
+        lines.append(
+            f"  {v} [{cl['id']}] ({cl['claim_type']}) "
+            f"conf={cl.get('confidence', '?'):.2f}{s}"
+        )
+        lines.append(f"    {cl['content'][:150]}")
+        lines.append(f"    source: {cl['source_entry_id']}")
+    return "\n".join(lines)
+
+
+@tool()
+async def rka_supersede_decision(
+    old_decision_id: str,
+    question: str,
+    chosen: str,
+    rationale: str,
+    decided_by: str = "brain",
+    phase: str = "",
+    kind: str = "decision",
+) -> str:
+    """Atomically supersede a decision and trigger re-distillation of affected knowledge.
+
+    Marks the old decision as superseded, creates a new replacement decision,
+    finds all journal entries linked to the old decision, marks their claims as stale,
+    and enqueues re-distillation jobs.
+
+    Args:
+        old_decision_id: ID of the decision to supersede
+        question: New decision question
+        chosen: New chosen option
+        rationale: Why the old decision is being overturned
+        decided_by: Actor making the decision (brain, executor, pi)
+        phase: Research phase
+        kind: Decision kind (decision, research_question, design_choice, operational)
+    """
+    payload = {
+        "old_decision_id": old_decision_id,
+        "new_decision": {
+            "question": question,
+            "chosen": chosen,
+            "rationale": rationale,
+            "decided_by": decided_by,
+            "phase": phase,
+            "kind": kind,
+        },
+    }
+    # Call the supersede endpoint via the decisions API
+    async with _client() as c:
+        r = await c.post(f"/api/decisions/{old_decision_id}/supersede", json=payload)
+        _raise_with_detail(r)
+    result = r.json()
+    _record_entity("decision", result.get("id", "?"), f"Supersedes {old_decision_id}: {question[:60]}")
+    return json.dumps(result, indent=2, default=str)
+
+
+@tool()
+async def rka_trace_provenance(
+    entity_id: str,
+    direction: str = "both",
+    max_depth: int = 4,
+) -> str:
+    """Trace the full reasoning chain behind any entity.
+
+    Follows typed entity links (informed_by, justified_by, motivated, produced,
+    derived_from, cites, references, supersedes) to show why something exists.
+
+    Args:
+        entity_id: The entity ID to trace from (any type: jrn_, dec_, clm_, etc.)
+        direction: upstream (what led to this), downstream (what this led to), or both
+        max_depth: Maximum hops to traverse (default 4)
+    """
+    async with _client() as c:
+        r = await c.get("/api/graph/ego", params={
+            "entity_id": entity_id, "depth": max_depth,
+        })
+        _raise_with_detail(r)
+    data = r.json()
+    nodes = {n["id"]: n for n in data.get("nodes", [])}
+    edges = data.get("edges", [])
+
+    lines = [f"Provenance for {entity_id}:"]
+
+    if direction in ("upstream", "both"):
+        lines.append("\n  Upstream (what led to this):")
+        for e in edges:
+            if e.get("target") == entity_id or (direction == "both" and entity_id in (e.get("source", ""), e.get("target", ""))):
+                src = nodes.get(e.get("source", ""), {})
+                lines.append(f"    ← {e.get('link_type', '?')} {e.get('source', '?')} [{src.get('type', '?')}] {src.get('label', '')[:80]}")
+
+    if direction in ("downstream", "both"):
+        lines.append("\n  Downstream (what this led to):")
+        for e in edges:
+            if e.get("source") == entity_id:
+                tgt = nodes.get(e.get("target", ""), {})
+                lines.append(f"    → {e.get('link_type', '?')} {e.get('target', '?')} [{tgt.get('type', '?')}] {tgt.get('label', '')[:80]}")
+
+    if len(lines) <= 3:
+        lines.append("  (no links found)")
+    return "\n".join(lines)
+
+
+@tool()
+async def rka_get_review_queue(
+    status: str = "pending",
+    limit: int = 20,
+) -> str:
+    """Get items in the Brain review queue.
+
+    The review queue contains items that need Brain-level attention:
+    low-confidence clusters, potential contradictions, complex syntheses,
+    re-distillation reviews, cross-topic links, and stale themes.
+
+    Args:
+        status: Filter by status (pending, acknowledged, resolved, dismissed)
+        limit: Max results
+    """
+    async with _client() as c:
+        r = await c.get("/api/review-queue", params={"status": status, "limit": limit})
+        _raise_with_detail(r)
+    items = r.json()
+    if not items:
+        return f"No {status} review items."
+    lines = [f"Review queue ({len(items)} {status} items):"]
+    for item in items:
+        lines.append(f"  [{item['id']}] {item['flag']} — {item['item_type']}:{item['item_id']}")
+        if item.get("context"):
+            ctx = item["context"] if isinstance(item["context"], str) else json.dumps(item["context"])
+            lines.append(f"    Context: {ctx[:200]}")
+        lines.append(f"    Priority: {item.get('priority', '?')} | Raised by: {item.get('raised_by', '?')}")
+    return "\n".join(lines)
+
+
+@tool()
+async def rka_review_cluster(
+    cluster_id: str,
+    confidence: str,
+    synthesis: str,
+    gaps: list[str] | None = None,
+    contradictions: list[str] | None = None,
+    resolve_queue_items: list[str] | None = None,
+) -> str:
+    """Brain reviews and enriches an evidence cluster.
+
+    The Brain evaluates a cluster's evidence and writes back a definitive
+    synthesis with proper confidence assessment. This replaces the local LLM's synthesis.
+
+    Args:
+        cluster_id: Evidence cluster to review
+        confidence: Brain's assessed confidence (strong, moderate, emerging, contested, refuted)
+        synthesis: Brain's written synthesis paragraph
+        gaps: Brain-identified evidence gaps
+        contradictions: Brain-confirmed contradictions
+        resolve_queue_items: Review queue item IDs to mark as resolved
+    """
+    # Update cluster
+    payload = {
+        "synthesis": synthesis,
+        "confidence": confidence,
+        "synthesized_by": "brain",
+        "needs_reprocessing": False,
+    }
+    async with _client() as c:
+        r = await c.put(f"/api/clusters/{cluster_id}", json=payload)
+        _raise_with_detail(r)
+
+        # Resolve review queue items
+        if resolve_queue_items:
+            for item_id in resolve_queue_items:
+                await c.put(f"/api/review-queue/{item_id}", json={
+                    "status": "resolved",
+                    "resolved_by": "brain",
+                    "resolution": f"Cluster {cluster_id} reviewed: {confidence}",
+                })
+
+    return f"Cluster {cluster_id} updated: confidence={confidence}, synthesized_by=brain"
+
+
+@tool()
+async def rka_review_claims(
+    claim_ids: list[str],
+    action: str = "approve",
+    confidence_override: float | None = None,
+) -> str:
+    """Brain reviews extracted claims — approve, adjust confidence, or reject.
+
+    Args:
+        claim_ids: List of claim IDs to review
+        action: approve (mark verified), reject (mark stale), adjust (set confidence)
+        confidence_override: New confidence value (0.0-1.0), used with action=adjust
+    """
+    results = []
+    async with _client() as c:
+        for cid in claim_ids:
+            if action == "approve":
+                payload = {"verified": True}
+            elif action == "reject":
+                payload = {"stale": True, "verified": False}
+            elif action == "adjust" and confidence_override is not None:
+                payload = {"confidence": confidence_override}
+            else:
+                results.append(f"{cid}: invalid action")
+                continue
+            r = await c.put(f"/api/claims/{cid}", json=payload)
+            if r.is_success:
+                results.append(f"{cid}: {action}d")
+            else:
+                results.append(f"{cid}: failed ({r.status_code})")
+    return "\n".join(results)
+
+
+@tool()
+async def rka_resolve_contradiction(
+    cluster_id: str,
+    resolution: str,
+    claim_actions: dict[str, str] | None = None,
+) -> str:
+    """Brain resolves a flagged contradiction within an evidence cluster.
+
+    Args:
+        cluster_id: The cluster containing the contradiction
+        resolution: Brain's explanation of how the contradiction is resolved
+        claim_actions: Dict of claim_id → action (keep, reject, reframe). Optional.
+    """
+    lines = [f"Resolving contradiction in cluster {cluster_id}"]
+    async with _client() as c:
+        if claim_actions:
+            for cid, action in claim_actions.items():
+                if action == "reject":
+                    await c.put(f"/api/claims/{cid}", json={"stale": True})
+                    lines.append(f"  {cid}: marked stale")
+                elif action == "keep":
+                    lines.append(f"  {cid}: kept")
+                elif action == "reframe":
+                    lines.append(f"  {cid}: flagged for re-extraction")
+
+        # Resolve matching review queue items
+        r = await c.get("/api/review-queue", params={"status": "pending"})
+        if r.is_success:
+            for item in r.json():
+                if item.get("item_id") == cluster_id and item.get("flag") == "potential_contradiction":
+                    await c.put(f"/api/review-queue/{item['id']}", json={
+                        "status": "resolved",
+                        "resolved_by": "brain",
+                        "resolution": resolution,
+                    })
+                    lines.append(f"  Resolved review item {item['id']}")
+
+    lines.append(f"  Resolution: {resolution}")
+    return "\n".join(lines)
 
 
 # ============================================================

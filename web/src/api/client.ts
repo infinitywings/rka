@@ -332,6 +332,40 @@ export const api = {
   updateLLMConfig: (data: LLMConfigUpdate) => put<LLMStatus>("/llm/config", data),
   checkLLM: () => post<LLMStatus>("/llm/check"),
   getLLMModels: () => get<LLMModel[]>("/llm/models"),
+
+  // v2.0: Research Map
+  getResearchMap: () => {
+    return get<ResearchMapData>("/research-map")
+  },
+  getRQClusters: (rqId: string) => get<EvidenceClusterData[]>(`/research-map/rq/${rqId}`),
+  getClusterClaims: (clusterId: string) => get<ClaimData[]>(`/research-map/cluster/${clusterId}/claims`),
+
+  // v2.0: Claims
+  listClaims: (params?: { source_entry_id?: string; cluster_id?: string; claim_type?: string; limit?: number }) => {
+    const search = new URLSearchParams()
+    if (params?.source_entry_id) search.set("source_entry_id", params.source_entry_id)
+    if (params?.cluster_id) search.set("cluster_id", params.cluster_id)
+    if (params?.claim_type) search.set("claim_type", params.claim_type)
+    if (params?.limit) search.set("limit", String(params.limit))
+    const qs = search.toString()
+    return get<ClaimData[]>(`/claims${qs ? `?${qs}` : ""}`)
+  },
+
+  // v2.0: Review Queue
+  getReviewQueue: (params?: { status?: string; limit?: number }) => {
+    const search = new URLSearchParams()
+    search.set("status", params?.status ?? "pending")
+    if (params?.limit) search.set("limit", String(params.limit))
+    const qs = search.toString()
+    return get<ReviewItemData[]>(`/review-queue${qs ? `?${qs}` : ""}`)
+  },
+  getReviewStats: () => get<Record<string, unknown>>("/review-queue/stats"),
 }
 
 export { ApiError }
+
+// v2.0 type aliases for API responses
+type ResearchMapData = import("./types").ResearchMapData
+type EvidenceClusterData = import("./types").EvidenceCluster
+type ClaimData = import("./types").Claim
+type ReviewItemData = import("./types").ReviewItem

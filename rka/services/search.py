@@ -66,6 +66,13 @@ class SearchService:
             "snippet_col": "objective",
             "join_alias": "m",
         },
+        "claim": {
+            "table": "fts_claims",
+            "source": "claims",
+            "title_expr": "'[' || c.claim_type || ']'",
+            "snippet_col": "content",
+            "join_alias": "c",
+        },
     }
 
     VEC_MAP = {
@@ -75,6 +82,7 @@ class SearchService:
         "mission": "vec_missions",
         "artifact": "vec_artifacts",
         "figure": "vec_artifacts",
+        "claim": "vec_claims",
     }
 
     SOURCE_MAP = {
@@ -84,6 +92,8 @@ class SearchService:
         "mission": "missions",
         "artifact": "artifacts",
         "figure": "figures",
+        "claim": "claims",
+        "cluster": "evidence_clusters",
     }
 
     def __init__(
@@ -114,7 +124,7 @@ class SearchService:
           - No FTS5 data → LIKE fallback
           - No sqlite-vec → keyword only
         """
-        types = entity_types or ["decision", "literature", "journal", "mission", "artifact", "figure"]
+        types = entity_types or ["decision", "literature", "journal", "mission", "artifact", "figure", "claim", "cluster"]
 
         # 1. FTS5 keyword search
         fts_results = await self._fts_search(query, types, limit * 2)
@@ -405,6 +415,30 @@ class SearchService:
                     )[:200],
                 ))
 
+        if "claim" in entity_types:
+            rows = await self.db.fetchall(
+                "SELECT * FROM claims WHERE project_id = ? AND content LIKE ? LIMIT ?",
+                [self.project_id, q, limit],
+            )
+            for row in rows:
+                results.append(SearchHit(
+                    entity_type="claim", entity_id=row["id"],
+                    title=f"[{row.get('claim_type', 'claim')}]",
+                    snippet=(row.get("content") or "")[:200],
+                ))
+
+        if "cluster" in entity_types:
+            rows = await self.db.fetchall(
+                "SELECT * FROM evidence_clusters WHERE project_id = ? AND (label LIKE ? OR synthesis LIKE ?) LIMIT ?",
+                [self.project_id, q, q, limit],
+            )
+            for row in rows:
+                results.append(SearchHit(
+                    entity_type="cluster", entity_id=row["id"],
+                    title=(row.get("label") or "")[:100],
+                    snippet=(row.get("synthesis") or "")[:200],
+                ))
+
         return results[:limit]
 
     @staticmethod
@@ -446,4 +480,8 @@ class SearchService:
                 claims=row.get("claims"),
             )
             return (row.get("caption") or f"Figure {row.get('id', '')}")[:100], text[:200]
+        elif etype == "claim":
+            return f"[{row.get('claim_type', 'claim')}]", (row.get("content") or "")[:200]
+        elif etype == "cluster":
+            return (row.get("label") or "")[:100], (row.get("synthesis") or "")[:200]
         return "", ""

@@ -22,6 +22,13 @@ _PREFIXES = {
     "qa_log": "qal",
     "keynode": "knd",
     "graphview": "gvw",
+    "claim": "clm",
+    "cluster": "ecl",
+    "claim_edge": "ced",
+    "topic": "top",
+    "entity_topic": "etp",
+    "context_snapshot": "ctx",
+    "review": "rev",
 }
 
 

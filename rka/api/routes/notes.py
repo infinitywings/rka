@@ -26,6 +26,7 @@ async def list_notes(
     confidence: str | None = None,
     importance: str | None = None,
     source: str | None = None,
+    status: str | None = None,
     since: str | None = None,
     hide_superseded: bool = True,
     limit: int = Query(50, le=200),
@@ -34,8 +35,9 @@ async def list_notes(
 ):
     return await svc.list(
         type=type, phase=phase, confidence=confidence,
-        importance=importance, source=source, since=since,
-        hide_superseded=hide_superseded, limit=limit, offset=offset,
+        importance=importance, source=source, status=status,
+        since=since, hide_superseded=hide_superseded,
+        limit=limit, offset=offset,
     )
 
 

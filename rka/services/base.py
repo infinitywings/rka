@@ -179,6 +179,7 @@ class BaseService:
         "decision": {"table": "fts_decisions", "columns": ["id", "question", "rationale"]},
         "literature": {"table": "fts_literature", "columns": ["id", "title", "abstract", "notes"]},
         "mission": {"table": "fts_missions", "columns": ["id", "objective", "context"]},
+        "claim": {"table": "fts_claims", "columns": ["id", "content"]},
     }
 
     async def _sync_fts(self, entity_type: str, entity_id: str, data: dict) -> None:
