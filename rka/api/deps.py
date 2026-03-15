@@ -31,6 +31,7 @@ from rka.services.clusters import ClusterService
 from rka.services.topics import TopicService
 from rka.services.research_map import ResearchMapService
 from rka.services.review_queue import ReviewQueueService
+from rka.services.onboarding import OnboardingService
 
 logger = logging.getLogger(__name__)
 
@@ -402,3 +403,10 @@ def get_scoped_review_queue_service(
     db: Database = Depends(get_db),
 ) -> ReviewQueueService:
     return ReviewQueueService(db, project_id=project_id)
+
+
+def get_scoped_onboarding_service(
+    project_id: str = Depends(require_project),
+    db: Database = Depends(get_db),
+) -> OnboardingService:
+    return OnboardingService(db, project_id=project_id)

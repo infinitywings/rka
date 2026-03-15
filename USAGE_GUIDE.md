@@ -1,4 +1,4 @@
-# RKA Usage Guide — Scenario-Based Walkthrough
+# RKA Usage Guide — Scenario-Based Walkthrough (v2.0)
 
 This guide supplements the [README](README.md) with end-to-end usage examples for common research scenarios. It is written around the RKA design philosophy: the PI supervises the project, the Brain handles synthesis and research direction, and the Executor handles implementation, ingestion, experimentation, and reporting. Each scenario shows how that collaboration is recorded in a persistent research memory rather than scattered across ephemeral chat sessions.
 
@@ -12,6 +12,8 @@ This guide supplements the [README](README.md) with end-to-end usage examples fo
 - [Scenario 1: Starting a New Research Project from Scratch](#scenario-1-starting-a-new-research-project-from-scratch)
 - [Scenario 2: Taking Over a Project with Existing Manuscript and Reviews](#scenario-2-taking-over-a-project-with-existing-manuscript-and-reviews)
 - [Scenario 3: Taking Over a Project with Scattered Ideas and Memos](#scenario-3-taking-over-a-project-with-scattered-ideas-and-memos)
+- [Scenario 4: Using the Research Map and Review Queue (v2.0)](#scenario-4-using-the-research-map-and-review-queue-v20)
+- [Generating a Project-Specific CLAUDE.md (v2.0)](#generating-a-project-specific-claudemd-v20)
 - [Batch Import Techniques](#batch-import-techniques)
 - [Academic Import Tools (Phase 5)](#academic-import-tools-phase-5)
 - [Workspace Bootstrap](#workspace-bootstrap)
@@ -26,27 +28,72 @@ This guide supplements the [README](README.md) with end-to-end usage examples fo
 Before starting any scenario:
 
 ```bash
-# 1. Make sure the server is running
-rka serve
+# 1. Start all services (API + web dashboard + background worker)
+docker compose up -d
 
-# 2. (Optional) Enable LLM enrichment for auto-tagging
+# 2. View logs
+docker compose logs -f rka
+
+# 3. (Optional) Enable LLM enrichment for auto-tagging
 #    Edit .env:
 #    RKA_LLM_ENABLED=true
 #    RKA_EMBEDDINGS_ENABLED=true
-#    Then restart: rka serve
+#    Then rebuild: docker compose up -d --build
 ```
 
 Ensure Claude Desktop and/or Claude Code have RKA configured as an MCP server (see [README — Quick Start](README.md#quick-start)).
 
+The MCP binary is installed via pipx outside Docker (since Claude Desktop/Code needs a local stdio process). After code changes to MCP or server files, reinstall and rebuild:
+
+```bash
+pipx install . --force          # update MCP binary
+docker compose up -d --build    # update API server + worker
+```
+
 Two operational constraints matter for current releases:
 
-1. In Docker, workspace bootstrap can only see folders mounted into the container. Add a bind mount for any host folder you want to scan.
+1. In Docker, workspace bootstrap can only see folders mounted into the container. Add a bind mount in `docker-compose.yml` for any host folder you want to scan.
 2. MCP tools keep lightweight per-session state for output compaction and session digests, but they still operate against the default server project. For strict multi-project workflows, use the REST API or web dashboard so `X-RKA-Project` is set correctly.
 
 For longer MCP sessions, two tools are useful:
 
 - `rka_session_digest()` compresses the current MCP session into a compact summary so the Brain or Executor does not need to retain earlier tool output manually.
 - `rka_reset_session()` clears the MCP session tracker when you are starting a new logical work session without restarting the MCP server.
+
+### Session Start Protocol
+
+**Brain (start of session):**
+
+```
+Brain → rka_get_status()                                    # project phase and metrics
+Brain → rka_get_context(topic="current work")               # relevant prior knowledge
+Brain → rka_get_review_queue()                              # clusters needing synthesis decisions
+Brain → rka_get_research_map()                              # RQs → clusters → claims overview
+```
+
+**Executor (start of session):**
+
+```
+Executor → rka_get_mission()                                # current assigned mission
+Executor → rka_get_context(topic="<mission topic>")         # relevant prior knowledge
+# Optional — check research map for awareness of active RQs
+Executor → rka_get_research_map()
+```
+
+### Recording Standards (v2.0)
+
+| Situation | Tool | Parameters |
+|-----------|------|------------|
+| Got a result / observation | `rka_add_note` | `type="note"`, `related_mission="<id>"` |
+| Ran a procedure step | `rka_add_note` | `type="log"`, `related_mission="<id>"` |
+| PI/Brain instruction | `rka_add_note` | `type="directive"` |
+| Hit a decision point | `rka_submit_checkpoint` | `blocking=True` |
+| Finished a mission | `rka_submit_report` | Include `related_decisions=[...]` |
+| Found a paper | `rka_add_literature` or `rka_enrich_doi` | |
+| Made a decision | `rka_add_decision` | Include `related_journal=[...]` |
+| Framed a research question | `rka_add_decision` | `kind="research_question"` |
+
+> **v2.0 type mapping**: The simplified type vocabulary is `note`, `log`, and `directive`. Old types (`finding`, `insight`, `observation`, `idea`, `hypothesis`, `exploration`, `summary`) are still accepted and mapped to `note`. Old type `methodology` maps to `log`. Old type `pi_instruction` maps to `directive`. Use the v2.0 types in new entries.
 
 ---
 
@@ -59,10 +106,16 @@ For longer MCP sessions, two tools are useful:
 In your terminal:
 
 ```bash
-mkdir ~/research/iot-ids-eval && cd ~/research/iot-ids-eval
-rka init "IoT Intrusion Detection Evaluation" \
-  --description "Comparative evaluation of ML-based IDS for IoT/CPS environments"
-rka serve
+# Create a new project via the web dashboard or REST API
+curl -sS -X POST http://localhost:9712/api/projects \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "IoT Intrusion Detection Evaluation",
+    "description": "Comparative evaluation of ML-based IDS for IoT/CPS environments"
+  }'
+
+# Or use the MCP tool from Brain:
+# rka_create_project(name="IoT Intrusion Detection Evaluation", ...)
 ```
 
 ### Step 2: Set the Research Phase and Initial Direction (Brain)
@@ -111,7 +164,31 @@ Brain → rka_add_decision(
 )
 ```
 
-### Step 4: Assign a Literature Survey Mission (Brain → Executor)
+### Step 4: Frame Research Questions (Brain)
+
+Use `rka_add_decision` with `kind="research_question"` to record the questions that will drive literature review and experiment design:
+
+```
+Brain → rka_add_decision(
+    question="Do MQTT-specific features outperform generic network features for IoT IDS?",
+    kind="research_question",
+    phase="literature_review",
+    decided_by="brain",
+    motivated_by_decision="dec_01ABC..."  # link RQ to the paradigm decision
+)
+→ returns dec_01RQ1...
+
+Brain → rka_add_decision(
+    question="Is real-traffic evaluation systematically missing from existing IDS benchmarks?",
+    kind="research_question",
+    phase="literature_review",
+    decided_by="brain",
+    motivated_by_decision="dec_01ABC..."
+)
+→ returns dec_01RQ2...
+```
+
+### Step 5: Assign a Literature Survey Mission (Brain → Executor)
 
 ```
 Brain → rka_create_mission(
@@ -129,11 +206,12 @@ Brain → rka_create_mission(
     acceptance_criteria="At least 15 papers cataloged with key findings extracted.
                         Comparison table ready for Brain review.",
     scope_boundaries="Do NOT start any implementation. Literature only.",
-    checkpoint_triggers="Raise a checkpoint if you find a very recent survey paper that might change our scope."
+    checkpoint_triggers="Raise a checkpoint if you find a very recent survey paper that might change our scope.",
+    motivated_by_decision="dec_01RQ2..."  # link mission to the RQ it addresses
 )
 ```
 
-### Step 5: Executor Picks Up and Works
+### Step 6: Executor Picks Up and Works
 
 Claude Code connects, retrieves the mission, and begins:
 
@@ -176,37 +254,39 @@ Executor → rka_add_literature(
 # ... repeat for each paper ...
 ```
 
-### Step 6: Executor Logs Insights Along the Way
+### Step 7: Executor Logs Observations Along the Way
 
 ```
 Executor → rka_add_note(
     content="Most papers use CICIDS2017 or NSL-KDD, but both are outdated
              (pre-2020 traffic patterns). Only 2 out of 12 papers tested on
              real IoT traffic. This is a clear gap we can exploit.",
-    type="insight",
+    type="note",  # result/observation
     source="executor",
     phase="literature_review",
     confidence="tested",
-    importance="high"
+    importance="high",
+    related_mission="msn_01XYZ..."  # always link to active mission
 )
 
 Executor → rka_add_note(
     content="Three papers mention MQTT-specific features (topic structure,
              QoS patterns) as more discriminative than generic network features.
              This supports focusing on MQTT-specific detection.",
-    type="finding",
+    type="note",  # result/observation — supports dec_01RQ1
     source="executor",
     confidence="hypothesis",
     importance="normal",
-    related_literature=["lit_01DEF...", "lit_01GHI...", "lit_01JKL..."]
+    related_literature=["lit_01DEF...", "lit_01GHI...", "lit_01JKL..."],
+    related_mission="msn_01XYZ..."
 )
 ```
 
-### Step 7: Executor Raises a Checkpoint When Needed
+### Step 8: Executor Raises a Checkpoint When Needed
 
 ```
 Executor → rka_submit_checkpoint(
-    mission_id="mis_01XYZ...",
+    mission_id="msn_01XYZ...",
     type="decision",
     description="Found a 2026 survey that already covers most of our planned scope.
                 Should we narrow focus to MQTT-specific detection to differentiate?",
@@ -223,7 +303,7 @@ Executor → rka_submit_checkpoint(
 )
 ```
 
-### Step 8: Brain Resolves and Directs Next Phase
+### Step 9: Brain Resolves and Directs Next Phase
 
 ```
 Brain → rka_resolve_checkpoint(
@@ -244,11 +324,11 @@ Brain → rka_update_status(
 )
 ```
 
-### Step 9: Executor Submits the Mission Report
+### Step 10: Executor Submits the Mission Report
 
 ```
 Executor → rka_submit_report(
-    mission_id="mis_01XYZ...",
+    mission_id="msn_01XYZ...",
     summary="Cataloged 14 papers from IEEE Xplore, ACM DL, and arXiv. Identified
              Random Forest, CNN, LSTM, Autoencoder, and GNN as the dominant
              approaches. The most common datasets were CICIDS2017, NSL-KDD, and
@@ -262,7 +342,8 @@ Executor → rka_submit_report(
                the same capture session, suggesting data leakage risk",
     questions="Should we collect our own MQTT traffic or use an existing IoT testbed?
                Which 3 IDS frameworks should we compare?",
-    recommended_next="Design the evaluation framework: select IDS tools, define metrics, plan traffic collection"
+    recommended_next="Design the evaluation framework: select IDS tools, define metrics, plan traffic collection",
+    related_decisions=["dec_01ABC...", "dec_01RQ2..."]  # link report to decisions it informs
 )
 ```
 
@@ -277,10 +358,13 @@ At this point your knowledge base has: 14+ literature entries, a growing decisio
 ### Step 1: Initialize and Set Phase
 
 ```bash
-mkdir ~/research/cps-anomaly && cd ~/research/cps-anomaly
-rka init "CPS Anomaly Detection" \
-  --description "Resumed project — ML anomaly detection for cyber-physical systems. R1 revision in progress."
-rka serve
+# Create the project
+curl -sS -X POST http://localhost:9712/api/projects \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "CPS Anomaly Detection",
+    "description": "Resumed project — ML anomaly detection for cyber-physical systems. R1 revision in progress."
+  }'
 ```
 
 ```
@@ -350,7 +434,8 @@ Brain → rka_create_mission(
         {"description": "Add all 32 papers with title, authors, year, venue", "status": "pending"},
         {"description": "For top-5 papers, add key_findings and relevance notes", "status": "pending"}
     ],
-    acceptance_criteria="All 32 references in RKA, top 5 with key findings"
+    acceptance_criteria="All 32 references in RKA, top 5 with key findings",
+    motivated_by_decision="dec_01ROOT..."
 )
 ```
 
@@ -378,16 +463,16 @@ Executor → rka_add_literature(
 )
 ```
 
-### Step 4: Ingest Reviewer Comments as PI Instructions (Brain)
+### Step 4: Ingest Reviewer Comments as Directives (Brain)
 
-Each reviewer comment becomes a traceable PI instruction:
+Each reviewer comment becomes a traceable directive:
 
 ```
 Brain → rka_add_note(
     content="[Reviewer 1, Comment 3] The evaluation should include a comparison with
              at least one traditional (non-DL) baseline such as One-Class SVM or
              Isolation Forest. The current comparison only includes deep learning methods.",
-    type="pi_instruction",
+    type="directive",  # PI/reviewer instruction
     source="pi",
     phase="revision_r1",
     importance="critical",
@@ -399,7 +484,7 @@ Brain → rka_add_note(
     content="[Reviewer 2, Major Comment 1] The SWaT dataset alone is insufficient.
              Please evaluate on at least one additional CPS dataset to demonstrate
              generalizability. WADI is acceptable but a third dataset would strengthen the claim.",
-    type="pi_instruction",
+    type="directive",  # PI/reviewer instruction
     source="pi",
     phase="revision_r1",
     importance="critical",
@@ -410,7 +495,7 @@ Brain → rka_add_note(
 Brain → rka_add_note(
     content="[Reviewer 2, Minor Comment 5] Table 3 is missing standard deviations.
              Please report mean ± std over multiple runs.",
-    type="pi_instruction",
+    type="directive",  # PI/reviewer instruction
     source="pi",
     phase="revision_r1",
     importance="high",
@@ -420,7 +505,7 @@ Brain → rka_add_note(
 Brain → rka_add_note(
     content="[Reviewer 3, Comment 1] The paper would benefit from a discussion of
              computational overhead and real-time feasibility of the proposed approach.",
-    type="pi_instruction",
+    type="directive",  # PI/reviewer instruction
     source="pi",
     phase="revision_r1",
     importance="high",
@@ -428,14 +513,14 @@ Brain → rka_add_note(
 )
 ```
 
-### Step 5: Record Existing Results as Findings
+### Step 5: Record Existing Results as Notes
 
 ```
 Brain → rka_add_note(
     content="Current model achieves 94.7% F1 on SWaT and 91.2% F1 on WADI.
              These are the results from the submitted manuscript, Table 3.
              Autoencoder-LSTM with window=50, latent_dim=32, LSTM_units=64.",
-    type="finding",
+    type="note",  # result/observation — verified experimental result
     source="pi",
     phase="experiment",
     confidence="verified",
@@ -445,7 +530,7 @@ Brain → rka_add_note(
 Brain → rka_add_note(
     content="Training time: 45 minutes on single V100. Inference: 1200 samples/sec.
              This is fast enough for real-time CPS monitoring at 100Hz sensor rate.",
-    type="finding",
+    type="note",  # result/observation
     source="pi",
     phase="experiment",
     confidence="verified",
@@ -488,7 +573,8 @@ Brain → rka_create_mission(
     acceptance_criteria="BATADAL results added, all models compared,
                         cross-dataset analysis written.",
     checkpoint_triggers="If BATADAL preprocessing reveals incompatible features,
-                        raise a checkpoint before adapting the model."
+                        raise a checkpoint before adapting the model.",
+    related_notes=["jrn_01R2M1..."]
 )
 ```
 
@@ -498,8 +584,8 @@ After this ingestion session (typically 30-60 minutes), your knowledge base cont
 
 - **Decision tree**: The full research path with rationale, reconstructed from the manuscript
 - **Literature**: All cited references, searchable, with key findings for the most important ones
-- **Journal entries**: Reviewer comments as traceable instructions, existing results as verified findings
-- **Missions**: Specific revision tasks linked to reviewer comments
+- **Journal entries**: Reviewer comments as traceable directives, existing results as verified notes
+- **Missions**: Specific revision tasks linked to reviewer directives
 - **Audit trail**: Who added what, when, and why
 
 From here, the Brain can call `rka_get_context(topic="reviewer comments on baselines")` and get a focused summary of everything related to the baseline evaluation task.
@@ -513,10 +599,12 @@ From here, the Brain can call `rka_get_context(topic="reviewer comments on basel
 ### Step 1: Initialize and Assess
 
 ```bash
-mkdir ~/research/federated-iot && cd ~/research/federated-iot
-rka init "Federated Learning for IoT Security" \
-  --description "Early-stage exploration — federated anomaly detection across IoT devices"
-rka serve
+curl -sS -X POST http://localhost:9712/api/projects \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "Federated Learning for IoT Security",
+    "description": "Early-stage exploration — federated anomaly detection across IoT devices"
+  }'
 ```
 
 ### Step 2: Have the Executor Catalog What Exists (Brain → Executor)
@@ -542,7 +630,7 @@ The Executor reads through the files and submits a report:
 
 ```
 Executor → rka_submit_report(
-    mission_id="mis_01ABC...",
+    mission_id="msn_01ABC...",
     summary="Completed a full inventory of 23 files in the project folder and
              classified each artifact by research role: meeting notes, literature,
              manuscript structure, code, collaborator communication, and loose ideas.",
@@ -554,7 +642,7 @@ Executor → rka_submit_report(
               6 misc text files with scattered ideas and TODO lists",
     questions="Should I ingest the email threads or only the actionable items from them?
                The prototype code is messy — should I log its architecture decisions or skip?",
-    recommended_next="Ingest in order: (1) meeting notes as PI instructions,
+    recommended_next="Ingest in order: (1) meeting notes as directives,
                      (2) papers as literature, (3) outline as decisions,
                      (4) ideas as journal entries"
 )
@@ -566,19 +654,19 @@ Executor → rka_submit_report(
 Brain → rka_resolve_checkpoint(...)  # if any were raised
 
 Brain → rka_add_note(
-    content="Ingestion plan: (1) Meeting notes → pi_instruction entries with action items.
+    content="Ingestion plan: (1) Meeting notes → directive entries with action items.
              (2) Papers → literature entries. (3) Workshop outline → decision tree skeleton.
-             (4) Scattered ideas → hypothesis/idea journal entries.
-             (5) Prototype code → methodology notes.
+             (4) Scattered ideas → note entries (hypothesis/idea).
+             (5) Prototype code → log notes.
              Skip raw email threads — extract only the dataset access decision.",
-    type="pi_instruction",
+    type="directive",  # Brain instruction to Executor
     source="brain",
     phase="setup",
     importance="high"
 )
 ```
 
-### Step 4: Ingest Meeting Notes as Instructions and Observations (Executor)
+### Step 4: Ingest Meeting Notes as Directives and Observations (Executor)
 
 ```
 # From meeting notes: Jan 15 advisor meeting
@@ -586,7 +674,7 @@ Executor → rka_add_note(
     content="[Advisor meeting Jan 15] PI suggests focusing on non-IID data distribution
              as the key challenge. Most federated learning papers assume IID —
              IoT devices have inherently non-IID traffic patterns.",
-    type="pi_instruction",
+    type="directive",  # PI instruction from meeting
     source="pi",
     phase="exploration",
     importance="critical"
@@ -596,7 +684,7 @@ Executor → rka_add_note(
     content="[Advisor meeting Jan 15] Discussed using differential privacy for gradient
              updates. PI concerned about accuracy trade-off. Wants experiments showing
              privacy budget vs. detection accuracy curve.",
-    type="pi_instruction",
+    type="directive",  # PI instruction from meeting
     source="pi",
     phase="exploration",
     importance="high"
@@ -606,7 +694,7 @@ Executor → rka_add_note(
 Executor → rka_add_note(
     content="[Advisor meeting Feb 20] Action item: contact Samsung IoT lab about
              accessing their smart home traffic dataset. PI has a contact there.",
-    type="pi_instruction",
+    type="directive",  # PI instruction from meeting
     source="pi",
     phase="exploration",
     importance="normal"
@@ -616,7 +704,7 @@ Executor → rka_add_note(
     content="[Advisor meeting Feb 20] Collaborator mentioned that FedAvg fails badly
              when devices have very different traffic volumes. May need FedProx or
              per-device weighting.",
-    type="observation",
+    type="note",  # result/observation from meeting discussion
     source="pi",
     phase="exploration",
     importance="high"
@@ -722,44 +810,48 @@ Executor → rka_add_note(
     content="Idea: Use device fingerprinting as a pre-filter before anomaly detection.
              Each IoT device has a unique traffic signature — if traffic doesn't match
              any known device fingerprint, flag it before even running the anomaly model.",
-    type="idea",
+    type="note",  # hypothesis/idea for future exploration
     source="pi",
     phase="exploration",
     confidence="hypothesis",
     importance="high",
-    tags=["device-fingerprinting", "pre-filter"]
+    tags=["device-fingerprinting", "pre-filter"],
+    related_mission="msn_01ABC..."
 )
 
 Executor → rka_add_note(
     content="What if we use a GAN to generate synthetic attack traffic for devices
              that have no attack data? This would solve the label scarcity problem
              for new IoT device types joining the federation.",
-    type="idea",
+    type="note",  # hypothesis/idea
     source="pi",
     phase="exploration",
     confidence="hypothesis",
-    importance="normal"
+    importance="normal",
+    related_mission="msn_01ABC..."
 )
 
 Executor → rka_add_note(
     content="From email with collaborator (Mar 5): Samsung dataset has 45 device types,
              3 months of traffic, but NO labeled attacks. Would need to inject synthetic
              attacks or use the unlabeled data for training the 'normal' model only.",
-    type="observation",
+    type="note",  # result/observation from external communication
     source="pi",
     phase="exploration",
-    importance="high"
+    importance="high",
+    related_mission="msn_01ABC..."
 )
 
 Executor → rka_add_note(
     content="Prototype code implements FedAvg with a simple autoencoder (3-layer).
              Architecture: input(40) → enc(20) → latent(10) → dec(20) → output(40).
              Tested on dummy data only — not validated on real IoT traffic yet.",
-    type="methodology",
+    type="log",  # procedure step / methodology record
     source="executor",
     phase="exploration",
     confidence="hypothesis",
-    importance="normal"
+    importance="normal",
+    related_mission="msn_01ABC..."
 )
 ```
 
@@ -807,10 +899,194 @@ Brain → rka_update_status(
 From a messy folder of 23 files, you now have:
 
 - **5 literature entries** — searchable by title, author, year, venue, with relevance notes
-- **8 journal entries** — meeting action items, observations, ideas, methodology notes
+- **8 journal entries** — meeting directives, observations, ideas, log notes
 - **4 decision nodes** — research direction choices (some open, some resolved)
 - **Complete audit trail** — everything traceable to its source (meeting, email, paper)
 - **Searchable context** — `rka_search("non-IID")` returns all related entries across all types
+
+---
+
+## Scenario 4: Using the Research Map and Review Queue (v2.0)
+
+**Situation**: You are the Brain, mid-project. Several missions have completed and the knowledge base has accumulated dozens of notes and literature entries. You want to synthesize findings into claims, resolve contradictions, and make sure research questions are being answered.
+
+### Step 1: Create Research Questions via the Decision Tree (Brain)
+
+Research questions are decisions with `kind="research_question"`. They anchor the research map:
+
+```
+Brain → rka_add_decision(
+    question="Does protocol-specific feature engineering improve IDS detection rates on real IoT traffic?",
+    kind="research_question",
+    phase="experiment_design",
+    decided_by="brain",
+    motivated_by_decision="dec_01ABC..."  # link to the paradigm decision that generated this RQ
+)
+→ dec_01RQ_PROTO...
+
+Brain → rka_add_decision(
+    question="Is the performance gap between synthetic and real-traffic evaluation statistically significant?",
+    kind="research_question",
+    phase="experiment_design",
+    decided_by="brain",
+    motivated_by_decision="dec_01ABC..."
+)
+→ dec_01RQ_GAP...
+```
+
+### Step 2: Check the Research Map (Brain)
+
+The research map shows the live state of all research questions, their associated evidence clusters, and the claims distilled from them:
+
+```
+Brain → rka_get_research_map()
+→ Returns:
+  Research Questions (2):
+    [dec_01RQ_PROTO] "Does protocol-specific feature engineering improve IDS..."
+      Clusters: 3 (synthesis_needed: 1, synthesized: 2, contradiction: 0)
+      Open claims: 2 | Confirmed: 1 | Refuted: 0
+
+    [dec_01RQ_GAP] "Is the performance gap between synthetic and real-traffic..."
+      Clusters: 1 (synthesis_needed: 1, synthesized: 0, contradiction: 0)
+      Open claims: 0
+
+  Unassigned clusters: 2 (not linked to any RQ)
+```
+
+### Step 3: Process the Review Queue (Brain)
+
+The review queue surfaces clusters that need a synthesis decision:
+
+```
+Brain → rka_get_review_queue()
+→ Returns list of clusters needing attention, e.g.:
+  [cluster_01ABC] "MQTT-specific features — detection rate comparisons" (synthesis_needed)
+    Evidence: 4 notes, 2 literature entries
+    Suggested claim: "MQTT-specific features improve detection by 8-15% vs generic features"
+    Contradictions: none
+
+  [cluster_01DEF] "Real-traffic vs synthetic benchmark gap" (synthesis_needed)
+    Evidence: 3 notes, 1 literature entry
+    Suggested claim: "Synthetic benchmarks overestimate detection rate by ~5%"
+    Contradictions: 1 (lit_01GHI contradicts jrn_01JKL on magnitude)
+```
+
+### Step 4: Synthesize a Cluster (Brain)
+
+Review the evidence and confirm or refine the suggested claim:
+
+```
+Brain → rka_review_cluster(
+    cluster_id="cluster_01ABC",
+    action="confirm_claim",
+    claim="MQTT-specific features improve detection rate by 8-15% vs generic network features on real IoT traffic.",
+    confidence="tested",
+    related_journal=["jrn_01DEF...", "jrn_01GHI...", "jrn_01JKL..."]  # evidence notes
+)
+
+# For the cluster with a contradiction:
+Brain → rka_resolve_contradiction(
+    cluster_id="cluster_01DEF",
+    contradiction_id="con_01XYZ...",
+    resolution="The 5% gap figure (jrn_01JKL) is the correct one. The 2% figure in lit_01GHI
+               uses a different evaluation protocol (leave-one-out vs. held-out test set).",
+    keep_entry="jrn_01JKL...",
+    supersede_entry="lit_01GHI..."
+)
+```
+
+### Step 5: Supersede a Decision When Direction Changes (Brain)
+
+When new evidence forces a research direction change, supersede the old decision rather than modifying it:
+
+```
+Brain → rka_supersede_decision(
+    old_id="dec_01ALGO...",
+    question="Which federated algorithm to use? (updated after non-IID experiments)",
+    decided_by="brain",
+    chosen="FedProx",
+    rationale="Executor experiments (msn_01XYZ) showed FedProx converges 1.8x faster
+              than FedAvg on our non-IID partition. The initial FedAvg choice was
+              a starting assumption — now overridden by evidence.",
+    related_journal=["jrn_01RESULT...", "jrn_01RESULT2..."]  # evidence that motivated the change
+)
+# Superseding a decision automatically queues affected clusters for re-distillation.
+```
+
+### Step 6: Trace Provenance (Brain or Executor)
+
+Trace the full upstream provenance of a claim or decision — from final claim back to raw observations:
+
+```
+Brain → rka_trace_provenance(
+    entity_id="dec_01ALGO...",
+    direction="upstream"
+)
+→ Returns provenance chain:
+  dec_01ALGO (decision: FedProx chosen)
+    ← jrn_01RESULT (note: FedProx 1.8x faster on non-IID partition)  [tested]
+        ← msn_01XYZ (mission: algorithm comparison experiments)
+            ← dec_01CORE (decision: non-IID as core contribution)
+    ← jrn_01RESULT2 (note: FedAvg diverges on high-heterogeneity partition)  [tested]
+        ← msn_01XYZ (same mission)
+```
+
+You can also trace downstream — to see everything that depends on a given entity:
+
+```
+Brain → rka_trace_provenance(
+    entity_id="lit_01FEDAVG...",
+    direction="downstream"
+)
+→ Shows all notes, decisions, and claims that cite this literature entry
+```
+
+---
+
+## Generating a Project-Specific CLAUDE.md (v2.0)
+
+When Claude Code is being used as the Executor for a specific research project, it needs project context loaded via a CLAUDE.md in the project directory. RKA can auto-generate a tailored CLAUDE.md based on the current project state.
+
+### Generate and Save (Brain or Executor)
+
+```
+Brain → rka_generate_claude_md(role="executor")
+→ Returns a CLAUDE.md string tailored for the Executor role, containing:
+  - Project name, description, and current phase
+  - Active mission summary
+  - Open checkpoints
+  - Key decisions (most recent / highest importance)
+  - Recording standards (v2.0 types)
+  - MCP tool reference for the Executor
+  - Session start protocol
+```
+
+Save the output to the project root so Claude Code picks it up automatically:
+
+```bash
+# From the terminal (or have the Executor write it):
+curl -sS http://localhost:9712/api/projects/claude-md?role=executor \
+  > ~/research/iot-ids-eval/CLAUDE.md
+```
+
+You can also generate a Brain-role version (for use in Claude Desktop system prompts):
+
+```
+Brain → rka_generate_claude_md(role="brain")
+```
+
+### What the Generated CLAUDE.md Contains
+
+The generated file includes:
+
+- **Project header**: Name, ID, description, current phase
+- **Recording standards**: v2.0 type vocabulary (`note`, `log`, `directive`) with usage guidance
+- **Active mission**: Current objective, tasks, and acceptance criteria
+- **Key decisions**: The 5-10 most relevant open or recently resolved decisions
+- **Session start protocol**: The exact tool calls to run at the start of each session
+- **Cross-reference conventions**: Patterns for `related_mission`, `related_journal`, `motivated_by_decision`
+
+Re-generate whenever the project phase changes or a major decision is resolved. The file reflects the state of the project at generation time.
 
 ---
 
@@ -867,10 +1143,10 @@ For manual entry of individual papers (when you need to include key findings and
 For structured review comments (e.g., from OpenReview, HotCRP, or CMT):
 
 ```
-# Pattern: one pi_instruction per actionable comment
+# Pattern: one directive per actionable comment
 Executor → rka_add_note(
     content="[R1.3] Add ablation study removing each component...",
-    type="pi_instruction",
+    type="directive",  # PI/reviewer instruction
     source="pi",
     phase="revision_r1",
     importance="critical"  # for major comments
@@ -878,7 +1154,7 @@ Executor → rka_add_note(
 
 Executor → rka_add_note(
     content="[R2.7] Fix typo in Equation 4...",
-    type="pi_instruction",
+    type="directive",  # PI/reviewer instruction — minor
     source="pi",
     phase="revision_r1",
     importance="low"  # for minor comments
@@ -896,10 +1172,10 @@ Brain → rka_batch_import(
     entries=[
         {"entity_type": "literature", "data": {"title": "Paper A", "authors": ["Author 1"], "year": 2024, "status": "to_read"}},
         {"entity_type": "literature", "data": {"title": "Paper B", "authors": ["Author 2"], "year": 2023, "status": "cited"}},
-        {"entity_type": "note", "data": {"content": "Key insight from meeting notes", "type": "insight", "source": "pi"}},
+        {"entity_type": "note", "data": {"content": "Key observation from meeting notes", "type": "note", "source": "pi"}},
         {"entity_type": "decision", "data": {"question": "Which framework to use?", "phase": "design", "decided_by": "brain"}}
     ],
-    actor="import"
+    actor="system"  # use "system" for programmatic ingestion — "import" is not a valid actor
 )
 → Returns: {imported: [{index: 0, id: "lit_01...", type: "literature"}, ...], errors: []}
 ```
@@ -912,21 +1188,21 @@ Use `rka_ingest_document` to send a full markdown document and have it automatic
 
 ```
 Brain → rka_ingest_document(
-    content="## Anomaly Detection Findings\n\nAutoencoder outperforms...\n\n## Methodology Notes\n\nUsed 5-fold cross-validation...\n\n## Next Steps\n\nInvestigate attention mechanisms...",
+    content="## Anomaly Detection Results\n\nAutoencoder outperforms...\n\n## Procedure Notes\n\nUsed 5-fold cross-validation...\n\n## Next Steps\n\nInvestigate attention mechanisms...",
     source="brain",
     phase="experiment",
     tags=["round-1"]
 )
 → Ingested document: 3 entries created from 3 sections
-  + jrn_01ABC [finding] Anomaly Detection Findings (142 chars)
-  + jrn_01DEF [methodology] Methodology Notes (98 chars)
-  + jrn_01GHI [idea] Next Steps (76 chars)
+  + jrn_01ABC [note] Anomaly Detection Results (142 chars)
+  + jrn_01DEF [log] Procedure Notes (98 chars)
+  + jrn_01GHI [note] Next Steps (76 chars)
 ```
 
 **How it works:**
 - Splits on `##` and `###` headings — each section becomes one journal entry
-- Auto-classifies entry type from heading keywords (e.g. "methodology" → methodology, "findings" → finding, "next steps" → idea)
-- Derives a tag from each heading (slugified: "Anomaly Detection Findings" → `anomaly-detection-findings`)
+- Auto-classifies entry type from heading keywords (e.g. "procedure" → log, "results" → note, "next steps" → note)
+- Derives a tag from each heading (slugified: "Anomaly Detection Results" → `anomaly-detection-results`)
 - Base `tags` you provide are applied to all entries; heading-derived tags are added per entry
 - Content before the first heading becomes a separate "preamble" entry
 - Set `split_by_headings=false` to import the entire document as a single entry
@@ -949,13 +1225,13 @@ Brain → rka_create_mission(
         {"description": "Read and parse research-notes.md", "status": "pending"},
         {"description": "Import 'Decision:' sections as rka_add_decision", "status": "pending"},
         {"description": "Import 'Paper:' sections as rka_add_literature", "status": "pending"},
-        {"description": "Import remaining sections as rka_add_note", "status": "pending"}
+        {"description": "Import remaining sections as rka_add_note (type=note or type=log as appropriate)", "status": "pending"}
     ],
     acceptance_criteria="All content from research-notes.md imported into RKA"
 )
 ```
 
-**Tip**: If your document contains only journal-type content (findings, insights, ideas), skip the mission overhead and use `rka_ingest_document` directly — it handles splitting, classification, and tagging automatically.
+**Tip**: If your document contains only journal-type content (results, observations, ideas), skip the mission overhead and use `rka_ingest_document` directly — it handles splitting, classification, and tagging automatically.
 
 ---
 
@@ -1086,6 +1362,7 @@ Brain → rka_ingest_document(
 
 # 6. Review everything in the web dashboard
 #    Navigate to /literature to see all imported papers
+#    Navigate to /research-map to see RQs, clusters, and claims
 #    Navigate to /graph to see entity relationships
 ```
 
@@ -1109,9 +1386,9 @@ If you are using multiple projects, treat the MCP bootstrap tools as default-pro
 | `.txt` | Text | Single entry or split by headings |
 | `.bib`, `.bibtex` | BibTeX | Each entry → literature record |
 | `.pdf` | PDF | Literature entry (title from metadata or LLM) |
-| `.py`, `.r`, `.do`, `.js`, `.ts`, `.jl` | Code | Single journal entry with docstring + first 50 lines |
+| `.py`, `.r`, `.do`, `.js`, `.ts`, `.jl` | Code | Single log entry with docstring + first 50 lines |
 | `.docx` | Document | Text extracted and split by headings (requires `python-docx`) |
-| `.csv`, `.xlsx` | Data | Single observation entry with file metadata |
+| `.csv`, `.xlsx` | Data | Single note entry with file metadata |
 
 ### Quick Bootstrap (One-Shot via MCP)
 
@@ -1159,16 +1436,16 @@ Returns a manifest showing how each file would be classified:
    Files: 25 found, 23 scanned (2 ignored)
 
    INGEST AS DOCUMENT (11 files):
-     meeting_notes.md [markdown, meeting_notes → summary]
-     draft_paper.md [markdown, paper_manuscript → finding]
+     meeting_notes.md [markdown, meeting_notes → note/directive]
+     draft_paper.md [markdown, paper_manuscript → note]
      ...
 
    IMPORT AS BIBTEX (2 files):
      refs.bib [bibtex]
 
    SINGLE JOURNAL ENTRY (5 files):
-     analysis.py [code, code_documentation → methodology]
-     results.csv [data → observation]
+     analysis.py [code, code_documentation → log]
+     results.csv [data → note]
      ...
 
    LITERATURE ENTRY (5 files):
@@ -1200,7 +1477,7 @@ Returns a structured review with suggestions:
 ```
 📋 Bootstrap Review — scn_01HXY...
    Entries created: 47
-   By type: finding=15, methodology=8, summary=6, observation=5, ...
+   By type: note=28, log=10, directive=9
    Tags: 23 unique, 8 singleton
 
    🔴 HIGH: Enrich 5 literature entries missing abstracts
@@ -1239,7 +1516,7 @@ The CLI bootstrap commands also target the current database/default project. The
 
 Use this flow when you need to bootstrap a specific project from an existing folder of code, PDFs, notes, or data.
 
-**Step 0: Mount the folder if you run Docker**
+**Step 0: Mount the folder (Docker)**
 
 Add a bind mount in `docker-compose.yml`, for example:
 
@@ -1251,7 +1528,7 @@ services:
       - /Users/you/research/project_files:/workspace/project_files:ro
 ```
 
-Restart the container after changing mounts.
+Restart the container after changing mounts: `docker compose up -d --build`
 
 **Step 1: Create the target project**
 
@@ -1401,10 +1678,12 @@ The web dashboard at `http://localhost:9712` provides visual interfaces for all 
 Project overview with active missions, open checkpoints, recent journal entries, and project controls. The Projects card lets you switch the active project, export the current project as a knowledge pack, or import a pack into a new project.
 
 ### Journal (`/journal`)
-Timeline view of all journal entries grouped by date. Filter by entry type (finding, insight, idea, etc.), confidence level, and source. Create and edit entries inline. A "hide superseded" toggle (on by default) keeps the view clean.
+Timeline view of all journal entries grouped by date. Filter by entry type (`note`, `log`, `directive`), confidence level, and source. Create and edit entries inline. A "hide superseded" toggle (on by default) keeps the view clean.
+
+> **v2.0 types**: The journal now uses `note` (result/observation/idea), `log` (procedure step), and `directive` (PI/Brain instruction). Old type labels are mapped on display.
 
 ### Decisions (`/decisions`)
-Interactive decision tree powered by React Flow with elkjs layout. Nodes are color-coded by status (active=green, abandoned=gray dashed, unresolved=orange). Click any node to open a side panel with full details, options, rationale, and related entities.
+Interactive decision tree powered by React Flow with elkjs layout. Nodes are color-coded by status (active=green, abandoned=gray dashed, unresolved=orange). Research questions appear with a distinct RQ badge. Click any node to open a side panel with full details, options, rationale, and related entities.
 
 ### Literature (`/literature`)
 Table/list view with status column tracking the reading pipeline (to_read → reading → read → cited → excluded). Filter by status tabs. Click to expand detail panels showing abstract, notes, and related decisions.
@@ -1417,12 +1696,15 @@ Event stream visualization grouped by date. Shows all state changes with color-c
 
 ### Knowledge Graph (`/graph`)
 Entity relationship visualization using React Flow. All entity types are displayed as colored nodes:
-- **Decisions** (blue) — with parent/child and related literature edges
+- **Decisions** (blue) — with parent/child, RQ links, and related literature edges
 - **Literature** (indigo) — with related decision edges
 - **Journal** (green) — with related decision, literature, mission, and supersession edges
-- **Missions** (pink) — with dependency edges
+- **Missions** (pink) — with dependency and motivated-by edges
 
 A legend and MiniMap help navigate large graphs.
+
+### Research Map (`/research-map`)
+Structured view of the research questions → evidence clusters → claims hierarchy. Shows synthesis status for each cluster (synthesis_needed, synthesized, contradiction). Links to review queue items. Use this page to track whether each research question is being addressed by the evidence in your knowledge base.
 
 ### Audit Log (`/audit`)
 System audit trail displayed as a sortable table. Filter by action type (create, update, delete, resolve), entity type, and actor. Color-coded action badges and a summary bar showing counts per action type help identify activity patterns.
@@ -1439,54 +1721,87 @@ Project configuration display, LLM status (enabled/disabled, model name), databa
 
 ### Daily Workflow
 
-1. **Start of session**: Brain calls `rka_get_status()` and `rka_get_context(topic="current work")` to orient. Or open the Dashboard (`/`) in the web UI for a visual overview.
-2. **During work**: Log findings and insights as you go — small frequent entries are better than rare large ones
-3. **End of session**: Executor calls `rka_submit_report()` even for informal progress updates
-4. **Compress long sessions**: Brain or Executor calls `rka_session_digest()` when tool output is getting lengthy. If you are switching to a new logical task, call `rka_reset_session()` before continuing.
-5. **Weekly**: Brain calls `rka_eviction_sweep(dry_run=true)` to review stale entries. Check the Timeline (`/timeline`) to review the event stream and the Audit Log (`/audit`) for a complete activity trail.
-6. **Periodically**: Visit the Knowledge Graph (`/graph`) to visualize how entities connect. Use Mermaid export (`rka_export_mermaid()`) for including decision trees in documents.
+1. **Start of session (Brain)**: Call `rka_get_status()`, `rka_get_context(topic="current work")`, `rka_get_review_queue()`, and `rka_get_research_map()` to orient. Or open the Dashboard (`/`) in the web UI for a visual overview.
+2. **Start of session (Executor)**: Call `rka_get_mission()` and `rka_get_context(topic="<mission topic>")`. Check `rka_get_research_map()` for awareness of active research questions.
+3. **During work**: Log results and procedure steps as you go — small frequent entries are better than rare large ones. Always include `related_mission="<id>"`.
+4. **End of session**: Executor calls `rka_submit_report()` even for informal progress updates. Include `related_decisions=[...]` to link the report to decisions it informs.
+5. **Compress long sessions**: Brain or Executor calls `rka_session_digest()` when tool output is getting lengthy. If you are switching to a new logical task, call `rka_reset_session()` before continuing.
+6. **Weekly**: Brain calls `rka_eviction_sweep(dry_run=true)` to review stale entries. Check the Timeline (`/timeline`) to review the event stream and the Audit Log (`/audit`) for a complete activity trail.
+7. **Periodically**: Visit the Knowledge Graph (`/graph`) and Research Map (`/research-map`) to visualize how entities connect. Use Mermaid export (`rka_export_mermaid()`) for including decision trees in documents.
 
 ### Keep Entries Atomic
 
-Each journal entry should capture one idea, one finding, or one decision. If you find yourself writing a paragraph that covers three different things, split it into three entries. This makes search and cross-referencing work much better.
+Each journal entry should capture one idea, one result, or one procedure step. If you find yourself writing a paragraph that covers three different things, split it into three entries. This makes search and cross-referencing work much better.
 
 **Tip**: If you have a large document with multiple sections, use `rka_ingest_document` — it splits markdown by headings automatically, so each section becomes its own atomic entry with proper type classification and tags.
 
-### Use Cross-References
+### Use Cross-References — Always Link to the Active Mission
 
-When adding a note that relates to a paper or decision, include the IDs:
+When adding a note during a mission, always include `related_mission`. When adding a decision that supersedes or extends another, include `related_journal` with the supporting evidence:
 
 ```
 rka_add_note(
-    content="Confirmed that FedProx converges 2x faster than FedAvg on non-IID partition",
-    type="finding",
+    content="Confirmed that FedProx converges 1.8x faster than FedAvg on non-IID partition",
+    type="note",  # result/observation — tested
     confidence="tested",
     related_literature=["lit_01FEDPROX..."],
     related_decisions=["dec_01ALGO..."],
+    related_mission="msn_01XYZ...",  # always link to active mission
     tags=["convergence", "fedprox-vs-fedavg"]
+)
+
+rka_add_decision(
+    question="Which federated algorithm to use?",
+    chosen="FedProx",
+    decided_by="brain",
+    related_journal=["jrn_01RESULT...", "jrn_01RESULT2..."]  # evidence that justifies the decision
+)
+
+rka_create_mission(
+    objective="...",
+    motivated_by_decision="dec_01ALGO..."  # link mission to the decision that spawned it
+)
+
+rka_submit_report(
+    mission_id="msn_01XYZ...",
+    summary="...",
+    related_decisions=["dec_01ALGO...", "dec_01RQ1..."]  # link report to decisions it informs
 )
 ```
 
-This makes `rka_get_context()` much more effective — it can trace the full chain from a finding back to the paper that inspired it and the decision it informs. Tags make entries discoverable through the web dashboard's filter controls and improve search relevance.
+Cross-references make `rka_get_context()` and `rka_trace_provenance()` much more effective — they can trace the full chain from a raw observation back to the decision it informed and forward to the claim it supports.
 
 ### Supersede, Don't Delete
 
-When a finding is outdated or corrected, don't delete it. Create a new entry that supersedes it:
+When a result is outdated or corrected, don't delete it. Create a new entry that supersedes it:
 
 ```
 rka_add_note(
     content="Updated: FedProx converges 1.8x faster (not 2x) after fixing the learning rate bug.",
-    type="finding",
+    type="note",  # result/observation — corrected
     confidence="verified",
-    supersedes="jrn_01OLDRESULT..."
+    supersedes="jrn_01OLDRESULT...",
+    related_mission="msn_01XYZ..."
 )
 ```
 
-The old entry remains in the knowledge base for audit trail purposes, but is automatically deprioritized in search and context packages.
+The old entry remains in the knowledge base for audit trail purposes, but is automatically deprioritized in search and context packages. Similarly, use `rka_supersede_decision()` when a research direction changes — this triggers automatic re-distillation of affected clusters.
 
 ### Use the Decision Tree for Major Forks
 
-Whenever you face a choice that affects the research direction, record it as a decision — even if you resolve it immediately. Six months later, when writing the paper or answering reviewer questions, having the decision tree with rationale is invaluable.
+Whenever you face a choice that affects the research direction, record it as a decision — even if you resolve it immediately. Six months later, when writing the paper or answering reviewer questions, having the decision tree with rationale is invaluable. Frame the questions that guide your investigation as `kind="research_question"` decisions — they appear in the Research Map and anchor the evidence synthesis workflow.
+
+### Use the Research Map and Review Queue
+
+After each wave of missions completes, have the Brain check `rka_get_review_queue()`. Clusters that have accumulated enough evidence are surfaced for synthesis. Confirm or refine the suggested claim with `rka_review_cluster()`. Resolve any contradictions with `rka_resolve_contradiction()`. This keeps the knowledge base advancing from raw observations to confirmed claims.
+
+### Trace Provenance Before Major Decisions
+
+Before making a significant research direction change, call `rka_trace_provenance(entity_id, direction="upstream")` on the key decision or claim. This surfaces all the evidence and reasoning behind it — making it clear whether the change is well-supported or whether more investigation is needed.
+
+### Generate CLAUDE.md for Each Project
+
+When onboarding Claude Code as Executor for a new project, generate a project-specific CLAUDE.md with `rka_generate_claude_md(role="executor")` and save it to the project root. This gives every new Executor session the current project context, recording standards, and session start protocol without manual setup. Re-generate whenever the project phase changes.
 
 ### Leverage Context Packages for New Sessions
 
@@ -1497,3 +1812,15 @@ rka_get_context(topic="your current focus area", max_tokens=3000)
 ```
 
 This gives the fresh Claude session all the relevant context from previous sessions, classified by recency (HOT/WARM/COLD), within the token budget. No more manually pasting previous conversation summaries.
+
+### v2.0 Type Vocabulary Reference
+
+The v2.0 journal type vocabulary is simplified to three types:
+
+| Type | Use for | Old equivalents (still accepted) |
+|------|---------|----------------------------------|
+| `note` | Results, observations, ideas, hypotheses, summaries, insights, findings | `finding`, `insight`, `observation`, `idea`, `hypothesis`, `exploration`, `summary` |
+| `log` | Procedure steps, methodology records, code documentation | `methodology` |
+| `directive` | PI instructions, Brain directives, reviewer comments | `pi_instruction` |
+
+Old type values are still accepted by the API and mapped automatically — existing entries are unaffected. Use `note`, `log`, and `directive` for all new entries.

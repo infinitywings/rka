@@ -1,26 +1,30 @@
 # Research Knowledge Agent (RKA)
 
-An MCP server and REST API for AI-assisted research orchestration. RKA provides a persistent, structured research memory for managing literature, hypotheses, findings, decisions, missions, checkpoints, and project-scoped artifacts across long-running investigations. It is designed for a collaborative workflow between a human principal investigator (PI), a strategic AI research assistant (Brain), and an implementation-focused AI assistant (Executor).
+An MCP server and REST API for AI-assisted research orchestration. RKA provides a persistent, structured research memory for managing literature, notes, decisions, missions, checkpoints, and project-scoped artifacts across long-running investigations. It is designed for a collaborative workflow between a human principal investigator (PI), a strategic AI research assistant (Brain), and an implementation-focused AI assistant (Executor).
 
 ## Why RKA Exists
 
 Modern research increasingly involves iterative collaboration between humans and AI systems, but most AI interfaces remain session-bound. Research questions, working hypotheses, literature interpretations, negative results, methodological choices, and the reasoning behind key decisions disappear between sessions. At the same time, research artifacts accumulate across papers, notes, code, datasets, experiment outputs, and meeting records without a unified structure for retrieval, provenance, or longitudinal reasoning.
 
-RKA addresses this by acting as a persistent knowledge layer for the research lifecycle. It stores findings with explicit confidence states from hypothesis through verification, records decisions together with alternatives and rationale, links literature to the questions and claims it informed, and maintains an event-sourced audit trail that preserves how a project evolved across weeks or months. The Brain/Executor model separates strategic interpretation from implementation: one AI can support synthesis, framing, and research direction, while another carries out coding, experiments, extraction, and reporting against the same shared research memory.
+RKA addresses this by acting as a persistent knowledge layer for the research lifecycle. It stores notes with explicit confidence states from hypothesis through verification, records decisions together with alternatives and rationale, links literature to the questions and claims it informed, and maintains an event-sourced audit trail that preserves how a project evolved across weeks or months. The Brain/Executor model separates strategic interpretation from implementation: one AI can support synthesis, framing, and research direction, while another carries out coding, experiments, extraction, and reporting against the same shared research memory.
 
 The result is continuity across the full arc of a project. A session in month six can access the accumulated context of month one: what was tried, what failed, what evidence supported a decision, what was abandoned and why, and which questions remain unresolved.
 
 ## What RKA Provides
 
 - Persistent research memory across sessions, phases, and projects
-- Structured entities for literature, findings, decisions, missions, checkpoints, artifacts, and events
-- Traceable provenance linking papers, findings, decisions, experiments, and outcomes
+- Structured entities for literature, notes, decisions, missions, checkpoints, artifacts, and events
+- Progressive distillation pipeline: journal entries extracted into claims, claims grouped into evidence clusters, clusters organized into a three-level research map (RQs, Clusters, Claims)
+- Traceable provenance linking papers, notes, decisions, experiments, and outcomes via typed cross-reference edges
+- Brain-augmented enrichment via a review queue for low-confidence claims, contradictions, and cluster synthesis
+- Decision superseding with optional re-distillation of affected claims
 - Brain/Executor coordination for strategic planning, execution, reporting, and escalation
 - Hybrid retrieval with keyword search, embeddings, summaries, and grounded Q&A
-- Multi-project isolation with project packs for export and import
+- Multi-project support with MCP tools for listing, switching, and creating projects
+- Project packs for portable export and import
 - REST API, MCP server, CLI, and web dashboard over a shared service layer
 
-Current release: `v1.5.0` moves all entity enrichment (notes, decisions, literature) to the background job queue, eliminating MCP timeouts caused by slow LLM backends. LLM features are now enabled by default.
+Current release: `v2.0` adds the progressive distillation pipeline (journal entries to claims to evidence clusters to a three-level research map), Brain-augmented enrichment via review queue, decision superseding, provenance chains, typed cross-references, hierarchical topic taxonomy, onboarding tools, and a background worker process for non-blocking enrichment. LLM features are enabled by default.
 
 Built for CS/IoT/CPS security research at UNC Charlotte.
 
@@ -32,7 +36,7 @@ Built for CS/IoT/CPS security research at UNC Charlotte.
 - [Key Concepts](#key-concepts)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
-- [Multi-Project and Project Packs](#multi-project-and-project-packs)
+- [Multi-Project Support](#multi-project-support)
 - [CLI Reference](#cli-reference)
 - [Configuration](#configuration)
 - [MCP Tools Reference](#mcp-tools-reference)
@@ -53,40 +57,46 @@ Built for CS/IoT/CPS security research at UNC Charlotte.
 RKA implements a three-actor collaboration:
 
 ```
-┌───────────────┐     ┌──────────────────┐     ┌───────────────────┐
-│      PI        │     │   Brain (Claude   │     │ Executor (Claude   │
-│  (Researcher)  │◄───►│    Desktop)       │◄───►│    Code)           │
-│                │     │  Strategic layer  │     │ Implementation     │
-└───────────────┘     └────────┬─────────┘     └────────┬──────────┘
-                               │                         │
-                               │    MCP tools (stdio)    │
-                               └────────┬────────────────┘
-                                        │
-                                        ▼
-                          ┌──────────────────────────┐
-                          │         RKA Server         │
-                          │  ┌──────────────────────┐  │
-                          │  │    Service Layer       │  │
-                          │  │  (shared business      │  │
-                          │  │   logic for MCP+REST)  │  │
-                          │  └──────────┬─────────────┘  │
-                          │             │                 │
-                          │  ┌──────────▼─────────────┐  │
-                          │  │ Infrastructure Layer     │  │
-                          │  │ SQLite + sqlite-vec      │  │
-                          │  │ LLM (LiteLLM+Instructor) │  │
-                          │  │ Embeddings (FastEmbed)   │  │
-                          │  └──────────┬──────────────┘  │
-                          └─────────────┼──────────────────┘
-                                        │
-                          ┌─────────────▼──────────────────┐
-                          │   LM Studio / Ollama (local)    │
-                          │   OpenAI-compatible API          │
-                          │   Context window auto-detected   │
-                          └─────────────────────────────────┘
++---------------+     +------------------+     +-------------------+
+|      PI        |     |   Brain (Claude   |     | Executor (Claude   |
+|  (Researcher)  |<--->|    Desktop)       |<--->|    Code)           |
+|                |     |  Strategic layer  |     | Implementation     |
++---------------+     +--------+---------+     +--------+----------+
+                               |                         |
+                               |    MCP tools (stdio)    |
+                               +--------+----------------+
+                                        |
+                                        v
+                          +----------------------------+
+                          |         RKA Server          |
+                          |  +----------------------+  |
+                          |  |    Service Layer       |  |
+                          |  |  (shared business      |  |
+                          |  |   logic for MCP+REST)  |  |
+                          |  +----------+-------------+  |
+                          |             |                 |
+                          |  +----------v-------------+  |
+                          |  | Infrastructure Layer    |  |
+                          |  | SQLite + sqlite-vec     |  |
+                          |  | LLM (LiteLLM+Instructor)|  |
+                          |  | Embeddings (FastEmbed)  |  |
+                          |  +----------+-------------+  |
+                          +-------------+--------------+  |
+                                        |
+                          +-------------v--------------+
+                          |   Background Worker         |
+                          |   Distillation Pipeline     |
+                          |   Enrichment Queue          |
+                          +----------------------------+
+                                        |
+                          +-------------v--------------+
+                          |   LM Studio / Ollama        |
+                          |   OpenAI-compatible API     |
+                          |   Context window detected   |
+                          +----------------------------+
 ```
 
-- **Brain** (Claude Desktop): Strategic decisions — what to research, which direction to take, how to interpret findings. Communicates via MCP tools.
+- **Brain** (Claude Desktop): Strategic decisions — what to research, which direction to take, how to interpret findings, and which review-queue items to resolve. Communicates via MCP tools.
 - **Executor** (Claude Code): Implementation — runs experiments, writes code, collects data. Receives missions, submits reports, raises checkpoints.
 - **PI** (Human): Oversees progress, resolves checkpoints, provides domain expertise.
 
@@ -94,21 +104,22 @@ RKA implements a three-actor collaboration:
 
 1. **MCP Tools Layer** — Thin adapter exposing `rka_*` tools over stdio. Keeps lightweight per-session state for output compaction and digests, but no core business logic.
 2. **REST API Layer** — FastAPI endpoints under `/api`. Same thin-adapter pattern, delegates to services.
-3. **Service Layer** — All business logic. CRUD operations, auto-enrichment, event emission, context preparation. Shared identically by MCP and REST.
+3. **Service Layer** — All business logic. CRUD operations, auto-enrichment, event emission, context preparation, distillation pipeline. Shared identically by MCP and REST.
 4. **Infrastructure Layer** — Database (SQLite + FTS5 + sqlite-vec), LLM gateway (LiteLLM + Instructor), embeddings (FastEmbed), file storage.
 
-### Two-Process Model
+### Three-Process Model
 
-RKA runs as two separate processes:
+RKA runs as three processes:
 
 | Process | Command | Purpose | Port |
 |---------|---------|---------|------|
 | REST API + Web UI | `rka serve` | HTTP endpoints + static web dashboard | 9712 |
+| Background Worker | started by `rka serve` | Distillation pipeline, enrichment queue, job processing | internal |
 | MCP stdio server | `rka mcp` | Tool interface for Claude Desktop/Code | stdio |
 
-Both processes share the same SQLite database file and service layer code. The MCP server communicates via stdio (stdin/stdout), while the REST server listens on HTTP.
+The REST API and background worker share the same SQLite database file and service layer code. The background worker handles all LLM-dependent tasks (claim extraction, cluster synthesis, embedding generation, review-queue population) so that MCP and REST calls return immediately without blocking on slow LLM backends.
 
-The REST API and web dashboard are project-aware. The current MCP server keeps lightweight per-session state but still operates against the default server project, so use the dashboard or REST API when you need strict per-project routing.
+The MCP server communicates via stdio (stdin/stdout) and proxies all calls to the REST API at `RKA_API_URL` (default: `http://localhost:9712`).
 
 ---
 
@@ -118,13 +129,55 @@ The REST API and web dashboard are project-aware. The current MCP server keeps l
 
 | Entity | Prefix | Purpose |
 |--------|--------|---------|
-| **Journal Entry** | `jrn_` | Research findings, insights, ideas, observations, hypotheses, methodologies |
+| **Journal Entry** | `jrn_` | Research notes — observations, analyses, procedures, and directives |
 | **Decision** | `dec_` | Decision tree nodes — questions with options, chosen path, rationale |
 | **Literature** | `lit_` | Papers, articles — tracked through reading pipeline |
 | **Mission** | `mis_` | Task packages assigned to the Executor with objectives and acceptance criteria |
 | **Checkpoint** | `chk_` | Escalation points where Executor needs Brain/PI input |
+| **Claim** | `clm_` | Extracted assertions from journal entries (hypothesis, evidence, method, result, observation, assumption) |
+| **Evidence Cluster** | `ecl_` | Groups of related claims with LLM-synthesized summaries |
+| **Topic** | `top_` | Hierarchical topic taxonomy for organizing knowledge |
+| **Review Queue Item** | `rev_` | Items flagged for Brain review (low confidence, contradictions, missing evidence) |
+| **Cross-Reference** | `link_` | Typed edges forming provenance chains between entities |
 | **Event** | `evt_` | Audit trail of all state changes with causal chain links |
 | **Project State** | — | Singleton per project: current phase, summary, blockers, metrics |
+
+### Journal Entry Types
+
+v2.0 simplifies journal entry types to three canonical categories:
+
+| Type | Purpose |
+|------|---------|
+| `note` | Observations, analyses, insights — the default type for most entries |
+| `log` | Procedures, methodology steps, experiment records |
+| `directive` | Instructions from PI or Brain to guide future work |
+
+Legacy types from v1 (`finding`, `insight`, `idea`, `observation`, `hypothesis`, `methodology`, `pi_instruction`, `exploration`, `summary`) are accepted as input and automatically mapped to the nearest v2.0 type.
+
+### Progressive Distillation Pipeline
+
+The distillation pipeline runs in the background and incrementally enriches raw journal entries into higher-level knowledge structures:
+
+```
+Journal Entries (note / log / directive)
+    |
+    | [background worker: claim extraction]
+    v
+Claims (clm_)
+  hypothesis | evidence | method | result | observation | assumption
+    |
+    | [background worker: clustering]
+    v
+Evidence Clusters (ecl_)
+  LLM-synthesized summary of related claims
+    |
+    | [background worker: research-map assembly]
+    v
+Research Map
+  Research Questions --> Clusters --> Claims
+```
+
+Each stage is asynchronous and non-blocking. Entries immediately become searchable; distillation refines understanding over time.
 
 ### ULID-Based IDs
 
@@ -133,11 +186,23 @@ All entities use type-prefixed ULIDs (e.g., `dec_01HXYZ...`). ULIDs are globally
 ### Mission Lifecycle
 
 ```
-Brain creates mission → Executor picks up (active) → Work proceeds
-    → Checkpoint raised if blocked → Brain/PI resolves
-    → Executor submits report → Brain reviews
-    → Mission marked complete/partial/blocked
+Brain creates mission --> Executor picks up (active) --> Work proceeds
+    --> Checkpoint raised if blocked --> Brain/PI resolves
+    --> Executor submits report --> Brain reviews
+    --> Mission marked complete/partial/blocked
 ```
+
+### Review Queue
+
+The review queue collects items that need Brain attention: low-confidence claims, contradictions between claims, clusters needing narrative synthesis, and distillation jobs with ambiguous results. Brain can approve, reject, merge, or override each item. Resolved items feed back into the distillation pipeline.
+
+### Decision Superseding
+
+When a decision is superseded by new evidence, RKA marks the old decision as superseded, links it to the replacement, and optionally re-runs distillation on claims that cited the old decision. This preserves the full audit trail while keeping the active research map current.
+
+### Provenance Chains
+
+Every entity can be linked to its sources via typed `link_` cross-references. Common link types include `derived_from`, `contradicts`, `supports`, `supersedes`, and `cites`. These edges form the provenance graph visible in the Knowledge Graph page.
 
 ### Context Temperature
 
@@ -145,8 +210,8 @@ Entries are classified by recency:
 
 | Temperature | Age | Behavior |
 |-------------|-----|----------|
-| **HOT** | ≤ 3 days | Included in full, highest priority |
-| **WARM** | ≤ 14 days | Included, may be compressed |
+| **HOT** | <= 3 days | Included in full, highest priority |
+| **WARM** | <= 14 days | Included, may be compressed |
 | **COLD** | > 14 days | Summarized or excluded |
 | **ARCHIVE** | Manually archived | Excluded unless explicitly requested |
 
@@ -156,7 +221,7 @@ The Context Engine uses these temperatures to build focused context packages wit
 
 ## Installation
 
-### Option A: Docker (Recommended — One-Click)
+### Option A: Docker (Recommended)
 
 Prerequisites: [Docker Desktop](https://www.docker.com/products/docker-desktop/) + [LM Studio](https://lmstudio.ai/) (or Ollama)
 
@@ -166,7 +231,7 @@ cd rka
 docker compose up -d
 ```
 
-That's it. Open `http://localhost:9712` in your browser.
+That is it. Open `http://localhost:9712` in your browser.
 
 **Connect Claude Desktop (MCP):**
 
@@ -184,6 +249,27 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 ```
 
 **LLM Setup:** Start LM Studio on your host machine, load a model, and configure it from the web UI Settings page (`http://localhost:9712/settings`). The default API base is `http://localhost:1234/v1`. Context window is auto-detected.
+
+**Connect Claude Code (MCP via pipx):**
+
+Install the MCP binary outside Docker so Claude Code can launch it directly:
+
+```bash
+pipx install . --force
+```
+
+```json
+{
+  "mcpServers": {
+    "rka": {
+      "command": "/Users/<you>/.local/bin/rka",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+The MCP binary is stateless — it proxies all calls to the Docker container's REST API at `RKA_API_URL`.
 
 ### Option B: From Source (Development)
 
@@ -204,7 +290,7 @@ pip install -e ".[llm,academic,workspace]"
 # Build web UI
 cd web && npm install && npm run build && cd ..
 
-# Start the server
+# Start the server (REST API + background worker)
 rka serve
 ```
 
@@ -233,7 +319,7 @@ pipx install . --force
 ### 1. Start the Server
 
 ```bash
-# Docker
+# Docker (recommended)
 docker compose up -d
 
 # Or from source
@@ -249,28 +335,32 @@ Open the **Settings** page in the web UI. Set your LLM backend:
 - **LM Studio**: API Base = `http://localhost:1234/v1`, Model = select from dropdown
 - **Ollama**: API Base = leave empty, Model = `ollama/qwen3:32b`
 
-The model's context window is auto-detected. All LLM-dependent features (Q&A, summaries, smart classification) are disabled until an LLM is connected.
+The model's context window is auto-detected. All LLM-dependent features (Q&A, summaries, smart classification, distillation pipeline) are disabled until an LLM is connected.
 
-### 3. Connect Claude Desktop
+### 3. Connect Claude Desktop or Claude Code
 
-Add the MCP config (see Installation above). Claude Desktop now has access to all `rka_*` tools for the Brain/Executor workflow.
+Add the MCP config (see Installation above). Both Claude Desktop and Claude Code now have access to all `rka_*` tools. Use `rka_list_projects`, `rka_set_project`, and `rka_create_project` for multi-project workflows.
 
-### 4. Start Researching
+### 4. Generate Onboarding Instructions (Optional)
 
-Use the web UI for browsing and Q&A, or use Claude Desktop/Code with MCP tools for the full Brain/Executor workflow. The dashboard lets you select the active project, create/import projects, and export the active project as a knowledge pack.
+Run `rka_generate_claude_md` from Claude Desktop or hit `GET /api/generate-claude-md?role=executor` to generate a customized `CLAUDE.md` for the current project and role. This gives new sessions immediate context on project goals, conventions, and active work.
+
+### 5. Start Researching
+
+Use the web UI for browsing and Q&A, or use Claude Desktop/Code with MCP tools for the full Brain/Executor workflow. The dashboard lets you select the active project, browse the Research Map, manage the review queue, and export the active project as a knowledge pack.
 
 For end-to-end task walkthroughs, see [USAGE_GUIDE.md](USAGE_GUIDE.md).
 
 ---
 
-## Multi-Project and Project Packs
+## Multi-Project Support
 
-- The REST API and web dashboard are project-aware. The dashboard stores the active project locally and injects `X-RKA-Project` on API requests automatically.
-- List/create projects with `GET /api/projects` and `POST /api/projects`.
-- Export the active project with `GET /api/projects/export`.
-- Import a previously exported pack with `POST /api/projects/import`. Import creates a separate project, remaps project-scoped entity IDs, and rewrites internal references.
-- MCP tools currently target the default server project. For strict multi-project workflows, use the dashboard or REST API.
-- The CLI bootstrap commands also operate on the current database/default project. For project-specific workspace bootstrap in a multi-project database, use the REST workspace endpoints with `X-RKA-Project`.
+Multi-project management is available through both MCP and REST:
+
+- **MCP tools**: `rka_list_projects` lists all projects. `rka_set_project` switches the active project by name or ID. `rka_create_project` creates a new project without leaving the MCP session.
+- **REST API and web dashboard**: Project-aware. The dashboard stores the active project locally and injects `X-RKA-Project` on API requests automatically.
+- **Knowledge packs**: Export the active project with `GET /api/projects/export`. Import a previously exported pack with `POST /api/projects/import`. Import creates a separate project, remaps project-scoped entity IDs, and rewrites internal references.
+- **Workspace bootstrap**: CLI bootstrap commands target the current database/default project. For project-specific bootstrap in a multi-project database, use `POST /api/workspace/scan` and `POST /api/workspace/ingest` with `X-RKA-Project`.
 
 ---
 
@@ -291,7 +381,7 @@ rka init "IoT Security Analysis" --description "Systematic review of CPS vulnera
 
 ### `rka serve`
 
-Start the REST API + web dashboard server.
+Start the REST API + web dashboard server and the background worker.
 
 ```bash
 rka serve --port 9712 --reload
@@ -305,7 +395,7 @@ rka serve --port 9712 --reload
 
 ### `rka mcp`
 
-Start the MCP stdio server for Claude Desktop or Claude Code.
+Start the MCP stdio server for Claude Desktop or Claude Code. The MCP server is stateless — it proxies all calls to the REST API at `RKA_API_URL`.
 
 ```bash
 rka mcp
@@ -390,6 +480,7 @@ All settings use environment variables with the `RKA_` prefix. Place them in a `
 | `RKA_DB_PATH` | `rka.db` | SQLite database file path |
 | `RKA_HOST` | `127.0.0.1` | API server bind address |
 | `RKA_PORT` | `9712` | API server port |
+| `RKA_API_URL` | `http://localhost:9712` | REST API URL for MCP proxy |
 
 ### LLM Settings
 
@@ -430,7 +521,7 @@ RKA_LLM_API_BASE=http://localhost:1234/v1
 **Ollama (local):**
 ```env
 RKA_LLM_MODEL=ollama/qwen3:32b
-# No API base needed — LiteLLM routes to Ollama's default port
+# No API base needed -- LiteLLM routes to Ollama's default port
 ```
 
 **OpenAI-compatible (vLLM, etc.):**
@@ -446,20 +537,44 @@ RKA_LLM_API_KEY=token-xxx
 
 ## MCP Tools Reference
 
-All tools are prefixed with `rka_` and available through the MCP stdio interface.
+All tools are prefixed with `rka_` and available through the MCP stdio interface. The MCP server is defined in `rka/mcp/server.py`.
 
-### Knowledge Management
+### Project
 
 | Tool | Purpose |
 |------|---------|
-| `rka_add_note` | Add a journal entry with optional tags (finding, insight, idea, observation, hypothesis, methodology, pi_instruction, exploration, summary) |
+| `rka_list_projects` | List all projects with name, description, and ID |
+| `rka_set_project` | Switch the active project by name or ID |
+| `rka_create_project` | Create a new project and optionally switch to it |
+| `rka_get_status` | Get current project state (phase, summary, blockers, metrics) |
+| `rka_update_status` | Update project state |
+
+### Notes
+
+| Tool | Purpose |
+|------|---------|
+| `rka_add_note` | Add a journal entry with optional tags; type is note, log, or directive (legacy types are mapped automatically) |
 | `rka_update_note` | Update an existing journal entry |
+| `rka_get_journal` | Query journal entries with filters (type, phase, confidence, since) |
+
+### Decisions
+
+| Tool | Purpose |
+|------|---------|
 | `rka_add_decision` | Add a decision node to the research decision tree |
 | `rka_update_decision` | Update a decision (change status, record chosen option, add rationale) |
+| `rka_get_decision_tree` | Get the full decision tree structure |
+
+### Literature
+
+| Tool | Purpose |
+|------|---------|
 | `rka_add_literature` | Add a literature entry (paper, article, book) |
 | `rka_update_literature` | Update any literature field (title, authors, year, venue, doi, abstract, status, methodology_notes, tags, etc.) |
+| `rka_get_literature` | Query literature with filters |
+| `rka_enrich_doi` | Enrich a literature entry by looking up its DOI via CrossRef |
 
-### Mission Lifecycle
+### Missions
 
 | Tool | Purpose |
 |------|---------|
@@ -477,40 +592,50 @@ All tools are prefixed with `rka_` and available through the MCP stdio interface
 | `rka_get_checkpoints` | List checkpoints by status (open, resolved, dismissed) |
 | `rka_resolve_checkpoint` | Resolve a checkpoint with a decision and rationale |
 
-### Retrieval and Search
+### Research Map (v2.0)
+
+| Tool | Purpose |
+|------|---------|
+| `rka_get_research_map` | Get the three-level research map: research questions, evidence clusters, and claims |
+| `rka_get_claims` | Query extracted claims with filters (type, confidence, cluster, entry_id) |
+| `rka_supersede_decision` | Mark a decision as superseded by a new decision, with optional re-distillation of affected claims |
+| `rka_trace_provenance` | Trace the full provenance chain for an entity — all upstream sources and downstream derivatives |
+
+### Review Queue (v2.0)
+
+| Tool | Purpose |
+|------|---------|
+| `rka_get_review_queue` | List items in the review queue (low confidence, contradictions, synthesis needed) |
+| `rka_review_cluster` | Review and approve or revise an evidence cluster's synthesized summary |
+| `rka_review_claims` | Review a set of claims — accept, reject, merge, or flag for further investigation |
+| `rka_resolve_contradiction` | Resolve a contradiction between two claims with a rationale and disposition |
+
+### Search and Context
 
 | Tool | Purpose |
 |------|---------|
 | `rka_search` | Hybrid search across all entity types |
-| `rka_get_decision_tree` | Get the full decision tree structure |
-| `rka_get_literature` | Query literature with filters |
-| `rka_get_journal` | Query journal entries with filters |
-
-### Project State
-
-| Tool | Purpose |
-|------|---------|
-| `rka_get_status` | Get current project state (phase, summary, blockers, metrics) |
-| `rka_update_status` | Update project state |
-
-### Context and Summarization (Phase 2)
-
-| Tool | Purpose |
-|------|---------|
 | `rka_get_context` | Generate a focused context package for a topic within a token budget |
+| `rka_ask` | Ask a question grounded in the knowledge base (RAG) |
 | `rka_summarize` | On-demand topic summarization |
 | `rka_eviction_sweep` | Propose entries for archival based on staleness |
 
-### Academic Import and Enrichment (Phase 5)
+### Graph
 
 | Tool | Purpose |
 |------|---------|
-| `rka_import_bibtex` | Import literature entries from a BibTeX string (auto-detects duplicates by DOI and title) |
-| `rka_enrich_doi` | Enrich a literature entry by looking up its DOI via CrossRef (fills missing title, authors, year, venue, abstract) |
+| `rka_get_graph` | Get the full entity relationship graph |
+| `rka_get_ego_graph` | Get the ego graph centered on a specific entity |
+| `rka_graph_stats` | Get graph statistics (node counts, edge counts, density) |
+
+### Academic Import and Enrichment
+
+| Tool | Purpose |
+|------|---------|
 | `rka_search_semantic_scholar` | Search Semantic Scholar for papers by query, with optional year/field filters and auto-add to library |
 | `rka_search_arxiv` | Search arXiv for papers by query, with sort options and optional auto-add to library |
-| `rka_batch_import` | Batch import multiple entities of different types (note, literature, decision) in a single call |
-| `rka_ingest_document` | Ingest a markdown document by splitting into journal entries (auto-splits by headings, classifies types, adds tags) |
+| `rka_search_elicit` | Search Elicit for papers relevant to a research question |
+| `rka_import_bibtex` | Import literature entries from a BibTeX string (auto-detects duplicates by DOI and title) |
 
 ### Workspace Bootstrap
 
@@ -520,12 +645,31 @@ All tools are prefixed with `rka_` and available through the MCP stdio interface
 | `rka_bootstrap_workspace` | One-shot scan + ingest: classify and import all files into the knowledge base |
 | `rka_review_bootstrap` | Review a completed bootstrap — entry counts, suggestions, and narrative for Brain handoff |
 
+### Session
+
+| Tool | Purpose |
+|------|---------|
+| `rka_session_digest` | Generate a digest of the current session's activity for handoff |
+| `rka_reset_session` | Reset per-session state (compaction counters, digest buffer) |
+
+### Onboarding (v2.0)
+
+| Tool | Purpose |
+|------|---------|
+| `rka_generate_claude_md` | Generate a customized CLAUDE.md for the active project and role (executor, brain) |
+
 ### Export
 
 | Tool | Purpose |
 |------|---------|
 | `rka_export` | Export research data as markdown, JSON, or Mermaid diagram (scopes: state, decisions, literature, full) |
 | `rka_export_mermaid` | Export the decision tree as a Mermaid flowchart with status-based styling |
+
+### Enrichment
+
+| Tool | Purpose |
+|------|---------|
+| `rka_enrich` | Trigger or check background enrichment jobs for one or more entities |
 
 ---
 
@@ -555,6 +699,7 @@ Most entity endpoints are project-scoped. Pass `X-RKA-Project: <project_id>` to 
 | `GET` | `/decisions/tree` | Get the full tree structure (for visualization) |
 | `GET` | `/decisions/{id}` | Get a single decision with options |
 | `PUT` | `/decisions/{id}` | Update a decision |
+| `POST` | `/decisions/{id}/supersede` | Supersede a decision with a replacement, optionally triggering re-distillation |
 
 ### Literature
 
@@ -584,6 +729,49 @@ Most entity endpoints are project-scoped. Pass `X-RKA-Project: <project_id>` to 
 | `GET` | `/checkpoints` | List checkpoints (filters: status, mission_id) |
 | `GET` | `/checkpoints/{id}` | Get a single checkpoint |
 | `PUT` | `/checkpoints/{id}/resolve` | Resolve a checkpoint |
+
+### Claims (v2.0)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/claims` | Create a claim manually or trigger extraction from a journal entry |
+| `GET` | `/claims` | List claims (filters: type, confidence, cluster_id, entry_id) |
+| `GET` | `/claims/{id}` | Get a single claim with provenance links |
+
+### Evidence Clusters (v2.0)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/clusters` | Create an evidence cluster |
+| `GET` | `/clusters` | List clusters (filters: topic_id, has_synthesis, since) |
+| `GET` | `/clusters/{id}` | Get a single cluster with member claims |
+| `PUT` | `/clusters/{id}` | Update a cluster (revise synthesis, update topic) |
+
+### Topics (v2.0)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/topics` | Create a topic |
+| `GET` | `/topics` | List topics (filters: parent_id, depth) |
+| `GET` | `/topics/{id}` | Get a single topic |
+| `PUT` | `/topics/{id}` | Update a topic |
+| `GET` | `/topics/tree` | Get the full hierarchical topic tree |
+
+### Research Map (v2.0)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/research-map` | Get the three-level research map: RQs, clusters, and representative claims |
+| `GET` | `/research-map/rq/{rq_id}/clusters` | Get all clusters under a research question |
+| `GET` | `/research-map/cluster/{cluster_id}/claims` | Get all claims within a cluster |
+
+### Review Queue (v2.0)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/review-queue` | List review-queue items (filters: status, reason, since) |
+| `POST` | `/review-queue` | Add an item to the review queue manually |
+| `PUT` | `/review-queue/{id}/resolve` | Resolve a review-queue item with a disposition |
 
 ### Search and Context
 
@@ -650,7 +838,7 @@ Most entity endpoints are project-scoped. Pass `X-RKA-Project: <project_id>` to 
 | `GET` | `/events` | List audit events (filters: phase, event_type, entity_type, actor, since) |
 | `GET` | `/tags` | List tags with counts (filter: entity_type) |
 
-### Audit Log (Phase 5)
+### Audit Log
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -665,9 +853,7 @@ Most entity endpoints are project-scoped. Pass `X-RKA-Project: <project_id>` to 
 | `POST` | `/workspace/ingest` | Ingest files from a scan manifest into the knowledge base |
 | `GET` | `/workspace/review/{scan_id}` | Review a completed bootstrap (entry counts, suggestions) |
 
-Use `X-RKA-Project` with these endpoints when bootstrapping a specific project in a multi-project deployment.
-
-### Academic Import (Phase 5)
+### Academic Import
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -677,6 +863,12 @@ Use `X-RKA-Project` with these endpoints when bootstrapping a specific project i
 | `GET` | `/decisions/mermaid` | Export the decision tree as a Mermaid flowchart diagram |
 | `POST` | `/import/batch` | Batch import multiple entities of different types |
 | `POST` | `/ingest/document` | Ingest a markdown document by splitting into journal entries |
+
+### Onboarding (v2.0)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/generate-claude-md` | Generate a customized CLAUDE.md for the active project and role (`?role=executor` or `?role=brain`) |
 
 ---
 
@@ -692,12 +884,12 @@ npm install
 npm run build
 ```
 
-The build output goes to `web/dist/`. When `rka serve` starts, it automatically detects and serves this directory at `http://localhost:9712`.
+The build output goes to `web/dist/`. When `rka serve` starts, it automatically detects and serves this directory at `http://localhost:9712`. Docker builds the dashboard automatically during `docker build`.
 
 ### Development Mode
 
 ```bash
-# Terminal 1: API server
+# Terminal 1: API server + background worker
 rka serve
 
 # Terminal 2: Vite dev server with HMR
@@ -712,13 +904,14 @@ The Vite dev server runs at `http://localhost:5173` and proxies API calls to `:9
 | Page | Path | Features |
 |------|------|----------|
 | **Dashboard** | `/` | Project overview, active missions, open checkpoints, recent entries, project selection, knowledge-pack export/import |
-| **Journal** | `/journal` | Timeline view grouped by date, type/confidence filters, create/edit entries |
-| **Decisions** | `/decisions` | Interactive decision tree (React Flow + elkjs), click nodes for detail panel |
+| **Journal** | `/journal` | Timeline view grouped by date, type filters (note/log/directive), confidence filters, create/edit entries |
+| **Decisions** | `/decisions` | Interactive decision tree (React Flow + elkjs), click nodes for detail panel, supersession badges |
 | **Literature** | `/literature` | Table view with reading pipeline status tabs, add/update papers |
 | **Missions** | `/missions` | Active mission with task checklist, checkpoint badges, report viewer |
 | **Notebook** | `/notebook` | Q&A chat (ask questions grounded in your knowledge base) + summary generation |
 | **Timeline** | `/timeline` | Event stream grouped by date, entity/actor filters, causal chain visualization |
-| **Research Map** | `/graph` | Entity relationship graph (React Flow), nodes colored by type, relationship edges |
+| **Research Map** | `/research-map` | Three-level research view: research questions, evidence clusters, and claims with confidence scores and provenance |
+| **Knowledge Graph** | `/graph` | Entity relationship graph (React Flow), nodes colored by type, relationship edges, provenance chain traversal |
 | **Audit Log** | `/audit` | System audit trail table with action/entity/actor filters, action counts summary |
 | **Context Inspector** | `/context` | Generate context packages, view temperature badges (HOT/WARM/COLD), copy JSON |
 | **Settings** | `/settings` | LLM configuration + status, API health, DB stats, project configuration, quick links to `/docs` and `/api/health` |
@@ -728,7 +921,7 @@ The Vite dev server runs at `http://localhost:5173` and proxies API calls to `:9
 - React 19 + TypeScript 5.9 with Vite 7
 - Tailwind CSS 4 + shadcn/ui (v5)
 - TanStack Query 5 for server state
-- @xyflow/react for decision tree and knowledge graph visualization
+- @xyflow/react for decision tree, knowledge graph, and research map visualization
 
 ---
 
@@ -739,10 +932,11 @@ The Vite dev server runs at `http://localhost:5173` and proxies API calls to `:9
 All data lives in a single `rka.db` file. The schema includes:
 
 - **Core tables**: `projects`, `project_states`, `decisions`, `literature`, `journal_entries`, `missions`, `checkpoints`, `events`, `artifacts`
+- **v2.0 tables**: `claims`, `claim_edges`, `evidence_clusters`, `topics`, `review_queue`, `entity_links`, `jobs`
 - **Junction table**: `tags` — entity-type/entity-id/tag triples for cross-entity tag queries
 - **JSON columns**: `options` (decisions), `authors` (literature), `tasks` (missions), `key_findings` (literature)
-- **FTS5 virtual tables**: Full-text search indexes on content fields (Phase 2)
-- **sqlite-vec virtual tables**: Vector embeddings for semantic search (Phase 2, optional)
+- **FTS5 virtual tables**: Full-text search indexes on content fields
+- **sqlite-vec virtual tables**: Vector embeddings for semantic search (optional)
 
 ### ID Format
 
@@ -757,17 +951,24 @@ All IDs follow the pattern: `{type_prefix}_{ulid}`
 | Checkpoint | `chk_` | `chk_01HXYZ...` |
 | Event | `evt_` | `evt_01HXYZ...` |
 | Scan | `scn_` | `scn_01HXYZ...` |
+| Claim | `clm_` | `clm_01HXYZ...` |
+| Evidence Cluster | `ecl_` | `ecl_01HXYZ...` |
+| Topic | `top_` | `top_01HXYZ...` |
+| Review Queue Item | `rev_` | `rev_01HXYZ...` |
+| Cross-Reference | `link_` | `link_01HXYZ...` |
 
 ### Event Sourcing
 
 Every write operation emits an event to the `events` table with:
-- `event_type` — created, updated, resolved, etc.
+- `event_type` — created, updated, resolved, distilled, superseded, etc.
 - `entity_type` + `entity_id` — what changed
-- `actor` — who made the change (brain, executor, pi, system)
+- `actor` — who made the change (brain, executor, pi, llm, web_ui, system)
 - `caused_by` — causal chain link to the triggering event
 - `metadata` — JSON blob with change details
 
-This creates a complete audit trail and enables the causal chain visualization.
+Valid actor values: `brain | executor | pi | llm | web_ui | system`
+
+This creates a complete audit trail and enables the causal chain visualization in the Timeline page.
 
 ---
 
@@ -788,7 +989,7 @@ The hybrid approach catches both exact matches and semantically related content.
 - **Runtime**: FastEmbed (ONNX, fully local, no API calls)
 - **Storage**: sqlite-vec virtual tables
 
-Embeddings are generated asynchronously when entries are created or updated.
+Embeddings are generated asynchronously by the background worker when entries are created or updated.
 
 ### Context Engine
 
@@ -812,24 +1013,45 @@ curl -X POST http://localhost:9712/api/context \
 
 ### Auto-Enrichment
 
-When `RKA_LLM_ENABLED=true`, write operations trigger asynchronous enrichment:
+When `RKA_LLM_ENABLED=true`, write operations enqueue background enrichment jobs:
 
-| Model | Purpose | Input |
-|-------|---------|-------|
-| **AutoTags** | Generate semantic tags | Entry content → list of tags |
-| **AutoClassification** | Classify entry type and confidence | Entry content → type + confidence |
-| **SupersessionCheck** | Detect if new entry supersedes old ones | New entry + recent entries → supersession links |
+| Job | Purpose | Input |
+|-----|---------|-------|
+| **AutoTags** | Generate semantic tags | Entry content -> list of tags |
+| **AutoClassification** | Classify entry type and confidence | Entry content -> type + confidence |
+| **SupersessionCheck** | Detect if new entry supersedes old ones | New entry + recent entries -> supersession links |
 
-All enrichment is:
-- **Async** — Non-blocking; the API responds immediately
+All enrichment is handled by the background worker process:
+- **Non-blocking** — The API responds immediately; enrichment runs after
 - **Graceful** — Failures are logged but never break the main operation
 - **Structured** — Uses Instructor + Pydantic for validated LLM outputs
+
+### Progressive Distillation
+
+The distillation pipeline is the core v2.0 LLM feature. After a journal entry is created and enriched, the background worker:
+
+1. **Extracts claims** — Reads the entry and generates typed claim assertions (hypothesis, evidence, method, result, observation, assumption) with confidence scores
+2. **Clusters claims** — Groups new claims with semantically related existing claims into evidence clusters
+3. **Synthesizes clusters** — Writes a narrative summary of each cluster using the LLM
+4. **Populates review queue** — Flags low-confidence claims, contradictions between claims, and clusters that need Brain review
+
+Brain can then use the review queue tools to refine the distilled knowledge before it enters the research map.
+
+### Brain-Augmented Enrichment
+
+The review queue bridges automated distillation and human/Brain expertise. Items in the queue include:
+- Low-confidence claims that need verification or rejection
+- Contradictions where two claims assert opposing positions
+- Evidence clusters ready for narrative synthesis review
+- Distillation jobs that failed or produced ambiguous results
+
+Brain resolves items via `rka_review_cluster`, `rka_review_claims`, and `rka_resolve_contradiction`. Resolutions are recorded with rationale and feed back into the research map.
 
 ### LLM Gateway
 
 RKA uses LiteLLM as a unified gateway, supporting:
-- **Ollama** (default, local)
-- **LM Studio** (local)
+- **Ollama** (local)
+- **LM Studio** (local, recommended)
 - **vLLM** (local or remote)
 - **OpenAI API** (cloud)
 - **Anthropic API** (cloud)
@@ -844,62 +1066,95 @@ The `think=False` parameter is passed by default to prevent reasoning-mode model
 ### Running Tests
 
 ```bash
-# Using the project's virtual environment
-.venv/bin/pytest
-
-# Or with uv
-uv run pytest
+# Docker (recommended)
+docker compose exec rka pytest
 
 # Verbose output
-.venv/bin/pytest -v
+docker compose exec rka pytest -v
 ```
 
-The test suite covers database schema, CRUD operations, FTS5 search, context engine, LLM enrichment, event emission, multi-project scoping, knowledge-pack import/export, API endpoints, workspace bootstrap, graph service, backfill service, and summary/QA services.
+The test suite covers database schema, CRUD operations, FTS5 search, context engine, LLM enrichment, event emission, multi-project scoping, knowledge-pack import/export, API endpoints, workspace bootstrap, graph service, backfill service, summary/QA services, distillation pipeline, claims, clusters, topics, review queue, research map, and onboarding.
 
 ### Project Structure
 
 ```
 rka/
-├── rka/                    # Python package
-│   ├── cli.py              # Click CLI (init, serve, mcp, status, backup, migrate, bootstrap, backfill)
-│   ├── config.py           # Pydantic settings (RKAConfig)
-│   ├── models/             # Pydantic models for all entities
-│   ├── services/           # Business logic (shared by MCP + REST)
-│   │   ├── base.py         # BaseService with emit_event()
-│   │   ├── project.py      # Project metadata + per-project status
-│   │   ├── notes.py        # Journal entry CRUD + enrichment
-│   │   ├── decisions.py    # Decision tree CRUD
-│   │   ├── literature.py   # Literature CRUD
-│   │   ├── missions.py     # Mission lifecycle
-│   │   ├── checkpoints.py  # Checkpoint CRUD + resolution
-│   │   ├── search.py       # Hybrid FTS5 + vector search
-│   │   ├── context.py      # Context engine (temperature, token budgeting)
-│   │   ├── audit.py        # Audit log queries and counts
-│   │   ├── academic.py     # BibTeX import, DOI enrichment, Mermaid export
-│   │   ├── artifacts.py    # Artifact registration + figure extraction
-│   │   ├── knowledge_pack.py # Project export/import packs
-│   │   └── workspace.py    # Workspace bootstrap (scan, classify, ingest)
-│   ├── infra/              # Infrastructure
-│   │   ├── database.py     # SQLite + FTS5 + sqlite-vec
-│   │   ├── llm.py          # LiteLLM + Instructor wrapper
-│   │   └── embeddings.py   # FastEmbed service
-│   ├── tools/              # MCP tool definitions
-│   └── api/                # FastAPI
-│       ├── app.py          # Application factory + static serving
-│       ├── deps.py         # Dependency injection
-│       └── routes/         # Route modules (one per entity type)
-├── web/                    # React dashboard (Vite + TypeScript)
-│   ├── src/
-│   │   ├── api/            # Fetch client + TypeScript types
-│   │   ├── hooks/          # TanStack Query hooks
-│   │   ├── components/     # UI components (shadcn + layout + shared)
-│   │   ├── pages/          # Page components (11 pages)
-│   │   └── lib/            # Utilities
-│   └── dist/               # Production build (served by FastAPI)
-├── tests/                  # Pytest test suite
-├── design.md               # Full design document
-├── pyproject.toml          # Python project config
-└── .env                    # Project configuration
++-- rka/                        # Python package
+|   +-- cli.py                  # Click CLI (init, serve, mcp, status, backup, migrate, bootstrap)
+|   +-- config.py               # Pydantic settings (RKAConfig)
+|   +-- models/                 # Pydantic models for all entities
+|   +-- services/               # Business logic (shared by MCP + REST)
+|   |   +-- base.py             # BaseService with emit_event()
+|   |   +-- project.py          # Project metadata + per-project status
+|   |   +-- notes.py            # Journal entry CRUD + enrichment
+|   |   +-- decisions.py        # Decision tree CRUD + superseding
+|   |   +-- literature.py       # Literature CRUD
+|   |   +-- missions.py         # Mission lifecycle
+|   |   +-- checkpoints.py      # Checkpoint CRUD + resolution
+|   |   +-- claims.py           # Claim extraction, CRUD, provenance
+|   |   +-- clusters.py         # Evidence cluster CRUD + synthesis
+|   |   +-- topics.py           # Hierarchical topic taxonomy
+|   |   +-- research_map.py     # Three-level research map assembly
+|   |   +-- review_queue.py     # Review queue CRUD + resolution
+|   |   +-- onboarding.py       # CLAUDE.md generation
+|   |   +-- worker.py           # Background worker + job queue
+|   |   +-- search.py           # Hybrid FTS5 + vector search
+|   |   +-- context.py          # Context engine (temperature, token budgeting)
+|   |   +-- graph.py            # Entity relationship graph
+|   |   +-- audit.py            # Audit log queries and counts
+|   |   +-- academic.py         # BibTeX import, DOI enrichment, Mermaid export
+|   |   +-- artifacts.py        # Artifact registration + figure extraction
+|   |   +-- knowledge_pack.py   # Project export/import packs
+|   |   +-- workspace.py        # Workspace bootstrap (scan, classify, ingest)
+|   |   +-- jobs.py             # Job queue primitives
+|   |   +-- summary.py          # Q&A + summary generation
+|   +-- infra/                  # Infrastructure
+|   |   +-- database.py         # SQLite + FTS5 + sqlite-vec
+|   |   +-- llm.py              # LiteLLM + Instructor wrapper
+|   |   +-- embeddings.py       # FastEmbed service
+|   +-- mcp/                    # MCP server
+|   |   +-- server.py           # FastMCP tool + prompt definitions (all rka_* tools)
+|   +-- api/                    # FastAPI
+|       +-- app.py              # Application factory + static serving
+|       +-- deps.py             # Dependency injection
+|       +-- routes/             # Route modules (one per entity type)
+|           +-- notes.py
+|           +-- decisions.py
+|           +-- literature.py
+|           +-- missions.py
+|           +-- checkpoints.py
+|           +-- claims.py
+|           +-- clusters.py
+|           +-- topics.py
+|           +-- research_map.py
+|           +-- review_queue.py
+|           +-- onboarding.py
+|           +-- search.py
+|           +-- context.py
+|           +-- graph.py
+|           +-- audit.py
+|           +-- academic.py
+|           +-- artifacts.py
+|           +-- workspace.py
+|           +-- project.py
+|           +-- llm.py
+|           +-- summary.py
+|           +-- enrich.py
+|           +-- events.py
+|           +-- tags.py
++-- web/                        # React dashboard (Vite + TypeScript)
+|   +-- src/
+|   |   +-- api/                # Fetch client + TypeScript types
+|   |   +-- hooks/              # TanStack Query hooks
+|   |   +-- components/         # UI components (shadcn + layout + shared)
+|   |   +-- pages/              # Page components (12 pages)
+|   |   +-- lib/                # Utilities
+|   +-- dist/                   # Production build (served by FastAPI)
++-- tests/                      # Pytest test suite
++-- pyproject.toml              # Python project config
++-- docker-compose.yml          # Docker Compose configuration
++-- Dockerfile                  # Docker image (builds web UI + installs Python package)
++-- .env                        # Project configuration
 ```
 
 ### Adding a New Entity Type
@@ -907,11 +1162,12 @@ rka/
 1. Create Pydantic models in `rka/models/`
 2. Add service class extending `BaseService` in `rka/services/`
 3. Add route module in `rka/api/routes/`
-4. Add MCP tool functions in `rka/tools/`
-5. Add schema DDL in `rka/infra/database.py`
-6. Add TypeScript types in `web/src/api/types.ts`
-7. Add TanStack Query hooks in `web/src/hooks/`
-8. Add page component in `web/src/pages/`
+4. Register route in `rka/api/app.py`
+5. Add MCP tool functions in `rka/mcp/server.py`
+6. Add schema DDL in `rka/infra/database.py`
+7. Add TypeScript types in `web/src/api/types.ts`
+8. Add TanStack Query hooks in `web/src/hooks/`
+9. Add page component in `web/src/pages/` if needed
 
 ---
 
@@ -919,14 +1175,15 @@ rka/
 
 | Phase | Focus | Status |
 |-------|-------|--------|
-| **Phase 1** | Core MCP + SQLite — schema, CRUD, 24 MCP tools, REST endpoints, CLI | Complete |
+| **Phase 1** | Core MCP + SQLite — schema, CRUD, MCP tools, REST endpoints, CLI | Complete |
 | **Phase 2** | LLM + Semantic Search — LiteLLM, FastEmbed, FTS5, Context Engine, auto-enrichment | Complete |
-| **Phase 3** | Web Dashboard — React + Vite, 7 core pages, decision tree visualization, static serving | Complete |
+| **Phase 3** | Web Dashboard — React + Vite, core pages, decision tree visualization, static serving | Complete |
 | **Phase 4** | Exploration Visualizations — Timeline page (event stream + causal chains), Knowledge Graph page (entity relationships with React Flow) | Complete |
 | **Phase 5** | Academic APIs + Audit — BibTeX import, DOI enrichment (CrossRef), Semantic Scholar + arXiv search, Mermaid decision tree export, batch import, document ingestion, Audit Log viewer + API | Complete |
 | **Phase 6** | Workspace Bootstrap — Folder scanning with regex + LLM classification, batch ingestion pipeline, duplicate detection, Brain handoff review | Complete |
 | **Phase 7** | Notebook + LLM Config — Q&A chat, summary generation, runtime LLM configuration, context window auto-detection, knowledge graph, Docker deployment | Complete |
-| **Phase 8** | Multi-Project + Knowledge Packs — project isolation, dashboard project management, portable project export/import, artifact-safe import remapping | Complete |
+| **Phase 8** | Multi-Project + Knowledge Packs — project isolation, dashboard project management, portable project export/import, artifact-safe import remapping, MCP multi-project tools | Complete |
+| **Phase 9** | v2.0 — Progressive distillation pipeline (entries -> claims -> clusters -> research map), three-level Research Map page, Brain-augmented enrichment via review queue, decision superseding with re-distillation, provenance chains, typed cross-references (link_), hierarchical topic taxonomy, background worker process, onboarding tools (rka_generate_claude_md), simplified journal entry types (note/log/directive) | Complete |
 
 ---
 

@@ -36,6 +36,7 @@ These changes are informed by a systematic literature review of 84+ papers and o
 | 11 | Entity type redesign | 3 record types + fine typing on claims layer | Practical analysis of v1.6 data |
 | 12 | Entity cross-references | Typed bidirectional links with full provenance chains | W3C PROV, MLflow lineage |
 | 13 | Brain-augmented enrichment | Tiered: local LLM for routine, Brain for complex reasoning | Agent Laboratory, CoALA |
+| 14 | AI tool discoverability | Three-layer: improved MCP instructions + auto-generated CLAUDE.md + updated prompts | Practical usability analysis |
 
 ---
 
@@ -845,7 +846,9 @@ Color coding:
    - Create FTS5 and vec0 tables for claims
 2. Write backfill script for existing journal type migration
 3. Update NoteService for type mapping
-4. Write tests: test_migration.py, test_type_mapping.py
+4. Update `RKA_INSTRUCTIONS` constant in server.py with v2.0 decision table, new entity types, and session protocol (see Section 20.3)
+5. Update `scripts/research_project_CLAUDE.md` template for v2.0 types and tools
+6. Write tests: test_migration.py, test_type_mapping.py
 
 ### Phase 2: Claim Extraction + Verification + Cross-References (Week 3-4)
 
@@ -912,7 +915,12 @@ Color coding:
 10. Add Brain-enrichment attribution (`synthesized_by: brain` vs `synthesized_by: llm`)
 11. Add review queue indicator badges to research map UI (shows which syntheses are Brain-verified)
 12. Run full test suite, update documentation
-13. Tag v2.0.0 release
+13. Implement `rka_generate_claude_md` MCP tool (queries live DB, produces project-specific CLAUDE.md)
+14. Add `GET /api/generate-claude-md` REST endpoint
+15. Update `brain_orientation()` prompt with v2.0 additions (research map, review queue, cross-references, decision lifecycle)
+16. Update `executor_orientation()` prompt with v2.0 additions (simplified types, cross-reference conventions, provenance)
+17. Run full test suite, update documentation
+18. Tag v2.0.0 release
 
 ---
 
@@ -1289,7 +1297,299 @@ These map to the MCP tools above. The PI doesn't need to know the tool names —
 
 ---
 
-## 20. Conclusion
+## 20. AI Tool Discoverability and Onboarding
+
+### 20.1 The Problem
+
+RKA v2.0 will have 50+ MCP tools across 12 categories. An AI agent (Brain or Executor) that connects to RKA sees all these tools listed with their parameter schemas, but has no reliable way to know:
+
+- **Workflow sequence**: Which tools to call first, which depend on others, what the session lifecycle looks like
+- **Situational mapping**: When a specific situation arises (e.g. "I found a result"), which tool to use and with what parameters
+- **Entity model**: What types of entries exist (note/log/directive), what confidence means on claims vs entries, how cross-references work
+- **Project conventions**: What tags are established, what phase the project is in, what the active research questions are
+
+Currently three mechanisms exist: `RKA_INSTRUCTIONS` (embedded in MCP server, auto-sent to clients), orientation prompts (`brain_orientation`, `executor_orientation` — callable but not auto-loaded), and a `CLAUDE.md` template (manual, generic). All three need substantial improvement for v2.0.
+
+### 20.2 Solution: Three Layers of Discoverability
+
+| Layer | Mechanism | Audience | Effort per project | When it helps |
+|-------|----------|----------|-------------------|--------------|
+| **1. MCP instructions** | `RKA_INSTRUCTIONS` constant in server.py | Every connected AI client | Zero — baked into server | Immediately on connection |
+| **2. Auto-generated CLAUDE.md** | New `rka_generate_claude_md` tool | Claude Code (Executor) | ~1 minute (run tool, save output) | Session start |
+| **3. Updated orientation prompts** | `brain_orientation()`, `executor_orientation()` | Brain and Executor on demand | Zero — baked into server | On first call or PI nudge |
+
+### 20.3 Layer 1: Improved RKA_INSTRUCTIONS (server.py)
+
+The `RKA_INSTRUCTIONS` string is automatically sent to every MCP client on connection. This is the highest-impact change because it requires zero per-project effort. The current version lists tool categories but not workflow. The v2.0 version must include:
+
+**Replace the current `RKA_INSTRUCTIONS` constant with:**
+
+```python
+RKA_INSTRUCTIONS = """\
+Research Knowledge Agent (RKA) — structured knowledge base for AI-assisted research.
+RKA tracks journal entries (note/log/directive), decisions, literature, missions,
+claims, evidence clusters, and a three-layer research map with full provenance chains.
+
+## Session Start — ALWAYS do this first
+1. `rka_get_context()` — load current project state, phase, recent knowledge
+2. `rka_get_status()` — see current phase, focus, next steps
+3. `rka_get_checkpoints(status="open")` — check for unresolved blockers
+4. `rka_get_review_queue()` — (Brain only) items flagged for deep reasoning
+
+## When to Use What
+
+| Situation | Tool | Key parameters |
+|-----------|------|---------------|
+| Starting a session | `rka_get_context()` | Always first |
+| Recorded an observation or analysis | `rka_add_note` | `type="note"`, `source="brain"` or `"executor"` |
+| Documented a procedure step | `rka_add_note` | `type="log"`, `related_mission=id` |
+| Giving instructions to Executor | `rka_add_note` | `type="directive"` |
+| Made a research or design decision | `rka_add_decision` | `related_journal=[ids]` for justification |
+| Need to assign implementation work | `rka_create_mission` | `motivated_by_decision=id` |
+| Hit a blocker, need Brain/PI input | `rka_submit_checkpoint` | `blocking=True` |
+| Finished an assigned mission | `rka_submit_report` | `related_decisions=[ids]` |
+| Found a relevant paper | `rka_add_literature` or `rka_enrich_doi` | |
+| Want to search for papers | `rka_search_semantic_scholar` / `rka_search_arxiv` | |
+| Want the research overview | `rka_get_research_map` | Three-level: RQs → clusters → claims |
+| Want to trace why something exists | `rka_trace_provenance` | `direction="upstream"` or `"both"` |
+| Need to overturn a past decision | `rka_supersede_decision` | Triggers re-distillation |
+| (Brain) Review flagged items | `rka_get_review_queue` then `rka_review_cluster` | |
+| (Brain) Deep topic synthesis | `rka_synthesize_topic` | Better than local LLM |
+| (Brain) Resolve a contradiction | `rka_resolve_contradiction` | |
+| Searching for anything | `rka_search` | Searches all entity types |
+| End of session | `rka_update_status` | Update summary and next_steps |
+
+## Entity Types (v2.0)
+- **Journal entries**: `note` (observations, analyses), `log` (procedures), `directive` (instructions)
+- **Claims**: Extracted from entries by LLM — `hypothesis`, `evidence`, `method`, `result`, `observation`, `assumption`
+- **Decisions**: `research_question`, `design_choice`, or `operational` (set via `kind` field)
+- **Evidence clusters**: Groups of related claims with LLM-generated synthesis
+- **Cross-references**: 12 link types forming provenance chains (informed_by, justified_by, motivated, produced, etc.)
+
+## Roles
+- **Brain** (Claude Desktop): strategy, decisions, literature review, deep reasoning, review queue
+- **Executor** (Claude Code): implementation, experiments, data processing, mission execution
+- **PI** (human): supervision, final authority, research direction
+
+Use `brain_orientation` or `executor_orientation` prompts for detailed role guidance.
+
+## Multi-Project
+`rka_list_projects()` → `rka_set_project(id)` to switch. All tools scope to active project.
+"""
+```
+
+**Key changes from v1.6.0:**
+- Decision table replaces category listing — tells AI *when*, not just *what*
+- Entity types updated for v2.0 (note/log/directive, claims, clusters)
+- v2.0 tools included (research map, provenance, review queue, supersede)
+- Cross-reference vocabulary mentioned
+- Session start protocol is prescriptive, not just suggested
+- Brain-specific tools clearly marked
+
+### 20.4 Layer 2: Auto-Generated CLAUDE.md Tool
+
+**New MCP tool: `rka_generate_claude_md`**
+
+This tool queries the live database and produces a complete, project-specific `CLAUDE.md` file. The PI runs it once when setting up a new project (or after major changes) and pastes the output into the project root.
+
+**Tool signature:**
+
+```python
+@tool()
+async def rka_generate_claude_md(
+    project_path: str = ".",
+    role: str = "executor",
+) -> str:
+    """Generate a project-specific CLAUDE.md for Claude Code.
+
+    Queries the live RKA database and produces a CLAUDE.md tailored to
+    the current project state: active phase, established tags, open missions,
+    research questions, recording conventions, and v2.0 tool guidance.
+
+    Args:
+        project_path: Root path of the project (for directory structure reference)
+        role: Target role — "executor" (default) or "brain"
+    """
+```
+
+**What it generates (from live DB state):**
+
+```markdown
+# CLAUDE.md — {project_name} ({role} instructions)
+
+This project uses RKA (Research Knowledge Agent) for persistent knowledge management.
+You are the {Role}: {role description}.
+
+## Project
+**Name**: {project_state.project_name}
+**Phase**: {project_state.current_phase}
+**RKA dashboard**: http://127.0.0.1:9712
+**Focus**: {project_state.summary — first 200 chars}
+
+## Session Start Protocol
+1. `rka_get_context()` — load current project state
+2. {role-specific steps — e.g. executor checks missions, brain checks review queue}
+
+## Active Research Questions
+{for each decision where kind='research_question' and status='active':}
+- {decision.question} (clusters: {count}, claims: {count})
+
+## Active Missions
+{for each mission where status in ('pending', 'active'):}
+- [{mission.status}] {mission.objective} (ID: {mission.id})
+
+## Recording Standards (v2.0)
+| Situation | Tool | Parameters |
+|-----------|------|-----------|
+| Got a result | `rka_add_note` | `type="note", related_mission="{active_mission_id}"` |
+| Ran an experiment | `rka_add_note` | `type="log", related_mission="{active_mission_id}"` |
+| Hit a decision point | `rka_submit_checkpoint` | `blocking=True` |
+| Finished a mission | `rka_submit_report` | Include `related_decisions` |
+| Found a paper | `rka_add_literature` or `rka_enrich_doi` | |
+
+## Established Tags
+{for each tag in top 20 most-used tags:}
+- `{tag}` ({count} entries)
+
+## Established Topics
+{for each topic in topics table:}
+- `{topic.name}` — {topic.description}
+
+## Open Checkpoints
+{for each checkpoint where status='open':}
+- [{checkpoint.type}] {checkpoint.description}
+
+## Key Decisions
+{for each recent active decision, last 10:}
+- {decision.question} → {decision.chosen}
+
+## Constraints
+- Journal entry types: `note` (observations/analyses), `log` (procedures), `directive` (instructions)
+- Always set `related_mission` when working on a mission task
+- Always set `related_decisions` when a finding bears on a decision
+- Raise checkpoints for strategic decisions — don't decide unilaterally
+```
+
+**Implementation details:**
+
+1. **Location**: `rka/mcp/server.py` — new tool function
+2. **Data sources**: Queries `project_state`, `decisions` (kind='research_question'), `missions` (active/pending), `tags` (top 20 by usage), `topics`, `checkpoints` (open), `decisions` (recent active)
+3. **API calls**: Makes GET requests to existing REST endpoints: `/api/status`, `/api/decisions`, `/api/missions`, `/api/tags`, `/api/topics`, `/api/checkpoints`
+4. **Output**: Returns the full markdown string. The PI or Brain can save it to the project root
+5. **No file writing**: The tool returns text only — it does NOT write to the filesystem (respects the no-Docker-mount principle). The user saves the output.
+
+### 20.5 Layer 3: Updated Orientation Prompts
+
+Both `brain_orientation()` and `executor_orientation()` MCP prompts need v2.0 updates. The key changes:
+
+**brain_orientation additions:**
+
+```
+## v2.0 Research Map Workflow
+- `rka_get_research_map()` — see the three-level view (RQs → clusters → claims)
+- When creating decisions, set `kind="research_question"` for questions that organize research
+- Use `related_journal=[ids]` on decisions to link them to justifying evidence
+- Use `motivated_by_decision=id` on missions to create provenance chains
+
+## Review Queue (Brain-Only)
+At session start, after loading context:
+4. `rka_get_review_queue()` — items the local LLM flagged for your attention
+
+Process high-priority items before starting new work:
+- `rka_review_cluster(cluster_id, confidence, synthesis)` — refine cluster quality
+- `rka_review_claims(entry_id, corrections)` — correct extracted claims
+- `rka_synthesize_topic(topic_id)` — write deep topic synthesis
+- `rka_resolve_contradiction(cluster_id, resolution)` — resolve flagged conflicts
+- `rka_evaluate_evidence(scope="project")` — assess overall evidence state
+
+Your syntheses are marked `synthesized_by: brain` — they override local LLM output.
+
+## Cross-References
+When recording decisions, always link evidence:
+- `rka_add_decision(..., related_journal=["jrn_01...", "jrn_02..."])` — what findings justify this
+- `rka_create_mission(..., motivated_by_decision="dec_01...")` — what decision triggers this work
+- `rka_trace_provenance(entity_id, direction="upstream")` — understand why something exists
+
+## Decision Lifecycle
+- To overturn a past decision: `rka_supersede_decision(old_id, question, chosen, rationale)`
+- This automatically triggers re-distillation of affected knowledge
+- Raw journal entries are never changed — only the interpretive layer rebuilds
+```
+
+**executor_orientation additions:**
+
+```
+## v2.0 Recording Standards
+
+### Entry Types (simplified)
+| Type | Use when | Example |
+|------|---------|---------|
+| `note` | You observed, analyzed, or discovered something | Results, insights, observations |
+| `log` | You did a procedure step | "Ran stress test", "Deployed config change" |
+| `directive` | You received or are recording instructions | PI instructions, Brain directions |
+
+Old types (finding, insight, methodology, etc.) are accepted but mapped to these three.
+
+### Cross-References — Always Link Your Work
+- `rka_add_note(..., related_mission="msn_01...")` — link to active mission (ALWAYS do this)
+- `rka_add_note(..., related_decisions=["dec_01..."])` — link to relevant decisions
+- `rka_submit_report(..., related_decisions=["dec_01..."])` — link findings to decisions they bear on
+
+### Research Map Awareness
+- `rka_get_research_map()` — see where your work fits in the big picture
+- After completing a mission, check if your findings affect any research questions
+- If they do, note which decisions your results justify or contradict
+
+### Provenance
+- `rka_trace_provenance(entity_id)` — trace the reasoning chain behind any entity
+- Use this when you need to understand why a decision was made before implementing
+```
+
+### 20.6 Implementation Specification
+
+**Files to modify:**
+
+| File | Change |
+|------|--------|
+| `rka/mcp/server.py` | Replace `RKA_INSTRUCTIONS` constant with v2.0 version |
+| `rka/mcp/server.py` | Add `rka_generate_claude_md` tool function |
+| `rka/mcp/server.py` | Update `brain_orientation()` prompt with v2.0 additions |
+| `rka/mcp/server.py` | Update `executor_orientation()` prompt with v2.0 additions |
+| `scripts/research_project_CLAUDE.md` | Update template to reflect v2.0 types and tools (serves as fallback when rka_generate_claude_md is unavailable) |
+
+**New API route (optional, for the tool):**
+
+```
+GET /api/generate-claude-md?role=executor
+```
+
+Returns the generated markdown. The MCP tool calls this endpoint.
+
+**Testing:**
+
+1. Connect a fresh Claude Code session to RKA — verify it calls `rka_get_context()` first without being told
+2. Present a scenario ("I found a result from my experiment") — verify the AI chooses `rka_add_note(type="note")` not the old `type="finding"`
+3. Create a mission — verify the Executor sets `related_mission` on its notes
+4. Have the Brain make a decision — verify it includes `related_journal` for justification
+5. Generate CLAUDE.md for an existing project — verify it includes correct active missions, tags, RQs
+
+### 20.7 Why This Design Over Alternatives
+
+**Why not a Claude Desktop skill file?** Skills (`.md` files in a skills directory) work for the computer-use sandbox but not for MCP tool workflows. The MCP instructions mechanism is the correct channel for tool discovery.
+
+**Why not force-load orientation prompts on every connection?** MCP instructions have a token budget. The full orientation text (~2000 tokens) would be sent on every single tool call's context, wasting tokens. The condensed decision table in `RKA_INSTRUCTIONS` (~500 tokens) hits the 80/20 — enough for correct tool selection, with full detail available on demand via orientation prompts.
+
+**Why auto-generate CLAUDE.md instead of just improving the template?** Because the template requires the PI to manually fill in project name, active missions, established tags, current phase, research questions, etc. This is tedious and quickly goes stale. Auto-generation from the live database ensures the file is always current and complete.
+
+**Why three layers instead of one?** Different AI contexts need different detail levels:
+- Layer 1 (MCP instructions): every connection, minimal tokens, just the decision table
+- Layer 2 (CLAUDE.md): project-specific, loaded once at session start, medium detail
+- Layer 3 (orientation prompts): full workflow guidance, loaded on demand, comprehensive
+
+
+---
+
+## 21. Conclusion
 
 RKA v2.0 transforms the system from a passive research bookkeeper into an active knowledge builder through four fundamental shifts:
 

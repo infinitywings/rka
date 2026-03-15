@@ -19,14 +19,37 @@ import httpx
 from rka.models.mission import MissionTask
 
 RKA_INSTRUCTIONS = """\
-Research Knowledge Agent (RKA) — a structured knowledge base for research projects.
-RKA tracks journal entries, decisions, literature, and missions across research phases,
-with a knowledge graph linking all entities.
+Research Knowledge Agent (RKA) — structured knowledge base for AI-assisted research.
+RKA tracks journal entries (note/log/directive), decisions, literature, missions,
+claims, evidence clusters, and a three-layer research map with full provenance chains.
 
-## Quick Start
-1. `rka_get_status()` — see current project state and phase
-2. `rka_get_context()` — get a focused context package with recent knowledge
-3. `rka_search(query)` — find anything in the knowledge base
+## Session Start — ALWAYS do this first
+1. `rka_get_context()` — load current project state, phase, recent knowledge
+2. `rka_get_status()` — see current phase, focus, next steps
+3. `rka_get_checkpoints(status="open")` — check for unresolved blockers
+4. `rka_get_review_queue()` — (Brain only) items flagged for deep reasoning
+
+## When to Use What
+
+| Situation | Tool | Key parameters |
+|-----------|------|---------------|
+| Starting a session | `rka_get_context()` | Always first |
+| Recorded an observation or analysis | `rka_add_note` | `type="note"`, `source="brain"` or `"executor"` |
+| Documented a procedure step | `rka_add_note` | `type="log"`, `related_mission=id` |
+| Giving instructions to Executor | `rka_add_note` | `type="directive"` |
+| Made a research or design decision | `rka_add_decision` | `related_journal=[ids]` for justification |
+| Need to assign implementation work | `rka_create_mission` | `motivated_by_decision=id` |
+| Hit a blocker, need Brain/PI input | `rka_submit_checkpoint` | `blocking=True` |
+| Finished an assigned mission | `rka_submit_report` | `related_decisions=[ids]` |
+| Found a relevant paper | `rka_add_literature` or `rka_enrich_doi` | |
+| Want to search for papers | `rka_search_semantic_scholar` / `rka_search_arxiv` | |
+| Want the research overview | `rka_get_research_map` | Three-level: RQs → clusters → claims |
+| Want to trace why something exists | `rka_trace_provenance` | `direction="upstream"` or `"both"` |
+| Need to overturn a past decision | `rka_supersede_decision` | Triggers re-distillation |
+| (Brain) Review flagged items | `rka_get_review_queue` then `rka_review_cluster` | |
+| (Brain) Resolve a contradiction | `rka_resolve_contradiction` | |
+| Searching for anything | `rka_search` | Searches all entity types |
+| End of session | `rka_update_status` | Update summary and next_steps |
 
 ## Tool Categories
 - **Project**: `rka_list_projects`, `rka_set_project`, `rka_create_project`, `rka_get_status`, `rka_update_status`
@@ -42,14 +65,24 @@ with a knowledge graph linking all entities.
 - **Academic**: `rka_search_semantic_scholar`, `rka_search_arxiv`, `rka_import_bibtex`
 - **Workspace**: `rka_scan_workspace`, `rka_bootstrap_workspace`
 - **Session**: `rka_session_digest`, `rka_reset_session`
+- **Onboarding**: `rka_generate_claude_md`
+
+## Entity Types (v2.0)
+- **Journal entries**: `note` (observations, analyses), `log` (procedures), `directive` (instructions)
+- **Claims**: Extracted from entries by LLM — `hypothesis`, `evidence`, `method`, `result`, `observation`, `assumption`
+- **Decisions**: `research_question`, `design_choice`, or `operational` (set via `kind` field)
+- **Evidence clusters**: Groups of related claims with LLM-generated synthesis
+- **Cross-references**: 12 link types forming provenance chains (informed_by, justified_by, motivated, produced, etc.)
 
 ## Roles
-RKA supports a Brain/Executor/PI workflow. Use the `brain_orientation` or
-`executor_orientation` prompts for role-specific guidance.
+- **Brain** (Claude Desktop): strategy, decisions, literature review, deep reasoning, review queue
+- **Executor** (Claude Code): implementation, experiments, data processing, mission execution
+- **PI** (human): supervision, final authority, research direction
+
+Use `brain_orientation` or `executor_orientation` prompts for detailed role guidance.
 
 ## Multi-Project
-Use `rka_list_projects()` and `rka_set_project(id)` to switch between projects.
-Default project is used if none is explicitly selected.
+`rka_list_projects()` → `rka_set_project(id)` to switch. All tools scope to active project.
 """
 
 mcp = FastMCP("Research Knowledge Agent", instructions=RKA_INSTRUCTIONS)
@@ -1993,6 +2026,27 @@ async def rka_reset_session() -> str:
     return f"Session state reset. Output verbosity and digest history cleared. Active project: {prev_project or 'proj_default (implicit)'}"
 
 
+@tool()
+async def rka_generate_claude_md(
+    role: str = "executor",
+) -> str:
+    """Generate a project-specific CLAUDE.md for Claude Code.
+
+    Queries the live RKA database and produces a CLAUDE.md tailored to
+    the current project state: active phase, established tags, open missions,
+    research questions, recording conventions, and v2.0 tool guidance.
+
+    Args:
+        role: Target role — "executor" (default) or "brain"
+    """
+    async with _client() as c:
+        r = await c.get("/api/generate-claude-md", params={"role": role})
+        _raise_with_detail(r)
+    data = r.json()
+    md = data.get("markdown", "")
+    return f"Generated CLAUDE.md for role '{data.get('role', role)}':\n\n{md}"
+
+
 # ============================================================
 # v2.0: Research Map, Claims, Provenance, Review Queue
 # ============================================================
@@ -2368,7 +2422,8 @@ If there are open checkpoints, resolve them before continuing new work.
 - `rka_resolve_checkpoint(id, resolution)` — unblock the Executor
 
 ### Recording Knowledge
-- `rka_add_note(content, type="finding"|"insight"|"idea"|"hypothesis", source="brain")` — log anything meaningful
+- `rka_add_note(content, type="note", source="brain")` — observations, analyses, insights
+- `rka_add_note(content, type="directive")` — instructions to the Executor
 - `rka_add_decision(title, rationale, chosen_option, alternatives)` — record all non-trivial choices
 - `rka_add_literature(...)` or `rka_enrich_doi(doi)` — add papers; use `rka_search_semantic_scholar` / `rka_search_arxiv` to find related work
 
@@ -2386,6 +2441,42 @@ If there are open checkpoints, resolve them before continuing new work.
 - Responses become more compact automatically in longer sessions to save tokens
 - `rka_session_digest()` gives you a compressed summary of the session so far
 - `rka_reset_session()` clears the session tracker when you want to start fresh
+
+---
+
+## v2.0 Research Map Workflow
+
+- `rka_get_research_map()` — see the three-level view (RQs → clusters → claims)
+- When creating decisions, set `kind="research_question"` for questions that organize research
+- Use `related_journal=[ids]` on decisions to link them to justifying evidence
+- Use `motivated_by_decision=id` on missions to create provenance chains
+
+## Review Queue (Brain-Only)
+
+At session start, after loading context:
+4. `rka_get_review_queue()` — items the local LLM flagged for your attention
+
+Process high-priority items before starting new work:
+- `rka_review_cluster(cluster_id, confidence, synthesis)` — refine cluster quality
+- `rka_review_claims(entry_id, corrections)` — correct extracted claims
+- `rka_synthesize_topic(topic_id)` — write deep topic synthesis
+- `rka_resolve_contradiction(cluster_id, resolution)` — resolve flagged conflicts
+- `rka_evaluate_evidence(scope="project")` — assess overall evidence state
+
+Your syntheses are marked `synthesized_by: brain` — they override local LLM output.
+
+## Cross-References
+
+When recording decisions, always link evidence:
+- `rka_add_decision(..., related_journal=["jrn_01...", "jrn_02..."])` — what findings justify this
+- `rka_create_mission(..., motivated_by_decision="dec_01...")` — what decision triggers this work
+- `rka_trace_provenance(entity_id, direction="upstream")` — understand why something exists
+
+## Decision Lifecycle
+
+- To overturn a past decision: `rka_supersede_decision(old_id, question, chosen, rationale)`
+- This automatically triggers re-distillation of affected knowledge
+- Raw journal entries are never changed — only the interpretive layer rebuilds
 
 ---
 
@@ -2450,9 +2541,8 @@ If no mission exists, ask the Brain or PI for direction before starting.
 ## Core Workflow
 
 ### During Implementation
-- `rka_add_note(content, type="methodology", source="executor", related_mission=id)` — document each significant implementation step
-- `rka_add_note(content, type="finding", source="executor", confidence="hypothesis")` — record results/observations
-- `rka_add_note(content, type="observation", source="executor")` — raw data observations
+- `rka_add_note(content, type="note", source="executor", related_mission=id)` — record results, observations, analyses
+- `rka_add_note(content, type="log", source="executor", related_mission=id)` — document procedure steps
 - `rka_ingest_document(path)` — import new files (PDFs, scripts, data files) into the knowledge base
 
 ### When Blocked
@@ -2470,18 +2560,34 @@ If no mission exists, ask the Brain or PI for direction before starting.
 
 ---
 
-## Recording Standards
+## v2.0 Recording Standards
 
-| What happened | Tool | type param |
-|---|---|---|
-| Ran an experiment | `rka_add_note` | `methodology` |
-| Got a result | `rka_add_note` | `finding` |
-| Noticed something odd | `rka_add_note` | `observation` |
-| Had an implementation idea | `rka_add_note` | `idea` |
-| Hit a decision point | `rka_submit_checkpoint` | — |
+### Entry Types (simplified)
 
-Always set `related_mission` when working on a mission task.
-Use project tags consistently (see existing tags in `rka_get_context`).
+| Type | Use when | Example |
+|------|---------|---------|
+| `note` | You observed, analyzed, or discovered something | Results, insights, observations |
+| `log` | You did a procedure step | "Ran stress test", "Deployed config" |
+| `directive` | You received or are recording instructions | PI instructions, Brain directions |
+
+Old types (finding, insight, methodology, etc.) are accepted but mapped to these three.
+
+### Cross-References — Always Link Your Work
+
+- `rka_add_note(..., related_mission="msn_01...")` — link to active mission (ALWAYS do this)
+- `rka_add_note(..., related_decisions=["dec_01..."])` — link to relevant decisions
+- `rka_submit_report(..., related_decisions=["dec_01..."])` — link findings to decisions they bear on
+
+### Research Map Awareness
+
+- `rka_get_research_map()` — see where your work fits in the big picture
+- After completing a mission, check if your findings affect any research questions
+- If they do, note which decisions your results justify or contradict
+
+### Provenance
+
+- `rka_trace_provenance(entity_id)` — trace the reasoning chain behind any entity
+- Use this when you need to understand why a decision was made before implementing
 
 ---
 
