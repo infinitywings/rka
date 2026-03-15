@@ -1,32 +1,154 @@
 # Research Knowledge Agent (RKA)
 
-An MCP server and REST API for AI-assisted research orchestration. RKA provides a persistent, structured research memory for managing literature, notes, decisions, missions, checkpoints, and project-scoped artifacts across long-running investigations. It is designed for a collaborative workflow between a human principal investigator (PI), a strategic AI research assistant (Brain), and an implementation-focused AI assistant (Executor).
+**Persistent research memory for AI-assisted investigations.**
 
-## Why RKA Exists
+RKA gives your research project a brain that doesn't forget between sessions. It stores every finding, decision, hypothesis, and literature reference in a structured knowledge base — then uses a local LLM to continuously organize that knowledge into navigable evidence maps with full provenance chains.
 
-Modern research increasingly involves iterative collaboration between humans and AI systems, but most AI interfaces remain session-bound. Research questions, working hypotheses, literature interpretations, negative results, methodological choices, and the reasoning behind key decisions disappear between sessions. At the same time, research artifacts accumulate across papers, notes, code, datasets, experiment outputs, and meeting records without a unified structure for retrieval, provenance, or longitudinal reasoning.
-
-RKA addresses this by acting as a persistent knowledge layer for the research lifecycle. It stores notes with explicit confidence states from hypothesis through verification, records decisions together with alternatives and rationale, links literature to the questions and claims it informed, and maintains an event-sourced audit trail that preserves how a project evolved across weeks or months. The Brain/Executor model separates strategic interpretation from implementation: one AI can support synthesis, framing, and research direction, while another carries out coding, experiments, extraction, and reporting against the same shared research memory.
-
-The result is continuity across the full arc of a project. A session in month six can access the accumulated context of month one: what was tried, what failed, what evidence supported a decision, what was abandoned and why, and which questions remain unresolved.
-
-## What RKA Provides
-
-- Persistent research memory across sessions, phases, and projects
-- Structured entities for literature, notes, decisions, missions, checkpoints, artifacts, and events
-- Progressive distillation pipeline: journal entries extracted into claims, claims grouped into evidence clusters, clusters organized into a three-level research map (RQs, Clusters, Claims)
-- Traceable provenance linking papers, notes, decisions, experiments, and outcomes via typed cross-reference edges
-- Brain-augmented enrichment via a review queue for low-confidence claims, contradictions, and cluster synthesis
-- Decision superseding with optional re-distillation of affected claims
-- Brain/Executor coordination for strategic planning, execution, reporting, and escalation
-- Hybrid retrieval with keyword search, embeddings, summaries, and grounded Q&A
-- Multi-project support with MCP tools for listing, switching, and creating projects
-- Project packs for portable export and import
-- REST API, MCP server, CLI, and web dashboard over a shared service layer
-
-Current release: `v2.0` adds the progressive distillation pipeline (journal entries to claims to evidence clusters to a three-level research map), Brain-augmented enrichment via review queue, decision superseding, provenance chains, typed cross-references, hierarchical topic taxonomy, onboarding tools, and a background worker process for non-blocking enrichment. LLM features are enabled by default.
+```
+ Month 1                    Month 3                    Month 6
+ ┌──────────┐              ┌──────────┐              ┌──────────┐
+ │ "We found │              │ "Based on │              │ "We can   │
+ │  that..." │              │  3 months │              │  trace    │
+ │           │   ┌─────┐   │  of evi-  │   ┌─────┐   │  every    │
+ │ (lost     │──▶│ RKA │──▶│  dence..."│──▶│ RKA │──▶│  decision │
+ │  next     │   └─────┘   │           │   └─────┘   │  back to  │
+ │  session) │              │ (all here)│              │  its why" │
+ └──────────┘              └──────────┘              └──────────┘
+  Without RKA               With RKA                  With RKA v2
+  Findings vanish            Everything persists        Knowledge self-organizes
+```
 
 Built for CS/IoT/CPS security research at UNC Charlotte.
+
+---
+
+## How it works
+
+Three actors collaborate through a shared knowledge base:
+
+```mermaid
+graph LR
+    PI["🧑‍🔬 PI<br/><i>Human researcher</i>"]
+    Brain["🧠 Brain<br/><i>Claude Desktop</i>"]
+    Executor["⚡ Executor<br/><i>Claude Code</i>"]
+    RKA["📚 RKA<br/><i>Knowledge base + LLM</i>"]
+
+    PI -->|supervises| Brain
+    PI -->|supervises| Executor
+    Brain -->|"strategy, decisions"| RKA
+    Executor -->|"findings, reports"| RKA
+    RKA -->|"context, evidence"| Brain
+    RKA -->|"missions, guidance"| Executor
+
+    style RKA fill:#E1F5EE,stroke:#0F6E56,color:#04342C
+    style Brain fill:#EEEDFE,stroke:#534AB7,color:#26215C
+    style Executor fill:#E6F1FB,stroke:#185FA5,color:#042C53
+    style PI fill:#F1EFE8,stroke:#5F5E5A,color:#2C2C2A
+```
+
+- **Brain** (Claude Desktop) — strategic layer. Interprets findings, decides research direction, reviews evidence clusters, resolves contradictions.
+- **Executor** (Claude Code) — implementation layer. Runs experiments, writes code, collects data. Receives missions, submits reports, raises checkpoints when blocked.
+- **PI** (human researcher) — supervises both, resolves escalations, provides domain expertise.
+- **RKA** — the shared memory. Stores everything, organizes it automatically, provides context to whoever needs it.
+
+---
+
+## The knowledge pipeline
+
+Raw observations don't stay raw. RKA's background worker continuously distills journal entries into structured knowledge:
+
+```mermaid
+graph TD
+    Entry["📝 Journal entries<br/><i>note · log · directive</i>"]
+    Claims["🔍 Claims<br/><i>hypothesis · evidence · method<br/>result · observation · assumption</i>"]
+    Clusters["🗂️ Evidence clusters<br/><i>Grouped claims with<br/>LLM-generated synthesis</i>"]
+    Map["🗺️ Research map<br/><i>Research questions →<br/>clusters → claims</i>"]
+
+    Entry -->|"LLM extracts"| Claims
+    Claims -->|"LLM clusters"| Clusters
+    Clusters -->|"LLM synthesizes"| Map
+
+    style Entry fill:#E6F1FB,stroke:#185FA5,color:#042C53
+    style Claims fill:#EEEDFE,stroke:#534AB7,color:#26215C
+    style Clusters fill:#FAEEDA,stroke:#854F0B,color:#412402
+    style Map fill:#E1F5EE,stroke:#0F6E56,color:#04342C
+```
+
+Every claim links back to its source entry with character offsets. Every cluster links to its constituent claims. The full provenance chain is always traversable.
+
+---
+
+## The provenance chain
+
+Every entity in RKA knows why it exists. Typed cross-references form a complete reasoning chain:
+
+```mermaid
+graph LR
+    Lit["📄 Literature<br/><i>MQTT benchmarks</i>"]
+    Dec1["🔀 Decision<br/><i>Test broker limits</i>"]
+    Mis["📋 Mission<br/><i>Stress test at scale</i>"]
+    Entry["📝 Finding<br/><i>12% packet loss</i>"]
+    Claim["💡 Claim<br/><i>Threshold at 400</i>"]
+    Dec2["🔀 Decision<br/><i>Implement sharding</i>"]
+
+    Lit -->|informed| Dec1
+    Dec1 -->|motivated| Mis
+    Mis -->|produced| Entry
+    Entry -->|derived| Claim
+    Claim -->|justified| Dec2
+
+    style Lit fill:#F1EFE8,stroke:#5F5E5A,color:#2C2C2A
+    style Dec1 fill:#EEEDFE,stroke:#534AB7,color:#26215C
+    style Mis fill:#E6F1FB,stroke:#185FA5,color:#042C53
+    style Entry fill:#E1F5EE,stroke:#0F6E56,color:#04342C
+    style Claim fill:#FAEEDA,stroke:#854F0B,color:#412402
+    style Dec2 fill:#EEEDFE,stroke:#534AB7,color:#26215C
+```
+
+12 typed link types: `informed_by` · `justified_by` · `motivated` · `produced` · `cites` · `references` · `supports` · `contradicts` · `supersedes` · `resolved_as` · `derived_from` · `builds_on`
+
+---
+
+## What you can do with RKA
+
+**Record and organize:**
+
+```
+Brain:    rka_add_note("12% packet loss above 400 connections", type="note")
+          rka_add_decision("Use horizontal sharding", related_journal=["jrn_..."])
+          rka_create_mission("Test sharding", motivated_by_decision="dec_...")
+
+Executor: rka_add_note("Ran 500-connection stress test", type="log")
+          rka_submit_report(mission_id, findings="Sharding reduced loss to 2%")
+          rka_submit_checkpoint("Need PI input on replication factor")
+```
+
+**Navigate and search:**
+
+```
+rka_get_research_map()         → Three-level view: RQs → clusters → claims
+rka_trace_provenance(id)       → Literature → decision → mission → finding → claim
+rka_get_review_queue()         → Items flagged for Brain's deep reasoning
+rka_search("MQTT scalability") → Entries, decisions, literature, claims
+rka_get_context(topic="...")   → Token-budgeted context package
+```
+
+---
+
+## Key features
+
+| Category | What it does |
+|----------|-------------|
+| **Persistent memory** | Journal entries, decisions, literature, missions, checkpoints — all survive between sessions |
+| **Progressive distillation** | Background LLM pipeline: entries → claims → evidence clusters → research themes |
+| **Three-layer research map** | Navigate: research questions → evidence clusters → individual claims |
+| **Full provenance** | 12 typed cross-reference edges forming traceable reasoning chains |
+| **Brain-augmented enrichment** | Local LLM handles routine work; review queue flags items for Brain's deep reasoning |
+| **Decision lifecycle** | Overturn decisions with `rka_supersede_decision` — affected knowledge re-distills automatically |
+| **Hybrid search** | FTS5 keyword + sqlite-vec embeddings + reciprocal rank fusion |
+| **Multi-project** | Isolated project databases with MCP tools for switching |
+| **Web dashboard** | 12-page React UI: research map, decision tree, knowledge graph, journal, timeline |
+| **Onboarding** | `rka_generate_claude_md` auto-generates project-specific CLAUDE.md from live DB state |
 
 ---
 
@@ -56,44 +178,32 @@ Built for CS/IoT/CPS security research at UNC Charlotte.
 
 RKA implements a three-actor collaboration:
 
-```
-+---------------+     +------------------+     +-------------------+
-|      PI        |     |   Brain (Claude   |     | Executor (Claude   |
-|  (Researcher)  |<--->|    Desktop)       |<--->|    Code)           |
-|                |     |  Strategic layer  |     | Implementation     |
-+---------------+     +--------+---------+     +--------+----------+
-                               |                         |
-                               |    MCP tools (stdio)    |
-                               +--------+----------------+
-                                        |
-                                        v
-                          +----------------------------+
-                          |         RKA Server          |
-                          |  +----------------------+  |
-                          |  |    Service Layer       |  |
-                          |  |  (shared business      |  |
-                          |  |   logic for MCP+REST)  |  |
-                          |  +----------+-------------+  |
-                          |             |                 |
-                          |  +----------v-------------+  |
-                          |  | Infrastructure Layer    |  |
-                          |  | SQLite + sqlite-vec     |  |
-                          |  | LLM (LiteLLM+Instructor)|  |
-                          |  | Embeddings (FastEmbed)  |  |
-                          |  +----------+-------------+  |
-                          +-------------+--------------+  |
-                                        |
-                          +-------------v--------------+
-                          |   Background Worker         |
-                          |   Distillation Pipeline     |
-                          |   Enrichment Queue          |
-                          +----------------------------+
-                                        |
-                          +-------------v--------------+
-                          |   LM Studio / Ollama        |
-                          |   OpenAI-compatible API     |
-                          |   Context window detected   |
-                          +----------------------------+
+```mermaid
+graph TD
+    subgraph Clients
+        CD["Claude Desktop<br/><i>Brain — MCP stdio</i>"]
+        CC["Claude Code<br/><i>Executor — MCP stdio</i>"]
+        WEB["Web Dashboard<br/><i>localhost:9712</i>"]
+    end
+
+    subgraph "RKA Server"
+        MCP["MCP Server — 50+ tools"]
+        API["REST API — FastAPI"]
+        SVC["Service Layer — shared logic"]
+        DB["SQLite + FTS5 + sqlite-vec"]
+        WORKER["Background Worker<br/><i>Distillation + enrichment</i>"]
+    end
+
+    LLM["Local LLM<br/><i>LM Studio / Ollama</i>"]
+
+    CD --> MCP
+    CC --> MCP
+    WEB --> API
+    MCP --> SVC
+    API --> SVC
+    SVC --> DB
+    WORKER --> DB
+    WORKER --> LLM
 ```
 
 - **Brain** (Claude Desktop): Strategic decisions — what to research, which direction to take, how to interpret findings, and which review-queue items to resolve. Communicates via MCP tools.
