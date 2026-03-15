@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 import { NavLink } from "react-router-dom"
 import {
   LayoutDashboard,
@@ -12,9 +12,10 @@ import {
   Shield,
   Telescope,
   Settings,
+  Plus,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { useProjectStatus, useProjects } from "@/hooks/useProject"
+import { useProjectStatus, useProjects, useCreateProject } from "@/hooks/useProject"
 import { useProjectSelection } from "@/hooks/useProjectSelection"
 import {
   Select,
@@ -23,6 +24,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
+import { Label } from "@/components/ui/label"
 
 const navItems = [
   { to: "/", icon: LayoutDashboard, label: "Dashboard" },
@@ -42,6 +54,10 @@ export function Sidebar() {
   const { projectId, setProjectId } = useProjectSelection()
   const { data: project } = useProjectStatus()
   const { data: projects } = useProjects()
+  const createProject = useCreateProject()
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [name, setName] = useState("")
+  const [description, setDescription] = useState("")
 
   useEffect(() => {
     if (!projects?.length) return
@@ -49,6 +65,21 @@ export function Sidebar() {
       setProjectId(projects[0].id)
     }
   }, [projectId, projects, setProjectId])
+
+  const handleCreate = () => {
+    if (!name.trim()) return
+    createProject.mutate(
+      { name: name.trim(), description: description.trim() || undefined },
+      {
+        onSuccess: (newProject) => {
+          setProjectId(newProject.id)
+          setDialogOpen(false)
+          setName("")
+          setDescription("")
+        },
+      },
+    )
+  }
 
   return (
     <aside className="flex h-screen w-56 flex-col border-r bg-sidebar">
@@ -69,9 +100,9 @@ export function Sidebar() {
             )}
           </div>
         </div>
-        <div className="mt-3">
+        <div className="mt-3 flex gap-1">
           <Select value={projectId} onValueChange={setProjectId}>
-            <SelectTrigger className="h-9 w-full text-xs">
+            <SelectTrigger className="h-9 flex-1 text-xs">
               <SelectValue placeholder="Select project" />
             </SelectTrigger>
             <SelectContent>
@@ -82,6 +113,15 @@ export function Sidebar() {
               ))}
             </SelectContent>
           </Select>
+          <Button
+            variant="outline"
+            size="icon"
+            className="h-9 w-9 shrink-0"
+            onClick={() => setDialogOpen(true)}
+            title="New project"
+          >
+            <Plus className="h-4 w-4" />
+          </Button>
         </div>
       </div>
 
@@ -113,6 +153,48 @@ export function Sidebar() {
           Research Knowledge Agent
         </p>
       </div>
+
+      {/* New Project Dialog */}
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>New Project</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="project-name">Project name</Label>
+              <Input
+                id="project-name"
+                placeholder="e.g. Climate Policy Analysis"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleCreate()}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="project-description">Description (optional)</Label>
+              <Textarea
+                id="project-description"
+                placeholder="Brief description of the research project"
+                rows={3}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleCreate}
+              disabled={!name.trim() || createProject.isPending}
+            >
+              {createProject.isPending ? "Creating..." : "Create"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </aside>
   )
 }

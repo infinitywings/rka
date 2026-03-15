@@ -29,7 +29,7 @@ with a knowledge graph linking all entities.
 3. `rka_search(query)` — find anything in the knowledge base
 
 ## Tool Categories
-- **Project**: `rka_list_projects`, `rka_set_project`, `rka_get_status`, `rka_update_status`
+- **Project**: `rka_list_projects`, `rka_set_project`, `rka_create_project`, `rka_get_status`, `rka_update_status`
 - **Notes**: `rka_add_note`, `rka_update_note`, `rka_get_journal`
 - **Decisions**: `rka_add_decision`, `rka_update_decision`, `rka_get_decision_tree`
 - **Literature**: `rka_add_literature`, `rka_update_literature`, `rka_get_literature`, `rka_enrich_doi`
@@ -853,6 +853,34 @@ async def rka_set_project(project_id: str) -> str:
             return f"Switched to project **{name}** (`{project_id}`). Phase: {phase}"
 
     return f"Switched to project `{project_id}`."
+
+
+@tool()
+async def rka_create_project(
+    name: str,
+    description: str | None = None,
+) -> str:
+    """Create a new research project and switch to it.
+
+    Args:
+        name: Human-readable project name (e.g. "Climate Policy Analysis")
+        description: Brief description of the research project
+    """
+    async with _client() as c:
+        body = {"name": name}
+        if description:
+            body["description"] = description
+        r = await c.post("/api/projects", json=body)
+        _raise_with_detail(r)
+        project = r.json()
+
+    # Auto-switch to the new project
+    _session.project_id = project["id"]
+
+    return (
+        f"Created project **{project['name']}** (`{project['id']}`).\n"
+        f"Session switched to this project. All subsequent tool calls will target it."
+    )
 
 
 # ============================================================
