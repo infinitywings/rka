@@ -57,4 +57,7 @@ async def update_cluster(
     cluster = await svc.get(cluster_id)
     if cluster is None:
         raise HTTPException(404, f"Cluster {cluster_id} not found")
-    return await svc.update(cluster_id, data)
+    try:
+        return await svc.update(cluster_id, data)
+    except ValueError as e:
+        raise HTTPException(422, str(e))

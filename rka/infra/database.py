@@ -99,7 +99,7 @@ class Database:
             logger.info("Applying migration: %s", sql_file.name)
             await self._conn.executescript(sql)
             await self._conn.execute(
-                "INSERT INTO schema_migrations (filename) VALUES (?)",
+                "INSERT OR IGNORE INTO schema_migrations (filename) VALUES (?)",
                 [sql_file.name],
             )
             await self._conn.commit()

@@ -42,10 +42,12 @@ class DecisionUpdate(BaseModel):
     rationale: str | None = None
     status: Literal["active", "abandoned", "superseded", "merged", "revisit"] | None = None
     abandonment_reason: str | None = None
+    parent_id: str | None = None
     related_missions: list[str] | None = None
     related_literature: list[str] | None = None
     related_journal: list[str] | None = None
     kind: Literal["research_question", "design_choice", "decision", "operational"] | None = None
+    phase: str | None = None
     tags: list[str] | None = None
 
 

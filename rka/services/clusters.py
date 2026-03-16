@@ -79,6 +79,20 @@ class ClusterService(BaseService):
         if not dump:
             return await self.get(cluster_id)
 
+        # Validate research_question_id if provided
+        if "research_question_id" in dump:
+            rq_id = dump["research_question_id"]
+            rq = await self.db.fetchone(
+                "SELECT id, kind FROM decisions WHERE id = ? AND project_id = ?",
+                [rq_id, self.project_id],
+            )
+            if not rq:
+                raise ValueError(f"Decision {rq_id} not found")
+            if rq["kind"] != "research_question":
+                raise ValueError(
+                    f"Decision {rq_id} is not a research_question (kind={rq['kind']})"
+                )
+
         if "needs_reprocessing" in dump:
             dump["needs_reprocessing"] = int(dump["needs_reprocessing"])
 

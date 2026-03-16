@@ -219,19 +219,23 @@ async def rka_update_note(
     related_literature: list[str] | None = None,
     related_mission: str | None = None,
     tags: list[str] | None = None,
+    phase: str | None = None,
+    source: str | None = None,
 ) -> str:
     """Update an existing journal entry.
 
     Args:
         id: The note ID to update
         content: New content
-        type: New type
+        type: New type — note | log | directive
         confidence: New confidence level — hypothesis | tested | verified | superseded | retracted
         importance: New importance level — critical | high | normal | low
         related_decisions: Decision IDs this note relates to
         related_literature: Literature IDs this note references
         related_mission: Mission ID this note belongs to
         tags: Tags for categorization
+        phase: Research phase (e.g. planning | development | design | experiment)
+        source: Who created this — brain | executor | pi | llm | web_ui
     """
     async with _client() as c:
         body = {
@@ -239,10 +243,13 @@ async def rka_update_note(
             "importance": importance, "related_decisions": related_decisions,
             "related_literature": related_literature,
             "related_mission": related_mission, "tags": tags,
+            "phase": phase, "source": source,
         }
-        r = await c.put(f"/api/notes/{id}", json={k: v for k, v in body.items() if v is not None})
+        filtered = {k: v for k, v in body.items() if v is not None}
+        r = await c.put(f"/api/notes/{id}", json=filtered)
         _raise_with_detail(r)
-        return f"Updated {id}"
+        changed = list(filtered.keys())
+        return f"Updated {id} fields={','.join(changed)}"
 
 
 @tool()
@@ -397,6 +404,11 @@ async def rka_update_decision(
     abandonment_reason: str | None = None,
     kind: str | None = None,
     related_journal: list[str] | None = None,
+    parent_id: str | None = None,
+    related_literature: list[str] | None = None,
+    related_missions: list[str] | None = None,
+    phase: str | None = None,
+    tags: list[str] | None = None,
 ) -> str:
     """Update a decision node.
 
@@ -408,16 +420,84 @@ async def rka_update_decision(
         abandonment_reason: Why this branch was abandoned
         kind: research_question | design_choice | decision | operational
         related_journal: Journal entry IDs that justify this decision
+        parent_id: Parent decision ID for tree structure (set to "" to clear)
+        related_literature: Literature IDs informing this decision
+        related_missions: Mission IDs related to this decision
+        phase: Research phase
+        tags: Tags for categorization
     """
     async with _client() as c:
         body = {
             "status": status, "chosen": chosen, "rationale": rationale,
             "abandonment_reason": abandonment_reason, "kind": kind,
-            "related_journal": related_journal,
+            "related_journal": related_journal, "parent_id": parent_id,
+            "related_literature": related_literature,
+            "related_missions": related_missions, "phase": phase, "tags": tags,
         }
-        r = await c.put(f"/api/decisions/{id}", json={k: v for k, v in body.items() if v is not None})
+        filtered = {k: v for k, v in body.items() if v is not None}
+        r = await c.put(f"/api/decisions/{id}", json=filtered)
         _raise_with_detail(r)
-        return f"Updated decision {id}"
+        changed = list(filtered.keys())
+        return f"Updated decision {id} fields={','.join(changed)}"
+
+
+@tool()
+async def rka_bulk_update(
+    updates: list[dict],
+) -> str:
+    """Bulk update multiple entities in one call.
+
+    Each update must have 'entity_type', 'id', and 'data' fields.
+    Supported entity_types: 'note', 'decision', 'literature'.
+
+    Args:
+        updates: List of updates, e.g. [{"entity_type": "note", "id": "jrn_01...", "data": {"type": "note", "confidence": "verified", "tags": ["v1.6-audit"]}}]
+    """
+    async with _client() as c:
+        results = []
+        errors = []
+        for i, upd in enumerate(updates):
+            etype = upd.get("entity_type")
+            eid = upd.get("id")
+            data = upd.get("data", {})
+
+            if not etype or not eid:
+                errors.append(f"[{i}] missing entity_type or id")
+                continue
+
+            endpoint_map = {
+                "note": f"/api/notes/{eid}",
+                "journal": f"/api/notes/{eid}",
+                "decision": f"/api/decisions/{eid}",
+                "literature": f"/api/literature/{eid}",
+            }
+            endpoint = endpoint_map.get(etype)
+            if not endpoint:
+                errors.append(f"[{i}] unknown entity_type: {etype}")
+                continue
+
+            try:
+                r = await c.put(endpoint, json=data)
+                if r.status_code < 300:
+                    results.append(f"[{i}] {etype} {eid} OK")
+                else:
+                    errors.append(f"[{i}] {etype} {eid} -> {r.status_code}: {r.text[:100]}")
+            except Exception as e:
+                errors.append(f"[{i}] {etype} {eid} -> error: {str(e)[:100]}")
+
+        summary = f"Updated {len(results)}/{len(updates)}"
+        if errors:
+            summary += f" ({len(errors)} errors)"
+        lines = [summary, ""]
+        if results:
+            lines.append("Successes:")
+            lines.extend(results[:20])
+            if len(results) > 20:
+                lines.append(f"  ... and {len(results) - 20} more")
+        if errors:
+            lines.append("Errors:")
+            lines.extend(errors)
+        return "\n".join(lines)
 
 
 # ============================================================
@@ -2265,6 +2345,7 @@ async def rka_review_cluster(
     gaps: list[str] | None = None,
     contradictions: list[str] | None = None,
     resolve_queue_items: list[str] | None = None,
+    research_question_id: str | None = None,
 ) -> str:
     """Brain reviews and enriches an evidence cluster.
 
@@ -2278,6 +2359,7 @@ async def rka_review_cluster(
         gaps: Brain-identified evidence gaps
         contradictions: Brain-confirmed contradictions
         resolve_queue_items: Review queue item IDs to mark as resolved
+        research_question_id: Decision ID (kind=research_question) to assign this cluster to
     """
     # Update cluster
     payload = {
@@ -2285,9 +2367,11 @@ async def rka_review_cluster(
         "confidence": confidence,
         "synthesized_by": "brain",
         "needs_reprocessing": False,
+        "research_question_id": research_question_id,
     }
+    body = {k: v for k, v in payload.items() if v is not None}
     async with _client() as c:
-        r = await c.put(f"/api/clusters/{cluster_id}", json=payload)
+        r = await c.put(f"/api/clusters/{cluster_id}", json=body)
         _raise_with_detail(r)
 
         # Resolve review queue items
@@ -2299,7 +2383,10 @@ async def rka_review_cluster(
                     "resolution": f"Cluster {cluster_id} reviewed: {confidence}",
                 })
 
-    return f"Cluster {cluster_id} updated: confidence={confidence}, synthesized_by=brain"
+    parts = [f"Cluster {cluster_id} updated: confidence={confidence}, synthesized_by=brain"]
+    if research_question_id:
+        parts.append(f"assigned to RQ {research_question_id}")
+    return ", ".join(parts)
 
 
 @tool()

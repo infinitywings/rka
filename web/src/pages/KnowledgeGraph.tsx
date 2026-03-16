@@ -32,6 +32,8 @@ const DIM = {
   mission:  { w: 232, h: 70 },
   finding:  { w: 212, h: 60 },
   lit:      { w: 222, h: 68 },
+  claim:    { w: 200, h: 56 },
+  cluster:  { w: 232, h: 70 },
 }
 
 // ── Custom node components ──────────────────────────────────────────────────
@@ -169,11 +171,63 @@ function LitNode({ data }: NodeProps) {
   )
 }
 
+function ClaimNode({ data }: NodeProps) {
+  const d = data as { content: string; claim_type: string }
+  return (
+    <>
+      <Handle type="target" position={Position.Left} />
+      <div
+        className="rounded border border-amber-300 bg-amber-50 px-2 py-1.5 shadow-sm cursor-pointer transition-shadow hover:shadow-md"
+        style={{ width: DIM.claim.w }}
+      >
+        <span className="text-[9px] font-bold uppercase tracking-wide text-amber-700">{d.claim_type || "claim"}</span>
+        <p
+          className="text-[10px] leading-snug mt-0.5"
+          style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
+        >
+          {d.content}
+        </p>
+      </div>
+      <Handle type="source" position={Position.Right} />
+    </>
+  )
+}
+
+function ClusterNode({ data }: NodeProps) {
+  const d = data as { label: string; claim_count: number; confidence: string }
+  return (
+    <>
+      <Handle type="target" position={Position.Left} />
+      <div
+        className="rounded-lg border-2 border-purple-400 bg-purple-50 px-3 py-2 shadow-sm cursor-pointer transition-shadow hover:shadow-md"
+        style={{ width: DIM.cluster.w }}
+      >
+        <div className="flex items-center gap-1">
+          <span className="text-[9px] font-bold text-purple-700 uppercase tracking-wide">Cluster</span>
+          {d.confidence && <span className="text-[9px] text-purple-500">{d.confidence}</span>}
+        </div>
+        <p
+          className="text-[11px] leading-snug mt-0.5"
+          style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
+        >
+          {d.label}
+        </p>
+        {d.claim_count > 0 && (
+          <span className="text-[9px] text-muted-foreground">{d.claim_count} claims</span>
+        )}
+      </div>
+      <Handle type="source" position={Position.Right} />
+    </>
+  )
+}
+
 const nodeTypes = {
   decisionNode: DecisionNode,
   missionNode:  MissionNode,
   findingNode:  FindingNode,
   litNode:      LitNode,
+  claimNode:    ClaimNode,
+  clusterNode:  ClusterNode,
 }
 
 // ── Main component ──────────────────────────────────────────────────────────
@@ -181,6 +235,8 @@ const nodeTypes = {
 export default function KnowledgeGraph() {
   const [showMissions, setShowMissions] = useState(true)
   const [showFindings, setShowFindings] = useState(true)
+  const [showClusters, setShowClusters] = useState(true)
+  const [showClaims, setShowClaims] = useState(false)
   const [showOrphans, setShowOrphans] = useState(false)
   const [selected, setSelected] = useState<{ id: string; kind: string } | null>(null)
 
@@ -215,6 +271,8 @@ export default function KnowledgeGraph() {
         case "decision":   return DIM.decision
         case "mission":    return DIM.mission
         case "literature": return DIM.lit
+        case "claim":      return DIM.claim
+        case "cluster":    return DIM.cluster
         default:           return DIM.finding
       }
     }
@@ -246,6 +304,8 @@ export default function KnowledgeGraph() {
       if (gn.type === "mission" && !showMissions) continue
       if (gn.type === "journal" && !showFindings) continue
       if (gn.type === "literature" && !showFindings) continue
+      if (gn.type === "claim" && !showClaims) continue
+      if (gn.type === "cluster" && !showClusters) continue
       if (!showOrphans && !connectedIds.has(gn.id)) continue
       addNode(gn.id, gn.type)
     }
@@ -318,6 +378,16 @@ export default function KnowledgeGraph() {
             id: gn.id, type: "litNode", position: pos,
             data: { title: lit?.title ?? gn.label },
           })
+        } else if (gn.type === "claim" && showClaims) {
+          flowNodes.push({
+            id: gn.id, type: "claimNode", position: pos,
+            data: { content: gn.label, claim_type: gn.status ?? "claim" },
+          })
+        } else if (gn.type === "cluster" && showClusters) {
+          flowNodes.push({
+            id: gn.id, type: "clusterNode", position: pos,
+            data: { label: gn.label, claim_count: 0, confidence: gn.status ?? "" },
+          })
         }
       }
 
@@ -330,6 +400,10 @@ export default function KnowledgeGraph() {
         supersedes:   { stroke: "#f59e0b", width: 1, dash: "6,4" },
         resolved_as:  { stroke: "#6366f1", width: 1.5 },
         evidence_for: { stroke: "#10b981", width: 1, dash: "4,3" },
+        derived_from: { stroke: "#f97316", width: 1.5 },
+        motivated:    { stroke: "#ec4899", width: 1.5, dash: "6,3" },
+        justified_by: { stroke: "#14b8a6", width: 1, dash: "4,3" },
+        informed_by:  { stroke: "#64748b", width: 1 },
       }
 
       const flowEdges: Edge[] = graphData.edges
@@ -356,20 +430,22 @@ export default function KnowledgeGraph() {
       setNodes(flowNodes)
       setEdges(flowEdges)
     }).catch(console.error)
-  }, [graphData, decisions, missions, notes, literature, showMissions, showFindings, showOrphans, setNodes, setEdges])
+  }, [graphData, decisions, missions, notes, literature, showMissions, showFindings, showClusters, showClaims, showOrphans, setNodes, setEdges])
 
   const handleNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
     const kind =
       node.type === "missionNode"  ? "mission"     :
       node.type === "findingNode"  ? "finding"     :
-      node.type === "litNode"      ? "literature"  : "decision"
+      node.type === "litNode"      ? "literature"  :
+      node.type === "claimNode"    ? "claim"       :
+      node.type === "clusterNode"  ? "cluster"     : "decision"
     setSelected({ id: node.id, kind })
   }, [])
 
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Research Map</h1>
+        <h1 className="text-2xl font-bold tracking-tight">Knowledge Graph</h1>
         <p className="text-sm text-muted-foreground">
           {nodes.length} nodes · {edges.length} connections
         </p>
@@ -396,6 +472,8 @@ export default function KnowledgeGraph() {
                 if (n.type === "decisionNode") return "#3b82f6"
                 if (n.type === "missionNode")  return "#0d9488"
                 if (n.type === "findingNode")  return "#10b981"
+                if (n.type === "claimNode")    return "#f59e0b"
+                if (n.type === "clusterNode")  return "#a855f7"
                 return "#94a3b8"
               }}
               style={{ height: 100, width: 160 }}
@@ -407,9 +485,11 @@ export default function KnowledgeGraph() {
               <div className="bg-background/95 backdrop-blur border rounded-lg p-3 shadow text-[11px] space-y-2 min-w-[160px]">
                 <p className="text-xs font-semibold">Layers</p>
                 {([
-                  { label: "Missions",  color: "#0d9488", val: showMissions, set: setShowMissions },
-                  { label: "Findings",  color: "#10b981", val: showFindings, set: setShowFindings },
-                  { label: "Orphan nodes", color: "#94a3b8", val: showOrphans, set: setShowOrphans },
+                  { label: "Missions",    color: "#0d9488", val: showMissions,  set: setShowMissions },
+                  { label: "Findings",    color: "#10b981", val: showFindings,  set: setShowFindings },
+                  { label: "Clusters",    color: "#a855f7", val: showClusters,  set: setShowClusters },
+                  { label: "Claims",      color: "#f59e0b", val: showClaims,    set: setShowClaims },
+                  { label: "Orphan nodes",color: "#94a3b8", val: showOrphans,   set: setShowOrphans },
                 ] as const).map(({ label, color, val, set }) => (
                   <label key={label} className="flex items-center gap-2 cursor-pointer select-none">
                     <input
@@ -423,17 +503,19 @@ export default function KnowledgeGraph() {
                 ))}
 
                 <div className="border-t pt-2 space-y-1 text-muted-foreground text-[10px]">
+                  <p className="text-[9px] font-semibold text-foreground">Edge types</p>
                   <div className="space-y-px">
-                    <div>🟢 active · ⬜ abandoned</div>
-                  </div>
-                  <div className="border-t pt-1 space-y-px">
-                    <div className="flex items-center gap-1"><span className="inline-block w-4 h-0 border-t-2" style={{borderColor:"#3b82f6"}} /> triggered</div>
-                    <div className="flex items-center gap-1"><span className="inline-block w-4 h-0 border-t-2" style={{borderColor:"#10b981"}} /> produced</div>
+                    <div className="flex items-center gap-1"><span className="inline-block w-4 h-0 border-t-2" style={{borderColor:"#f97316"}} /> derived_from</div>
                     <div className="flex items-center gap-1"><span className="inline-block w-4 h-0 border-t-2" style={{borderColor:"#0d9488"}} /> references</div>
                     <div className="flex items-center gap-1"><span className="inline-block w-4 h-0 border-t border-dashed" style={{borderColor:"#8b5cf6"}} /> cites</div>
+                    <div className="flex items-center gap-1"><span className="inline-block w-4 h-0 border-t-2" style={{borderColor:"#10b981"}} /> produced</div>
+                    <div className="flex items-center gap-1"><span className="inline-block w-4 h-0 border-t border-dashed" style={{borderColor:"#ec4899"}} /> motivated</div>
+                    <div className="flex items-center gap-1"><span className="inline-block w-4 h-0 border-t-2" style={{borderColor:"#3b82f6"}} /> triggered</div>
+                    <div className="flex items-center gap-1"><span className="inline-block w-4 h-0 border-t border-dashed" style={{borderColor:"#14b8a6"}} /> justified_by</div>
+                    <div className="flex items-center gap-1"><span className="inline-block w-4 h-0 border-t border-dashed" style={{borderColor:"#10b981"}} /> evidence_for</div>
                     <div className="flex items-center gap-1"><span className="inline-block w-4 h-0 border-t border-dashed" style={{borderColor:"#f59e0b"}} /> supersedes</div>
+                    <div className="flex items-center gap-1"><span className="inline-block w-4 h-0 border-t" style={{borderColor:"#94a3b8"}} /> other</div>
                   </div>
-                  <p className="border-t pt-1 text-[9px]">Edges from entity_links table</p>
                 </div>
               </div>
             </Panel>
@@ -444,6 +526,7 @@ export default function KnowledgeGraph() {
       <NodeDetailSheet
         node={selected} onClose={() => setSelected(null)}
         decisions={decisions} missions={missions} notes={notes} literature={literature}
+        graphNodes={graphData?.nodes ?? []}
       />
     </div>
   )
@@ -452,7 +535,7 @@ export default function KnowledgeGraph() {
 // ── Detail side panel ───────────────────────────────────────────────────────
 
 function NodeDetailSheet({
-  node, onClose, decisions, missions, notes, literature,
+  node, onClose, decisions, missions, notes, literature, graphNodes,
 }: {
   node: { id: string; kind: string } | null
   onClose: () => void
@@ -460,11 +543,14 @@ function NodeDetailSheet({
   missions: Mission[]
   notes: JournalEntry[]
   literature: Literature[]
+  graphNodes: GraphData["nodes"]
 }) {
   const decision = node?.kind === "decision"   ? decisions.find(d => d.id === node.id)  : null
   const mission  = node?.kind === "mission"    ? missions.find(m => m.id === node.id)   : null
   const note     = node?.kind === "finding"    ? notes.find(n => n.id === node.id)      : null
   const lit      = node?.kind === "literature" ? literature.find(l => l.id === node.id) : null
+  const gn       = (node?.kind === "claim" || node?.kind === "cluster")
+                   ? graphNodes.find(g => g.id === node.id) : null
 
   return (
     <Sheet open={!!node} onOpenChange={open => !open && onClose()}>
@@ -477,6 +563,8 @@ function NodeDetailSheet({
           {mission  && <MissionDetail  mis={mission} />}
           {note     && <FindingDetail  note={note} literature={literature} />}
           {lit      && <LitDetail      lit={lit} />}
+          {node?.kind === "claim" && gn && <ClaimDetail gn={gn} />}
+          {node?.kind === "cluster" && gn && <ClusterDetail gn={gn} />}
         </div>
       </SheetContent>
     </Sheet>
@@ -645,6 +733,36 @@ function LitDetail({ lit }: { lit: Literature }) {
       )}
       <TagList tags={lit.tags} />
       <p className="text-[10px] text-muted-foreground font-mono">{lit.id}</p>
+    </>
+  )
+}
+
+function ClaimDetail({ gn }: { gn: GraphData["nodes"][number] }) {
+  return (
+    <>
+      <div className="flex items-center gap-2 flex-wrap">
+        <Badge variant="outline" className="text-xs border-amber-400 text-amber-700">{gn.status || "claim"}</Badge>
+        {gn.phase && <Badge variant="secondary" className="text-xs">{gn.phase}</Badge>}
+      </div>
+      <Section label="Content">
+        <p className="whitespace-pre-wrap">{gn.label}</p>
+      </Section>
+      <p className="text-[10px] text-muted-foreground font-mono">{gn.id}</p>
+    </>
+  )
+}
+
+function ClusterDetail({ gn }: { gn: GraphData["nodes"][number] }) {
+  return (
+    <>
+      <div className="flex items-center gap-2 flex-wrap">
+        <Badge variant="outline" className="text-xs border-purple-400 text-purple-700">cluster</Badge>
+        {gn.status && <Badge variant="secondary" className="text-xs">{gn.status}</Badge>}
+      </div>
+      <Section label="Label">
+        <p className="font-medium">{gn.label}</p>
+      </Section>
+      <p className="text-[10px] text-muted-foreground font-mono">{gn.id}</p>
     </>
   )
 }

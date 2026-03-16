@@ -75,6 +75,7 @@ class EvidenceClusterUpdate(BaseModel):
     confidence: ClusterConfidence | None = None
     needs_reprocessing: bool | None = None
     synthesized_by: Literal["llm", "brain"] | None = None
+    research_question_id: str | None = None
 
 
 class EvidenceCluster(BaseModel):

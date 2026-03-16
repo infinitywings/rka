@@ -82,6 +82,8 @@ class JournalEntryUpdate(BaseModel):
     content: str | None = None
     type: AnyJournalType | None = None
     summary: str | None = None
+    source: Literal["brain", "executor", "pi", "web_ui", "llm"] | None = None
+    phase: str | None = None
     confidence: Literal["hypothesis", "tested", "verified", "superseded", "retracted"] | None = None
     importance: Literal["critical", "high", "normal", "low", "archived"] | None = None
     status: Literal["draft", "active", "superseded", "retracted"] | None = None
