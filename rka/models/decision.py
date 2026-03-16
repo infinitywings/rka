@@ -27,7 +27,9 @@ class DecisionCreate(BaseModel):
     phase: str
     related_missions: list[str] | None = None
     related_literature: list[str] | None = None
+    related_journal: list[str] | None = None
     status: Literal["active", "abandoned", "superseded", "merged", "revisit"] = "active"
+    kind: Literal["research_question", "design_choice", "decision", "operational"] = "decision"
     tags: list[str] = Field(default_factory=list)
 
 
@@ -40,8 +42,12 @@ class DecisionUpdate(BaseModel):
     rationale: str | None = None
     status: Literal["active", "abandoned", "superseded", "merged", "revisit"] | None = None
     abandonment_reason: str | None = None
+    parent_id: str | None = None
     related_missions: list[str] | None = None
     related_literature: list[str] | None = None
+    related_journal: list[str] | None = None
+    kind: Literal["research_question", "design_choice", "decision", "operational"] | None = None
+    phase: str | None = None
     tags: list[str] | None = None
 
 
@@ -60,6 +66,10 @@ class Decision(BaseModel):
     abandonment_reason: str | None = None
     related_missions: list[str] | None = None
     related_literature: list[str] | None = None
+    related_journal: list[str] | None = None
+    superseded_by: str | None = None
+    scope_version: int = 1
+    kind: str = "decision"
     tags: list[str] = Field(default_factory=list)
     enrichment_status: Literal["pending", "ready", "failed"] = "ready"
     created_at: str | None = None

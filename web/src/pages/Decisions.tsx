@@ -6,6 +6,8 @@ import {
   MiniMap,
   useNodesState,
   useEdgesState,
+  Handle,
+  Position,
   type Node,
   type Edge,
   Panel,
@@ -31,22 +33,26 @@ const statusStyles: Record<string, string> = {
 
 function DecisionNodeComponent({ data }: { data: { label: string; status: string; chosen: string | null; phase: string } }) {
   return (
-    <div
-      className={`rounded-lg border-2 px-4 py-3 shadow-sm min-w-[200px] max-w-[280px] ${
-        statusStyles[data.status] ?? "border-gray-300 bg-white"
-      }`}
-    >
-      <div className="flex items-center gap-2 mb-1">
-        <StatusBadge status={data.status} />
-        <span className="text-[10px] text-muted-foreground">{data.phase}</span>
+    <>
+      <Handle type="target" position={Position.Top} />
+      <div
+        className={`rounded-lg border-2 px-4 py-3 shadow-sm min-w-[200px] max-w-[280px] ${
+          statusStyles[data.status] ?? "border-gray-300 bg-white"
+        }`}
+      >
+        <div className="flex items-center gap-2 mb-1">
+          <StatusBadge status={data.status} />
+          <span className="text-[10px] text-muted-foreground">{data.phase}</span>
+        </div>
+        <p className="text-sm font-medium leading-tight">{data.label}</p>
+        {data.chosen && (
+          <p className="text-xs text-muted-foreground mt-1 truncate">
+            → {data.chosen}
+          </p>
+        )}
       </div>
-      <p className="text-sm font-medium leading-tight">{data.label}</p>
-      {data.chosen && (
-        <p className="text-xs text-muted-foreground mt-1 truncate">
-          → {data.chosen}
-        </p>
-      )}
-    </div>
+      <Handle type="source" position={Position.Bottom} />
+    </>
   )
 }
 

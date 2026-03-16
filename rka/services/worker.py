@@ -97,6 +97,56 @@ class EnrichmentWorker:
                 return await svc.process_auto_summarize_job(entity_id)
             if job_type == "note_embed":
                 return await svc.process_embedding_job(entity_id)
+            if job_type == "note_extract_claims":
+                from rka.services.claims import ClaimService
+                claim_svc = ClaimService(
+                    self.db, llm=self.llm, embeddings=self.embeddings,
+                    project_id=project_id,
+                )
+                return await claim_svc.process_extract_claims_job(entity_id)
+
+        if job_type.startswith("claim_"):
+            from rka.services.claims import ClaimService
+
+            svc = ClaimService(
+                self.db, llm=self.llm, embeddings=self.embeddings,
+                project_id=project_id,
+            )
+            if job_type == "claim_verify":
+                return await svc.process_verify_claim_job(entity_id)
+            if job_type == "claim_embed":
+                return await svc.process_embedding_job(entity_id)
+
+        if job_type.startswith("cluster_") or job_type in ("theme_synthesize", "contradiction_check"):
+            from rka.services.clusters import ClusterService
+
+            svc = ClusterService(
+                self.db, llm=self.llm, embeddings=self.embeddings,
+                project_id=project_id,
+            )
+            if job_type == "cluster_update":
+                return await svc.process_cluster_update_job(entity_id)
+            if job_type == "theme_synthesize":
+                return await svc.process_theme_synthesize_job(entity_id)
+            if job_type == "contradiction_check":
+                payload = None
+                if job.get("payload"):
+                    import json
+                    try:
+                        payload = json.loads(job["payload"]) if isinstance(job["payload"], str) else job["payload"]
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                return await svc.process_contradiction_check_job(entity_id, payload)
+
+        if job_type == "re_distill":
+            from rka.services.claims import ClaimService
+            claim_svc = ClaimService(
+                self.db, llm=self.llm, embeddings=self.embeddings,
+                project_id=project_id,
+            )
+            # Mark existing claims as stale, then re-extract
+            await claim_svc.mark_stale_by_entry(entity_id)
+            return await claim_svc.process_extract_claims_job(entity_id)
 
         if job_type.startswith("decision_"):
             from rka.services.decisions import DecisionService

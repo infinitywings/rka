@@ -2,13 +2,18 @@
 
 // ---- Journal ----
 
-export type JournalType =
+// v2.0 canonical types
+export type JournalType = "note" | "log" | "directive"
+// Legacy types still accepted by the API (auto-mapped to v2 types)
+export type LegacyJournalType =
   | "finding" | "insight" | "pi_instruction" | "exploration"
   | "idea" | "observation" | "hypothesis" | "methodology" | "summary"
+export type AnyJournalType = JournalType | LegacyJournalType
 
 export type Source = "brain" | "executor" | "pi" | "web_ui" | "llm"
 export type Confidence = "hypothesis" | "tested" | "verified" | "superseded" | "retracted"
 export type Importance = "critical" | "high" | "normal" | "low" | "archived"
+export type JournalStatus = "draft" | "active" | "superseded" | "retracted"
 
 export interface JournalEntry {
   id: string
@@ -24,6 +29,8 @@ export interface JournalEntry {
   superseded_by: string | null
   confidence: string
   importance: string
+  status: string
+  pinned: boolean
   tags: string[]
   created_at: string | null
   updated_at: string | null
@@ -31,7 +38,7 @@ export interface JournalEntry {
 
 export interface JournalEntryCreate {
   content: string
-  type?: JournalType
+  type?: AnyJournalType
   source?: Source
   phase?: string
   related_decisions?: string[]
@@ -40,15 +47,19 @@ export interface JournalEntryCreate {
   supersedes?: string
   confidence?: Confidence
   importance?: Importance
+  status?: JournalStatus
+  pinned?: boolean
   tags?: string[]
 }
 
 export interface JournalEntryUpdate {
   content?: string
-  type?: JournalType
+  type?: AnyJournalType
   summary?: string
   confidence?: Confidence
   importance?: Importance
+  status?: JournalStatus
+  pinned?: boolean
   related_decisions?: string[]
   related_literature?: string[]
   related_mission?: string
@@ -65,6 +76,7 @@ export interface DecisionOption {
 
 export type DecisionStatus = "active" | "abandoned" | "superseded" | "merged" | "revisit"
 export type DecidedBy = "pi" | "brain" | "executor"
+export type DecisionKind = "research_question" | "design_choice" | "decision" | "operational"
 
 export interface Decision {
   id: string
@@ -79,6 +91,10 @@ export interface Decision {
   abandonment_reason: string | null
   related_missions: string[] | null
   related_literature: string[] | null
+  related_journal: string[] | null
+  superseded_by: string | null
+  scope_version: number
+  kind: string
   tags: string[]
   created_at: string | null
   updated_at: string | null
@@ -94,7 +110,9 @@ export interface DecisionCreate {
   parent_id?: string
   related_missions?: string[]
   related_literature?: string[]
+  related_journal?: string[]
   status?: DecisionStatus
+  kind?: DecisionKind
   tags?: string[]
 }
 
@@ -107,6 +125,8 @@ export interface DecisionUpdate {
   abandonment_reason?: string
   related_missions?: string[]
   related_literature?: string[]
+  related_journal?: string[]
+  kind?: DecisionKind
   tags?: string[]
 }
 
@@ -209,6 +229,9 @@ export interface Mission {
   status: string
   depends_on: string | null
   report: MissionReport | null
+  iteration: number
+  parent_mission_id: string | null
+  motivated_by_decision: string | null
   tags: string[]
   created_at: string | null
   completed_at: string | null
@@ -223,6 +246,7 @@ export interface MissionCreate {
   scope_boundaries?: string
   checkpoint_triggers?: string
   depends_on?: string
+  motivated_by_decision?: string
   tags?: string[]
 }
 
@@ -543,4 +567,85 @@ export interface QASession {
     confidence: number | null
     created_at: string
   }>
+}
+
+// ---- v2.0: Claims & Research Map ----
+
+export type ClaimType = "hypothesis" | "evidence" | "method" | "result" | "observation" | "assumption"
+export type ClusterConfidence = "strong" | "moderate" | "emerging" | "contested" | "refuted"
+
+export interface Claim {
+  id: string
+  source_entry_id: string
+  claim_type: string
+  content: string
+  confidence: number
+  verified: boolean
+  stale: boolean
+  source_offset_start: number | null
+  source_offset_end: number | null
+  project_id: string
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface EvidenceCluster {
+  id: string
+  research_question_id: string | null
+  label: string
+  synthesis: string | null
+  confidence: string
+  claim_count: number
+  gap_count: number
+  needs_reprocessing: boolean
+  synthesized_by: string
+  project_id: string
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface ResearchQuestion {
+  id: string
+  question: string
+  status: string
+  phase: string | null
+  cluster_count: number
+  total_claims: number
+  gap_count: number
+  contradiction_count: number
+  created_at: string | null
+}
+
+export interface ResearchMapData {
+  research_questions: ResearchQuestion[]
+  unassigned_clusters: Array<{
+    id: string
+    label: string
+    claim_count: number
+    confidence: string
+  }>
+  summary: {
+    total_rqs: number
+    total_clusters: number
+    total_claims: number
+    total_gaps: number
+    total_contradictions: number
+    pending_review: number
+  }
+}
+
+export interface ReviewItem {
+  id: string
+  item_type: string
+  item_id: string
+  flag: string
+  context: unknown
+  priority: number
+  status: string
+  raised_by: string
+  resolved_by: string | null
+  resolution: string | null
+  project_id: string
+  created_at: string | null
+  resolved_at: string | null
 }

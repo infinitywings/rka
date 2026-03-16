@@ -26,6 +26,12 @@ from rka.services.graph import GraphService
 from rka.services.summary import SummaryService, QAService
 from rka.services.artifacts import ArtifactService
 from rka.services.knowledge_pack import KnowledgePackService
+from rka.services.claims import ClaimService
+from rka.services.clusters import ClusterService
+from rka.services.topics import TopicService
+from rka.services.research_map import ResearchMapService
+from rka.services.review_queue import ReviewQueueService
+from rka.services.onboarding import OnboardingService
 
 logger = logging.getLogger(__name__)
 
@@ -356,3 +362,51 @@ def get_scoped_knowledge_pack_service(
     embeddings: EmbeddingService | None = Depends(get_embeddings),
 ) -> KnowledgePackService:
     return KnowledgePackService(db, llm=llm, embeddings=embeddings, project_id=project_id)
+
+
+# ---- v2.0 service factories ----
+
+def get_scoped_claim_service(
+    project_id: str = Depends(require_project),
+    db: Database = Depends(get_db),
+    llm: LLMClient | None = Depends(get_llm),
+    embeddings: EmbeddingService | None = Depends(get_embeddings),
+) -> ClaimService:
+    return ClaimService(db, llm=llm, embeddings=embeddings, project_id=project_id)
+
+
+def get_scoped_cluster_service(
+    project_id: str = Depends(require_project),
+    db: Database = Depends(get_db),
+    llm: LLMClient | None = Depends(get_llm),
+    embeddings: EmbeddingService | None = Depends(get_embeddings),
+) -> ClusterService:
+    return ClusterService(db, llm=llm, embeddings=embeddings, project_id=project_id)
+
+
+def get_scoped_topic_service(
+    project_id: str = Depends(require_project),
+    db: Database = Depends(get_db),
+) -> TopicService:
+    return TopicService(db, project_id=project_id)
+
+
+def get_scoped_research_map_service(
+    project_id: str = Depends(require_project),
+    db: Database = Depends(get_db),
+) -> ResearchMapService:
+    return ResearchMapService(db, project_id=project_id)
+
+
+def get_scoped_review_queue_service(
+    project_id: str = Depends(require_project),
+    db: Database = Depends(get_db),
+) -> ReviewQueueService:
+    return ReviewQueueService(db, project_id=project_id)
+
+
+def get_scoped_onboarding_service(
+    project_id: str = Depends(require_project),
+    db: Database = Depends(get_db),
+) -> OnboardingService:
+    return OnboardingService(db, project_id=project_id)

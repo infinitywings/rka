@@ -91,6 +91,53 @@ class SemanticLinks(BaseModel):
     )
 
 
+# ---------- v2.0 distillation pipeline models ----------
+
+class ExtractedClaim(BaseModel):
+    """A single claim extracted from a journal entry."""
+    claim_type: Literal["hypothesis", "evidence", "method", "result", "observation", "assumption"]
+    content: str
+    source_offset_start: int
+    source_offset_end: int
+
+
+class ExtractedClaims(BaseModel):
+    """Output of claim extraction from a journal entry."""
+    claims: list[ExtractedClaim] = Field(min_length=1, max_length=20)
+    reasoning: str
+
+
+class ClaimVerification(BaseModel):
+    """Output of factored verification of a claim against source text."""
+    exists_in_source: bool
+    number_accuracy: bool
+    direction_correct: bool
+    overall_confidence: float = Field(ge=0.0, le=1.0)
+    issues: list[str] = Field(default_factory=list)
+
+
+class ClaimRelation(BaseModel):
+    """A relationship between two claims."""
+    target_claim_id: str
+    relation: Literal["supports", "contradicts", "qualifies"]
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class ClusterAssignment(BaseModel):
+    """Output of cluster scoring for a claim."""
+    cluster_id: str | None = None  # existing cluster or None for new
+    cluster_label: str  # for new clusters
+    relations: list[ClaimRelation] = Field(default_factory=list)
+
+
+class ThemeSynthesis(BaseModel):
+    """Output of cluster synthesis."""
+    synthesis: str  # paragraph
+    confidence: Literal["strong", "moderate", "emerging", "contested", "refuted"]
+    gaps: list[str] = Field(default_factory=list)  # what evidence is missing
+    contradictions: list[str] = Field(default_factory=list)  # what evidence conflicts
+
+
 class FileClassification(BaseModel):
     """LLM classification of a research file's content."""
     content_type: Literal[
@@ -672,6 +719,105 @@ class LLMClient:
         if loc:
             header = f"{header} ({loc})"
         return f"{header} {str(block.get('text', ''))[:self._evidence_block_limit]}"
+
+    # ---------- v2.0 distillation pipeline ----------
+
+    async def extract_claims(
+        self, entry_content: str, existing_claims: list[str] | None = None,
+    ) -> ExtractedClaims:
+        """Extract structured claims from a journal entry."""
+        dedup_hint = ""
+        if existing_claims:
+            limit = 50 if self.ctx >= 128_000 else 20 if self.ctx >= 32_000 else 10
+            dedup_hint = (
+                f"\n\nAlready extracted claims (do NOT duplicate these):\n"
+                + "\n".join(f"- {c}" for c in existing_claims[:limit])
+            )
+        return await self.extract(
+            ExtractedClaims,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Extract structured claims from this research journal entry. "
+                    f"Each claim should be an atomic, self-contained statement with a type "
+                    f"(hypothesis, evidence, method, result, observation, assumption). "
+                    f"Provide character offsets into the source text for each claim. "
+                    f"Do not paraphrase — stay close to the source wording.{dedup_hint}"
+                    f"\n\nEntry:\n{entry_content[:self._content_limit]}"
+                ),
+            }],
+        )
+
+    async def verify_claim(
+        self, claim_content: str, source_text: str,
+    ) -> ClaimVerification:
+        """Factored verification of a claim against its source text."""
+        return await self.extract(
+            ClaimVerification,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Verify this extracted claim against the source text with three checks:\n"
+                    f"1. Existence: Does the claim follow from or appear in the source?\n"
+                    f"2. Number accuracy: Are quantities/percentages accurately extracted?\n"
+                    f"3. Direction: Is the direction of effects correct (increase vs decrease)?\n\n"
+                    f"Claim: {claim_content}\n\n"
+                    f"Source text:\n{source_text[:self._content_limit]}"
+                ),
+            }],
+        )
+
+    async def assign_to_cluster(
+        self,
+        claim_content: str,
+        claim_type: str,
+        existing_clusters: list[dict],
+        nearby_claims: list[dict],
+    ) -> ClusterAssignment:
+        """Determine which cluster a claim belongs to and its relations to nearby claims."""
+        cluster_text = "\n".join(
+            f"  {c['id']}: {c['label']} ({c.get('claim_count', 0)} claims)"
+            for c in existing_clusters[:30]
+        ) or "  (none — create a new cluster)"
+        claims_text = "\n".join(
+            f"  {c['id']}: [{c['claim_type']}] {c['content'][:200]}"
+            for c in nearby_claims[:20]
+        ) or "  (none)"
+        return await self.extract(
+            ClusterAssignment,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Assign this claim to an evidence cluster and identify relations to nearby claims.\n\n"
+                    f"Claim [{claim_type}]: {claim_content}\n\n"
+                    f"Existing clusters:\n{cluster_text}\n\n"
+                    f"Nearby claims in potential clusters:\n{claims_text}\n\n"
+                    f"If no existing cluster is a good fit, set cluster_id to null and provide a new label."
+                ),
+            }],
+        )
+
+    async def synthesize_theme(
+        self, cluster_label: str, claims: list[dict],
+    ) -> ThemeSynthesis:
+        """Generate a synthesis paragraph for an evidence cluster."""
+        claims_text = "\n".join(
+            f"- [{c.get('claim_type', '?')}] {c.get('content', '')[:300]} "
+            f"(confidence: {c.get('confidence', '?')})"
+            for c in claims[:50]
+        )
+        return await self.extract(
+            ThemeSynthesis,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Synthesize these claims into a coherent research theme for the cluster '{cluster_label}'.\n"
+                    f"Identify: what's known, what's contested, what evidence is missing.\n"
+                    f"Set confidence based on evidence strength and consistency.\n\n"
+                    f"Claims:\n{claims_text}"
+                ),
+            }],
+        )
 
     async def extract_pdf_metadata(
         self, first_page_text: str,

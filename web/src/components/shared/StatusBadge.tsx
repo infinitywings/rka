@@ -23,6 +23,13 @@ const statusColors: Record<string, string> = {
   // Checkpoint
   open: "bg-orange-100 text-orange-800 border-orange-200",
   resolved: "bg-green-100 text-green-800 border-green-200",
+  // Journal types (v2)
+  note: "bg-blue-100 text-blue-800 border-blue-200",
+  log: "bg-emerald-100 text-emerald-800 border-emerald-200",
+  directive: "bg-purple-100 text-purple-800 border-purple-200",
+  // Journal status (v2)
+  draft: "bg-gray-100 text-gray-500 border-gray-200",
+  retracted: "bg-red-100 text-red-800 border-red-200",
 }
 
 export function StatusBadge({ status, className }: { status: string; className?: string }) {

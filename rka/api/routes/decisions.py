@@ -59,3 +59,16 @@ async def update_decision(
     if dec is None:
         raise HTTPException(404, f"Decision {dec_id} not found")
     return await svc.update(dec_id, data, actor=actor)
+
+
+@router.post("/decisions/{dec_id}/supersede", response_model=Decision, status_code=201)
+async def supersede_decision(
+    dec_id: str,
+    new_data: DecisionCreate,
+    svc: DecisionService = Depends(get_scoped_decision_service),
+):
+    """Atomically supersede a decision and trigger re-distillation."""
+    try:
+        return await svc.supersede_decision(dec_id, new_data)
+    except ValueError as e:
+        raise HTTPException(404, str(e))

@@ -190,12 +190,15 @@ CREATE TABLE IF NOT EXISTS events (
     id TEXT PRIMARY KEY,
     timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     event_type TEXT NOT NULL CHECK (event_type IN (
-        'decision_created', 'decision_updated', 'decision_abandoned',
+        'decision_created', 'decision_updated', 'decision_abandoned', 'decision_superseded',
         'mission_created', 'mission_completed', 'mission_blocked',
         'finding_recorded', 'insight_recorded', 'pi_instruction',
         'checkpoint_created', 'checkpoint_resolved',
         'literature_added', 'literature_cited',
-        'phase_changed', 'status_updated'
+        'phase_changed', 'status_updated',
+        'claim_created', 'claim_verified',
+        'cluster_created', 'cluster_synthesized',
+        'review_flagged', 'review_resolved'
     )),
     entity_type TEXT NOT NULL,
     entity_id TEXT NOT NULL,

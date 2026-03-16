@@ -18,6 +18,13 @@ from rka.models.checkpoint import (
 )
 from rka.models.context import ContextRequest, ContextPackage
 from rka.models.event import Event
+from rka.models.claim import (
+    Claim, ClaimCreate, ClaimUpdate,
+    EvidenceCluster, EvidenceClusterCreate, EvidenceClusterUpdate,
+    ClaimEdge, ClaimEdgeCreate,
+)
+from rka.models.topic import Topic, TopicCreate, TopicUpdate, EntityTopicAssignment
+from rka.models.review_queue import ReviewItem, ReviewItemCreate, ReviewItemResolve
 
 __all__ = [
     "ProjectState", "ProjectStateUpdate",
@@ -28,4 +35,9 @@ __all__ = [
     "Checkpoint", "CheckpointCreate", "CheckpointResolve",
     "ContextRequest", "ContextPackage",
     "Event",
+    "Claim", "ClaimCreate", "ClaimUpdate",
+    "EvidenceCluster", "EvidenceClusterCreate", "EvidenceClusterUpdate",
+    "ClaimEdge", "ClaimEdgeCreate",
+    "Topic", "TopicCreate", "TopicUpdate", "EntityTopicAssignment",
+    "ReviewItem", "ReviewItemCreate", "ReviewItemResolve",
 ]

@@ -56,16 +56,26 @@ class MissionService(BaseService):
         await self.db.execute(
             """INSERT INTO missions
                (id, phase, objective, tasks, context, acceptance_criteria,
-                scope_boundaries, checkpoint_triggers, depends_on, project_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                scope_boundaries, checkpoint_triggers, depends_on,
+                motivated_by_decision, project_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 mis_id, data.phase, data.objective, tasks_json,
                 data.context, data.acceptance_criteria,
                 data.scope_boundaries, data.checkpoint_triggers,
-                data.depends_on, self.project_id,
+                data.depends_on, data.motivated_by_decision,
+                self.project_id,
             ],
         )
         await self.db.commit()
+
+        # Write entity_link for motivated_by_decision
+        if data.motivated_by_decision:
+            await self.add_link(
+                "decision", data.motivated_by_decision,
+                "motivated", "mission", mis_id,
+                created_by=actor,
+            )
 
         # Save user-provided tags immediately. Derived tags are eventual.
         tags = data.tags
@@ -282,16 +292,16 @@ class MissionService(BaseService):
             await note_svc.create(note_in, actor=actor)
 
         for finding in data.findings or []:
-            await _create("finding", finding, confidence="tested")
+            await _create("note", finding, confidence="tested")
 
         for anomaly in data.anomalies or []:
-            await _create("observation", anomaly, confidence="hypothesis")
+            await _create("note", anomaly, confidence="hypothesis")
 
         for question in data.questions or []:
-            await _create("pi_instruction", question, confidence="hypothesis")
+            await _create("directive", question, confidence="hypothesis")
 
         if data.recommended_next:
-            await _create("idea", data.recommended_next, confidence="hypothesis")
+            await _create("note", data.recommended_next, confidence="hypothesis")
 
     async def get_report(self, mis_id: str | None = None) -> MissionReport | None:
         """Get report for a mission. Defaults to latest complete mission."""
@@ -337,6 +347,9 @@ class MissionService(BaseService):
             status=row["status"],
             depends_on=row.get("depends_on"),
             report=report,
+            iteration=row.get("iteration", 1),
+            parent_mission_id=row.get("parent_mission_id"),
+            motivated_by_decision=row.get("motivated_by_decision"),
             tags=tags,
             enrichment_status=enrichment_status,
             created_at=row.get("created_at"),

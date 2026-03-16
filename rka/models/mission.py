@@ -27,6 +27,7 @@ class MissionCreate(BaseModel):
     scope_boundaries: str | None = None
     checkpoint_triggers: str | None = None
     depends_on: str | None = None
+    motivated_by_decision: str | None = None
     tags: list[str] = Field(default_factory=list)
 
 
@@ -76,6 +77,9 @@ class Mission(BaseModel):
     status: str
     depends_on: str | None = None
     report: MissionReport | None = None
+    iteration: int = 1
+    parent_mission_id: str | None = None
+    motivated_by_decision: str | None = None
     tags: list[str] = Field(default_factory=list)
     enrichment_status: Literal["pending", "ready", "failed"] = "ready"
     created_at: str | None = None

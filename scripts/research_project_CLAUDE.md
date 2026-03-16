@@ -48,20 +48,23 @@ your work in RKA. The Brain sets strategy; you implement.
 
 ---
 
-## Recording Work in RKA
+## Recording Standards (v2.0)
 
-### What to record
+| Situation | Tool | Parameters |
+|-----------|------|-----------|
+| Got a result / observation | `rka_add_note` | `type="note", related_mission="<id>"` |
+| Ran a procedure step | `rka_add_note` | `type="log", related_mission="<id>"` |
+| PI/Brain instruction | `rka_add_note` | `type="directive"` |
+| Hit a decision point | `rka_submit_checkpoint` | `blocking=True` |
+| Finished a mission | `rka_submit_report` | Include `related_decisions=[...]` |
+| Found a paper | `rka_add_literature` or `rka_enrich_doi` | |
+| Made a decision | `rka_add_decision` | Include `related_journal=[...]` |
+| Imported a file | `rka_ingest_document(path)` | |
 
-| Situation | Tool | Notes |
-|---|---|---|
-| Completed a script / pipeline step | `rka_add_note` | `type="methodology"` |
-| Got a result or measurement | `rka_add_note` | `type="finding"`, `confidence="hypothesis"` |
-| Noticed unexpected behavior | `rka_add_note` | `type="observation"` |
-| Hit a decision that needs Brain/PI | `rka_submit_checkpoint` | Set `blocking=True` |
-| Found a relevant paper | `rka_add_literature` or `rka_enrich_doi` | |
-| Imported a new file | `rka_ingest_document(path)` | |
+**Always set `related_mission` when working on a mission task.**
+**Always set `related_decisions` when a finding bears on a decision.**
 
-Always set `related_mission=<id>` when working on a mission task.
+Old types (finding, insight, methodology, etc.) are accepted but mapped to: `note`, `log`, `directive`.
 
 ### Tags for this project
 
@@ -69,7 +72,8 @@ Always set `related_mission=<id>` when working on a mission task.
 - `ico-audit` — all entries for this project
 - `data-collection` — data acquisition tasks
 - `verification` — whitepaper vs contract checks
-- `methodology` — pipeline and process notes
+
+> **Tip**: Run `rka_generate_claude_md(role="executor")` to auto-generate this file from live project data.
 
 ---
 
