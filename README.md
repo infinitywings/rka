@@ -455,11 +455,24 @@ Add the MCP config (see Installation above). Both Claude Desktop and Claude Code
 
 Run `rka_generate_claude_md` from Claude Desktop or hit `GET /api/generate-claude-md?role=executor` to generate a customized `CLAUDE.md` for the current project and role. This gives new sessions immediate context on project goals, conventions, and active work.
 
-### 5. Start Researching
+### 5. Try the Example Project (Optional)
+
+RKA ships with an example knowledge pack — the `rka_development` project used to build RKA itself. Import it to explore a fully populated knowledge base with 80 journal entries, 22 decisions, 10 literature references, 3 missions, and 279 cross-references:
+
+```bash
+curl -X POST http://localhost:9712/api/projects/import \
+  -F "file=@examples/rka_development.rka-pack_v2.zip"
+```
+
+Or use the web dashboard: open **Dashboard** → **Import Pack** → select `examples/rka_development.rka-pack_v2.zip`.
+
+After import, switch to the project in the sidebar and explore the Decision Tree, Knowledge Graph, and Research Map to see how a real project looks.
+
+### 6. Start Researching
 
 Use the web UI for browsing and Q&A, or use Claude Desktop/Code with MCP tools for the full Brain/Executor workflow. The dashboard lets you select the active project, browse the Research Map, manage the review queue, and export the active project as a knowledge pack.
 
-For end-to-end task walkthroughs, see [USAGE_GUIDE.md](USAGE_GUIDE.md).
+For end-to-end task walkthroughs, see [USAGE_GUIDE.md](USAGE_GUIDE.md) or the [Wiki](https://github.com/infinitywings/rka/wiki).
 
 ---
 
