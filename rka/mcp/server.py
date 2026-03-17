@@ -1,8 +1,7 @@
 """MCP server — thin HTTP proxy to the RKA REST API.
 
 All tools are prefixed with `rka_` for namespace isolation.
-The server keeps lightweight per-session state to reduce token waste
-and provide a compact session digest during long MCP conversations.
+The server keeps lightweight per-session state for session digest.
 """
 
 from __future__ import annotations
@@ -106,11 +105,7 @@ class MCPSessionState:
 
     @property
     def verbosity(self) -> str:
-        if self.tool_calls <= 5:
-            return "full"
-        if self.tool_calls <= 15:
-            return "compact"
-        return "minimal"
+        return "full"
 
 
 _session = MCPSessionState()
@@ -555,7 +550,7 @@ async def rka_create_mission(
             f"  ID:        {mid}",
             f"  Status:    {d.get('status', 'pending')}",
             f"  Enrich:    {d.get('enrichment_status', 'ready')}",
-            f"  Objective: {d['objective'][:120]}",
+            f"  Objective: {d['objective'][:500]}",
             f"  Tasks:     {n_tasks}",
             "",
             f"Pass this ID to the Executor: {mid}",
@@ -737,7 +732,7 @@ async def rka_get_checkpoints(status: str = "open") -> str:
         lines = []
         for chk in chks:
             flag = "🔴 BLOCKING" if chk.get("blocking") else "🟡"
-            lines.append(f"{flag} {chk['id']} [{chk['type']}]: {chk['description'][:100]}")
+            lines.append(f"{flag} {chk['id']} [{chk['type']}]: {chk['description'][:300]}")
         return "\n".join(lines)
 
 
@@ -780,6 +775,8 @@ async def rka_search(
 ) -> str:
     """Search across all research knowledge.
 
+    Results show truncated snippets. Use rka_get(id) to read the full content of any result.
+
     Args:
         query: Search query
         entity_types: Filter by type — decision | literature | journal | mission
@@ -796,15 +793,40 @@ async def rka_search(
         lines = []
         for res in results:
             lines.append(f"[{res['entity_type']}] {res['entity_id']}: {res['title']}")
-            if res.get("snippet") and session.verbosity == "full":
-                lines.append(f"  {res['snippet'][:150]}")
-            elif res.get("snippet") and session.verbosity == "compact":
-                lines.append(f"  {res['snippet'][:80]}")
-        if session.verbosity != "full":
-            lines.append(
-                f"\n({session.tool_calls} tool calls this session — using {session.verbosity} output)"
-            )
+            if res.get("snippet"):
+                lines.append(f"  {res['snippet'][:500]}")
         return "\n".join(lines)
+
+
+@tool()
+async def rka_get(
+    id: str,
+) -> str:
+    """Get the full content of any entity by ID.
+
+    Use this when listing tools (rka_get_journal, rka_search, etc.) truncate
+    content and you need to see the complete text. Supports all entity types.
+
+    Args:
+        id: Entity ID (e.g. jrn_01..., dec_01..., lit_01..., clm_01..., ecl_01..., mis_01...)
+    """
+    prefix = id.split("_")[0] if "_" in id else ""
+    endpoint_map = {
+        "jrn": f"/api/notes/{id}",
+        "dec": f"/api/decisions/{id}",
+        "lit": f"/api/literature/{id}",
+        "clm": f"/api/claims/{id}",
+        "ecl": f"/api/clusters/{id}",
+        "mis": f"/api/missions/{id}",
+    }
+    endpoint = endpoint_map.get(prefix)
+    if not endpoint:
+        return f"Unknown ID prefix '{prefix}'. Expected: jrn_, dec_, lit_, clm_, ecl_, mis_"
+    async with _client() as c:
+        r = await c.get(endpoint)
+        _raise_with_detail(r)
+        data = r.json()
+        return json.dumps(data, indent=2, default=str)
 
 
 @tool()
@@ -817,6 +839,7 @@ async def rka_get_decision_tree(
 
     Shows hierarchical decisions with children, chosen options,
     and linked missions/journal entries/literature from entity_links.
+    Use rka_get(id) to read the full content of any decision.
 
     Args:
         root_id: Optional decision ID to get subtree only
@@ -840,7 +863,7 @@ async def rka_get_decision_tree(
                 return []
             if active_only and status != "active":
                 return []
-            lines = [f"{prefix}[{status}] {node['id']}: {node['question'][:100]}"]
+            lines = [f"{prefix}[{status}] {node['id']}: {node['question'][:300]}"]
             if chosen:
                 lines.append(f"{prefix}  → Chosen: {chosen}")
             for le in node.get("linked_entities", []):
@@ -863,6 +886,8 @@ async def rka_get_literature(
 ) -> str:
     """Get literature entries.
 
+    Titles are truncated in listings. Use rka_get(id) to read the full record including abstract.
+
     Args:
         status: to_read | reading | read | cited | excluded
         query: Search in title/abstract
@@ -882,7 +907,7 @@ async def rka_get_literature(
         lines = []
         for e in entries:
             authors = ", ".join(e.get("authors") or [])[:40]
-            lines.append(f"{e['id']} [{e['status']}] {e['title'][:80]}")
+            lines.append(f"{e['id']} [{e['status']}] {e['title'][:300]}")
             if authors:
                 lines.append(f"  {authors} ({e.get('year', '?')})")
         return "\n".join(lines)
@@ -898,6 +923,8 @@ async def rka_get_journal(
     limit: int = 20,
 ) -> str:
     """Get journal entries.
+
+    Content is truncated in listings. Use rka_get(id) to read the full content of any entry.
 
     Args:
         type: note | log | directive (legacy types like finding/insight also accepted)
@@ -926,7 +953,7 @@ async def rka_get_journal(
             return "No journal entries found."
         lines = []
         for e in entries:
-            lines.append(f"{e['id']} [{e['type']}] ({e['confidence']}) {e['content'][:120]}")
+            lines.append(f"{e['id']} [{e['type']}] ({e['confidence']}) {e['content'][:500]}")
         return "\n".join(lines)
 
 
@@ -1058,14 +1085,14 @@ async def rka_get_status() -> str:
             m = active_missions[0]
             n_tasks = len(m.get("tasks") or [])
             lines.append(f"\n### Active Mission: {m['id']}")
-            lines.append(f"Objective: {m['objective'][:120]}")
+            lines.append(f"Objective: {m['objective'][:500]}")
             lines.append(f"Tasks: {n_tasks}")
 
         if open_chks:
             lines.append(f"\n### Open Checkpoints: {len(open_chks)}")
             for chk in open_chks[:5]:
                 flag = "🔴" if chk.get("blocking") else "🟡"
-                lines.append(f"  {flag} {chk['id']}: {chk['description'][:80]}")
+                lines.append(f"  {flag} {chk['id']}: {chk['description'][:300]}")
 
         return "\n".join(lines)
 
@@ -1915,7 +1942,7 @@ async def rka_get_ego_graph(entity_id: str, depth: int = 1) -> str:
         lines = [f"Ego graph for {entity_id}: {len(d['nodes'])} nodes, {len(d['edges'])} edges\n"]
         for node in d["nodes"]:
             marker = " ← CENTER" if node["id"] == entity_id else ""
-            lines.append(f"  [{node['type']}] {node['id']}: {node['label'][:80]}{marker}")
+            lines.append(f"  [{node['type']}] {node['id']}: {node['label'][:300]}{marker}")
         lines.append("\nEdges:")
         for edge in d["edges"]:
             lines.append(f"  {edge['source']} --{edge['link_type']}--> {edge['target']}")
@@ -1984,7 +2011,7 @@ async def rka_generate_summary(
         if d.get("sources"):
             lines.append(f"\nSources cited: {len(d['sources'])}")
             for s in d["sources"][:5]:
-                lines.append(f"  [{s['entity_type']}:{s['entity_id']}] {s.get('excerpt', '')[:80]}")
+                lines.append(f"  [{s['entity_type']}:{s['entity_id']}] {s.get('excerpt', '')[:300]}")
         return "\n".join(lines)
 
 
@@ -2024,7 +2051,7 @@ async def rka_ask(
         if d.get("sources"):
             lines.append(f"\n\nSources ({len(d['sources'])}):")
             for i, s in enumerate(d["sources"]):
-                lines.append(f"  [{i}] [{s['entity_type']}:{s['entity_id']}] \"{s.get('excerpt', '')[:100]}\"")
+                lines.append(f"  [{i}] [{s['entity_type']}:{s['entity_id']}] \"{s.get('excerpt', '')[:300]}\"")
         if d.get("followups"):
             lines.append("\nSuggested follow-ups:")
             for f in d["followups"]:
@@ -2072,7 +2099,7 @@ async def rka_session_digest() -> str:
                 lines.append("\n### Current Project State")
                 lines.append(f"Phase: {status.get('current_phase', '?')}")
                 if status.get("summary"):
-                    lines.append(f"Summary: {status['summary'][:200]}")
+                    lines.append(f"Summary: {status['summary'][:500]}")
                 if status.get("blockers"):
                     lines.append(f"Blockers: {status['blockers']}")
 
@@ -2083,7 +2110,7 @@ async def rka_session_digest() -> str:
                     lines.append(f"\n### Open Checkpoints ({len(checkpoints)})")
                     for chk in checkpoints[:5]:
                         flag = "🔴" if chk.get("blocking") else "🟡"
-                        lines.append(f"  {flag} {chk['id']}: {chk['description'][:80]}")
+                        lines.append(f"  {flag} {chk['id']}: {chk['description'][:300]}")
     except Exception:
         pass
 
@@ -2177,6 +2204,8 @@ async def rka_get_claims(
 ) -> str:
     """Query claims with filters.
 
+    Claim content is truncated in listings. Use rka_get(id) to read the full claim.
+
     Args:
         source_entry_id: Filter by source journal entry ID
         cluster_id: Filter by evidence cluster ID
@@ -2210,7 +2239,7 @@ async def rka_get_claims(
             f"  {v} [{cl['id']}] ({cl['claim_type']}) "
             f"conf={cl.get('confidence', '?'):.2f}{s}"
         )
-        lines.append(f"    {cl['content'][:150]}")
+        lines.append(f"    {cl['content'][:500]}")
         lines.append(f"    source: {cl['source_entry_id']}")
     return "\n".join(lines)
 
@@ -2332,7 +2361,7 @@ async def rka_get_review_queue(
         lines.append(f"  [{item['id']}] {item['flag']} — {item['item_type']}:{item['item_id']}")
         if item.get("context"):
             ctx = item["context"] if isinstance(item["context"], str) else json.dumps(item["context"])
-            lines.append(f"    Context: {ctx[:200]}")
+            lines.append(f"    Context: {ctx[:500]}")
         lines.append(f"    Priority: {item.get('priority', '?')} | Raised by: {item.get('raised_by', '?')}")
     return "\n".join(lines)
 
@@ -2525,7 +2554,7 @@ If there are open checkpoints, resolve them before continuing new work.
 - `rka_summarize(scope="project")` — generate a full project summary
 
 ### Session Management
-- Responses become more compact automatically in longer sessions to save tokens
+- Use `limit` parameters to control output size when needed
 - `rka_session_digest()` gives you a compressed summary of the session so far
 - `rka_reset_session()` clears the session tracker when you want to start fresh
 
@@ -2619,7 +2648,7 @@ If no mission exists, ask the Brain or PI for direction before starting.
 **Mission status lifecycle**: `pending` (Brain created, not started) → `active` (you are working on it) → `complete` (done via `rka_submit_report`). Always activate a pending mission before starting work.
 
 ### Session Management
-- Responses become more compact automatically in longer sessions to save tokens
+- Use `limit` parameters to control output size when needed
 - `rka_session_digest()` gives you a compressed summary of the session so far
 - `rka_reset_session()` clears the session tracker when you want to start fresh
 
