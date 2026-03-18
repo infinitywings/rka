@@ -57,6 +57,8 @@ claims, evidence clusters, and a three-layer research map with full provenance c
 - **Literature**: `rka_add_literature`, `rka_update_literature`, `rka_get_literature`, `rka_enrich_doi`
 - **Missions**: `rka_create_mission`, `rka_get_mission`, `rka_update_mission_status`, `rka_submit_report`
 - **Checkpoints**: `rka_submit_checkpoint`, `rka_get_checkpoints`, `rka_resolve_checkpoint`
+- **Roles**: `rka_register_role`, `rka_list_roles`, `rka_update_role`, `rka_bind_role`, `rka_save_role_state`
+- **Role Events**: `rka_get_events`, `rka_ack_event`
 - **Research Map**: `rka_get_research_map`, `rka_get_claims`, `rka_supersede_decision`, `rka_trace_provenance`
 - **Review Queue**: `rka_get_review_queue`, `rka_review_cluster`, `rka_review_claims`, `rka_resolve_contradiction`
 - **Search & Context**: `rka_search`, `rka_get_context`, `rka_ask`
@@ -2506,6 +2508,183 @@ async def rka_resolve_contradiction(
 
     lines.append(f"  Resolution: {resolution}")
     return "\n".join(lines)
+
+
+# ============================================================
+# v2.1 — Role Registry + Event Queue
+# ============================================================
+
+@tool()
+async def rka_register_role(
+    name: str,
+    description: str | None = None,
+    system_prompt_template: str | None = None,
+    subscriptions: list[str] | None = None,
+    autonomy_profile: dict | None = None,
+    model: str | None = None,
+    model_tier: str | None = None,
+    tools_config: dict | None = None,
+) -> str:
+    """Register a new agent role.
+
+    Args:
+        name: Unique role name within the project (e.g. researcher_brain)
+        description: Human-readable role description
+        system_prompt_template: Template for the role's system prompt
+        subscriptions: List of fnmatch-style event globs to subscribe to (e.g. ["report.*", "checkpoint.created.*"])
+        autonomy_profile: JSON autonomy config {level, constraints, escalation_rules}
+        model: Preferred model identifier
+        model_tier: Model tier for tiered routing
+        tools_config: JSON tool access config {allowed_tools, denied_tools}
+    """
+    async with _client() as c:
+        body = {
+            "name": name, "description": description,
+            "system_prompt_template": system_prompt_template,
+            "subscriptions": subscriptions or [],
+            "autonomy_profile": autonomy_profile,
+            "model": model, "model_tier": model_tier,
+            "tools_config": tools_config,
+        }
+        r = await c.post("/api/roles", json={k: v for k, v in body.items() if v is not None})
+        _raise_with_detail(r)
+        d = r.json()
+        return f"Registered role {d['id']} [{d['name']}]"
+
+
+@tool()
+async def rka_list_roles(limit: int = 50) -> str:
+    """List all registered agent roles in the current project.
+
+    Args:
+        limit: Max roles to return (default 50)
+    """
+    async with _client() as c:
+        r = await c.get("/api/roles", params={"limit": limit})
+        _raise_with_detail(r)
+        roles = r.json()
+        if not roles:
+            return "No roles registered."
+        lines = [f"Roles ({len(roles)}):"]
+        for rl in roles:
+            subs = rl.get("subscriptions") or []
+            lines.append(
+                f"  {rl['id']}  {rl['name']:<24}  model={rl.get('model') or '-':<16}  "
+                f"subs={len(subs)}  last_active={rl.get('last_active_at') or 'never'}"
+            )
+        return "\n".join(lines)
+
+
+@tool()
+async def rka_update_role(
+    role_id: str,
+    name: str | None = None,
+    description: str | None = None,
+    subscriptions: list[str] | None = None,
+    autonomy_profile: dict | None = None,
+    model: str | None = None,
+    model_tier: str | None = None,
+    tools_config: dict | None = None,
+) -> str:
+    """Update an existing agent role.
+
+    Args:
+        role_id: The role ID to update
+        name: New role name
+        description: New description
+        subscriptions: New subscription globs
+        autonomy_profile: New autonomy profile
+        model: New model identifier
+        model_tier: New model tier
+        tools_config: New tool config
+    """
+    async with _client() as c:
+        body = {
+            "name": name, "description": description,
+            "subscriptions": subscriptions,
+            "autonomy_profile": autonomy_profile,
+            "model": model, "model_tier": model_tier,
+            "tools_config": tools_config,
+        }
+        r = await c.put(f"/api/roles/{role_id}", json={k: v for k, v in body.items() if v is not None})
+        _raise_with_detail(r)
+        d = r.json()
+        return f"Updated role {d['id']} [{d['name']}]"
+
+
+@tool()
+async def rka_bind_role(role_id: str, session_id: str) -> str:
+    """Bind a role to an active session (DB-backed session-role binding).
+
+    Args:
+        role_id: The role to bind
+        session_id: Session identifier to bind to
+    """
+    async with _client() as c:
+        r = await c.post(f"/api/roles/{role_id}/bind", json={"session_id": session_id})
+        _raise_with_detail(r)
+        d = r.json()
+        return f"Bound role {d['id']} [{d['name']}] to session {session_id}"
+
+
+@tool()
+async def rka_save_role_state(role_id: str, role_state: dict) -> str:
+    """Save role-specific state (learnings, context, working memory).
+
+    Args:
+        role_id: The role ID
+        role_state: JSON state to persist
+    """
+    async with _client() as c:
+        r = await c.put(f"/api/roles/{role_id}/state", json={"role_state": role_state})
+        _raise_with_detail(r)
+        d = r.json()
+        return f"Saved state for role {d['id']} [{d['name']}]"
+
+
+@tool()
+async def rka_get_events(
+    role_id: str,
+    status: str | None = None,
+    limit: int = 20,
+) -> str:
+    """Get role events (inbox) for a specific role.
+
+    Args:
+        role_id: Target role ID
+        status: Filter by status — pending | processing | acked | expired
+        limit: Max events to return (default 20)
+    """
+    async with _client() as c:
+        params: dict = {"limit": limit}
+        if status:
+            params["status"] = status
+        r = await c.get(f"/api/roles/{role_id}/events", params=params)
+        _raise_with_detail(r)
+        events = r.json()
+        if not events:
+            return "No events."
+        lines = [f"Role events ({len(events)}):"]
+        for evt in events:
+            lines.append(
+                f"  {evt['id']}  {evt['event_type']:<28}  status={evt['status']:<12}  "
+                f"pri={evt.get('priority', 100)}  created={evt.get('created_at', '?')}"
+            )
+        return "\n".join(lines)
+
+
+@tool()
+async def rka_ack_event(event_id: str) -> str:
+    """Acknowledge (consume) a role event.
+
+    Args:
+        event_id: The role event ID to acknowledge
+    """
+    async with _client() as c:
+        r = await c.post(f"/api/role-events/{event_id}/ack")
+        _raise_with_detail(r)
+        d = r.json()
+        return f"Acked event {d['id']} [{d['event_type']}] → {d['status']}"
 
 
 # ============================================================

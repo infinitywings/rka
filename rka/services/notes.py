@@ -153,6 +153,13 @@ class NoteService(BaseService):
             summary=f"{data.type}: {data.content[:100]}",
             phase=data.phase,
         )
+        # v2.1: fan-out routed role event
+        await self._fanout_role_event(
+            "note.created",
+            "journal", entry_id,
+            source_role_id=data.role_id,
+            payload={"type": data.type, "summary": data.content[:200]},
+        )
         await self.audit("create", "journal", entry_id, source)
         return await self.get(entry_id)
 

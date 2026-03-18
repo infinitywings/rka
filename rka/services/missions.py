@@ -102,6 +102,13 @@ class MissionService(BaseService):
             summary=f"Mission: {data.objective[:100]}",
             phase=data.phase,
         )
+        # v2.1: fan-out routed role event
+        await self._fanout_role_event(
+            "mission.created",
+            "mission", mis_id,
+            source_role_id=data.role_id,
+            payload={"objective": data.objective[:200]},
+        )
         await self.audit("create", "mission", mis_id, actor)
         return await self.get(mis_id)
 
@@ -236,6 +243,12 @@ class MissionService(BaseService):
             entity_id=mis_id,
             actor=actor,
             summary=f"Report submitted with {len(data.findings or [])} findings",
+        )
+        # v2.1: fan-out routed role event
+        await self._fanout_role_event(
+            "report.submitted",
+            "mission", mis_id,
+            payload={"findings_count": len(data.findings or [])},
         )
         await self.audit("update", "mission", mis_id, actor, {"action": "submit_report"})
 

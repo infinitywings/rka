@@ -13,6 +13,8 @@ from rka.infra.ids import generate_id
 if TYPE_CHECKING:
     from rka.infra.embeddings import EmbeddingService
     from rka.infra.llm import LLMClient
+    from rka.services.agent_roles import AgentRoleService
+    from rka.services.role_events import RoleEventService
 
 logger = logging.getLogger(__name__)
 DEFAULT_PROJECT_ID = "proj_default"
@@ -72,11 +74,15 @@ class BaseService:
         llm: "LLMClient | None" = None,
         embeddings: "EmbeddingService | None" = None,
         project_id: str = DEFAULT_PROJECT_ID,
+        role_event_service: "RoleEventService | None" = None,
+        agent_role_service: "AgentRoleService | None" = None,
     ):
         self.db = db
         self.llm = llm
         self.embeddings = embeddings
         self.project_id = project_id
+        self._role_event_service = role_event_service
+        self._agent_role_service = agent_role_service
 
     def _resolve_project_id(self, project_id: str | None = None) -> str:
         return (project_id or self.project_id).strip()
@@ -120,6 +126,36 @@ class BaseService:
         )
         await self.db.commit()
         return event_id
+
+    async def _fanout_role_event(
+        self,
+        event_type: str,
+        entity_type: str,
+        entity_id: str,
+        *,
+        source_role_id: str | None = None,
+        payload: dict | None = None,
+        priority: int = 100,
+    ) -> list[str]:
+        """Fan-out a routed role event to all matching subscriber roles.
+
+        No-op if role_event_service or agent_role_service is not injected.
+        """
+        if not self._role_event_service or not self._agent_role_service:
+            return []
+        try:
+            return await self._role_event_service.emit_for_subscribers(
+                event_type,
+                source_entity_id=entity_id,
+                source_entity_type=entity_type,
+                source_role_id=source_role_id,
+                payload=payload,
+                priority=priority,
+                agent_role_service=self._agent_role_service,
+            )
+        except Exception as exc:
+            logger.debug("Role event fan-out failed for %s: %s", event_type, exc)
+            return []
 
     async def audit(
         self,

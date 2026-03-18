@@ -102,6 +102,13 @@ class DecisionService(BaseService):
             summary=f"Decision: {data.question[:100]}",
             phase=data.phase,
         )
+        # v2.1: fan-out routed role event
+        await self._fanout_role_event(
+            "decision.created",
+            "decision", dec_id,
+            source_role_id=data.role_id,
+            payload={"question": data.question[:200]},
+        )
         await self.audit("create", "decision", dec_id, actor_val)
         return await self.get(dec_id)
 

@@ -32,6 +32,8 @@ from rka.services.topics import TopicService
 from rka.services.research_map import ResearchMapService
 from rka.services.review_queue import ReviewQueueService
 from rka.services.onboarding import OnboardingService
+from rka.services.agent_roles import AgentRoleService
+from rka.services.role_events import RoleEventService
 
 logger = logging.getLogger(__name__)
 
@@ -116,13 +118,19 @@ def get_scoped_search_service(
     return SearchService(db=db, embeddings=embeddings, project_id=project_id)
 
 
+def _role_services(db: Database, project_id: str) -> tuple[RoleEventService, AgentRoleService]:
+    """Build the optional role event + agent role services for fan-out injection."""
+    return RoleEventService(db, project_id=project_id), AgentRoleService(db, project_id=project_id)
+
+
 def get_note_service(
     project_id: str = Depends(get_project_id),
     db: Database = Depends(get_db),
     llm: LLMClient | None = Depends(get_llm),
     embeddings: EmbeddingService | None = Depends(get_embeddings),
 ) -> NoteService:
-    return NoteService(db, llm=llm, embeddings=embeddings, project_id=project_id)
+    revs, arls = _role_services(db, project_id)
+    return NoteService(db, llm=llm, embeddings=embeddings, project_id=project_id, role_event_service=revs, agent_role_service=arls)
 
 
 def get_scoped_note_service(
@@ -131,7 +139,8 @@ def get_scoped_note_service(
     llm: LLMClient | None = Depends(get_llm),
     embeddings: EmbeddingService | None = Depends(get_embeddings),
 ) -> NoteService:
-    return NoteService(db, llm=llm, embeddings=embeddings, project_id=project_id)
+    revs, arls = _role_services(db, project_id)
+    return NoteService(db, llm=llm, embeddings=embeddings, project_id=project_id, role_event_service=revs, agent_role_service=arls)
 
 
 def get_decision_service(
@@ -140,7 +149,8 @@ def get_decision_service(
     llm: LLMClient | None = Depends(get_llm),
     embeddings: EmbeddingService | None = Depends(get_embeddings),
 ) -> DecisionService:
-    return DecisionService(db, llm=llm, embeddings=embeddings, project_id=project_id)
+    revs, arls = _role_services(db, project_id)
+    return DecisionService(db, llm=llm, embeddings=embeddings, project_id=project_id, role_event_service=revs, agent_role_service=arls)
 
 
 def get_scoped_decision_service(
@@ -149,7 +159,8 @@ def get_scoped_decision_service(
     llm: LLMClient | None = Depends(get_llm),
     embeddings: EmbeddingService | None = Depends(get_embeddings),
 ) -> DecisionService:
-    return DecisionService(db, llm=llm, embeddings=embeddings, project_id=project_id)
+    revs, arls = _role_services(db, project_id)
+    return DecisionService(db, llm=llm, embeddings=embeddings, project_id=project_id, role_event_service=revs, agent_role_service=arls)
 
 
 def get_literature_service(
@@ -176,7 +187,8 @@ def get_mission_service(
     llm: LLMClient | None = Depends(get_llm),
     embeddings: EmbeddingService | None = Depends(get_embeddings),
 ) -> MissionService:
-    return MissionService(db, llm=llm, embeddings=embeddings, project_id=project_id)
+    revs, arls = _role_services(db, project_id)
+    return MissionService(db, llm=llm, embeddings=embeddings, project_id=project_id, role_event_service=revs, agent_role_service=arls)
 
 
 def get_scoped_mission_service(
@@ -185,21 +197,24 @@ def get_scoped_mission_service(
     llm: LLMClient | None = Depends(get_llm),
     embeddings: EmbeddingService | None = Depends(get_embeddings),
 ) -> MissionService:
-    return MissionService(db, llm=llm, embeddings=embeddings, project_id=project_id)
+    revs, arls = _role_services(db, project_id)
+    return MissionService(db, llm=llm, embeddings=embeddings, project_id=project_id, role_event_service=revs, agent_role_service=arls)
 
 
 def get_checkpoint_service(
     project_id: str = Depends(get_project_id),
     db: Database = Depends(get_db),
 ) -> CheckpointService:
-    return CheckpointService(db, project_id=project_id)
+    revs, arls = _role_services(db, project_id)
+    return CheckpointService(db, project_id=project_id, role_event_service=revs, agent_role_service=arls)
 
 
 def get_scoped_checkpoint_service(
     project_id: str = Depends(require_project),
     db: Database = Depends(get_db),
 ) -> CheckpointService:
-    return CheckpointService(db, project_id=project_id)
+    revs, arls = _role_services(db, project_id)
+    return CheckpointService(db, project_id=project_id, role_event_service=revs, agent_role_service=arls)
 
 
 def get_event_service(
@@ -410,3 +425,33 @@ def get_scoped_onboarding_service(
     db: Database = Depends(get_db),
 ) -> OnboardingService:
     return OnboardingService(db, project_id=project_id)
+
+
+# ---- v2.1 Phase 1 service factories ----
+
+def get_agent_role_service(
+    project_id: str = Depends(get_project_id),
+    db: Database = Depends(get_db),
+) -> AgentRoleService:
+    return AgentRoleService(db, project_id=project_id)
+
+
+def get_scoped_agent_role_service(
+    project_id: str = Depends(require_project),
+    db: Database = Depends(get_db),
+) -> AgentRoleService:
+    return AgentRoleService(db, project_id=project_id)
+
+
+def get_role_event_service(
+    project_id: str = Depends(get_project_id),
+    db: Database = Depends(get_db),
+) -> RoleEventService:
+    return RoleEventService(db, project_id=project_id)
+
+
+def get_scoped_role_event_service(
+    project_id: str = Depends(require_project),
+    db: Database = Depends(get_db),
+) -> RoleEventService:
+    return RoleEventService(db, project_id=project_id)

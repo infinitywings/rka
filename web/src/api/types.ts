@@ -649,3 +649,44 @@ export interface ReviewItem {
   created_at: string | null
   resolved_at: string | null
 }
+
+// ---- v2.1: Agent Roles + Role Events ----
+
+export interface AgentRole {
+  id: string
+  project_id: string
+  name: string
+  description: string | null
+  system_prompt_template: string | null
+  subscriptions: string[]
+  subscription_filters: unknown | null
+  role_state: unknown | null
+  learnings_digest: string | null
+  autonomy_profile: unknown | null
+  model: string | null
+  model_tier: string | null
+  tools_config: unknown | null
+  active_session_id: string | null
+  last_active_at: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export type RoleEventStatus = "pending" | "processing" | "acked" | "expired"
+
+export interface RoleEvent {
+  id: string
+  project_id: string
+  target_role_id: string
+  event_type: string
+  source_role_id: string | null
+  source_entity_id: string | null
+  source_entity_type: string | null
+  payload: unknown | null
+  status: RoleEventStatus
+  priority: number
+  depends_on: string | null
+  created_at: string | null
+  processed_at: string | null
+  acked_at: string | null
+}

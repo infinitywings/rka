@@ -29,6 +29,8 @@ _PREFIXES = {
     "entity_topic": "etp",
     "context_snapshot": "ctx",
     "review": "rev",
+    "agent_role": "arl",
+    "role_event": "rve",
 }
 
 

@@ -360,6 +360,14 @@ export const api = {
     return get<ReviewItemData[]>(`/review-queue${qs ? `?${qs}` : ""}`)
   },
   getReviewStats: () => get<Record<string, unknown>>("/review-queue/stats"),
+
+  // v2.1: Agent Roles + Role Events
+  listAgentRoles: (limit = 50) => get<AgentRoleData[]>(`/roles?limit=${limit}`),
+  listRoleEvents: (roleId: string, status?: string, limit = 50) => {
+    const search = new URLSearchParams({ limit: String(limit) })
+    if (status) search.set("status", status)
+    return get<RoleEventData[]>(`/roles/${roleId}/events?${search}`)
+  },
 }
 
 export { ApiError }
@@ -369,3 +377,5 @@ type ResearchMapData = import("./types").ResearchMapData
 type EvidenceClusterData = import("./types").EvidenceCluster
 type ClaimData = import("./types").Claim
 type ReviewItemData = import("./types").ReviewItem
+type AgentRoleData = import("./types").AgentRole
+type RoleEventData = import("./types").RoleEvent

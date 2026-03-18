@@ -43,6 +43,13 @@ class CheckpointService(BaseService):
             actor=actor,
             summary=f"Checkpoint ({data.type}): {data.description[:100]}",
         )
+        # v2.1: fan-out routed role event
+        await self._fanout_role_event(
+            "checkpoint.created",
+            "checkpoint", chk_id,
+            source_role_id=data.role_id,
+            payload={"type": data.type, "blocking": data.blocking},
+        )
         await self.audit("create", "checkpoint", chk_id, actor)
         return await self.get(chk_id)
 
@@ -130,6 +137,12 @@ class CheckpointService(BaseService):
             entity_id=chk_id,
             actor=data.resolved_by,
             summary=f"Resolved: {data.resolution[:100]}",
+        )
+        # v2.1: fan-out routed role event
+        await self._fanout_role_event(
+            "checkpoint.resolved",
+            "checkpoint", chk_id,
+            payload={"resolution": data.resolution[:200]},
         )
 
         # If a decision was created, link the causal chain
