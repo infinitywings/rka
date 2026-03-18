@@ -26,6 +26,8 @@ class CheckpointCreate(BaseModel):
     options: list[CheckpointOption] | None = None
     recommendation: str | None = None
     blocking: bool = True
+    # v2.1
+    role_id: str | None = None
 
 
 class CheckpointResolve(BaseModel):
@@ -54,5 +56,7 @@ class Checkpoint(BaseModel):
     resolution_rationale: str | None = None
     linked_decision_id: str | None = None
     status: str = "open"
+    # v2.1
+    role_id: str | None = None
     created_at: str | None = None
     resolved_at: str | None = None

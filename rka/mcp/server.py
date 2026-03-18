@@ -171,6 +171,8 @@ async def rka_add_note(
     confidence: str = "hypothesis",
     importance: str = "normal",
     tags: list[str] | None = None,
+    provenance: dict | None = None,
+    role_id: str | None = None,
 ) -> str:
     """Add a research journal entry.
 
@@ -186,6 +188,8 @@ async def rka_add_note(
         confidence: hypothesis | tested | verified | superseded | retracted
         importance: critical | high | normal | low
         tags: Optional tags for categorization (e.g. ["anomaly-detection", "methodology"])
+        provenance: Optional structured origin info {type, source_id, location, extraction_method, summary}. type must be one of: literature_derived, experiment_result, manual_entry, llm_generated, imported, synthesized, pi_directive
+        role_id: Optional role identity (e.g. researcher_brain, reviewer_brain)
     """
     async with _client() as c:
         body = {
@@ -194,7 +198,7 @@ async def rka_add_note(
             "related_literature": related_literature,
             "related_mission": related_mission, "supersedes": supersedes,
             "confidence": confidence, "importance": importance,
-            "tags": tags,
+            "tags": tags, "provenance": provenance, "role_id": role_id,
         }
         r = await c.post("/api/notes", json={k: v for k, v in body.items() if v is not None})
         _raise_with_detail(r)
@@ -361,6 +365,7 @@ async def rka_add_decision(
     related_literature: list[str] | None = None,
     related_journal: list[str] | None = None,
     kind: str = "decision",
+    role_id: str | None = None,
 ) -> str:
     """Add a decision node to the research decision tree.
 
@@ -375,6 +380,7 @@ async def rka_add_decision(
         related_literature: Literature IDs informing this decision
         related_journal: Journal entry IDs that justify this decision (creates justified_by links)
         kind: research_question | design_choice | decision | operational
+        role_id: Optional role identity (e.g. researcher_brain)
     """
     async with _client() as c:
         body = {
@@ -382,6 +388,7 @@ async def rka_add_decision(
             "options": options, "chosen": chosen, "rationale": rationale,
             "parent_id": parent_id, "related_literature": related_literature,
             "related_journal": related_journal, "kind": kind,
+            "role_id": role_id,
         }
         r = await c.post("/api/decisions", json={k: v for k, v in body.items() if v is not None})
         _raise_with_detail(r)
@@ -511,6 +518,7 @@ async def rka_create_mission(
     depends_on: str | None = None,
     motivated_by_decision: str | None = None,
     tags: list[str] | None = None,
+    role_id: str | None = None,
 ) -> str:
     """Create a new mission for the Executor.
 
@@ -525,6 +533,7 @@ async def rka_create_mission(
         depends_on: Mission ID this depends on
         motivated_by_decision: Decision ID that triggered this mission (creates motivated link)
         tags: Optional explicit tags. Providing tags skips delayed auto-tag enrichment.
+        role_id: Optional role identity (e.g. researcher_brain)
     """
     async with _client() as c:
         body = {
@@ -536,7 +545,7 @@ async def rka_create_mission(
             "checkpoint_triggers": checkpoint_triggers,
             "depends_on": depends_on,
             "motivated_by_decision": motivated_by_decision,
-            "tags": tags,
+            "tags": tags, "role_id": role_id,
         }
         r = await c.post("/api/missions", json={k: v for k, v in body.items() if v is not None})
         _raise_with_detail(r)
@@ -689,6 +698,7 @@ async def rka_submit_checkpoint(
     options: list[dict] | None = None,
     recommendation: str | None = None,
     blocking: bool = True,
+    role_id: str | None = None,
 ) -> str:
     """Submit a checkpoint — escalate a decision/question to Brain/PI.
 
@@ -701,13 +711,14 @@ async def rka_submit_checkpoint(
         options: Possible options [{label, description, consequence}]
         recommendation: Executor's non-binding recommendation
         blocking: Whether this blocks further progress
+        role_id: Optional role identity (e.g. executor_impl)
     """
     async with _client() as c:
         body = {
             "mission_id": mission_id, "type": type, "description": description,
             "task_reference": task_reference, "context": context,
             "options": options, "recommendation": recommendation,
-            "blocking": blocking,
+            "blocking": blocking, "role_id": role_id,
         }
         r = await c.post("/api/checkpoints", json={k: v for k, v in body.items() if v is not None})
         _raise_with_detail(r)
@@ -1250,6 +1261,8 @@ async def rka_ingest_document(
     related_decisions: list[str] | None = None,
     related_mission: str | None = None,
     split_by_headings: bool = True,
+    provenance_type: str | None = None,
+    role_id: str | None = None,
 ) -> str:
     """Ingest a markdown document by splitting it into journal entries.
 
@@ -1269,6 +1282,8 @@ async def rka_ingest_document(
         related_decisions: Decision IDs all entries relate to
         related_mission: Mission ID all entries belong to
         split_by_headings: Whether to split by ## / ### headings (default: true). If false, creates one entry.
+        provenance_type: Optional provenance type for all entries (e.g. literature_derived, imported)
+        role_id: Optional role identity (e.g. researcher_brain)
     """
     async with _client() as c:
         body = {
@@ -1278,6 +1293,7 @@ async def rka_ingest_document(
             "related_decisions": related_decisions,
             "related_mission": related_mission,
             "split_by_headings": split_by_headings,
+            "provenance_type": provenance_type, "role_id": role_id,
         }
         r = await c.post("/api/ingest/document", json={k: v for k, v in body.items() if v is not None})
         _raise_with_detail(r)

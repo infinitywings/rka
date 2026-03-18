@@ -18,6 +18,44 @@ logger = logging.getLogger(__name__)
 DEFAULT_PROJECT_ID = "proj_default"
 VALID_ACTORS = frozenset({"brain", "executor", "pi", "llm", "web_ui", "system"})
 
+# v2.1 provenance — known type values (validated if present, unknown extras preserved)
+VALID_PROVENANCE_TYPES = frozenset({
+    "literature_derived",
+    "experiment_result",
+    "manual_entry",
+    "llm_generated",
+    "imported",
+    "synthesized",
+    "pi_directive",
+})
+
+
+def validate_provenance(provenance: dict | str | None) -> str | None:
+    """Validate and serialize provenance data.
+
+    Rules (from v2.1 brief):
+    - ``type`` is validated if present against known types
+    - other fields remain flexible and are preserved
+    - returns JSON string for DB storage, or None
+    """
+    if provenance is None:
+        return None
+    if isinstance(provenance, str):
+        try:
+            provenance = json.loads(provenance)
+        except (json.JSONDecodeError, TypeError):
+            # Treat raw string as opaque provenance — store as-is
+            return provenance
+    if not isinstance(provenance, dict):
+        raise ValueError("provenance must be a JSON object (dict) or null")
+    prov_type = provenance.get("type")
+    if prov_type is not None and prov_type not in VALID_PROVENANCE_TYPES:
+        raise ValueError(
+            f"Invalid provenance type '{prov_type}'. "
+            f"Known types: {', '.join(sorted(VALID_PROVENANCE_TYPES))}"
+        )
+    return json.dumps(provenance, default=str)
+
 
 def _now() -> str:
     """ISO 8601 UTC timestamp."""

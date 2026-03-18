@@ -29,6 +29,8 @@ class MissionCreate(BaseModel):
     depends_on: str | None = None
     motivated_by_decision: str | None = None
     tags: list[str] = Field(default_factory=list)
+    # v2.1
+    role_id: str | None = None
 
 
 class MissionUpdate(BaseModel):
@@ -82,5 +84,7 @@ class Mission(BaseModel):
     motivated_by_decision: str | None = None
     tags: list[str] = Field(default_factory=list)
     enrichment_status: Literal["pending", "ready", "failed"] = "ready"
+    # v2.1
+    role_id: str | None = None
     created_at: str | None = None
     completed_at: str | None = None

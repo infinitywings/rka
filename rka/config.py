@@ -56,6 +56,20 @@ class RKAConfig(BaseSettings):
     job_lease_seconds: int = Field(default=300, description="Job lease duration before recovery")
     job_max_attempts: int = Field(default=5, description="Max attempts before a job is marked failed")
 
+    # v2.1: Workspace and model tier groundwork
+    workspace_root: str | None = Field(
+        default=None,
+        description="Workspace root path for documentation/template purposes (no filesystem enforcement)",
+    )
+    model_tiers: dict[str, str] = Field(
+        default_factory=lambda: {
+            "fast": "",
+            "standard": "",
+            "reasoning": "",
+        },
+        description="Map of tier names to concrete model strings (e.g. {'fast': 'haiku', 'standard': 'sonnet'})",
+    )
+
     @property
     def database_url(self) -> str:
         """Resolve database path relative to project dir."""

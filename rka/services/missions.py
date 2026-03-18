@@ -57,14 +57,14 @@ class MissionService(BaseService):
             """INSERT INTO missions
                (id, phase, objective, tasks, context, acceptance_criteria,
                 scope_boundaries, checkpoint_triggers, depends_on,
-                motivated_by_decision, project_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                motivated_by_decision, role_id, project_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 mis_id, data.phase, data.objective, tasks_json,
                 data.context, data.acceptance_criteria,
                 data.scope_boundaries, data.checkpoint_triggers,
                 data.depends_on, data.motivated_by_decision,
-                self.project_id,
+                data.role_id, self.project_id,
             ],
         )
         await self.db.commit()
@@ -352,6 +352,7 @@ class MissionService(BaseService):
             motivated_by_decision=row.get("motivated_by_decision"),
             tags=tags,
             enrichment_status=enrichment_status,
+            role_id=row.get("role_id"),
             created_at=row.get("created_at"),
             completed_at=row.get("completed_at"),
         )

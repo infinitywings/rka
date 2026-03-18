@@ -69,6 +69,9 @@ class JournalEntryCreate(BaseModel):
     status: Literal["draft", "active", "superseded", "retracted"] = "active"
     pinned: bool = False
     tags: list[str] = Field(default_factory=list)
+    # v2.1: structured provenance and role identity
+    provenance: dict | str | None = None
+    role_id: str | None = None
 
     @model_validator(mode="after")
     def _normalize_type(self) -> JournalEntryCreate:
@@ -92,6 +95,9 @@ class JournalEntryUpdate(BaseModel):
     related_literature: list[str] | None = None
     related_mission: str | None = None
     tags: list[str] | None = None
+    # v2.1
+    provenance: dict | str | None = None
+    role_id: str | None = None
 
     @model_validator(mode="after")
     def _normalize_type(self) -> JournalEntryUpdate:
@@ -120,5 +126,8 @@ class JournalEntry(BaseModel):
     pinned: bool = False
     tags: list[str] = Field(default_factory=list)
     enrichment_status: Literal["pending", "ready", "failed"] = "ready"
+    # v2.1
+    provenance: dict | str | None = None
+    role_id: str | None = None
     created_at: str | None = None
     updated_at: str | None = None

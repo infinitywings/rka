@@ -58,8 +58,8 @@ class DecisionService(BaseService):
             """INSERT INTO decisions
                (id, parent_id, phase, question, options, chosen, rationale,
                 decided_by, status, related_missions, related_literature,
-                related_journal, kind, project_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                related_journal, kind, role_id, project_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 dec_id, data.parent_id, data.phase, data.question,
                 options_json, data.chosen, data.rationale,
@@ -67,7 +67,7 @@ class DecisionService(BaseService):
                 self._json_dumps(data.related_missions),
                 self._json_dumps(data.related_literature),
                 self._json_dumps(data.related_journal),
-                data.kind,
+                data.kind, data.role_id,
                 self.project_id,
             ],
         )
@@ -401,6 +401,7 @@ class DecisionService(BaseService):
             kind=row.get("kind", "decision"),
             tags=tags,
             enrichment_status=enrichment_status,
+            role_id=row.get("role_id"),
             created_at=row.get("created_at"),
             updated_at=row.get("updated_at"),
         )

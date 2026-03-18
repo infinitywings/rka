@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from rka.infra.ids import generate_id
 from rka.models.journal import JournalEntry, JournalEntryCreate, JournalEntryUpdate
-from rka.services.base import BaseService, _now
+from rka.services.base import BaseService, _now, validate_provenance
 from rka.services.jobs import JobQueue
 
 
@@ -63,18 +63,23 @@ class NoteService(BaseService):
         entry_id = generate_id("journal")
         source = actor or data.source
 
+        # v2.1: validate and serialize provenance
+        provenance_json = validate_provenance(data.provenance)
+
         await self.db.execute(
             """INSERT INTO journal
                (id, type, content, source, phase, related_decisions, related_literature,
-                related_mission, supersedes, confidence, importance, status, pinned, project_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                related_mission, supersedes, confidence, importance, status, pinned,
+                provenance, role_id, project_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 entry_id, data.type, data.content, source, data.phase,
                 self._json_dumps(data.related_decisions),
                 self._json_dumps(data.related_literature),
                 data.related_mission, data.supersedes,
                 data.confidence, data.importance,
-                data.status, int(data.pinned), self.project_id,
+                data.status, int(data.pinned),
+                provenance_json, data.role_id, self.project_id,
             ],
         )
 
@@ -222,6 +227,8 @@ class NoteService(BaseService):
         for field, value in dump.items():
             if field in ("related_decisions", "related_literature"):
                 updates[field] = self._json_dumps(value)
+            elif field == "provenance":
+                updates[field] = validate_provenance(value)
             else:
                 updates[field] = value
 
@@ -284,6 +291,8 @@ class NoteService(BaseService):
             pinned=bool(row.get("pinned", 0)),
             tags=tags,
             enrichment_status=enrichment_status,
+            provenance=self._json_loads(row.get("provenance")),
+            role_id=row.get("role_id"),
             created_at=row.get("created_at"),
             updated_at=row.get("updated_at"),
         )

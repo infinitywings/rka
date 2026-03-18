@@ -91,6 +91,9 @@ class IngestDocumentRequest(BaseModel):
     related_decisions: list[str] | None = None
     related_mission: str | None = None
     split_by_headings: bool = True
+    # v2.1
+    provenance_type: str | None = None
+    role_id: str | None = None
 
 
 @router.post("/ingest/document")
@@ -109,6 +112,8 @@ async def ingest_document(
         related_decisions=data.related_decisions,
         related_mission=data.related_mission,
         split_by_headings=data.split_by_headings,
+        provenance_type=data.provenance_type,
+        role_id=data.role_id,
     )
 
 

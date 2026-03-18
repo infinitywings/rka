@@ -25,13 +25,13 @@ class CheckpointService(BaseService):
         await self.db.execute(
             """INSERT INTO checkpoints
                (id, mission_id, task_reference, type, description, context,
-                options, recommendation, blocking, project_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                options, recommendation, blocking, role_id, project_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 chk_id, data.mission_id, data.task_reference,
                 data.type, data.description, data.context,
                 options_json, data.recommendation,
-                1 if data.blocking else 0, self.project_id,
+                1 if data.blocking else 0, data.role_id, self.project_id,
             ],
         )
         await self.db.commit()
@@ -168,6 +168,7 @@ class CheckpointService(BaseService):
             resolution_rationale=row.get("resolution_rationale"),
             linked_decision_id=row.get("linked_decision_id"),
             status=row["status"],
+            role_id=row.get("role_id"),
             created_at=row.get("created_at"),
             resolved_at=row.get("resolved_at"),
         )

@@ -341,6 +341,8 @@ class AcademicImportService:
         related_decisions: list[str] | None = None,
         related_mission: str | None = None,
         split_by_headings: bool = True,
+        provenance_type: str | None = None,
+        role_id: str | None = None,
     ) -> dict:
         """Ingest a markdown document by splitting it into journal entries.
 
@@ -392,6 +394,7 @@ class AcademicImportService:
                     entry_tags.append(slug)
 
             try:
+                provenance = {"type": provenance_type} if provenance_type else None
                 data = JournalEntryCreate(
                     content=entry_content,
                     type=entry_type,
@@ -401,6 +404,8 @@ class AcademicImportService:
                     related_decisions=related_decisions,
                     related_mission=related_mission,
                     tags=entry_tags,
+                    provenance=provenance,
+                    role_id=role_id,
                 )
                 entry = await self._note_svc.create(data, actor=source)
                 results["created"].append({
