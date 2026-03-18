@@ -11,11 +11,13 @@ from rka.infra.database import Database
 from rka.models.decision import DecisionCreate, DecisionOption
 from rka.models.journal import JournalEntryCreate
 from rka.models.literature import LiteratureCreate
+from rka.models.mission import MissionCreate
 from rka.models.project import ProjectCreate
 from rka.services.artifacts import ArtifactService
 from rka.services.decisions import DecisionService
 from rka.services.knowledge_pack import KnowledgePackService
 from rka.services.literature import LiteratureService
+from rka.services.missions import MissionService
 from rka.services.notes import NoteService
 from rka.services.project import ProjectService
 
@@ -158,6 +160,120 @@ async def test_knowledge_pack_round_trip_imports_into_same_db_with_remapped_ids_
         assert Path(imported_artifact["filepath"]).exists()
         assert Path(imported_artifact["filepath"]).read_text(encoding="utf-8") == "artifact payload"
         assert sorted(row["id"] for row in fts_rows) == sorted([note.id, imported_note["id"]])
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_knowledge_pack_import_with_mission_motivated_by_decision(tmp_path: Path):
+    """Import must succeed when missions reference decisions via motivated_by_decision FK."""
+    db = await _make_db(tmp_path / "mission-fk.db")
+
+    try:
+        project_svc = ProjectService(db)
+        await project_svc.create_project(
+            ProjectCreate(id="proj_src", name="Source", description="src"),
+            actor="system",
+        )
+        decision_svc = DecisionService(db, project_id="proj_src")
+        mission_svc = MissionService(db, project_id="proj_src")
+
+        decision = await decision_svc.create(
+            DecisionCreate(
+                question="Which broker to use?",
+                decided_by="pi",
+                phase="design",
+            ),
+            actor="pi",
+        )
+        mission = await mission_svc.create(
+            MissionCreate(
+                phase="design",
+                objective="Evaluate broker options",
+                motivated_by_decision=decision.id,
+            ),
+            actor="executor",
+        )
+
+        export_svc = KnowledgePackService(db, project_id="proj_src")
+        pack_path, _ = await export_svc.export_pack()
+
+        import_svc = KnowledgePackService(db)
+        with open(pack_path, "rb") as pack_file:
+            result = await import_svc.import_pack(
+                pack_file,
+                project_id="proj_dst",
+                project_name="Destination",
+            )
+
+        assert result.imported_counts["missions"] == 1
+        assert result.imported_counts["decisions"] == 1
+
+        imported_mission = await db.fetchone(
+            "SELECT * FROM missions WHERE project_id = ?", ["proj_dst"]
+        )
+        imported_decision = await db.fetchone(
+            "SELECT * FROM decisions WHERE project_id = ? LIMIT 1", ["proj_dst"]
+        )
+
+        assert imported_mission is not None
+        assert imported_decision is not None
+        assert imported_mission["id"] != mission.id
+        assert imported_mission["motivated_by_decision"] == imported_decision["id"]
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_knowledge_pack_import_remaps_decision_related_journal(tmp_path: Path):
+    """Import must remap decision.related_journal JSON references."""
+    db = await _make_db(tmp_path / "dec-journal.db")
+
+    try:
+        project_svc = ProjectService(db)
+        await project_svc.create_project(
+            ProjectCreate(id="proj_src", name="Source", description="src"),
+            actor="system",
+        )
+        decision_svc = DecisionService(db, project_id="proj_src")
+        note_svc = NoteService(db, project_id="proj_src")
+
+        note = await note_svc.create(
+            JournalEntryCreate(content="Background analysis.", type="note"),
+            actor="executor",
+        )
+        decision = await decision_svc.create(
+            DecisionCreate(
+                question="Which approach?",
+                decided_by="brain",
+                phase="design",
+                related_journal=[note.id],
+            ),
+            actor="brain",
+        )
+
+        export_svc = KnowledgePackService(db, project_id="proj_src")
+        pack_path, _ = await export_svc.export_pack()
+
+        import_svc = KnowledgePackService(db)
+        with open(pack_path, "rb") as pack_file:
+            result = await import_svc.import_pack(
+                pack_file,
+                project_id="proj_dst",
+                project_name="Destination",
+            )
+
+        imported_decision = await db.fetchone(
+            "SELECT * FROM decisions WHERE project_id = ?", ["proj_dst"]
+        )
+        imported_note = await db.fetchone(
+            "SELECT * FROM journal WHERE project_id = ?", ["proj_dst"]
+        )
+
+        assert imported_decision is not None
+        assert imported_note is not None
+        related_journal = json.loads(imported_decision["related_journal"])
+        assert related_journal == [imported_note["id"]]
     finally:
         await db.close()
 

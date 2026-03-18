@@ -38,8 +38,8 @@ _PROJECT_TABLES = (
 )
 _INSERT_ORDER = (
     "literature",
-    "missions",
     "decisions",
+    "missions",
     "journal",
     "checkpoints",
     "artifacts",
@@ -55,9 +55,9 @@ _INSERT_ORDER = (
     "keynodes",
     "graph_views",
 )
-_SELF_REFERENTIAL_TABLES = {
-    "missions": "depends_on",
-    "decisions": "parent_id",
+_SELF_REFERENTIAL_TABLES: dict[str, str | list[str]] = {
+    "missions": ["depends_on", "parent_mission_id"],
+    "decisions": ["parent_id", "superseded_by"],
     "journal": "supersedes",
     "events": "caused_by_event",
 }
@@ -79,8 +79,8 @@ _ID_ENTITY_TYPES = {
 }
 _DIRECT_ID_COLUMNS = {
     "literature": ("id",),
-    "missions": ("id", "depends_on"),
-    "decisions": ("id", "parent_id"),
+    "missions": ("id", "depends_on", "parent_mission_id", "motivated_by_decision"),
+    "decisions": ("id", "parent_id", "superseded_by"),
     "journal": ("id", "related_mission", "supersedes", "superseded_by"),
     "checkpoints": ("id", "mission_id", "linked_decision_id"),
     "artifacts": ("id",),
@@ -98,7 +98,7 @@ _DIRECT_ID_COLUMNS = {
 }
 _JSON_ID_COLUMNS = {
     "literature": ("related_decisions",),
-    "decisions": ("related_missions", "related_literature"),
+    "decisions": ("related_missions", "related_literature", "related_journal"),
     "journal": ("related_decisions", "related_literature"),
     "exploration_summaries": ("source_refs",),
     "qa_logs": ("answer_structured", "sources"),
@@ -496,9 +496,11 @@ class KnowledgePackService(BaseService):
     ) -> list[dict[str, Any]]:
         prepared = [self._rewrite_project_scope(table, row, target_project_id) for row in rows]
 
-        dependency_key = _SELF_REFERENTIAL_TABLES.get(table)
-        if dependency_key:
-            prepared = self._sort_rows_by_dependency(prepared, dependency_key)
+        dependency_keys = _SELF_REFERENTIAL_TABLES.get(table)
+        if dependency_keys:
+            keys = [dependency_keys] if isinstance(dependency_keys, str) else list(dependency_keys)
+            for key in keys:
+                prepared = self._sort_rows_by_dependency(prepared, key)
 
         if table == "audit_log" or table == "bootstrap_log":
             for row in prepared:
