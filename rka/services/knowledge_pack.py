@@ -11,6 +11,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, BinaryIO
 
+from rka import __version__ as _rka_version
 from rka.infra.ids import generate_id
 from rka.models.knowledge_pack import KnowledgePackImportResult
 from rka.services.base import BaseService, _now
@@ -129,7 +130,7 @@ class KnowledgePackService(BaseService):
         manifest: dict[str, Any] = {
             "schema_version": PACK_SCHEMA_VERSION,
             "exported_at": _now(),
-            "rka_version": "1.5.0",
+            "rka_version": _rka_version,
             "project": dict(project),
             "project_state": dict(project_state) if project_state else None,
             "tables": {},
