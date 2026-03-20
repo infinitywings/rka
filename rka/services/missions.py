@@ -220,6 +220,7 @@ class MissionService(BaseService):
         self, mis_id: str, data: MissionReportCreate, actor: str = "executor"
     ) -> Mission:
         """Submit an execution report for a mission."""
+        now = _now()
         report = MissionReport(
             mission_id=mis_id,
             tasks_completed=data.tasks_completed,
@@ -228,13 +229,34 @@ class MissionService(BaseService):
             questions=data.questions,
             codebase_state=data.codebase_state,
             recommended_next=data.recommended_next,
-            submitted_at=_now(),
+            submitted_at=now,
         )
 
-        await self.db.execute(
-            "UPDATE missions SET report = ?, status = 'complete', completed_at = ? WHERE id = ? AND project_id = ?",
-            [report.model_dump_json(), _now(), mis_id, self.project_id],
+        # Synchronise task statuses: mark non-terminal tasks as complete
+        row = await self.db.fetchone(
+            "SELECT tasks FROM missions WHERE id = ? AND project_id = ?",
+            [mis_id, self.project_id],
         )
+        updated_tasks_json = None
+        if row and row.get("tasks"):
+            raw_tasks = self._json_loads(row["tasks"], [])
+            terminal = {"complete", "skipped", "cancelled"}
+            for t in raw_tasks:
+                if t.get("status") not in terminal:
+                    t["status"] = "complete"
+                    t["completed_at"] = now
+            updated_tasks_json = json.dumps(raw_tasks)
+
+        if updated_tasks_json is not None:
+            await self.db.execute(
+                "UPDATE missions SET report = ?, tasks = ?, status = 'complete', completed_at = ? WHERE id = ? AND project_id = ?",
+                [report.model_dump_json(), updated_tasks_json, now, mis_id, self.project_id],
+            )
+        else:
+            await self.db.execute(
+                "UPDATE missions SET report = ?, status = 'complete', completed_at = ? WHERE id = ? AND project_id = ?",
+                [report.model_dump_json(), now, mis_id, self.project_id],
+            )
         await self.db.commit()
 
         await self.emit_event(

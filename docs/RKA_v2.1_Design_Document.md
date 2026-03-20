@@ -1013,33 +1013,51 @@ For markdown reports authored by the PI:
 - Unit tests for event routing logic
 
 ### Phase 2: OpenClaw Agent Configuration (2-3 days)
-- Create SOUL.md templates for Researcher, Reviewer, and Executor roles
-- Configure OpenClaw multi-agent setup with per-agent model and tool permissions
-- Package RKA MCP as OpenClaw skill
-- Set up cron-based event polling (HEARTBEAT.md)
-- Test single-agent event processing end-to-end
+**Current status (2026-03-19): Mostly complete**
+- [x] Create SOUL.md templates for Researcher, Reviewer, and Executor roles
+- [x] Configure OpenClaw multi-agent setup with per-agent model and tool permissions
+- [x] Package / wire RKA MCP for OpenClaw agent workspaces
+- [x] Set up workspace HEARTBEAT templates
+- [x] Test single-agent event processing end-to-end
+- [ ] Harden cron/heartbeat-driven automation for repeated unattended execution
 
 ### Phase 3: Executor Autopilot (3-5 days)
-- Executor agent processes `mission.assigned` events autonomously
-- Checkpoint submission and resolution flow working
-- Researcher Brain resolves clarification checkpoints
-- Test complete mission lifecycle: create → checkpoint → resolve → report
+**Current status (2026-03-19): Partially complete, first real slice working**
+- [x] Executor agent processes a real mission event autonomously
+- [x] Executor binds role, loads mission context, writes execution log, submits report, and acks event
+- [ ] Checkpoint submission and resolution flow working end-to-end
+- [ ] Researcher Brain resolves clarification checkpoints
+- [ ] Complete mission lifecycle with blocker path: create → checkpoint → resolve → resume → report
+- [ ] Fix mission task-status hygiene (mission can complete while `tasks[]` entries remain pending)
 
 ### Phase 4: Full Autonomous Loop (3-5 days)
-- Researcher Brain processes `report.submitted` → writes synthesis
-- Reviewer Brain processes `synthesis.created` → writes critique
-- Cycle completes: critique → next mission → Executor picks up
-- Disagreement detection and PI escalation working
-- WhatsApp/Discord notifications for escalations
+**Current status (2026-03-19): Partially complete, cross-role propagation proven**
+- [x] Researcher Brain processes downstream `report.submitted` and writes synthesis
+- [x] Reviewer Brain processes downstream report event and writes review / quality-gate notes
+- [x] Cross-role event propagation works on a real mission across executor → researcher → reviewer
+- [ ] Cycle completes automatically: critique/review → next mission → Executor picks up
+- [ ] Disagreement detection and PI escalation working
+- [ ] WhatsApp/Discord notifications for escalations
+- [ ] Validate `synthesis.created`-driven reviewer routing if that is kept as the canonical trigger instead of `report.submitted`
 
 ### Phase 5: PI Control Plane and Hardening (2-3 days)
-- Web dashboard "Orchestration" page showing role status, queues, costs
-- Autonomy mode switching (manual/supervised/autonomous/paused)
-- Token cost tracking per role per mission
-- Circuit breaker: halt autonomous loop if cost exceeds threshold
-- PI override: inject directive that preempts current mission
+**Current status (2026-03-19): Mostly not implemented for v2.1 orchestration**
+- [ ] Web dashboard "Orchestration" page showing role status, queues, costs
+- [ ] Autonomy mode switching (manual/supervised/autonomous/paused)
+- [ ] Token cost tracking per role per mission
+- [ ] Circuit breaker: halt autonomous loop if cost exceeds threshold
+- [ ] PI override: inject directive that preempts current mission
+- [ ] Stuck-event/operator recovery flows surfaced in the UI
 
-**Total estimated timeline: 17-25 days (6 phases)**
+**Updated orchestration readout (2026-03-19):**
+- Phase 0: complete
+- Phase 1: complete
+- Phase 2: operational first slice complete
+- Phase 3: executor autopilot first slice proven
+- Phase 4: first multi-role loop proven
+- Phase 5: still ahead
+
+**Original estimated timeline: 17-25 days (6 phases)**
 
 ---
 

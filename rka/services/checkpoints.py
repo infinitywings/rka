@@ -36,6 +36,14 @@ class CheckpointService(BaseService):
         )
         await self.db.commit()
 
+        # Auto-block the parent mission when a blocking checkpoint is created
+        if data.blocking and data.mission_id:
+            await self.db.execute(
+                "UPDATE missions SET status = 'blocked' WHERE id = ? AND project_id = ? AND status IN ('pending', 'active')",
+                [data.mission_id, self.project_id],
+            )
+            await self.db.commit()
+
         await self.emit_event(
             event_type="checkpoint_created",
             entity_type="checkpoint",
@@ -130,6 +138,22 @@ class CheckpointService(BaseService):
              linked_decision_id, now, chk_id, self.project_id],
         )
         await self.db.commit()
+
+        # Auto-unblock the parent mission if no other open blocking checkpoints remain
+        chk = await self.get(chk_id)
+        if chk and chk.mission_id:
+            remaining = await self.db.fetchone(
+                """SELECT COUNT(*) AS cnt FROM checkpoints
+                   WHERE mission_id = ? AND project_id = ? AND blocking = 1
+                     AND status = 'open' AND id != ?""",
+                [chk.mission_id, self.project_id, chk_id],
+            )
+            if remaining and remaining["cnt"] == 0:
+                await self.db.execute(
+                    "UPDATE missions SET status = 'active' WHERE id = ? AND project_id = ? AND status = 'blocked'",
+                    [chk.mission_id, self.project_id],
+                )
+                await self.db.commit()
 
         resolve_evt = await self.emit_event(
             event_type="checkpoint_resolved",
