@@ -368,6 +368,20 @@ export const api = {
     if (status) search.set("status", status)
     return get<RoleEventData[]>(`/roles/${roleId}/events?${search}`)
   },
+
+  // v2.1 Phase 5: Orchestration
+  getOrchestrationStatus: () => get<OrchestrationStatusData>("/orchestration/status"),
+  getOrchestrationConfig: () => get<OrchestrationConfigData>("/orchestration/config"),
+  updateOrchestrationConfig: (data: { autonomy_mode?: string; circuit_breaker_enabled?: boolean; cost_limit_usd?: number; cost_window_hours?: number }) =>
+    put<OrchestrationConfigData>("/orchestration/config", data),
+  setAutonomyMode: (mode: string, actor = "pi") =>
+    put<OrchestrationConfigData>("/orchestration/autonomy-mode", { autonomy_mode: mode, actor }),
+  resetCircuitBreaker: (actor = "pi") =>
+    post<OrchestrationConfigData>("/orchestration/circuit-breaker/reset", { actor }),
+  piOverride: (data: { directive: string; target_role_id?: string; target_role_name?: string; halt_current?: boolean }) =>
+    post<{ status: string; events_created: number; targets: string[] }>("/orchestration/pi-override", data),
+  retryStuckEvent: (eventId: string) =>
+    post<{ status: string; event_id: string }>(`/orchestration/stuck-events/${eventId}/retry`),
 }
 
 export { ApiError }
@@ -379,3 +393,5 @@ type ClaimData = import("./types").Claim
 type ReviewItemData = import("./types").ReviewItem
 type AgentRoleData = import("./types").AgentRole
 type RoleEventData = import("./types").RoleEvent
+type OrchestrationStatusData = import("./types").OrchestrationStatus
+type OrchestrationConfigData = import("./types").OrchestrationConfig

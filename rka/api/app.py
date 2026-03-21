@@ -40,6 +40,7 @@ from rka.api.routes import (
     onboarding as onboarding_routes,
     agent_roles as agent_roles_routes,
     role_events as role_events_routes,
+    orchestration as orchestration_routes,
 )
 from rka.config import RKAConfig
 from rka.infra.database import Database
@@ -222,6 +223,7 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
     app.include_router(onboarding_routes.router, prefix="/api", tags=["onboarding"])
     app.include_router(agent_roles_routes.router, prefix="/api", tags=["roles"])
     app.include_router(role_events_routes.router, prefix="/api", tags=["role-events"])
+    app.include_router(orchestration_routes.router, prefix="/api", tags=["orchestration"])
 
     @app.get("/api/health")
     async def health(request: Request):

@@ -19,6 +19,7 @@ import Settings from "@/pages/Settings"
 import Notebook from "@/pages/Notebook"
 import ResearchMap from "@/pages/ResearchMap"
 import AgentDebug from "@/pages/AgentDebug"
+import Orchestration from "@/pages/Orchestration"
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -49,6 +50,7 @@ export default function App() {
               <Route path="notebook" element={<Notebook />} />
               <Route path="audit" element={<AuditLog />} />
               <Route path="context" element={<ContextInspector />} />
+              <Route path="orchestration" element={<Orchestration />} />
               <Route path="agent-debug" element={<AgentDebug />} />
               <Route path="settings" element={<Settings />} />
             </Route>

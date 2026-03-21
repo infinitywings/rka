@@ -12,6 +12,7 @@ import {
   Shield,
   Telescope,
   Map,
+  Radio,
   Bot,
   Settings,
   Plus,
@@ -54,6 +55,7 @@ const navItems = [
   { to: "/notebook", icon: MessageSquare, label: "Notebook" },
   { to: "/audit", icon: Shield, label: "Audit Log" },
   { to: "/context", icon: Telescope, label: "Context" },
+  { to: "/orchestration", icon: Radio, label: "Orchestration" },
   { to: "/agent-debug", icon: Bot, label: "Agent Debug" },
   { to: "/settings", icon: Settings, label: "Settings" },
 ]

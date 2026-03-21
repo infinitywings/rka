@@ -59,6 +59,7 @@ claims, evidence clusters, and a three-layer research map with full provenance c
 - **Checkpoints**: `rka_submit_checkpoint`, `rka_get_checkpoints`, `rka_resolve_checkpoint`
 - **Roles**: `rka_register_role`, `rka_list_roles`, `rka_update_role`, `rka_bind_role`, `rka_save_role_state`
 - **Role Events**: `rka_get_events`, `rka_ack_event`
+- **Orchestration**: `rka_get_orchestration_status`, `rka_set_autonomy_mode`, `rka_pi_override`, `rka_log_cost`, `rka_reset_circuit_breaker`, `rka_retry_stuck_event`
 - **Research Map**: `rka_get_research_map`, `rka_get_claims`, `rka_supersede_decision`, `rka_trace_provenance`
 - **Review Queue**: `rka_get_review_queue`, `rka_review_cluster`, `rka_review_claims`, `rka_resolve_contradiction`
 - **Search & Context**: `rka_search`, `rka_get_context`, `rka_ask`
@@ -2685,6 +2686,202 @@ async def rka_ack_event(event_id: str) -> str:
         _raise_with_detail(r)
         d = r.json()
         return f"Acked event {d['id']} [{d['event_type']}] → {d['status']}"
+
+
+# ============================================================
+# Orchestration Control Plane (v2.1 Phase 5)
+# ============================================================
+
+@tool()
+async def rka_get_orchestration_status() -> str:
+    """Get full orchestration status: autonomy mode, circuit breaker, costs, stuck events, roles with queue depths.
+
+    Returns a comprehensive view of the orchestration control plane for the active project.
+    """
+    async with _client() as c:
+        r = await c.get("/api/orchestration/status")
+        _raise_with_detail(r)
+        d = r.json()
+
+    lines = []
+    cfg = d.get("config", {})
+    lines.append(f"=== Orchestration Status ===")
+    lines.append(f"Autonomy mode: {cfg.get('autonomy_mode', 'unknown')}")
+    lines.append(f"Circuit breaker: {'TRIPPED' if cfg.get('circuit_breaker_tripped') else 'OK'}"
+                 f" (enabled={cfg.get('circuit_breaker_enabled', True)}, "
+                 f"limit=${cfg.get('cost_limit_usd', 0):.2f}/{cfg.get('cost_window_hours', 24)}h)")
+
+    cs = d.get("cost_summary", {})
+    lines.append(f"\n--- Cost (window) ---")
+    lines.append(f"Total: ${cs.get('total_cost_usd', 0):.4f}  "
+                 f"({cs.get('total_input_tokens', 0):,} in / {cs.get('total_output_tokens', 0):,} out, "
+                 f"{cs.get('entry_count', 0)} entries)")
+
+    cbr = d.get("cost_by_role", [])
+    if cbr:
+        lines.append(f"\n--- Cost by Role ---")
+        for r in cbr:
+            lines.append(f"  {r.get('role_name', r['role_id'])}: ${r['total_cost_usd']:.4f} "
+                         f"({r['total_input_tokens']:,}in/{r['total_output_tokens']:,}out)")
+
+    roles = d.get("roles", [])
+    if roles:
+        lines.append(f"\n--- Roles ({len(roles)}) ---")
+        for role in roles:
+            status = "active" if role.get("active_session_id") else "idle"
+            lines.append(
+                f"  {role['name']}: {status}  "
+                f"pending={role.get('pending_events', 0)}  "
+                f"processing={role.get('processing_events', 0)}  "
+                f"model={role.get('model', 'n/a')}"
+            )
+
+    stuck = d.get("stuck_events", [])
+    if stuck:
+        lines.append(f"\n--- Stuck Events ({len(stuck)}) ---")
+        for evt in stuck:
+            lines.append(f"  {evt['id']}: {evt['event_type']} status={evt['status']} "
+                         f"role={evt.get('role_name', evt.get('target_role_id', '?'))}")
+
+    overrides = d.get("recent_overrides", [])
+    if overrides:
+        lines.append(f"\n--- Recent PI Overrides ({len(overrides)}) ---")
+        for o in overrides:
+            payload = o.get("payload")
+            if isinstance(payload, str):
+                import json as _json
+                try:
+                    payload = _json.loads(payload)
+                except Exception:
+                    payload = {}
+            directive = (payload or {}).get("directive", "?")[:80]
+            lines.append(f"  → {o.get('target_role_name', '?')}: {directive}")
+
+    return "\n".join(lines)
+
+
+@tool()
+async def rka_set_autonomy_mode(
+    mode: str,
+    actor: str = "pi",
+) -> str:
+    """Set the orchestration autonomy mode.
+
+    Args:
+        mode: One of 'manual', 'supervised', 'autonomous', 'paused'
+        actor: Who is making the change (default: pi)
+    """
+    if mode not in ("manual", "supervised", "autonomous", "paused"):
+        return f"Invalid mode '{mode}'. Must be: manual, supervised, autonomous, paused"
+    async with _client() as c:
+        r = await c.put("/api/orchestration/autonomy-mode",
+                        json={"autonomy_mode": mode, "actor": actor})
+        _raise_with_detail(r)
+        d = r.json()
+    return f"Autonomy mode set to '{d.get('autonomy_mode', mode)}' by {actor}"
+
+
+@tool()
+async def rka_pi_override(
+    directive: str,
+    target_role_name: str | None = None,
+    target_role_id: str | None = None,
+    halt_current: bool = False,
+) -> str:
+    """Inject a PI override directive as a max-priority event to a role (or all roles).
+
+    This preempts normal event processing. Use halt_current=True to also expire
+    all pending/processing events for the target role(s).
+
+    Args:
+        directive: The PI instruction to inject
+        target_role_name: Name of the target role (optional — broadcasts if omitted)
+        target_role_id: ID of the target role (optional)
+        halt_current: If True, expire all pending/processing events for the target
+    """
+    async with _client() as c:
+        r = await c.post("/api/orchestration/pi-override", json={
+            "directive": directive,
+            "target_role_name": target_role_name,
+            "target_role_id": target_role_id,
+            "halt_current": halt_current,
+        })
+        _raise_with_detail(r)
+        d = r.json()
+    targets = ", ".join(d.get("targets", []))
+    return (f"PI override sent to {d.get('events_created', 0)} role(s): {targets}\n"
+            f"Halt current: {halt_current}\n"
+            f"Directive: {directive[:200]}")
+
+
+@tool()
+async def rka_log_cost(
+    role_id: str,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    estimated_cost_usd: float = 0.0,
+    model: str | None = None,
+    mission_id: str | None = None,
+    description: str | None = None,
+) -> str:
+    """Record token usage for a role (and optionally a mission).
+
+    Called by heartbeat workers or agents to track API spend.
+    Automatically checks the circuit breaker after logging.
+
+    Args:
+        role_id: The agent role ID
+        input_tokens: Number of input tokens consumed
+        output_tokens: Number of output tokens consumed
+        estimated_cost_usd: Estimated cost in USD
+        model: Model used (e.g. 'claude-sonnet-4-20250514')
+        mission_id: Related mission ID (optional)
+        description: What the tokens were spent on (optional)
+    """
+    async with _client() as c:
+        r = await c.post("/api/orchestration/costs", json={
+            "role_id": role_id,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "estimated_cost_usd": estimated_cost_usd,
+            "model": model,
+            "mission_id": mission_id,
+            "description": description,
+        })
+        _raise_with_detail(r)
+        d = r.json()
+    return (f"Cost logged: {input_tokens:,}in/{output_tokens:,}out = ${estimated_cost_usd:.4f}"
+            f" for role {role_id}")
+
+
+@tool()
+async def rka_reset_circuit_breaker(actor: str = "pi") -> str:
+    """Reset a tripped circuit breaker to allow event processing to resume.
+
+    Args:
+        actor: Who is resetting (default: pi)
+    """
+    async with _client() as c:
+        r = await c.post("/api/orchestration/circuit-breaker/reset",
+                         json={"actor": actor})
+        _raise_with_detail(r)
+        d = r.json()
+    return (f"Circuit breaker reset by {actor}. "
+            f"Mode: {d.get('autonomy_mode')}, tripped: {d.get('circuit_breaker_tripped')}")
+
+
+@tool()
+async def rka_retry_stuck_event(event_id: str) -> str:
+    """Retry a stuck event by resetting it to pending status.
+
+    Args:
+        event_id: The event ID to retry
+    """
+    async with _client() as c:
+        r = await c.post(f"/api/orchestration/stuck-events/{event_id}/retry")
+        _raise_with_detail(r)
+        d = r.json()
+    return f"Event {event_id}: {d.get('status', 'unknown')}"
 
 
 # ============================================================

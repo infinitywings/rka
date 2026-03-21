@@ -1022,40 +1022,43 @@ For markdown reports authored by the PI:
 - [ ] Harden cron/heartbeat-driven automation for repeated unattended execution
 
 ### Phase 3: Executor Autopilot (3-5 days)
-**Current status (2026-03-19): Partially complete, first real slice working**
+**Current status (2026-03-20): Mostly complete, including unattended heartbeat execution**
 - [x] Executor agent processes a real mission event autonomously
 - [x] Executor binds role, loads mission context, writes execution log, submits report, and acks event
-- [ ] Checkpoint submission and resolution flow working end-to-end
-- [ ] Researcher Brain resolves clarification checkpoints
-- [ ] Complete mission lifecycle with blocker path: create → checkpoint → resolve → resume → report
-- [ ] Fix mission task-status hygiene (mission can complete while `tasks[]` entries remain pending)
+- [x] Checkpoint submission and resolution flow working end-to-end
+- [x] Complete mission lifecycle with blocker path: create → checkpoint → resolve → resume → report
+- [x] Fix mission task-status hygiene (mission can complete while `tasks[]` entries remain pending)
+- [x] Unattended heartbeat-driven executor mission execution proven on a live project
+- [ ] Researcher Brain resolves clarification checkpoints in a richer multi-step scenario
 
 ### Phase 4: Full Autonomous Loop (3-5 days)
-**Current status (2026-03-19): Partially complete, cross-role propagation proven**
+**Current status (2026-03-20): Partially complete, unattended cross-role loop proven for one mission**
 - [x] Researcher Brain processes downstream `report.submitted` and writes synthesis
 - [x] Reviewer Brain processes downstream report event and writes review / quality-gate notes
 - [x] Cross-role event propagation works on a real mission across executor → researcher → reviewer
-- [ ] Cycle completes automatically: critique/review → next mission → Executor picks up
+- [x] Cycle completes automatically under heartbeat for one mission: executor completes mission, downstream researcher/reviewer events are emitted, and both are eventually acknowledged
+- [ ] Critique/review automatically causes the next mission to be generated and picked up
 - [ ] Disagreement detection and PI escalation working
 - [ ] WhatsApp/Discord notifications for escalations
 - [ ] Validate `synthesis.created`-driven reviewer routing if that is kept as the canonical trigger instead of `report.submitted`
+- [ ] Stabilize researcher heartbeat behavior; it eventually succeeds but still exhibits confusing blocked/stale transcript behavior during validation
 
 ### Phase 5: PI Control Plane and Hardening (2-3 days)
-**Current status (2026-03-19): Mostly not implemented for v2.1 orchestration**
-- [ ] Web dashboard "Orchestration" page showing role status, queues, costs
-- [ ] Autonomy mode switching (manual/supervised/autonomous/paused)
-- [ ] Token cost tracking per role per mission
-- [ ] Circuit breaker: halt autonomous loop if cost exceeds threshold
-- [ ] PI override: inject directive that preempts current mission
-- [ ] Stuck-event/operator recovery flows surfaced in the UI
+**Current status (2026-03-21): Implemented**
+- [x] Web dashboard "Orchestration" page showing role status, queues, costs
+- [x] Autonomy mode switching (manual/supervised/autonomous/paused)
+- [x] Token cost tracking per role per mission
+- [x] Circuit breaker: halt autonomous loop if cost exceeds threshold
+- [x] PI override: inject directive that preempts current mission
+- [x] Stuck-event/operator recovery flows surfaced in the UI
 
-**Updated orchestration readout (2026-03-19):**
+**Updated orchestration readout (2026-03-21):**
 - Phase 0: complete
 - Phase 1: complete
 - Phase 2: operational first slice complete
-- Phase 3: executor autopilot first slice proven
-- Phase 4: first multi-role loop proven
-- Phase 5: still ahead
+- Phase 3: live blocked-mission path + unattended executor flow proven
+- Phase 4: unattended cross-role loop proven for one mission (executor → researcher → reviewer)
+- Phase 5: complete — orchestration control plane with autonomy modes, circuit breaker, cost tracking, PI overrides, stuck-event detection
 
 **Original estimated timeline: 17-25 days (6 phases)**
 

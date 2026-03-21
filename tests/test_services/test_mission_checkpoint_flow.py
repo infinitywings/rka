@@ -7,8 +7,11 @@ import pytest
 from rka.infra.database import Database
 from rka.models.checkpoint import CheckpointCreate, CheckpointResolve
 from rka.models.mission import MissionCreate, MissionReportCreate, MissionTask
+from rka.models.agent_role import AgentRoleCreate
+from rka.services.agent_roles import AgentRoleService
 from rka.services.checkpoints import CheckpointService
 from rka.services.missions import MissionService
+from rka.services.role_events import RoleEventService
 
 
 async def _ensure_project(db: Database, project_id: str = "proj_default") -> None:
@@ -309,3 +312,116 @@ async def svc_submit_report_with_tasks(svc: MissionService, mis_id: str) -> None
             recommended_next="Run integration tests",
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# Resume event emission on checkpoint resolution (v2.1)
+# ---------------------------------------------------------------------------
+
+
+class TestMissionResumedEvent:
+    """Verify that resolving the last blocking checkpoint emits mission.resumed."""
+
+    async def _setup_services(self, db: Database):
+        """Create services with role event fan-out wired up."""
+        role_svc = AgentRoleService(db)
+        evt_svc = RoleEventService(db)
+
+        # Register an executor role that subscribes to mission.* events
+        executor_role = await role_svc.register(AgentRoleCreate(
+            name="test_executor",
+            subscriptions=["mission.*"],
+        ))
+
+        mis_svc = MissionService(db, project_id="proj_default",
+                                 role_event_service=evt_svc, agent_role_service=role_svc)
+        chk_svc = CheckpointService(db, project_id="proj_default",
+                                    role_event_service=evt_svc, agent_role_service=role_svc)
+        return mis_svc, chk_svc, evt_svc, executor_role
+
+    @pytest.mark.asyncio
+    async def test_resolve_last_blocking_emits_mission_resumed(self, db: Database):
+        """Resolving the sole blocking checkpoint emits mission.resumed."""
+        await _ensure_project(db)
+        mis_svc, chk_svc, evt_svc, executor_role = await self._setup_services(db)
+
+        mis_id = await _create_mission_with_tasks(mis_svc)
+
+        chk = await chk_svc.create(CheckpointCreate(
+            mission_id=mis_id, type="decision",
+            description="Blocked", blocking=True,
+        ))
+        assert (await mis_svc.get(mis_id)).status == "blocked"
+
+        await chk_svc.resolve(chk.id, CheckpointResolve(
+            resolution="Go ahead", resolved_by="brain",
+        ))
+
+        assert (await mis_svc.get(mis_id)).status == "active"
+
+        # Verify mission.resumed event was emitted to the executor role
+        events = await evt_svc.list_for_role(executor_role.id)
+        resumed_events = [e for e in events if e.event_type == "mission.resumed"]
+        assert len(resumed_events) == 1
+        assert resumed_events[0].source_entity_id == mis_id
+        assert resumed_events[0].source_entity_type == "mission"
+
+    @pytest.mark.asyncio
+    async def test_resolve_one_of_two_does_not_emit_resume(self, db: Database):
+        """Resolving one of two blocking checkpoints must NOT emit mission.resumed."""
+        await _ensure_project(db)
+        mis_svc, chk_svc, evt_svc, executor_role = await self._setup_services(db)
+
+        mis_id = await _create_mission_with_tasks(mis_svc)
+
+        chk1 = await chk_svc.create(CheckpointCreate(
+            mission_id=mis_id, type="decision",
+            description="Blocker 1", blocking=True,
+        ))
+        chk2 = await chk_svc.create(CheckpointCreate(
+            mission_id=mis_id, type="decision",
+            description="Blocker 2", blocking=True,
+        ))
+
+        # Resolve only the first
+        await chk_svc.resolve(chk1.id, CheckpointResolve(
+            resolution="Partial", resolved_by="brain",
+        ))
+
+        assert (await mis_svc.get(mis_id)).status == "blocked"
+
+        # No mission.resumed event should exist yet
+        events = await evt_svc.list_for_role(executor_role.id)
+        resumed_events = [e for e in events if e.event_type == "mission.resumed"]
+        assert len(resumed_events) == 0
+
+        # Resolve the second — NOW it should emit
+        await chk_svc.resolve(chk2.id, CheckpointResolve(
+            resolution="All clear", resolved_by="pi",
+        ))
+
+        assert (await mis_svc.get(mis_id)).status == "active"
+        events = await evt_svc.list_for_role(executor_role.id)
+        resumed_events = [e for e in events if e.event_type == "mission.resumed"]
+        assert len(resumed_events) == 1
+
+    @pytest.mark.asyncio
+    async def test_resume_event_payload_contains_checkpoint_id(self, db: Database):
+        """The mission.resumed event payload should reference the resolving checkpoint."""
+        await _ensure_project(db)
+        mis_svc, chk_svc, evt_svc, executor_role = await self._setup_services(db)
+
+        mis_id = await _create_mission_with_tasks(mis_svc)
+
+        chk = await chk_svc.create(CheckpointCreate(
+            mission_id=mis_id, type="decision",
+            description="Blocked", blocking=True,
+        ))
+        await chk_svc.resolve(chk.id, CheckpointResolve(
+            resolution="Approved", resolved_by="brain",
+        ))
+
+        events = await evt_svc.list_for_role(executor_role.id)
+        resumed = [e for e in events if e.event_type == "mission.resumed"][0]
+        assert resumed.payload["checkpoint_id"] == chk.id
+        assert resumed.payload["resolution"] == "Approved"

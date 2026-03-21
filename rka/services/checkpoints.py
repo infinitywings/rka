@@ -154,6 +154,16 @@ class CheckpointService(BaseService):
                     [chk.mission_id, self.project_id],
                 )
                 await self.db.commit()
+                # v2.1: emit resume event so executor heartbeat picks up the unblocked mission
+                await self._fanout_role_event(
+                    "mission.resumed",
+                    "mission", chk.mission_id,
+                    payload={
+                        "checkpoint_id": chk_id,
+                        "resolution": data.resolution[:200],
+                    },
+                    priority=90,  # slightly elevated over default
+                )
 
         resolve_evt = await self.emit_event(
             event_type="checkpoint_resolved",

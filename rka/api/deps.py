@@ -34,6 +34,7 @@ from rka.services.review_queue import ReviewQueueService
 from rka.services.onboarding import OnboardingService
 from rka.services.agent_roles import AgentRoleService
 from rka.services.role_events import RoleEventService
+from rka.services.orchestration import OrchestrationService
 
 logger = logging.getLogger(__name__)
 
@@ -455,3 +456,19 @@ def get_scoped_role_event_service(
     db: Database = Depends(get_db),
 ) -> RoleEventService:
     return RoleEventService(db, project_id=project_id)
+
+
+# ---- v2.1 Phase 5 orchestration service factories ----
+
+def get_orchestration_service(
+    project_id: str = Depends(get_project_id),
+    db: Database = Depends(get_db),
+) -> OrchestrationService:
+    return OrchestrationService(db, project_id=project_id)
+
+
+def get_scoped_orchestration_service(
+    project_id: str = Depends(require_project),
+    db: Database = Depends(get_db),
+) -> OrchestrationService:
+    return OrchestrationService(db, project_id=project_id)

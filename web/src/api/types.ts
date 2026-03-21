@@ -690,3 +690,59 @@ export interface RoleEvent {
   processed_at: string | null
   acked_at: string | null
 }
+
+// ---- v2.1 Phase 5: Orchestration ----
+
+export type AutonomyMode = "manual" | "supervised" | "autonomous" | "paused"
+
+export interface OrchestrationConfig {
+  project_id: string
+  autonomy_mode: AutonomyMode
+  circuit_breaker_enabled: boolean
+  cost_limit_usd: number
+  cost_window_hours: number
+  circuit_breaker_tripped: boolean
+  circuit_breaker_tripped_at: string | null
+  updated_at: string | null
+  updated_by: string | null
+}
+
+export interface CostSummary {
+  total_input_tokens: number
+  total_output_tokens: number
+  total_cost_usd: number
+  entry_count: number
+  window_hours: number | null
+}
+
+export interface RoleCostSummary {
+  role_id: string
+  role_name: string | null
+  total_input_tokens: number
+  total_output_tokens: number
+  total_cost_usd: number
+  entry_count: number
+}
+
+export interface OrchestrationRoleStatus {
+  id: string
+  name: string
+  description: string | null
+  model: string | null
+  model_tier: string | null
+  subscriptions: string[]
+  last_active_at: string | null
+  active_session_id: string | null
+  pending_events: number
+  processing_events: number
+  autonomy_profile: unknown | null
+}
+
+export interface OrchestrationStatus {
+  config: OrchestrationConfig
+  roles: OrchestrationRoleStatus[]
+  cost_summary: CostSummary
+  cost_by_role: RoleCostSummary[]
+  stuck_events: Array<Record<string, unknown>>
+  recent_overrides: Array<Record<string, unknown>>
+}
