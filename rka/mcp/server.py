@@ -58,7 +58,7 @@ claims, evidence clusters, and a three-layer research map with full provenance c
 - **Missions**: `rka_create_mission`, `rka_get_mission`, `rka_update_mission_status`, `rka_submit_report`
 - **Checkpoints**: `rka_submit_checkpoint`, `rka_get_checkpoints`, `rka_resolve_checkpoint`
 - **Roles**: `rka_register_role`, `rka_list_roles`, `rka_update_role`, `rka_bind_role`, `rka_save_role_state`
-- **Role Events**: `rka_get_events`, `rka_ack_event`
+- **Role Events**: `rka_get_events`, `rka_ack_event`, `rka_emit_event`
 - **Orchestration**: `rka_get_orchestration_status`, `rka_set_autonomy_mode`, `rka_pi_override`, `rka_log_cost`, `rka_reset_circuit_breaker`, `rka_retry_stuck_event`
 - **Research Map**: `rka_get_research_map`, `rka_get_claims`, `rka_supersede_decision`, `rka_trace_provenance`
 - **Review Queue**: `rka_get_review_queue`, `rka_review_cluster`, `rka_review_claims`, `rka_resolve_contradiction`
@@ -2686,6 +2686,50 @@ async def rka_ack_event(event_id: str) -> str:
         _raise_with_detail(r)
         d = r.json()
         return f"Acked event {d['id']} [{d['event_type']}] → {d['status']}"
+
+
+@tool()
+async def rka_emit_event(
+    event_type: str,
+    source_role_id: str | None = None,
+    source_entity_id: str | None = None,
+    source_entity_type: str | None = None,
+    payload: dict | None = None,
+    priority: int = 100,
+) -> str:
+    """Emit a role event with fan-out to all roles whose subscriptions match.
+
+    Use this after completing a workflow step that should trigger downstream roles.
+    For example: emit 'synthesis.created' after writing a synthesis note so the
+    reviewer picks it up, or 'critique.no_issues' so the researcher creates the
+    next mission.
+
+    Args:
+        event_type: Dot-separated event type (e.g. 'synthesis.created', 'critique.no_issues')
+        source_role_id: Role ID of the emitting agent
+        source_entity_id: ID of the entity that triggered this event (e.g. journal entry ID)
+        source_entity_type: Type of the source entity (e.g. 'journal', 'mission')
+        payload: Optional JSON payload with event details
+        priority: Event priority (default 100)
+    """
+    body: dict = {"event_type": event_type, "priority": priority}
+    if source_role_id:
+        body["source_role_id"] = source_role_id
+    if source_entity_id:
+        body["source_entity_id"] = source_entity_id
+    if source_entity_type:
+        body["source_entity_type"] = source_entity_type
+    if payload:
+        body["payload"] = payload
+
+    async with _client() as c:
+        r = await c.post("/api/role-events/fanout", json=body)
+        _raise_with_detail(r)
+        d = r.json()
+        return (
+            f"Emitted '{d['event_type']}' → {d['subscriber_count']} subscriber(s) "
+            f"(event IDs: {', '.join(d['created_event_ids']) or 'none'})"
+        )
 
 
 # ============================================================

@@ -1037,10 +1037,10 @@ For markdown reports authored by the PI:
 - [x] Reviewer Brain processes downstream report event and writes review / quality-gate notes
 - [x] Cross-role event propagation works on a real mission across executor → researcher → reviewer
 - [x] Cycle completes automatically under heartbeat for one mission: executor completes mission, downstream researcher/reviewer events are emitted, and both are eventually acknowledged
-- [ ] Critique/review automatically causes the next mission to be generated and picked up
-- [ ] Disagreement detection and PI escalation working
+- [x] Critique/review automatically causes the next mission to be generated and picked up (Phase 6: researcher processes `critique.no_issues` → `rka_create_mission`)
+- [x] Disagreement detection and PI escalation working (Phase 6: `disagreement.detected` event type)
 - [ ] WhatsApp/Discord notifications for escalations
-- [ ] Validate `synthesis.created`-driven reviewer routing if that is kept as the canonical trigger instead of `report.submitted`
+- [x] Validate `synthesis.created`-driven reviewer routing if that is kept as the canonical trigger instead of `report.submitted` (Phase 6: reviewer now subscribes to `synthesis.created`)
 - [ ] Stabilize researcher heartbeat behavior; it eventually succeeds but still exhibits confusing blocked/stale transcript behavior during validation
 
 ### Phase 5: PI Control Plane and Hardening (2-3 days)
@@ -1052,6 +1052,18 @@ For markdown reports authored by the PI:
 - [x] PI override: inject directive that preempts current mission
 - [x] Stuck-event/operator recovery flows surfaced in the UI
 
+### Phase 6: Sequential Review Loop (1-2 days)
+**Current status (2026-03-21): Implemented**
+- [x] Fan-out API endpoint `POST /api/role-events/fanout` for agent-emitted events
+- [x] MCP tool `rka_emit_event` for agents to emit events with subscriber fan-out
+- [x] Reviewer subscriptions updated: `synthesis.created`, `report.*` (removed `decision.*`, `claim.*`)
+- [x] Researcher subscriptions updated: added `critique.*` pattern
+- [x] Researcher heartbeat: emits `synthesis.created` after writing synthesis note
+- [x] Researcher heartbeat: processes `critique.no_issues` → creates next mission (auto-loop)
+- [x] Reviewer heartbeat: processes `synthesis.created` → writes critique → emits `critique.no_issues` or `disagreement.detected`
+- [x] `disagreement.detected` event type for PI escalation
+- [x] Tests for full sequential review loop (report → synthesis → critique → next mission)
+
 **Updated orchestration readout (2026-03-21):**
 - Phase 0: complete
 - Phase 1: complete
@@ -1059,6 +1071,7 @@ For markdown reports authored by the PI:
 - Phase 3: live blocked-mission path + unattended executor flow proven
 - Phase 4: unattended cross-role loop proven for one mission (executor → researcher → reviewer)
 - Phase 5: complete — orchestration control plane with autonomy modes, circuit breaker, cost tracking, PI overrides, stuck-event detection
+- Phase 6: complete — sequential review loop with synthesis.created/critique.no_issues/disagreement.detected event routing
 
 **Original estimated timeline: 17-25 days (6 phases)**
 

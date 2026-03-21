@@ -24,7 +24,6 @@ import {
 } from "@/components/ui/dialog"
 import { toast } from "sonner"
 import type {
-  OrchestrationStatus,
   OrchestrationRoleStatus,
   AutonomyMode,
   RoleCostSummary,
@@ -161,7 +160,7 @@ export default function Orchestration() {
               </Badge>
               <Select
                 value={cfg.autonomy_mode}
-                onValueChange={(v) => setModeMutation.mutate(v)}
+                onValueChange={(v) => v && setModeMutation.mutate(v)}
               >
                 <SelectTrigger className="h-8 text-xs">
                   <SelectValue />
@@ -387,7 +386,7 @@ export default function Orchestration() {
           <div className="space-y-4 py-2">
             <div className="space-y-2">
               <Label>Target Role (leave empty for broadcast)</Label>
-              <Select value={overrideTarget} onValueChange={setOverrideTarget}>
+              <Select value={overrideTarget} onValueChange={(v) => setOverrideTarget(v ?? "")}>
                 <SelectTrigger>
                   <SelectValue placeholder="All roles (broadcast)" />
                 </SelectTrigger>
