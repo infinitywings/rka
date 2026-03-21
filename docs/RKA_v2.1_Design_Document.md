@@ -1039,9 +1039,9 @@ For markdown reports authored by the PI:
 - [x] Cycle completes automatically under heartbeat for one mission: executor completes mission, downstream researcher/reviewer events are emitted, and both are eventually acknowledged
 - [x] Critique/review automatically causes the next mission to be generated and picked up (Phase 6: researcher processes `critique.no_issues` → `rka_create_mission`)
 - [x] Disagreement detection and PI escalation working (Phase 6: `disagreement.detected` event type)
-- [ ] WhatsApp/Discord notifications for escalations
+- [x] WhatsApp/Discord notifications for escalations (reviewer heartbeat now uses sessions_send to main session + wacli on disagreement.detected)
 - [x] Validate `synthesis.created`-driven reviewer routing if that is kept as the canonical trigger instead of `report.submitted` (Phase 6: reviewer now subscribes to `synthesis.created`)
-- [ ] Stabilize researcher heartbeat behavior; it eventually succeeds but still exhibits confusing blocked/stale transcript behavior during validation
+- [x] Stabilize researcher heartbeat behavior — clarified no-events path (reply HEARTBEAT_OK immediately, no "I'm blocked"), added sessions_send PI notification on critique.no_issues, improved error handling so failures reply HEARTBEAT_OK instead of retrying
 
 ### Phase 5: PI Control Plane and Hardening (2-3 days)
 **Current status (2026-03-21): Implemented**
