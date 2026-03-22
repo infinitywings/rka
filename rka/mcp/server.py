@@ -64,7 +64,7 @@ claims, evidence clusters, and a three-layer research map with full provenance c
 - **Review Queue**: `rka_get_review_queue`, `rka_review_cluster`, `rka_review_claims`, `rka_resolve_contradiction`
 - **Search & Context**: `rka_search`, `rka_get_context`, `rka_ask`
 - **Graph**: `rka_get_graph`, `rka_get_ego_graph`, `rka_graph_stats`
-- **Academic**: `rka_search_semantic_scholar`, `rka_search_arxiv`, `rka_import_bibtex`
+- **Academic**: `rka_search_semantic_scholar`, `rka_search_arxiv`, `rka_browse_url`, `rka_import_bibtex`
 - **Workspace**: `rka_scan_workspace`, `rka_bootstrap_workspace`
 - **Session**: `rka_session_digest`, `rka_reset_session`
 - **Onboarding**: `rka_generate_claude_md`
@@ -1650,6 +1650,55 @@ async def rka_search_arxiv(
         lines.append(f"\n✅ Added {len(added_ids)} papers to library")
 
     return "\n".join(lines)
+
+
+# ============================================================
+# Literature Browsing
+# ============================================================
+
+@tool()
+async def rka_browse_url(url: str, max_chars: int = 8000) -> str:
+    """Fetch and extract readable text from any URL using a headless browser.
+
+    Use this to:
+    - Read arXiv abstract pages (https://arxiv.org/abs/...)
+    - Read GitHub README pages and code
+    - Access paper landing pages, conference proceedings
+    - Extract structured content from any public web page
+
+    Args:
+        url: The URL to visit
+        max_chars: Maximum characters to return (truncates if exceeded)
+    """
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["agent-browser", "open", url, "--markdown", "--max-chars", str(max_chars)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except FileNotFoundError:
+        return "agent-browser not found. Install with: npm install -g agent-browser"
+    except Exception as exc:
+        return f"Browser failed: {exc}"
+
+    if result.returncode != 0:
+        # Fallback: basic HTTP fetch
+        try:
+            import urllib.request
+            req = urllib.request.Request(url, headers={"User-Agent": "RKA/1.0"})
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+            return raw[:max_chars]
+        except Exception:
+            return f"Failed to fetch {url}: {result.stderr or result.stdout}"
+
+    output = result.stdout
+    if len(output) > max_chars:
+        output = output[:max_chars] + f"\n\n[Truncated — original was {len(output)} chars]"
+    return output
 
 
 def _xml_text(xml: str, tag: str) -> str:

@@ -147,8 +147,11 @@ rka_get_context(topic="...")   → Token-budgeted context package
 | **Decision lifecycle** | Overturn decisions with `rka_supersede_decision` — affected knowledge re-distills automatically |
 | **Hybrid search** | FTS5 keyword + sqlite-vec embeddings + reciprocal rank fusion |
 | **Multi-project** | Isolated project databases with MCP tools for switching |
-| **Web dashboard** | 12-page React UI: research map, decision tree, knowledge graph, journal, timeline |
+| **Web dashboard** | 13-page React UI: research map, decision tree, knowledge graph, journal, timeline, orchestration panel |
 | **Onboarding** | `rka_generate_claude_md` auto-generates project-specific CLAUDE.md from live DB state |
+| **v2.1 Three-Agent Loop** | Executor → Researcher → Reviewer heartbeat loop runs autonomously with PI oversight |
+| **PI Control Plane** | Autonomy modes, circuit breaker, cost tracking, PI overrides, stuck-event detection |
+| **Literature MCP** | ArXiv, Semantic Scholar, OpenAlex, Google Scholar search via `research-tools` MCP |
 
 ---
 
@@ -230,6 +233,58 @@ RKA runs as three processes:
 The REST API and background worker share the same SQLite database file and service layer code. The background worker handles all LLM-dependent tasks (claim extraction, cluster synthesis, embedding generation, review-queue population) so that MCP and REST calls return immediately without blocking on slow LLM backends.
 
 The MCP server communicates via stdio (stdin/stdout) and proxies all calls to the REST API at `RKA_API_URL` (default: `http://localhost:9712`).
+
+---
+
+## v2.1 Three-Agent Heartbeat Loop
+
+RKA v2.1 introduces a fully autonomous three-agent research loop driven by heartbeat automation:
+
+```mermaid
+graph TD
+    subgraph "Three-Agent Loop"
+        Exec["⚡ Executor\nHeartbeat"]
+        Res["🧠 Researcher Brain\nHeartbeat"]
+        Rev["🔍 Reviewer Brain\nHeartbeat"]
+        PI["🧑‍🔬 PI\n(Human — escalation)"]
+        DB["RKA\nrole_events table"]
+    end
+
+    Exec -->|mission.assigned| Exec
+    Exec -->|report.submitted| DB
+    DB -->|report.submitted| Res
+    Res -->|synthesis.created| DB
+    DB -->|synthesis.created| Rev
+    Rev -->|critique.no_issues| DB
+    DB -->|critique.no_issues| Res
+    Res -->|mission.assigned| Exec
+    Rev -->|disagreement.detected| PI
+    PI -->|resolves| Rev
+    Exec -->|checkpoint.resolved| DB
+    DB -->|checkpoint.resolved| Exec
+```
+
+**Roles and subscriptions:**
+
+| Role | Event Types it processes | Tools available |
+|------|-------------------------|----------------|
+| **Executor** | `mission.assigned`, `directive.*` | `rka_*` MCP tools, `research-tools` MCP (ArXiv, Scholar, etc.) |
+| **Researcher Brain** | `report.submitted`, `critique.no_issues` | `rka_*` tools + literature search |
+| **Reviewer Brain** | `synthesis.created`, `report.submitted` | `rka_*` tools, writes critique notes |
+| **PI** | Receives `disagreement.detected` notifications | All — human judgment |
+
+**The complete v2.1 lifecycle:**
+
+1. PI creates a directive or Researcher creates a mission → assigned to Executor
+2. Executor picks up mission via heartbeat → does work → emits `report.submitted`
+3. Researcher picks up `report.submitted` → synthesizes findings → emits `synthesis.created`
+4. Reviewer picks up `synthesis.created` → writes critique → emits `critique.no_issues` or `disagreement.detected`
+5. On `critique.no_issues`: Researcher creates next mission → loop returns to Step 2
+6. On `disagreement.detected`: PI is notified (OpenClaw session injection + WhatsApp) → PI resolves → loop continues
+
+**Autonomy modes:** The PI can switch between `manual`, `supervised`, `autonomous`, and `paused` via the Orchestration dashboard or API. Circuit breaker and cost tracking prevent runaway spend.
+
+**Literature research:** The Executor and Researcher have `research-tools` MCP configured, giving them live access to ArXiv, Google Scholar, Semantic Scholar, OpenAlex, and headless web browsing — enabling them to conduct real literature reviews within the loop.
 
 ---
 
@@ -451,28 +506,30 @@ The model's context window is auto-detected. All LLM-dependent features (Q&A, su
 
 Add the MCP config (see Installation above). Both Claude Desktop and Claude Code now have access to all `rka_*` tools. Use `rka_list_projects`, `rka_set_project`, and `rka_create_project` for multi-project workflows.
 
-### 4. Generate Onboarding Instructions (Optional)
+### 4. Try the v2.1 Demo Project (Recommended First Step)
+
+The fastest way to see v2.1 in action is to run the demo script — it pre-populates a complete three-agent research cycle:
+
+```bash
+python scripts/v2.1_demo_project.py
+```
+
+This creates a fully populated project ("Privacy-Preserving Federated Learning for IoT Edge Devices") with:
+- PI directive, literature entries, missions, executor reports, researcher synthesis notes, reviewer critiques, decisions, and checkpoints
+- Events showing the complete loop: `report.submitted` → `synthesis.created` → `critique.no_issues` / `disagreement.detected`
+- Autonomy mode set to `autonomous`
+
+See `docs/v2.1_example_research_plan.md` for a detailed annotated walkthrough of the same project.
+
+### 5. Generate Onboarding Instructions (Optional)
 
 Run `rka_generate_claude_md` from Claude Desktop or hit `GET /api/generate-claude-md?role=executor` to generate a customized `CLAUDE.md` for the current project and role. This gives new sessions immediate context on project goals, conventions, and active work.
 
-### 5. Try the Example Project (Optional)
-
-RKA ships with an example knowledge pack — the `rka_development` project used to build RKA itself. Import it to explore a fully populated knowledge base with 80 journal entries, 22 decisions, 10 literature references, 3 missions, and 279 cross-references:
-
-```bash
-curl -X POST http://localhost:9712/api/projects/import \
-  -F "file=@examples/rka_development.rka-pack_v2.zip"
-```
-
-Or use the web dashboard: open **Dashboard** → **Import Pack** → select `examples/rka_development.rka-pack_v2.zip`.
-
-After import, switch to the project in the sidebar and explore the Decision Tree, Knowledge Graph, and Research Map to see how a real project looks.
-
 ### 6. Start Researching
 
-Use the web UI for browsing and Q&A, or use Claude Desktop/Code with MCP tools for the full Brain/Executor workflow. The dashboard lets you select the active project, browse the Research Map, manage the review queue, and export the active project as a knowledge pack.
+Use the web UI for browsing and Q&A, or use Claude Desktop/Code with MCP tools for the full three-agent loop. The dashboard lets you select the active project, browse the Research Map, manage the review queue, check the Orchestration panel for autonomy mode and cost tracking, and export the active project as a knowledge pack.
 
-For end-to-end task walkthroughs, see [USAGE_GUIDE.md](USAGE_GUIDE.md) or the [Wiki](https://github.com/infinitywings/rka/wiki).
+For end-to-end task walkthroughs, see [USAGE_GUIDE.md](USAGE_GUIDE.md) or [docs/v2.1_example_research_plan.md](docs/v2.1_example_research_plan.md).
 
 ---
 
@@ -751,12 +808,26 @@ All tools are prefixed with `rka_` and available through the MCP stdio interface
 | `rka_get_ego_graph` | Get the ego graph centered on a specific entity |
 | `rka_graph_stats` | Get graph statistics (node counts, edge counts, density) |
 
+### Orchestration (v2.1)
+
+| Tool | Purpose |
+|------|---------|
+| `rka_get_orchestration_status` | Full dashboard: autonomy mode, circuit breaker state, cost summary, role costs, stuck events |
+| `rka_set_autonomy_mode` | Set mode to `manual`, `supervised`, `autonomous`, or `paused` |
+| `rka_emit_event` | Emit a named event for the three-agent loop (e.g. `synthesis.created`, `critique.no_issues`, `disagreement.detected`) |
+| `rka_pi_override` | Inject a priority directive with elevated urgency, bypassing normal event routing |
+| `rka_log_cost` | Record a cost entry for token tracking |
+| `rka_get_cost_summary` | Aggregate token cost by time window, with per-role breakdown |
+| `rka_reset_circuit_breaker` | Reset the circuit breaker (PI only) |
+| `rka_retry_stuck_event` | Retry a stuck event that failed to fan out to subscribers |
+
 ### Academic Import and Enrichment
 
 | Tool | Purpose |
 |------|---------|
 | `rka_search_semantic_scholar` | Search Semantic Scholar for papers by query, with optional year/field filters and auto-add to library |
 | `rka_search_arxiv` | Search arXiv for papers by query, with sort options and optional auto-add to library |
+| `rka_browse_url` | Headless browser fetch of any URL (arXiv abstracts, GitHub READMEs, paper pages) |
 | `rka_search_elicit` | Search Elicit for papers relevant to a research question |
 | `rka_import_bibtex` | Import literature entries from a BibTeX string (auto-detects duplicates by DOI and title) |
 
