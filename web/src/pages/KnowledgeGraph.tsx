@@ -39,11 +39,11 @@ const DIM = {
 // ── Custom node components ──────────────────────────────────────────────────
 
 const decisionStatusCls: Record<string, string> = {
-  active:    "border-green-500 bg-green-50",
-  abandoned: "border-gray-300 bg-gray-100 border-dashed",
-  superseded:"border-yellow-400 bg-yellow-50",
-  merged:    "border-blue-400 bg-blue-50",
-  revisit:   "border-orange-400 bg-orange-50",
+  active:    "border-green-500 bg-green-50 dark:bg-green-950 dark:border-green-600",
+  abandoned: "border-gray-300 bg-gray-100 border-dashed dark:bg-gray-900 dark:border-gray-600",
+  superseded:"border-yellow-400 bg-yellow-50 dark:bg-yellow-950 dark:border-yellow-500",
+  merged:    "border-blue-400 bg-blue-50 dark:bg-blue-950 dark:border-blue-500",
+  revisit:   "border-orange-400 bg-orange-50 dark:bg-orange-950 dark:border-orange-500",
 }
 
 function DecisionNode({ data }: NodeProps) {
@@ -57,27 +57,27 @@ function DecisionNode({ data }: NodeProps) {
       <Handle type="target" position={Position.Left} />
       <div
         className={`rounded-lg border-2 px-3 py-2 shadow-sm cursor-pointer transition-shadow hover:shadow-md
-          ${decisionStatusCls[d.status] ?? "border-gray-300 bg-white"}
+          ${decisionStatusCls[d.status] ?? "border-gray-300 bg-white dark:bg-gray-900 dark:border-gray-600"}
           ${isAbandoned ? "opacity-50" : ""}`}
         style={{ width: DIM.decision.w }}
       >
         <div className="flex items-center gap-1 mb-1">
-          <span className="text-[9px] font-bold text-blue-700 uppercase tracking-wide">Decision</span>
+          <span className="text-[9px] font-bold text-blue-700 dark:text-blue-300 uppercase tracking-wide">Decision</span>
           <span className="text-[9px] text-muted-foreground">{d.phase}</span>
           {!d.explored && !isAbandoned && (
-            <span className="ml-auto text-[8px] px-1 py-px rounded border border-amber-400 text-amber-600 bg-amber-50 shrink-0">
+            <span className="ml-auto text-[8px] px-1 py-px rounded border border-amber-400 text-amber-600 bg-amber-50 dark:bg-amber-950 dark:text-amber-400 shrink-0">
               unexplored
             </span>
           )}
         </div>
         <p
-          className="text-[11px] font-medium leading-snug"
+          className="text-[11px] font-medium leading-snug text-gray-900 dark:text-gray-100"
           style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
         >
           {d.question}
         </p>
         {d.chosen && (
-          <p className="text-[10px] text-muted-foreground mt-1 truncate">→ {d.chosen}</p>
+          <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1 truncate">→ {d.chosen}</p>
         )}
       </div>
       <Handle type="source" position={Position.Right} />
@@ -86,12 +86,12 @@ function DecisionNode({ data }: NodeProps) {
 }
 
 const missionStatusCls: Record<string, string> = {
-  pending:   "border-amber-400 bg-amber-50",
-  active:    "border-teal-500 bg-teal-50",
-  complete:  "border-slate-400 bg-slate-50",
-  partial:   "border-slate-400 bg-slate-50",
-  blocked:   "border-red-400 bg-red-50",
-  cancelled: "border-gray-200 bg-gray-50 opacity-40",
+  pending:   "border-amber-400 bg-amber-50 dark:bg-amber-950 dark:border-amber-500",
+  active:    "border-teal-500 bg-teal-50 dark:bg-teal-950 dark:border-teal-400",
+  complete:  "border-slate-400 bg-slate-50 dark:bg-slate-900 dark:border-slate-500",
+  partial:   "border-slate-400 bg-slate-50 dark:bg-slate-900 dark:border-slate-500",
+  blocked:   "border-red-400 bg-red-50 dark:bg-red-950 dark:border-red-500",
+  cancelled: "border-gray-200 bg-gray-50 opacity-40 dark:bg-gray-900 dark:border-gray-600",
 }
 
 function MissionNode({ data }: NodeProps) {
@@ -101,14 +101,14 @@ function MissionNode({ data }: NodeProps) {
       <Handle type="target" position={Position.Left} />
       <div
         className={`rounded-md border-2 px-3 py-2 shadow-sm cursor-pointer transition-shadow hover:shadow-md
-          ${missionStatusCls[d.status] ?? "border-gray-300 bg-white"}`}
+          ${missionStatusCls[d.status] ?? "border-gray-300 bg-white dark:bg-gray-900 dark:border-gray-600"}`}
         style={{ width: DIM.mission.w }}
       >
-        <span className="text-[9px] font-bold text-teal-700 uppercase tracking-wide">
+        <span className="text-[9px] font-bold text-teal-700 dark:text-teal-300 uppercase tracking-wide">
           Mission · {d.status}
         </span>
         <p
-          className="text-[11px] leading-snug mt-0.5"
+          className="text-[11px] leading-snug mt-0.5 text-gray-900 dark:text-gray-100"
           style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
         >
           {d.objective}
@@ -134,13 +134,13 @@ function FindingNode({ data }: NodeProps) {
     <>
       <Handle type="target" position={Position.Left} />
       <div
-        className={`rounded border border-gray-200 border-l-4 bg-white px-2 py-1.5 shadow-sm cursor-pointer transition-shadow hover:shadow-md
+        className={`rounded border border-gray-200 dark:border-gray-700 border-l-4 bg-white dark:bg-gray-900 px-2 py-1.5 shadow-sm cursor-pointer transition-shadow hover:shadow-md
           ${findingBorderCls[d.type] ?? "border-l-gray-400"}`}
         style={{ width: DIM.finding.w }}
       >
-        <span className="text-[9px] font-bold uppercase tracking-wide text-gray-500">{d.type}</span>
+        <span className="text-[9px] font-bold uppercase tracking-wide text-gray-500 dark:text-gray-400">{d.type}</span>
         <p
-          className="text-[10px] leading-snug mt-0.5"
+          className="text-[10px] leading-snug mt-0.5 text-gray-900 dark:text-gray-100"
           style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
         >
           {d.content}
@@ -155,12 +155,12 @@ function LitNode({ data }: NodeProps) {
   return (
     <>
       <div
-        className="rounded border-2 border-indigo-400 bg-indigo-50 px-3 py-2 shadow-sm cursor-pointer transition-shadow hover:shadow-md"
+        className="rounded border-2 border-indigo-400 bg-indigo-50 dark:bg-indigo-950 dark:border-indigo-500 px-3 py-2 shadow-sm cursor-pointer transition-shadow hover:shadow-md"
         style={{ width: DIM.lit.w }}
       >
-        <span className="text-[9px] font-bold text-indigo-700 uppercase tracking-wide">Literature</span>
+        <span className="text-[9px] font-bold text-indigo-700 dark:text-indigo-300 uppercase tracking-wide">Literature</span>
         <p
-          className="text-[11px] leading-snug mt-0.5"
+          className="text-[11px] leading-snug mt-0.5 text-gray-900 dark:text-gray-100"
           style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
         >
           {d.title}
@@ -177,12 +177,12 @@ function ClaimNode({ data }: NodeProps) {
     <>
       <Handle type="target" position={Position.Left} />
       <div
-        className="rounded border border-amber-300 bg-amber-50 px-2 py-1.5 shadow-sm cursor-pointer transition-shadow hover:shadow-md"
+        className="rounded border border-amber-300 bg-amber-50 dark:bg-amber-950 dark:border-amber-500 px-2 py-1.5 shadow-sm cursor-pointer transition-shadow hover:shadow-md"
         style={{ width: DIM.claim.w }}
       >
-        <span className="text-[9px] font-bold uppercase tracking-wide text-amber-700">{d.claim_type || "claim"}</span>
+        <span className="text-[9px] font-bold uppercase tracking-wide text-amber-700 dark:text-amber-300">{d.claim_type || "claim"}</span>
         <p
-          className="text-[10px] leading-snug mt-0.5"
+          className="text-[10px] leading-snug mt-0.5 text-gray-900 dark:text-gray-100"
           style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
         >
           {d.content}
@@ -199,21 +199,21 @@ function ClusterNode({ data }: NodeProps) {
     <>
       <Handle type="target" position={Position.Left} />
       <div
-        className="rounded-lg border-2 border-purple-400 bg-purple-50 px-3 py-2 shadow-sm cursor-pointer transition-shadow hover:shadow-md"
+        className="rounded-lg border-2 border-purple-400 bg-purple-50 dark:bg-purple-950 dark:border-purple-500 px-3 py-2 shadow-sm cursor-pointer transition-shadow hover:shadow-md"
         style={{ width: DIM.cluster.w }}
       >
         <div className="flex items-center gap-1">
-          <span className="text-[9px] font-bold text-purple-700 uppercase tracking-wide">Cluster</span>
-          {d.confidence && <span className="text-[9px] text-purple-500">{d.confidence}</span>}
+          <span className="text-[9px] font-bold text-purple-700 dark:text-purple-300 uppercase tracking-wide">Cluster</span>
+          {d.confidence && <span className="text-[9px] text-purple-500 dark:text-purple-400">{d.confidence}</span>}
         </div>
         <p
-          className="text-[11px] leading-snug mt-0.5"
+          className="text-[11px] leading-snug mt-0.5 text-gray-900 dark:text-gray-100"
           style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
         >
           {d.label}
         </p>
         {d.claim_count > 0 && (
-          <span className="text-[9px] text-muted-foreground">{d.claim_count} claims</span>
+          <span className="text-[9px] text-gray-500 dark:text-gray-400">{d.claim_count} claims</span>
         )}
       </div>
       <Handle type="source" position={Position.Right} />
