@@ -140,6 +140,81 @@ class ProjectService(BaseService):
         await self.audit("update", "project", project_id, actor, {"fields": list(updates.keys())}, project_id=project_id)
         return await self.get(project_id=project_id)
 
+    # All project-scoped tables that must be cascade-deleted.
+    # Order: dependents first (reverse of insert order).
+    _DELETE_TABLES = (
+        "review_queue", "claim_edges", "claims", "evidence_clusters",
+        "entity_topics", "topics", "context_snapshots",
+        "checkpoints", "bootstrap_log", "graph_views", "keynodes",
+        "entity_links", "tags", "audit_log", "events",
+        "qa_logs", "qa_sessions", "exploration_summaries", "figures", "artifacts",
+        "jobs", "embedding_metadata",
+        "journal", "missions", "decisions", "literature",
+        "project_states",
+    )
+
+    async def get_project_entity_counts(self, project_id: str) -> dict[str, int]:
+        """Return row counts per table for a project, for confirmation UI."""
+        counts = {}
+        for table in self._DELETE_TABLES:
+            try:
+                row = await self.db.fetchone(
+                    f"SELECT COUNT(*) as cnt FROM {table} WHERE project_id = ?",
+                    [project_id],
+                )
+                cnt = row["cnt"] if row else 0
+                if cnt > 0:
+                    counts[table] = cnt
+            except Exception:
+                pass  # table may not exist in older schemas
+        return counts
+
+    async def delete_project(self, project_id: str, confirm: bool = False) -> dict:
+        """Delete a project and all its scoped data. Requires confirm=True."""
+        if project_id == self.DEFAULT_PROJECT_ID:
+            raise ValueError("Cannot delete the default project (proj_default)")
+
+        # Verify project exists
+        row = await self.db.fetchone("SELECT id, name FROM projects WHERE id = ?", [project_id])
+        if not row:
+            raise ValueError(f"Project '{project_id}' not found")
+
+        project_name = row["name"]
+        counts = await self.get_project_entity_counts(project_id)
+
+        if not confirm:
+            return {
+                "project_id": project_id,
+                "project_name": project_name,
+                "entity_counts": counts,
+                "total_rows": sum(counts.values()),
+                "confirmed": False,
+                "message": "Set confirm=true to permanently delete this project and all its data.",
+            }
+
+        # Cascade delete in reverse dependency order
+        for table in self._DELETE_TABLES:
+            try:
+                await self.db.execute(
+                    f"DELETE FROM {table} WHERE project_id = ?",
+                    [project_id],
+                )
+            except Exception:
+                pass  # table may not exist in older schemas
+
+        # Delete the project row itself
+        await self.db.execute("DELETE FROM projects WHERE id = ?", [project_id])
+        await self.db.commit()
+
+        return {
+            "project_id": project_id,
+            "project_name": project_name,
+            "entity_counts": counts,
+            "total_rows": sum(counts.values()),
+            "confirmed": True,
+            "message": f"Project '{project_name}' and all its data have been permanently deleted.",
+        }
+
     def _row_to_model(self, row: dict) -> ProjectState:
         return ProjectState(
             project_name=row["project_name"],

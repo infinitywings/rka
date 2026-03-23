@@ -36,6 +36,25 @@ export function useCreateProject() {
   })
 }
 
+export function useDeleteProject() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (projectId: string) => api.deleteProject(projectId, true),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects"] })
+      qc.invalidateQueries({ queryKey: ["project"] })
+    },
+  })
+}
+
+export function useProjectEntityCounts(projectId: string | null) {
+  return useQuery({
+    queryKey: ["project-entity-counts", projectId],
+    queryFn: () => api.getProjectEntityCounts(projectId!),
+    enabled: !!projectId,
+  })
+}
+
 export function useExportKnowledgePack() {
   return useMutation({
     mutationFn: api.exportKnowledgePack,

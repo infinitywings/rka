@@ -23,27 +23,19 @@ class DecisionService(BaseService):
         self,
         dec_id: str,
         *,
-        include_auto_tags: bool,
         include_embedding: bool,
     ) -> None:
+        if not include_embedding:
+            return
         queue = JobQueue(self.db)
-        if include_auto_tags:
-            await queue.enqueue(
-                "decision_auto_tag",
-                project_id=self.project_id,
-                entity_type="decision",
-                entity_id=dec_id,
-                dedupe_key=self._job_dedupe_key(dec_id, "auto_tag"),
-            )
-        if include_embedding:
-            await queue.enqueue(
-                "decision_embed",
-                project_id=self.project_id,
-                entity_type="decision",
-                entity_id=dec_id,
-                dedupe_key=self._job_dedupe_key(dec_id, "embed"),
-                priority=110,
-            )
+        await queue.enqueue(
+            "decision_embed",
+            project_id=self.project_id,
+            entity_type="decision",
+            entity_id=dec_id,
+            dedupe_key=self._job_dedupe_key(dec_id, "embed"),
+            priority=110,
+        )
 
     async def create(self, data: DecisionCreate, actor: str | None = None) -> Decision:
         """Create a new decision node."""
@@ -78,10 +70,13 @@ class DecisionService(BaseService):
         if has_user_tags:
             await self._set_tags("decision", dec_id, data.tags)
 
-        # Write entity_links for caller-provided related_journal (justified_by links)
+        # Write entity_links for caller-provided cross-references
         if data.related_journal:
             for jrn_id in data.related_journal:
                 await self.add_link("decision", dec_id, "justified_by", "journal", jrn_id, created_by=actor_val)
+        if data.related_literature:
+            for lit_id in data.related_literature:
+                await self.add_link("literature", lit_id, "informed_by", "decision", dec_id, created_by=actor_val)
 
         # Sync cheap deterministic FTS now; LLM enrichment + embedding are queued
         await self._sync_fts("decision", dec_id, {
@@ -90,7 +85,6 @@ class DecisionService(BaseService):
 
         await self._enqueue_enrichment_jobs(
             dec_id,
-            include_auto_tags=bool(self.llm) and not has_user_tags,
             include_embedding=bool(self.embeddings),
         )
 
@@ -181,6 +175,14 @@ class DecisionService(BaseService):
         )
         await self.db.commit()
 
+        # Materialize entity_links for updated cross-reference fields
+        if data.related_journal:
+            for jrn_id in data.related_journal:
+                await self.add_link("decision", dec_id, "justified_by", "journal", jrn_id, created_by=actor)
+        if data.related_literature:
+            for lit_id in data.related_literature:
+                await self.add_link("literature", lit_id, "informed_by", "decision", dec_id, created_by=actor)
+
         # Emit event for status changes
         if data.status:
             event_type = {
@@ -204,7 +206,6 @@ class DecisionService(BaseService):
                 await self._sync_fts("decision", dec_id, dict(row))
                 await self._enqueue_enrichment_jobs(
                     dec_id,
-                    include_auto_tags=False,
                     include_embedding=bool(self.embeddings),
                 )
 
@@ -289,15 +290,9 @@ class DecisionService(BaseService):
                    ) AND project_id = ?""",
                 [_now(), entry_id, self.project_id],
             )
-            # Enqueue re-distillation
-            await queue.enqueue(
-                "re_distill",
-                project_id=self.project_id,
-                entity_type="journal",
-                entity_id=entry_id,
-                dedupe_key=f"{self.project_id}:journal:{entry_id}:re_distill",
-                priority=115,
-            )
+            # Note: re-distillation (claim re-extraction) is now a Brain task,
+            # not an automated LLM job. Claims are marked stale above; Brain
+            # reviews and re-extracts during maintenance sessions.
         await self.db.commit()
 
         await self.emit_event(

@@ -75,6 +75,32 @@ async def update_status(
     return await svc.update(data, actor=actor, project_id=project_id)
 
 
+@router.delete("/projects/{project_id}")
+async def delete_project(
+    project_id: str,
+    confirm: bool = False,
+    svc: ProjectService = Depends(get_project_service),
+):
+    """Delete a project and all its scoped data. Requires confirm=true query parameter."""
+    try:
+        return await svc.delete_project(project_id, confirm=confirm)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/projects/{project_id}/entity-counts")
+async def get_project_entity_counts(
+    project_id: str,
+    svc: ProjectService = Depends(get_project_service),
+):
+    """Return entity counts for a project (for deletion confirmation UI)."""
+    row = await svc.db.fetchone("SELECT id FROM projects WHERE id = ?", [project_id])
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+    counts = await svc.get_project_entity_counts(project_id)
+    return {"project_id": project_id, "entity_counts": counts, "total_rows": sum(counts.values())}
+
+
 @router.get("/projects/export")
 async def export_project_pack(
     project_id: str = Depends(require_project),

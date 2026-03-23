@@ -51,18 +51,6 @@ class ClaimService(BaseService):
             created_by="llm",
         )
 
-        # Enqueue verification job
-        if self.llm:
-            queue = JobQueue(self.db)
-            await queue.enqueue(
-                "claim_verify",
-                project_id=self.project_id,
-                entity_type="claim",
-                entity_id=claim_id,
-                dedupe_key=self._job_dedupe_key(claim_id, "verify"),
-                priority=122,
-            )
-
         # Enqueue embedding job
         if self.embeddings:
             queue = JobQueue(self.db)
@@ -268,18 +256,6 @@ class ClaimService(BaseService):
         # If verification failed, flag for review
         if not (verification.exists_in_source and verification.number_accuracy and verification.direction_correct):
             await self._flag_for_review(claim_id, "claim", verification.issues)
-
-        # Enqueue cluster_update downstream
-        if self.llm:
-            queue = JobQueue(self.db)
-            await queue.enqueue(
-                "cluster_update",
-                project_id=self.project_id,
-                entity_type="claim",
-                entity_id=claim_id,
-                dedupe_key=f"{self.project_id}:claim:{claim_id}:cluster_update",
-                priority=130,
-            )
 
         return {
             "outcome": "updated",

@@ -24,26 +24,18 @@ class MissionService(BaseService):
         self,
         mis_id: str,
         *,
-        include_auto_tags: bool,
         include_embedding: bool,
     ) -> None:
+        if not include_embedding:
+            return
         queue = JobQueue(self.db)
-        if include_auto_tags:
-            await queue.enqueue(
-                "mission_auto_tag",
-                project_id=self.project_id,
-                entity_type="mission",
-                entity_id=mis_id,
-                dedupe_key=self._job_dedupe_key(mis_id, "auto_tag"),
-            )
-        if include_embedding:
-            await queue.enqueue(
-                "mission_embed",
-                project_id=self.project_id,
-                entity_type="mission",
-                entity_id=mis_id,
-                dedupe_key=self._job_dedupe_key(mis_id, "embed"),
-            )
+        await queue.enqueue(
+            "mission_embed",
+            project_id=self.project_id,
+            entity_type="mission",
+            entity_id=mis_id,
+            dedupe_key=self._job_dedupe_key(mis_id, "embed"),
+        )
 
     async def create(self, data: MissionCreate, actor: str = "brain") -> Mission:
         """Create a new mission."""
@@ -90,7 +82,6 @@ class MissionService(BaseService):
         )
         await self._enqueue_enrichment_jobs(
             mis_id,
-            include_auto_tags=bool(self.llm) and not tags,
             include_embedding=bool(self.embeddings),
         )
 
@@ -202,7 +193,6 @@ class MissionService(BaseService):
                 await self._sync_fts("mission", mis_id, dict(row))
                 await self._enqueue_enrichment_jobs(
                     mis_id,
-                    include_auto_tags=bool(self.llm),
                     include_embedding=bool(self.embeddings),
                 )
 

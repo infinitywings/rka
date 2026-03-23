@@ -18,27 +18,19 @@ class LiteratureService(BaseService):
         self,
         lit_id: str,
         *,
-        include_auto_tags: bool,
         include_embedding: bool,
     ) -> None:
+        if not include_embedding:
+            return
         queue = JobQueue(self.db)
-        if include_auto_tags:
-            await queue.enqueue(
-                "literature_auto_tag",
-                project_id=self.project_id,
-                entity_type="literature",
-                entity_id=lit_id,
-                dedupe_key=self._job_dedupe_key(lit_id, "auto_tag"),
-            )
-        if include_embedding:
-            await queue.enqueue(
-                "literature_embed",
-                project_id=self.project_id,
-                entity_type="literature",
-                entity_id=lit_id,
-                dedupe_key=self._job_dedupe_key(lit_id, "embed"),
-                priority=110,
-            )
+        await queue.enqueue(
+            "literature_embed",
+            project_id=self.project_id,
+            entity_type="literature",
+            entity_id=lit_id,
+            dedupe_key=self._job_dedupe_key(lit_id, "embed"),
+            priority=110,
+        )
 
     async def create(self, data: LiteratureCreate, actor: str | None = None) -> Literature:
         """Create a new literature entry."""
@@ -75,7 +67,6 @@ class LiteratureService(BaseService):
 
         await self._enqueue_enrichment_jobs(
             lit_id,
-            include_auto_tags=bool(self.llm) and not has_user_tags,
             include_embedding=bool(self.embeddings),
         )
 
@@ -188,7 +179,6 @@ class LiteratureService(BaseService):
                 await self._sync_fts("literature", lit_id, dict(row))
                 await self._enqueue_enrichment_jobs(
                     lit_id,
-                    include_auto_tags=False,
                     include_embedding=bool(self.embeddings),
                 )
 

@@ -2,7 +2,7 @@
 
 **Persistent research memory for AI-assisted investigations.**
 
-RKA gives your research project a brain that doesn't forget between sessions. It stores every finding, decision, hypothesis, and literature reference in a structured knowledge base — then uses a local LLM to continuously organize that knowledge into navigable evidence maps with full provenance chains.
+RKA gives your research project a brain that doesn't forget between sessions. It stores every finding, decision, hypothesis, and literature reference in a structured knowledge base with full provenance chains. The Brain (Claude) handles all knowledge enrichment — no local LLM required.
 
 ```
  Month 1                    Month 3                    Month 6
@@ -49,24 +49,24 @@ graph LR
 - **Brain** (Claude Desktop) — strategic layer. Interprets findings, decides research direction, reviews evidence clusters, resolves contradictions.
 - **Executor** (Claude Code) — implementation layer. Runs experiments, writes code, collects data. Receives missions, submits reports, raises checkpoints when blocked.
 - **PI** (human researcher) — supervises both, resolves escalations, provides domain expertise.
-- **RKA** — the shared memory. Stores everything, organizes it automatically, provides context to whoever needs it.
+- **RKA** — the shared memory. Stores everything, provides context to whoever needs it. A maintenance manifest detects provenance gaps for the Brain to fix.
 
 ---
 
 ## The knowledge pipeline
 
-Raw observations don't stay raw. RKA's background worker continuously distills journal entries into structured knowledge:
+Raw observations don't stay raw. The Brain distills journal entries into structured knowledge during maintenance sessions:
 
 ```mermaid
 graph TD
     Entry["📝 Journal entries<br/><i>note · log · directive</i>"]
     Claims["🔍 Claims<br/><i>hypothesis · evidence · method<br/>result · observation · assumption</i>"]
-    Clusters["🗂️ Evidence clusters<br/><i>Grouped claims with<br/>LLM-generated synthesis</i>"]
+    Clusters["🗂️ Evidence clusters<br/><i>Grouped claims with<br/>Brain-written synthesis</i>"]
     Map["🗺️ Research map<br/><i>Research questions →<br/>clusters → claims</i>"]
 
-    Entry -->|"LLM extracts"| Claims
-    Claims -->|"LLM clusters"| Clusters
-    Clusters -->|"LLM synthesizes"| Map
+    Entry -->|"Brain extracts"| Claims
+    Claims -->|"Brain clusters"| Clusters
+    Clusters -->|"Brain synthesizes"| Map
 
     style Entry fill:#E6F1FB,stroke:#185FA5,color:#042C53
     style Claims fill:#EEEDFE,stroke:#534AB7,color:#26215C
@@ -140,11 +140,11 @@ rka_get_context(topic="...")   → Token-budgeted context package
 | Category | What it does |
 |----------|-------------|
 | **Persistent memory** | Journal entries, decisions, literature, missions, checkpoints — all survive between sessions |
-| **Progressive distillation** | Background LLM pipeline: entries → claims → evidence clusters → research themes |
+| **Progressive distillation** | Brain-driven pipeline: entries → claims → evidence clusters → research themes |
 | **Three-layer research map** | Navigate: research questions → evidence clusters → individual claims |
 | **Full provenance** | 12 typed cross-reference edges forming traceable reasoning chains |
-| **Brain-augmented enrichment** | Local LLM handles routine work; review queue flags items for Brain's deep reasoning |
-| **Decision lifecycle** | Overturn decisions with `rka_supersede_decision` — affected knowledge re-distills automatically |
+| **Brain-driven enrichment** | Brain handles all knowledge enrichment; maintenance manifest detects gaps automatically |
+| **Decision lifecycle** | Overturn decisions with `rka_supersede_decision` — affected claims marked stale for Brain review |
 | **Hybrid search** | FTS5 keyword + sqlite-vec embeddings + reciprocal rank fusion |
 | **Multi-project** | Isolated project databases with MCP tools for switching |
 | **Web dashboard** | 12-page React UI: research map, decision tree, knowledge graph, journal, timeline |
@@ -191,10 +191,8 @@ graph TD
         API["REST API — FastAPI"]
         SVC["Service Layer — shared logic"]
         DB["SQLite + FTS5 + sqlite-vec"]
-        WORKER["Background Worker<br/><i>Distillation + enrichment</i>"]
+        WORKER["Background Worker<br/><i>Embeddings only</i>"]
     end
-
-    LLM["Local LLM<br/><i>LM Studio / Ollama</i>"]
 
     CD --> MCP
     CC --> MCP
@@ -203,7 +201,6 @@ graph TD
     API --> SVC
     SVC --> DB
     WORKER --> DB
-    WORKER --> LLM
 ```
 
 - **Brain** (Claude Desktop): Strategic decisions — what to research, which direction to take, how to interpret findings, and which review-queue items to resolve. Communicates via MCP tools.
@@ -224,10 +221,10 @@ RKA runs as three processes:
 | Process | Command | Purpose | Port |
 |---------|---------|---------|------|
 | REST API + Web UI | `rka serve` | HTTP endpoints + static web dashboard | 9712 |
-| Background Worker | started by `rka serve` | Distillation pipeline, enrichment queue, job processing | internal |
+| Background Worker | started by `rka serve` | Embedding generation, FTS indexing | internal |
 | MCP stdio server | `rka mcp` | Tool interface for Claude Desktop/Code | stdio |
 
-The REST API and background worker share the same SQLite database file and service layer code. The background worker handles all LLM-dependent tasks (claim extraction, cluster synthesis, embedding generation, review-queue population) so that MCP and REST calls return immediately without blocking on slow LLM backends.
+The REST API and background worker share the same SQLite database file and service layer code. The background worker handles embedding generation so that MCP and REST calls return immediately. Knowledge enrichment (claim extraction, cluster synthesis, provenance linking) is handled by the Brain during maintenance sessions — no local LLM is required.
 
 The MCP server communicates via stdio (stdin/stdout) and proxies all calls to the REST API at `RKA_API_URL` (default: `http://localhost:9712`).
 
@@ -266,28 +263,28 @@ Legacy types from v1 (`finding`, `insight`, `idea`, `observation`, `hypothesis`,
 
 ### Progressive Distillation Pipeline
 
-The distillation pipeline runs in the background and incrementally enriches raw journal entries into higher-level knowledge structures:
+The distillation pipeline is Brain-driven. The Brain extracts claims, clusters evidence, and writes syntheses during maintenance sessions:
 
 ```
 Journal Entries (note / log / directive)
     |
-    | [background worker: claim extraction]
+    | [Brain: claim extraction during maintenance]
     v
 Claims (clm_)
   hypothesis | evidence | method | result | observation | assumption
     |
-    | [background worker: clustering]
+    | [Brain: clustering and synthesis]
     v
 Evidence Clusters (ecl_)
-  LLM-synthesized summary of related claims
+  Brain-written synthesis of related claims
     |
-    | [background worker: research-map assembly]
+    | [Brain: research question assignment]
     v
 Research Map
   Research Questions --> Clusters --> Claims
 ```
 
-Each stage is asynchronous and non-blocking. Entries immediately become searchable; distillation refines understanding over time.
+`rka_get_pending_maintenance()` detects entries needing distillation and other provenance gaps. The Brain processes these at session start.
 
 ### ULID-Based IDs
 
@@ -304,7 +301,7 @@ Brain creates mission --> Executor picks up (active) --> Work proceeds
 
 ### Review Queue
 
-The review queue collects items that need Brain attention: low-confidence claims, contradictions between claims, clusters needing narrative synthesis, and distillation jobs with ambiguous results. Brain can approve, reject, merge, or override each item. Resolved items feed back into the distillation pipeline.
+The review queue collects items that need Brain attention: low-confidence claims, contradictions between claims, and clusters needing narrative synthesis. Brain can approve, reject, merge, or override each item.
 
 ### Decision Superseding
 
@@ -333,7 +330,7 @@ The Context Engine uses these temperatures to build focused context packages wit
 
 ### Option A: Docker (Recommended)
 
-Prerequisites: [Docker Desktop](https://www.docker.com/products/docker-desktop/) + [LM Studio](https://lmstudio.ai/) (or Ollama)
+Prerequisites: [Docker Desktop](https://www.docker.com/products/docker-desktop/)
 
 ```bash
 git clone https://github.com/infinitywings/rka.git
@@ -358,7 +355,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 }
 ```
 
-**LLM Setup:** Start LM Studio on your host machine, load a model, and configure it from the web UI Settings page (`http://localhost:9712/settings`). The default API base is `http://localhost:1234/v1`. Context window is auto-detected.
+**Optional LLM:** If you want `rka_ask` and `rka_generate_summary` features, configure a cloud LLM API (or local LM Studio/Ollama) from the web UI Settings page (`http://localhost:9712/settings`). This is optional — core functionality works without any LLM.
 
 **Connect Claude Code (MCP via pipx):**
 
@@ -386,7 +383,7 @@ The MCP binary is stateless — it proxies all calls to the Docker container's R
 Prerequisites:
 - Python 3.11+
 - Node.js 18+ (for web dashboard)
-- [LM Studio](https://lmstudio.ai/) or [Ollama](https://ollama.com/) (for LLM features)
+- Optional: [LM Studio](https://lmstudio.ai/) or [Ollama](https://ollama.com/) (for `rka_ask` and `rka_generate_summary`)
 
 ```bash
 git clone https://github.com/infinitywings/rka.git
@@ -911,10 +908,13 @@ Most entity endpoints are project-scoped. Pass `X-RKA-Project: <project_id>` to 
 |--------|----------|-------------|
 | `GET` | `/projects` | List project metadata |
 | `POST` | `/projects` | Create a project |
+| `DELETE` | `/projects/{id}?confirm=true` | Delete a project and all its data (requires confirm=true) |
+| `GET` | `/projects/{id}/entity-counts` | Get entity counts for a project (pre-deletion check) |
 | `GET` | `/status` | Get project state |
 | `PUT` | `/status` | Update project state |
 | `GET` | `/projects/export` | Export the active project as a knowledge-pack zip |
 | `POST` | `/projects/import` | Import a knowledge-pack zip into a new project |
+| `GET` | `/maintenance` | Get pending maintenance manifest (provenance gaps, missing links) |
 | `GET` | `/health` | Health check (version, sqlite-vec status) |
 
 ### LLM Configuration
@@ -1134,53 +1134,43 @@ curl -X POST http://localhost:9712/api/context \
 
 ## LLM Integration
 
-### Auto-Enrichment
+### Brain-Driven Enrichment (v2.0)
 
-When `RKA_LLM_ENABLED=true`, write operations enqueue background enrichment jobs:
+As of v2.0, all knowledge enrichment is handled by the Brain (Claude Desktop/Code) during sessions, not by a local LLM. The background worker only processes embedding jobs for semantic search.
 
-| Job | Purpose | Input |
-|-----|---------|-------|
-| **AutoTags** | Generate semantic tags | Entry content -> list of tags |
-| **AutoClassification** | Classify entry type and confidence | Entry content -> type + confidence |
-| **SupersessionCheck** | Detect if new entry supersedes old ones | New entry + recent entries -> supersession links |
+**What the Brain does during maintenance sessions:**
+- Extracts claims from journal entries
+- Clusters related claims into evidence groups
+- Writes synthesis narratives for evidence clusters
+- Resolves contradictions between claims
+- Assigns evidence clusters to research questions
+- Repairs missing provenance links
 
-All enrichment is handled by the background worker process:
-- **Non-blocking** — The API responds immediately; enrichment runs after
-- **Graceful** — Failures are logged but never break the main operation
-- **Structured** — Uses Instructor + Pydantic for validated LLM outputs
+**Maintenance manifest:** `rka_get_pending_maintenance()` detects all provenance gaps with pure SQL queries. The Brain processes up to 10 items per session at startup.
 
-### Progressive Distillation
+### Optional LLM Features
 
-The distillation pipeline is the core v2.0 LLM feature. After a journal entry is created and enriched, the background worker:
+When `RKA_LLM_ENABLED=true`, two tools gain LLM-powered capabilities:
+- `rka_ask(question)` — Answer research questions grounded in knowledge base evidence
+- `rka_generate_summary(scope)` — Generate narrative summaries of research progress
 
-1. **Extracts claims** — Reads the entry and generates typed claim assertions (hypothesis, evidence, method, result, observation, assumption) with confidence scores
-2. **Clusters claims** — Groups new claims with semantically related existing claims into evidence clusters
-3. **Synthesizes clusters** — Writes a narrative summary of each cluster using the LLM
-4. **Populates review queue** — Flags low-confidence claims, contradictions between claims, and clusters that need Brain review
-
-Brain can then use the review queue tools to refine the distilled knowledge before it enters the research map.
-
-### Brain-Augmented Enrichment
-
-The review queue bridges automated distillation and human/Brain expertise. Items in the queue include:
-- Low-confidence claims that need verification or rejection
-- Contradictions where two claims assert opposing positions
-- Evidence clusters ready for narrative synthesis review
-- Distillation jobs that failed or produced ambiguous results
-
-Brain resolves items via `rka_review_cluster`, `rka_review_claims`, and `rka_resolve_contradiction`. Resolutions are recorded with rationale and feed back into the research map.
-
-### LLM Gateway
-
-RKA uses LiteLLM as a unified gateway, supporting:
+These use LiteLLM as a unified gateway, supporting:
+- **LM Studio** (local)
 - **Ollama** (local)
-- **LM Studio** (local, recommended)
-- **vLLM** (local or remote)
 - **OpenAI API** (cloud)
 - **Anthropic API** (cloud)
 - Any OpenAI-compatible endpoint
 
-The `think=False` parameter is passed by default to prevent reasoning-mode models from including `<think>` blocks in structured output, which breaks JSON extraction.
+Configure from the web UI Settings page or via environment variables (`RKA_LLM_ENABLED`, `RKA_LLM_MODEL`, `RKA_LLM_API_BASE`).
+
+### Review Queue
+
+The review queue collects items flagged for Brain attention:
+- Low-confidence claims needing verification
+- Contradictions between claims
+- Evidence clusters needing synthesis
+
+Brain resolves items via `rka_review_cluster`, `rka_review_claims`, and `rka_resolve_contradiction`.
 
 ---
 

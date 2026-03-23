@@ -5,8 +5,10 @@
 #
 # Prerequisites:
 #   - Docker Desktop (macOS/Windows) or Docker Engine (Linux)
-#   - LM Studio running on host at http://localhost:1234
-#     (or Ollama — change LLM env vars below)
+#
+# Optional (for rka_ask / rka_generate_summary):
+#   - A cloud LLM API key (e.g. OpenAI, Anthropic via LiteLLM)
+#   - Or a local LLM server (LM Studio, Ollama)
 #
 # Usage:
 #   docker compose up -d          # start
@@ -36,13 +38,13 @@ services:
     volumes:
       - rka-data:/data
     environment:
-      # --- LLM Backend ---
-      # LM Studio (default): runs on your host machine
-      RKA_LLM_API_BASE: http://host.docker.internal:1234/v1
-      RKA_LLM_MODEL: openai/qwen3-32b
-      # Ollama (alternative): uncomment and comment out LM Studio lines
-      # RKA_LLM_API_BASE: http://host.docker.internal:11434/v1
-      # RKA_LLM_MODEL: ollama/qwen3:32b
+      # LLM is disabled by default. The background worker only needs embeddings.
+      # To enable rka_ask / rka_generate_summary, set RKA_LLM_ENABLED=true
+      # and configure the model/base below.
+      # RKA_LLM_ENABLED: "true"
+      # RKA_LLM_API_BASE: http://host.docker.internal:1234/v1
+      # RKA_LLM_MODEL: openai/qwen3-32b
+      PLACEHOLDER: ""
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -54,9 +56,7 @@ services:
       disable: true
     volumes:
       - rka-data:/data
-    environment:
-      RKA_LLM_API_BASE: http://host.docker.internal:1234/v1
-      RKA_LLM_MODEL: openai/qwen3-32b
+    # Worker only processes embedding jobs — no LLM needed
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

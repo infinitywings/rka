@@ -18,45 +18,19 @@ class NoteService(BaseService):
         self,
         entry_id: str,
         *,
-        include_auto_tags: bool,
-        include_auto_link: bool,
-        include_auto_summarize: bool,
         include_embedding: bool,
     ) -> None:
+        if not include_embedding:
+            return
         queue = JobQueue(self.db)
-        if include_auto_tags:
-            await queue.enqueue(
-                "note_auto_tag",
-                project_id=self.project_id,
-                entity_type="journal",
-                entity_id=entry_id,
-                dedupe_key=self._job_dedupe_key(entry_id, "auto_tag"),
-            )
-        if include_auto_link:
-            await queue.enqueue(
-                "note_auto_link",
-                project_id=self.project_id,
-                entity_type="journal",
-                entity_id=entry_id,
-                dedupe_key=self._job_dedupe_key(entry_id, "auto_link"),
-            )
-        if include_auto_summarize:
-            await queue.enqueue(
-                "note_auto_summarize",
-                project_id=self.project_id,
-                entity_type="journal",
-                entity_id=entry_id,
-                dedupe_key=self._job_dedupe_key(entry_id, "auto_summarize"),
-            )
-        if include_embedding:
-            await queue.enqueue(
-                "note_embed",
-                project_id=self.project_id,
-                entity_type="journal",
-                entity_id=entry_id,
-                dedupe_key=self._job_dedupe_key(entry_id, "embed"),
-                priority=110,  # run after summarize so embedding includes summary
-            )
+        await queue.enqueue(
+            "note_embed",
+            project_id=self.project_id,
+            entity_type="journal",
+            entity_id=entry_id,
+            dedupe_key=self._job_dedupe_key(entry_id, "embed"),
+            priority=110,
+        )
 
     async def create(self, data: JournalEntryCreate, actor: str | None = None) -> JournalEntry:
         """Create a new journal entry."""
@@ -107,26 +81,11 @@ class NoteService(BaseService):
             "content": data.content, "summary": "",
         })
 
-        # Enqueue background enrichment jobs
+        # Enqueue background embedding job
         await self._enqueue_enrichment_jobs(
             entry_id,
-            include_auto_tags=bool(self.llm) and not has_user_tags,
-            include_auto_link=bool(self.llm) and not has_user_links,
-            include_auto_summarize=bool(self.llm),
             include_embedding=bool(self.embeddings),
         )
-
-        # Enqueue claim extraction job (v2.0 distillation pipeline)
-        if self.llm:
-            queue = JobQueue(self.db)
-            await queue.enqueue(
-                "note_extract_claims",
-                project_id=self.project_id,
-                entity_type="journal",
-                entity_id=entry_id,
-                dedupe_key=self._job_dedupe_key(entry_id, "extract_claims"),
-                priority=120,
-            )
 
         # Determine event type based on journal type
         event_type_map = {
@@ -240,6 +199,14 @@ class NoteService(BaseService):
             values + [self.project_id],
         )
         await self.db.commit()
+
+        # Materialize entity_links for updated cross-reference fields
+        if data.related_decisions:
+            for dec_id in data.related_decisions:
+                await self.add_link("journal", entry_id, "references", "decision", dec_id, created_by="system")
+        if data.related_literature:
+            for lit_id in data.related_literature:
+                await self.add_link("journal", entry_id, "cites", "literature", lit_id, created_by="system")
 
         # Re-sync FTS on content changes; defer embedding to job queue
         if "content" in updates or "summary" in updates:

@@ -197,27 +197,8 @@ class ClusterService(BaseService):
         )
         await self.db.commit()
 
-        # Enqueue theme synthesis downstream
-        queue = JobQueue(self.db)
-        await queue.enqueue(
-            "theme_synthesize",
-            project_id=self.project_id,
-            entity_type="cluster",
-            entity_id=cluster_id,
-            dedupe_key=f"{self.project_id}:cluster:{cluster_id}:synthesize",
-            priority=140,
-        )
-
-        # Enqueue contradiction check
-        await queue.enqueue(
-            "contradiction_check",
-            project_id=self.project_id,
-            entity_type="claim",
-            entity_id=claim_id,
-            payload={"cluster_id": cluster_id},
-            dedupe_key=f"{self.project_id}:claim:{claim_id}:contradiction",
-            priority=125,
-        )
+        # Note: theme synthesis and contradiction checks are now Brain tasks,
+        # not automated LLM jobs. Use rka_review_cluster and rka_resolve_contradiction.
 
         return {"outcome": "updated", "cluster_id": cluster_id, "relations": len(assignment.relations)}
 

@@ -25,8 +25,13 @@ claims, evidence clusters, and a three-layer research map with full provenance c
 ## Session Start — ALWAYS do this first
 1. `rka_get_context()` — load current project state, phase, recent knowledge
 2. `rka_get_status()` — see current phase, focus, next steps
-3. `rka_get_checkpoints(status="open")` — check for unresolved blockers
-4. `rka_get_review_queue()` — (Brain only) items flagged for deep reasoning
+3. `rka_get_pending_maintenance()` — check for provenance gaps and maintenance items
+4. `rka_get_checkpoints(status="open")` — check for unresolved blockers
+5. `rka_get_review_queue()` — (Brain only) items flagged for deep reasoning
+
+**Maintenance Protocol (Brain)**: If `rka_get_pending_maintenance()` returns items,
+silently process up to 10 items per session before greeting the user. Priority order:
+decisions_without_justified_by > missions_without_motivated_by > unassigned_clusters > entries_missing_cross_refs.
 
 ## When to Use What
 
@@ -64,13 +69,24 @@ claims, evidence clusters, and a three-layer research map with full provenance c
 - **Academic**: `rka_search_semantic_scholar`, `rka_search_arxiv`, `rka_import_bibtex`
 - **Workspace**: `rka_scan_workspace`, `rka_bootstrap_workspace`
 - **Session**: `rka_session_digest`, `rka_reset_session`
+- **Maintenance**: `rka_get_pending_maintenance`
 - **Onboarding**: `rka_generate_claude_md`
+
+## Provenance Rules — ALWAYS follow these
+Every entity must be linked to its context. Orphaned entities degrade the knowledge graph.
+
+- **Decisions**: ALWAYS provide `related_journal=[ids]` to link justifying evidence (creates `justified_by` links)
+- **Notes**: ALWAYS provide `related_decisions=[ids]` and/or `related_mission=id` when applicable
+- **Missions**: ALWAYS provide `motivated_by_decision=id` to link the triggering decision
+- **Literature**: Provide `related_decisions=[ids]` when the paper informs a specific decision
+
+If you realize a link is missing on an existing entity, fix it immediately via update tools.
 
 ## Entity Types (v2.0)
 - **Journal entries**: `note` (observations, analyses), `log` (procedures), `directive` (instructions)
-- **Claims**: Extracted from entries by LLM — `hypothesis`, `evidence`, `method`, `result`, `observation`, `assumption`
+- **Claims**: Atomic knowledge extracted from entries by Brain review
 - **Decisions**: `research_question`, `design_choice`, or `operational` (set via `kind` field)
-- **Evidence clusters**: Groups of related claims with LLM-generated synthesis
+- **Evidence clusters**: Groups of related claims with Brain-written synthesis
 - **Cross-references**: 12 link types forming provenance chains (informed_by, justified_by, motivated, produced, etc.)
 
 ## Roles
@@ -514,17 +530,21 @@ async def rka_create_mission(
 ) -> str:
     """Create a new mission for the Executor.
 
+    PROVENANCE: Always provide `motivated_by_decision` to link the triggering decision.
+    Include relevant decision IDs, journal entry IDs, and literature IDs in the `context`
+    field so the Executor can read the full reasoning chain before starting work.
+
     Args:
         phase: Research phase
         objective: Clear mission objective
         tasks: Task list [{description, status}]
-        context: Background context for the Executor
+        context: Background context for the Executor — include decision IDs, journal IDs, and literature IDs that inform this mission
         acceptance_criteria: How to know when done
         scope_boundaries: What NOT to do
         checkpoint_triggers: When to escalate
         depends_on: Mission ID this depends on
-        motivated_by_decision: Decision ID that triggered this mission (creates motivated link)
-        tags: Optional explicit tags. Providing tags skips delayed auto-tag enrichment.
+        motivated_by_decision: Decision ID that triggered this mission (REQUIRED for provenance — creates motivated link)
+        tags: Optional explicit tags for categorization
     """
     async with _client() as c:
         body = {
@@ -1855,37 +1875,6 @@ async def rka_review_bootstrap(scan_id: str) -> str:
 # LLM Enrichment
 # ============================================================
 
-@tool()
-async def rka_enrich(limit: int = 50, fix_types: bool = True) -> str:
-    """Run LLM semantic linking on journal entries that have no relationships set.
-
-    Scans unlinked journal entries and uses the local LLM to infer:
-    - Which decisions each entry is related to
-    - Which literature it references
-    - Which mission produced it
-    - Whether the entry type is correct (and fixes it if fix_types=True)
-
-    Call this after a batch of notes have been added without explicit links,
-    or periodically to keep the research map accurate.
-
-    Args:
-        limit: Max number of entries to process (default 50)
-        fix_types: Also correct misclassified entry types (default True)
-    """
-    async with _client() as c:
-        r = await c.post("/api/enrich", params={"limit": limit, "fix_types": fix_types})
-        _raise_with_detail(r)
-        d = r.json()
-        if d.get("status") == "skipped":
-            return f"Enrichment skipped: {d.get('reason', 'LLM not enabled')}"
-        return (
-            f"Enrichment complete\n"
-            f"  Scanned:    {d['scanned']} unlinked entries\n"
-            f"  Updated:    {d['updated']} entries got new links\n"
-            f"  Type fixes: {d['type_fixes']} entries had their type corrected\n"
-        )
-
-
 # ============================================================
 # Graph & Research Map
 # ============================================================
@@ -2493,6 +2482,57 @@ async def rka_resolve_contradiction(
 
 
 # ============================================================
+# Maintenance manifest
+# ============================================================
+
+
+@tool()
+async def rka_get_pending_maintenance() -> str:
+    """Detect knowledge base gaps that need attention. Pure SQL — no LLM needed.
+
+    Returns a compact manifest of:
+    (a) entries without tags
+    (b) entries without claims extracted
+    (c) clusters needing synthesis
+    (d) flagged contradictions
+    (e) entries missing cross-references (no related_decisions)
+    (f) decisions without justified_by links
+    (g) missions without motivated_by_decision
+    (h) unassigned evidence clusters
+
+    Each category includes entity IDs, counts, and suggested fix actions.
+    Use at session start to identify maintenance work before proceeding.
+    """
+    async with _client() as c:
+        r = await c.get("/api/maintenance")
+        _raise_with_detail(r)
+        data = r.json()
+
+    total = data["total_items"]
+    est = data["estimated_tool_calls"]
+
+    if total == 0:
+        return "Knowledge base is clean — no pending maintenance items."
+
+    lines = [f"## Pending Maintenance: {total} items (~{est} tool calls to fix)\n"]
+    for key, cat in data["categories"].items():
+        count = cat["count"]
+        if count == 0:
+            continue
+        lines.append(f"### {cat['description']} ({count})")
+        ids = cat["ids"]
+        # Show up to 10 IDs inline, rest as count
+        shown = ids[:10]
+        lines.append(f"  IDs: {', '.join(shown)}")
+        if len(ids) > 10:
+            lines.append(f"  ... and {len(ids) - 10} more")
+        lines.append(f"  Fix: {cat['fix_action']}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+# ============================================================
 # MCP Prompts — orientation guides for Brain and Executor
 # ============================================================
 
@@ -2524,7 +2564,13 @@ Always begin a session by loading context:
 1. If working with multiple projects, use `rka_list_projects()` to see available projects and `rka_set_project(id)` to select the right one. Skip if only one project exists or if the correct project is already active.
 2. `rka_get_context()` — full project state (phase, open missions, recent notes, decisions)
 3. `rka_get_status()` — current phase, focus, next steps
-4. `rka_get_checkpoints(status="open")` — check for unresolved Executor blockers
+4. `rka_get_pending_maintenance()` — check for provenance gaps
+5. `rka_get_checkpoints(status="open")` — check for unresolved Executor blockers
+
+**Maintenance Protocol**: If maintenance items exist, silently process up to 10
+before greeting the user. Priority: decisions_without_justified_by > missions_without_motivated_by
+> unassigned_clusters > entries_missing_cross_refs. Do not mention maintenance work
+to the user unless they ask.
 
 If there are open checkpoints, resolve them before continuing new work.
 
@@ -2560,33 +2606,33 @@ If there are open checkpoints, resolve them before continuing new work.
 
 ---
 
+## Provenance Enforcement (Critical)
+
+You are responsible for maintaining provenance discipline. ALWAYS:
+- `rka_add_decision(..., related_journal=["jrn_01...", "jrn_02..."])` — what findings justify this
+- `rka_create_mission(..., motivated_by_decision="dec_01...")` — what decision triggers this work
+- `rka_add_note(..., related_decisions=["dec_01..."], related_mission="msn_01...")` — link context
+- `rka_trace_provenance(entity_id, direction="upstream")` — understand why something exists
+
+Orphaned entities (no links) degrade the knowledge graph. Fix them during maintenance.
+
 ## v2.0 Research Map Workflow
 
 - `rka_get_research_map()` — see the three-level view (RQs → clusters → claims)
 - When creating decisions, set `kind="research_question"` for questions that organize research
-- Use `related_journal=[ids]` on decisions to link them to justifying evidence
-- Use `motivated_by_decision=id` on missions to create provenance chains
+- Assign orphaned evidence clusters to research questions via `rka_review_cluster(..., research_question_id=dec_id)`
 
 ## Review Queue (Brain-Only)
 
 At session start, after loading context:
-4. `rka_get_review_queue()` — items the local LLM flagged for your attention
+5. `rka_get_review_queue()` — items flagged for your attention
 
 Process high-priority items before starting new work:
-- `rka_review_cluster(cluster_id, confidence, synthesis)` — refine cluster quality
-- `rka_review_claims(entry_id, corrections)` — correct extracted claims
-- `rka_synthesize_topic(topic_id)` — write deep topic synthesis
+- `rka_review_cluster(cluster_id, confidence, synthesis)` — write definitive synthesis
+- `rka_review_claims(claim_ids, action)` — approve, reject, or adjust claims
 - `rka_resolve_contradiction(cluster_id, resolution)` — resolve flagged conflicts
-- `rka_evaluate_evidence(scope="project")` — assess overall evidence state
 
-Your syntheses are marked `synthesized_by: brain` — they override local LLM output.
-
-## Cross-References
-
-When recording decisions, always link evidence:
-- `rka_add_decision(..., related_journal=["jrn_01...", "jrn_02..."])` — what findings justify this
-- `rka_create_mission(..., motivated_by_decision="dec_01...")` — what decision triggers this work
-- `rka_trace_provenance(entity_id, direction="upstream")` — understand why something exists
+Your syntheses are marked `synthesized_by: brain` — they are the authoritative interpretation.
 
 ## Decision Lifecycle
 
@@ -2641,7 +2687,8 @@ The **PI** (human researcher) supervises both.
 2. `rka_get_context()` — load current project state
 3. `rka_get_mission()` — finds the active or most recent pending mission automatically
 4. If a pending mission is found, call `rka_update_mission_status(id, "active")` to claim it
-5. Read the mission's `objective` and `tasks` list carefully before starting
+5. Read the mission's `objective`, `tasks`, and **context** carefully before starting
+6. If the mission has `motivated_by_decision`, read that decision with `rka_get(dec_id)` for full context
 
 If no mission exists, ask the Brain or PI for direction before starting.
 
@@ -2688,11 +2735,15 @@ If no mission exists, ask the Brain or PI for direction before starting.
 
 Old types (finding, insight, methodology, etc.) are accepted but mapped to these three.
 
-### Cross-References — Always Link Your Work
+### Cross-References — ALWAYS Link Your Work
 
-- `rka_add_note(..., related_mission="msn_01...")` — link to active mission (ALWAYS do this)
-- `rka_add_note(..., related_decisions=["dec_01..."])` — link to relevant decisions
+Every note and report MUST be linked to its context:
+- `rka_add_note(..., related_mission="msn_01...")` — link to active mission (MANDATORY)
+- `rka_add_note(..., related_decisions=["dec_01..."])` — link to relevant decisions (MANDATORY when applicable)
 - `rka_submit_report(..., related_decisions=["dec_01..."])` — link findings to decisions they bear on
+
+Orphaned entries (no related_mission, no related_decisions, no entity_links) are flagged
+by `rka_get_pending_maintenance()` and create work for the Brain. Prevent this by linking as you go.
 
 ### Research Map Awareness
 

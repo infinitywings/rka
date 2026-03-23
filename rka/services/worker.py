@@ -1,4 +1,10 @@
-"""Background worker for asynchronous enrichment jobs."""
+"""Background worker for asynchronous enrichment jobs.
+
+Only processes embedding jobs. LLM-dependent enrichment (auto-tag, auto-link,
+auto-summarize, claim extraction, verification, theme synthesis, contradiction
+checks) has been removed — those tasks are now handled by the Brain during
+maintenance sessions.
+"""
 
 from __future__ import annotations
 
@@ -15,13 +21,12 @@ logger = logging.getLogger(__name__)
 
 
 class EnrichmentWorker:
-    """Polls the durable queue and processes enrichment jobs."""
+    """Polls the durable queue and processes embedding jobs."""
 
     def __init__(
         self,
         *,
         db: Database,
-        llm=None,
         embeddings=None,
         poll_interval: float = 1.0,
         lease_seconds: int = 300,
@@ -29,7 +34,6 @@ class EnrichmentWorker:
         worker_id: str | None = None,
     ):
         self.db = db
-        self.llm = llm
         self.embeddings = embeddings
         self.poll_interval = poll_interval
         self.queue = JobQueue(db, lease_seconds=lease_seconds, default_max_attempts=max_attempts)
@@ -66,114 +70,44 @@ class EnrichmentWorker:
         project_id = job["project_id"]
         entity_id = job.get("entity_id")
 
-        if job_type.startswith("mission_"):
+        # ── Embedding-only jobs ──────────────────────────────────
+
+        if job_type == "mission_embed":
             from rka.services.missions import MissionService
+            svc = MissionService(self.db, embeddings=self.embeddings, project_id=project_id)
+            return await svc.process_embedding_job(entity_id)
 
-            svc = MissionService(
-                self.db,
-                llm=self.llm,
-                embeddings=self.embeddings,
-                project_id=project_id,
-            )
-            if job_type == "mission_auto_tag":
-                return await svc.process_auto_tag_job(entity_id)
-            if job_type == "mission_embed":
-                return await svc.process_embedding_job(entity_id)
-
-        if job_type.startswith("note_"):
+        if job_type == "note_embed":
             from rka.services.notes import NoteService
+            svc = NoteService(self.db, embeddings=self.embeddings, project_id=project_id)
+            return await svc.process_embedding_job(entity_id)
 
-            svc = NoteService(
-                self.db,
-                llm=self.llm,
-                embeddings=self.embeddings,
-                project_id=project_id,
-            )
-            if job_type == "note_auto_tag":
-                return await svc.process_auto_tag_job(entity_id)
-            if job_type == "note_auto_link":
-                return await svc.process_auto_link_job(entity_id)
-            if job_type == "note_auto_summarize":
-                return await svc.process_auto_summarize_job(entity_id)
-            if job_type == "note_embed":
-                return await svc.process_embedding_job(entity_id)
-            if job_type == "note_extract_claims":
-                from rka.services.claims import ClaimService
-                claim_svc = ClaimService(
-                    self.db, llm=self.llm, embeddings=self.embeddings,
-                    project_id=project_id,
-                )
-                return await claim_svc.process_extract_claims_job(entity_id)
-
-        if job_type.startswith("claim_"):
+        if job_type == "claim_embed":
             from rka.services.claims import ClaimService
+            svc = ClaimService(self.db, embeddings=self.embeddings, project_id=project_id)
+            return await svc.process_embedding_job(entity_id)
 
-            svc = ClaimService(
-                self.db, llm=self.llm, embeddings=self.embeddings,
-                project_id=project_id,
-            )
-            if job_type == "claim_verify":
-                return await svc.process_verify_claim_job(entity_id)
-            if job_type == "claim_embed":
-                return await svc.process_embedding_job(entity_id)
-
-        if job_type.startswith("cluster_") or job_type in ("theme_synthesize", "contradiction_check"):
-            from rka.services.clusters import ClusterService
-
-            svc = ClusterService(
-                self.db, llm=self.llm, embeddings=self.embeddings,
-                project_id=project_id,
-            )
-            if job_type == "cluster_update":
-                return await svc.process_cluster_update_job(entity_id)
-            if job_type == "theme_synthesize":
-                return await svc.process_theme_synthesize_job(entity_id)
-            if job_type == "contradiction_check":
-                payload = None
-                if job.get("payload"):
-                    import json
-                    try:
-                        payload = json.loads(job["payload"]) if isinstance(job["payload"], str) else job["payload"]
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-                return await svc.process_contradiction_check_job(entity_id, payload)
-
-        if job_type == "re_distill":
-            from rka.services.claims import ClaimService
-            claim_svc = ClaimService(
-                self.db, llm=self.llm, embeddings=self.embeddings,
-                project_id=project_id,
-            )
-            # Mark existing claims as stale, then re-extract
-            await claim_svc.mark_stale_by_entry(entity_id)
-            return await claim_svc.process_extract_claims_job(entity_id)
-
-        if job_type.startswith("decision_"):
+        if job_type == "decision_embed":
             from rka.services.decisions import DecisionService
+            svc = DecisionService(self.db, embeddings=self.embeddings, project_id=project_id)
+            return await svc.process_embedding_job(entity_id)
 
-            svc = DecisionService(
-                self.db,
-                llm=self.llm,
-                embeddings=self.embeddings,
-                project_id=project_id,
-            )
-            if job_type == "decision_auto_tag":
-                return await svc.process_auto_tag_job(entity_id)
-            if job_type == "decision_embed":
-                return await svc.process_embedding_job(entity_id)
-
-        if job_type.startswith("literature_"):
+        if job_type == "literature_embed":
             from rka.services.literature import LiteratureService
+            svc = LiteratureService(self.db, embeddings=self.embeddings, project_id=project_id)
+            return await svc.process_embedding_job(entity_id)
 
-            svc = LiteratureService(
-                self.db,
-                llm=self.llm,
-                embeddings=self.embeddings,
-                project_id=project_id,
-            )
-            if job_type == "literature_auto_tag":
-                return await svc.process_auto_tag_job(entity_id)
-            if job_type == "literature_embed":
-                return await svc.process_embedding_job(entity_id)
+        # ── Legacy LLM jobs — skip gracefully ────────────────────
+        # These job types may still exist in the queue from before the migration.
+        # Complete them as no-ops instead of failing.
+
+        _LEGACY_LLM_JOBS = {
+            "note_auto_tag", "note_auto_link", "note_auto_summarize", "note_extract_claims",
+            "claim_verify", "cluster_update", "theme_synthesize", "contradiction_check",
+            "decision_auto_tag", "literature_auto_tag", "mission_auto_tag", "re_distill",
+        }
+        if job_type in _LEGACY_LLM_JOBS:
+            logger.info("Skipping legacy LLM job %s (%s) — no longer processed by worker", job_type, job["id"])
+            return {"outcome": "skipped", "reason": "legacy_llm_job"}
 
         raise ValueError(f"Unsupported job_type '{job_type}'")

@@ -55,9 +55,7 @@ VOLUME /data
 ENV RKA_DB_PATH=/data/rka.db \
     RKA_HOST=0.0.0.0 \
     RKA_PORT=9712 \
-    RKA_LLM_ENABLED=true \
-    RKA_LLM_MODEL=openai/qwen3-32b \
-    RKA_LLM_API_BASE=http://host.docker.internal:1234/v1 \
+    RKA_LLM_ENABLED=false \
     RKA_SQLITE_VEC_PATH=/usr/local/lib/vec0.so
 
 EXPOSE 9712

@@ -137,6 +137,15 @@ export const api = {
   // Project
   listProjects: () => get<ProjectInfo[]>("/projects"),
   createProject: (data: ProjectCreate) => post<ProjectInfo>("/projects", data),
+  deleteProject: (projectId: string, confirm = false) =>
+    request<{ project_id: string; project_name: string; entity_counts: Record<string, number>; total_rows: number; confirmed: boolean; message: string }>(
+      `/projects/${projectId}?confirm=${confirm}`,
+      { method: "DELETE" },
+    ),
+  getProjectEntityCounts: (projectId: string) =>
+    get<{ project_id: string; entity_counts: Record<string, number>; total_rows: number }>(
+      `/projects/${projectId}/entity-counts`,
+    ),
   getStatus: () => get<ProjectState>("/status"),
   updateStatus: (data: ProjectStateUpdate) => put<ProjectState>("/status", data),
   exportKnowledgePack: async (): Promise<KnowledgePackDownload> => {

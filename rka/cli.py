@@ -110,11 +110,9 @@ def worker(
     once: bool,
 ):
     """Run the background enrichment worker."""
-    from rka.api.routes.llm import _load_llm_overrides
     from rka.config import RKAConfig
     from rka.infra.database import Database
     from rka.infra.embeddings import EmbeddingService
-    from rka.infra.llm import LLMClient
     from rka.services.worker import EnrichmentWorker
 
     config = RKAConfig()
@@ -126,9 +124,6 @@ def worker(
         await db.initialize_phase2_schema()
 
         try:
-            await _load_llm_overrides(config, db)
-
-            llm = LLMClient(config) if config.llm_enabled else None
             embeddings = (
                 EmbeddingService(model_name=config.embedding_model, db=db)
                 if config.embeddings_enabled
@@ -136,7 +131,6 @@ def worker(
             )
             runner = EnrichmentWorker(
                 db=db,
-                llm=llm,
                 embeddings=embeddings,
                 poll_interval=poll_interval or config.job_poll_interval,
                 lease_seconds=lease_seconds or config.job_lease_seconds,

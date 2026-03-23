@@ -14,13 +14,14 @@ import {
   Map,
   Settings,
   Plus,
+  Trash2,
   Sun,
   Moon,
   Monitor,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useTheme } from "@/hooks/useTheme"
-import { useProjectStatus, useProjects, useCreateProject } from "@/hooks/useProject"
+import { useProjectStatus, useProjects, useCreateProject, useDeleteProject, useProjectEntityCounts } from "@/hooks/useProject"
 import { useProjectSelection } from "@/hooks/useProjectSelection"
 import {
   Select,
@@ -32,6 +33,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -61,9 +63,16 @@ export function Sidebar() {
   const { data: project } = useProjectStatus()
   const { data: projects } = useProjects()
   const createProject = useCreateProject()
+  const deleteProject = useDeleteProject()
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [deleteConfirmName, setDeleteConfirmName] = useState("")
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
+
+  const currentProject = projects?.find((p) => p.id === projectId)
+  const canDelete = projectId !== "proj_default" && !!currentProject
+  const { data: entityCounts } = useProjectEntityCounts(deleteDialogOpen ? projectId : null)
 
   useEffect(() => {
     if (!projects?.length) return
@@ -128,6 +137,17 @@ export function Sidebar() {
           >
             <Plus className="h-4 w-4" />
           </Button>
+          {canDelete && (
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-9 w-9 shrink-0 text-destructive hover:bg-destructive/10"
+              onClick={() => { setDeleteDialogOpen(true); setDeleteConfirmName("") }}
+              title="Delete project"
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
         </div>
       </div>
 
@@ -198,6 +218,83 @@ export function Sidebar() {
               disabled={!name.trim() || createProject.isPending}
             >
               {createProject.isPending ? "Creating..." : "Create"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Project Dialog */}
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete Project</DialogTitle>
+            <DialogDescription>
+              This action is irreversible. All project data will be permanently deleted.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            {entityCounts && (
+              <div className="rounded-md border p-3 text-sm space-y-1">
+                <p className="font-medium">This will delete {entityCounts.total_rows.toLocaleString()} rows:</p>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs text-muted-foreground mt-2">
+                  {Object.entries(entityCounts.entity_counts)
+                    .sort(([, a], [, b]) => (b as number) - (a as number))
+                    .map(([table, count]) => (
+                      <div key={table} className="flex justify-between">
+                        <span>{table}</span>
+                        <span className="font-mono">{(count as number).toLocaleString()}</span>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+            <div className="space-y-2">
+              <Label htmlFor="delete-confirm">
+                Type <span className="font-mono font-bold">{currentProject?.name}</span> to confirm
+              </Label>
+              <Input
+                id="delete-confirm"
+                placeholder="Project name"
+                value={deleteConfirmName}
+                onChange={(e) => setDeleteConfirmName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && deleteConfirmName === currentProject?.name) {
+                    deleteProject.mutate(projectId, {
+                      onSuccess: () => {
+                        setDeleteDialogOpen(false)
+                        setDeleteConfirmName("")
+                        if (projects && projects.length > 1) {
+                          const next = projects.find((p) => p.id !== projectId)
+                          if (next) setProjectId(next.id)
+                        }
+                      },
+                    })
+                  }
+                }}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={deleteConfirmName !== currentProject?.name || deleteProject.isPending}
+              onClick={() => {
+                deleteProject.mutate(projectId, {
+                  onSuccess: () => {
+                    setDeleteDialogOpen(false)
+                    setDeleteConfirmName("")
+                    if (projects && projects.length > 1) {
+                      const next = projects.find((p) => p.id !== projectId)
+                      if (next) setProjectId(next.id)
+                    }
+                  },
+                })
+              }}
+            >
+              {deleteProject.isPending ? "Deleting..." : "Delete Forever"}
             </Button>
           </DialogFooter>
         </DialogContent>
