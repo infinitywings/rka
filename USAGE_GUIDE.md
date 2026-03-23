@@ -1678,7 +1678,7 @@ The web dashboard at `http://localhost:9712` provides visual interfaces for all 
 Project overview with active missions, open checkpoints, recent journal entries, and project controls. The Projects card lets you switch the active project, export the current project as a knowledge pack, or import a pack into a new project.
 
 ### Journal (`/journal`)
-Timeline view of all journal entries grouped by date. Filter by entry type (`note`, `log`, `directive`), confidence level, and source. Create and edit entries inline. A "hide superseded" toggle (on by default) keeps the view clean.
+Timeline view of all journal entries grouped by date. Entry content is rendered as **markdown** — headings, bold, code blocks, tables, and lists display with proper formatting. Click any entry to expand/collapse between a 3-line preview and the full rendered content. Filter by entry type (`note`, `log`, `directive`), confidence level, and source. Create and edit entries inline. A "hide superseded" toggle (on by default) keeps the view clean.
 
 > **v2.0 types**: The journal now uses `note` (result/observation/idea), `log` (procedure step), and `directive` (PI/Brain instruction). Old type labels are mapped on display.
 
@@ -1689,7 +1689,7 @@ Interactive decision tree powered by React Flow with elkjs layout. Nodes are col
 Table/list view with status column tracking the reading pipeline (to_read → reading → read → cited → excluded). Filter by status tabs. Click to expand detail panels showing abstract, notes, and related decisions.
 
 ### Missions (`/missions`)
-Active missions with task checklists (parsed from task JSON), checkpoint badges with status indicators, and a report viewer that renders structured mission reports as readable summaries.
+Active missions are displayed with full detail: task checklists with progress bars, checkpoint badges with status indicators, and report viewer. **Historical missions are expandable** — click any completed/partial/blocked mission to expand it and see its full context (markdown-rendered), task list, acceptance criteria, checkpoints, report, tags, and mission ID. Click again to collapse. This lets you review past mission outcomes without switching to the API.
 
 ### Timeline (`/timeline`)
 Event stream visualization grouped by date. Shows all state changes with color-coded event type badges (15+ event types) and actor icons (brain, executor, PI, LLM, web_ui, system). Causal chains are displayed — see which events triggered follow-up events. Filter by entity type and actor.
@@ -1704,7 +1704,7 @@ Entity relationship visualization using React Flow. All entity types are display
 A legend and MiniMap help navigate large graphs.
 
 ### Research Map (`/research-map`)
-Structured view of the research questions → evidence clusters → claims hierarchy. Shows synthesis status for each cluster (synthesis_needed, synthesized, contradiction). Links to review queue items. Use this page to track whether each research question is being addressed by the evidence in your knowledge base.
+Three-level drill-down view: research questions → evidence clusters → claims. The **summary stat cards** at the top (RQs, Clusters, Claims, Gaps, Contradictions) are interactive — click "Evidence Gaps" or "Contradictions" to filter the research question list to only those with issues. Gap and contradiction counts on each research question are displayed as prominent badges. Click any research question to drill into its evidence clusters, then click a cluster to see its individual claims with confidence scores and source references. Cluster synthesis text is rendered as markdown.
 
 ### Audit Log (`/audit`)
 System audit trail displayed as a sortable table. Filter by action type (create, update, delete, resolve), entity type, and actor. Color-coded action badges and a summary bar showing counts per action type help identify activity patterns.
@@ -1727,7 +1727,7 @@ Project configuration display, LLM status (enabled/disabled, model name), databa
 4. **End of session**: Executor calls `rka_submit_report()` even for informal progress updates. Include `related_decisions=[...]` to link the report to decisions it informs.
 5. **Compress long sessions**: Brain or Executor calls `rka_session_digest()` when tool output is getting lengthy. If you are switching to a new logical task, call `rka_reset_session()` before continuing.
 6. **Weekly**: Brain calls `rka_eviction_sweep(dry_run=true)` to review stale entries. Check the Timeline (`/timeline`) to review the event stream and the Audit Log (`/audit`) for a complete activity trail.
-7. **Periodically**: Visit the Knowledge Graph (`/graph`) and Research Map (`/research-map`) to visualize how entities connect. Use Mermaid export (`rka_export_mermaid()`) for including decision trees in documents.
+7. **Periodically**: Visit the Knowledge Graph (`/graph`) and Research Map (`/research-map`) to visualize how entities connect. Use the Research Map's gap/contradiction filters to focus on areas needing attention. Use Mermaid export (`rka_export_mermaid()`) for including decision trees in documents.
 
 ### Keep Entries Atomic
 

@@ -147,7 +147,7 @@ rka_get_context(topic="...")   → Token-budgeted context package
 | **Decision lifecycle** | Overturn decisions with `rka_supersede_decision` — affected claims marked stale for Brain review |
 | **Hybrid search** | FTS5 keyword + sqlite-vec embeddings + reciprocal rank fusion |
 | **Multi-project** | Isolated project databases with MCP tools for switching |
-| **Web dashboard** | 12-page React UI: research map, decision tree, knowledge graph, journal, timeline |
+| **Web dashboard** | 12-page React UI: research map with filterable stats, decision tree, knowledge graph, markdown-rendered journal, expandable missions |
 | **Onboarding** | `rka_generate_claude_md` auto-generates project-specific CLAUDE.md from live DB state |
 
 ---
@@ -1027,13 +1027,13 @@ The Vite dev server runs at `http://localhost:5173` and proxies API calls to `:9
 | Page | Path | Features |
 |------|------|----------|
 | **Dashboard** | `/` | Project overview, active missions, open checkpoints, recent entries, project selection, knowledge-pack export/import |
-| **Journal** | `/journal` | Timeline view grouped by date, type filters (note/log/directive), confidence filters, create/edit entries |
+| **Journal** | `/journal` | Timeline view grouped by date, markdown-rendered content with expand/collapse, type filters (note/log/directive), confidence filters, create/edit entries |
 | **Decisions** | `/decisions` | Interactive decision tree (React Flow + elkjs), click nodes for detail panel, supersession badges |
 | **Literature** | `/literature` | Table view with reading pipeline status tabs, add/update papers |
-| **Missions** | `/missions` | Active mission with task checklist, checkpoint badges, report viewer |
+| **Missions** | `/missions` | Active and historical missions with expandable detail view, task checklist with progress bar, checkpoint badges, context display, report viewer |
 | **Notebook** | `/notebook` | Q&A chat (ask questions grounded in your knowledge base) + summary generation |
 | **Timeline** | `/timeline` | Event stream grouped by date, entity/actor filters, causal chain visualization |
-| **Research Map** | `/research-map` | Three-level research view: research questions, evidence clusters, and claims with confidence scores and provenance |
+| **Research Map** | `/research-map` | Three-level drill-down: research questions, evidence clusters, and claims. Clickable summary stats filter by gaps/contradictions. Cluster synthesis rendered as markdown |
 | **Knowledge Graph** | `/graph` | Entity relationship graph (React Flow), nodes colored by type, relationship edges, provenance chain traversal |
 | **Audit Log** | `/audit` | System audit trail table with action/entity/actor filters, action counts summary |
 | **Context Inspector** | `/context` | Generate context packages, view temperature badges (HOT/WARM/COLD), copy JSON |

@@ -62,7 +62,7 @@ These changes are informed by a systematic literature review of 84+ papers and o
 - Background enrichment worker with durable job queue (auto-tag, auto-link, auto-summarize, embed)
 - Temperature-classified context engine (HOT/WARM/COLD)
 - Multi-project isolation with project-scoped queries
-- 11-page web dashboard with decision tree and knowledge graph visualization
+- 12-page web dashboard with decision tree, knowledge graph, and interactive research map
 
 ### 2.3 What Needs Improvement
 

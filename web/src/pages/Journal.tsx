@@ -21,6 +21,7 @@ import {
 import { StatusBadge } from "@/components/shared/StatusBadge"
 import { ConfidenceBadge } from "@/components/shared/ConfidenceBadge"
 import { TagList } from "@/components/shared/TagList"
+import { Markdown } from "@/components/shared/Markdown"
 import { useNotes, useCreateNote } from "@/hooks/useNotes"
 import { timeAgo } from "@/lib/utils"
 import { Plus, Filter, ChevronDown, ChevronUp } from "lucide-react"
@@ -157,9 +158,9 @@ function JournalCard({ entry }: { entry: JournalEntry }) {
         {entry.summary && (
           <p className="text-sm font-medium mb-1">{entry.summary}</p>
         )}
-        <p className={`text-sm text-muted-foreground whitespace-pre-wrap ${expanded ? "" : "line-clamp-3"}`}>
-          {entry.content}
-        </p>
+        <div className={`text-muted-foreground ${expanded ? "" : "line-clamp-3"}`}>
+          <Markdown>{entry.content}</Markdown>
+        </div>
         {expanded && entry.id && (
           <p className="mt-2 text-xs text-muted-foreground font-mono">{entry.id}</p>
         )}
