@@ -37,12 +37,10 @@ services:
       - rka-data:/data
     environment:
       # --- LLM Backend ---
-      # LM Studio (default): runs on your host machine
-      RKA_LLM_API_BASE: http://host.docker.internal:1234/v1
-      RKA_LLM_MODEL: openai/qwen3-32b
-      # Ollama (alternative): uncomment and comment out LM Studio lines
-      # RKA_LLM_API_BASE: http://host.docker.internal:11434/v1
-      # RKA_LLM_MODEL: ollama/qwen3:32b
+      # MiniMax API (production)
+      RKA_LLM_API_BASE: https://api.minimax.io/v1
+      RKA_LLM_MODEL: openai/MiniMax-M2.7
+      RKA_LLM_API_KEY: sk-cp-zgGbIn29oh8N0H4ZCz_QutnNEPkoWxACLXTxIOSeOv4-sM8bPYK-NmvJfZZQOh03YJ7-VHJ9eTT3HzxrgmOT3TxK7rlwA-u2xEs1ebcxxIZErCSUj1u7QuM
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -55,8 +53,9 @@ services:
     volumes:
       - rka-data:/data
     environment:
-      RKA_LLM_API_BASE: http://host.docker.internal:1234/v1
-      RKA_LLM_MODEL: openai/qwen3-32b
+      RKA_LLM_API_BASE: https://api.minimax.io/v1
+      RKA_LLM_MODEL: openai/MiniMax-M2.7
+      RKA_LLM_API_KEY: sk-cp-zgGbIn29oh8N0H4ZCz_QutnNEPkoWxACLXTxIOSeOv4-sM8bPYK-NmvJfZZQOh03YJ7-VHJ9eTT3HzxrgmOT3TxK7rlwA-u2xEs1ebcxxIZErCSUj1u7QuM
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

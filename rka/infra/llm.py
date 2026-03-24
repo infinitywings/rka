@@ -79,15 +79,13 @@ class SemanticLinks(BaseModel):
         None,
         description="ID of the mission that produced or is most relevant to this entry, or null.",
     )
-    suggested_type: Literal[
-        "finding", "insight", "methodology", "idea", "observation",
-        "hypothesis", "exploration", "pi_instruction", "summary",
-    ] | None = Field(
+    suggested_type: str | None = Field(
         None,
         description="Corrected journal entry type based on content, if the provided type appears wrong.",
     )
-    reasoning: str = Field(
-        ..., description="One sentence explaining the inferred links.",
+    reasoning: str | None = Field(
+        default="",
+        description="One sentence explaining the inferred links.",
     )
 
 
@@ -259,14 +257,15 @@ class LLMClient:
     def _get_instructor(self):
         """Lazy-init Instructor client.
 
-        Uses JSON_SCHEMA mode instead of tool/function-calling mode because
-        local backends (LM Studio, Ollama) don't support tool_choice objects.
+        Uses JSON mode (plain JSON extraction) for maximum compatibility
+        across LLM backends. JSON_SCHEMA mode causes markdown formatting and
+        retry loops with some models like MiniMax.
         """
         if self._instructor_client is None:
             import litellm
             import instructor
             self._instructor_client = instructor.from_litellm(
-                litellm.acompletion, mode=instructor.Mode.JSON_SCHEMA,
+                litellm.acompletion, mode=instructor.Mode.JSON,
             )
         return self._instructor_client
 
@@ -537,19 +536,30 @@ class LLMClient:
 
         result = await self.extract(
             SemanticLinks,
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"You are organizing a research knowledge base. Given the entry below, "
-                    f"identify which existing decisions, literature, and missions it is related to. "
-                    f"Only return IDs that appear in the candidate lists. "
-                    f"Also suggest a corrected type if '{current_type}' seems wrong.\n\n"
-                    f"Entry (type={current_type}):\n{content[:self._content_limit]}\n\n"
-                    f"Candidate decisions:\n{dec_text}\n\n"
-                    f"Candidate literature:\n{lit_text}\n\n"
-                    f"Candidate missions:\n{mis_text}"
-                ),
-            }],
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You must respond ONLY with valid JSON matching the required schema. "
+                        "Do not include any markdown formatting (no **bold**, no bullet points, no headings), "
+                        "no explanations, and no text outside the JSON structure. "
+                        "Output raw JSON only."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"You are organizing a research knowledge base. Given the entry below, "
+                        f"identify which existing decisions, literature, and missions it is related to. "
+                        f"Only return IDs that appear in the candidate lists. "
+                        f"Also suggest a corrected type if '{current_type}' seems wrong.\n\n"
+                        f"Entry (type={current_type}):\n{content[:self._content_limit]}\n\n"
+                        f"Candidate decisions:\n{dec_text}\n\n"
+                        f"Candidate literature:\n{lit_text}\n\n"
+                        f"Candidate missions:\n{mis_text}"
+                    ),
+                },
+            ],
         )
         # Filter to only valid IDs (LLM may hallucinate)
         result.related_decision_ids = [i for i in result.related_decision_ids if i in valid_dec_ids]
