@@ -47,6 +47,9 @@ decisions_without_justified_by > missions_without_motivated_by > unassigned_clus
 | Finished an assigned mission | `rka_submit_report` | `related_decisions=[ids]` |
 | Found a relevant paper | `rka_add_literature` or `rka_enrich_doi` | |
 | Want to search for papers | `rka_search_semantic_scholar` / `rka_search_arxiv` | |
+| Extracted claims from an entry | `rka_extract_claims` | `entry_id`, `claims=[{claim_type, content, confidence}]` |
+| Grouping claims into a theme | `rka_create_cluster` | `label`, optional `claim_ids`, `research_question_id` |
+| Adding claims to existing cluster | `rka_assign_claims_to_cluster` | `cluster_id`, `claim_ids` |
 | Want the research overview | `rka_get_research_map` | Three-level: RQs → clusters → claims |
 | Want to trace why something exists | `rka_trace_provenance` | `direction="upstream"` or `"both"` |
 | Need to overturn a past decision | `rka_supersede_decision` | Triggers re-distillation |
@@ -62,7 +65,7 @@ decisions_without_justified_by > missions_without_motivated_by > unassigned_clus
 - **Literature**: `rka_add_literature`, `rka_update_literature`, `rka_get_literature`, `rka_enrich_doi`
 - **Missions**: `rka_create_mission`, `rka_get_mission`, `rka_update_mission_status`, `rka_submit_report`
 - **Checkpoints**: `rka_submit_checkpoint`, `rka_get_checkpoints`, `rka_resolve_checkpoint`
-- **Research Map**: `rka_get_research_map`, `rka_get_claims`, `rka_supersede_decision`, `rka_trace_provenance`
+- **Research Map**: `rka_get_research_map`, `rka_get_claims`, `rka_extract_claims`, `rka_create_cluster`, `rka_assign_claims_to_cluster`, `rka_supersede_decision`, `rka_trace_provenance`
 - **Review Queue**: `rka_get_review_queue`, `rka_review_cluster`, `rka_review_claims`, `rka_resolve_contradiction`
 - **Search & Context**: `rka_search`, `rka_get_context`, `rka_ask`
 - **Graph**: `rka_get_graph`, `rka_get_ego_graph`, `rka_graph_stats`
@@ -2231,6 +2234,136 @@ async def rka_get_claims(
         lines.append(f"    {cl['content'][:500]}")
         lines.append(f"    source: {cl['source_entry_id']}")
     return "\n".join(lines)
+
+
+@tool()
+async def rka_extract_claims(
+    entry_id: str,
+    claims: list[dict],
+) -> str:
+    """Brain creates claims extracted from a journal entry.
+
+    The Brain reads an entry, identifies atomic claims, and writes them back.
+    Each claim gets a derived_from link to the source entry.
+
+    Args:
+        entry_id: Source journal entry ID (e.g. jnl_...)
+        claims: List of claim objects, each with:
+            - claim_type: hypothesis, evidence, method, result, observation, assumption
+            - content: The atomic claim text
+            - confidence: 0.0-1.0 (default 0.5)
+    """
+    created = []
+    async with _client() as c:
+        for cl in claims:
+            payload = {
+                "source_entry_id": entry_id,
+                "claim_type": cl["claim_type"],
+                "content": cl["content"],
+                "confidence": cl.get("confidence", 0.5),
+            }
+            r = await c.post("/api/claims", json=payload)
+            _raise_with_detail(r)
+            result = r.json()
+            created.append(result)
+            _record_entity("claim", result["id"], f"{cl['claim_type']}: {cl['content'][:60]}")
+
+    lines = [f"Created {len(created)} claims from {entry_id}:"]
+    for cl in created:
+        lines.append(f"  [{cl['id']}] ({cl['claim_type']}) conf={cl.get('confidence', 0.5):.2f}")
+        lines.append(f"    {cl['content'][:200]}")
+    return "\n".join(lines)
+
+
+@tool()
+async def rka_create_cluster(
+    label: str,
+    research_question_id: str | None = None,
+    synthesis: str | None = None,
+    confidence: str = "emerging",
+    claim_ids: list[str] | None = None,
+) -> str:
+    """Brain creates an evidence cluster and optionally assigns claims to it.
+
+    Args:
+        label: Short label for the cluster theme
+        research_question_id: Decision ID (kind=research_question) this cluster addresses
+        synthesis: Brain's synthesis paragraph (can be added later via rka_review_cluster)
+        confidence: strong, moderate, emerging, contested, refuted
+        claim_ids: Optional list of claim IDs to assign as members
+    """
+    payload = {
+        "label": label,
+        "confidence": confidence,
+    }
+    if research_question_id:
+        payload["research_question_id"] = research_question_id
+    if synthesis:
+        payload["synthesis"] = synthesis
+
+    async with _client() as c:
+        r = await c.post("/api/clusters", json=payload)
+        _raise_with_detail(r)
+        cluster = r.json()
+        cluster_id = cluster["id"]
+        _record_entity("cluster", cluster_id, f"Cluster: {label[:60]}")
+
+        assigned = 0
+        if claim_ids:
+            for cid in claim_ids:
+                edge_payload = {
+                    "source_claim_id": cid,
+                    "cluster_id": cluster_id,
+                    "relation": "member_of",
+                    "confidence": 0.5,
+                }
+                er = await c.post("/api/claims/edges", json=edge_payload)
+                if er.is_success:
+                    assigned += 1
+
+            # Update cluster claim count
+            r2 = await c.put(f"/api/clusters/{cluster_id}", json={
+                "needs_reprocessing": False,
+                "synthesized_by": "brain",
+            })
+
+    parts = [f"Created cluster {cluster_id} ({label}), confidence={confidence}"]
+    if assigned:
+        parts.append(f"{assigned} claims assigned")
+    if research_question_id:
+        parts.append(f"linked to RQ {research_question_id}")
+    return ", ".join(parts)
+
+
+@tool()
+async def rka_assign_claims_to_cluster(
+    cluster_id: str,
+    claim_ids: list[str],
+) -> str:
+    """Brain assigns existing claims to an existing evidence cluster.
+
+    Creates member_of edges between claims and the cluster.
+
+    Args:
+        cluster_id: Target evidence cluster ID
+        claim_ids: List of claim IDs to assign
+    """
+    results = []
+    async with _client() as c:
+        for cid in claim_ids:
+            edge_payload = {
+                "source_claim_id": cid,
+                "cluster_id": cluster_id,
+                "relation": "member_of",
+                "confidence": 0.5,
+            }
+            r = await c.post("/api/claims/edges", json=edge_payload)
+            if r.is_success:
+                results.append(f"  {cid}: assigned")
+            else:
+                results.append(f"  {cid}: failed ({r.status_code})")
+
+    return f"Assigned {len([r for r in results if 'assigned' in r])}/{len(claim_ids)} claims to cluster {cluster_id}:\n" + "\n".join(results)
 
 
 @tool()

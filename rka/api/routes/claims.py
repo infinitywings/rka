@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from rka.models.claim import Claim, ClaimCreate, ClaimUpdate
+from rka.models.claim import Claim, ClaimCreate, ClaimUpdate, ClaimEdge, ClaimEdgeCreate
 from rka.services.claims import ClaimService
 from rka.api.deps import get_scoped_claim_service
 
@@ -62,3 +62,11 @@ async def update_claim(
     if claim is None:
         raise HTTPException(404, f"Claim {claim_id} not found")
     return await svc.update(claim_id, data)
+
+
+@router.post("/claims/edges", response_model=ClaimEdge, status_code=201)
+async def create_claim_edge(
+    data: ClaimEdgeCreate,
+    svc: ClaimService = Depends(get_scoped_claim_service),
+):
+    return await svc.create_edge(data)
