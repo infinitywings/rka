@@ -53,23 +53,23 @@ docker compose up -d --build
 
 ## MCP Configuration
 
-The MCP binary is installed via pipx (outside the Docker container) because
+The MCP binary is installed via `uv tool` (outside the Docker container) because
 Claude Desktop/Code needs a local stdio process. It proxies all calls to the
 Docker container's REST API.
 
 ```bash
 # Install / re-install after code changes:
-pipx install . --force        # from repo root
+UV_CACHE_DIR=/tmp/uv-cache uv tool install --force .   # from repo root
 # Binary lands at: ~/.local/bin/rka
 ```
 
 `~/Library/Application Support/Claude/claude_desktop_config.json`:
 ```json
-"rka": { "command": "/Users/cfu6/.local/bin/rka", "args": ["mcp"] }
+"rka": { "command": "/Users/<user>/.local/bin/rka", "args": ["mcp"] }
 ```
 
 After code changes to `rka/mcp/server.py` or other source files:
-1. `pipx install . --force` — update the MCP binary
+1. `UV_CACHE_DIR=/tmp/uv-cache uv tool install --force .` — update the MCP binary
 2. `docker compose up -d --build` — update the API server + worker
 
 ## Common Pitfalls

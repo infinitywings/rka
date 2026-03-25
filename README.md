@@ -284,7 +284,7 @@ Research Map
   Research Questions --> Clusters --> Claims
 ```
 
-`rka_get_pending_maintenance()` detects entries needing distillation and other provenance gaps. The Brain processes these at session start.
+`rka_get_pending_maintenance()` detects entries needing distillation and other provenance gaps. The Brain processes these at session start using `rka_extract_claims`, `rka_create_cluster`, and `rka_assign_claims_to_cluster`.
 
 ### ULID-Based IDs
 
@@ -718,6 +718,9 @@ All tools are prefixed with `rka_` and available through the MCP stdio interface
 |------|---------|
 | `rka_get_research_map` | Get the three-level research map: research questions, evidence clusters, and claims |
 | `rka_get_claims` | Query extracted claims with filters (type, confidence, cluster, entry_id) |
+| `rka_extract_claims` | Brain creates claims from a journal entry (takes entry_id + list of claim objects) |
+| `rka_create_cluster` | Brain creates an evidence cluster, optionally assigning claims in one call |
+| `rka_assign_claims_to_cluster` | Brain wires existing claims to an existing cluster via member_of edges |
 | `rka_supersede_decision` | Mark a decision as superseded by a new decision, with optional re-distillation of affected claims |
 | `rka_trace_provenance` | Trace the full provenance chain for an entity — all upstream sources and downstream derivatives |
 
@@ -857,6 +860,7 @@ Most entity endpoints are project-scoped. Pass `X-RKA-Project: <project_id>` to 
 | `POST` | `/claims` | Create a claim manually or trigger extraction from a journal entry |
 | `GET` | `/claims` | List claims (filters: type, confidence, cluster_id, entry_id) |
 | `GET` | `/claims/{id}` | Get a single claim with provenance links |
+| `POST` | `/claims/edges` | Create a claim edge (member_of, supports, contradicts, qualifies, supersedes) |
 
 ### Evidence Clusters (v2.0)
 
