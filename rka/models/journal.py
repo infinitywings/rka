@@ -60,6 +60,7 @@ class JournalEntryCreate(BaseModel):
     type: AnyJournalType = "note"
     source: Literal["brain", "executor", "pi", "web_ui", "llm"] = "pi"
     phase: str | None = None
+    verbatim_input: str | None = None
     related_decisions: list[str] | None = None
     related_literature: list[str] | None = None
     related_mission: str | None = None
@@ -84,6 +85,7 @@ class JournalEntryUpdate(BaseModel):
     summary: str | None = None
     source: Literal["brain", "executor", "pi", "web_ui", "llm"] | None = None
     phase: str | None = None
+    verbatim_input: str | None = None
     confidence: Literal["hypothesis", "tested", "verified", "superseded", "retracted"] | None = None
     importance: Literal["critical", "high", "normal", "low", "archived"] | None = None
     status: Literal["draft", "active", "superseded", "retracted"] | None = None
@@ -109,6 +111,7 @@ class JournalEntry(BaseModel):
     summary: str | None = None
     source: str
     phase: str | None = None
+    verbatim_input: str | None = None
     related_decisions: list[str] | None = None
     related_literature: list[str] | None = None
     related_mission: str | None = None

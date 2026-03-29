@@ -208,6 +208,12 @@ class ContextEngine:
                 warm.remove(entry)
                 hot.append(entry)
 
+        # Sort PI-sourced entries first within each band
+        def _pi_first(e: dict) -> int:
+            return 0 if e.get("source") == "pi" else 1
+        hot.sort(key=_pi_first)
+        warm.sort(key=_pi_first)
+
         return hot, warm, cold
 
     async def _hydrate_hits(self, hits, project_id: str = "proj_default") -> list[dict]:
@@ -298,7 +304,10 @@ class ContextEngine:
         eid = entry.get("id", "?")
 
         if etype == "journal":
-            return f"[{entry.get('type', 'note')}|{entry.get('confidence', '?')}] {eid}: {(entry.get('content') or '')[:max_len]}"
+            pi_tag = " [PI]" if entry.get("source") == "pi" else ""
+            verbatim = entry.get("verbatim_input")
+            verbatim_line = f"\n  PI said: \"{verbatim[:200]}\"" if verbatim else ""
+            return f"[{entry.get('type', 'note')}|{entry.get('confidence', '?')}]{pi_tag} {eid}: {(entry.get('content') or '')[:max_len]}{verbatim_line}"
         elif etype == "decision":
             chosen = f" → {entry['chosen']}" if entry.get("chosen") else ""
             return f"[decision|{entry.get('status', '?')}] {eid}: {(entry.get('question') or '')[:max_len]}{chosen}"

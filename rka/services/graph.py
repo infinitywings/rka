@@ -306,7 +306,7 @@ class GraphService:
         """
         rows = await self.db.fetchall(
             "SELECT id, parent_id, question, chosen, status, phase, rationale, "
-            "related_missions, related_literature, created_at "
+            "decided_by, related_missions, related_literature, created_at "
             f"FROM decisions WHERE {self._project_clause()} ORDER BY created_at",
             [project_id],
         )
@@ -322,6 +322,7 @@ class GraphService:
                 "status": r["status"],
                 "phase": r["phase"],
                 "rationale": r["rationale"],
+                "decided_by": r.get("decided_by"),
                 "created_at": r["created_at"],
                 "children": [],
                 "linked_entities": [],

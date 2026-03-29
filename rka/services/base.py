@@ -180,6 +180,7 @@ class BaseService:
         "literature": {"table": "fts_literature", "columns": ["id", "title", "abstract", "notes"]},
         "mission": {"table": "fts_missions", "columns": ["id", "objective", "context"]},
         "claim": {"table": "fts_claims", "columns": ["id", "content"]},
+        "cluster": {"table": "fts_clusters", "columns": ["id", "label", "synthesis"]},
     }
 
     async def _sync_fts(self, entity_type: str, entity_id: str, data: dict) -> None:

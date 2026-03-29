@@ -183,6 +183,7 @@ async def rka_add_note(
     type: str = "note",
     source: str = "executor",
     phase: str | None = None,
+    verbatim_input: str | None = None,
     related_decisions: list[str] | None = None,
     related_literature: list[str] | None = None,
     related_mission: str | None = None,
@@ -194,10 +195,11 @@ async def rka_add_note(
     """Add a research journal entry.
 
     Args:
-        content: The note content
+        content: The note content (Brain's analysis when recording PI input)
         type: Entry type — note | log | directive (legacy types like finding/insight/methodology are auto-mapped)
         source: Who created this — brain | executor | pi | llm | web_ui | system
         phase: Research phase (uses current if omitted)
+        verbatim_input: PI's exact words when recording PI input (preserves intellectual attribution)
         related_decisions: Decision IDs this note relates to
         related_literature: Literature IDs this note references
         related_mission: Mission ID this note belongs to
@@ -209,7 +211,8 @@ async def rka_add_note(
     async with _client() as c:
         body = {
             "content": content, "type": type, "source": source,
-            "phase": phase, "related_decisions": related_decisions,
+            "phase": phase, "verbatim_input": verbatim_input,
+            "related_decisions": related_decisions,
             "related_literature": related_literature,
             "related_mission": related_mission, "supersedes": supersedes,
             "confidence": confidence, "importance": importance,
@@ -229,6 +232,7 @@ async def rka_update_note(
     type: str | None = None,
     confidence: str | None = None,
     importance: str | None = None,
+    verbatim_input: str | None = None,
     related_decisions: list[str] | None = None,
     related_literature: list[str] | None = None,
     related_mission: str | None = None,
@@ -244,6 +248,7 @@ async def rka_update_note(
         type: New type — note | log | directive
         confidence: New confidence level — hypothesis | tested | verified | superseded | retracted
         importance: New importance level — critical | high | normal | low
+        verbatim_input: PI's exact words (preserves intellectual attribution)
         related_decisions: Decision IDs this note relates to
         related_literature: Literature IDs this note references
         related_mission: Mission ID this note belongs to
@@ -254,7 +259,8 @@ async def rka_update_note(
     async with _client() as c:
         body = {
             "content": content, "type": type, "confidence": confidence,
-            "importance": importance, "related_decisions": related_decisions,
+            "importance": importance, "verbatim_input": verbatim_input,
+            "related_decisions": related_decisions,
             "related_literature": related_literature,
             "related_mission": related_mission, "tags": tags,
             "phase": phase, "source": source,
@@ -906,7 +912,9 @@ async def rka_get_decision_tree(
                 return []
             if active_only and status != "active":
                 return []
-            lines = [f"{prefix}[{status}] {node['id']}: {node['question'][:300]}"]
+            decided_by = node.get("decided_by", "")
+            decided_tag = f", {decided_by}" if decided_by else ""
+            lines = [f"{prefix}[{status}{decided_tag}] {node['id']}: {node['question'][:300]}"]
             if chosen:
                 lines.append(f"{prefix}  → Chosen: {chosen}")
             for le in node.get("linked_entities", []):
@@ -996,7 +1004,8 @@ async def rka_get_journal(
             return "No journal entries found."
         lines = []
         for e in entries:
-            lines.append(f"{e['id']} [{e['type']}] ({e['confidence']}) {e['content'][:500]}")
+            pi_marker = " [PI]" if e.get("source") == "pi" else ""
+            lines.append(f"{e['id']} [{e['type']}]{pi_marker} ({e['confidence']}) {e['content'][:500]}")
         return "\n".join(lines)
 
 
@@ -2328,8 +2337,10 @@ async def rka_extract_claims(
             - claim_type: hypothesis, evidence, method, result, observation, assumption
             - content: The atomic claim text
             - confidence: 0.0-1.0 (default 0.5)
+            - cluster_id: Optional cluster ID to assign this claim to (e.g. ecl_...)
     """
     created = []
+    assigned = 0
     async with _client() as c:
         for cl in claims:
             payload = {
@@ -2344,7 +2355,21 @@ async def rka_extract_claims(
             created.append(result)
             _record_entity("claim", result["id"], f"{cl['claim_type']}: {cl['content'][:60]}")
 
+            # Inline cluster assignment if cluster_id provided
+            cluster_id = cl.get("cluster_id")
+            if cluster_id:
+                edge_payload = {
+                    "source_claim_id": result["id"],
+                    "cluster_id": cluster_id,
+                    "relation": "member_of",
+                }
+                r2 = await c.post("/api/claims/edges", json=edge_payload)
+                _raise_with_detail(r2)
+                assigned += 1
+
     lines = [f"Created {len(created)} claims from {entry_id}:"]
+    if assigned:
+        lines[0] += f" ({assigned} assigned to clusters)"
     for cl in created:
         lines.append(f"  [{cl['id']}] ({cl['claim_type']}) conf={cl.get('confidence', 0.5):.2f}")
         lines.append(f"    {cl['content'][:200]}")
@@ -2797,6 +2822,11 @@ If there are open checkpoints, resolve them before continuing new work.
 - `rka_add_note(content, type="directive")` — instructions to the Executor
 - `rka_add_decision(title, rationale, chosen_option, alternatives)` — record all non-trivial choices
 - `rka_add_literature(...)` or `rka_enrich_doi(doi)` — add papers; use `rka_search_semantic_scholar` / `rka_search_arxiv` to find related work
+
+### PI Input Attribution (Critical)
+When recording PI input, ALWAYS set `source="pi"` and `verbatim_input` to the PI's exact words.
+Your analysis goes in `content`. This preserves intellectual attribution.
+Example: `rka_add_note(content="PI suggests focusing on...", source="pi", verbatim_input="Let's try the transformer approach instead")`
 
 ### Reviewing Progress
 - `rka_get_journal(limit=20)` — recent notes from all actors

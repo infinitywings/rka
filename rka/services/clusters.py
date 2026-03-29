@@ -32,6 +32,9 @@ class ClusterService(BaseService):
             ],
         )
         await self.db.commit()
+        await self._sync_fts("cluster", cluster_id, {
+            "label": data.label, "synthesis": data.synthesis or "",
+        })
         await self.audit("create", "cluster", cluster_id, "llm")
         return await self.get(cluster_id)
 
@@ -105,6 +108,13 @@ class ClusterService(BaseService):
             values,
         )
         await self.db.commit()
+        if "label" in dump or "synthesis" in dump:
+            row = await self.db.fetchone(
+                "SELECT label, synthesis FROM evidence_clusters WHERE id = ? AND project_id = ?",
+                [cluster_id, self.project_id],
+            )
+            if row:
+                await self._sync_fts("cluster", cluster_id, dict(row))
         await self.audit("update", "cluster", cluster_id, "system", {"fields": list(dump.keys())})
         return await self.get(cluster_id)
 
@@ -237,6 +247,9 @@ class ClusterService(BaseService):
             ],
         )
         await self.db.commit()
+        await self._sync_fts("cluster", cluster_id, {
+            "label": cluster.label, "synthesis": synthesis.synthesis,
+        })
 
         # Flag for Brain review if complex
         if len(claims) >= 10 or synthesis.confidence == "contested":

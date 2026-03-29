@@ -73,6 +73,13 @@ class SearchService:
             "snippet_col": "content",
             "join_alias": "c",
         },
+        "cluster": {
+            "table": "fts_clusters",
+            "source": "evidence_clusters",
+            "title_expr": "ec.label",
+            "snippet_col": "label",
+            "join_alias": "ec",
+        },
     }
 
     VEC_MAP = {
