@@ -96,6 +96,18 @@ _DIRECT_ID_COLUMNS = {
     "keynodes": ("id",),
     "graph_views": ("id",),
 }
+# Columns with actual FOREIGN KEY constraints in the schema.
+# Unresolvable references in these columns must be NULLed to avoid FK errors.
+# (Excludes "id" columns — those are PKs, not FK references.)
+_FK_COLUMNS: dict[str, set[str]] = {
+    "decisions": {"parent_id", "superseded_by"},
+    "missions": {"depends_on", "parent_mission_id", "motivated_by_decision"},
+    "journal": {"supersedes"},
+    "checkpoints": {"mission_id", "linked_decision_id"},
+    "events": {"caused_by_event"},
+    "qa_logs": {"session_id"},
+    "figures": {"artifact_id"},
+}
 _JSON_ID_COLUMNS = {
     "literature": ("related_decisions",),
     "decisions": ("related_missions", "related_literature", "related_journal"),
@@ -413,7 +425,14 @@ class KnowledgePackService(BaseService):
 
         if value == source_project_id:
             return target_project_id
-        return id_map.get(value, value)
+        remapped = id_map.get(value)
+        if remapped is not None:
+            return remapped
+        # Value not in id_map — if this column has a FK constraint,
+        # the original ID won't exist in the target DB, so NULL it out.
+        if column in _FK_COLUMNS.get(table, set()):
+            return None
+        return value
 
     def _rewrite_json_refs(
         self,
