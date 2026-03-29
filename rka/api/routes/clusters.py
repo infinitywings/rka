@@ -6,7 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from rka.models.claim import EvidenceCluster, EvidenceClusterCreate, EvidenceClusterUpdate
 from rka.services.clusters import ClusterService
-from rka.api.deps import get_scoped_cluster_service
+from rka.services.research_map import ResearchMapService
+from rka.api.deps import get_scoped_cluster_service, get_scoped_research_map_service
 
 router = APIRouter()
 
@@ -37,15 +38,21 @@ async def list_clusters(
     )
 
 
-@router.get("/clusters/{cluster_id}", response_model=EvidenceCluster)
+@router.get("/clusters/{cluster_id}")
 async def get_cluster(
     cluster_id: str,
+    include_claims: bool = False,
     svc: ClusterService = Depends(get_scoped_cluster_service),
+    map_svc: ResearchMapService = Depends(get_scoped_research_map_service),
 ):
     cluster = await svc.get(cluster_id)
     if cluster is None:
         raise HTTPException(404, f"Cluster {cluster_id} not found")
-    return cluster
+    result = cluster.model_dump()
+    if include_claims:
+        claims = await map_svc.get_claims_for_cluster(cluster_id)
+        result["claims"] = claims
+    return result
 
 
 @router.put("/clusters/{cluster_id}", response_model=EvidenceCluster)

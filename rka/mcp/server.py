@@ -845,10 +845,30 @@ async def rka_get(
     endpoint = endpoint_map.get(prefix)
     if not endpoint:
         return f"Unknown ID prefix '{prefix}'. Expected: jrn_, dec_, lit_, clm_, ecl_, mis_"
+    params = {}
+    if prefix == "ecl":
+        params["include_claims"] = "true"
     async with _client() as c:
-        r = await c.get(endpoint)
+        r = await c.get(endpoint, params=params)
         _raise_with_detail(r)
         data = r.json()
+        # Format cluster claims inline for readability
+        if prefix == "ecl" and data.get("claims"):
+            claims = data["claims"]
+            claim_summaries = []
+            for cl in claims:
+                content = cl.get("content", "")[:100]
+                if len(cl.get("content", "")) > 100:
+                    content += "…"
+                v = "✓" if cl.get("verified") else "○"
+                claim_summaries.append({
+                    "id": cl["id"],
+                    "type": cl.get("claim_type"),
+                    "confidence": cl.get("confidence"),
+                    "verified": v,
+                    "content": content,
+                })
+            data["claims"] = claim_summaries
         return json.dumps(data, indent=2, default=str)
 
 
@@ -2151,6 +2171,48 @@ async def rka_generate_claude_md(
 # ============================================================
 
 @tool()
+async def rka_list_clusters(
+    research_question_id: str | None = None,
+    confidence: str | None = None,
+    limit: int = 50,
+) -> str:
+    """List evidence clusters with claim counts.
+
+    Returns cluster ID, label, confidence, claim count, research question,
+    and truncated synthesis for each cluster.
+
+    Args:
+        research_question_id: Filter to clusters under a specific RQ (dec_... ID)
+        confidence: Filter by confidence level: strong, moderate, emerging, contested, refuted
+        limit: Max results (default 50)
+    """
+    params: dict = {"limit": limit}
+    if research_question_id:
+        params["research_question_id"] = research_question_id
+    if confidence:
+        params["confidence"] = confidence
+    async with _client() as c:
+        r = await c.get("/api/clusters", params=params)
+        _raise_with_detail(r)
+    clusters = r.json()
+    if not clusters:
+        return "No clusters found matching filters."
+    lines = [f"Found {len(clusters)} clusters:"]
+    for cl in clusters:
+        conf = cl.get("confidence", "emerging")
+        rq = cl.get("research_question_id") or "unassigned"
+        lines.append(
+            f"  [{conf}] {cl['id']} — {cl['label']} "
+            f"({cl.get('claim_count', 0)} claims)"
+        )
+        lines.append(f"    RQ: {rq}")
+        synthesis = cl.get("synthesis") or ""
+        if synthesis:
+            lines.append(f"    {synthesis[:100]}{'…' if len(synthesis) > 100 else ''}")
+    return "\n".join(lines)
+
+
+@tool()
 async def rka_get_research_map() -> str:
     """Get the three-level research map: Research Questions → Evidence Clusters → Claims.
 
@@ -2172,16 +2234,30 @@ async def rka_get_research_map() -> str:
     lines.append("")
     for rq in data.get("research_questions", []):
         status_icon = "●" if rq.get("status") == "active" else "○"
+        total_claims = rq.get("total_claims", 0)
+        cluster_count = rq.get("cluster_count", 0)
         lines.append(f"{status_icon} [{rq['id']}] {rq['question']}")
-        lines.append(f"  {rq.get('cluster_count', 0)} clusters, "
-                     f"{rq.get('total_claims', 0)} claims, "
+        lines.append(f"  {cluster_count} clusters, {total_claims} claims, "
                      f"{rq.get('gap_count', 0)} gaps, "
                      f"{rq.get('contradiction_count', 0)} contradictions")
+        clusters = rq.get("clusters", [])
+        max_shown = 10
+        for i, cl in enumerate(clusters[:max_shown]):
+            connector = "└─" if i == len(clusters[:max_shown]) - 1 and len(clusters) <= max_shown else "├─"
+            lines.append(
+                f"  {connector} [{cl.get('confidence', '?')}] {cl['label']} "
+                f"({cl.get('claim_count', 0)} claims) — {cl['id']}"
+            )
+        if len(clusters) > max_shown:
+            lines.append(f"  └─ ... ({len(clusters) - max_shown} more)")
     unassigned = data.get("unassigned_clusters", [])
     if unassigned:
         lines.append(f"\nUnassigned clusters: {len(unassigned)}")
         for uc in unassigned[:5]:
-            lines.append(f"  - [{uc['id']}] {uc['label']} ({uc.get('claim_count', 0)} claims)")
+            lines.append(f"  - [{uc.get('confidence', '?')}] {uc['label']} "
+                         f"({uc.get('claim_count', 0)} claims) — {uc['id']}")
+        if len(unassigned) > 5:
+            lines.append(f"  ... ({len(unassigned) - 5} more)")
     return "\n".join(lines)
 
 

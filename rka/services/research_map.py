@@ -111,6 +111,25 @@ class ResearchMapService(BaseService):
         """Get the complete three-level research map."""
         rqs = await self.get_research_questions()
 
+        # Attach top clusters to each RQ
+        for rq in rqs:
+            clusters = await self.db.fetchall(
+                """SELECT id, label, confidence, claim_count
+                   FROM evidence_clusters
+                   WHERE research_question_id = ? AND project_id = ?
+                   ORDER BY claim_count DESC""",
+                [rq["id"], self.project_id],
+            )
+            rq["clusters"] = [
+                {
+                    "id": c["id"],
+                    "label": c["label"],
+                    "confidence": c.get("confidence", "emerging"),
+                    "claim_count": c.get("claim_count", 0),
+                }
+                for c in clusters
+            ]
+
         # Unassigned clusters (no RQ)
         unassigned = await self.db.fetchall(
             """SELECT * FROM evidence_clusters
