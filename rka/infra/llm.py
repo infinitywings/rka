@@ -10,6 +10,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from rka.config import RKAConfig
+from rka.models.journal import JOURNAL_TYPE_MAP
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
@@ -566,6 +567,10 @@ class LLMClient:
         result.related_literature_ids = [i for i in result.related_literature_ids if i in valid_lit_ids]
         if result.related_mission_id and result.related_mission_id not in valid_mis_ids:
             result.related_mission_id = None
+        # Validate suggested_type against JOURNAL_TYPE_MAP keys to avoid DB CHECK violations
+        if result.suggested_type is not None and result.suggested_type not in JOURNAL_TYPE_MAP:
+            logger.warning("LLM suggested invalid journal type %r; discarding", result.suggested_type)
+            result.suggested_type = None
         return result
 
     async def classify_file(

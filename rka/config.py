@@ -38,7 +38,7 @@ class RKAConfig(BaseSettings):
 
     # LLM context window — auto-detected from backend, or set manually
     llm_context_window: int = Field(default=0, description="Model context window in tokens (0 = unknown/auto)")
-    llm_request_timeout: int = Field(default=120, description="Timeout for LLM requests in seconds")
+    llm_request_timeout: int = Field(default=300, description="Timeout for LLM requests in seconds")
 
     # Embeddings (Phase 2)
     embedding_model: str = Field(
