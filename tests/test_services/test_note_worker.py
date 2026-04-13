@@ -69,9 +69,11 @@ class DummyEmbeddings(EmbeddingService):
     def __init__(self, db: Database):
         super().__init__(model_name="dummy-embed", db=db)
         self.calls = 0
+        self.texts: list[str] = []
 
     async def embed_document(self, text: str) -> list[float]:
         self.calls += 1
+        self.texts.append(text)
         digest = hashlib.sha256(text.encode()).digest()
         return [digest[i % len(digest)] / 255.0 for i in range(self.dim)]
 
@@ -313,3 +315,40 @@ class TestNoteQueue:
             "SELECT job_type FROM jobs WHERE entity_id = ?", [note.id],
         )
         assert jobs == []
+
+    @pytest.mark.asyncio
+    async def test_worker_embeds_large_note_content_without_truncation(self, db: Database):
+        """Embedding jobs should handle multi-thousand-word journal entries intact."""
+        await _ensure_project(db, "proj_notes", "Notes")
+        embeddings = DummyEmbeddings(db)
+        svc = NoteService(db, llm=None, embeddings=embeddings, project_id="proj_notes")
+        large_content = " ".join(f"token_{i}" for i in range(2500))
+
+        note = await svc.create(
+            JournalEntryCreate(
+                content=large_content,
+                type="note",
+                source="executor",
+            ),
+            actor="executor",
+        )
+
+        worker = EnrichmentWorker(
+            db=db,
+            embeddings=embeddings,
+            poll_interval=0.01,
+            lease_seconds=60,
+            max_attempts=3,
+        )
+
+        assert await worker.run_once() is True
+        assert embeddings.calls == 1
+        assert embeddings.texts == [large_content]
+
+        metadata = await db.fetchone(
+            """SELECT content_hash
+               FROM embedding_metadata
+               WHERE project_id = ? AND entity_type = 'journal' AND entity_id = ?""",
+            ["proj_notes", note.id],
+        )
+        assert metadata is not None

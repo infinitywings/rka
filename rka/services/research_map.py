@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from rka.services.base import BaseService
 
 
@@ -31,10 +33,16 @@ class ResearchMapService(BaseService):
                    WHERE research_question_id = ? AND project_id = ?""",
                 [rq["id"], self.project_id],
             )
+            # Check for rq:* lifecycle tag
+            rq_tag = await self.db.fetchone(
+                "SELECT tag FROM tags WHERE entity_type = 'decision' AND entity_id = ? AND tag LIKE 'rq:%'",
+                [rq["id"]],
+            )
+            display_status = rq_tag["tag"][3:] if rq_tag else rq["status"]
             result.append({
                 "id": rq["id"],
                 "question": rq["question"],
-                "status": rq["status"],
+                "status": display_status,
                 "phase": rq.get("phase"),
                 "cluster_count": (stats["cluster_count"] or 0) if stats else 0,
                 "total_claims": (stats["total_claims"] or 0) if stats else 0,
@@ -106,6 +114,118 @@ class ResearchMapService(BaseService):
             }
             for c in claims
         ]
+
+    async def get_cluster_detail(self, cluster_id: str) -> dict | None:
+        """Get a cluster with claims, contradiction edges, and pending review items."""
+        cluster = await self.db.fetchone(
+            "SELECT * FROM evidence_clusters WHERE id = ? AND project_id = ?",
+            [cluster_id, self.project_id],
+        )
+        if cluster is None:
+            return None
+
+        claims = await self.get_claims_for_cluster(cluster_id)
+        contradiction_rows = await self.db.fetchall(
+            """SELECT
+                   ce.id,
+                   ce.confidence,
+                   ce.source_claim_id,
+                   sc.content AS source_claim_content,
+                   sc.source_entry_id AS source_entry_id,
+                   ce.target_claim_id,
+                   tc.content AS target_claim_content,
+                   tc.source_entry_id AS target_source_entry_id,
+                   ce.created_at
+               FROM claim_edges ce
+               JOIN claims sc
+                 ON sc.id = ce.source_claim_id
+                AND sc.project_id = ce.project_id
+               LEFT JOIN claims tc
+                 ON tc.id = ce.target_claim_id
+                AND tc.project_id = ce.project_id
+               WHERE ce.cluster_id = ?
+                 AND ce.project_id = ?
+                 AND ce.relation = 'contradicts'
+               ORDER BY ce.confidence DESC, ce.created_at DESC""",
+            [cluster_id, self.project_id],
+        )
+        review_rows = await self.db.fetchall(
+            """SELECT *
+               FROM review_queue
+               WHERE item_type = 'cluster'
+                 AND item_id = ?
+                 AND project_id = ?
+                 AND status = 'pending'
+               ORDER BY priority ASC, created_at ASC""",
+            [cluster_id, self.project_id],
+        )
+
+        research_question = None
+        if cluster.get("research_question_id"):
+            rq = await self.db.fetchone(
+                """SELECT id, question
+                   FROM decisions
+                   WHERE id = ? AND project_id = ?""",
+                [cluster["research_question_id"], self.project_id],
+            )
+            if rq:
+                research_question = {"id": rq["id"], "question": rq["question"]}
+
+        return {
+            "id": cluster["id"],
+            "research_question_id": cluster.get("research_question_id"),
+            "label": cluster["label"],
+            "synthesis": cluster.get("synthesis"),
+            "confidence": cluster.get("confidence", "emerging"),
+            "claim_count": len(claims),
+            "gap_count": cluster.get("gap_count", 0),
+            "needs_reprocessing": bool(cluster.get("needs_reprocessing", 0)),
+            "synthesized_by": cluster.get("synthesized_by", "llm"),
+            "project_id": cluster.get("project_id", "proj_default"),
+            "created_at": cluster.get("created_at"),
+            "updated_at": cluster.get("updated_at"),
+            "research_question": research_question,
+            "claims": claims,
+            "contradictions": [
+                {
+                    "id": row["id"],
+                    "confidence": row.get("confidence", 0.5),
+                    "source_claim_id": row["source_claim_id"],
+                    "source_claim_content": row["source_claim_content"],
+                    "source_entry_id": row["source_entry_id"],
+                    "target_claim_id": row.get("target_claim_id"),
+                    "target_claim_content": row.get("target_claim_content"),
+                    "target_source_entry_id": row.get("target_source_entry_id"),
+                    "created_at": row.get("created_at"),
+                }
+                for row in contradiction_rows
+            ],
+            "review_items": [self._review_row_to_dict(row) for row in review_rows],
+        }
+
+    @staticmethod
+    def _review_row_to_dict(row: dict) -> dict:
+        context = row.get("context")
+        if context and isinstance(context, str):
+            try:
+                context = json.loads(context)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return {
+            "id": row["id"],
+            "item_type": row["item_type"],
+            "item_id": row["item_id"],
+            "flag": row["flag"],
+            "context": context,
+            "priority": row.get("priority", 100),
+            "status": row.get("status", "pending"),
+            "raised_by": row.get("raised_by", "llm"),
+            "resolved_by": row.get("resolved_by"),
+            "resolution": row.get("resolution"),
+            "project_id": row.get("project_id", "proj_default"),
+            "created_at": row.get("created_at"),
+            "resolved_at": row.get("resolved_at"),
+        }
 
     async def get_full_map(self) -> dict:
         """Get the complete three-level research map."""

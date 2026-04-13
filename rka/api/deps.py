@@ -32,6 +32,7 @@ from rka.services.topics import TopicService
 from rka.services.research_map import ResearchMapService
 from rka.services.review_queue import ReviewQueueService
 from rka.services.onboarding import OnboardingService
+from rka.services.researcher_tools import ResearcherToolsService
 
 logger = logging.getLogger(__name__)
 
@@ -410,3 +411,10 @@ def get_scoped_onboarding_service(
     db: Database = Depends(get_db),
 ) -> OnboardingService:
     return OnboardingService(db, project_id=project_id)
+
+
+def get_scoped_researcher_tools_service(
+    project_id: str = Depends(require_project),
+    db: Database = Depends(get_db),
+) -> ResearcherToolsService:
+    return ResearcherToolsService(db, project_id=project_id)

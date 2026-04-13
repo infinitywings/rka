@@ -15,6 +15,7 @@ import {
   Settings,
   Plus,
   Trash2,
+  Copy,
   Sun,
   Moon,
   Monitor,
@@ -42,6 +43,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
+import { toast } from "sonner"
 
 const navItems = [
   { to: "/", icon: LayoutDashboard, label: "Dashboard" },
@@ -73,6 +75,7 @@ export function Sidebar() {
   const currentProject = projects?.find((p) => p.id === projectId)
   const canDelete = projectId !== "proj_default" && !!currentProject
   const { data: entityCounts } = useProjectEntityCounts(deleteDialogOpen ? projectId : null)
+  const displayProjectId = currentProject?.id ?? projectId
 
   useEffect(() => {
     if (!projects?.length) return
@@ -96,6 +99,15 @@ export function Sidebar() {
     )
   }
 
+  const handleCopyProjectId = async () => {
+    try {
+      await navigator.clipboard.writeText(displayProjectId)
+      toast.success(`Copied ${displayProjectId}`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Copy failed")
+    }
+  }
+
   return (
     <aside className="flex h-screen w-56 flex-col border-r bg-sidebar">
       {/* Logo / Project Name */}
@@ -114,6 +126,21 @@ export function Sidebar() {
               </span>
             )}
           </div>
+        </div>
+        <div className="mt-2 flex items-center gap-1">
+          <code className="min-w-0 flex-1 truncate rounded bg-muted px-1.5 py-1 text-[10px] text-muted-foreground">
+            {displayProjectId}
+          </code>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            className="shrink-0"
+            onClick={handleCopyProjectId}
+            title="Copy project ID"
+          >
+            <Copy className="h-3 w-3" />
+          </Button>
         </div>
         <div className="mt-3 flex gap-1">
           <Select value={projectId} onValueChange={setProjectId}>

@@ -584,9 +584,11 @@ export interface Claim {
   stale: boolean
   source_offset_start: number | null
   source_offset_end: number | null
-  project_id: string
-  created_at: string | null
-  updated_at: string | null
+  source_type?: string | null
+  source_actor?: string | null
+  project_id?: string
+  created_at?: string | null
+  updated_at?: string | null
 }
 
 export interface EvidenceCluster {
@@ -599,9 +601,18 @@ export interface EvidenceCluster {
   gap_count: number
   needs_reprocessing: boolean
   synthesized_by: string
-  project_id: string
-  created_at: string | null
-  updated_at: string | null
+  project_id?: string
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface EvidenceClusterUpdateRequest {
+  label?: string
+  synthesis?: string | null
+  confidence?: ClusterConfidence
+  needs_reprocessing?: boolean
+  synthesized_by?: "llm" | "brain"
+  research_question_id?: string | null
 }
 
 export interface ResearchQuestion {
@@ -632,6 +643,30 @@ export interface ResearchMapData {
     total_contradictions: number
     pending_review: number
   }
+}
+
+export interface ClusterContradiction {
+  id: string
+  confidence: number
+  source_claim_id: string
+  source_claim_content: string
+  source_entry_id: string | null
+  target_claim_id: string | null
+  target_claim_content: string | null
+  target_source_entry_id: string | null
+  created_at: string | null
+}
+
+export interface ResearchQuestionReference {
+  id: string
+  question: string
+}
+
+export interface ResearchMapClusterDetail extends EvidenceCluster {
+  research_question: ResearchQuestionReference | null
+  claims: Claim[]
+  contradictions: ClusterContradiction[]
+  review_items: ReviewItem[]
 }
 
 export interface ReviewItem {

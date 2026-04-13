@@ -5,10 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { toast } from "sonner"
-import { MessageSquare, Sparkles, Send, CheckCircle, Clock, AlertTriangle, Loader2 } from "lucide-react"
+import { MessageSquare, Send, AlertTriangle, Loader2 } from "lucide-react"
 import { useLLMStatus } from "@/hooks/useLLM"
 import { NavLink } from "react-router-dom"
 import { Markdown } from "@/components/shared/Markdown"
@@ -22,7 +20,7 @@ export default function Notebook() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Notebook</h1>
         <p className="text-sm text-muted-foreground">
-          Ask questions about your research and generate summaries
+          Ask questions about your research
         </p>
       </div>
 
@@ -33,7 +31,7 @@ export default function Notebook() {
             <div>
               <p className="text-sm font-medium text-amber-800">Local LLM not available</p>
               <p className="text-xs text-amber-600 mt-0.5">
-                Q&A and summary features require a connected local LLM (LM Studio or Ollama).{" "}
+                Q&A requires a connected local LLM (LM Studio or Ollama).{" "}
                 <NavLink to="/settings" className="underline font-medium">
                   Configure it in Settings
                 </NavLink>
@@ -43,19 +41,17 @@ export default function Notebook() {
         </Card>
       )}
 
-      <Tabs defaultValue="qa" className="space-y-4">
-        <TabsList>
-          <TabsTrigger value="qa" className="gap-1.5">
-            <MessageSquare className="h-3.5 w-3.5" /> Q&A
-          </TabsTrigger>
-          <TabsTrigger value="summaries" className="gap-1.5">
-            <Sparkles className="h-3.5 w-3.5" /> Summaries
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="qa"><QAPanel disabled={!llmReady} /></TabsContent>
-        <TabsContent value="summaries"><SummaryPanel disabled={!llmReady} /></TabsContent>
-      </Tabs>
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <MessageSquare className="h-4 w-4" />
+            Q&A
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <QAPanel disabled={!llmReady} />
+        </CardContent>
+      </Card>
     </div>
   )
 }
@@ -247,323 +243,6 @@ function QAPanel({ disabled = false }: { disabled?: boolean }) {
           {sessions.length === 0 && (
             <p className="text-[11px] text-muted-foreground text-center py-4">
               No sessions yet
-            </p>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ── Summary Panel ──────────────────────────────────────────────────────────
-
-function SummaryPanel({ disabled = false }: { disabled?: boolean }) {
-  const queryClient = useQueryClient()
-  const [scopeType, setScopeType] = useState("project")
-  const [scopeId, setScopeId] = useState("")
-  const [granularity, setGranularity] = useState("paragraph")
-  const [activeResult, setActiveResult] = useState<{
-    one_line: string; paragraph: string; narrative: string | null
-    key_questions: string[]
-    sources: Array<{ entity_type: string; entity_id: string; excerpt: string }>
-    confidence: number
-  } | null>(null)
-
-  // Fetch data for scope dropdowns
-  const { data: missions = [] } = useQuery({
-    queryKey: ["missions"],
-    queryFn: () => api.listMissions(),
-  })
-  const { data: project } = useQuery({
-    queryKey: ["project-status"],
-    queryFn: () => api.getStatus(),
-  })
-  const { data: tags = [] } = useQuery({
-    queryKey: ["tags"],
-    queryFn: () => api.listTags(),
-  })
-
-  const phases = project?.phases_config ?? []
-
-  const { data: summaries = [] } = useQuery({
-    queryKey: ["summaries"],
-    queryFn: () => api.listSummaries(),
-  })
-
-  const generateMutation = useMutation({
-    mutationFn: () => api.generateSummary({
-      scope_type: scopeType,
-      scope_id: scopeId || undefined,
-      granularity,
-    }),
-    onSuccess: (data) => {
-      if ("error" in data) {
-        toast.error(String((data as { error: string }).error))
-        return
-      }
-      setActiveResult(data)
-      queryClient.invalidateQueries({ queryKey: ["summaries"] })
-      toast.success("Summary generated")
-    },
-    onError: (err: Error) => toast.error(err.message),
-  })
-
-  const blessMutation = useMutation({
-    mutationFn: (id: string) => api.blessSummary(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["summaries"] })
-      toast.success("Summary blessed")
-    },
-  })
-
-  // Reset scope ID when scope type changes
-  const handleScopeTypeChange = (v: string | null) => {
-    if (!v) return
-    setScopeType(v)
-    setScopeId("")
-  }
-
-  // Build the scope ID options based on scope type
-  const renderScopeIdPicker = () => {
-    if (scopeType === "project") return null
-
-    if (scopeType === "phase" && phases.length > 0) {
-      return (
-        <div className="space-y-1">
-          <label className="text-xs font-medium text-muted-foreground">Phase</label>
-          <Select value={scopeId} onValueChange={(v) => v && setScopeId(v)}>
-            <SelectTrigger className="text-xs h-8">
-              <SelectValue placeholder="Select a phase..." />
-            </SelectTrigger>
-            <SelectContent>
-              {phases.map((p: string) => (
-                <SelectItem key={p} value={p} className="text-xs">{p}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      )
-    }
-
-    if (scopeType === "mission" && missions.length > 0) {
-      return (
-        <div className="space-y-1">
-          <label className="text-xs font-medium text-muted-foreground">Mission</label>
-          <Select value={scopeId} onValueChange={(v) => v && setScopeId(v)}>
-            <SelectTrigger className="text-xs h-8">
-              <SelectValue placeholder="Select a mission..." />
-            </SelectTrigger>
-            <SelectContent>
-              {missions.map((m) => (
-                <SelectItem key={m.id} value={m.id} className="text-xs">
-                  {m.objective.length > 60 ? m.objective.slice(0, 60) + "..." : m.objective}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      )
-    }
-
-    if (scopeType === "tag" && tags.length > 0) {
-      return (
-        <div className="space-y-1">
-          <label className="text-xs font-medium text-muted-foreground">Tag</label>
-          <Select value={scopeId} onValueChange={(v) => v && setScopeId(v)}>
-            <SelectTrigger className="text-xs h-8">
-              <SelectValue placeholder="Select a tag..." />
-            </SelectTrigger>
-            <SelectContent>
-              {tags.slice(0, 30).map((t: { tag: string; count: number }) => (
-                <SelectItem key={t.tag} value={t.tag} className="text-xs">
-                  {t.tag} ({t.count})
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      )
-    }
-
-    // Fallback text input for empty lists
-    return (
-      <div className="space-y-1">
-        <label className="text-xs font-medium text-muted-foreground">
-          {scopeType === "phase" ? "Phase" : scopeType === "mission" ? "Mission ID" : "Tag"}
-        </label>
-        <input
-          value={scopeId}
-          onChange={(e) => setScopeId(e.target.value)}
-          placeholder={`Enter ${scopeType}...`}
-          className="w-full text-xs h-8 rounded-md border border-input bg-background px-3"
-        />
-      </div>
-    )
-  }
-
-  return (
-    <div className="grid grid-cols-[1fr_300px] gap-4">
-      {/* Generate + Result */}
-      <div className="space-y-4">
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-sm">Generate Summary</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              {/* Scope type */}
-              <div className="space-y-1">
-                <label className="text-xs font-medium text-muted-foreground">Scope</label>
-                <Select value={scopeType} onValueChange={handleScopeTypeChange}>
-                  <SelectTrigger className="text-xs h-8">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="project" className="text-xs">Entire Project</SelectItem>
-                    <SelectItem value="phase" className="text-xs">By Phase</SelectItem>
-                    <SelectItem value="mission" className="text-xs">By Mission</SelectItem>
-                    <SelectItem value="tag" className="text-xs">By Tag</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-[10px] text-muted-foreground">
-                  {scopeType === "project" ? "Summarize everything" :
-                   scopeType === "phase" ? "Summarize a research phase" :
-                   scopeType === "mission" ? "Summarize a specific mission" :
-                   "Summarize entries with a tag"}
-                </p>
-              </div>
-
-              {/* Granularity */}
-              <div className="space-y-1">
-                <label className="text-xs font-medium text-muted-foreground">Detail Level</label>
-                <Select value={granularity} onValueChange={(v: string | null) => v && setGranularity(v)}>
-                  <SelectTrigger className="text-xs h-8">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="one_line" className="text-xs">One-line</SelectItem>
-                    <SelectItem value="paragraph" className="text-xs">Paragraph</SelectItem>
-                    <SelectItem value="narrative" className="text-xs">Full Narrative</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-[10px] text-muted-foreground">
-                  {granularity === "one_line" ? "Brief one-sentence summary" :
-                   granularity === "paragraph" ? "Concise paragraph" :
-                   "Detailed narrative with context"}
-                </p>
-              </div>
-            </div>
-
-            {/* Scope ID picker */}
-            {renderScopeIdPicker()}
-
-            <Button
-              onClick={() => generateMutation.mutate()}
-              disabled={disabled || generateMutation.isPending || (scopeType !== "project" && !scopeId)}
-              size="sm"
-            >
-              {generateMutation.isPending ? (
-                <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-              ) : (
-                <Sparkles className="h-3.5 w-3.5 mr-1.5" />
-              )}
-              {generateMutation.isPending ? "Generating..." : "Generate"}
-            </Button>
-          </CardContent>
-        </Card>
-
-        {activeResult && (
-          <Card>
-            <CardHeader className="pb-2">
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-sm">Result</CardTitle>
-                <Badge variant="outline" className="text-[10px]">
-                  Confidence: {(activeResult.confidence * 100).toFixed(0)}%
-                </Badge>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {activeResult.one_line && (
-                <div>
-                  <p className="text-[10px] font-bold text-muted-foreground uppercase mb-0.5">One-line</p>
-                  <p className="text-sm font-medium">{activeResult.one_line}</p>
-                </div>
-              )}
-              {activeResult.paragraph && (
-                <div>
-                  <p className="text-[10px] font-bold text-muted-foreground uppercase mb-0.5">Summary</p>
-                  <Markdown>{activeResult.paragraph}</Markdown>
-                </div>
-              )}
-              {activeResult.narrative && (
-                <div>
-                  <p className="text-[10px] font-bold text-muted-foreground uppercase mb-0.5">Narrative</p>
-                  <Markdown>{activeResult.narrative}</Markdown>
-                </div>
-              )}
-              {activeResult.key_questions.length > 0 && (
-                <div className="border-t pt-2">
-                  <p className="text-[10px] font-bold text-muted-foreground uppercase mb-1">Open Questions</p>
-                  <ul className="space-y-0.5">
-                    {activeResult.key_questions.map((q, i) => (
-                      <li key={i} className="text-xs text-muted-foreground">? {q}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {activeResult.sources.length > 0 && (
-                <div className="border-t pt-2">
-                  <p className="text-[10px] font-bold text-muted-foreground uppercase mb-1">
-                    Sources ({activeResult.sources.length})
-                  </p>
-                  <div className="space-y-1">
-                    {activeResult.sources.slice(0, 5).map((s, i) => (
-                      <div key={i} className="text-[11px] text-muted-foreground">
-                        <Badge variant="secondary" className="text-[9px] mr-1">{s.entity_type}</Badge>
-                        <span className="font-mono text-[10px]">{s.entity_id}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        )}
-      </div>
-
-      {/* Saved summaries */}
-      <div className="space-y-2">
-        <p className="text-xs font-semibold text-muted-foreground uppercase">Saved Summaries</p>
-        <div className="space-y-2">
-          {summaries.map(s => (
-            <Card key={s.id} className="cursor-pointer hover:shadow-sm transition-shadow">
-              <CardContent className="p-3 space-y-1">
-                <div className="flex items-center justify-between">
-                  <Badge variant="outline" className="text-[9px]">{s.scope_type}</Badge>
-                  <div className="flex items-center gap-1">
-                    {s.blessed ? (
-                      <CheckCircle className="h-3 w-3 text-green-500" />
-                    ) : (
-                      <button
-                        onClick={() => blessMutation.mutate(s.id)}
-                        className="text-[10px] text-blue-600 hover:underline"
-                      >
-                        Bless
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <p className="text-xs line-clamp-3">{s.content}</p>
-                <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                  <Clock className="h-2.5 w-2.5" />
-                  {s.created_at?.slice(0, 10)}
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-          {summaries.length === 0 && (
-            <p className="text-[11px] text-muted-foreground text-center py-4">
-              No summaries yet. Generate one to get started.
             </p>
           )}
         </div>

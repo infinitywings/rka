@@ -11,6 +11,11 @@ export function setApiProjectId(projectId: string | null) {
   activeProjectId = projectId?.trim() || "proj_default"
 }
 
+type RequestConfig = {
+  includeJsonContentType?: boolean
+  includeProjectHeader?: boolean
+}
+
 class ApiError extends Error {
   status: number
   detail: string
@@ -22,12 +27,17 @@ class ApiError extends Error {
   }
 }
 
-function buildHeaders(headers?: HeadersInit, includeJsonContentType = true): Headers {
+function buildHeaders(
+  headers?: HeadersInit,
+  { includeJsonContentType = true, includeProjectHeader = true }: RequestConfig = {},
+): Headers {
   const result = new Headers(headers)
   if (includeJsonContentType && !result.has("Content-Type")) {
     result.set("Content-Type", "application/json")
   }
-  result.set("X-RKA-Project", activeProjectId)
+  if (includeProjectHeader) {
+    result.set("X-RKA-Project", activeProjectId)
+  }
   return result
 }
 
@@ -51,10 +61,11 @@ function getFilenameFromDisposition(disposition: string | null, fallback: string
 async function request<T>(
   path: string,
   options: RequestInit = {},
+  config: RequestConfig = {},
 ): Promise<T> {
   const url = `${BASE_URL}${path}`
   const res = await fetch(url, {
-    headers: buildHeaders(options.headers),
+    headers: buildHeaders(options.headers, config),
     ...options,
   })
 
@@ -70,11 +81,11 @@ function get<T>(path: string): Promise<T> {
   return request<T>(path)
 }
 
-function post<T>(path: string, body?: unknown): Promise<T> {
+function post<T>(path: string, body?: unknown, config?: RequestConfig): Promise<T> {
   return request<T>(path, {
     method: "POST",
     body: body ? JSON.stringify(body) : undefined,
-  })
+  }, config)
 }
 
 function put<T>(path: string, body?: unknown): Promise<T> {
@@ -128,6 +139,7 @@ import type {
   LLMModel,
   KnowledgePackDownload,
   KnowledgePackImportResult,
+  EvidenceClusterUpdateRequest,
 } from "./types"
 
 export const api = {
@@ -136,7 +148,8 @@ export const api = {
 
   // Project
   listProjects: () => get<ProjectInfo[]>("/projects"),
-  createProject: (data: ProjectCreate) => post<ProjectInfo>("/projects", data),
+  createProject: (data: ProjectCreate) =>
+    post<ProjectInfo>("/projects", data, { includeProjectHeader: false }),
   deleteProject: (projectId: string, confirm = false) =>
     request<{ project_id: string; project_name: string; entity_counts: Record<string, number>; total_rows: number; confirmed: boolean; message: string }>(
       `/projects/${projectId}?confirm=${confirm}`,
@@ -150,7 +163,7 @@ export const api = {
   updateStatus: (data: ProjectStateUpdate) => put<ProjectState>("/status", data),
   exportKnowledgePack: async (): Promise<KnowledgePackDownload> => {
     const res = await fetch(`${BASE_URL}/projects/export`, {
-      headers: buildHeaders(undefined, false),
+      headers: buildHeaders(undefined, { includeJsonContentType: false }),
     })
     if (!res.ok) {
       await parseApiError(res)
@@ -174,7 +187,7 @@ export const api = {
 
     const res = await fetch(`${BASE_URL}/projects/import`, {
       method: "POST",
-      headers: buildHeaders(undefined, false),
+      headers: buildHeaders(undefined, { includeJsonContentType: false }),
       body: form,
     })
     if (!res.ok) {
@@ -347,7 +360,11 @@ export const api = {
     return get<ResearchMapData>("/research-map")
   },
   getRQClusters: (rqId: string) => get<EvidenceClusterData[]>(`/research-map/rq/${rqId}`),
+  getClusterDetail: (clusterId: string) =>
+    get<ResearchMapClusterDetailData>(`/research-map/cluster/${clusterId}`),
   getClusterClaims: (clusterId: string) => get<ClaimData[]>(`/research-map/cluster/${clusterId}/claims`),
+  updateCluster: (clusterId: string, data: EvidenceClusterUpdateRequest) =>
+    put<EvidenceClusterData>(`/clusters/${clusterId}`, data),
 
   // v2.0: Claims
   listClaims: (params?: { source_entry_id?: string; cluster_id?: string; claim_type?: string; limit?: number }) => {
@@ -376,5 +393,6 @@ export { ApiError }
 // v2.0 type aliases for API responses
 type ResearchMapData = import("./types").ResearchMapData
 type EvidenceClusterData = import("./types").EvidenceCluster
+type ResearchMapClusterDetailData = import("./types").ResearchMapClusterDetail
 type ClaimData = import("./types").Claim
 type ReviewItemData = import("./types").ReviewItem

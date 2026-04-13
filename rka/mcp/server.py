@@ -18,93 +18,46 @@ import httpx
 from rka.models.mission import MissionTask
 
 RKA_INSTRUCTIONS = """\
-Research Knowledge Agent (RKA) — structured knowledge base for AI-assisted research.
-RKA tracks journal entries (note/log/directive), decisions, literature, missions,
-claims, evidence clusters, and a three-layer research map with full provenance chains.
+Research Knowledge Agent (RKA) is a structured research knowledge base shared by the
+Brain, Executor, and PI. It stores journal entries, decisions, literature, missions,
+claims, evidence clusters, and a provenance-linked research map.
 
-## Session Start — ALWAYS do this first
-1. `rka_get_context()` — load current project state, phase, recent knowledge
-2. `rka_get_status()` — see current phase, focus, next steps
-3. `rka_get_pending_maintenance()` — check for provenance gaps and maintenance items
-4. `rka_get_checkpoints(status="open")` — check for unresolved blockers
-5. `rka_get_review_queue()` — (Brain only) items flagged for deep reasoning
+Detailed operating guidance now lives in the role skill files shipped with the repo:
+- `skills/SKILL.md`
+- `skills/brain/SKILL.md`
+- `skills/executor/SKILL.md`
+- `skills/pi/SKILL.md`
 
-**Maintenance Protocol (Brain)**: If `rka_get_pending_maintenance()` returns items,
-silently process up to 10 items per session before greeting the user. Priority order:
-decisions_without_justified_by > missions_without_motivated_by > unassigned_clusters > entries_missing_cross_refs.
+Use this MCP instruction block as a fallback only.
 
-## When to Use What
+## Minimal Session Start
+1. `rka_get_context()` — load current project state and recent knowledge
+2. `rka_get_status()` — current phase, focus, blockers
+3. `rka_get_pending_maintenance()` — provenance gaps and stale knowledge
+4. `rka_get_checkpoints(status="open")` — unresolved blockers
+5. `rka_get_review_queue()` and `rka_get_research_map()` — Brain/PI review surfaces
 
-| Situation | Tool | Key parameters |
-|-----------|------|---------------|
-| Starting a session | `rka_get_context()` | Always first |
-| Recorded an observation or analysis | `rka_add_note` | `type="note"`, `source="brain"` or `"executor"` |
-| Documented a procedure step | `rka_add_note` | `type="log"`, `related_mission=id` |
-| Giving instructions to Executor | `rka_add_note` | `type="directive"` |
-| Made a research or design decision | `rka_add_decision` | `related_journal=[ids]` for justification |
-| Need to assign implementation work | `rka_create_mission` | `motivated_by_decision=id` |
-| Hit a blocker, need Brain/PI input | `rka_submit_checkpoint` | `blocking=True` |
-| Finished an assigned mission | `rka_submit_report` | `related_decisions=[ids]` |
-| Found a relevant paper | `rka_add_literature` or `rka_enrich_doi` | |
-| Want to search for papers | `rka_search_semantic_scholar` / `rka_search_arxiv` | |
-| Extracted claims from an entry | `rka_extract_claims` | `entry_id`, `claims=[{claim_type, content, confidence}]` |
-| Grouping claims into a theme | `rka_create_cluster` | `label`, optional `claim_ids`, `research_question_id` |
-| Adding claims to existing cluster | `rka_assign_claims_to_cluster` | `cluster_id`, `claim_ids` |
-| Want the research overview | `rka_get_research_map` | Three-level: RQs → clusters → claims |
-| Want to trace why something exists | `rka_trace_provenance` | `direction="upstream"` or `"both"` |
-| Need to overturn a past decision | `rka_supersede_decision` | Triggers re-distillation |
-| (Brain) Review flagged items | `rka_get_review_queue` then `rka_review_cluster` | |
-| (Brain) Resolve a contradiction | `rka_resolve_contradiction` | |
-| Searching for anything | `rka_search` | Searches all entity types |
-| End of session | `rka_update_status` | Update summary and next_steps |
+## Core Provenance Rules
+- Decisions require `related_journal=[...]`
+- Missions require `motivated_by_decision=...`
+- Notes should set `related_decisions=[...]` and/or `related_mission=...` when applicable
+- PI input must use `source="pi"` and `verbatim_input="..."` with exact wording
 
-## Tool Categories
-- **Project**: `rka_list_projects`, `rka_set_project`, `rka_create_project`, `rka_get_status`, `rka_update_status`
-- **Notes**: `rka_add_note`, `rka_update_note`, `rka_get_journal`
-- **Decisions**: `rka_add_decision`, `rka_update_decision`, `rka_get_decision_tree`
-- **Literature**: `rka_add_literature`, `rka_update_literature`, `rka_get_literature`, `rka_enrich_doi`
-- **Missions**: `rka_create_mission`, `rka_get_mission`, `rka_update_mission_status`, `rka_submit_report`
-- **Checkpoints**: `rka_submit_checkpoint`, `rka_get_checkpoints`, `rka_resolve_checkpoint`
-- **Research Map**: `rka_get_research_map`, `rka_get_claims`, `rka_extract_claims`, `rka_create_cluster`, `rka_assign_claims_to_cluster`, `rka_supersede_decision`, `rka_trace_provenance`
-- **Review Queue**: `rka_get_review_queue`, `rka_review_cluster`, `rka_review_claims`, `rka_resolve_contradiction`
-- **Search & Context**: `rka_search`, `rka_get_context`, `rka_ask`
-- **Graph**: `rka_get_graph`, `rka_get_ego_graph`, `rka_graph_stats`
-- **Academic**: `rka_search_semantic_scholar`, `rka_search_arxiv`, `rka_import_bibtex`
-- **Workspace**: `rka_scan_workspace`, `rka_bootstrap_workspace`
-- **Session**: `rka_session_digest`, `rka_reset_session`
-- **Maintenance**: `rka_get_pending_maintenance`
-- **Onboarding**: `rka_generate_claude_md`
-
-## Provenance Rules — ALWAYS follow these
-Every entity must be linked to its context. Orphaned entities degrade the knowledge graph.
-
-- **Decisions**: ALWAYS provide `related_journal=[ids]` to link justifying evidence (creates `justified_by` links)
-- **Notes**: ALWAYS provide `related_decisions=[ids]` and/or `related_mission=id` when applicable
-- **Missions**: ALWAYS provide `motivated_by_decision=id` to link the triggering decision
-- **Literature**: Provide `related_decisions=[ids]` when the paper informs a specific decision
-
-If you realize a link is missing on an existing entity, fix it immediately via update tools.
-
-## Entity Types (v2.0)
-- **Journal entries**: `note` (observations, analyses), `log` (procedures), `directive` (instructions)
-- **Claims**: Atomic knowledge extracted from entries by Brain review
-- **Decisions**: `research_question`, `design_choice`, or `operational` (set via `kind` field)
-- **Evidence clusters**: Groups of related claims with Brain-written synthesis
-- **Cross-references**: 12 link types forming provenance chains (informed_by, justified_by, motivated, produced, etc.)
-
-## Roles
-- **Brain** (Claude Desktop): strategy, decisions, literature review, deep reasoning, review queue
-- **Executor** (Claude Code): implementation, experiments, data processing, mission execution
-- **PI** (human): supervision, final authority, research direction
-
-Use `brain_orientation` or `executor_orientation` prompts for detailed role guidance.
+## High-Value Tools
+- Project: `rka_list_projects`, `rka_set_project`, `rka_get_status`
+- Recording: `rka_add_note`, `rka_add_decision`, `rka_add_literature`
+- Execution: `rka_create_mission`, `rka_submit_checkpoint`, `rka_submit_report`
+- Research map: `rka_get_research_map`, `rka_review_cluster`, `rka_resolve_contradiction`
+- Retrieval: `rka_search`, `rka_trace_provenance`, `rka_get_journal`
 
 ## Multi-Project
-`rka_list_projects()` → `rka_set_project(id)` to switch. All tools scope to active project.
+If project scope is unclear, call `rka_list_projects()` and `rka_set_project(id)` first.
+All tools operate on the active project.
 """
 
 mcp = FastMCP("Research Knowledge Agent", instructions=RKA_INSTRUCTIONS)
 API_URL = os.environ.get("RKA_API_URL", "http://localhost:9712")
+API_TIMEOUT = httpx.Timeout(connect=30.0, read=120.0, write=120.0, pool=30.0)
 
 
 @dataclass
@@ -159,7 +112,7 @@ def _client() -> httpx.AsyncClient:
     headers = {}
     if _session.project_id:
         headers["X-RKA-Project"] = _session.project_id
-    return httpx.AsyncClient(base_url=API_URL, timeout=30.0, headers=headers)
+    return httpx.AsyncClient(base_url=API_URL, timeout=API_TIMEOUT, headers=headers)
 
 
 def _raise_with_detail(r: httpx.Response) -> None:
@@ -2242,7 +2195,11 @@ async def rka_get_research_map() -> str:
                  f"Pending review: {summary.get('pending_review', 0)}")
     lines.append("")
     for rq in data.get("research_questions", []):
-        status_icon = "●" if rq.get("status") == "active" else "○"
+        rq_status_icons = {
+            "open": "●", "active": "●", "partially_answered": "◐",
+            "answered": "✓", "reframed": "↻", "closed": "○",
+        }
+        status_icon = rq_status_icons.get(rq.get("status", ""), "●")
         total_claims = rq.get("total_claims", 0)
         cluster_count = rq.get("cluster_count", 0)
         lines.append(f"{status_icon} [{rq['id']}] {rq['question']}")
@@ -2712,6 +2669,244 @@ async def rka_resolve_contradiction(
                     lines.append(f"  Resolved review item {item['id']}")
 
     lines.append(f"  Resolution: {resolution}")
+    return "\n".join(lines)
+
+
+# ============================================================
+# Researcher experience tools
+# ============================================================
+
+
+@tool()
+async def rka_get_changelog(
+    since: str,
+    limit: int = 50,
+) -> str:
+    """Show what changed since a given date across all entity types.
+
+    Returns created and modified entities (journal, decisions, literature,
+    claims, clusters, missions) grouped by action, with a statistics block.
+
+    Args:
+        since: ISO date/datetime (e.g. "2026-04-10" or "2026-04-10T14:00:00Z")
+        limit: Max results per category (default 50)
+    """
+    async with _client() as c:
+        r = await c.get("/api/changelog", params={"since": since, "limit": limit})
+        _raise_with_detail(r)
+        data = r.json()
+
+    stats = data.get("statistics", {})
+    created = data.get("created", [])
+    modified = data.get("modified", [])
+
+    lines = [f"## Changelog since {since}"]
+    lines.append(f"Created: {stats.get('total_created', 0)} | Modified: {stats.get('total_modified', 0)}")
+    by_type = stats.get("by_type", {})
+    if by_type:
+        lines.append("By type: " + ", ".join(f"{k}: {v}" for k, v in by_type.items()))
+    lines.append("")
+
+    if created:
+        lines.append("### Created")
+        for e in created:
+            lines.append(f"  [{e['entity_type']}] {e['id']}: {e.get('label', '')}")
+        lines.append("")
+
+    if modified:
+        lines.append("### Modified")
+        for e in modified:
+            lines.append(f"  [{e['entity_type']}] {e['id']}: {e.get('label', '')}")
+
+    if not created and not modified:
+        lines.append("No changes since " + since)
+
+    return "\n".join(lines)
+
+
+@tool()
+async def rka_assemble_evidence(
+    research_question_id: str,
+    format: str = "progress_report",
+) -> str:
+    """Assemble evidence under a research question into a structured markdown draft.
+
+    Pulls cluster syntheses, key claims, decision rationale, and cited literature
+    into a document the Brain can edit and refine. No LLM needed — structured
+    concatenation of existing data.
+
+    Args:
+        research_question_id: The RQ decision ID (dec_...)
+        format: lit_review | progress_report | proposal_section
+    """
+    async with _client() as c:
+        r = await c.get("/api/assemble-evidence", params={
+            "research_question_id": research_question_id,
+            "format": format,
+        })
+        _raise_with_detail(r)
+        data = r.json()
+
+    return data["content"]
+
+
+@tool()
+async def rka_split_cluster(
+    source_id: str,
+    new_clusters: list[dict],
+) -> str:
+    """Split a cluster into multiple new clusters by reassigning its claims.
+
+    Claims not mentioned in any new_cluster stay in the source.
+    Claim-to-entry provenance links are preserved — only cluster membership changes.
+
+    Args:
+        source_id: Cluster to split (ecl_...)
+        new_clusters: List of {label: str, claim_ids: [str], research_question_id?: str}
+    """
+    async with _client() as c:
+        r = await c.post("/api/clusters/split", json={
+            "source_id": source_id,
+            "new_clusters": new_clusters,
+        })
+        _raise_with_detail(r)
+        data = r.json()
+
+    lines = [f"Split {source_id} → {len(data['new_clusters'])} new clusters:"]
+    for nc in data["new_clusters"]:
+        lines.append(f"  {nc['id']}: {nc['label']} ({nc['claim_count']} claims)")
+        _record_entity("cluster", nc["id"], nc["label"])
+    lines.append(f"Source retains {data['source_remaining_claims']} claims")
+    return "\n".join(lines)
+
+
+@tool()
+async def rka_merge_clusters(
+    source_ids: list[str],
+    target_label: str,
+    target_synthesis: str | None = None,
+    research_question_id: str | None = None,
+) -> str:
+    """Merge multiple clusters into one new cluster.
+
+    All claims from source clusters are reassigned to the new cluster.
+    Source clusters are left empty. Claim-to-entry provenance links are preserved.
+
+    Args:
+        source_ids: Clusters to merge (list of ecl_...)
+        target_label: Label for the new combined cluster
+        target_synthesis: Brain's synthesis for the merged cluster
+        research_question_id: RQ to assign the new cluster to
+    """
+    async with _client() as c:
+        r = await c.post("/api/clusters/merge", json={
+            "source_ids": source_ids,
+            "target_label": target_label,
+            "target_synthesis": target_synthesis,
+            "research_question_id": research_question_id,
+        })
+        _raise_with_detail(r)
+        data = r.json()
+
+    _record_entity("cluster", data["target_id"], target_label)
+    lines = [
+        f"Merged {len(source_ids)} clusters into {data['target_id']}: {target_label}",
+        f"  {data['total_claims_moved']} claims moved",
+        f"  Sources left empty: {', '.join(source_ids)}",
+    ]
+    return "\n".join(lines)
+
+
+@tool()
+async def rka_process_paper(
+    lit_id: str,
+    annotations: list[dict],
+    summary: str | None = None,
+) -> str:
+    """Process reading annotations from a paper into structured claims.
+
+    Creates a journal entry with reading notes, then extracts claims from
+    each annotation. Optionally assigns claims to clusters inline.
+    Auto-advances literature status from to_read to reading.
+
+    Args:
+        lit_id: Literature entry ID (lit_...)
+        annotations: List of reading annotations:
+            - passage: Key text/finding from the paper
+            - note: Your interpretation or commentary (optional)
+            - claim_type: hypothesis | evidence | method | result | observation | assumption
+            - confidence: 0.0-1.0 (default 0.5)
+            - cluster_id: Optional cluster to assign to (ecl_...)
+        summary: Overall paper summary (becomes the journal entry content)
+    """
+    async with _client() as c:
+        r = await c.post("/api/literature/process-paper", json={
+            "lit_id": lit_id,
+            "annotations": annotations,
+            "summary": summary,
+        })
+        _raise_with_detail(r)
+        data = r.json()
+
+    _record_entity("journal", data["journal_entry_id"], f"Reading notes for {lit_id}")
+    for cl in data.get("claims", []):
+        _record_entity("claim", cl["id"], f"{cl['claim_type']}: {cl['content']}")
+
+    lines = [
+        f"Processed {len(data['claims'])} annotations from {lit_id}:",
+        f"  Journal entry: {data['journal_entry_id']}",
+        f"  Claims created: {data['claims_created']}",
+    ]
+    if data["claims_assigned"] > 0:
+        lines.append(f"  Claims assigned to clusters: {data['claims_assigned']}")
+    lines.append(f"  Literature status: {data['literature_status']}")
+    for cl in data.get("claims", []):
+        cluster_str = f" → {cl['cluster_id']}" if cl.get("cluster_id") else ""
+        lines.append(f"    [{cl['id']}] ({cl['claim_type']}) {cl['content']}{cluster_str}")
+    return "\n".join(lines)
+
+
+@tool()
+async def rka_advance_rq(
+    rq_id: str,
+    status: str,
+    conclusion: str | None = None,
+    evidence_cluster_ids: list[str] | None = None,
+) -> str:
+    """Advance a research question's lifecycle status.
+
+    Tracks RQ progress from open through answered/closed. Optionally stores
+    a conclusion and links supporting evidence clusters.
+
+    Args:
+        rq_id: Research question decision ID (dec_... with kind=research_question)
+        status: open | partially_answered | answered | reframed | closed
+        conclusion: Brain's conclusion text (recommended when status=answered)
+        evidence_cluster_ids: Clusters that provide the answer (creates justified_by links)
+    """
+    async with _client() as c:
+        r = await c.post("/api/research-questions/advance", json={
+            "rq_id": rq_id,
+            "status": status,
+            "conclusion": conclusion,
+            "evidence_cluster_ids": evidence_cluster_ids,
+        })
+        _raise_with_detail(r)
+        data = r.json()
+
+    status_icons = {
+        "open": "●", "partially_answered": "◐",
+        "answered": "✓", "reframed": "↻", "closed": "○",
+    }
+    icon = status_icons.get(status, "?")
+    lines = [
+        f"{icon} RQ {rq_id}: {data.get('previous_status', '?')} → {status}",
+        f"  Question: {data.get('question', '')}",
+    ]
+    if data.get("conclusion_entry_id"):
+        lines.append(f"  Conclusion recorded: {data['conclusion_entry_id']}")
+    if data.get("evidence_clusters_linked", 0) > 0:
+        lines.append(f"  Evidence clusters linked: {data['evidence_clusters_linked']}")
     return "\n".join(lines)
 
 

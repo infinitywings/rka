@@ -37,6 +37,7 @@ import {
   Loader2,
   PackageOpen,
   Upload,
+  Copy,
 } from "lucide-react"
 
 export default function Dashboard() {
@@ -59,6 +60,15 @@ export default function Dashboard() {
     setImportFile(null)
     setImportProjectId("")
     setImportProjectName("")
+  }
+
+  const handleCopyProjectId = async (id: string) => {
+    try {
+      await navigator.clipboard.writeText(id)
+      toast.success(`Copied ${id}`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Copy failed")
+    }
   }
 
   const handleExportPack = async () => {
@@ -207,11 +217,18 @@ export default function Dashboard() {
               {projects.map((item) => {
                 const active = item.id === projectId
                 return (
-                  <button
+                  <div
                     key={item.id}
-                    type="button"
+                    role="button"
+                    tabIndex={0}
                     onClick={() => setProjectId(item.id)}
-                    className={`rounded-md border p-3 text-left transition-colors ${
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault()
+                        setProjectId(item.id)
+                      }
+                    }}
+                    className={`cursor-pointer rounded-md border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                       active
                         ? "border-primary bg-primary/5"
                         : "hover:bg-muted/50"
@@ -220,14 +237,31 @@ export default function Dashboard() {
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
                         <div className="truncate text-sm font-medium">{item.name}</div>
-                        <div className="truncate text-[11px] text-muted-foreground">{item.id}</div>
+                        <div className="mt-1 flex items-center gap-1">
+                          <code className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
+                            {item.id}
+                          </code>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            className="shrink-0"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              handleCopyProjectId(item.id)
+                            }}
+                            title="Copy project ID"
+                          >
+                            <Copy className="h-3 w-3" />
+                          </Button>
+                        </div>
                       </div>
                       {active && <Badge variant="default">Active</Badge>}
                     </div>
                     <p className="mt-2 text-xs text-muted-foreground line-clamp-2">
                       {item.description || "No description"}
                     </p>
-                  </button>
+                  </div>
                 )
               })}
             </div>

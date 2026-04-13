@@ -1,4 +1,5 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
+import { useSearchParams } from "react-router-dom"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -22,7 +23,7 @@ import { StatusBadge } from "@/components/shared/StatusBadge"
 import { ConfidenceBadge } from "@/components/shared/ConfidenceBadge"
 import { TagList } from "@/components/shared/TagList"
 import { Markdown } from "@/components/shared/Markdown"
-import { useNotes, useCreateNote } from "@/hooks/useNotes"
+import { useNotes, useCreateNote, useNote } from "@/hooks/useNotes"
 import { timeAgo } from "@/lib/utils"
 import { Plus, Filter, ChevronDown, ChevronUp } from "lucide-react"
 import type { JournalEntry, JournalEntryCreate, JournalType, Confidence, Source } from "@/api/types"
@@ -32,16 +33,21 @@ const CONFIDENCES: Confidence[] = ["hypothesis", "tested", "verified"]
 const SOURCES: Source[] = ["pi", "brain", "executor", "web_ui"]
 
 export default function Journal() {
+  const [searchParams] = useSearchParams()
   const [filterType, setFilterType] = useState<string>("")
   const [hideSuperseded, setHideSuperseded] = useState(true)
+  const focusEntryId = searchParams.get("entry")?.trim() || ""
   const { data: notes, isLoading } = useNotes(
     filterType ? { type: filterType } : undefined,
   )
+  const { data: focusedEntry } = useNote(focusEntryId)
 
   const filtered = (notes ?? []).filter((entry) => {
     if (hideSuperseded && entry.superseded_by) return false
     return true
   })
+  const missingFocusedEntry =
+    focusedEntry && !filtered.some((entry) => entry.id === focusedEntry.id) ? focusedEntry : null
 
   // Group by date
   const grouped = new Map<string, typeof filtered>()
@@ -97,6 +103,18 @@ export default function Journal() {
         </label>
       </div>
 
+      {missingFocusedEntry && (
+        <div className="space-y-2">
+          <div>
+            <h2 className="text-sm font-semibold">Referenced Entry</h2>
+            <p className="text-xs text-muted-foreground">
+              Showing this entry directly because it is outside the current list or filter.
+            </p>
+          </div>
+          <JournalCard entry={missingFocusedEntry} highlighted forceExpanded />
+        </div>
+      )}
+
       {/* Timeline */}
       {isLoading ? (
         <JournalSkeleton />
@@ -115,7 +133,12 @@ export default function Journal() {
               </h3>
               <div className="space-y-2 ml-4 border-l-2 border-border pl-4">
                 {entries.map((entry) => (
-                  <JournalCard key={entry.id} entry={entry} />
+                  <JournalCard
+                    key={entry.id}
+                    entry={entry}
+                    highlighted={entry.id === focusEntryId}
+                    forceExpanded={entry.id === focusEntryId}
+                  />
                 ))}
               </div>
             </div>
@@ -126,47 +149,70 @@ export default function Journal() {
   )
 }
 
-function JournalCard({ entry }: { entry: JournalEntry }) {
-  const [expanded, setExpanded] = useState(false)
+function JournalCard({
+  entry,
+  highlighted = false,
+  forceExpanded = false,
+}: {
+  entry: JournalEntry
+  highlighted?: boolean
+  forceExpanded?: boolean
+}) {
+  const [expanded, setExpanded] = useState(forceExpanded)
   const isLong = entry.content.length > 200
+  const cardRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!forceExpanded) return
+    setExpanded(true)
+  }, [forceExpanded])
+
+  useEffect(() => {
+    if (!highlighted) return
+    cardRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })
+  }, [highlighted])
 
   return (
-    <Card
-      className={`relative cursor-pointer transition-colors hover:bg-muted/50 ${expanded ? "ring-1 ring-primary/20" : ""}`}
-      onClick={() => setExpanded(!expanded)}
-    >
-      {/* Timeline dot */}
-      <div className="absolute -left-[25px] top-4 h-2.5 w-2.5 rounded-full border-2 border-primary bg-background" />
-      <CardContent className="py-3 px-4">
-        <div className="flex items-center gap-2 mb-1.5">
-          <StatusBadge status={entry.type} />
-          <ConfidenceBadge confidence={entry.confidence} />
-          <span className="text-[10px] text-muted-foreground">
-            via {entry.source}
-          </span>
-          {entry.created_at && (
-            <span className="text-[10px] text-muted-foreground ml-auto">
-              {timeAgo(entry.created_at)}
+    <div ref={cardRef}>
+      <Card
+        className={`relative cursor-pointer transition-colors hover:bg-muted/50 ${
+          highlighted ? "ring-2 ring-primary/30 bg-primary/5" : expanded ? "ring-1 ring-primary/20" : ""
+        }`}
+        onClick={() => setExpanded(!expanded)}
+      >
+        {/* Timeline dot */}
+        <div className="absolute -left-[25px] top-4 h-2.5 w-2.5 rounded-full border-2 border-primary bg-background" />
+        <CardContent className="py-3 px-4">
+          <div className="flex items-center gap-2 mb-1.5">
+            <StatusBadge status={entry.type} />
+            <ConfidenceBadge confidence={entry.confidence} />
+            <span className="text-[10px] text-muted-foreground">
+              via {entry.source}
             </span>
+            {entry.created_at && (
+              <span className="text-[10px] text-muted-foreground ml-auto">
+                {timeAgo(entry.created_at)}
+              </span>
+            )}
+            {isLong && (
+              expanded
+                ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
+                : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+            )}
+          </div>
+          {entry.summary && (
+            <p className="text-sm font-medium mb-1">{entry.summary}</p>
           )}
-          {isLong && (
-            expanded
-              ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
-              : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+          <div className={`text-muted-foreground ${expanded ? "" : "line-clamp-3"}`}>
+            <Markdown>{entry.content}</Markdown>
+          </div>
+          {(expanded || highlighted) && entry.id && (
+            <p className="mt-2 text-xs text-muted-foreground font-mono">{entry.id}</p>
           )}
-        </div>
-        {entry.summary && (
-          <p className="text-sm font-medium mb-1">{entry.summary}</p>
-        )}
-        <div className={`text-muted-foreground ${expanded ? "" : "line-clamp-3"}`}>
-          <Markdown>{entry.content}</Markdown>
-        </div>
-        {expanded && entry.id && (
-          <p className="mt-2 text-xs text-muted-foreground font-mono">{entry.id}</p>
-        )}
-        <TagList tags={entry.tags} />
-      </CardContent>
-    </Card>
+          <TagList tags={entry.tags} />
+        </CardContent>
+      </Card>
+    </div>
   )
 }
 
