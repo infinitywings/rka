@@ -234,7 +234,7 @@ class ResearchMapService(BaseService):
         # Attach top clusters to each RQ
         for rq in rqs:
             clusters = await self.db.fetchall(
-                """SELECT id, label, confidence, claim_count, staleness
+                """SELECT id, label, confidence, claim_count, COALESCE(staleness, 'green') AS staleness
                    FROM evidence_clusters
                    WHERE research_question_id = ? AND project_id = ?
                    ORDER BY claim_count DESC""",

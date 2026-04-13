@@ -819,16 +819,25 @@ class ResearcherToolsService(BaseService):
         if not content:
             raise ValueError(f"Entity {entity_id} not found or has no content")
 
-        # Check if embeddings are available
+        # Check if embeddings are available — fall back to FTS if not
         has_embeddings = await self.db.fetchone(
             "SELECT COUNT(*) as cnt FROM embedding_metadata WHERE project_id = ?",
             [self.project_id],
         )
-        if not has_embeddings or has_embeddings["cnt"] == 0:
+        use_vectors = has_embeddings and has_embeddings["cnt"] > 0
+
+        if not use_vectors:
+            candidates = await self._fts_contradiction_fallback(entity_id, content, max_results)
             return {
                 "entity_id": entity_id,
-                "candidates": [],
-                "message": "No embeddings available — enable RKA_EMBEDDINGS_ENABLED=true and reprocess entries to use vector similarity.",
+                "candidates": candidates,
+                "message": (
+                    f"Using text search — found {len(candidates)} candidates. "
+                    "Enable RKA_EMBEDDINGS_ENABLED=true for vector similarity."
+                ) if candidates else (
+                    "No similar claims found via text search. "
+                    "Enable RKA_EMBEDDINGS_ENABLED=true for vector similarity."
+                ),
             }
 
         # Try vector similarity search via sqlite-vec
