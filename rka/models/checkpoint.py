@@ -20,7 +20,7 @@ class CheckpointCreate(BaseModel):
 
     mission_id: str
     task_reference: str | None = None
-    type: Literal["decision", "clarification", "inspection"]
+    type: Literal["decision", "clarification", "inspection", "gate"]
     description: str
     context: str | None = None
     options: list[CheckpointOption] | None = None

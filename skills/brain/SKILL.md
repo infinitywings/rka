@@ -79,6 +79,134 @@ rka_add_note(
 
 ---
 
+## Confirmation Brief — Verifying PI Intent
+
+When the PI gives a new directive that will lead to significant work — a mission, a research direction change, a design decision, or any task requiring more than a few tool calls — ALWAYS respond with a Confirmation Brief before proceeding.
+
+### What to Include
+
+1. **Restated intent**: Not just the task, but WHY. What outcome does the PI want?
+2. **Assumptions you are making**: What are you taking as given that the PI hasn't explicitly stated?
+3. **Proposed scope**: What's in, what's out, what are the boundaries?
+4. **Success criteria**: How will we know this is done correctly?
+
+Present this naturally in conversation, not as a formal checklist. The PI corrects any misalignment. Only AFTER PI confirmation do you proceed to planning or execution.
+
+### When to Use
+
+- PI gives a research direction ("focus on privacy-aware decomposition")
+- PI requests a significant deliverable ("create a user manual")
+- PI describes a problem to solve ("the import is failing with a 500 error")
+- PI asks for multi-step work ("fix the search, update the docs, and check the import")
+
+### When NOT to Use
+
+- PI asks a simple question ("what's the current graph stats?")
+- PI gives a small, unambiguous instruction ("mark that mission complete")
+- PI is reviewing your previous Confirmation Brief (don't loop)
+
+### Example
+
+PI says: "I think we should pivot the paper to focus on privacy-aware task decomposition instead of model routing"
+
+Brain responds:
+
+> Let me make sure I understand your direction:
+>
+> **Intent**: Reframe the paper's primary contribution from optimal model routing (already well-studied) to making data sensitivity a first-class constraint in task decomposition (genuinely novel).
+>
+> **Assumptions**:
+> 1. The existing Brain/Executor architecture remains — we're reframing, not redesigning
+> 2. The formal model stays but sensitivity becomes the key constraint variable
+> 3. Prior work on model routing moves to "related work" rather than "our approach"
+>
+> **Scope**: This affects the introduction, related work, problem formulation, and evaluation sections. Experimental baselines may need updating.
+>
+> **Success criteria**: The paper clearly articulates why privacy-aware decomposition is distinct from model routing, with at least one formal property that doesn't hold under naive routing.
+>
+> Does this match your intent, or should I adjust?
+
+After PI confirms or corrects, record the confirmed understanding:
+
+```
+rka_add_note(
+  content="Confirmed PI direction: Reframe paper contribution from model routing to privacy-aware task decomposition. [detailed confirmed understanding]",
+  source="pi",
+  verbatim_input="I think we should pivot the paper to focus on privacy-aware task decomposition instead of model routing",
+  type="directive",
+  tags=["confirmation-brief"],
+  related_decisions=["dec_01..."]
+)
+```
+
+---
+
+## Research Protocol — Establishing the Foundation (Gate 0)
+
+Before starting any significant research phase — a new project, a new research question, or a major pivot — the Brain and PI should produce a Research Protocol. This is the reference document for all subsequent work. Decisions, missions, and findings should be traceable back to the protocol.
+
+### When to Create a Protocol
+
+- Starting a new research project
+- Opening a new research question
+- Making a major methodological change
+- Pivoting research direction based on new evidence
+
+### Protocol Template
+
+Create a journal entry with `type="directive"` and tag `"research-protocol"`:
+
+```
+rka_add_note(
+  content="""
+  # Research Protocol: [Title]
+
+  ## Research Question
+  [Precise, testable question]
+
+  ## Scope
+  - IN: [what this research covers]
+  - OUT: [what is explicitly excluded]
+
+  ## Key Assumptions (numbered)
+  1. [Assumption — what we take as given]
+  2. [Assumption]
+  3. [Assumption]
+
+  ## Success Criteria
+  - [What "answered" looks like — specific, testable]
+  - [Minimum evidence threshold]
+
+  ## Methodology
+  - [Approach: literature review, experiment, prototype, survey, etc.]
+  - [Data sources]
+  - [Validation method]
+
+  ## Known Risks
+  - [Risk 1 and mitigation]
+  - [Risk 2 and mitigation]
+  """,
+  source="pi",
+  verbatim_input="[PI's original direction that initiated this protocol]",
+  type="directive",
+  tags=["research-protocol", "gate-0"],
+  related_decisions=["dec_..."]
+)
+```
+
+### Why This Matters
+
+Without a protocol, the Brain and Executor work from implicit assumptions that may diverge from the PI's actual intent. The protocol is the contract. When a decision is questioned later, the protocol answers: "what were we trying to do, and why?"
+
+### Reviewing Against the Protocol
+
+Periodically — when significant results arrive, or when the research direction feels uncertain — the Brain should:
+1. Re-read the protocol: search for tag "research-protocol" in the current project
+2. Check whether current work still aligns with the protocol's scope and assumptions
+3. If assumptions have been invalidated by evidence, flag this to the PI with a Confirmation Brief
+
+---
+
 ## Provenance — Every Entity Must Know Why It Exists
 
 ### Required Links by Entity Type
@@ -204,6 +332,16 @@ The Executor (Claude Code) handles implementation. Read their skill at `skills/e
 - Write acceptance criteria as testable assertions, not vague goals
 - Set `scope_boundaries` to prevent scope creep
 
+### Structured Mission Handoff Format
+
+The `context` field in every mission should follow this structure:
+
+- **INTENT**: Why this work exists — not just what to do, but the research goal it serves. Reference the motivated_by_decision.
+- **BACKGROUND**: Key findings, prior attempts, and relevant context the Executor needs. Include entity IDs (journal entries, decisions, literature) the Executor should read with `rka_get(id)`.
+- **CONSTRAINTS**: What the Executor must NOT do. Be explicit about scope boundaries.
+- **ASSUMPTIONS**: What the Executor should take as given without verifying. Number these so the Executor's Backbrief can reference them by number.
+- **VERIFICATION**: How to verify the work is correct. Specific test commands, expected outputs, or acceptance checks.
+
 ### Reviewing Executor Reports
 
 After the Executor submits a report (`rka_submit_report`):
@@ -212,6 +350,17 @@ After the Executor submits a report (`rka_submit_report`):
 3. Check for anomalies the Executor flagged
 4. Answer any questions the Executor raised
 5. Mark the mission complete or create follow-up missions
+
+### Reviewing the Executor's Backbrief
+
+Before approving the Executor to proceed with significant work, the Executor will present a Backbrief — their plan for how they intend to accomplish the mission. Review it against these checks:
+
+1. Does the Executor's plan address ALL tasks in the mission?
+2. Does their interpretation of acceptance criteria match your intent?
+3. Are their stated assumptions consistent with the mission's numbered assumptions?
+4. Do the risks they identify warrant scope changes or additional guidance?
+
+If misalignment exists, correct it NOW — before the Executor starts implementation. A 2-minute correction here saves hours of wasted work. If the misalignment is significant, recycle the mission with updated context.
 
 ---
 
@@ -227,6 +376,10 @@ After the Executor submits a report (`rka_submit_report`):
 8. **DON'T** let generated summaries (`rka_ask`, `rka_generate_summary`) become canonical knowledge — they're disposable
 9. **DON'T** assume the Executor understands context — always include file paths, decision links, and journal references in missions
 10. **DON'T** forget to verify Executor work — always check mission reports against live data before marking complete
+11. **DON'T** proceed on significant PI direction without a Confirmation Brief — restate your understanding and wait for PI correction first
+12. **DON'T** create missions without the structured handoff format — Intent/Background/Constraints/Assumptions/Verification in the context field
+13. **DON'T** skip reviewing the Executor's Backbrief — approve their plan before they begin significant work
+14. **DON'T** ignore escalation triggers from the Executor — they indicate potential misalignment or invalidated assumptions that need immediate attention
 
 ---
 
@@ -363,3 +516,111 @@ rka_advance_rq(
 ```
 
 An "answered" RQ with a formal conclusion is a completed research contribution.
+
+---
+
+## Knowledge Freshness — Detecting Stale Evidence
+
+Knowledge decays. When new evidence arrives, existing claims and syntheses may become
+outdated but still appear as current context. Use the freshness tools to detect and
+manage staleness proactively.
+
+### At Session Start
+
+Run `rka_check_freshness()` alongside `rka_get_pending_maintenance()` to surface
+stale claims, superseded sources, and aging evidence that needs review.
+
+### After Extracting Claims
+
+Review contradiction candidates in the extraction response. When `rka_extract_claims`
+creates new claims, check if any conflict with existing knowledge.
+
+### Flagging Stale Items
+
+When new evidence contradicts old claims:
+```
+rka_flag_stale(
+  entity_id="clm_01...",
+  reason="Contradicted by newer experiment in jrn_01...",
+  staleness="red",
+  propagate=true
+)
+```
+
+With `propagate=true`, staleness cascades: stale claim → parent cluster (if >50%
+claims stale) → decisions citing that cluster.
+
+### Detecting Contradictions
+
+Use `rka_detect_contradictions(entity_id="clm_01...")` to find similar claims that
+may conflict. The tool surfaces candidates — you decide if they're real contradictions.
+
+### Assumption Tracking
+
+When creating decisions, record assumptions explicitly:
+```
+rka_add_decision(
+  question="Should we use MQTT for sensor data?",
+  ...,
+  assumptions=["Network latency <50ms", "Sensor count stays under 500"]
+)
+```
+
+Periodically review assumption health: are recorded assumptions still valid given
+new evidence?
+
+---
+
+## Validation Gates — Catching Errors Early
+
+Gates are formal go/no-go checkpoints at critical transitions. They prevent compounding
+errors by forcing evaluation before proceeding.
+
+### When to Create Gates
+
+| Gate | When | Who Creates | Who Evaluates |
+|------|------|-------------|---------------|
+| Gate 0: Problem Framing | Before research starts | Brain | Brain + PI |
+| Gate 1: Plan Validation | After mission created, before Executor starts | Brain | Brain |
+| Gate 2: Evidence Review | After experiments/evidence gathering | Executor | Brain + PI |
+| Gate 3: Synthesis Validation | Before committing conclusions | Brain | Brain + PI |
+
+### Creating a Gate
+
+```
+rka_create_gate(
+  mission_id="mis_01...",
+  gate_type="problem_framing",
+  deliverables=["Research Protocol journal entry with tag research-protocol"],
+  pass_criteria=[
+    "Research question is precise and testable",
+    "At least 3 assumptions are identified and numbered",
+    "Success criteria are specific enough to evaluate"
+  ],
+  assumptions_to_verify=["The dataset is available", "The method scales to 1000 entries"]
+)
+```
+
+### Evaluating a Gate
+
+```
+rka_evaluate_gate(
+  gate_id="chk_01...",
+  verdict="go",
+  notes="Plan is aligned. Assumption #2 verified by checking schema.",
+  assumption_status={
+    "The dataset is available": "validated",
+    "The method scales to 1000 entries": "unvalidated"
+  }
+)
+```
+
+Verdicts: **go** (proceed), **kill** (abandon), **hold** (wait), **recycle** (revise).
+If any assumption is "invalidated", the gate auto-flags the related decision as stale.
+
+### Not Every Task Needs All 4 Gates
+
+- Quick bug fixes: Gate 1 only (plan validation)
+- New research direction: All 4 gates
+- Literature review: Gate 0 (protocol) + Gate 3 (synthesis)
+- Experiment: Gate 1 (plan) + Gate 2 (evidence review)

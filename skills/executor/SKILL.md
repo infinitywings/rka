@@ -27,6 +27,63 @@ When you receive a mission:
 
 ---
 
+## Backbrief — Confirming Your Plan
+
+After reading a mission and its context links, but BEFORE starting significant implementation work, present a Backbrief to the Brain.
+
+### What to Include
+
+1. **Plan summary**: "I will accomplish this by doing X, Y, Z"
+2. **Interpretation check**: "I interpret the acceptance criteria to mean [specific interpretation]"
+3. **Assumptions**: "I assume [numbered list, referencing mission assumptions where applicable]"
+4. **Risks**: "I see these risks: [list, including any that might require scope changes]"
+5. **Approach**: "I plan to modify files A, B, C and test with [method]"
+
+### Example
+
+Mission: "Fix the entity_links edge type mismatch — related_journal on decisions creates references instead of justified_by"
+
+Executor Backbrief:
+
+> Before I start, here's my plan:
+>
+> **Plan**: I'll investigate DecisionService.create() and update() in rka/services/decisions.py to find where entity_links rows get link_type='references' instead of 'justified_by'. Then fix the code and write a migration to repair existing edges.
+>
+> **Acceptance criteria interpretation**: "justified_by edge count matching decisions with related_journal" means every decision with a non-null related_journal should have at least one justified_by edge in entity_links.
+>
+> **Assumptions**:
+> 1. The entity_links table schema doesn't need changes — only the link_type values (per mission assumption #1)
+> 2. The migration converts references→justified_by only for decision↔journal pairs, not ALL references edges
+> 3. NoteService and MissionService may have the same bug — I'll check them too
+>
+> **Risks**: The migration could incorrectly convert references edges that are genuinely references. I'll scope it to only edges where source is a decision and target is a journal entry.
+>
+> Does this look right?
+
+Wait for the Brain to approve, correct, or recycle before starting implementation.
+
+### When NOT to Backbrief
+
+- Trivial tasks (single file edit, simple config change, documentation fix)
+- Tasks the Brain explicitly said "just do it" for
+- Follow-up tasks where the approach was already approved in an earlier Backbrief
+
+### Recording the Backbrief
+
+Store as a journal entry linked to the mission so the plan is traceable:
+
+```
+rka_add_note(
+  content="Executor Backbrief for mission mis_01...: [plan summary, assumptions, risks]",
+  type="log",
+  source="executor",
+  related_mission="mis_01...",
+  tags=["backbrief"]
+)
+```
+
+---
+
 ## Core Responsibilities
 
 - Record findings and analysis with `rka_add_note(type="note", source="executor")`.
@@ -48,6 +105,34 @@ Use `rka_submit_report` with structured sections:
 
 ---
 
+## Escalation Triggers — When to Flag the Brain
+
+During execution, raise a checkpoint (`rka_submit_checkpoint`) when any of these conditions occur. Don't guess or work around these situations — escalate.
+
+### Must Escalate (type="decision")
+
+- **Assumption invalidation**: An assumption from the mission turns out to be false
+  → "Mission assumes entity_links has no FK constraints, but it does — approach needs to change"
+- **Scope expansion required**: Completing the task properly requires changes outside the stated scope
+  → "To fix DecisionService, I also need to fix MissionService and NoteService — expanding scope"
+- **Contradictory results**: Experiment results contradict the expected outcome or existing knowledge
+  → "Migration converted 80 edges but maintenance still reports 29 decisions without justified_by"
+
+### Should Escalate (type="clarification")
+
+- **Ambiguous acceptance criteria**: Multiple valid interpretations exist and the choice matters
+- **Missing context**: Information referenced in the mission doesn't exist or can't be found
+- **Unexpected complexity**: Task is significantly more complex than the mission anticipated
+
+### Can Proceed — Document in Report
+
+- Technical choices within scope (which library, which algorithm, which test approach)
+- Minor bugs found and fixed along the way
+- Performance optimizations that don't change behavior
+- Code quality improvements in files being modified
+
+---
+
 ## Your Counterpart: The Brain
 
 The Brain (Claude Desktop) handles strategy, decisions, literature review, and research map maintenance.
@@ -65,6 +150,25 @@ The Brain (Claude Desktop) handles strategy, decisions, literature review, and r
 - Missing information (what did the PI mean?) → checkpoint `type="clarification"`
 - Work needs review before continuing → checkpoint `type="inspection"`
 - Technical choice within scope → proceed, document in report
+
+### Gate 1: Plan Validation
+
+For significant missions, the Brain may create a Gate 1 (plan_validation) checkpoint that
+formally records the Backbrief approval. This gate blocks until the Brain evaluates your plan.
+When you see a gate checkpoint on your mission, present your Backbrief and wait for the Brain
+to evaluate it with `rka_evaluate_gate`. The gate verdict (go/kill/hold/recycle) determines
+whether you proceed, revise, or stop.
+
+### The Confirmation Brief — Why Your Missions Are Vetted
+
+Before creating your mission, the Brain verified its understanding of the PI's intent through a Confirmation Brief — restating the PI's direction and getting explicit correction. This means:
+
+- The mission's objectives have been validated against the PI's actual intent
+- The numbered assumptions in the mission context have been reviewed
+- If the mission still seems confusing or contradictory, that's a signal to raise a checkpoint — the Confirmation Brief may have missed something
+
+You can find the Confirmation Brief by searching for the tag "confirmation-brief" in the journal:
+`rka_search(query="confirmation-brief", entity_types=["journal"])`
 
 ---
 

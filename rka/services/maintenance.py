@@ -32,6 +32,8 @@ class MaintenanceService(BaseService):
         decisions_without_justified_by = await self._decisions_without_justified_by(pid)
         missions_without_motivated_by = await self._missions_without_motivated_by(pid)
         unassigned_clusters = await self._unassigned_clusters(pid)
+        stale_claims = await self._stale_claims(pid)
+        stale_clusters = await self._stale_clusters(pid)
 
         categories = {
             "entries_without_tags": entries_without_tags,
@@ -42,6 +44,8 @@ class MaintenanceService(BaseService):
             "decisions_without_justified_by": decisions_without_justified_by,
             "missions_without_motivated_by": missions_without_motivated_by,
             "unassigned_clusters": unassigned_clusters,
+            "stale_claims": stale_claims,
+            "stale_clusters": stale_clusters,
         }
 
         total_items = sum(len(c["ids"]) for c in categories.values())
@@ -212,5 +216,35 @@ class MaintenanceService(BaseService):
             "ids": [r["id"] for r in rows],
             "description": "Evidence clusters not assigned to any research question",
             "fix_action": "rka_review_cluster(cluster_id, ..., research_question_id=dec_id)",
+            "fix_calls_per_item": 1,
+        }
+
+    async def _stale_claims(self, pid: str) -> dict:
+        rows = await self.db.fetchall(
+            """SELECT id FROM claims
+               WHERE project_id = ? AND staleness IN ('yellow', 'red')
+               ORDER BY updated_at DESC LIMIT 50""",
+            [pid],
+        )
+        return {
+            "count": len(rows),
+            "ids": [r["id"] for r in rows],
+            "description": "Claims flagged stale needing review",
+            "fix_action": "Brain reviews claim, updates or resolves staleness",
+            "fix_calls_per_item": 1,
+        }
+
+    async def _stale_clusters(self, pid: str) -> dict:
+        rows = await self.db.fetchall(
+            """SELECT id FROM evidence_clusters
+               WHERE project_id = ? AND staleness IN ('yellow', 'red')
+               ORDER BY updated_at DESC LIMIT 50""",
+            [pid],
+        )
+        return {
+            "count": len(rows),
+            "ids": [r["id"] for r in rows],
+            "description": "Clusters with stale evidence needing re-synthesis",
+            "fix_action": "Brain re-reviews cluster with fresh evidence",
             "fix_calls_per_item": 1,
         }

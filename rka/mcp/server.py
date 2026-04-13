@@ -339,6 +339,7 @@ async def rka_add_decision(
     related_literature: list[str] | None = None,
     related_journal: list[str] | None = None,
     kind: str = "decision",
+    assumptions: list[str] | None = None,
 ) -> str:
     """Add a decision node to the research decision tree.
 
@@ -353,6 +354,7 @@ async def rka_add_decision(
         related_literature: Literature IDs informing this decision
         related_journal: Journal entry IDs that justify this decision (creates justified_by links)
         kind: research_question | design_choice | decision | operational
+        assumptions: List of assumptions this decision rests on (stored as JSON)
     """
     async with _client() as c:
         body = {
@@ -360,6 +362,7 @@ async def rka_add_decision(
             "options": options, "chosen": chosen, "rationale": rationale,
             "parent_id": parent_id, "related_literature": related_literature,
             "related_journal": related_journal, "kind": kind,
+            "assumptions": assumptions,
         }
         r = await c.post("/api/decisions", json={k: v for k, v in body.items() if v is not None})
         _raise_with_detail(r)
@@ -382,6 +385,7 @@ async def rka_update_decision(
     related_missions: list[str] | None = None,
     phase: str | None = None,
     tags: list[str] | None = None,
+    assumptions: list[str] | None = None,
 ) -> str:
     """Update a decision node.
 
@@ -398,6 +402,7 @@ async def rka_update_decision(
         related_missions: Mission IDs related to this decision
         phase: Research phase
         tags: Tags for categorization
+        assumptions: List of assumptions this decision rests on (stored as JSON)
     """
     async with _client() as c:
         body = {
@@ -406,6 +411,7 @@ async def rka_update_decision(
             "related_journal": related_journal, "parent_id": parent_id,
             "related_literature": related_literature,
             "related_missions": related_missions, "phase": phase, "tags": tags,
+            "assumptions": assumptions,
         }
         filtered = {k: v for k, v in body.items() if v is not None}
         r = await c.put(f"/api/decisions/{id}", json=filtered)
@@ -676,7 +682,7 @@ async def rka_submit_checkpoint(
 
     Args:
         mission_id: Current mission ID
-        type: decision | clarification | inspection
+        type: decision | clarification | inspection | gate
         description: What needs resolving
         task_reference: Which task triggered this
         context: Additional context
@@ -714,7 +720,26 @@ async def rka_get_checkpoints(status: str = "open") -> str:
         lines = []
         for chk in chks:
             flag = "🔴 BLOCKING" if chk.get("blocking") else "🟡"
-            lines.append(f"{flag} {chk['id']} [{chk['type']}]: {chk['description'][:300]}")
+            desc = chk.get("description", "")
+            # Format gate checkpoints with structured metadata
+            if chk.get("type") == "gate":
+                try:
+                    meta = json.loads(desc)
+                    gate_label = meta.get("gate_type", "gate").replace("_", " ").title()
+                    n_deliverables = len(meta.get("deliverables", []))
+                    n_criteria = len(meta.get("pass_criteria", []))
+                    gate_status = meta.get("status", "pending")
+                    if chk.get("status") == "resolved":
+                        try:
+                            res = json.loads(chk.get("resolution", "{}"))
+                            gate_status = res.get("verdict", "resolved")
+                        except (json.JSONDecodeError, TypeError):
+                            gate_status = "resolved"
+                    lines.append(f"{flag} {chk['id']} [Gate: {gate_label}] status={gate_status} ({n_deliverables} deliverables, {n_criteria} criteria)")
+                except (json.JSONDecodeError, TypeError):
+                    lines.append(f"{flag} {chk['id']} [gate]: {desc[:300]}")
+            else:
+                lines.append(f"{flag} {chk['id']} [{chk['type']}]: {desc[:300]}")
         return "\n".join(lines)
 
 
@@ -743,6 +768,138 @@ async def rka_resolve_checkpoint(
         r = await c.put(f"/api/checkpoints/{id}/resolve", json=body)
         _raise_with_detail(r)
         return f"Checkpoint {id} resolved by {resolved_by}"
+
+
+@tool()
+async def rka_create_gate(
+    mission_id: str,
+    gate_type: str,
+    deliverables: list[str],
+    pass_criteria: list[str],
+    assumptions_to_verify: list[str] | None = None,
+) -> str:
+    """Create a validation gate checkpoint for a mission.
+
+    Gates are go/no-go decision points at critical transitions.
+    The gate blocks progress until the Brain evaluates it.
+
+    Args:
+        mission_id: The mission this gate belongs to
+        gate_type: problem_framing | plan_validation | evidence_review | synthesis_validation
+        deliverables: List of required deliverables before the gate can be evaluated
+        pass_criteria: List of specific, testable conditions that must be met to pass
+        assumptions_to_verify: Assumptions that should be checked during evaluation
+    """
+    valid_types = ("problem_framing", "plan_validation", "evidence_review", "synthesis_validation")
+    if gate_type not in valid_types:
+        raise Exception(f"Invalid gate_type: {gate_type}. Must be one of {valid_types}")
+
+    description = json.dumps({
+        "gate_type": gate_type,
+        "deliverables": deliverables,
+        "pass_criteria": pass_criteria,
+        "assumptions_to_verify": assumptions_to_verify or [],
+        "status": "pending",
+    })
+
+    async with _client() as c:
+        body = {
+            "mission_id": mission_id,
+            "type": "gate",
+            "description": description,
+            "blocking": True,
+        }
+        r = await c.post("/api/checkpoints", json=body)
+        _raise_with_detail(r)
+        d = r.json()
+        _session.checkpoints_raised.append(d["id"])
+
+    gate_label = gate_type.replace("_", " ").title()
+    lines = [
+        f"🚦 Gate created: {d['id']} [{gate_label}]",
+        f"  Mission: {mission_id}",
+        f"  Deliverables: {len(deliverables)} items",
+        f"  Pass criteria: {len(pass_criteria)} conditions",
+    ]
+    if assumptions_to_verify:
+        lines.append(f"  Assumptions to verify: {len(assumptions_to_verify)}")
+    lines.append("  Status: PENDING — gate blocks until evaluated")
+    return "\n".join(lines)
+
+
+@tool()
+async def rka_evaluate_gate(
+    gate_id: str,
+    verdict: str,
+    notes: str,
+    assumption_status: dict[str, str] | None = None,
+) -> str:
+    """Evaluate a validation gate and record the verdict.
+
+    If any assumption is 'invalidated', auto-flags the related decision as stale.
+
+    Args:
+        gate_id: The gate checkpoint ID (chk_...)
+        verdict: go | kill | hold | recycle
+        notes: Brain's evaluation rationale
+        assumption_status: Map of assumption text → validated | unvalidated | invalidated
+    """
+    valid_verdicts = ("go", "kill", "hold", "recycle")
+    if verdict not in valid_verdicts:
+        raise Exception(f"Invalid verdict: {verdict}. Must be one of {valid_verdicts}")
+
+    resolution = json.dumps({
+        "verdict": verdict,
+        "notes": notes,
+        "assumption_status": assumption_status or {},
+        "evaluated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    })
+
+    async with _client() as c:
+        r = await c.put(f"/api/checkpoints/{gate_id}/resolve", json={
+            "resolution": resolution,
+            "resolved_by": "brain",
+            "rationale": f"Gate verdict: {verdict}",
+        })
+        _raise_with_detail(r)
+
+        # If any assumption invalidated, flag the mission's decision as stale
+        invalidated = [
+            k for k, v in (assumption_status or {}).items() if v == "invalidated"
+        ]
+        stale_targets = []
+        if invalidated:
+            # Get the checkpoint to find the mission
+            chk_r = await c.get(f"/api/checkpoints/{gate_id}")
+            if chk_r.is_success:
+                chk = chk_r.json()
+                mission_id = chk.get("mission_id")
+                if mission_id:
+                    mis_r = await c.get(f"/api/missions/{mission_id}")
+                    if mis_r.is_success:
+                        mis = mis_r.json()
+                        dec_id = mis.get("motivated_by_decision")
+                        if dec_id:
+                            for assumption in invalidated:
+                                flag_r = await c.post("/api/freshness/flag-stale", json={
+                                    "entity_id": dec_id,
+                                    "reason": f"Assumption invalidated at gate: {assumption}",
+                                    "staleness": "yellow",
+                                    "propagate": True,
+                                })
+                                if flag_r.is_success:
+                                    stale_targets.append(dec_id)
+
+    verdict_icons = {"go": "✅", "kill": "❌", "hold": "⏸️", "recycle": "♻️"}
+    icon = verdict_icons.get(verdict, "?")
+    lines = [f"{icon} Gate {gate_id} evaluated: {verdict.upper()}", f"  Notes: {notes}"]
+    if assumption_status:
+        for assumption, status in assumption_status.items():
+            status_icon = {"validated": "✓", "unvalidated": "?", "invalidated": "✗"}.get(status, "?")
+            lines.append(f"  [{status_icon}] {assumption}: {status}")
+    if stale_targets:
+        lines.append(f"  ⚠️ Flagged stale due to invalidated assumptions: {', '.join(stale_targets)}")
+    return "\n".join(lines)
 
 
 # ============================================================
@@ -2210,8 +2367,11 @@ async def rka_get_research_map() -> str:
         max_shown = 10
         for i, cl in enumerate(clusters[:max_shown]):
             connector = "└─" if i == len(clusters[:max_shown]) - 1 and len(clusters) <= max_shown else "├─"
+            staleness_icon = {"green": "🟢", "yellow": "🟡", "red": "🔴"}.get(
+                cl.get("staleness", "green"), "🟢"
+            )
             lines.append(
-                f"  {connector} [{cl.get('confidence', '?')}] {cl['label']} "
+                f"  {connector} [{cl.get('confidence', '?')}, {staleness_icon}] {cl['label']} "
                 f"({cl.get('claim_count', 0)} claims) — {cl['id']}"
             )
         if len(clusters) > max_shown:
@@ -2907,6 +3067,121 @@ async def rka_advance_rq(
         lines.append(f"  Conclusion recorded: {data['conclusion_entry_id']}")
     if data.get("evidence_clusters_linked", 0) > 0:
         lines.append(f"  Evidence clusters linked: {data['evidence_clusters_linked']}")
+    return "\n".join(lines)
+
+
+# ============================================================
+# Knowledge freshness tools
+# ============================================================
+
+
+@tool()
+async def rka_flag_stale(
+    entity_id: str,
+    reason: str,
+    staleness: str = "yellow",
+    propagate: bool = True,
+) -> str:
+    """Flag a claim, cluster, or decision as potentially stale.
+
+    When propagate=true, traverses dependency graph: stale claim → flag parent
+    cluster (if >50% claims stale) → flag decisions citing the cluster.
+
+    Args:
+        entity_id: The entity to flag (clm_..., ecl_..., or dec_...)
+        reason: Why this entity is stale (e.g., "Contradicted by newer experiment in jrn_01...")
+        staleness: yellow (aging/partially conflicting) or red (directly contradicted)
+        propagate: If true, traverse dependency graph and flag dependent entities
+    """
+    async with _client() as c:
+        r = await c.post("/api/freshness/flag-stale", json={
+            "entity_id": entity_id, "reason": reason,
+            "staleness": staleness, "propagate": propagate,
+        })
+        _raise_with_detail(r)
+        data = r.json()
+
+    flagged = data.get("flagged", [])
+    lines = [f"Flagged {len(flagged)} entities:"]
+    for f in flagged:
+        icon = "🔴" if f.get("staleness") == "red" else "🟡"
+        lines.append(f"  {icon} {f['id']} → {f.get('staleness', 'yellow')}")
+    return "\n".join(lines)
+
+
+@tool()
+async def rka_check_freshness(
+    days_threshold: int = 30,
+) -> str:
+    """Scan for potentially stale knowledge items.
+
+    Pure SQL scan — no LLM needed. Returns items that may need Brain review:
+    claims already flagged, claims with superseded sources, aging claims,
+    and stale clusters.
+
+    Args:
+        days_threshold: Claims older than this may need freshness review (default 30)
+    """
+    async with _client() as c:
+        r = await c.get("/api/freshness/check", params={"days_threshold": days_threshold})
+        _raise_with_detail(r)
+        data = r.json()
+
+    total = data.get("total_items", 0)
+    if total == 0:
+        return "Knowledge base is fresh — no staleness issues detected."
+
+    lines = [f"## Knowledge Freshness: {total} items need review\n"]
+    for key, cat in data.get("categories", {}).items():
+        if cat["count"] == 0:
+            continue
+        lines.append(f"### {cat['description']} ({cat['count']})")
+        shown = cat["ids"][:10]
+        lines.append(f"  IDs: {', '.join(shown)}")
+        if len(cat["ids"]) > 10:
+            lines.append(f"  ... and {len(cat['ids']) - 10} more")
+        lines.append(f"  Fix: {cat['fix_action']}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+@tool()
+async def rka_detect_contradictions(
+    entity_id: str,
+    similarity_threshold: float = 0.7,
+    max_results: int = 5,
+) -> str:
+    """Find claims that may contradict a given claim or journal entry.
+
+    Uses vector similarity (or FTS fallback) to find semantically related claims,
+    then surfaces them for Brain review. Does NOT auto-resolve — the Brain
+    decides whether conflicts are real contradictions.
+
+    Args:
+        entity_id: A claim (clm_...) or journal entry (jrn_...) to check against
+        similarity_threshold: Minimum similarity to consider (default 0.7)
+        max_results: Maximum candidates to return (default 5)
+    """
+    async with _client() as c:
+        r = await c.post("/api/freshness/detect-contradictions", json={
+            "entity_id": entity_id,
+            "similarity_threshold": similarity_threshold,
+            "max_results": max_results,
+        })
+        _raise_with_detail(r)
+        data = r.json()
+
+    candidates = data.get("candidates", [])
+    if not candidates:
+        return data.get("message", f"No similar claims found for {entity_id}.")
+
+    lines = [f"Contradiction check for {entity_id}:"]
+    for c in candidates:
+        sim = c.get("similarity", 0)
+        icon = "⚠️" if sim >= 0.8 else "ℹ️"
+        cluster_str = f" (cluster: {c['cluster_id']})" if c.get("cluster_id") else ""
+        lines.append(f"  {icon} {sim:.2f} — {c['claim_id']} [{c['claim_type']}] \"{c['content']}\"{cluster_str}")
+    lines.append("Brain: review these candidates and use rka_flag_stale if any are genuine contradictions.")
     return "\n".join(lines)
 
 

@@ -625,3 +625,284 @@ class ResearcherToolsService(BaseService):
             "conclusion_entry_id": journal_id,
             "evidence_clusters_linked": len(evidence_cluster_ids) if evidence_cluster_ids else 0,
         }
+
+    # ------------------------------------------------------------------
+    # 7. Flag Stale
+    # ------------------------------------------------------------------
+
+    async def flag_stale(
+        self,
+        entity_id: str,
+        reason: str,
+        staleness: str = "yellow",
+        propagate: bool = True,
+    ) -> dict:
+        """Flag a claim, cluster, or decision as potentially stale."""
+        if staleness not in ("yellow", "red"):
+            raise ValueError("staleness must be 'yellow' or 'red'")
+
+        now = _now()
+        flagged = [{"id": entity_id, "staleness": staleness}]
+
+        if entity_id.startswith("clm_"):
+            await self.db.execute(
+                "UPDATE claims SET staleness = ?, stale_reason = ?, updated_at = ? WHERE id = ? AND project_id = ?",
+                [staleness, reason, now, entity_id, self.project_id],
+            )
+            if propagate:
+                flagged += await self._propagate_from_claim(entity_id, reason, now)
+        elif entity_id.startswith("ecl_"):
+            await self.db.execute(
+                "UPDATE evidence_clusters SET staleness = ?, stale_reason = ?, updated_at = ? WHERE id = ? AND project_id = ?",
+                [staleness, reason, now, entity_id, self.project_id],
+            )
+            if propagate:
+                flagged += await self._propagate_from_cluster(entity_id, reason, now)
+        elif entity_id.startswith("dec_"):
+            await self.db.execute(
+                "UPDATE decisions SET assumptions = json_set(COALESCE(assumptions, '{}'), '$.staleness', ?), updated_at = ? WHERE id = ? AND project_id = ?",
+                [staleness, now, entity_id, self.project_id],
+            )
+        else:
+            raise ValueError(f"Unsupported entity type for {entity_id}")
+
+        await self.db.commit()
+        return {"flagged": flagged, "total_flagged": len(flagged)}
+
+    async def _propagate_from_claim(self, claim_id: str, reason: str, now: str) -> list[dict]:
+        """Propagate staleness from a claim to parent clusters and their decisions."""
+        flagged = []
+        # Find parent clusters via claim_edges
+        clusters = await self.db.fetchall(
+            "SELECT DISTINCT cluster_id FROM claim_edges WHERE source_claim_id = ? AND relation = 'member_of'",
+            [claim_id],
+        )
+        for row in clusters:
+            cid = row["cluster_id"]
+            # Check if >50% of claims in this cluster are stale
+            total = await self.db.fetchone(
+                "SELECT COUNT(*) as cnt FROM claim_edges WHERE cluster_id = ? AND relation = 'member_of'", [cid],
+            )
+            stale = await self.db.fetchone(
+                """SELECT COUNT(*) as cnt FROM claim_edges ce
+                   JOIN claims c ON c.id = ce.source_claim_id
+                   WHERE ce.cluster_id = ? AND ce.relation = 'member_of'
+                     AND c.staleness IN ('yellow', 'red')""",
+                [cid],
+            )
+            if total and stale and total["cnt"] > 0 and (stale["cnt"] / total["cnt"]) > 0.5:
+                await self.db.execute(
+                    "UPDATE evidence_clusters SET staleness = 'yellow', stale_reason = ?, updated_at = ? WHERE id = ? AND project_id = ?",
+                    [f">50% claims stale (includes {claim_id})", now, cid, self.project_id],
+                )
+                flagged.append({"id": cid, "staleness": "yellow"})
+                flagged += await self._propagate_from_cluster(cid, reason, now)
+        return flagged
+
+    async def _propagate_from_cluster(self, cluster_id: str, reason: str, now: str) -> list[dict]:
+        """Propagate staleness from a cluster to decisions citing it."""
+        flagged = []
+        decisions = await self.db.fetchall(
+            """SELECT source_id FROM entity_links
+               WHERE target_id = ? AND link_type = 'justified_by'
+                 AND source_type = 'decision'""",
+            [cluster_id],
+        )
+        for row in decisions:
+            dec_id = row["source_id"]
+            await self.db.execute(
+                "UPDATE decisions SET updated_at = ? WHERE id = ? AND project_id = ?",
+                [now, dec_id, self.project_id],
+            )
+            flagged.append({"id": dec_id, "staleness": "yellow"})
+        return flagged
+
+    # ------------------------------------------------------------------
+    # 8. Check Freshness
+    # ------------------------------------------------------------------
+
+    async def check_freshness(self, days_threshold: int = 30) -> dict:
+        """Scan for potentially stale knowledge items. Pure SQL — no LLM."""
+        pid = self.project_id
+        categories = {}
+
+        # 1. Claims already flagged stale
+        flagged_claims = await self.db.fetchall(
+            """SELECT id, staleness, stale_reason FROM claims
+               WHERE project_id = ? AND staleness IN ('yellow', 'red')
+               ORDER BY updated_at DESC LIMIT 50""",
+            [pid],
+        )
+        categories["stale_claims"] = {
+            "count": len(flagged_claims),
+            "ids": [r["id"] for r in flagged_claims],
+            "description": "Claims flagged stale (yellow or red)",
+            "fix_action": "Brain reviews and resolves via rka_flag_stale or updates",
+        }
+
+        # 2. Claims with superseded source entries
+        superseded_source = await self.db.fetchall(
+            """SELECT c.id FROM claims c
+               JOIN journal j ON j.id = c.source_entry_id
+               WHERE c.project_id = ? AND c.staleness = 'green'
+                 AND j.superseded_by IS NOT NULL
+               LIMIT 50""",
+            [pid],
+        )
+        categories["superseded_source_claims"] = {
+            "count": len(superseded_source),
+            "ids": [r["id"] for r in superseded_source],
+            "description": "Claims whose source journal entry was superseded",
+            "fix_action": "rka_flag_stale(claim_id, reason='Source entry superseded')",
+        }
+
+        # 3. Claims older than threshold with no recent cluster activity
+        old_claims = await self.db.fetchall(
+            f"""SELECT c.id FROM claims c
+               WHERE c.project_id = ? AND c.staleness = 'green'
+                 AND c.valid_from < datetime('now', '-{days_threshold} days')
+               ORDER BY c.valid_from ASC LIMIT 50""",
+            [pid],
+        )
+        categories["aging_claims"] = {
+            "count": len(old_claims),
+            "ids": [r["id"] for r in old_claims],
+            "description": f"Claims older than {days_threshold} days (may need review)",
+            "fix_action": "Brain reviews claim currency and flags stale if needed",
+        }
+
+        # 4. Clusters with >50% stale claims
+        stale_clusters = await self.db.fetchall(
+            """SELECT ec.id FROM evidence_clusters ec
+               WHERE ec.project_id = ? AND ec.staleness IN ('yellow', 'red')
+               LIMIT 50""",
+            [pid],
+        )
+        categories["stale_clusters"] = {
+            "count": len(stale_clusters),
+            "ids": [r["id"] for r in stale_clusters],
+            "description": "Clusters flagged stale",
+            "fix_action": "Brain re-synthesizes cluster with fresh evidence",
+        }
+
+        total = sum(c["count"] for c in categories.values())
+        return {"total_items": total, "categories": categories}
+
+    # ------------------------------------------------------------------
+    # 9. Detect Contradictions (vector similarity)
+    # ------------------------------------------------------------------
+
+    async def detect_contradictions(
+        self,
+        entity_id: str,
+        similarity_threshold: float = 0.7,
+        max_results: int = 5,
+    ) -> dict:
+        """Find claims that may contradict a given claim or journal entry."""
+        # Get the content to compare
+        content = None
+        if entity_id.startswith("clm_"):
+            row = await self.db.fetchone(
+                "SELECT content FROM claims WHERE id = ? AND project_id = ?",
+                [entity_id, self.project_id],
+            )
+            if row:
+                content = row["content"]
+        elif entity_id.startswith("jrn_"):
+            row = await self.db.fetchone(
+                "SELECT content FROM journal WHERE id = ? AND project_id = ?",
+                [entity_id, self.project_id],
+            )
+            if row:
+                content = row["content"]
+
+        if not content:
+            raise ValueError(f"Entity {entity_id} not found or has no content")
+
+        # Check if embeddings are available
+        has_embeddings = await self.db.fetchone(
+            "SELECT COUNT(*) as cnt FROM embedding_metadata WHERE project_id = ?",
+            [self.project_id],
+        )
+        if not has_embeddings or has_embeddings["cnt"] == 0:
+            return {
+                "entity_id": entity_id,
+                "candidates": [],
+                "message": "No embeddings available — enable RKA_EMBEDDINGS_ENABLED=true and reprocess entries to use vector similarity.",
+            }
+
+        # Try vector similarity search via sqlite-vec
+        try:
+            # Get embedding for the entity
+            emb_row = await self.db.fetchone(
+                "SELECT embedding FROM embeddings WHERE entity_id = ? AND project_id = ?",
+                [entity_id, self.project_id],
+            )
+            if not emb_row:
+                return {
+                    "entity_id": entity_id,
+                    "candidates": [],
+                    "message": f"No embedding found for {entity_id}. Run enrichment first.",
+                }
+
+            # Find similar claims
+            similar = await self.db.fetchall(
+                """SELECT e.entity_id, e.distance, c.content, c.claim_type, c.confidence,
+                          ce.cluster_id
+                   FROM vec_embeddings v
+                   JOIN embeddings e ON e.rowid = v.rowid
+                   JOIN claims c ON c.id = e.entity_id AND c.project_id = e.project_id
+                   LEFT JOIN claim_edges ce ON ce.source_claim_id = c.id AND ce.relation = 'member_of'
+                   WHERE v.embedding MATCH ? AND e.project_id = ? AND e.entity_id != ?
+                   ORDER BY v.distance ASC
+                   LIMIT ?""",
+                [emb_row["embedding"], self.project_id, entity_id, max_results],
+            )
+            candidates = [
+                {
+                    "claim_id": r["entity_id"],
+                    "similarity": round(1 - (r.get("distance", 0) or 0), 3),
+                    "content": r["content"][:120],
+                    "claim_type": r["claim_type"],
+                    "cluster_id": r.get("cluster_id"),
+                }
+                for r in similar
+            ]
+        except Exception:
+            # Vector search not available — fall back to FTS
+            candidates = await self._fts_contradiction_fallback(entity_id, content, max_results)
+
+        return {
+            "entity_id": entity_id,
+            "candidates": candidates,
+            "message": f"Found {len(candidates)} similar claims for review." if candidates else "No similar claims found.",
+        }
+
+    async def _fts_contradiction_fallback(self, entity_id: str, content: str, max_results: int) -> list[dict]:
+        """Fallback: use FTS5 keyword matching when vector search unavailable."""
+        # Extract key terms (first 5 significant words)
+        words = [w for w in content.split() if len(w) > 3][:5]
+        if not words:
+            return []
+        query = " OR ".join(words)
+        try:
+            rows = await self.db.fetchall(
+                """SELECT c.id, c.content, c.claim_type, c.confidence
+                   FROM fts_claims fc
+                   JOIN claims c ON c.id = fc.id
+                   WHERE fts_claims MATCH ? AND c.project_id = ? AND c.id != ?
+                   LIMIT ?""",
+                [query, self.project_id, entity_id, max_results],
+            )
+            return [
+                {
+                    "claim_id": r["id"],
+                    "similarity": 0.5,  # FTS doesn't give similarity scores
+                    "content": r["content"][:120],
+                    "claim_type": r["claim_type"],
+                    "cluster_id": None,
+                }
+                for r in rows
+            ]
+        except Exception:
+            return []

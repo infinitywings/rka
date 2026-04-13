@@ -127,3 +127,50 @@ async def advance_rq(
         )
     except ValueError as e:
         raise HTTPException(422, str(e))
+
+
+# ------------------------------------------------------------------
+# Phase 2: Knowledge Freshness
+# ------------------------------------------------------------------
+
+class FlagStaleRequest(BaseModel):
+    entity_id: str
+    reason: str
+    staleness: str = "yellow"
+    propagate: bool = True
+
+
+class DetectContradictionsRequest(BaseModel):
+    entity_id: str
+    similarity_threshold: float = 0.7
+    max_results: int = 5
+
+
+@router.post("/freshness/flag-stale")
+async def flag_stale(
+    data: FlagStaleRequest,
+    svc: ResearcherToolsService = Depends(get_scoped_researcher_tools_service),
+):
+    try:
+        return await svc.flag_stale(data.entity_id, data.reason, data.staleness, data.propagate)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+@router.get("/freshness/check")
+async def check_freshness(
+    days_threshold: int = Query(30, ge=1),
+    svc: ResearcherToolsService = Depends(get_scoped_researcher_tools_service),
+):
+    return await svc.check_freshness(days_threshold)
+
+
+@router.post("/freshness/detect-contradictions")
+async def detect_contradictions(
+    data: DetectContradictionsRequest,
+    svc: ResearcherToolsService = Depends(get_scoped_researcher_tools_service),
+):
+    try:
+        return await svc.detect_contradictions(data.entity_id, data.similarity_threshold, data.max_results)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
