@@ -1,6 +1,6 @@
 [project]
 name = "rka"
-version = "2.0.2"
+version = "2.1.0"
 description = "Research Knowledge Agent — MCP server + REST API for AI-assisted research orchestration"
 requires-python = ">=3.11"
 dependencies = [
