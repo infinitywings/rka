@@ -50,7 +50,7 @@ build-backend = "setuptools.build_meta"
 include = ["rka*"]
 
 [tool.setuptools.package-data]
-rka = ["db/*.sql", "db/migrations/*.sql"]
+rka = ["db/*.sql", "db/migrations/*.sql", "skills/*.md", "skills/**/*.md"]
 
 [tool.ruff]
 line-length = 100

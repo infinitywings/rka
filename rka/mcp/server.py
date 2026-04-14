@@ -11,24 +11,35 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import wraps
+from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 import httpx
 
 from rka.models.mission import MissionTask
 
+# Skills are shipped as package data inside rka/skills/
+_SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
+
+
+def _read_skill(path: str) -> str:
+    """Read a skill file from the packaged skills directory."""
+    try:
+        return (_SKILLS_DIR / path).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return f"Skill file not found: {path}"
+
 RKA_INSTRUCTIONS = """\
 Research Knowledge Agent (RKA) is a structured research knowledge base shared by the
 Brain, Executor, and PI. It stores journal entries, decisions, literature, missions,
 claims, evidence clusters, and a provenance-linked research map.
 
-Detailed operating guidance now lives in the role skill files shipped with the repo:
-- `skills/SKILL.md`
-- `skills/brain/SKILL.md`
-- `skills/executor/SKILL.md`
-- `skills/pi/SKILL.md`
+Detailed operating guidance is available via MCP prompts:
+- `brain_skill` — full Brain workflow guide (strategy, decisions, review)
+- `executor_skill` — full Executor workflow guide (missions, reports, backbrief)
+- `pi_skill` — PI quick reference
 
-Use this MCP instruction block as a fallback only.
+Use these prompts to load role-specific guidance at session start.
 
 ## Minimal Session Start
 1. `rka_get_context()` — load current project state and recent knowledge
@@ -3268,8 +3279,27 @@ async def rka_get_pending_maintenance() -> str:
 
 
 # ============================================================
-# MCP Prompts — orientation guides for Brain and Executor
+# MCP Prompts — skill files and orientation guides
 # ============================================================
+
+
+@mcp.prompt()
+def brain_skill() -> str:
+    """Full Brain workflow guide — strategy, decisions, provenance, claim extraction, research map, gates."""
+    return _read_skill("brain/SKILL.md")
+
+
+@mcp.prompt()
+def executor_skill() -> str:
+    """Full Executor workflow guide — missions, backbrief, recording, escalation, reports."""
+    return _read_skill("executor/SKILL.md")
+
+
+@mcp.prompt()
+def pi_skill() -> str:
+    """PI quick reference — project status, research map, checkpoint resolution."""
+    return _read_skill("pi/SKILL.md")
+
 
 @mcp.prompt()
 def brain_orientation() -> str:
