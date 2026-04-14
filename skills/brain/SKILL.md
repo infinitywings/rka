@@ -380,6 +380,7 @@ If misalignment exists, correct it NOW — before the Executor starts implementa
 12. **DON'T** create missions without the structured handoff format — Intent/Background/Constraints/Assumptions/Verification in the context field
 13. **DON'T** skip reviewing the Executor's Backbrief — approve their plan before they begin significant work
 14. **DON'T** ignore escalation triggers from the Executor — they indicate potential misalignment or invalidated assumptions that need immediate attention
+15. **DON'T** upgrade RKA without exporting first — run `rka_export` to verify the pack includes all expected tables, then `rka_check_integrity` after import to verify no data was lost
 
 ---
 

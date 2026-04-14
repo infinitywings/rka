@@ -3070,6 +3070,37 @@ async def rka_advance_rq(
     return "\n".join(lines)
 
 
+@tool()
+async def rka_check_integrity() -> str:
+    """Verify knowledge base integrity — check for orphaned edges, missing references, and count mismatches.
+
+    Run periodically or after import to ensure data consistency. Checks:
+    - entity_links source/target reference existing entities
+    - claim_edges reference existing claims and clusters
+    - evidence_clusters.claim_count matches actual claim_edges count
+    """
+    async with _client() as c:
+        r = await c.get("/api/integrity")
+        _raise_with_detail(r)
+        data = r.json()
+
+    total = data.get("total_issues", 0)
+    if total == 0:
+        return "Knowledge base integrity check passed — no issues found."
+
+    lines = [f"## Integrity Check: {total} issues found\n"]
+    for issue in data.get("issues", []):
+        lines.append(f"### {issue['description']} ({issue['count']})")
+        shown = issue.get("ids", [])[:10]
+        if shown:
+            lines.append(f"  IDs: {', '.join(shown)}")
+        if issue["count"] > 10:
+            lines.append(f"  ... and {issue['count'] - 10} more")
+        lines.append(f"  Fix: {issue.get('fix_action', 'Review manually')}")
+        lines.append("")
+    return "\n".join(lines)
+
+
 # ============================================================
 # Knowledge freshness tools
 # ============================================================

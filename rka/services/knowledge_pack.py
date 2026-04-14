@@ -15,46 +15,95 @@ from rka.infra.ids import generate_id
 from rka.models.knowledge_pack import KnowledgePackImportResult
 from rka.services.base import BaseService, _now
 
-PACK_SCHEMA_VERSION = 1
+PACK_SCHEMA_VERSION = 2
 PACK_FILE_SUFFIX = ".rka-pack.zip"
-_PROJECT_TABLES = (
-    "literature",
-    "missions",
-    "decisions",
-    "journal",
-    "checkpoints",
-    "artifacts",
-    "figures",
-    "exploration_summaries",
-    "qa_sessions",
-    "qa_logs",
-    "events",
-    "audit_log",
-    "tags",
-    "bootstrap_log",
-    "entity_links",
-    "keynodes",
-    "graph_views",
-)
+
+# Categorized table registry — all tables with project_id MUST be listed here.
+# Export validation will FAIL if any uncategorized table has data.
+_TABLE_CATEGORIES: dict[str, list[str]] = {
+    "core_data": [
+        # MUST export, MUST import — these are the research knowledge
+        "literature",
+        "decisions",
+        "missions",
+        "journal",
+        "checkpoints",
+        "claims",
+        "evidence_clusters",
+        "claim_edges",
+        "entity_links",
+        "tags",
+    ],
+    "derived_data": [
+        # SHOULD export, can rebuild if missing
+        "review_queue",
+        "topics",
+        "entity_topics",
+        "exploration_summaries",
+        "context_snapshots",
+        "keynodes",
+        "graph_views",
+        "artifacts",
+        "figures",
+        "bootstrap_log",
+    ],
+    "system": [
+        # SKIP — managed by infrastructure, not per-project data
+        "projects",
+        "project_states",
+        "project_state",
+        "schema_migrations",
+        "jobs",
+        "kv_store",
+        "embedding_metadata",
+    ],
+    "indexes": [
+        # SKIP — rebuilt automatically (vec_*, fts_* detected by prefix)
+    ],
+    "bulk_logs": [
+        # OPTIONAL — export only with include_logs=True
+        "audit_log",
+        "events",
+        "qa_sessions",
+        "qa_logs",
+    ],
+}
+
+# Computed from categories — FK-dependency sorted insert order
 _INSERT_ORDER = (
+    # core_data (FK-safe order)
     "literature",
     "decisions",
     "missions",
     "journal",
     "checkpoints",
-    "artifacts",
-    "figures",
-    "qa_sessions",
-    "qa_logs",
-    "events",
-    "audit_log",
-    "tags",
-    "bootstrap_log",
+    "evidence_clusters",
+    "claims",
+    "claim_edges",
     "entity_links",
+    "tags",
+    # derived_data
+    "review_queue",
+    "topics",
+    "entity_topics",
     "exploration_summaries",
+    "context_snapshots",
     "keynodes",
     "graph_views",
+    "artifacts",
+    "figures",
+    "bootstrap_log",
+    # bulk_logs (when included)
+    "audit_log",
+    "events",
+    "qa_sessions",
+    "qa_logs",
 )
+
+# Tables to export by default (core + derived)
+_EXPORT_TABLES = _TABLE_CATEGORIES["core_data"] + _TABLE_CATEGORIES["derived_data"]
+# All registered table names for validation
+_ALL_REGISTERED = {t for tables in _TABLE_CATEGORIES.values() for t in tables}
 _SELF_REFERENTIAL_TABLES: dict[str, str | list[str]] = {
     "missions": ["depends_on", "parent_mission_id"],
     "decisions": ["parent_id", "superseded_by"],
@@ -67,6 +116,9 @@ _ID_ENTITY_TYPES = {
     "decisions": "decision",
     "journal": "journal",
     "checkpoints": "checkpoint",
+    "claims": "claim",
+    "evidence_clusters": "cluster",
+    "claim_edges": "claim_edge",
     "artifacts": "artifact",
     "figures": "figure",
     "exploration_summaries": "summary",
@@ -74,6 +126,7 @@ _ID_ENTITY_TYPES = {
     "qa_logs": "qa_log",
     "events": "event",
     "entity_links": "link",
+    "review_queue": "review_item",
     "keynodes": "keynode",
     "graph_views": "graphview",
 }
@@ -83,6 +136,9 @@ _DIRECT_ID_COLUMNS = {
     "decisions": ("id", "parent_id", "superseded_by"),
     "journal": ("id", "related_mission", "supersedes", "superseded_by"),
     "checkpoints": ("id", "mission_id", "linked_decision_id"),
+    "claims": ("id", "source_entry_id"),
+    "evidence_clusters": ("id", "research_question_id"),
+    "claim_edges": ("id", "source_claim_id", "target_claim_id", "cluster_id"),
     "artifacts": ("id",),
     "figures": ("id", "artifact_id"),
     "exploration_summaries": ("id", "scope_id"),
@@ -93,6 +149,7 @@ _DIRECT_ID_COLUMNS = {
     "tags": ("entity_id",),
     "bootstrap_log": ("entity_id",),
     "entity_links": ("id", "source_id", "target_id"),
+    "review_queue": ("id", "item_id"),
     "keynodes": ("id",),
     "graph_views": ("id",),
 }
@@ -104,6 +161,9 @@ _FK_COLUMNS: dict[str, set[str]] = {
     "missions": {"depends_on", "parent_mission_id", "motivated_by_decision"},
     "journal": {"supersedes"},
     "checkpoints": {"mission_id", "linked_decision_id"},
+    "claims": {"source_entry_id"},
+    "evidence_clusters": {"research_question_id"},
+    "claim_edges": {"source_claim_id", "target_claim_id", "cluster_id"},
     "events": {"caused_by_event"},
     "qa_logs": {"session_id"},
     "figures": {"artifact_id"},
@@ -124,7 +184,7 @@ _JSON_ID_COLUMNS = {
 class KnowledgePackService(BaseService):
     """Export and import a full project-scoped knowledge pack."""
 
-    async def export_pack(self, project_id: str | None = None) -> tuple[str, str]:
+    async def export_pack(self, project_id: str | None = None, include_logs: bool = False) -> tuple[str, str]:
         resolved_project_id = self._resolve_project_id(project_id)
         project = await self.db.fetchone(
             "SELECT * FROM projects WHERE id = ?",
@@ -133,15 +193,29 @@ class KnowledgePackService(BaseService):
         if project is None:
             raise ValueError(f"Project '{resolved_project_id}' not found")
 
+        # Dynamic validation: fail if any uncategorized table has data
+        await self._validate_registry(resolved_project_id)
+
         project_state = await self.db.fetchone(
             "SELECT * FROM project_states WHERE project_id = ?",
             [resolved_project_id],
         )
 
+        # Determine which tables to export
+        export_tables = list(_EXPORT_TABLES)
+        if include_logs:
+            export_tables += _TABLE_CATEGORIES["bulk_logs"]
+
+        # Get schema version (latest migration number)
+        schema_version = await self._get_schema_version()
+
+        table_counts: dict[str, int] = {}
         manifest: dict[str, Any] = {
-            "schema_version": PACK_SCHEMA_VERSION,
+            "schema_version": schema_version,
+            "pack_format_version": PACK_SCHEMA_VERSION,
             "exported_at": _now(),
-            "rka_version": "1.5.0",
+            "rka_version": "2.1.0",
+            "categories_exported": ["core_data", "derived_data"] + (["bulk_logs"] if include_logs else []),
             "project": dict(project),
             "project_state": dict(project_state) if project_state else None,
             "tables": {},
@@ -156,11 +230,13 @@ class KnowledgePackService(BaseService):
         temp_file.close()
 
         with zipfile.ZipFile(temp_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            for table in _PROJECT_TABLES:
+            for table in export_tables:
                 rows = await self._export_rows_for_table(table, resolved_project_id)
                 if table == "artifacts":
                     rows = self._attach_artifact_files(rows, archive)
                 manifest["tables"][table] = rows
+                table_counts[table] = len(rows)
+            manifest["table_counts"] = table_counts
             archive.writestr("manifest.json", json.dumps(manifest, indent=2, sort_keys=True))
 
         filename = f"{self._slugify(project['name'] or resolved_project_id)}{PACK_FILE_SUFFIX}"
@@ -246,12 +322,16 @@ class KnowledgePackService(BaseService):
 
         await self._sync_imported_indexes(tables)
 
+        # Post-import integrity check
+        integrity_issues = await self.check_integrity(target_project_id)
+
         return KnowledgePackImportResult(
             project_id=target_project_id,
             project_name=target_project_name,
             source_project_id=source_project["id"],
             imported_counts=imported_counts,
             artifact_files_restored=artifact_files_restored,
+            integrity_issues=integrity_issues,
         )
 
     async def _export_rows_for_table(self, table: str, project_id: str) -> list[dict[str, Any]]:
@@ -299,9 +379,10 @@ class KnowledgePackService(BaseService):
         except json.JSONDecodeError as exc:
             raise ValueError("Knowledge pack manifest is not valid JSON") from exc
 
-        if manifest.get("schema_version") != PACK_SCHEMA_VERSION:
+        pack_format = manifest.get("pack_format_version") or manifest.get("schema_version")
+        if pack_format not in (1, 2, PACK_SCHEMA_VERSION):
             raise ValueError(
-                f"Unsupported knowledge pack schema version: {manifest.get('schema_version')}"
+                f"Unsupported knowledge pack format version: {pack_format}"
             )
         if not manifest.get("project"):
             raise ValueError("Knowledge pack manifest is missing project metadata")
@@ -336,7 +417,7 @@ class KnowledgePackService(BaseService):
     ) -> dict[str, list[dict[str, Any]]]:
         id_map = self._build_id_map(tables)
         remapped: dict[str, list[dict[str, Any]]] = {}
-        for table in _PROJECT_TABLES:
+        for table in tables:
             remapped[table] = [
                 self._remap_row(
                     table,
@@ -623,3 +704,147 @@ class KnowledgePackService(BaseService):
     @staticmethod
     def _safe_filename(value: str) -> str:
         return Path(value).name or "artifact.bin"
+
+    async def _validate_registry(self, project_id: str) -> None:
+        """Fail if any table with project_id data exists but isn't categorized."""
+        all_tables = await self.db.fetchall(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )
+        for row in all_tables:
+            table_name = row["name"]
+            if table_name.startswith(("vec_", "fts_", "sqlite_")):
+                continue
+            if table_name in _ALL_REGISTERED:
+                continue
+            # Check if table has project_id column
+            cols = await self.db.fetchall(f"PRAGMA table_info({table_name})")
+            col_names = [c["name"] for c in cols]
+            if "project_id" not in col_names:
+                continue
+            # Check if table has data for this project
+            count = await self.db.fetchone(
+                f"SELECT COUNT(*) as c FROM [{table_name}] WHERE project_id = ?",
+                [project_id],
+            )
+            if count and count["c"] > 0:
+                raise ValueError(
+                    f"Table '{table_name}' has {count['c']} rows for project {project_id} "
+                    f"but is not registered in _TABLE_CATEGORIES. "
+                    f"Add it to the appropriate category in knowledge_pack.py before exporting."
+                )
+
+    async def _get_schema_version(self) -> int:
+        """Get the latest migration number as the schema version."""
+        try:
+            row = await self.db.fetchone(
+                "SELECT MAX(CAST(SUBSTR(name, 1, 3) AS INTEGER)) as ver FROM schema_migrations"
+            )
+            return row["ver"] if row and row["ver"] else 0
+        except Exception:
+            return 0
+
+    async def check_integrity(self, project_id: str | None = None) -> list[dict]:
+        """Verify knowledge base integrity — check for orphaned edges, missing refs, count mismatches."""
+        pid = project_id or self.project_id
+        issues: list[dict] = []
+
+        # 1. entity_links with orphaned source_id
+        orphaned_source = await self.db.fetchall(
+            """SELECT el.id, el.source_id, el.source_type FROM entity_links el
+               WHERE el.project_id = ?
+               AND NOT EXISTS (SELECT 1 FROM journal j WHERE j.id = el.source_id)
+               AND NOT EXISTS (SELECT 1 FROM decisions d WHERE d.id = el.source_id)
+               AND NOT EXISTS (SELECT 1 FROM literature l WHERE l.id = el.source_id)
+               AND NOT EXISTS (SELECT 1 FROM missions m WHERE m.id = el.source_id)
+               AND NOT EXISTS (SELECT 1 FROM claims c WHERE c.id = el.source_id)
+               AND NOT EXISTS (SELECT 1 FROM evidence_clusters ec WHERE ec.id = el.source_id)
+               LIMIT 50""",
+            [pid],
+        )
+        if orphaned_source:
+            issues.append({
+                "category": "orphaned_entity_link_sources",
+                "count": len(orphaned_source),
+                "ids": [r["id"] for r in orphaned_source[:10]],
+                "description": "entity_links with source_id pointing to non-existent entities",
+                "fix_action": "Delete orphaned edges or re-import missing entities",
+            })
+
+        # 2. entity_links with orphaned target_id
+        orphaned_target = await self.db.fetchall(
+            """SELECT el.id, el.target_id, el.target_type FROM entity_links el
+               WHERE el.project_id = ?
+               AND NOT EXISTS (SELECT 1 FROM journal j WHERE j.id = el.target_id)
+               AND NOT EXISTS (SELECT 1 FROM decisions d WHERE d.id = el.target_id)
+               AND NOT EXISTS (SELECT 1 FROM literature l WHERE l.id = el.target_id)
+               AND NOT EXISTS (SELECT 1 FROM missions m WHERE m.id = el.target_id)
+               AND NOT EXISTS (SELECT 1 FROM claims c WHERE c.id = el.target_id)
+               AND NOT EXISTS (SELECT 1 FROM evidence_clusters ec WHERE ec.id = el.target_id)
+               LIMIT 50""",
+            [pid],
+        )
+        if orphaned_target:
+            issues.append({
+                "category": "orphaned_entity_link_targets",
+                "count": len(orphaned_target),
+                "ids": [r["id"] for r in orphaned_target[:10]],
+                "description": "entity_links with target_id pointing to non-existent entities",
+                "fix_action": "Delete orphaned edges or re-import missing entities",
+            })
+
+        # 3. claim_edges with orphaned source_claim_id
+        orphaned_claims = await self.db.fetchall(
+            """SELECT ce.id FROM claim_edges ce
+               WHERE ce.project_id = ?
+               AND NOT EXISTS (SELECT 1 FROM claims c WHERE c.id = ce.source_claim_id)
+               LIMIT 50""",
+            [pid],
+        )
+        if orphaned_claims:
+            issues.append({
+                "category": "orphaned_claim_edge_sources",
+                "count": len(orphaned_claims),
+                "ids": [r["id"] for r in orphaned_claims[:10]],
+                "description": "claim_edges referencing non-existent claims",
+                "fix_action": "Delete orphaned claim edges",
+            })
+
+        # 4. claim_edges with orphaned cluster_id
+        orphaned_clusters = await self.db.fetchall(
+            """SELECT ce.id FROM claim_edges ce
+               WHERE ce.project_id = ? AND ce.cluster_id IS NOT NULL
+               AND NOT EXISTS (SELECT 1 FROM evidence_clusters ec WHERE ec.id = ce.cluster_id)
+               LIMIT 50""",
+            [pid],
+        )
+        if orphaned_clusters:
+            issues.append({
+                "category": "orphaned_claim_edge_clusters",
+                "count": len(orphaned_clusters),
+                "ids": [r["id"] for r in orphaned_clusters[:10]],
+                "description": "claim_edges referencing non-existent clusters",
+                "fix_action": "Delete orphaned claim edges or re-create clusters",
+            })
+
+        # 5. evidence_clusters.claim_count mismatch
+        mismatched = await self.db.fetchall(
+            """SELECT ec.id, ec.claim_count,
+                      (SELECT COUNT(*) FROM claim_edges ce
+                       WHERE ce.cluster_id = ec.id AND ce.relation = 'member_of') as actual
+               FROM evidence_clusters ec
+               WHERE ec.project_id = ?
+               AND ec.claim_count != (SELECT COUNT(*) FROM claim_edges ce
+                                      WHERE ce.cluster_id = ec.id AND ce.relation = 'member_of')
+               LIMIT 50""",
+            [pid],
+        )
+        if mismatched:
+            issues.append({
+                "category": "claim_count_mismatch",
+                "count": len(mismatched),
+                "ids": [r["id"] for r in mismatched[:10]],
+                "description": "evidence_clusters with claim_count != actual claim_edges count",
+                "fix_action": "Run migration 016 to recompute claim counts",
+            })
+
+        return issues

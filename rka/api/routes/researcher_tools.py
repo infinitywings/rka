@@ -6,7 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from rka.services.researcher_tools import ResearcherToolsService
-from rka.api.deps import get_scoped_researcher_tools_service
+from rka.services.knowledge_pack import KnowledgePackService
+from rka.api.deps import get_scoped_researcher_tools_service, get_scoped_knowledge_pack_service
 
 router = APIRouter()
 
@@ -174,3 +175,15 @@ async def detect_contradictions(
         return await svc.detect_contradictions(data.entity_id, data.similarity_threshold, data.max_results)
     except ValueError as e:
         raise HTTPException(404, str(e))
+
+
+# ------------------------------------------------------------------
+# Integrity Check
+# ------------------------------------------------------------------
+
+@router.get("/integrity")
+async def check_integrity(
+    svc: KnowledgePackService = Depends(get_scoped_knowledge_pack_service),
+):
+    issues = await svc.check_integrity()
+    return {"total_issues": sum(i["count"] for i in issues), "issues": issues}

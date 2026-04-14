@@ -13,3 +13,4 @@ class KnowledgePackImportResult(BaseModel):
     source_project_id: str
     imported_counts: dict[str, int] = Field(default_factory=dict)
     artifact_files_restored: int = 0
+    integrity_issues: list[dict] = Field(default_factory=list)

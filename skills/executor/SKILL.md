@@ -178,6 +178,18 @@ You can find the Confirmation Brief by searching for the tag "confirmation-brief
 - Do not create orphaned notes or reports — always link to the relevant mission or decision.
 - Do not paraphrase PI instructions as your own; if you need to record PI direction, preserve it with `source="pi"` and `verbatim_input`.
 
+### Migration Table Registry
+
+When writing a migration that creates a new table with a `project_id` column, you MUST also
+add it to `_TABLE_CATEGORIES` in `rka/services/knowledge_pack.py`. Choose the correct category:
+- `core_data`: Research knowledge that MUST be preserved (journal, decisions, claims, clusters, etc.)
+- `derived_data`: Can be rebuilt if missing (review_queue, topics, exploration_summaries)
+- `system`: Infrastructure tables not exported (jobs, kv_store, schema_migrations)
+- `bulk_logs`: Large log tables exported only on request (audit_log, events)
+
+If you skip this step, the pre-export validation will fail with an explicit error — but catching
+it at development time is better than catching it at export time.
+
 ### Critical: MCP Binary Reinstall
 
 After ANY code changes to `rka/` source:
