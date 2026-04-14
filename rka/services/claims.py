@@ -167,6 +167,12 @@ class ClaimService(BaseService):
                 data.cluster_id, data.relation, data.confidence, self.project_id,
             ],
         )
+        # Update cluster claim_count for member_of edges
+        if data.relation == "member_of" and data.cluster_id:
+            await self.db.execute(
+                "UPDATE evidence_clusters SET claim_count = claim_count + 1, updated_at = ? WHERE id = ? AND project_id = ?",
+                [_now(), data.cluster_id, self.project_id],
+            )
         await self.db.commit()
         return ClaimEdge(
             id=edge_id,
