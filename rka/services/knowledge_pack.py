@@ -38,7 +38,6 @@ _TABLE_CATEGORIES: dict[str, list[str]] = {
         # SHOULD export, can rebuild if missing
         "review_queue",
         "topics",
-        "entity_topics",
         "exploration_summaries",
         "context_snapshots",
         "keynodes",
@@ -56,6 +55,8 @@ _TABLE_CATEGORIES: dict[str, list[str]] = {
         "jobs",
         "kv_store",
         "embedding_metadata",
+        "entity_topics",   # junction table, no project_id column
+        "qa_logs",         # child of qa_sessions via session_id, no project_id
     ],
     "indexes": [
         # SKIP — rebuilt automatically (vec_*, fts_* detected by prefix)
@@ -65,7 +66,6 @@ _TABLE_CATEGORIES: dict[str, list[str]] = {
         "audit_log",
         "events",
         "qa_sessions",
-        "qa_logs",
     ],
 }
 
@@ -85,7 +85,6 @@ _INSERT_ORDER = (
     # derived_data
     "review_queue",
     "topics",
-    "entity_topics",
     "exploration_summaries",
     "context_snapshots",
     "keynodes",
@@ -97,7 +96,6 @@ _INSERT_ORDER = (
     "audit_log",
     "events",
     "qa_sessions",
-    "qa_logs",
 )
 
 # Tables to export by default (core + derived)
@@ -335,17 +333,18 @@ class KnowledgePackService(BaseService):
         )
 
     async def _export_rows_for_table(self, table: str, project_id: str) -> list[dict[str, Any]]:
-        if table == "qa_logs":
-            return await self.db.fetchall(
-                """SELECT qa_logs.*
-                   FROM qa_logs
-                   INNER JOIN qa_sessions ON qa_sessions.id = qa_logs.session_id
-                   WHERE qa_sessions.project_id = ?
-                   ORDER BY qa_logs.created_at, qa_logs.id""",
-                [project_id],
-            )
+        # Safety: verify the table exists and has project_id before querying
+        try:
+            cols = await self.db.fetchall(f"PRAGMA table_info([{table}])")
+        except Exception:
+            return []
+        col_names = [c["name"] for c in cols]
+        if not col_names:
+            return []  # table doesn't exist
+        if "project_id" not in col_names:
+            return []  # table has no project_id — skip silently
         return await self.db.fetchall(
-            f"SELECT * FROM {table} WHERE project_id = ? ORDER BY rowid",
+            f"SELECT * FROM [{table}] WHERE project_id = ? ORDER BY rowid",
             [project_id],
         )
 
