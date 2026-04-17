@@ -445,10 +445,10 @@ class TestIngest:
         assert result.total_errors == 0
         assert result.total_created == 1
 
-        # Verify the entry exists and has methodology type
+        # Migration 009 mapped legacy 'methodology' -> 'log' for the v2 type vocabulary.
         rows = await db.fetchall("SELECT * FROM journal")
         assert len(rows) == 1
-        assert rows[0]["type"] == "methodology"
+        assert rows[0]["type"] == "log"
         assert "analysis.py" in rows[0]["content"]
 
     @pytest.mark.asyncio
@@ -464,9 +464,10 @@ class TestIngest:
         assert result.total_errors == 0
         assert result.total_created == 1
 
+        # Migration 009 mapped legacy 'observation' -> 'note' for the v2 type vocabulary.
         rows = await db.fetchall("SELECT * FROM journal")
         assert len(rows) == 1
-        assert rows[0]["type"] == "observation"
+        assert rows[0]["type"] == "note"
 
     @pytest.mark.asyncio
     async def test_ingest_skips_unknown(

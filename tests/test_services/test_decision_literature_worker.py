@@ -79,13 +79,13 @@ class TestDecisionQueue:
         fts_rows = await db.fetchall("SELECT * FROM fts_decisions WHERE id = ?", [dec.id])
         assert len(fts_rows) == 1
 
-        # 2 jobs enqueued
+        # Only embed job enqueued; LLM-dependent auto_tag removed when local LLM
+        # was deprecated — those responsibilities moved to the Brain.
         jobs = await db.fetchall(
             "SELECT job_type, status FROM jobs WHERE entity_type = 'decision' AND entity_id = ? ORDER BY job_type",
             [dec.id],
         )
         assert jobs == [
-            {"job_type": "decision_auto_tag", "status": "pending"},
             {"job_type": "decision_embed", "status": "pending"},
         ]
 
@@ -127,7 +127,7 @@ class TestDecisionQueue:
         )
 
         worker = EnrichmentWorker(
-            db=db, llm=llm, embeddings=embeddings,
+            db=db, embeddings=embeddings,
             poll_interval=0.01, lease_seconds=60, max_attempts=3,
         )
 
@@ -135,11 +135,12 @@ class TestDecisionQueue:
         while await worker.run_once():
             handled += 1
 
-        assert handled == 2
+        # Only the embed job is processed; auto_tag is no longer enqueued.
+        assert handled == 1
         refreshed = await svc.get(dec.id)
         assert refreshed.enrichment_status == "ready"
-        assert sorted(refreshed.tags) == ["architecture", "database"]
-        assert llm.calls == 1
+        assert refreshed.tags == []
+        assert llm.calls == 0
         assert embeddings.calls == 1
 
 
@@ -172,7 +173,6 @@ class TestLiteratureQueue:
             [lit.id],
         )
         assert jobs == [
-            {"job_type": "literature_auto_tag", "status": "pending"},
             {"job_type": "literature_embed", "status": "pending"},
         ]
 
@@ -212,7 +212,7 @@ class TestLiteratureQueue:
         )
 
         worker = EnrichmentWorker(
-            db=db, llm=llm, embeddings=embeddings,
+            db=db, embeddings=embeddings,
             poll_interval=0.01, lease_seconds=60, max_attempts=3,
         )
 
@@ -220,11 +220,11 @@ class TestLiteratureQueue:
         while await worker.run_once():
             handled += 1
 
-        assert handled == 2
+        assert handled == 1
         refreshed = await svc.get(lit.id)
         assert refreshed.enrichment_status == "ready"
-        assert sorted(refreshed.tags) == ["attention", "transformers"]
-        assert llm.calls == 1
+        assert refreshed.tags == []
+        assert llm.calls == 0
         assert embeddings.calls == 1
 
     @pytest.mark.asyncio

@@ -89,8 +89,8 @@ class TestMissionQueue:
                ORDER BY job_type""",
             ["proj_alpha", mission.id],
         )
+        # LLM-dependent mission_auto_tag is no longer enqueued — only embed.
         assert jobs == [
-            {"job_type": "mission_auto_tag", "status": "pending"},
             {"job_type": "mission_embed", "status": "pending"},
         ]
 
@@ -120,7 +120,6 @@ class TestMissionQueue:
 
         worker = EnrichmentWorker(
             db=db,
-            llm=llm,
             embeddings=embeddings,
             poll_interval=0.01,
             lease_seconds=60,
@@ -132,11 +131,11 @@ class TestMissionQueue:
             handled += 1
 
         refreshed = await svc.get(mission.id)
-        assert handled == 2
+        assert handled == 1
         assert refreshed is not None
         assert refreshed.enrichment_status == "ready"
-        assert refreshed.tags == ["evaluation", "baseline"]
-        assert llm.calls == 1
+        assert refreshed.tags == []
+        assert llm.calls == 0
         assert embeddings.calls == 1
 
         metadata = await db.fetchall(
@@ -151,7 +150,7 @@ class TestMissionQueue:
             "SELECT status FROM jobs WHERE entity_id = ? ORDER BY job_type",
             [mission.id],
         )
-        assert [job["status"] for job in jobs] == ["completed", "completed"]
+        assert [job["status"] for job in jobs] == ["completed"]
 
     @pytest.mark.asyncio
     async def test_job_queue_dedupes_pending_jobs(self, db: Database):
@@ -180,6 +179,7 @@ class TestMissionQueue:
 
     @pytest.mark.asyncio
     async def test_worker_marks_job_failed_after_max_attempts(self, db: Database):
+        """Exceptions raised during job processing mark the job failed after max_attempts."""
         await _ensure_project(db, "proj_alpha", "Alpha")
         await db.execute(
             "INSERT INTO missions (id, phase, objective, status, project_id) VALUES (?, ?, ?, ?, ?)",
@@ -187,20 +187,23 @@ class TestMissionQueue:
         )
         await db.commit()
 
+        class FailingEmbeddings(DummyEmbeddings):
+            async def embed_document(self, text: str) -> list[float]:
+                raise RuntimeError("Embedding service unavailable")
+
         queue = JobQueue(db, default_max_attempts=1)
         await queue.enqueue(
-            "mission_auto_tag",
+            "mission_embed",
             project_id="proj_alpha",
             entity_type="mission",
             entity_id="mis_fail",
             max_attempts=1,
-            dedupe_key="proj_alpha:mission:mis_fail:auto_tag",
+            dedupe_key="proj_alpha:mission:mis_fail:embed",
         )
 
         worker = EnrichmentWorker(
             db=db,
-            llm=DummyLLM(raises=True),
-            embeddings=None,
+            embeddings=FailingEmbeddings(db),
             poll_interval=0.01,
             lease_seconds=60,
             max_attempts=1,
@@ -214,4 +217,4 @@ class TestMissionQueue:
         assert row is not None
         assert row["status"] == "failed"
         assert row["attempts"] == 1
-        assert "LLM unavailable" in row["last_error"]
+        assert "Embedding service unavailable" in row["last_error"]
