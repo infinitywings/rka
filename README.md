@@ -473,6 +473,15 @@ The model's context window is auto-detected. All LLM-dependent features (Q&A, su
 
 Add the MCP config (see Installation above). Both Claude Desktop and Claude Code now have access to all `rka_*` tools. Use `rka_list_projects`, `rka_set_project`, and `rka_create_project` for multi-project workflows.
 
+#### MCP Transport Modes
+
+The `rka mcp` binary supports two transport modes:
+
+- **Stdio (default)** — `rka mcp` with no arguments. Claude Desktop and Claude Code spawn the binary as a subprocess and communicate over stdin/stdout. This is the mode the install instructions above configure.
+- **Streamable HTTP (opt-in, v2.2+)** — `rka mcp --transport http --port 9713` runs the server on `http://127.0.0.1:9713/mcp`. Useful for remote access, multi-client scenarios, or mitmproxy-based protocol debugging. Enable via the `--transport http` flag or `RKA_MCP_TRANSPORT=http` env var. Authentication is not yet implemented — treat HTTP mode as dev/internal only until a future mission adds OAuth 2.1.
+
+The tool surface is identical across transports. Docker's default command still launches stdio-nothing there has changed.
+
 ### 4. Generate Onboarding Instructions (Optional)
 
 Run `rka_generate_claude_md` from Claude Desktop or hit `GET /api/generate-claude-md?role=executor` to generate a customized `CLAUDE.md` for the current project and role. This gives new sessions immediate context on project goals, conventions, and active work.
