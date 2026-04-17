@@ -18,8 +18,12 @@ from rka.infra.llm import LLMClient
 
 @pytest.mark.asyncio
 async def test_lifespan_does_not_block_on_llm_startup_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # Probe sleeps 1.0s; lifespan must return well before the probe completes.
+    # Earlier threshold of 0.15s was flaky on slower/shared CI runners — a 0.5s
+    # threshold still catches a blocking regression (would be >=1.0s) while
+    # tolerating CI scheduling noise.
     async def fake_is_available(self: LLMClient) -> bool:
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(1.0)
         self._available = False
         return False
 
@@ -44,7 +48,7 @@ async def test_lifespan_does_not_block_on_llm_startup_probe(tmp_path: Path, monk
     elapsed = time.perf_counter() - start
 
     try:
-        assert elapsed < 0.15
+        assert elapsed < 0.5
     finally:
         await lifespan.__aexit__(None, None, None)
 
