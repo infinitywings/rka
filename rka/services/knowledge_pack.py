@@ -33,6 +33,7 @@ _TABLE_CATEGORIES: dict[str, list[str]] = {
         "claim_edges",
         "entity_links",
         "tags",
+        "decision_options",
     ],
     "derived_data": [
         # SHOULD export, can rebuild if missing
@@ -74,6 +75,7 @@ _INSERT_ORDER = (
     # core_data (FK-safe order)
     "literature",
     "decisions",
+    "decision_options",
     "missions",
     "journal",
     "checkpoints",
@@ -117,6 +119,7 @@ _ID_ENTITY_TYPES = {
     "claims": "claim",
     "evidence_clusters": "cluster",
     "claim_edges": "claim_edge",
+    "decision_options": "decision_option",
     "artifacts": "artifact",
     "figures": "figure",
     "exploration_summaries": "summary",
@@ -131,12 +134,13 @@ _ID_ENTITY_TYPES = {
 _DIRECT_ID_COLUMNS = {
     "literature": ("id",),
     "missions": ("id", "depends_on", "parent_mission_id", "motivated_by_decision"),
-    "decisions": ("id", "parent_id", "superseded_by"),
+    "decisions": ("id", "parent_id", "superseded_by", "recommended_option_id", "pi_selected_option_id"),
     "journal": ("id", "related_mission", "supersedes", "superseded_by"),
     "checkpoints": ("id", "mission_id", "linked_decision_id"),
     "claims": ("id", "source_entry_id"),
     "evidence_clusters": ("id", "research_question_id"),
     "claim_edges": ("id", "source_claim_id", "target_claim_id", "cluster_id"),
+    "decision_options": ("id", "decision_id", "dominated_by"),
     "artifacts": ("id",),
     "figures": ("id", "artifact_id"),
     "exploration_summaries": ("id", "scope_id"),
