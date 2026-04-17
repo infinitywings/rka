@@ -1,5 +1,7 @@
 # Research Knowledge Agent (RKA)
 
+[![pytest](https://github.com/infinitywings/rka/actions/workflows/pytest.yml/badge.svg?branch=main)](https://github.com/infinitywings/rka/actions/workflows/pytest.yml)
+
 **Persistent research memory for AI-assisted investigations.**
 
 RKA gives your research project a brain that doesn't forget between sessions. It stores every finding, decision, hypothesis, and literature reference in a structured knowledge base with full provenance chains. The Brain (Claude) handles all knowledge enrichment — no local LLM required.

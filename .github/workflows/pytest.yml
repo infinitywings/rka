@@ -1,0 +1,42 @@
+name: pytest
+
+# CI runs pytest outside Docker against a fresh venv, per v2.2 Phase 0 design
+# (dec_01KPE5V4EXMWR9MGGPKA1R2VGH). The runtime Dockerfile installs only
+# .[llm,academic,workspace] — keeping production images slim. GitHub Actions
+# installs .[llm,academic,workspace,dev] directly into the runner, so each CI
+# job gets a fresh in-memory/migrated test DB via pytest's tmp_path fixtures.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: pytest-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install project with runtime + dev extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[llm,academic,workspace,dev]"
+
+      - name: Run pytest
+        run: python -m pytest -q --tb=short

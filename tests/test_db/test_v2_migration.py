@@ -74,6 +74,11 @@ async def test_decisions_have_v2_columns(db: Database):
 @pytest.mark.asyncio
 async def test_missions_have_v2_columns(db: Database):
     """Missions table has iteration, parent_mission_id, motivated_by_decision."""
+    # motivated_by_decision is a FK to decisions(id); seed the referenced row first.
+    await db.execute(
+        """INSERT INTO decisions (id, phase, question, decided_by, status, project_id)
+           VALUES ('dec_x', 'p1', 'test?', 'brain', 'active', 'proj_default')""",
+    )
     await db.execute(
         """INSERT INTO missions (id, phase, objective, status, iteration, motivated_by_decision, project_id)
            VALUES ('msn_test', 'p1', 'test', 'pending', 2, 'dec_x', 'proj_default')""",
@@ -87,6 +92,11 @@ async def test_missions_have_v2_columns(db: Database):
 @pytest.mark.asyncio
 async def test_claims_table_exists(db: Database):
     """Claims table is created by migration."""
+    # claims.source_entry_id FKs to journal(id); seed it first.
+    await db.execute(
+        """INSERT INTO journal (id, type, content, source, confidence, importance, status, pinned, project_id)
+           VALUES ('jrn_1', 'note', 'src', 'brain', 'hypothesis', 'normal', 'active', 0, 'proj_default')""",
+    )
     await db.execute(
         """INSERT INTO claims (id, source_entry_id, claim_type, content, project_id)
            VALUES ('clm_test', 'jrn_1', 'hypothesis', 'test claim', 'proj_default')""",
@@ -117,7 +127,12 @@ async def test_evidence_clusters_table_exists(db: Database):
 @pytest.mark.asyncio
 async def test_claim_edges_table_exists(db: Database):
     """Claim edges table is created by migration."""
-    # First create a claim to reference
+    # claims.source_entry_id FKs to journal(id); claim_edges.source_claim_id FKs to claims(id).
+    # Seed the full chain before the claim_edges insert.
+    await db.execute(
+        """INSERT INTO journal (id, type, content, source, confidence, importance, status, pinned, project_id)
+           VALUES ('jrn_1', 'note', 'src', 'brain', 'hypothesis', 'normal', 'active', 0, 'proj_default')""",
+    )
     await db.execute(
         """INSERT INTO claims (id, source_entry_id, claim_type, content, project_id)
            VALUES ('clm_e1', 'jrn_1', 'evidence', 'test', 'proj_default')""",
