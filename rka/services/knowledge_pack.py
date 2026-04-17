@@ -280,6 +280,11 @@ class KnowledgePackService(BaseService):
             created_root = False
 
             await self.db.execute("BEGIN")
+            # Defer FK checks until commit — enables forward references between
+            # tables (e.g., decisions.recommended_option_id → decision_options
+            # inserted later in _INSERT_ORDER). All refs must resolve by commit;
+            # genuine orphans still fail there.
+            await self.db.execute("PRAGMA defer_foreign_keys = ON")
             try:
                 await self._insert_row(
                     "projects",
