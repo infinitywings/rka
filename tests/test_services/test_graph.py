@@ -126,6 +126,49 @@ class TestEgoGraph:
         assert len(result["edges"]) == 0
 
 
+class TestEgoGraphClaimEdges:
+    @pytest_asyncio.fixture
+    async def cluster_svc(self, db: Database) -> GraphService:
+        """GraphService seeded with a cluster and two member claims via claim_edges."""
+        await db.execute(
+            "INSERT INTO journal (id, type, content, source, confidence, phase, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ["jrn_src", "finding", "Source entry for test claims", "brain", "hypothesis", "phase_1", "proj_default"],
+        )
+        await db.execute(
+            "INSERT INTO evidence_clusters (id, label, project_id) VALUES (?, ?, ?)",
+            ["ecl_test", "Test cluster", "proj_default"],
+        )
+        await db.execute(
+            "INSERT INTO claims (id, source_entry_id, claim_type, content, project_id) VALUES (?, ?, ?, ?, ?)",
+            ["clm_a", "jrn_src", "evidence", "Claim A", "proj_default"],
+        )
+        await db.execute(
+            "INSERT INTO claims (id, source_entry_id, claim_type, content, project_id) VALUES (?, ?, ?, ?, ?)",
+            ["clm_b", "jrn_src", "evidence", "Claim B", "proj_default"],
+        )
+        await db.execute(
+            "INSERT INTO claim_edges (id, source_claim_id, cluster_id, relation, project_id) VALUES (?, ?, ?, ?, ?)",
+            ["ced_a", "clm_a", "ecl_test", "member_of", "proj_default"],
+        )
+        await db.execute(
+            "INSERT INTO claim_edges (id, source_claim_id, cluster_id, relation, project_id) VALUES (?, ?, ?, ?, ?)",
+            ["ced_b", "clm_b", "ecl_test", "member_of", "proj_default"],
+        )
+        await db.commit()
+        return GraphService(db=db)
+
+    @pytest.mark.asyncio
+    async def test_cluster_ego_includes_member_claims(self, cluster_svc: GraphService):
+        result = await cluster_svc.get_ego_graph("ecl_test", depth=1)
+        node_ids = {n["id"] for n in result["nodes"]}
+        assert node_ids == {"ecl_test", "clm_a", "clm_b"}
+        edge_types = [e["link_type"] for e in result["edges"]]
+        assert edge_types.count("member_of") == 2
+        for edge in result["edges"]:
+            assert edge["target"] == "ecl_test"
+            assert edge["source"] in {"clm_a", "clm_b"}
+
+
 class TestDecisionTree:
     @pytest.mark.asyncio
     async def test_returns_decision_with_linked_entities(self, graph_svc: GraphService):
