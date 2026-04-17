@@ -2657,9 +2657,7 @@ async def rka_trace_provenance(
         max_depth: Maximum hops to traverse (default 4)
     """
     async with _client() as c:
-        r = await c.get("/api/graph/ego", params={
-            "entity_id": entity_id, "depth": max_depth,
-        })
+        r = await c.get(f"/api/graph/ego/{entity_id}", params={"depth": max_depth})
         _raise_with_detail(r)
     data = r.json()
     nodes = {n["id"]: n for n in data.get("nodes", [])}
