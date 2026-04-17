@@ -968,10 +968,11 @@ async def rka_get(
         "clm": f"/api/claims/{id}",
         "ecl": f"/api/clusters/{id}",
         "mis": f"/api/missions/{id}",
+        "chk": f"/api/checkpoints/{id}",
     }
     endpoint = endpoint_map.get(prefix)
     if not endpoint:
-        return f"Unknown ID prefix '{prefix}'. Expected: jrn_, dec_, lit_, clm_, ecl_, mis_"
+        return f"Unknown ID prefix '{prefix}'. Expected: jrn_, dec_, lit_, clm_, ecl_, mis_, chk_"
     params = {}
     if prefix == "ecl":
         params["include_claims"] = "true"
