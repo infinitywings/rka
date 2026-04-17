@@ -27,7 +27,7 @@ def _make_option(
         explanation=f"{label} full reasoning.",
         pros=["Pro one", "Pro two", "Pro three"],
         cons=["Con one", "Con two", "Con three (steelman)"],
-        evidence=[EvidenceRef(claim_id="clm_test", strength_tier="moderate")],
+        evidence=[EvidenceRef(claim_id="clm_test", strength_tier="direct")],
         confidence_verbal="moderate",
         confidence_numeric=confidence,
         confidence_evidence_strength="moderate",

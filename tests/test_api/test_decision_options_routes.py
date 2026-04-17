@@ -30,7 +30,7 @@ def _option_payload(
         "explanation": f"{label} full reasoning.",
         "pros": ["p1", "p2", "p3"],
         "cons": ["c1", "c2", "c3 (steelman)"],
-        "evidence": [{"claim_id": "clm_x", "strength_tier": "moderate"}],
+        "evidence": [{"claim_id": "clm_x", "strength_tier": "direct"}],
         "confidence_verbal": "moderate",
         "confidence_numeric": confidence,
         "confidence_evidence_strength": "moderate",

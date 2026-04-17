@@ -431,6 +431,218 @@ async def rka_update_decision(
         return f"Updated decision {id} fields={','.join(changed)}"
 
 
+# ============================================================
+# Multi-Choice Decision UX (v2.2) — strip-then-re-inject protocol
+# ============================================================
+# See skills/brain/decision_ux.md for the full protocol spec. These tools
+# implement the persistence + validation + ranking portions; the Brain is
+# responsible for Stage 1 option generation with PI preference stripped.
+
+
+@tool()
+async def rka_present_decision(
+    decision_id: str,
+    confirmation_brief: str,
+    options: list[dict],
+    pi_preference: str | None = None,
+) -> str:
+    """Present a multi-choice decision to the PI via the v2.2 strip-then-re-inject protocol.
+
+    Implements decision_ux.md's three-stage pipeline as a persistence + validation
+    + ranking layer. The Brain generates 5 candidate options externally with
+    PI preference stripped from the generation context; this tool then:
+      - Stage 1 (validation): substring-checks options for PI-preference leakage
+        (trip-wire; semantic leaks must be caught by Brain discipline).
+      - Stage 2 (pruning): persists all 5, computes Pareto dominance on
+        (confidence_numeric, effort_time, effort_reversibility), sets dominated_by
+        on dominated rows. Non-dominated survivors proceed.
+      - Stage 3 (ranking): recommendation goes to the survivor with highest
+        confidence_numeric (proxy for "least convincing opposing-critique").
+
+    Refuses if the decision already has options or a recorded PI selection —
+    use rka_supersede_decision to revisit.
+
+    Args:
+        decision_id: Existing decision to attach options to.
+        confirmation_brief: The Brain's restatement of PI intent (recorded for audit).
+        options: List of 5 DecisionOptionCreate-shaped dicts. Brain-authored.
+        pi_preference: PI's stated preference text; used only for stage-1
+            strip check + stage-3 audit marker. Pass None if no preference known.
+
+    Returns:
+        JSON string summarizing the presentation: presented_option_ids,
+        recommended_option_id, presentation_method, and the markdown-rendered
+        options block for the Brain to show the PI.
+    """
+    async with _client() as c:
+        # Guard: refuse if decision doesn't exist, has existing options,
+        # or already recorded a PI selection.
+        r = await c.get(f"/api/decisions/{decision_id}")
+        if r.status_code == 404:
+            return json.dumps({"error": "decision_not_found", "decision_id": decision_id})
+        _raise_with_detail(r)
+        dec = r.json()
+        if dec.get("pi_selected_option_id") or dec.get("pi_override_rationale"):
+            return json.dumps({
+                "error": "decision_already_selected",
+                "message": "Decision already presented; use rka_supersede_decision to create a new decision with fresh options.",
+            })
+        r = await c.get(f"/api/decisions/{decision_id}/options")
+        _raise_with_detail(r)
+        if r.json():
+            return json.dumps({
+                "error": "decision_already_presented",
+                "message": "Decision already presented; use rka_supersede_decision to create a new decision with fresh options.",
+            })
+
+        # Stage 1 — strip check. Substring match is advisory per decision_ux.md;
+        # Brain discipline is the semantic guarantee.
+        if pi_preference:
+            pref_lower = pi_preference.strip().lower()
+            if pref_lower:
+                for idx, opt in enumerate(options):
+                    text_blob = " ".join(str(opt.get(k, "")) for k in (
+                        "label", "summary", "justification", "explanation",
+                    )).lower()
+                    if pref_lower in text_blob:
+                        return json.dumps({
+                            "error": "pi_preference_leaked_into_generation",
+                            "message": f"Option index {idx} contains the PI preference text. "
+                                       "Stage 1 failed; regenerate with preference stripped.",
+                            "offending_option_index": idx,
+                        })
+
+        # Stage 2a — persist all 5 via bulk create.
+        r = await c.post(f"/api/decisions/{decision_id}/options/bulk", json=options)
+        _raise_with_detail(r)
+        created = r.json()
+        if len(created) < 2:
+            return json.dumps({
+                "error": "insufficient_options",
+                "message": f"Only {len(created)} option(s) persisted; need at least 2 for Pareto to be meaningful.",
+                "presented_option_ids": [o["id"] for o in created],
+            })
+
+        # Stage 2b — Pareto dominance. Compute locally, then PUT dominated_by per row.
+        from rka.services.pareto import compute_dominance
+        dominance = compute_dominance(created)
+        for i, dominator_idx in dominance.items():
+            if dominator_idx is not None:
+                dominator_id = created[dominator_idx]["id"]
+                r = await c.put(
+                    f"/api/decision_options/{created[i]['id']}/dominated_by",
+                    json={"dominator_id": dominator_id},
+                )
+                _raise_with_detail(r)
+
+        # Stage 2c — select survivors. If >3 non-dominated, sort by confidence
+        # desc and keep top 3. If <3, proceed with whatever remains and note.
+        survivors = [o for i, o in enumerate(created) if dominance[i] is None]
+        if len(survivors) > 3:
+            survivors.sort(key=lambda o: float(o.get("confidence_numeric", 0.0)), reverse=True)
+            survivors = survivors[:3]
+        elif len(survivors) == 1:
+            # Fall through: present the single survivor; Brain/PI decide what this means.
+            pass
+
+        # Stage 3 — ranking. Proxy for "weakest opposing-critique": highest
+        # confidence_numeric among survivors.
+        recommended = max(survivors, key=lambda o: float(o.get("confidence_numeric", 0.0)))
+        r = await c.put(f"/api/decision_options/{recommended['id']}/recommend")
+        _raise_with_detail(r)
+
+        # Persist presentation_method on the decisions row.
+        r = await c.put(
+            f"/api/decisions/{decision_id}",
+            json={"presentation_method": "markdown_fallback"},
+        )
+        # The PUT endpoint may not accept presentation_method via the normal
+        # DecisionUpdate model — attempt, tolerate 422. Future work to wire it cleanly.
+
+        # Render markdown presentation block.
+        lines = [
+            f"# Decision: {dec.get('question', '(no question recorded)')}",
+            "",
+            "## Confirmation Brief",
+            confirmation_brief,
+            "",
+        ]
+        if pi_preference:
+            lines.extend(["## PI Preference (re-injected at ranking)", pi_preference, ""])
+        lines.append(f"## Surviving Options ({len(survivors)})")
+        lines.append("")
+        for o in survivors:
+            marker = "⭐ RECOMMENDED" if o["id"] == recommended["id"] else ""
+            lines.extend([
+                f"### {o['label']} {marker}".strip(),
+                f"_Confidence: {o.get('confidence_verbal')}_ "
+                f"({o.get('confidence_numeric')}, {o.get('confidence_evidence_strength')} evidence) "
+                f"· _Effort: {o.get('effort_time')} / {o.get('effort_reversibility')}_",
+                "",
+                o.get("summary", ""),
+                "",
+                f"**Justification**: {o.get('justification')}",
+                "",
+                f"**Explanation**: {o.get('explanation')}",
+                "",
+                "**Pros**:",
+                *[f"- {p}" for p in o.get("pros") or []],
+                "",
+                "**Cons**:",
+                *[f"- {c}" for c in o.get("cons") or []],
+                "",
+                "**Known unknowns**:",
+                *[f"- {u}" for u in o.get("confidence_known_unknowns") or []],
+                "",
+            ])
+        lines.append(
+            "Call `rka_record_pi_selection(decision_id, selected_option_id=...)` "
+            "to record the PI's choice, or with `override_rationale` for an "
+            "escape-hatch response."
+        )
+
+        return json.dumps({
+            "decision_id": decision_id,
+            "presented_option_ids": [o["id"] for o in survivors],
+            "recommended_option_id": recommended["id"],
+            "presentation_method": "markdown_fallback",
+            "dominated_option_ids": [o["id"] for i, o in enumerate(created) if dominance[i] is not None],
+            "presentation_markdown": "\n".join(lines),
+        }, indent=2)
+
+
+@tool()
+async def rka_record_pi_selection(
+    decision_id: str,
+    selected_option_id: str | None = None,
+    override_rationale: str | None = None,
+) -> str:
+    """Record the PI's response to a presented decision.
+
+    Exclusive: pass EITHER selected_option_id (PI chose one of the surviving
+    options) OR override_rationale (PI invoked an escape hatch). Both set or
+    neither set is rejected.
+
+    Args:
+        decision_id: The decision being responded to.
+        selected_option_id: If the PI selected one of the presented options,
+            its dop_... ID.
+        override_rationale: If the PI used an escape hatch, one of the four
+            canonical values per decision_ux.md: "defer", "reframe", "reject_all",
+            or "custom: <free text>".
+    """
+    async with _client() as c:
+        r = await c.put(
+            f"/api/decisions/{decision_id}/pi_selection",
+            json={
+                "selected_option_id": selected_option_id,
+                "override_rationale": override_rationale,
+            },
+        )
+        _raise_with_detail(r)
+        return json.dumps(r.json(), indent=2)
+
+
 @tool()
 async def rka_bulk_update(
     updates: list[dict],

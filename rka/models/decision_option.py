@@ -17,7 +17,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 ConfidenceVerbal = Literal["low", "moderate", "high"]
+# EvidenceStrength describes the option's aggregate evidence-quality assessment.
 EvidenceStrength = Literal["weak", "moderate", "strong"]
+# EvidenceRefStrength is the per-pointer relationship strength between an
+# individual claim and the option. Semantically distinct from the aggregate
+# quality assessment — a set of "direct" refs can still total to "moderate"
+# aggregate strength if the claims are weak individually.
+EvidenceRefStrength = Literal["direct", "indirect", "weak"]
 EffortTime = Literal["S", "M", "L", "XL"]
 EffortReversibility = Literal["reversible", "costly", "irreversible"]
 
@@ -25,12 +31,21 @@ EffortReversibility = Literal["reversible", "costly", "irreversible"]
 class EvidenceRef(BaseModel):
     """One evidence pointer attached to a decision option.
 
-    Shape mirrors decision_ux.md: each entry is a claim reference with a
-    strength tier. Schema stores this as a JSON array of these records.
+    Shape formalized in Mission 1B-ii per jrn_01KPEQ57WBXEJC6QV2RSJVDZZ1 Q2.
+    Schema stores a list of these as a JSON array in
+    ``decision_options.evidence``.
+
+    - ``claim_id``: the referenced claim.
+    - ``strength_tier``: how directly the claim supports the option's case.
+      ``direct`` = the claim is the core evidence; ``indirect`` = supportive but
+      not decisive; ``weak`` = mentioned for completeness.
+    - ``weight``: optional fine-grained score in [0, 1]. Used by future
+      calibration features; may be None during current Brain workflows.
     """
 
     claim_id: str
-    strength_tier: EvidenceStrength
+    strength_tier: EvidenceRefStrength
+    weight: float | None = None
 
 
 class DecisionOptionCreate(BaseModel):
