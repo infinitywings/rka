@@ -34,6 +34,7 @@ _TABLE_CATEGORIES: dict[str, list[str]] = {
         "entity_links",
         "tags",
         "decision_options",
+        "calibration_outcomes",
     ],
     "derived_data": [
         # SHOULD export, can rebuild if missing
@@ -84,6 +85,7 @@ _INSERT_ORDER = (
     "claim_edges",
     "entity_links",
     "tags",
+    "calibration_outcomes",
     # derived_data
     "review_queue",
     "topics",
@@ -120,6 +122,7 @@ _ID_ENTITY_TYPES = {
     "evidence_clusters": "cluster",
     "claim_edges": "claim_edge",
     "decision_options": "decision_option",
+    "calibration_outcomes": "calibration_outcome",
     "artifacts": "artifact",
     "figures": "figure",
     "exploration_summaries": "summary",
@@ -141,6 +144,7 @@ _DIRECT_ID_COLUMNS = {
     "evidence_clusters": ("id", "research_question_id"),
     "claim_edges": ("id", "source_claim_id", "target_claim_id", "cluster_id"),
     "decision_options": ("id", "decision_id", "dominated_by"),
+    "calibration_outcomes": ("id", "decision_id"),
     "artifacts": ("id",),
     "figures": ("id", "artifact_id"),
     "exploration_summaries": ("id", "scope_id"),
