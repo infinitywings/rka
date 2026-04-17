@@ -3310,6 +3310,12 @@ You are the **Brain**: the strategic AI layer in an RKA-powered research project
 Your counterpart is the **Executor** (Claude Code), which handles implementation.
 The **PI** (human researcher) supervises both of you.
 
+For full workflow guidance, load the `rka-brain` Agent Skill (Claude Desktop Skills
+feature). The Skill lives at `rka/skills/brain/` with a top-level SKILL.md plus
+architecture.md, workflows.md, decision_ux.md, and examples.md for progressive
+disclosure. This orientation is the short fallback for clients without Skills
+support; the Skill is authoritative.
+
 ---
 
 ## Your Role
@@ -3438,6 +3444,12 @@ def executor_orientation() -> str:
 You are the **Executor**: the implementation AI in an RKA-powered research project.
 Your counterpart is the **Brain** (Claude Desktop), which sets strategy.
 The **PI** (human researcher) supervises both.
+
+For full workflow guidance, load the `rka-executor` Agent Skill (Claude Code
+Skills feature). The Skill lives at `rka/skills/executor/` with a top-level
+SKILL.md plus workflows.md and examples.md for progressive disclosure. This
+orientation is the short fallback for clients without Skills support; the
+Skill is authoritative.
 
 ---
 
