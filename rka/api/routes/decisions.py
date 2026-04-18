@@ -1,9 +1,11 @@
 """Decision tree routes.
 
-Also hosts the decision_options (v2.2 rich multi-choice) endpoints since they
-attach naturally to ``/decisions/{decision_id}/...``. Standalone option paths
-live under ``/decision_options/{option_id}/...``. Splitting to a separate file
-makes sense once this file exceeds ~300 lines.
+Also hosts the decision_options (v2.2 rich multi-choice) endpoints and the
+calibration_outcomes endpoints since they attach naturally to
+``/decisions/{decision_id}/...``. Standalone option + calibration paths
+live under ``/decision_options/{option_id}/...`` and ``/calibration/...``.
+Splitting calibration to its own file becomes worthwhile once this file
+exceeds ~350 lines.
 """
 
 from __future__ import annotations
@@ -17,11 +19,18 @@ from rka.models.decision_option import (
     DominatedByPayload,
     PiSelectionPayload,
 )
+from rka.models.calibration import (
+    CalibrationMetrics,
+    CalibrationOutcome,
+    CalibrationOutcomeCreate,
+)
 from rka.services.decisions import DecisionService
 from rka.services.decision_options import DecisionOptionsService
+from rka.services.calibration import CalibrationService
 from rka.api.deps import (
     get_scoped_decision_service,
     get_scoped_decision_options_service,
+    get_scoped_calibration_service,
 )
 
 router = APIRouter()
@@ -208,3 +217,80 @@ async def record_pi_selection(
         "selected_option_id": payload.selected_option_id,
         "override_rationale": payload.override_rationale,
     }
+
+
+# ============================================================
+# Calibration outcomes (Mission 1B-iii)
+# ============================================================
+
+
+async def _require_decision_for_outcome(dec_id: str, svc: DecisionService):
+    """Fetch the decision, raise 404 if missing, 400 if no PI selection recorded.
+
+    Outcomes only make sense for decisions the PI has resolved — either by
+    selecting an option or invoking an escape hatch. Without that, there's
+    nothing to measure success against.
+    """
+    dec = await svc.get(dec_id)
+    if dec is None:
+        raise HTTPException(404, f"Decision {dec_id} not found")
+    if not dec.pi_selected_option_id and not dec.pi_override_rationale:
+        raise HTTPException(
+            400,
+            f"Decision {dec_id} has no recorded PI selection (neither "
+            "pi_selected_option_id nor pi_override_rationale set); cannot record outcome.",
+        )
+    return dec
+
+
+@router.post(
+    "/decisions/{dec_id}/outcomes",
+    response_model=CalibrationOutcome,
+    status_code=201,
+)
+async def record_outcome(
+    dec_id: str,
+    data: CalibrationOutcomeCreate,
+    dec_svc: DecisionService = Depends(get_scoped_decision_service),
+    cal_svc: CalibrationService = Depends(get_scoped_calibration_service),
+):
+    await _require_decision_for_outcome(dec_id, dec_svc)
+    return await cal_svc.record(dec_id, data)
+
+
+@router.get(
+    "/decisions/{dec_id}/outcomes",
+    response_model=list[CalibrationOutcome],
+)
+async def list_outcomes_for_decision(
+    dec_id: str,
+    cal_svc: CalibrationService = Depends(get_scoped_calibration_service),
+):
+    return await cal_svc.list_for_decision(dec_id)
+
+
+@router.get(
+    "/calibration/outcomes",
+    response_model=list[CalibrationOutcome],
+)
+async def list_all_outcomes(
+    outcome: str | None = Query(
+        None, description="Filter by outcome: succeeded | failed | mixed | unresolved"
+    ),
+    since: str | None = Query(
+        None, description="ISO-8601 timestamp; filter to outcomes recorded at/after this time"
+    ),
+    cal_svc: CalibrationService = Depends(get_scoped_calibration_service),
+):
+    return await cal_svc.list_all(since=since, outcome_filter=outcome)
+
+
+@router.get(
+    "/calibration/metrics",
+    response_model=CalibrationMetrics,
+)
+async def calibration_metrics(
+    cal_svc: CalibrationService = Depends(get_scoped_calibration_service),
+):
+    """Compute Brier + ECE over eligible decisions in the project."""
+    return await cal_svc.compute_metrics()

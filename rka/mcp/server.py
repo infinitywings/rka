@@ -644,6 +644,58 @@ async def rka_record_pi_selection(
 
 
 @tool()
+async def rka_record_outcome(
+    decision_id: str,
+    outcome: str,
+    outcome_details: str | None = None,
+    recorded_by: str = "pi",
+) -> str:
+    """Record what actually happened after a decision played out.
+
+    Writes to the calibration_outcomes table (migration 018). The Brain or PI
+    should call this once a decision's real-world outcome becomes known —
+    days, weeks, or months after rka_present_decision was called. Multiple
+    outcomes per decision are allowed (revisions); the most recent is what
+    Brier/ECE use.
+
+    Refuses on decisions with no recorded PI selection — there's nothing to
+    measure success against.
+
+    Args:
+        decision_id: The decision being scored.
+        outcome: One of "succeeded" | "failed" | "mixed" | "unresolved".
+        outcome_details: Optional free text explaining what happened.
+        recorded_by: "pi" by default; use "brain" if the Brain is recording
+            on the PI's behalf based on a directive.
+
+    Returns:
+        JSON string with the created calibration_outcomes row.
+    """
+    async with _client() as c:
+        r = await c.post(
+            f"/api/decisions/{decision_id}/outcomes",
+            json={
+                "outcome": outcome,
+                "outcome_details": outcome_details,
+                "recorded_by": recorded_by,
+            },
+        )
+        if r.status_code == 400:
+            return json.dumps({
+                "error": "decision_not_resolved",
+                "message": r.json().get("detail", "Decision has no recorded PI selection"),
+                "decision_id": decision_id,
+            })
+        if r.status_code == 404:
+            return json.dumps({
+                "error": "decision_not_found",
+                "decision_id": decision_id,
+            })
+        _raise_with_detail(r)
+        return json.dumps(r.json(), indent=2)
+
+
+@tool()
 async def rka_bulk_update(
     updates: list[dict],
 ) -> str:

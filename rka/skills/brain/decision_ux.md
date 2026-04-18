@@ -119,7 +119,7 @@ Once an option is selected (`pi_selected_option_id` set) or rejected via escape 
 
 ### The Calibration Loop
 
-When a decision's real-world outcome becomes known, record it in `calibration_outcomes` (migration 018):
+The `rka_record_outcome` tool records what actually happened after a decision played out, writing to `calibration_outcomes` (migration 018). The `/api/calibration/metrics` endpoint computes Brier score and ECE on demand from those outcomes — both ship in v2.2 (Mission 1B-iii). The Brain or PI calls `rka_record_outcome` once a decision's real-world outcome becomes known:
 
 ```python
 rka_record_outcome(
@@ -129,7 +129,7 @@ rka_record_outcome(
 )
 ```
 
-Periodically — quarterly or after 20+ outcomes — compute Brier score and ECE on recommended options vs. actual outcomes:
+Periodically — quarterly or after 20+ outcomes — `GET /api/calibration/metrics` reports Brier score and ECE on recommended options vs. actual outcomes (returns a warning if N<5):
 
 - **Brier score**: mean squared error between `confidence_numeric` and the binary outcome. Lower is better. Uncalibrated Brain = high Brier.
 - **ECE (Expected Calibration Error)**: over binned confidence, the average gap between stated confidence and actual accuracy. Flags systematic over- or under-confidence.

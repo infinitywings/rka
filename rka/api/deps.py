@@ -34,6 +34,7 @@ from rka.services.review_queue import ReviewQueueService
 from rka.services.onboarding import OnboardingService
 from rka.services.researcher_tools import ResearcherToolsService
 from rka.services.decision_options import DecisionOptionsService
+from rka.services.calibration import CalibrationService
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +160,13 @@ def get_scoped_decision_options_service(
     db: Database = Depends(get_db),
 ) -> DecisionOptionsService:
     return DecisionOptionsService(db, project_id=project_id)
+
+
+def get_scoped_calibration_service(
+    project_id: str = Depends(require_project),
+    db: Database = Depends(get_db),
+) -> CalibrationService:
+    return CalibrationService(db, project_id=project_id)
 
 
 def get_literature_service(
