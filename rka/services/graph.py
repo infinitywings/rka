@@ -249,11 +249,27 @@ class GraphService:
             if not frontier:
                 break
             placeholders = ",".join("?" for _ in frontier)
+            frontier_list = list(frontier)
             rows = await self.db.fetchall(
                 f"SELECT source_type, source_id, link_type, target_type, target_id, created_at "
                 f"FROM entity_links "
                 f"WHERE {self._project_clause()} AND (source_id IN ({placeholders}) OR target_id IN ({placeholders}))",
-                [project_id] + list(frontier) + list(frontier),
+                [project_id] + frontier_list + frontier_list,
+            )
+            # Also expand via claim_edges (cluster membership + claim-to-claim relations).
+            # Returns no rows when the frontier contains no clm_/ecl_ IDs, so this is safe
+            # for non-claim entities.
+            # Edge direction: member_of points claim -> cluster (source_claim_id -> cluster_id,
+            # target_claim_id is NULL). Other relations (supports/contradicts/qualifies/supersedes)
+            # point source_claim_id -> target_claim_id.
+            ce_rows = await self.db.fetchall(
+                f"SELECT source_claim_id, target_claim_id, cluster_id, relation, created_at "
+                f"FROM claim_edges "
+                f"WHERE {self._project_clause()} AND ("
+                f"source_claim_id IN ({placeholders}) OR "
+                f"target_claim_id IN ({placeholders}) OR "
+                f"cluster_id IN ({placeholders}))",
+                [project_id] + frontier_list + frontier_list + frontier_list,
             )
             visited |= frontier
             next_frontier: set[str] = set()
@@ -265,6 +281,22 @@ class GraphService:
                     "created_at": row["created_at"],
                 })
                 for eid in (row["source_id"], row["target_id"]):
+                    if eid not in visited:
+                        next_frontier.add(eid)
+            for row in ce_rows:
+                src = row["source_claim_id"]
+                # member_of edges point claim -> cluster (target_claim_id is NULL).
+                # All other relations point claim -> claim.
+                tgt = row["cluster_id"] if row["relation"] == "member_of" else row["target_claim_id"]
+                if not src or not tgt:
+                    continue
+                all_edges.append({
+                    "source": src,
+                    "target": tgt,
+                    "link_type": row["relation"],
+                    "created_at": row["created_at"],
+                })
+                for eid in (src, tgt):
                     if eid not in visited:
                         next_frontier.add(eid)
             frontier = next_frontier

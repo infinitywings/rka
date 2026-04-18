@@ -33,6 +33,8 @@ _TABLE_CATEGORIES: dict[str, list[str]] = {
         "claim_edges",
         "entity_links",
         "tags",
+        "decision_options",
+        "calibration_outcomes",
     ],
     "derived_data": [
         # SHOULD export, can rebuild if missing
@@ -74,6 +76,7 @@ _INSERT_ORDER = (
     # core_data (FK-safe order)
     "literature",
     "decisions",
+    "decision_options",
     "missions",
     "journal",
     "checkpoints",
@@ -82,6 +85,7 @@ _INSERT_ORDER = (
     "claim_edges",
     "entity_links",
     "tags",
+    "calibration_outcomes",
     # derived_data
     "review_queue",
     "topics",
@@ -117,6 +121,8 @@ _ID_ENTITY_TYPES = {
     "claims": "claim",
     "evidence_clusters": "cluster",
     "claim_edges": "claim_edge",
+    "decision_options": "decision_option",
+    "calibration_outcomes": "calibration_outcome",
     "artifacts": "artifact",
     "figures": "figure",
     "exploration_summaries": "summary",
@@ -131,12 +137,14 @@ _ID_ENTITY_TYPES = {
 _DIRECT_ID_COLUMNS = {
     "literature": ("id",),
     "missions": ("id", "depends_on", "parent_mission_id", "motivated_by_decision"),
-    "decisions": ("id", "parent_id", "superseded_by"),
+    "decisions": ("id", "parent_id", "superseded_by", "recommended_option_id", "pi_selected_option_id"),
     "journal": ("id", "related_mission", "supersedes", "superseded_by"),
     "checkpoints": ("id", "mission_id", "linked_decision_id"),
     "claims": ("id", "source_entry_id"),
     "evidence_clusters": ("id", "research_question_id"),
     "claim_edges": ("id", "source_claim_id", "target_claim_id", "cluster_id"),
+    "decision_options": ("id", "decision_id", "dominated_by"),
+    "calibration_outcomes": ("id", "decision_id"),
     "artifacts": ("id",),
     "figures": ("id", "artifact_id"),
     "exploration_summaries": ("id", "scope_id"),
@@ -272,6 +280,11 @@ class KnowledgePackService(BaseService):
             created_root = False
 
             await self.db.execute("BEGIN")
+            # Defer FK checks until commit — enables forward references between
+            # tables (e.g., decisions.recommended_option_id → decision_options
+            # inserted later in _INSERT_ORDER). All refs must resolve by commit;
+            # genuine orphans still fail there.
+            await self.db.execute("PRAGMA defer_foreign_keys = ON")
             try:
                 await self._insert_row(
                     "projects",

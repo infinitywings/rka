@@ -1,5 +1,7 @@
 # Research Knowledge Agent (RKA)
 
+[![pytest](https://github.com/infinitywings/rka/actions/workflows/pytest.yml/badge.svg?branch=main)](https://github.com/infinitywings/rka/actions/workflows/pytest.yml)
+
 **Persistent research memory for AI-assisted investigations.**
 
 RKA gives your research project a brain that doesn't forget between sessions. It stores every finding, decision, hypothesis, and literature reference in a structured knowledge base with full provenance chains. The Brain (Claude) handles all knowledge enrichment — no local LLM required.
@@ -149,6 +151,14 @@ rka_get_context(topic="...")   → Token-budgeted context package
 | **Multi-project** | Isolated project databases with MCP tools for switching |
 | **Web dashboard** | 12-page React UI: research map with filterable stats, decision tree, knowledge graph, markdown-rendered journal, expandable missions |
 | **Onboarding** | `rka_generate_claude_md` auto-generates project-specific CLAUDE.md from live DB state |
+| **Skills plugin** | Role-specific SKILL.md guides packaged as MCP prompts (Brain, Executor, PI) with worked examples and anti-patterns |
+| **Knowledge freshness** | Staleness detection and propagation through the dependency graph; contradiction detection via vector similarity |
+| **Validation gates** | Structured go/no-go checkpoints (Gate 0–3) with Go/Kill/Hold/Recycle verdicts and assumption tracking |
+| **Cluster management** | Split large clusters, merge thin ones — claim provenance preserved automatically |
+| **Literature workflow** | `rka_process_paper` captures reading annotations as structured claims in one call |
+| **RQ lifecycle** | Track research questions from open → partially_answered → answered → reframed → closed |
+| **Evidence assembly** | `rka_assemble_evidence` produces lit reviews, progress reports, and proposal sections from existing knowledge |
+| **Data integrity** | Categorized table registry prevents silent data loss during export; `rka_check_integrity` verifies the knowledge graph |
 
 ---
 
@@ -158,6 +168,7 @@ rka_get_context(topic="...")   → Token-budgeted context package
 - [Key Concepts](#key-concepts)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
+- [Skills Plugin](#skills-plugin--role-specific-workflow-guidance)
 - [Multi-Project Support](#multi-project-support)
 - [CLI Reference](#cli-reference)
 - [Configuration](#configuration)
@@ -187,7 +198,7 @@ graph TD
     end
 
     subgraph "RKA Server"
-        MCP["MCP Server — 50+ tools"]
+        MCP["MCP Server — 75+ tools"]
         API["REST API — FastAPI"]
         SVC["Service Layer — shared logic"]
         DB["SQLite + FTS5 + sqlite-vec"]
@@ -357,13 +368,17 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 
 **Optional LLM:** If you want `rka_ask` and `rka_generate_summary` features, configure a cloud LLM API (or local LM Studio/Ollama) from the web UI Settings page (`http://localhost:9712/settings`). This is optional — core functionality works without any LLM.
 
-**Connect Claude Code (MCP via pipx):**
+**Connect Claude Code (MCP via uv tool):**
 
 Install the MCP binary outside Docker so Claude Code can launch it directly:
 
 ```bash
-pipx install . --force
+UV_CACHE_DIR=/tmp/uv-cache uv tool install --force .
 ```
+
+The binary includes role-specific skill prompts (`brain_skill`, `executor_skill`, `pi_skill`) that Claude can load for full workflow guidance.
+
+Add to your Claude Code MCP config (`.claude/mcp.json` or VS Code settings):
 
 ```json
 {
@@ -377,6 +392,16 @@ pipx install . --force
 ```
 
 The MCP binary is stateless — it proxies all calls to the Docker container's REST API at `RKA_API_URL`.
+
+**After code changes**, always reinstall the MCP binary:
+
+```bash
+uv tool uninstall rka
+rm -rf /tmp/uv-cache
+UV_CACHE_DIR=/tmp/uv-cache uv tool install --force --reinstall .
+```
+
+Plain `uv tool install --force .` uses cached wheels and may NOT pick up changes.
 
 ### Option B: From Source (Development)
 
@@ -404,8 +429,8 @@ rka serve
 **Connect Claude Desktop/Code (MCP):**
 
 ```bash
-# Install the MCP binary via pipx (avoids macOS sandbox issues)
-pipx install . --force
+# Install the MCP binary via uv tool (avoids macOS sandbox issues)
+UV_CACHE_DIR=/tmp/uv-cache uv tool install --force .
 ```
 
 ```json
@@ -448,6 +473,15 @@ The model's context window is auto-detected. All LLM-dependent features (Q&A, su
 
 Add the MCP config (see Installation above). Both Claude Desktop and Claude Code now have access to all `rka_*` tools. Use `rka_list_projects`, `rka_set_project`, and `rka_create_project` for multi-project workflows.
 
+#### MCP Transport Modes
+
+The `rka mcp` binary supports two transport modes:
+
+- **Stdio (default)** — `rka mcp` with no arguments. Claude Desktop and Claude Code spawn the binary as a subprocess and communicate over stdin/stdout. This is the mode the install instructions above configure.
+- **Streamable HTTP (opt-in, v2.2+)** — `rka mcp --transport http --port 9713` runs the server on `http://127.0.0.1:9713/mcp`. Useful for remote access, multi-client scenarios, or mitmproxy-based protocol debugging. Enable via the `--transport http` flag or `RKA_MCP_TRANSPORT=http` env var. Authentication is not yet implemented — treat HTTP mode as dev/internal only until a future mission adds OAuth 2.1.
+
+The tool surface is identical across transports. Docker's default command still launches stdio-nothing there has changed.
+
 ### 4. Generate Onboarding Instructions (Optional)
 
 Run `rka_generate_claude_md` from Claude Desktop or hit `GET /api/generate-claude-md?role=executor` to generate a customized `CLAUDE.md` for the current project and role. This gives new sessions immediate context on project goals, conventions, and active work.
@@ -470,6 +504,42 @@ After import, switch to the project in the sidebar and explore the Decision Tree
 Use the web UI for browsing and Q&A, or use Claude Desktop/Code with MCP tools for the full Brain/Executor workflow. The dashboard lets you select the active project, browse the Research Map, manage the review queue, and export the active project as a knowledge pack.
 
 For end-to-end task walkthroughs, see [USAGE_GUIDE.md](USAGE_GUIDE.md) or the [Wiki](https://github.com/infinitywings/rka/wiki).
+
+---
+
+## Skills Plugin — Role-Specific Workflow Guidance
+
+RKA ships with role-specific skill guides that teach Claude how to use the tools effectively. These are packaged with the MCP binary and available as MCP prompts.
+
+### Available Skills
+
+| Skill | Target | Content |
+|-------|--------|---------|
+| `brain_skill` | Claude Desktop | Session start protocol, PI attribution, provenance discipline, claim extraction, multi-task parsing, Research Map workflow, confirmation briefs, knowledge freshness, validation gates, anti-patterns |
+| `executor_skill` | Claude Code | Mission pickup protocol, backbrief procedure, recording standards, escalation triggers, report submission, MCP binary reinstall, cross-role awareness |
+| `pi_skill` | Human researcher | Quick reference for checking status, reading the research map, reviewing decisions, finding what changed |
+
+### How Skills Are Loaded
+
+The MCP server instructions tell Claude to load the appropriate skill prompt at session start. Claude Desktop loads `brain_skill`; Claude Code loads `executor_skill`. The PI can read `skills/pi/SKILL.md` directly.
+
+### Key Workflows
+
+**Brain session start:**
+1. `rka_set_project()` → `rka_get_changelog(since="yesterday")` → `rka_get_research_map()`
+2. Process up to 10 maintenance items silently
+3. Greet the user
+
+**Executor mission pickup:**
+1. `rka_get_mission()` → read `motivated_by_decision` → read context links
+2. Present a Backbrief (plan summary, assumptions, risks)
+3. Wait for Brain approval before starting
+
+**Validation gates (go/no-go checkpoints):**
+1. `rka_create_gate(mission_id, gate_type, deliverables, pass_criteria)`
+2. Work proceeds → deliverables created
+3. `rka_evaluate_gate(gate_id, verdict, notes, assumption_status)`
+4. If assumptions invalidated → staleness cascades through the knowledge graph
 
 ---
 
@@ -724,6 +794,14 @@ All tools are prefixed with `rka_` and available through the MCP stdio interface
 | `rka_supersede_decision` | Mark a decision as superseded by a new decision, with optional re-distillation of affected claims |
 | `rka_trace_provenance` | Trace the full provenance chain for an entity — all upstream sources and downstream derivatives |
 
+### Cluster Management (v2.1)
+
+| Tool | Purpose |
+|------|---------|
+| `rka_list_clusters` | List evidence clusters with claim counts, confidence, and synthesis |
+| `rka_split_cluster` | Split a cluster into multiple new clusters by reassigning its claims |
+| `rka_merge_clusters` | Merge multiple clusters into one new cluster |
+
 ### Review Queue (v2.0)
 
 | Tool | Purpose |
@@ -732,6 +810,31 @@ All tools are prefixed with `rka_` and available through the MCP stdio interface
 | `rka_review_cluster` | Review and approve or revise an evidence cluster's synthesized summary |
 | `rka_review_claims` | Review a set of claims — accept, reject, merge, or flag for further investigation |
 | `rka_resolve_contradiction` | Resolve a contradiction between two claims with a rationale and disposition |
+
+### Knowledge Freshness (v2.1)
+
+| Tool | Purpose |
+|------|---------|
+| `rka_flag_stale` | Flag a claim, cluster, or decision as stale (yellow/red) with optional propagation through the dependency graph |
+| `rka_check_freshness` | Scan for potentially stale knowledge: aging claims, superseded sources, stale clusters and decisions |
+| `rka_detect_contradictions` | Find claims that may contradict a given claim using vector similarity or FTS fallback |
+
+### Validation Gates (v2.1)
+
+| Tool | Purpose |
+|------|---------|
+| `rka_create_gate` | Create a validation gate checkpoint (problem_framing, plan_validation, evidence_review, synthesis_validation) |
+| `rka_evaluate_gate` | Evaluate a gate with Go/Kill/Hold/Recycle verdict; invalidated assumptions auto-cascade staleness |
+
+### Researcher Experience (v2.1)
+
+| Tool | Purpose |
+|------|---------|
+| `rka_get_changelog` | Cross-entity temporal view — what changed since a given date across all entity types |
+| `rka_assemble_evidence` | Assemble evidence under a research question into structured markdown (lit_review, progress_report, proposal_section) |
+| `rka_process_paper` | Literature reading workflow — create reading notes + extract claims from annotations in one call |
+| `rka_advance_rq` | Advance a research question's lifecycle (open → partially_answered → answered → reframed → closed) |
+| `rka_check_integrity` | Verify knowledge base integrity — orphaned edges, missing references, count mismatches |
 
 ### Search and Context
 
@@ -787,12 +890,6 @@ All tools are prefixed with `rka_` and available through the MCP stdio interface
 |------|---------|
 | `rka_export` | Export research data as markdown, JSON, or Mermaid diagram (scopes: state, decisions, literature, full) |
 | `rka_export_mermaid` | Export the decision tree as a Mermaid flowchart with status-based styling |
-
-### Enrichment
-
-| Tool | Purpose |
-|------|---------|
-| `rka_enrich` | Trigger or check background enrichment jobs for one or more entities |
 
 ---
 
@@ -896,6 +993,26 @@ Most entity endpoints are project-scoped. Pass `X-RKA-Project: <project_id>` to 
 | `GET` | `/review-queue` | List review-queue items (filters: status, reason, since) |
 | `POST` | `/review-queue` | Add an item to the review queue manually |
 | `PUT` | `/review-queue/{id}/resolve` | Resolve a review-queue item with a disposition |
+
+### Researcher Tools (v2.1)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/changelog` | Cross-entity temporal view (query: `since`, `limit`) |
+| `GET` | `/assemble-evidence` | Assemble evidence as markdown (query: `research_question_id`, `format`) |
+| `POST` | `/clusters/split` | Split a cluster into multiple new clusters |
+| `POST` | `/clusters/merge` | Merge multiple clusters into one |
+| `POST` | `/literature/process-paper` | Process paper annotations into claims |
+| `POST` | `/research-questions/advance` | Advance an RQ lifecycle status |
+
+### Knowledge Freshness (v2.1)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/freshness/flag-stale` | Flag an entity as stale with optional propagation |
+| `GET` | `/freshness/check` | Scan for potentially stale items |
+| `POST` | `/freshness/detect-contradictions` | Find contradiction candidates via vector similarity or FTS |
+| `GET` | `/integrity` | Run knowledge base integrity check |
 
 ### Search and Context
 
@@ -1196,6 +1313,11 @@ The test suite covers database schema, CRUD operations, FTS5 search, context eng
 
 ```
 rka/
++-- skills/                     # MCP skill prompts (packaged with binary)
+|   +-- SKILL.md                # Router: detects role, directs to sub-skill
+|   +-- brain/SKILL.md          # Brain workflow guide (~450 lines)
+|   +-- executor/SKILL.md       # Executor workflow guide (~150 lines)
+|   +-- pi/SKILL.md             # PI quick reference
 +-- rka/                        # Python package
 |   +-- cli.py                  # Click CLI (init, serve, mcp, status, backup, migrate, bootstrap)
 |   +-- config.py               # Pydantic settings (RKAConfig)
@@ -1221,7 +1343,8 @@ rka/
 |   |   +-- audit.py            # Audit log queries and counts
 |   |   +-- academic.py         # BibTeX import, DOI enrichment, Mermaid export
 |   |   +-- artifacts.py        # Artifact registration + figure extraction
-|   |   +-- knowledge_pack.py   # Project export/import packs
+|   |   +-- knowledge_pack.py   # Project export/import packs (categorized table registry)
+|   |   +-- researcher_tools.py # Changelog, evidence assembly, cluster split/merge, paper processing, RQ lifecycle
 |   |   +-- workspace.py        # Workspace bootstrap (scan, classify, ingest)
 |   |   +-- jobs.py             # Job queue primitives
 |   |   +-- summary.py          # Q&A + summary generation
@@ -1256,7 +1379,7 @@ rka/
 |           +-- project.py
 |           +-- llm.py
 |           +-- summary.py
-|           +-- enrich.py
+|           +-- researcher_tools.py  # Changelog, evidence assembly, split/merge, process paper, advance RQ, integrity
 |           +-- events.py
 |           +-- tags.py
 +-- web/                        # React dashboard (Vite + TypeScript)
@@ -1301,6 +1424,7 @@ rka/
 | **Phase 7** | Notebook + LLM Config — Q&A chat, summary generation, runtime LLM configuration, context window auto-detection, knowledge graph, Docker deployment | Complete |
 | **Phase 8** | Multi-Project + Knowledge Packs — project isolation, dashboard project management, portable project export/import, artifact-safe import remapping, MCP multi-project tools | Complete |
 | **Phase 9** | v2.0 — Progressive distillation pipeline (entries -> claims -> clusters -> research map), three-level Research Map page, Brain-augmented enrichment via review queue, decision superseding with re-distillation, provenance chains, typed cross-references (link_), hierarchical topic taxonomy, background worker process, onboarding tools (rka_generate_claude_md), simplified journal entry types (note/log/directive) | Complete |
+| **Phase 10** | v2.1 — Skills plugin (role-specific SKILL.md as MCP prompts), interactive Research Map with cluster detail panels, researcher experience tools (changelog, evidence assembly, cluster split/merge, literature processing, RQ lifecycle), three-layer defense-in-depth (actor alignment protocol, knowledge freshness with staleness propagation, validation gates), knowledge pack redesign with table registry and integrity checks, `rka_check_integrity` tool | Complete |
 
 ---
 

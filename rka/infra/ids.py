@@ -25,6 +25,8 @@ _PREFIXES = {
     "claim": "clm",
     "cluster": "ecl",
     "claim_edge": "ced",
+    "decision_option": "dop",
+    "calibration_outcome": "cao",
     "topic": "top",
     "entity_topic": "etp",
     "context_snapshot": "ctx",

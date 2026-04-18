@@ -81,7 +81,7 @@ class DummyEmbeddings(EmbeddingService):
 class TestNoteQueue:
     @pytest.mark.asyncio
     async def test_create_note_returns_immediately(self, db: Database):
-        """Note creation should not call LLM inline; enrichment is queued."""
+        """Note creation should not call LLM inline; only embed enrichment is queued."""
         await _ensure_project(db, "proj_notes", "Notes")
         llm = DummyLLM()
         embeddings = DummyEmbeddings(db)
@@ -96,11 +96,12 @@ class TestNoteQueue:
             actor="executor",
         )
 
-        # No LLM calls during create
+        # No LLM calls during create (auto_tag/auto_link/auto_summarize were removed
+        # when local-LLM enrichment was deprecated — those moved to the Brain).
         assert llm.calls == {"auto_tag": 0, "semantic_link": 0, "summarize": 0}
         assert embeddings.calls == 0
 
-        # Enrichment is pending
+        # Embed is queued, note reports pending until the worker processes it.
         assert note.enrichment_status == "pending"
         assert note.tags == []
         assert note.summary is None
@@ -109,7 +110,7 @@ class TestNoteQueue:
         fts_rows = await db.fetchall("SELECT * FROM fts_journal WHERE id = ?", [note.id])
         assert len(fts_rows) == 1
 
-        # 4 jobs enqueued: auto_tag, auto_link, auto_summarize, embed
+        # Only note_embed is enqueued.
         jobs = await db.fetchall(
             """SELECT job_type, status, priority
                FROM jobs
@@ -117,73 +118,13 @@ class TestNoteQueue:
                ORDER BY job_type""",
             ["proj_notes", note.id],
         )
-        assert len(jobs) == 4
-        job_types = [j["job_type"] for j in jobs]
-        assert "note_auto_tag" in job_types
-        assert "note_auto_link" in job_types
-        assert "note_auto_summarize" in job_types
-        assert "note_embed" in job_types
-
-    @pytest.mark.asyncio
-    async def test_create_note_with_user_tags_skips_auto_tag_job(self, db: Database):
-        """When user provides tags, auto_tag job is not enqueued."""
-        await _ensure_project(db, "proj_notes", "Notes")
-        llm = DummyLLM()
-        svc = NoteService(db, llm=llm, embeddings=None, project_id="proj_notes")
-
-        note = await svc.create(
-            JournalEntryCreate(
-                content="Manual observation.",
-                type="observation",
-                source="pi",
-                tags=["manual", "curated"],
-            ),
-        )
-
-        assert sorted(note.tags) == ["curated", "manual"]
-
-        jobs = await db.fetchall(
-            "SELECT job_type FROM jobs WHERE entity_id = ? ORDER BY job_type",
-            [note.id],
-        )
-        job_types = [j["job_type"] for j in jobs]
-        assert "note_auto_tag" not in job_types
-        assert "note_auto_link" in job_types
-        assert "note_auto_summarize" in job_types
-
-    @pytest.mark.asyncio
-    async def test_create_note_with_user_links_skips_auto_link_job(self, db: Database):
-        """When user provides related entities, auto_link job is not enqueued."""
-        await _ensure_project(db, "proj_notes", "Notes")
-        llm = DummyLLM()
-        svc = NoteService(db, llm=llm, embeddings=None, project_id="proj_notes")
-
-        note = await svc.create(
-            JournalEntryCreate(
-                content="This finding relates to mission X.",
-                type="finding",
-                source="executor",
-                related_mission="mis_test001",
-            ),
-        )
-
-        jobs = await db.fetchall(
-            "SELECT job_type FROM jobs WHERE entity_id = ? ORDER BY job_type",
-            [note.id],
-        )
-        job_types = [j["job_type"] for j in jobs]
-        assert "note_auto_link" not in job_types
-        assert "note_auto_tag" in job_types
-        assert "note_auto_summarize" in job_types
+        assert [j["job_type"] for j in jobs] == ["note_embed"]
 
     @pytest.mark.asyncio
     async def test_worker_processes_note_jobs(self, db: Database):
-        """Worker should process all note jobs and populate tags/summary/embedding."""
+        """Worker processes note_embed; no LLM-dependent jobs enqueued post-deprecation."""
         await _ensure_project(db, "proj_notes", "Notes")
-        llm = DummyLLM(
-            tags=["precision", "fine-tuning"],
-            summary="15% precision improvement after fine-tuning.",
-        )
+        llm = DummyLLM()  # unused by worker; kept for NoteService construction parity
         embeddings = DummyEmbeddings(db)
         svc = NoteService(db, llm=llm, embeddings=embeddings, project_id="proj_notes")
 
@@ -198,7 +139,6 @@ class TestNoteQueue:
 
         worker = EnrichmentWorker(
             db=db,
-            llm=llm,
             embeddings=embeddings,
             poll_interval=0.01,
             lease_seconds=60,
@@ -209,16 +149,14 @@ class TestNoteQueue:
         while await worker.run_once():
             handled += 1
 
-        assert handled == 4
+        assert handled == 1
 
         refreshed = await svc.get(note.id)
         assert refreshed is not None
         assert refreshed.enrichment_status == "ready"
-        assert sorted(refreshed.tags) == ["fine-tuning", "precision"]
-        assert refreshed.summary == "15% precision improvement after fine-tuning."
-        assert llm.calls["auto_tag"] == 1
-        assert llm.calls["summarize"] == 1
-        assert llm.calls["semantic_link"] == 1
+        assert refreshed.tags == []
+        assert refreshed.summary is None
+        assert llm.calls == {"auto_tag": 0, "semantic_link": 0, "summarize": 0}
         assert embeddings.calls == 1
 
     @pytest.mark.asyncio
@@ -250,9 +188,13 @@ class TestNoteQueue:
 
     @pytest.mark.asyncio
     async def test_worker_handles_note_job_failure(self, db: Database):
-        """Failed LLM calls should mark jobs as failed after max attempts."""
+        """Exceptions during embed processing mark the job failed after max attempts."""
         await _ensure_project(db, "proj_notes", "Notes")
-        # Create note without LLM so no jobs are enqueued
+
+        class FailingEmbeddings(DummyEmbeddings):
+            async def embed_document(self, text: str) -> list[float]:
+                raise RuntimeError("Embedding service unavailable")
+
         svc_no_llm = NoteService(db, llm=None, embeddings=None, project_id="proj_notes")
         note = await svc_no_llm.create(
             JournalEntryCreate(
@@ -262,21 +204,19 @@ class TestNoteQueue:
             ),
         )
 
-        # Manually enqueue a job that will fail
         queue = JobQueue(db, default_max_attempts=1)
         await queue.enqueue(
-            "note_auto_tag",
+            "note_embed",
             project_id="proj_notes",
             entity_type="journal",
             entity_id=note.id,
             max_attempts=1,
-            dedupe_key=f"proj_notes:journal:{note.id}:auto_tag",
+            dedupe_key=f"proj_notes:journal:{note.id}:embed",
         )
 
         worker = EnrichmentWorker(
             db=db,
-            llm=DummyLLM(raises=True),
-            embeddings=None,
+            embeddings=FailingEmbeddings(db),
             poll_interval=0.01,
             lease_seconds=60,
             max_attempts=1,
@@ -290,7 +230,7 @@ class TestNoteQueue:
         assert row is not None
         assert row["status"] == "failed"
         assert row["attempts"] == 1
-        assert "LLM unavailable" in row["last_error"]
+        assert "Embedding service unavailable" in row["last_error"]
 
         # Note should show failed enrichment status
         refreshed = await svc_no_llm.get(note.id)
