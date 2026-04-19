@@ -696,6 +696,33 @@ async def rka_record_outcome(
 
 
 @tool()
+async def rka_get_calibration_metrics() -> str:
+    """Get calibration metrics for the active project.
+
+    Returns both families of metrics side-by-side:
+
+    **Outcome-based** (Brier / ECE): how well the Brain's ``confidence_numeric``
+    values match actual outcomes. Lower Brier / lower ECE = better calibration.
+    ``metrics_available=False`` with a warning when N<5 outcomes.
+
+    **Selection-based** (override rates): what proportion of decisions the PI
+    engaged with rather than rubber-stamping. Three rates:
+    ``override_rate`` (selected != recommended, including escape hatches),
+    ``escape_hatch_rate`` (PI used defer/reframe/reject_all/custom), and
+    ``near_miss_rate`` (PI picked a different non-dominated survivor —
+    engaged disagreement). ``override_metrics_available=False`` when
+    ``qualifying_decisions<5``. See ``skills/brain/decision_ux.md`` for the
+    pattern taxonomy (rubber-stamp / alternate / escape / mixed).
+
+    Takes no arguments — operates on the active project from the MCP session.
+    """
+    async with _client() as c:
+        r = await c.get("/api/calibration/metrics")
+        _raise_with_detail(r)
+        return json.dumps(r.json(), indent=2)
+
+
+@tool()
 async def rka_bulk_update(
     updates: list[dict],
 ) -> str:

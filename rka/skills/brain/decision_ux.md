@@ -136,6 +136,30 @@ Periodically — quarterly or after 20+ outcomes — `GET /api/calibration/metri
 
 A Brain with good calibration metrics is trustworthy to the PI. A Brain with poor metrics should flag its own confidence claims as unreliable until recalibrated.
 
+### Reading Override Rates — Detecting Approval Theater
+
+The same `/api/calibration/metrics` response surfaces three **selection-based** rates (v2.2.x, Mission 2; see `dec_01KPJXVYZY2Y2HJN5T1WN5KYRN`). Unlike Brier/ECE, these run on decisions with a PI selection regardless of whether an outcome has been recorded — they measure **engagement pattern**, not forecast accuracy.
+
+| Field | Meaning |
+|---|---|
+| `qualifying_decisions` | Decisions with `recommended_option_id` set AND any PI resolution (selection or escape hatch). Denominator for the three rates below. |
+| `override_rate` | Fraction where `pi_selected_option_id != recommended_option_id` (includes escape hatches, where selected is NULL). |
+| `escape_hatch_rate` | Fraction where `pi_override_rationale` is populated (`defer`, `reframe`, `reject_all`, `custom:*`). |
+| `near_miss_rate` | Fraction where the PI selected a non-dominated *survivor* that was not the recommended one — i.e. engaged disagreement, not rubber-stamping and not escape. |
+
+`override_metrics_available` is True only when `qualifying_decisions ≥ 5`. Below that, rates are computed but treat them as noisy.
+
+**Pattern taxonomy** — the Brain should read the three rates together, not in isolation:
+
+| Pattern | `override_rate` | `escape_hatch_rate` | `near_miss_rate` | Interpretation |
+|---|---|---|---|---|
+| PI rubber-stamps | low | low | low | Approval-theater risk: recommendations may be persuasive rather than correct. Per Liu et al. 2026 §11.2, interactive confirmation alone is behaviorally unreliable when agreement runs ~93%. Consider whether options are genuinely diverse or whether Stage 1 generation is leaking preference back in. |
+| PI picks alternate survivor | high | low | high | Protocol working: PI engages with options, disagrees with Brain's stage-3 ranking heuristic. This is the healthy signal. |
+| PI escape-hatches frequently | high | high | low | Brain framing is off; options don't include the real answer. Reframe the decision before the next presentation. |
+| PI mixes escape + alternate | high | mid | mid | Healthy signal of active engagement across multiple decisions (ideal distribution). |
+
+A single-number summary (just `override_rate`) would conflate the second and third patterns — the *kind* of disagreement is the load-bearing signal. Read all three fields together.
+
 ## Recording a Decision After PI Selection
 
 ```python
