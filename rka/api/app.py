@@ -40,6 +40,7 @@ from rka.api.routes import (
     onboarding as onboarding_routes,
     maintenance as maintenance_routes,
     researcher_tools as researcher_tools_routes,
+    hooks as hooks_routes,
 )
 from rka.config import RKAConfig
 from rka.infra.database import Database
@@ -222,6 +223,7 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
     app.include_router(onboarding_routes.router, prefix="/api", tags=["onboarding"])
     app.include_router(maintenance_routes.router, prefix="/api", tags=["maintenance"])
     app.include_router(researcher_tools_routes.router, prefix="/api", tags=["researcher-tools"])
+    app.include_router(hooks_routes.router, prefix="/api", tags=["hooks"])
 
     @app.get("/api/health")
     async def health(request: Request):

@@ -141,6 +141,11 @@ class CalibrationService(BaseService):
         The caller is responsible for verifying the decision has a recorded
         PI selection (selected_option_id or override_rationale) — see
         ``rka_record_outcome`` in the MCP layer for the refusal rule.
+
+        Fires ``post_record_outcome`` hook after commit (Mission 2). Payload
+        carries the new outcome plus a flattened snapshot of CalibrationMetrics
+        so brain_notify hooks can interpolate ``{override_rate}``,
+        ``{brier_score}``, etc. directly without dotted-path traversal.
         """
         outcome_id = generate_id("calibration_outcome")
         await self.db.execute(
@@ -161,7 +166,42 @@ class CalibrationService(BaseService):
             "SELECT * FROM calibration_outcomes WHERE id = ?",
             [outcome_id],
         )
-        return self._row_to_model(row)
+        result = self._row_to_model(row)
+
+        # Fire post_record_outcome hook (Mission 2). Flatten current
+        # CalibrationMetrics into the payload so brain_notify templates can
+        # reference {override_rate}, {brier_score}, etc. without dotted paths.
+        # All hook firing failures are silent.
+        try:
+            metrics = await self.compute_metrics()
+            from rka.services.hook_dispatcher import HookDispatcher
+            await HookDispatcher(self.db).fire(
+                event="post_record_outcome",
+                payload={
+                    "decision_id": decision_id,
+                    "outcome": data.outcome,
+                    # Flattened metrics_after — both metric families.
+                    "brier_score": metrics.brier_score,
+                    "ece": metrics.ece,
+                    "n_outcomes": metrics.n,
+                    "metrics_available": metrics.metrics_available,
+                    "override_rate": metrics.override_rate,
+                    "escape_hatch_rate": metrics.escape_hatch_rate,
+                    "near_miss_rate": metrics.near_miss_rate,
+                    "qualifying_decisions": metrics.qualifying_decisions,
+                    "override_metrics_available": metrics.override_metrics_available,
+                },
+                project_id=self.project_id,
+            )
+        except Exception:
+            # logger import is inside the try because BaseService doesn't expose one;
+            # we never want hook firing to break outcome recording.
+            import logging
+            logging.getLogger(__name__).warning(
+                "post_record_outcome hook fire failed", exc_info=True,
+            )
+
+        return result
 
     async def list_for_decision(self, decision_id: str) -> list[CalibrationOutcome]:
         """All outcomes for a single decision, most recent first."""

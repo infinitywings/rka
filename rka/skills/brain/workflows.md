@@ -407,6 +407,86 @@ rka_evaluate_gate(
 
 **Verdicts**: `go` (proceed), `kill` (abandon), `hold` (wait), `recycle` (revise). If any assumption is marked `invalidated`, the gate auto-flags the related decision as stale.
 
+## Hook Registration (v2.3 — Mission 2)
+
+The hook system (`dec_01KPJXN5QJ029FC93EK2WRNDFJ`) lets the Brain register handlers that fire on lifecycle events without consuming Brain attention between sessions. v1 supports five events (`session_start`, `post_journal_create`, `post_claim_extract`, `post_record_outcome`, `periodic`) and three handler types (`sql`, `mcp_tool`, `brain_notify`). Hooks are project-scoped; failures are silent and logged to `hook_executions`; the dispatcher caps cascades at depth 3.
+
+### The brain_notify pattern (most useful in v1)
+
+`brain_notify` writes a row to `brain_notifications`. The Brain reads the queue at session start (via `rka_get_brain_notifications`) and acts on the contents itself. This is the structural answer to "Brain forgets to run maintenance" — findings accumulate asynchronously while the Brain isn't present, then surface when it is.
+
+### `mcp_tool` is scheduled-only in v1
+
+Per `dec_01KPM1M58F0ARXCM0W0GZ476VD`: the `mcp_tool` handler logs intent (`scheduled=true, tool, args`) to `hook_executions` but does **not** invoke the tool. The Brain reads brain_notifications and invokes downstream tools itself using normal MCP access. Real in-process invocation is a clean v1.1 upgrade path (no schema migration; behavior-only change).
+
+### Three recommended default hooks
+
+1. **Session-start maintenance nudge** — surfaces a reminder on every fresh project session.
+   ```
+   rka_add_hook(
+     event="session_start",
+     handler_type="brain_notify",
+     handler_config={"severity": "info", "content_template": {
+       "reminder": "Run rka_get_pending_maintenance and rka_check_integrity",
+       "project": "{project_id}"
+     }},
+     name="session-start-maintenance",
+   )
+   ```
+
+2. **Drift watch** — fires after every `rka_record_outcome` with the flattened metric snapshot. The Brain decides whether the surfaced rates warrant follow-up.
+   ```
+   rka_add_hook(
+     event="post_record_outcome",
+     handler_type="brain_notify",
+     handler_config={"severity": "warning", "content_template": {
+       "decision": "{decision_id}",
+       "outcome": "{outcome}",
+       "override_rate": "{override_rate}",
+       "brier": "{brier_score}",
+       "note": "Consider whether override_rate / brier indicate calibration drift"
+     }},
+     name="drift-watch",
+   )
+   ```
+   Payload fields available for `{key}` interpolation: `decision_id`, `outcome`, `brier_score`, `ece`, `n_outcomes`, `metrics_available`, `override_rate`, `escape_hatch_rate`, `near_miss_rate`, `qualifying_decisions`, `override_metrics_available`.
+
+3. **Note-creation audit hook (sql)** — append every new journal entry to a project audit table.
+   ```
+   rka_add_hook(
+     event="post_journal_create",
+     handler_type="sql",
+     handler_config={
+       "statement": "INSERT INTO audit_log (action, entity_type, entity_id, actor, details) "
+                    "VALUES ('enrich', 'journal', ?, 'system', ?)",
+       "params": ["{entry_id}", "{type}"],
+     },
+     name="note-audit",
+   )
+   ```
+
+### Session-start UX
+
+After hooks fire on the first tool call per project per session, brain_notifications accumulate. Best practice: at session start, after `rka_get_pending_maintenance`, also call `rka_get_brain_notifications` and surface a digest to the PI. After acting on findings, call `rka_clear_brain_notifications(ids=[...])` to mark them as processed.
+
+`rka_set_project` clears the session-start fired marker for the new project, so re-setting refires.
+
+### Periodic hooks
+
+Trigger the `periodic` event from the host system on whatever cadence the PI chooses (cron, systemd timer, etc.):
+```
+rka periodic-hooks                         # all projects
+rka periodic-hooks --project-id prj_X      # single project
+```
+
+The CLI command opens the DB, fires `periodic` once per project, exits. v1 keeps scheduling external; v1.1 may add per-hook interval config inside the dispatcher.
+
+### Auditing
+
+`rka_get_hook_executions(hook_id?, since?, status?)` queries the audit log. Useful filters: `status="error"` for broken hooks, `status="aborted_depth_limit"` for cascade violations, `since="<iso>"` for recent activity.
+
+---
+
 ### Not Every Task Needs All 4 Gates
 
 - Quick bug fixes: Gate 1 only (plan validation).

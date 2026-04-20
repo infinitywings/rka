@@ -35,6 +35,8 @@ _TABLE_CATEGORIES: dict[str, list[str]] = {
         "tags",
         "decision_options",
         "calibration_outcomes",
+        "hooks",
+        "brain_notifications",
     ],
     "derived_data": [
         # SHOULD export, can rebuild if missing
@@ -68,6 +70,7 @@ _TABLE_CATEGORIES: dict[str, list[str]] = {
         "audit_log",
         "events",
         "qa_sessions",
+        "hook_executions",
     ],
 }
 
@@ -86,6 +89,8 @@ _INSERT_ORDER = (
     "entity_links",
     "tags",
     "calibration_outcomes",
+    "hooks",
+    "brain_notifications",
     # derived_data
     "review_queue",
     "topics",
@@ -123,6 +128,9 @@ _ID_ENTITY_TYPES = {
     "claim_edges": "claim_edge",
     "decision_options": "decision_option",
     "calibration_outcomes": "calibration_outcome",
+    "hooks": "hook",
+    "hook_executions": "hook_execution",
+    "brain_notifications": "brain_notification",
     "artifacts": "artifact",
     "figures": "figure",
     "exploration_summaries": "summary",
@@ -145,6 +153,9 @@ _DIRECT_ID_COLUMNS = {
     "claim_edges": ("id", "source_claim_id", "target_claim_id", "cluster_id"),
     "decision_options": ("id", "decision_id", "dominated_by"),
     "calibration_outcomes": ("id", "decision_id"),
+    "hooks": ("id",),
+    "hook_executions": ("id", "hook_id"),
+    "brain_notifications": ("id", "hook_id"),
     "artifacts": ("id",),
     "figures": ("id", "artifact_id"),
     "exploration_summaries": ("id", "scope_id"),
