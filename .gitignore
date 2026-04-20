@@ -34,3 +34,6 @@ rka_backup_*.db
 
 # Storage
 storage/
+
+# Local writing scratch (not synced)
+writing/
