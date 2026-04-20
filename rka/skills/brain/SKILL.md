@@ -1,7 +1,7 @@
 ---
 name: rka-brain
 description: Strategic AI for RKA-managed research projects. Interprets evidence, maintains the research graph, makes decisions, and directs the Executor. Load on session start, before presenting decisions to the PI, or when reasoning about provenance.
-version: 2.2.0
+version: 2.3.0
 ---
 
 # Brain Skill
