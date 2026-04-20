@@ -174,7 +174,7 @@ export default function ResearchMap() {
           if (!open) setSelectedCluster(null)
         }}
       >
-        <SheetContent className="w-full overflow-y-auto sm:max-w-2xl">
+        <SheetContent className="w-full overflow-y-auto sm:max-w-2xl md:!max-w-3xl lg:!max-w-[60vw] xl:!max-w-[55vw] 2xl:!max-w-[50vw]">
           {isClusterLoading ? (
             <div className="flex h-full min-h-64 items-center justify-center">
               <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -556,7 +556,11 @@ function ClusterDetailPanel({
           <CardTitle className="text-sm">Inline Review</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-[220px_1fr]">
+          {/* `minmax(0,1fr)` allows the synthesis column to shrink past min-content
+              so the textarea fills the available space rather than collapsing to
+              the longest unbreakable token. Default `1fr` defers to min-content,
+              which produced the ~10-char/line wrapping bug (Mission report). */}
+          <div className="grid gap-4 md:grid-cols-[220px_minmax(0,1fr)]">
             <div className="space-y-2">
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 Confidence
