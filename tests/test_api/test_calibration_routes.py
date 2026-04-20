@@ -165,3 +165,55 @@ async def test_calibration_metrics_warning_when_n_below_threshold(api_client: ht
     assert "Need" in body["warning"]
     assert body["brier_score"] is None
     assert body["ece"] is None
+
+
+@pytest.mark.asyncio
+async def test_metrics_response_includes_override_fields(api_client: httpx.AsyncClient):
+    """GET /calibration/metrics surfaces the v2.2.x override-rate fields."""
+    dec_id = await _resolved_decision(api_client)  # PI selected the recommended option
+    r = await api_client.get("/api/calibration/metrics", headers=HEADERS)
+    assert r.status_code == 200
+    body = r.json()
+    # Four new fields present on the response shape:
+    for field in (
+        "qualifying_decisions",
+        "override_metrics_available",
+        "override_rate",
+        "escape_hatch_rate",
+        "near_miss_rate",
+    ):
+        assert field in body, f"missing field: {field}"
+    assert body["qualifying_decisions"] == 1
+    assert body["override_rate"] == 0.0  # exact match with recommended
+    assert body["escape_hatch_rate"] == 0.0
+    assert body["near_miss_rate"] == 0.0
+    assert body["override_metrics_available"] is False  # N<5
+
+
+@pytest.mark.asyncio
+async def test_metrics_response_escape_hatch_surfaces_in_rates(api_client: httpx.AsyncClient):
+    """Escape-hatch decisions count in override_rate + escape_hatch_rate only."""
+    # Seed a decision, recommend an option, then PI picks override.
+    r = await api_client.post(
+        "/api/decisions",
+        json={"question": "Escape", "phase": "design", "decided_by": "brain"},
+        headers=HEADERS,
+    )
+    dec_id = r.json()["id"]
+    opt = await api_client.post(
+        f"/api/decisions/{dec_id}/options",
+        json=_option_payload("A", 0.7, 1),
+        headers=HEADERS,
+    )
+    await api_client.put(f"/api/decision_options/{opt.json()['id']}/recommend", headers=HEADERS)
+    await api_client.put(
+        f"/api/decisions/{dec_id}/pi_selection",
+        json={"selected_option_id": None, "override_rationale": "defer"},
+        headers=HEADERS,
+    )
+    r = await api_client.get("/api/calibration/metrics", headers=HEADERS)
+    body = r.json()
+    assert body["qualifying_decisions"] == 1
+    assert body["override_rate"] == 1.0
+    assert body["escape_hatch_rate"] == 1.0
+    assert body["near_miss_rate"] == 0.0

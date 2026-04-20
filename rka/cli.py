@@ -494,5 +494,59 @@ def bootstrap_ingest(
             click.echo(f"  ✓ {item.relative_path} → {item.entity_count} entries")
 
 
+@main.command("periodic-hooks")
+@click.option(
+    "--project-id",
+    "project_ids",
+    multiple=True,
+    help="Project IDs to fire 'periodic' hooks for. Repeat for multiple, "
+         "or omit to fire across every project in the database.",
+)
+def periodic_hooks(project_ids: tuple[str, ...]):
+    """Fire 'periodic' hooks once across one or more projects.
+
+    Intended to be invoked by cron or a scheduler at the cadence the PI/Brain
+    chooses (hourly, daily). Each invocation fires the periodic event once;
+    handler config inside individual hooks decides what to do.
+
+    Mission 2 v1: simple cron-driven invocation. v1.1 may add per-hook
+    interval scheduling inside the dispatcher.
+    """
+    from datetime import datetime, timezone
+    from rka.config import RKAConfig
+    from rka.infra.database import Database
+    from rka.services.hook_dispatcher import HookDispatcher
+
+    config = RKAConfig()
+
+    async def _run() -> None:
+        db = Database(config.database_url)
+        await db.connect()
+        try:
+            targets = list(project_ids)
+            if not targets:
+                rows = await db.fetchall("SELECT id FROM projects")
+                targets = [r["id"] for r in rows]
+            if not targets:
+                click.echo("No projects found; nothing to fire.")
+                return
+            dispatcher = HookDispatcher(db)
+            now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            total = 0
+            for pid in targets:
+                ids = await dispatcher.fire(
+                    event="periodic",
+                    payload={"project_id": pid, "now": now},
+                    project_id=pid,
+                )
+                click.echo(f"  {pid}: fired {len(ids)} hook execution(s)")
+                total += len(ids)
+            click.echo(f"Done. {total} executions across {len(targets)} project(s).")
+        finally:
+            await db.close()
+
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":
     main()

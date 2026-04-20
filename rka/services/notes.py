@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+
 from rka.infra.ids import generate_id
 from rka.models.journal import JournalEntry, JournalEntryCreate, JournalEntryUpdate
 from rka.services.base import BaseService, _now
 from rka.services.jobs import JobQueue
+
+logger = logging.getLogger(__name__)
 
 
 class NoteService(BaseService):
@@ -109,6 +113,26 @@ class NoteService(BaseService):
             phase=data.phase,
         )
         await self.audit("create", "journal", entry_id, source)
+
+        # Fire post_journal_create hook (Mission 2). Failures are silent —
+        # HookDispatcher logs them and never raises. Hooks cannot break note
+        # creation.
+        try:
+            from rka.services.hook_dispatcher import HookDispatcher
+            await HookDispatcher(self.db).fire(
+                event="post_journal_create",
+                payload={
+                    "entry_id": entry_id,
+                    "type": data.type,
+                    "importance": data.importance,
+                    "tags": list(data.tags or []),
+                    "source": source,
+                },
+                project_id=self.project_id,
+            )
+        except Exception as exc:  # extra defense-in-depth
+            logger.warning("post_journal_create hook fire failed: %s", exc)
+
         return await self.get(entry_id)
 
     async def get(self, entry_id: str) -> JournalEntry | None:

@@ -85,6 +85,9 @@ class MCPSessionState:
     entities_created: list[dict[str, str]] = field(default_factory=list)
     decisions_made: list[str] = field(default_factory=list)
     checkpoints_raised: list[str] = field(default_factory=list)
+    # Mission 2 — track which (mcp_session, project_id) pairs have already
+    # fired session_start. Reset per project when rka_set_project is called.
+    session_start_fired_for: set[str] = field(default_factory=set)
 
     @property
     def verbosity(self) -> str:
@@ -97,6 +100,36 @@ _session = MCPSessionState()
 def _tick() -> MCPSessionState:
     _session.tool_calls += 1
     return _session
+
+
+async def _maybe_fire_session_start() -> None:
+    """Fire session_start hook once per project per MCP session.
+
+    Idempotent within the session; rka_set_project clears the project's
+    entry so a re-set re-fires. All firing failures are silent — hooks
+    cannot block tool execution.
+    """
+    pid = _session.project_id
+    if not pid or pid in _session.session_start_fired_for:
+        return
+    _session.session_start_fired_for.add(pid)
+    try:
+        async with _client() as c:
+            await c.post(
+                "/api/hooks/fire",
+                json={
+                    "event": "session_start",
+                    "payload": {
+                        "project_id": pid,
+                        "session_start_iso": _session.session_start,
+                        "actor": "brain",
+                    },
+                },
+            )
+    except Exception:
+        # Re-arm so a later tool call retries — failure mid-fire shouldn't
+        # leave the session permanently un-fired.
+        _session.session_start_fired_for.discard(pid)
 
 
 def _record_entity(entity_type: str, entity_id: str, summary: str) -> None:
@@ -112,7 +145,12 @@ def tool():
         @wraps(func)
         async def wrapper(*args, **kwargs):
             _tick()
-            return await func(*args, **kwargs)
+            result = await func(*args, **kwargs)
+            # Fire session_start hook AFTER the tool body so rka_set_project
+            # has a chance to set _session.project_id first. Idempotent
+            # within the session per Mission 2 Q3 default.
+            await _maybe_fire_session_start()
+            return result
 
         return mcp.tool()(wrapper)
 
@@ -691,6 +729,204 @@ async def rka_record_outcome(
                 "error": "decision_not_found",
                 "decision_id": decision_id,
             })
+        _raise_with_detail(r)
+        return json.dumps(r.json(), indent=2)
+
+
+@tool()
+async def rka_get_calibration_metrics() -> str:
+    """Get calibration metrics for the active project.
+
+    Returns both families of metrics side-by-side:
+
+    **Outcome-based** (Brier / ECE): how well the Brain's ``confidence_numeric``
+    values match actual outcomes. Lower Brier / lower ECE = better calibration.
+    ``metrics_available=False`` with a warning when N<5 outcomes.
+
+    **Selection-based** (override rates): what proportion of decisions the PI
+    engaged with rather than rubber-stamping. Three rates:
+    ``override_rate`` (selected != recommended, including escape hatches),
+    ``escape_hatch_rate`` (PI used defer/reframe/reject_all/custom), and
+    ``near_miss_rate`` (PI picked a different non-dominated survivor —
+    engaged disagreement). ``override_metrics_available=False`` when
+    ``qualifying_decisions<5``. See ``skills/brain/decision_ux.md`` for the
+    pattern taxonomy (rubber-stamp / alternate / escape / mixed).
+
+    Takes no arguments — operates on the active project from the MCP session.
+    """
+    async with _client() as c:
+        r = await c.get("/api/calibration/metrics")
+        _raise_with_detail(r)
+        return json.dumps(r.json(), indent=2)
+
+
+# ============================================================
+# Hook System v1 (Mission 2 Phase B)
+# ============================================================
+# 8 tools: registration (add/list/enable/disable/delete) + audit
+# (executions) + notifications queue (list/clear). Per
+# dec_01KPM1M58F0ARXCM0W0GZ476VD: mcp_tool handler is scheduled-only in v1
+# (logs intent; the Brain reads brain_notifications and invokes downstream
+# tools itself).
+
+
+@tool()
+async def rka_add_hook(
+    event: str,
+    handler_type: str,
+    handler_config: dict,
+    name: str,
+    enabled: bool = True,
+    created_by: str = "pi",
+) -> str:
+    """Register a lifecycle hook for the active project.
+
+    Args:
+        event: One of session_start | post_journal_create | post_claim_extract
+            | post_record_outcome | periodic.
+        handler_type: One of sql | mcp_tool | brain_notify.
+            - sql: parameterized statement; ``handler_config = {statement, params}``.
+              params can use ``{key}`` to interpolate from the event payload.
+            - mcp_tool: scheduled-only in v1 (logs intent; Brain invokes the
+              tool itself after reading brain_notifications). config =
+              ``{tool, args}``.
+            - brain_notify: writes a row to brain_notifications. config =
+              ``{severity, content_template}`` where content_template is a
+              dict with ``{key}`` interpolation references.
+        handler_config: handler-type-specific config dict.
+        name: human label for the hook.
+        enabled: defaults to True.
+        created_by: pi | brain | executor | system. Defaults to pi.
+    """
+    async with _client() as c:
+        r = await c.post(
+            "/api/hooks",
+            json={
+                "event": event,
+                "handler_type": handler_type,
+                "handler_config": handler_config,
+                "name": name,
+                "enabled": enabled,
+                "created_by": created_by,
+            },
+        )
+        _raise_with_detail(r)
+        return json.dumps(r.json(), indent=2)
+
+
+@tool()
+async def rka_list_hooks(
+    event: str | None = None,
+    enabled_only: bool = False,
+) -> str:
+    """List hooks registered for the active project.
+
+    Args:
+        event: Optional event filter.
+        enabled_only: If True, only return hooks with enabled=true.
+    """
+    async with _client() as c:
+        params = {}
+        if event:
+            params["event"] = event
+        if enabled_only:
+            params["enabled_only"] = "true"
+        r = await c.get("/api/hooks", params=params)
+        _raise_with_detail(r)
+        return json.dumps(r.json(), indent=2)
+
+
+@tool()
+async def rka_enable_hook(hook_id: str) -> str:
+    """Enable a previously-disabled hook."""
+    async with _client() as c:
+        r = await c.put(f"/api/hooks/{hook_id}/enable")
+        _raise_with_detail(r)
+        return json.dumps(r.json(), indent=2)
+
+
+@tool()
+async def rka_disable_hook(hook_id: str) -> str:
+    """Disable a hook without deleting it. Re-enable later via rka_enable_hook."""
+    async with _client() as c:
+        r = await c.put(f"/api/hooks/{hook_id}/disable")
+        _raise_with_detail(r)
+        return json.dumps(r.json(), indent=2)
+
+
+@tool()
+async def rka_delete_hook(hook_id: str) -> str:
+    """Delete a hook permanently. Cascades to hook_executions via FK."""
+    async with _client() as c:
+        r = await c.delete(f"/api/hooks/{hook_id}")
+        if r.status_code == 404:
+            return json.dumps({"error": "hook_not_found", "hook_id": hook_id})
+        _raise_with_detail(r)
+        return json.dumps({"deleted": hook_id})
+
+
+@tool()
+async def rka_get_hook_executions(
+    hook_id: str | None = None,
+    since: str | None = None,
+    status: str | None = None,
+    limit: int = 100,
+) -> str:
+    """Query the hook_executions audit log.
+
+    Args:
+        hook_id: Optional filter to a single hook.
+        since: ISO-8601 timestamp; only return executions at or after this time.
+        status: Optional filter — success | error | aborted_depth_limit | skipped_disabled.
+        limit: Max rows (cap 500).
+    """
+    async with _client() as c:
+        params: dict[str, str] = {"limit": str(min(limit, 500))}
+        if hook_id:
+            params["hook_id"] = hook_id
+        if since:
+            params["since"] = since
+        if status:
+            params["status"] = status
+        r = await c.get("/api/hooks/executions/list", params=params)
+        _raise_with_detail(r)
+        return json.dumps(r.json(), indent=2)
+
+
+@tool()
+async def rka_get_brain_notifications(
+    since: str | None = None,
+    include_cleared: bool = False,
+    limit: int = 100,
+) -> str:
+    """Read the brain_notifications queue. Default: only uncleared rows.
+
+    Args:
+        since: ISO-8601; only return notifications created at/after.
+        include_cleared: Include already-cleared notifications.
+        limit: Max rows (cap 500).
+    """
+    async with _client() as c:
+        params: dict[str, str] = {
+            "limit": str(min(limit, 500)),
+            "include_cleared": "true" if include_cleared else "false",
+        }
+        if since:
+            params["since"] = since
+        r = await c.get("/api/notifications", params=params)
+        _raise_with_detail(r)
+        return json.dumps(r.json(), indent=2)
+
+
+@tool()
+async def rka_clear_brain_notifications(ids: list[str]) -> str:
+    """Mark a list of brain_notifications as cleared (read).
+
+    Args:
+        ids: List of bnt_... notification IDs.
+    """
+    async with _client() as c:
+        r = await c.post("/api/notifications/clear", json={"ids": ids})
         _raise_with_detail(r)
         return json.dumps(r.json(), indent=2)
 
@@ -1450,6 +1686,9 @@ async def rka_set_project(project_id: str) -> str:
         return f"Project '{project_id}' not found. Available:\n{available}"
 
     _session.project_id = resolved_id
+    # Mission 2 — clear session_start fired-marker for this project so the
+    # post-call wrapper refires (Q3 spec: "rka_set_project refires").
+    _session.session_start_fired_for.discard(resolved_id)
 
     # Fetch project status to confirm
     async with _client() as c:
@@ -2759,6 +2998,25 @@ async def rka_extract_claims(
                 r2 = await c.post("/api/claims/edges", json=edge_payload)
                 _raise_with_detail(r2)
                 assigned += 1
+
+    # Mission 2 — fire post_claim_extract via the server-side hook endpoint.
+    # Composite event: payload carries entry_id + claim_ids[] (the spec shape).
+    # Failures silent.
+    try:
+        async with _client() as c:
+            await c.post(
+                "/api/hooks/fire",
+                json={
+                    "event": "post_claim_extract",
+                    "payload": {
+                        "entry_id": entry_id,
+                        "claim_ids": [cl["id"] for cl in created],
+                        "source": "brain",
+                    },
+                },
+            )
+    except Exception:
+        pass
 
     lines = [f"Created {len(created)} claims from {entry_id}:"]
     if assigned:

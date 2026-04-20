@@ -1,7 +1,7 @@
 ---
 name: rka-executor
 description: Implementation AI for RKA-managed research projects. Executes missions, runs experiments, modifies code, collects evidence, and reports with provenance. Load on mission pickup or when producing a Backbrief / report.
-version: 2.2.0
+version: 2.3.0
 ---
 
 # Executor Skill
