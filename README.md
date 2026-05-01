@@ -44,7 +44,7 @@ graph LR
     PI["🧑‍🔬 PI<br/><i>Human researcher</i>"]
     Brain["🧠 Brain<br/><i>Claude Desktop</i>"]
     Executor["⚡ Executor<br/><i>Claude Code</i>"]
-    RKA["📚 RKA<br/><i>Knowledge base + LLM</i>"]
+    RKA["📚 RKA<br/><i>Shared knowledge base</i>"]
 
     PI -->|supervises| Brain
     PI -->|supervises| Executor
@@ -238,7 +238,7 @@ graph TD
 1. **MCP Tools Layer** — Thin adapter exposing `rka_*` tools over stdio. Keeps lightweight per-session state for output compaction and digests, but no core business logic.
 2. **REST API Layer** — FastAPI endpoints under `/api`. Same thin-adapter pattern, delegates to services.
 3. **Service Layer** — All business logic. CRUD operations, auto-enrichment, event emission, context preparation, distillation pipeline. Shared identically by MCP and REST.
-4. **Infrastructure Layer** — Database (SQLite + FTS5 + sqlite-vec), LLM gateway (LiteLLM + Instructor), embeddings (FastEmbed), file storage.
+4. **Infrastructure Layer** — Database (SQLite + FTS5 + sqlite-vec), embeddings (FastEmbed), file storage. An optional LiteLLM gateway powers `rka_ask` / `rka_generate_summary` only when the user wires up a cloud-LLM API key.
 
 ### Three-Process Model
 
@@ -268,7 +268,7 @@ The MCP server communicates via stdio (stdin/stdout) and proxies all calls to th
 | **Mission**           | `mis_`  | Task packages assigned to the Executor with objectives and acceptance criteria                            |
 | **Checkpoint**        | `chk_`  | Escalation points where Executor needs Brain/PI input                                                     |
 | **Claim**             | `clm_`  | Extracted assertions from journal entries (hypothesis, evidence, method, result, observation, assumption) |
-| **Evidence Cluster**  | `ecl_`  | Groups of related claims with LLM-synthesized summaries                                                   |
+| **Evidence Cluster**  | `ecl_`  | Groups of related claims with Brain-authored synthesis written during maintenance sessions                |
 | **Topic**             | `top_`  | Hierarchical topic taxonomy for organizing knowledge                                                      |
 | **Review Queue Item** | `rev_`  | Items flagged for Brain review (low confidence, contradictions, missing evidence)                         |
 | **Cross-Reference**   | `link_` | Typed edges forming provenance chains between entities                                                    |
@@ -381,7 +381,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 }
 ```
 
-**Optional LLM:** If you want `rka_ask` and `rka_generate_summary` features, configure a cloud LLM API (or local LM Studio/Ollama) from the web UI Settings page (`http://localhost:9712/settings`). This is optional — core functionality works without any LLM.
+**No LLM required for core functionality.** The Brain (Claude Desktop) handles all knowledge enrichment — claim extraction, cluster synthesis, contradiction resolution — during normal sessions. The two non-essential tools `rka_ask` and `rka_generate_summary` are the only features that need an LLM; if you want them, plug in a cloud API key (Anthropic, OpenAI, or any OpenAI-compatible endpoint) from the web UI Settings page (`http://localhost:9712/settings`).
 
 **Connect Claude Code (MCP via uv tool):**
 
@@ -424,7 +424,7 @@ Prerequisites:
 
 - Python 3.11+
 - Node.js 18+ (for web dashboard)
-- Optional: [LM Studio](https://lmstudio.ai/) or [Ollama](https://ollama.com/) (for `rka_ask` and `rka_generate_summary`)
+- Optional: a cloud LLM API key (Anthropic, OpenAI, or any OpenAI-compatible endpoint) — only needed for the optional `rka_ask` and `rka_generate_summary` tools. Core RKA needs no LLM.
 
 ```bash
 git clone https://github.com/infinitywings/rka.git
@@ -476,14 +476,17 @@ rka serve
 
 The web dashboard is at `http://localhost:9712`. API docs are at `http://localhost:9712/docs`.
 
-### 2. Configure LLM
+### 2. (Optional) Configure a cloud LLM API
 
-Open the **Settings** page in the web UI. Set your LLM backend:
+**You can skip this step.** Core RKA works without any LLM — the Brain (Claude Desktop) handles all knowledge enrichment during normal sessions. Configure an LLM only if you want the two optional convenience tools `rka_ask` and `rka_generate_summary` to work outside a Claude session.
 
-- **LM Studio**: API Base = `http://localhost:1234/v1`, Model = select from dropdown
-- **Ollama**: API Base = leave empty, Model = `ollama/qwen3:32b`
+Open the **Settings** page in the web UI (`http://localhost:9712/settings`) and set a cloud LLM backend:
 
-The model's context window is auto-detected. All LLM-dependent features (Q&A, summaries, smart classification, distillation pipeline) are disabled until an LLM is connected.
+- **Anthropic API**: API Base = leave empty, Model = `anthropic/claude-sonnet-4-5`
+- **OpenAI API**: API Base = leave empty, Model = `openai/gpt-4o`
+- **OpenAI-compatible endpoint**: API Base = your endpoint URL, Model = your model identifier
+
+When configured, only `rka_ask` and `rka_generate_summary` become active; everything else (the distillation pipeline, claim extraction, cluster synthesis, contradiction detection) runs through the Brain in Claude Desktop and works without a configured LLM.
 
 ### 3. Connect Claude Desktop or Claude Code
 
@@ -691,18 +694,20 @@ All settings use environment variables with the `RKA_` prefix. Place them in a `
 | `RKA_PORT`        | `9712`                  | API server port            |
 | `RKA_API_URL`     | `http://localhost:9712` | REST API URL for MCP proxy |
 
-### LLM Settings
+### LLM Settings (Optional)
+
+> **You can skip this section.** Core RKA — including the full distillation pipeline, claim extraction, and cluster synthesis — runs through the Brain (Claude Desktop) and needs no LLM configuration. These settings only affect the optional convenience tools `rka_ask` and `rka_generate_summary`.
 
 LLM configuration is managed from the **web UI Settings page**. Changes persist in the database and survive restarts without touching `.env`. Environment variables serve as initial defaults.
 
-| Variable                   | Default                      | Description                                                                    |
-| -------------------------- | ---------------------------- | ------------------------------------------------------------------------------ |
-| `RKA_LLM_ENABLED`        | `true`                     | Enable LLM features                                                            |
-| `RKA_LLM_MODEL`          | `openai/qwen3-32b`         | LiteLLM model identifier (`openai/*` for LM Studio, `ollama/*` for Ollama) |
-| `RKA_LLM_API_BASE`       | `http://localhost:1234/v1` | LLM API base URL                                                               |
-| `RKA_LLM_API_KEY`        | `None`                     | API key (not needed for local backends)                                        |
-| `RKA_LLM_THINK`          | `false`                    | Enable thinking/reasoning mode                                                 |
-| `RKA_LLM_CONTEXT_WINDOW` | `4096`                     | Context window in tokens (auto-detected from LM Studio/Ollama)                 |
+| Variable                   | Default                       | Description                                                                          |
+| -------------------------- | ----------------------------- | ------------------------------------------------------------------------------------ |
+| `RKA_LLM_ENABLED`        | `false`                     | Enable the optional `rka_ask` / `rka_generate_summary` tools                       |
+| `RKA_LLM_MODEL`          | `anthropic/claude-sonnet-4-5` | LiteLLM model identifier (cloud backends recommended; any LiteLLM-supported model) |
+| `RKA_LLM_API_BASE`       | `None`                      | API base URL — leave empty for Anthropic / OpenAI                                    |
+| `RKA_LLM_API_KEY`        | `None`                      | Cloud API key                                                                        |
+| `RKA_LLM_THINK`          | `false`                     | Enable thinking/reasoning mode                                                       |
+| `RKA_LLM_CONTEXT_WINDOW` | `200000`                    | Context window in tokens                                                             |
 
 ### Embedding Settings
 
@@ -719,31 +724,34 @@ LLM configuration is managed from the **web UI Settings page**. Changes persist 
 | `RKA_CONTEXT_WARM_DAYS`          | `14`   | Days for WARM temperature classification  |
 | `RKA_CONTEXT_DEFAULT_MAX_TOKENS` | `2000` | Default token budget for context packages |
 
-### LLM Provider Examples
+### LLM Provider Examples (for the optional tools only)
 
-**LM Studio (recommended, local):**
+**Anthropic API (recommended):**
 
 ```env
-RKA_LLM_MODEL=openai/qwen3-32b
-RKA_LLM_API_BASE=http://localhost:1234/v1
+RKA_LLM_ENABLED=true
+RKA_LLM_MODEL=anthropic/claude-sonnet-4-5
+RKA_LLM_API_KEY=sk-ant-...
 ```
 
-**Ollama (local):**
+**OpenAI API:**
 
 ```env
-RKA_LLM_MODEL=ollama/qwen3:32b
-# No API base needed -- LiteLLM routes to Ollama's default port
+RKA_LLM_ENABLED=true
+RKA_LLM_MODEL=openai/gpt-4o
+RKA_LLM_API_KEY=sk-...
 ```
 
-**OpenAI-compatible (vLLM, etc.):**
+**OpenAI-compatible endpoint (self-hosted vLLM, etc.):**
 
 ```env
+RKA_LLM_ENABLED=true
 RKA_LLM_MODEL=openai/your-model
 RKA_LLM_API_BASE=http://localhost:8000/v1
 RKA_LLM_API_KEY=token-xxx
 ```
 
-> **Tip:** You can change all LLM settings at runtime from the web UI Settings page without restarting the server. The model dropdown auto-populates from your LM Studio/Ollama instance.
+> **Tip:** You can change all LLM settings at runtime from the web UI Settings page without restarting the server.
 
 ---
 
@@ -1067,7 +1075,7 @@ Most entity endpoints are project-scoped. Pass `X-RKA-Project: <project_id>` to 
 | `GET`  | `/llm/status` | LLM config, availability, model, context window  |
 | `PUT`  | `/llm/config` | Update LLM settings at runtime (persisted to DB) |
 | `POST` | `/llm/check`  | Re-check LLM connectivity                        |
-| `GET`  | `/llm/models` | List models from LM Studio/Ollama backend        |
+| `GET`  | `/llm/models` | List models available on the configured cloud LLM backend |
 
 ### Notebook (Q&A + Summaries)
 
@@ -1296,20 +1304,18 @@ As of v2.0, all knowledge enrichment is handled by the Brain (Claude Desktop/Cod
 
 ### Optional LLM Features
 
-When `RKA_LLM_ENABLED=true`, two tools gain LLM-powered capabilities:
+When `RKA_LLM_ENABLED=true` and a cloud API key is configured, two tools gain LLM-powered capabilities:
 
 - `rka_ask(question)` — Answer research questions grounded in knowledge base evidence
 - `rka_generate_summary(scope)` — Generate narrative summaries of research progress
 
 These use LiteLLM as a unified gateway, supporting:
 
-- **LM Studio** (local)
-- **Ollama** (local)
-- **OpenAI API** (cloud)
-- **Anthropic API** (cloud)
-- Any OpenAI-compatible endpoint
+- **Anthropic API** (recommended)
+- **OpenAI API**
+- Any OpenAI-compatible endpoint (e.g. self-hosted vLLM)
 
-Configure from the web UI Settings page or via environment variables (`RKA_LLM_ENABLED`, `RKA_LLM_MODEL`, `RKA_LLM_API_BASE`).
+Configure from the web UI Settings page or via environment variables (`RKA_LLM_ENABLED`, `RKA_LLM_MODEL`, `RKA_LLM_API_KEY`).
 
 ### Review Queue
 
