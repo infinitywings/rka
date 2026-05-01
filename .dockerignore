@@ -1,3 +1,7 @@
+# macOS AppleDouble metadata (created on non-APFS volumes; can't be xattr'd into build context)
+._*
+.DS_Store
+
 # Git
 .git
 .gitignore

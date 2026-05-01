@@ -6,6 +6,11 @@
 
 RKA gives your research project a brain that doesn't forget between sessions. It stores every finding, decision, hypothesis, and literature reference in a structured knowledge base with full provenance chains. The Brain (Claude) handles all knowledge enrichment — no local LLM required.
 
+![RKA architecture and operational mechanism](docs/paper/architecture-overview.png)
+
+> **(A)** Three roles — **Researcher** (frames and ratifies), **Brain** (Claude Desktop, synthesizes literature and proposes structured options), **Executor** (Claude Code, implements bounded missions) — share a typed, provenance-aware knowledge base. Four control properties anchor the architecture: traceability, reversibility, visible disagreement, human-ratified commitment.
+> **(B)** One operational cycle: the Researcher frames a goal; the Brain restates intent (Confirmation Brief), retrieves context, and proposes structured options; the Researcher ratifies a decision; a mission is dispatched to the Executor; the Executor implements and reports back; the Brain integrates results and opens the next decision cycle.
+
 ```
  Month 1                    Month 3                    Month 6
  ┌──────────┐              ┌──────────┐              ┌──────────┐
@@ -21,6 +26,12 @@ RKA gives your research project a brain that doesn't forget between sessions. It
 ```
 
 Built for CS/IoT/CPS security research at UNC Charlotte.
+
+## Paper
+
+A working draft describing RKA's architecture, design principles, and evaluation is available as a PDF: **[RKA-paper.pdf](docs/paper/RKA-paper.pdf)** — *Framing Is Human: Researcher–Brain–Executor Architecture for AI-Assisted Research*.
+
+The figure above is Figure 1 of the draft; it provides a one-glance overview of the architecture (panel A) and one operational decision cycle (panel B). The rest of this README is the practical, hands-on companion: setup, CLI, MCP tools, REST API, and the web dashboard. For the conceptual argument and evaluation, read the draft.
 
 ---
 
@@ -139,31 +150,35 @@ rka_get_context(topic="...")   → Token-budgeted context package
 
 ## Key features
 
-| Category | What it does |
-|----------|-------------|
-| **Persistent memory** | Journal entries, decisions, literature, missions, checkpoints — all survive between sessions |
-| **Progressive distillation** | Brain-driven pipeline: entries → claims → evidence clusters → research themes |
-| **Three-layer research map** | Navigate: research questions → evidence clusters → individual claims |
-| **Full provenance** | 12 typed cross-reference edges forming traceable reasoning chains |
-| **Brain-driven enrichment** | Brain handles all knowledge enrichment; maintenance manifest detects gaps automatically |
-| **Decision lifecycle** | Overturn decisions with `rka_supersede_decision` — affected claims marked stale for Brain review |
-| **Hybrid search** | FTS5 keyword + sqlite-vec embeddings + reciprocal rank fusion |
-| **Multi-project** | Isolated project databases with MCP tools for switching |
-| **Web dashboard** | 12-page React UI: research map with filterable stats, decision tree, knowledge graph, markdown-rendered journal, expandable missions |
-| **Onboarding** | `rka_generate_claude_md` auto-generates project-specific CLAUDE.md from live DB state |
-| **Skills plugin** | Role-specific SKILL.md guides packaged as MCP prompts (Brain, Executor, PI) with worked examples and anti-patterns |
-| **Knowledge freshness** | Staleness detection and propagation through the dependency graph; contradiction detection via vector similarity |
-| **Validation gates** | Structured go/no-go checkpoints (Gate 0–3) with Go/Kill/Hold/Recycle verdicts and assumption tracking |
-| **Cluster management** | Split large clusters, merge thin ones — claim provenance preserved automatically |
-| **Literature workflow** | `rka_process_paper` captures reading annotations as structured claims in one call |
-| **RQ lifecycle** | Track research questions from open → partially_answered → answered → reframed → closed |
-| **Evidence assembly** | `rka_assemble_evidence` produces lit reviews, progress reports, and proposal sections from existing knowledge |
-| **Data integrity** | Categorized table registry prevents silent data loss during export; `rka_check_integrity` verifies the knowledge graph |
+| Category                           | What it does                                                                                                                                                                                                                                                                                                              |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Persistent memory**        | Journal entries, decisions, literature, missions, checkpoints — all survive between sessions                                                                                                                                                                                                                             |
+| **Progressive distillation** | Brain-driven pipeline: entries → claims → evidence clusters → research themes                                                                                                                                                                                                                                          |
+| **Three-layer research map** | Navigate: research questions → evidence clusters → individual claims                                                                                                                                                                                                                                                    |
+| **Full provenance**          | 12 typed cross-reference edges forming traceable reasoning chains                                                                                                                                                                                                                                                         |
+| **Brain-driven enrichment**  | Brain handles all knowledge enrichment; maintenance manifest detects gaps automatically                                                                                                                                                                                                                                   |
+| **Decision lifecycle**       | Overturn decisions with `rka_supersede_decision` — affected claims marked stale for Brain review                                                                                                                                                                                                                       |
+| **Hybrid search**            | FTS5 keyword + sqlite-vec embeddings + reciprocal rank fusion                                                                                                                                                                                                                                                             |
+| **Multi-project**            | Isolated project databases with MCP tools for switching                                                                                                                                                                                                                                                                   |
+| **Web dashboard**            | 12-page React UI: research map with filterable stats, decision tree, knowledge graph, markdown-rendered journal, expandable missions                                                                                                                                                                                      |
+| **Onboarding**               | `rka_generate_claude_md` auto-generates project-specific CLAUDE.md from live DB state                                                                                                                                                                                                                                   |
+| **Skills plugin**            | Role-specific SKILL.md guides packaged as MCP prompts (Brain, Executor, PI) with worked examples and anti-patterns                                                                                                                                                                                                        |
+| **Knowledge freshness**      | Staleness detection and propagation through the dependency graph; contradiction detection via vector similarity                                                                                                                                                                                                           |
+| **Validation gates**         | Structured go/no-go checkpoints (Gate 0–3) with Go/Kill/Hold/Recycle verdicts and assumption tracking                                                                                                                                                                                                                    |
+| **Cluster management**       | Split large clusters, merge thin ones — claim provenance preserved automatically                                                                                                                                                                                                                                         |
+| **Literature workflow**      | `rka_process_paper` captures reading annotations as structured claims in one call                                                                                                                                                                                                                                       |
+| **RQ lifecycle**             | Track research questions from open → partially_answered → answered → reframed → closed                                                                                                                                                                                                                                |
+| **Evidence assembly**        | `rka_assemble_evidence` produces lit reviews, progress reports, and proposal sections from existing knowledge                                                                                                                                                                                                           |
+| **Data integrity**           | Categorized table registry prevents silent data loss during export;`rka_check_integrity` verifies the knowledge graph                                                                                                                                                                                                   |
+| **Multi-choice decision UX** | `rka_present_decision` renders structured option sets with Pareto highlights; `rka_record_pi_selection` captures the human choice and `rka_record_outcome` closes the calibration loop with Brier score, ECE, and override-rate metrics                                                                             |
+| **Hook system**              | Event-driven automation (migration 019): 5 event types and 8 MCP tools (`rka_add_hook`, `rka_list_hooks`, `rka_enable_hook`/`rka_disable_hook`, `rka_delete_hook`, `rka_get_hook_executions`, `rka_get_brain_notifications`, `rka_clear_brain_notifications`) for drift detection and Brain notifications |
+| **Streamable HTTP MCP**      | Optional `rka mcp --transport http` mode for remote / multi-client access (dev-only until OAuth 2.1 lands)                                                                                                                                                                                                              |
 
 ---
 
 ## Table of Contents
 
+- [Paper](#paper)
 - [Architecture](#architecture)
 - [Key Concepts](#key-concepts)
 - [Installation](#installation)
@@ -229,11 +244,11 @@ graph TD
 
 RKA runs as three processes:
 
-| Process | Command | Purpose | Port |
-|---------|---------|---------|------|
-| REST API + Web UI | `rka serve` | HTTP endpoints + static web dashboard | 9712 |
-| Background Worker | started by `rka serve` | Embedding generation, FTS indexing | internal |
-| MCP stdio server | `rka mcp` | Tool interface for Claude Desktop/Code | stdio |
+| Process           | Command                  | Purpose                                | Port     |
+| ----------------- | ------------------------ | -------------------------------------- | -------- |
+| REST API + Web UI | `rka serve`            | HTTP endpoints + static web dashboard  | 9712     |
+| Background Worker | started by `rka serve` | Embedding generation, FTS indexing     | internal |
+| MCP stdio server  | `rka mcp`              | Tool interface for Claude Desktop/Code | stdio    |
 
 The REST API and background worker share the same SQLite database file and service layer code. The background worker handles embedding generation so that MCP and REST calls return immediately. Knowledge enrichment (claim extraction, cluster synthesis, provenance linking) is handled by the Brain during maintenance sessions — no local LLM is required.
 
@@ -245,30 +260,30 @@ The MCP server communicates via stdio (stdin/stdout) and proxies all calls to th
 
 ### Entity Types
 
-| Entity | Prefix | Purpose |
-|--------|--------|---------|
-| **Journal Entry** | `jrn_` | Research notes — observations, analyses, procedures, and directives |
-| **Decision** | `dec_` | Decision tree nodes — questions with options, chosen path, rationale |
-| **Literature** | `lit_` | Papers, articles — tracked through reading pipeline |
-| **Mission** | `mis_` | Task packages assigned to the Executor with objectives and acceptance criteria |
-| **Checkpoint** | `chk_` | Escalation points where Executor needs Brain/PI input |
-| **Claim** | `clm_` | Extracted assertions from journal entries (hypothesis, evidence, method, result, observation, assumption) |
-| **Evidence Cluster** | `ecl_` | Groups of related claims with LLM-synthesized summaries |
-| **Topic** | `top_` | Hierarchical topic taxonomy for organizing knowledge |
-| **Review Queue Item** | `rev_` | Items flagged for Brain review (low confidence, contradictions, missing evidence) |
-| **Cross-Reference** | `link_` | Typed edges forming provenance chains between entities |
-| **Event** | `evt_` | Audit trail of all state changes with causal chain links |
-| **Project State** | — | Singleton per project: current phase, summary, blockers, metrics |
+| Entity                      | Prefix    | Purpose                                                                                                   |
+| --------------------------- | --------- | --------------------------------------------------------------------------------------------------------- |
+| **Journal Entry**     | `jrn_`  | Research notes — observations, analyses, procedures, and directives                                      |
+| **Decision**          | `dec_`  | Decision tree nodes — questions with options, chosen path, rationale                                     |
+| **Literature**        | `lit_`  | Papers, articles — tracked through reading pipeline                                                      |
+| **Mission**           | `mis_`  | Task packages assigned to the Executor with objectives and acceptance criteria                            |
+| **Checkpoint**        | `chk_`  | Escalation points where Executor needs Brain/PI input                                                     |
+| **Claim**             | `clm_`  | Extracted assertions from journal entries (hypothesis, evidence, method, result, observation, assumption) |
+| **Evidence Cluster**  | `ecl_`  | Groups of related claims with LLM-synthesized summaries                                                   |
+| **Topic**             | `top_`  | Hierarchical topic taxonomy for organizing knowledge                                                      |
+| **Review Queue Item** | `rev_`  | Items flagged for Brain review (low confidence, contradictions, missing evidence)                         |
+| **Cross-Reference**   | `link_` | Typed edges forming provenance chains between entities                                                    |
+| **Event**             | `evt_`  | Audit trail of all state changes with causal chain links                                                  |
+| **Project State**     | —        | Singleton per project: current phase, summary, blockers, metrics                                          |
 
 ### Journal Entry Types
 
 v2.0 simplifies journal entry types to three canonical categories:
 
-| Type | Purpose |
-|------|---------|
-| `note` | Observations, analyses, insights — the default type for most entries |
-| `log` | Procedures, methodology steps, experiment records |
-| `directive` | Instructions from PI or Brain to guide future work |
+| Type          | Purpose                                                               |
+| ------------- | --------------------------------------------------------------------- |
+| `note`      | Observations, analyses, insights — the default type for most entries |
+| `log`       | Procedures, methodology steps, experiment records                     |
+| `directive` | Instructions from PI or Brain to guide future work                    |
 
 Legacy types from v1 (`finding`, `insight`, `idea`, `observation`, `hypothesis`, `methodology`, `pi_instruction`, `exploration`, `summary`) are accepted as input and automatically mapped to the nearest v2.0 type.
 
@@ -326,11 +341,11 @@ Every entity can be linked to its sources via typed `link_` cross-references. Co
 
 Entries are classified by recency:
 
-| Temperature | Age | Behavior |
-|-------------|-----|----------|
-| **HOT** | <= 3 days | Included in full, highest priority |
-| **WARM** | <= 14 days | Included, may be compressed |
-| **COLD** | > 14 days | Summarized or excluded |
+| Temperature       | Age               | Behavior                             |
+| ----------------- | ----------------- | ------------------------------------ |
+| **HOT**     | <= 3 days         | Included in full, highest priority   |
+| **WARM**    | <= 14 days        | Included, may be compressed          |
+| **COLD**    | > 14 days         | Summarized or excluded               |
 | **ARCHIVE** | Manually archived | Excluded unless explicitly requested |
 
 The Context Engine uses these temperatures to build focused context packages within token budgets.
@@ -406,6 +421,7 @@ Plain `uv tool install --force .` uses cached wheels and may NOT pick up changes
 ### Option B: From Source (Development)
 
 Prerequisites:
+
 - Python 3.11+
 - Node.js 18+ (for web dashboard)
 - Optional: [LM Studio](https://lmstudio.ai/) or [Ollama](https://ollama.com/) (for `rka_ask` and `rka_generate_summary`)
@@ -513,11 +529,11 @@ RKA ships with role-specific skill guides that teach Claude how to use the tools
 
 ### Available Skills
 
-| Skill | Target | Content |
-|-------|--------|---------|
-| `brain_skill` | Claude Desktop | Session start protocol, PI attribution, provenance discipline, claim extraction, multi-task parsing, Research Map workflow, confirmation briefs, knowledge freshness, validation gates, anti-patterns |
-| `executor_skill` | Claude Code | Mission pickup protocol, backbrief procedure, recording standards, escalation triggers, report submission, MCP binary reinstall, cross-role awareness |
-| `pi_skill` | Human researcher | Quick reference for checking status, reading the research map, reviewing decisions, finding what changed |
+| Skill              | Target           | Content                                                                                                                                                                                               |
+| ------------------ | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `brain_skill`    | Claude Desktop   | Session start protocol, PI attribution, provenance discipline, claim extraction, multi-task parsing, Research Map workflow, confirmation briefs, knowledge freshness, validation gates, anti-patterns |
+| `executor_skill` | Claude Code      | Mission pickup protocol, backbrief procedure, recording standards, escalation triggers, report submission, MCP binary reinstall, cross-role awareness                                                 |
+| `pi_skill`       | Human researcher | Quick reference for checking status, reading the research map, reviewing decisions, finding what changed                                                                                              |
 
 ### How Skills Are Loaded
 
@@ -526,16 +542,19 @@ The MCP server instructions tell Claude to load the appropriate skill prompt at 
 ### Key Workflows
 
 **Brain session start:**
+
 1. `rka_set_project()` → `rka_get_changelog(since="yesterday")` → `rka_get_research_map()`
 2. Process up to 10 maintenance items silently
 3. Greet the user
 
 **Executor mission pickup:**
+
 1. `rka_get_mission()` → read `motivated_by_decision` → read context links
 2. Present a Backbrief (plan summary, assumptions, risks)
 3. Wait for Brain approval before starting
 
 **Validation gates (go/no-go checkpoints):**
+
 1. `rka_create_gate(mission_id, gate_type, deliverables, pass_criteria)`
 2. Work proceeds → deliverables created
 3. `rka_evaluate_gate(gate_id, verdict, notes, assumption_status)`
@@ -564,10 +583,10 @@ Initialize a new RKA workspace and seed the default project.
 rka init "IoT Security Analysis" --description "Systematic review of CPS vulnerabilities"
 ```
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--description` | `""` | Project description |
-| `--dir` | `.` | Project directory |
+| Option            | Default | Description         |
+| ----------------- | ------- | ------------------- |
+| `--description` | `""`  | Project description |
+| `--dir`         | `.`   | Project directory   |
 
 ### `rka serve`
 
@@ -577,11 +596,11 @@ Start the REST API + web dashboard server and the background worker.
 rka serve --port 9712 --reload
 ```
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--host` | `127.0.0.1` | Bind address |
-| `--port` | `9712` | Port number |
-| `--reload` | `false` | Auto-reload on code changes (dev mode) |
+| Option       | Default       | Description                            |
+| ------------ | ------------- | -------------------------------------- |
+| `--host`   | `127.0.0.1` | Bind address                           |
+| `--port`   | `9712`      | Port number                            |
+| `--reload` | `false`     | Auto-reload on code changes (dev mode) |
 
 ### `rka mcp`
 
@@ -611,8 +630,8 @@ Backup the SQLite database.
 rka backup --output ./backups/rka-backup.db
 ```
 
-| Option | Default | Description |
-|--------|---------|-------------|
+| Option       | Default          | Description            |
+| ------------ | ---------------- | ---------------------- |
 | `--output` | Timestamped file | Output path for backup |
 
 ### `rka migrate`
@@ -631,11 +650,11 @@ Scan a workspace folder and classify files for ingestion into the knowledge base
 rka bootstrap scan ~/research/project_files --no-llm
 ```
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--ignore` | — | Additional ignore patterns (repeatable) |
-| `--no-llm` | `false` | Disable LLM-enhanced classification |
-| `--json-output` | `false` | Output raw JSON manifest |
+| Option            | Default   | Description                             |
+| ----------------- | --------- | --------------------------------------- |
+| `--ignore`      | —        | Additional ignore patterns (repeatable) |
+| `--no-llm`      | `false` | Disable LLM-enhanced classification     |
+| `--json-output` | `false` | Output raw JSON manifest                |
 
 ### `rka bootstrap ingest <folder>`
 
@@ -645,14 +664,14 @@ Scan and ingest a workspace folder into the knowledge base.
 rka bootstrap ingest ~/research/project_files --phase phase_1 --tags bootstrap -y
 ```
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--phase` | `None` | Research phase for all entries |
-| `--tags` | — | Tags to add to all entries (repeatable) |
-| `--skip` | — | Relative paths to skip (repeatable) |
-| `--no-llm` | `false` | Disable LLM-enhanced classification |
-| `--dry-run` | `false` | Preview without creating entries |
-| `--yes` | `false` | Skip confirmation prompt |
+| Option        | Default   | Description                             |
+| ------------- | --------- | --------------------------------------- |
+| `--phase`   | `None`  | Research phase for all entries          |
+| `--tags`    | —        | Tags to add to all entries (repeatable) |
+| `--skip`    | —        | Relative paths to skip (repeatable)     |
+| `--no-llm`  | `false` | Disable LLM-enhanced classification     |
+| `--dry-run` | `false` | Preview without creating entries        |
+| `--yes`     | `false` | Skip confirmation prompt                |
 
 These CLI bootstrap commands target the current database/default project. In a multi-project deployment, use `POST /api/workspace/scan` and `POST /api/workspace/ingest` with `X-RKA-Project` to bootstrap a specific project.
 
@@ -664,57 +683,60 @@ All settings use environment variables with the `RKA_` prefix. Place them in a `
 
 ### Core Settings
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `RKA_PROJECT_DIR` | `.` | Project root directory |
-| `RKA_DB_PATH` | `rka.db` | SQLite database file path |
-| `RKA_HOST` | `127.0.0.1` | API server bind address |
-| `RKA_PORT` | `9712` | API server port |
-| `RKA_API_URL` | `http://localhost:9712` | REST API URL for MCP proxy |
+| Variable            | Default                   | Description                |
+| ------------------- | ------------------------- | -------------------------- |
+| `RKA_PROJECT_DIR` | `.`                     | Project root directory     |
+| `RKA_DB_PATH`     | `rka.db`                | SQLite database file path  |
+| `RKA_HOST`        | `127.0.0.1`             | API server bind address    |
+| `RKA_PORT`        | `9712`                  | API server port            |
+| `RKA_API_URL`     | `http://localhost:9712` | REST API URL for MCP proxy |
 
 ### LLM Settings
 
 LLM configuration is managed from the **web UI Settings page**. Changes persist in the database and survive restarts without touching `.env`. Environment variables serve as initial defaults.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `RKA_LLM_ENABLED` | `true` | Enable LLM features |
-| `RKA_LLM_MODEL` | `openai/qwen3-32b` | LiteLLM model identifier (`openai/*` for LM Studio, `ollama/*` for Ollama) |
-| `RKA_LLM_API_BASE` | `http://localhost:1234/v1` | LLM API base URL |
-| `RKA_LLM_API_KEY` | `None` | API key (not needed for local backends) |
-| `RKA_LLM_THINK` | `false` | Enable thinking/reasoning mode |
-| `RKA_LLM_CONTEXT_WINDOW` | `4096` | Context window in tokens (auto-detected from LM Studio/Ollama) |
+| Variable                   | Default                      | Description                                                                    |
+| -------------------------- | ---------------------------- | ------------------------------------------------------------------------------ |
+| `RKA_LLM_ENABLED`        | `true`                     | Enable LLM features                                                            |
+| `RKA_LLM_MODEL`          | `openai/qwen3-32b`         | LiteLLM model identifier (`openai/*` for LM Studio, `ollama/*` for Ollama) |
+| `RKA_LLM_API_BASE`       | `http://localhost:1234/v1` | LLM API base URL                                                               |
+| `RKA_LLM_API_KEY`        | `None`                     | API key (not needed for local backends)                                        |
+| `RKA_LLM_THINK`          | `false`                    | Enable thinking/reasoning mode                                                 |
+| `RKA_LLM_CONTEXT_WINDOW` | `4096`                     | Context window in tokens (auto-detected from LM Studio/Ollama)                 |
 
 ### Embedding Settings
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `RKA_EMBEDDINGS_ENABLED` | `false` | Enable embedding generation |
-| `RKA_EMBEDDING_MODEL` | `nomic-ai/nomic-embed-text-v1.5` | FastEmbed model name |
+| Variable                   | Default                            | Description                 |
+| -------------------------- | ---------------------------------- | --------------------------- |
+| `RKA_EMBEDDINGS_ENABLED` | `false`                          | Enable embedding generation |
+| `RKA_EMBEDDING_MODEL`    | `nomic-ai/nomic-embed-text-v1.5` | FastEmbed model name        |
 
 ### Context Engine Settings
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `RKA_CONTEXT_HOT_DAYS` | `3` | Days for HOT temperature classification |
-| `RKA_CONTEXT_WARM_DAYS` | `14` | Days for WARM temperature classification |
+| Variable                           | Default  | Description                               |
+| ---------------------------------- | -------- | ----------------------------------------- |
+| `RKA_CONTEXT_HOT_DAYS`           | `3`    | Days for HOT temperature classification   |
+| `RKA_CONTEXT_WARM_DAYS`          | `14`   | Days for WARM temperature classification  |
 | `RKA_CONTEXT_DEFAULT_MAX_TOKENS` | `2000` | Default token budget for context packages |
 
 ### LLM Provider Examples
 
 **LM Studio (recommended, local):**
+
 ```env
 RKA_LLM_MODEL=openai/qwen3-32b
 RKA_LLM_API_BASE=http://localhost:1234/v1
 ```
 
 **Ollama (local):**
+
 ```env
 RKA_LLM_MODEL=ollama/qwen3:32b
 # No API base needed -- LiteLLM routes to Ollama's default port
 ```
 
 **OpenAI-compatible (vLLM, etc.):**
+
 ```env
 RKA_LLM_MODEL=openai/your-model
 RKA_LLM_API_BASE=http://localhost:8000/v1
@@ -731,165 +753,165 @@ All tools are prefixed with `rka_` and available through the MCP stdio interface
 
 ### Project
 
-| Tool | Purpose |
-|------|---------|
-| `rka_list_projects` | List all projects with name, description, and ID |
-| `rka_set_project` | Switch the active project by name or ID |
-| `rka_create_project` | Create a new project and optionally switch to it |
-| `rka_get_status` | Get current project state (phase, summary, blockers, metrics) |
-| `rka_update_status` | Update project state |
+| Tool                   | Purpose                                                       |
+| ---------------------- | ------------------------------------------------------------- |
+| `rka_list_projects`  | List all projects with name, description, and ID              |
+| `rka_set_project`    | Switch the active project by name or ID                       |
+| `rka_create_project` | Create a new project and optionally switch to it              |
+| `rka_get_status`     | Get current project state (phase, summary, blockers, metrics) |
+| `rka_update_status`  | Update project state                                          |
 
 ### Notes
 
-| Tool | Purpose |
-|------|---------|
-| `rka_add_note` | Add a journal entry with optional tags; type is note, log, or directive (legacy types are mapped automatically) |
-| `rka_update_note` | Update an existing journal entry |
-| `rka_get_journal` | Query journal entries with filters (type, phase, confidence, since) |
+| Tool                | Purpose                                                                                                         |
+| ------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `rka_add_note`    | Add a journal entry with optional tags; type is note, log, or directive (legacy types are mapped automatically) |
+| `rka_update_note` | Update an existing journal entry                                                                                |
+| `rka_get_journal` | Query journal entries with filters (type, phase, confidence, since)                                             |
 
 ### Decisions
 
-| Tool | Purpose |
-|------|---------|
-| `rka_add_decision` | Add a decision node to the research decision tree |
-| `rka_update_decision` | Update a decision (change status, record chosen option, add rationale) |
-| `rka_get_decision_tree` | Get the full decision tree structure |
+| Tool                      | Purpose                                                                |
+| ------------------------- | ---------------------------------------------------------------------- |
+| `rka_add_decision`      | Add a decision node to the research decision tree                      |
+| `rka_update_decision`   | Update a decision (change status, record chosen option, add rationale) |
+| `rka_get_decision_tree` | Get the full decision tree structure                                   |
 
 ### Literature
 
-| Tool | Purpose |
-|------|---------|
-| `rka_add_literature` | Add a literature entry (paper, article, book) |
+| Tool                      | Purpose                                                                                                         |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `rka_add_literature`    | Add a literature entry (paper, article, book)                                                                   |
 | `rka_update_literature` | Update any literature field (title, authors, year, venue, doi, abstract, status, methodology_notes, tags, etc.) |
-| `rka_get_literature` | Query literature with filters |
-| `rka_enrich_doi` | Enrich a literature entry by looking up its DOI via CrossRef |
+| `rka_get_literature`    | Query literature with filters                                                                                   |
+| `rka_enrich_doi`        | Enrich a literature entry by looking up its DOI via CrossRef                                                    |
 
 ### Missions
 
-| Tool | Purpose |
-|------|---------|
-| `rka_create_mission` | Create a mission for the Executor with objectives, tasks, and acceptance criteria |
-| `rka_get_mission` | Get a mission by ID, or the current active mission |
-| `rka_update_mission_status` | Update mission status and task progress |
-| `rka_submit_report` | Submit an execution report for a completed/partial mission |
-| `rka_get_report` | Retrieve a mission report |
+| Tool                          | Purpose                                                                           |
+| ----------------------------- | --------------------------------------------------------------------------------- |
+| `rka_create_mission`        | Create a mission for the Executor with objectives, tasks, and acceptance criteria |
+| `rka_get_mission`           | Get a mission by ID, or the current active mission                                |
+| `rka_update_mission_status` | Update mission status and task progress                                           |
+| `rka_submit_report`         | Submit an execution report for a completed/partial mission                        |
+| `rka_get_report`            | Retrieve a mission report                                                         |
 
 ### Checkpoints (Escalation)
 
-| Tool | Purpose |
-|------|---------|
-| `rka_submit_checkpoint` | Raise a decision/clarification/inspection checkpoint |
-| `rka_get_checkpoints` | List checkpoints by status (open, resolved, dismissed) |
-| `rka_resolve_checkpoint` | Resolve a checkpoint with a decision and rationale |
+| Tool                       | Purpose                                                |
+| -------------------------- | ------------------------------------------------------ |
+| `rka_submit_checkpoint`  | Raise a decision/clarification/inspection checkpoint   |
+| `rka_get_checkpoints`    | List checkpoints by status (open, resolved, dismissed) |
+| `rka_resolve_checkpoint` | Resolve a checkpoint with a decision and rationale     |
 
 ### Research Map (v2.0)
 
-| Tool | Purpose |
-|------|---------|
-| `rka_get_research_map` | Get the three-level research map: research questions, evidence clusters, and claims |
-| `rka_get_claims` | Query extracted claims with filters (type, confidence, cluster, entry_id) |
-| `rka_extract_claims` | Brain creates claims from a journal entry (takes entry_id + list of claim objects) |
-| `rka_create_cluster` | Brain creates an evidence cluster, optionally assigning claims in one call |
-| `rka_assign_claims_to_cluster` | Brain wires existing claims to an existing cluster via member_of edges |
-| `rka_supersede_decision` | Mark a decision as superseded by a new decision, with optional re-distillation of affected claims |
-| `rka_trace_provenance` | Trace the full provenance chain for an entity — all upstream sources and downstream derivatives |
+| Tool                             | Purpose                                                                                           |
+| -------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `rka_get_research_map`         | Get the three-level research map: research questions, evidence clusters, and claims               |
+| `rka_get_claims`               | Query extracted claims with filters (type, confidence, cluster, entry_id)                         |
+| `rka_extract_claims`           | Brain creates claims from a journal entry (takes entry_id + list of claim objects)                |
+| `rka_create_cluster`           | Brain creates an evidence cluster, optionally assigning claims in one call                        |
+| `rka_assign_claims_to_cluster` | Brain wires existing claims to an existing cluster via member_of edges                            |
+| `rka_supersede_decision`       | Mark a decision as superseded by a new decision, with optional re-distillation of affected claims |
+| `rka_trace_provenance`         | Trace the full provenance chain for an entity — all upstream sources and downstream derivatives  |
 
 ### Cluster Management (v2.1)
 
-| Tool | Purpose |
-|------|---------|
-| `rka_list_clusters` | List evidence clusters with claim counts, confidence, and synthesis |
-| `rka_split_cluster` | Split a cluster into multiple new clusters by reassigning its claims |
-| `rka_merge_clusters` | Merge multiple clusters into one new cluster |
+| Tool                   | Purpose                                                              |
+| ---------------------- | -------------------------------------------------------------------- |
+| `rka_list_clusters`  | List evidence clusters with claim counts, confidence, and synthesis  |
+| `rka_split_cluster`  | Split a cluster into multiple new clusters by reassigning its claims |
+| `rka_merge_clusters` | Merge multiple clusters into one new cluster                         |
 
 ### Review Queue (v2.0)
 
-| Tool | Purpose |
-|------|---------|
-| `rka_get_review_queue` | List items in the review queue (low confidence, contradictions, synthesis needed) |
-| `rka_review_cluster` | Review and approve or revise an evidence cluster's synthesized summary |
-| `rka_review_claims` | Review a set of claims — accept, reject, merge, or flag for further investigation |
-| `rka_resolve_contradiction` | Resolve a contradiction between two claims with a rationale and disposition |
+| Tool                          | Purpose                                                                            |
+| ----------------------------- | ---------------------------------------------------------------------------------- |
+| `rka_get_review_queue`      | List items in the review queue (low confidence, contradictions, synthesis needed)  |
+| `rka_review_cluster`        | Review and approve or revise an evidence cluster's synthesized summary             |
+| `rka_review_claims`         | Review a set of claims — accept, reject, merge, or flag for further investigation |
+| `rka_resolve_contradiction` | Resolve a contradiction between two claims with a rationale and disposition        |
 
 ### Knowledge Freshness (v2.1)
 
-| Tool | Purpose |
-|------|---------|
-| `rka_flag_stale` | Flag a claim, cluster, or decision as stale (yellow/red) with optional propagation through the dependency graph |
-| `rka_check_freshness` | Scan for potentially stale knowledge: aging claims, superseded sources, stale clusters and decisions |
-| `rka_detect_contradictions` | Find claims that may contradict a given claim using vector similarity or FTS fallback |
+| Tool                          | Purpose                                                                                                         |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `rka_flag_stale`            | Flag a claim, cluster, or decision as stale (yellow/red) with optional propagation through the dependency graph |
+| `rka_check_freshness`       | Scan for potentially stale knowledge: aging claims, superseded sources, stale clusters and decisions            |
+| `rka_detect_contradictions` | Find claims that may contradict a given claim using vector similarity or FTS fallback                           |
 
 ### Validation Gates (v2.1)
 
-| Tool | Purpose |
-|------|---------|
-| `rka_create_gate` | Create a validation gate checkpoint (problem_framing, plan_validation, evidence_review, synthesis_validation) |
-| `rka_evaluate_gate` | Evaluate a gate with Go/Kill/Hold/Recycle verdict; invalidated assumptions auto-cascade staleness |
+| Tool                  | Purpose                                                                                                       |
+| --------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `rka_create_gate`   | Create a validation gate checkpoint (problem_framing, plan_validation, evidence_review, synthesis_validation) |
+| `rka_evaluate_gate` | Evaluate a gate with Go/Kill/Hold/Recycle verdict; invalidated assumptions auto-cascade staleness             |
 
 ### Researcher Experience (v2.1)
 
-| Tool | Purpose |
-|------|---------|
-| `rka_get_changelog` | Cross-entity temporal view — what changed since a given date across all entity types |
+| Tool                      | Purpose                                                                                                              |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `rka_get_changelog`     | Cross-entity temporal view — what changed since a given date across all entity types                                |
 | `rka_assemble_evidence` | Assemble evidence under a research question into structured markdown (lit_review, progress_report, proposal_section) |
-| `rka_process_paper` | Literature reading workflow — create reading notes + extract claims from annotations in one call |
-| `rka_advance_rq` | Advance a research question's lifecycle (open → partially_answered → answered → reframed → closed) |
-| `rka_check_integrity` | Verify knowledge base integrity — orphaned edges, missing references, count mismatches |
+| `rka_process_paper`     | Literature reading workflow — create reading notes + extract claims from annotations in one call                    |
+| `rka_advance_rq`        | Advance a research question's lifecycle (open → partially_answered → answered → reframed → closed)               |
+| `rka_check_integrity`   | Verify knowledge base integrity — orphaned edges, missing references, count mismatches                              |
 
 ### Search and Context
 
-| Tool | Purpose |
-|------|---------|
-| `rka_search` | Hybrid search across all entity types |
-| `rka_get_context` | Generate a focused context package for a topic within a token budget |
-| `rka_ask` | Ask a question grounded in the knowledge base (RAG) |
-| `rka_summarize` | On-demand topic summarization |
-| `rka_eviction_sweep` | Propose entries for archival based on staleness |
+| Tool                   | Purpose                                                              |
+| ---------------------- | -------------------------------------------------------------------- |
+| `rka_search`         | Hybrid search across all entity types                                |
+| `rka_get_context`    | Generate a focused context package for a topic within a token budget |
+| `rka_ask`            | Ask a question grounded in the knowledge base (RAG)                  |
+| `rka_summarize`      | On-demand topic summarization                                        |
+| `rka_eviction_sweep` | Propose entries for archival based on staleness                      |
 
 ### Graph
 
-| Tool | Purpose |
-|------|---------|
-| `rka_get_graph` | Get the full entity relationship graph |
-| `rka_get_ego_graph` | Get the ego graph centered on a specific entity |
-| `rka_graph_stats` | Get graph statistics (node counts, edge counts, density) |
+| Tool                  | Purpose                                                  |
+| --------------------- | -------------------------------------------------------- |
+| `rka_get_graph`     | Get the full entity relationship graph                   |
+| `rka_get_ego_graph` | Get the ego graph centered on a specific entity          |
+| `rka_graph_stats`   | Get graph statistics (node counts, edge counts, density) |
 
 ### Academic Import and Enrichment
 
-| Tool | Purpose |
-|------|---------|
+| Tool                            | Purpose                                                                                               |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | `rka_search_semantic_scholar` | Search Semantic Scholar for papers by query, with optional year/field filters and auto-add to library |
-| `rka_search_arxiv` | Search arXiv for papers by query, with sort options and optional auto-add to library |
-| `rka_search_elicit` | Search Elicit for papers relevant to a research question |
-| `rka_import_bibtex` | Import literature entries from a BibTeX string (auto-detects duplicates by DOI and title) |
+| `rka_search_arxiv`            | Search arXiv for papers by query, with sort options and optional auto-add to library                  |
+| `rka_search_elicit`           | Search Elicit for papers relevant to a research question                                              |
+| `rka_import_bibtex`           | Import literature entries from a BibTeX string (auto-detects duplicates by DOI and title)             |
 
 ### Workspace Bootstrap
 
-| Tool | Purpose |
-|------|---------|
-| `rka_scan_workspace` | Scan a folder and classify files for ingestion (regex heuristics + optional LLM enhancement) |
-| `rka_bootstrap_workspace` | One-shot scan + ingest: classify and import all files into the knowledge base |
-| `rka_review_bootstrap` | Review a completed bootstrap — entry counts, suggestions, and narrative for Brain handoff |
+| Tool                        | Purpose                                                                                      |
+| --------------------------- | -------------------------------------------------------------------------------------------- |
+| `rka_scan_workspace`      | Scan a folder and classify files for ingestion (regex heuristics + optional LLM enhancement) |
+| `rka_bootstrap_workspace` | One-shot scan + ingest: classify and import all files into the knowledge base                |
+| `rka_review_bootstrap`    | Review a completed bootstrap — entry counts, suggestions, and narrative for Brain handoff   |
 
 ### Session
 
-| Tool | Purpose |
-|------|---------|
+| Tool                   | Purpose                                                         |
+| ---------------------- | --------------------------------------------------------------- |
 | `rka_session_digest` | Generate a digest of the current session's activity for handoff |
-| `rka_reset_session` | Reset per-session state (compaction counters, digest buffer) |
+| `rka_reset_session`  | Reset per-session state (compaction counters, digest buffer)    |
 
 ### Onboarding (v2.0)
 
-| Tool | Purpose |
-|------|---------|
+| Tool                       | Purpose                                                                           |
+| -------------------------- | --------------------------------------------------------------------------------- |
 | `rka_generate_claude_md` | Generate a customized CLAUDE.md for the active project and role (executor, brain) |
 
 ### Export
 
-| Tool | Purpose |
-|------|---------|
-| `rka_export` | Export research data as markdown, JSON, or Mermaid diagram (scopes: state, decisions, literature, full) |
-| `rka_export_mermaid` | Export the decision tree as a Mermaid flowchart with status-based styling |
+| Tool                   | Purpose                                                                                                 |
+| ---------------------- | ------------------------------------------------------------------------------------------------------- |
+| `rka_export`         | Export research data as markdown, JSON, or Mermaid diagram (scopes: state, decisions, literature, full) |
+| `rka_export_mermaid` | Export the decision tree as a Mermaid flowchart with status-based styling                               |
 
 ---
 
@@ -903,215 +925,215 @@ Most entity endpoints are project-scoped. Pass `X-RKA-Project: <project_id>` to 
 
 ### Notes (Journal Entries)
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/notes` | Create a journal entry |
-| `GET` | `/notes` | List entries (filters: type, phase, confidence, importance, source, since, hide_superseded) |
-| `GET` | `/notes/{id}` | Get a single entry |
-| `PUT` | `/notes/{id}` | Update an entry |
+| Method   | Endpoint        | Description                                                                                 |
+| -------- | --------------- | ------------------------------------------------------------------------------------------- |
+| `POST` | `/notes`      | Create a journal entry                                                                      |
+| `GET`  | `/notes`      | List entries (filters: type, phase, confidence, importance, source, since, hide_superseded) |
+| `GET`  | `/notes/{id}` | Get a single entry                                                                          |
+| `PUT`  | `/notes/{id}` | Update an entry                                                                             |
 
 ### Decisions
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/decisions` | Create a decision node |
-| `GET` | `/decisions` | List decisions (filters: phase, status, parent_id) |
-| `GET` | `/decisions/tree` | Get the full tree structure (for visualization) |
-| `GET` | `/decisions/{id}` | Get a single decision with options |
-| `PUT` | `/decisions/{id}` | Update a decision |
+| Method   | Endpoint                      | Description                                                                    |
+| -------- | ----------------------------- | ------------------------------------------------------------------------------ |
+| `POST` | `/decisions`                | Create a decision node                                                         |
+| `GET`  | `/decisions`                | List decisions (filters: phase, status, parent_id)                             |
+| `GET`  | `/decisions/tree`           | Get the full tree structure (for visualization)                                |
+| `GET`  | `/decisions/{id}`           | Get a single decision with options                                             |
+| `PUT`  | `/decisions/{id}`           | Update a decision                                                              |
 | `POST` | `/decisions/{id}/supersede` | Supersede a decision with a replacement, optionally triggering re-distillation |
 
 ### Literature
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/literature` | Add a literature entry |
-| `GET` | `/literature` | List entries (filters: status, year range, venue, query) |
-| `GET` | `/literature/{id}` | Get a single entry |
-| `PUT` | `/literature/{id}` | Update an entry |
+| Method   | Endpoint             | Description                                              |
+| -------- | -------------------- | -------------------------------------------------------- |
+| `POST` | `/literature`      | Add a literature entry                                   |
+| `GET`  | `/literature`      | List entries (filters: status, year range, venue, query) |
+| `GET`  | `/literature/{id}` | Get a single entry                                       |
+| `PUT`  | `/literature/{id}` | Update an entry                                          |
 
 ### Missions
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/missions` | Create a mission |
-| `GET` | `/missions` | List missions (filters: phase, status) |
-| `GET` | `/missions/{id}` | Get a single mission |
-| `PUT` | `/missions/{id}` | Update a mission |
-| `POST` | `/missions/{id}/report` | Submit an execution report |
-| `GET` | `/missions/{id}/report` | Get the mission report |
+| Method   | Endpoint                  | Description                            |
+| -------- | ------------------------- | -------------------------------------- |
+| `POST` | `/missions`             | Create a mission                       |
+| `GET`  | `/missions`             | List missions (filters: phase, status) |
+| `GET`  | `/missions/{id}`        | Get a single mission                   |
+| `PUT`  | `/missions/{id}`        | Update a mission                       |
+| `POST` | `/missions/{id}/report` | Submit an execution report             |
+| `GET`  | `/missions/{id}/report` | Get the mission report                 |
 
 ### Checkpoints
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/checkpoints` | Create a checkpoint |
-| `GET` | `/checkpoints` | List checkpoints (filters: status, mission_id) |
-| `GET` | `/checkpoints/{id}` | Get a single checkpoint |
-| `PUT` | `/checkpoints/{id}/resolve` | Resolve a checkpoint |
+| Method   | Endpoint                      | Description                                    |
+| -------- | ----------------------------- | ---------------------------------------------- |
+| `POST` | `/checkpoints`              | Create a checkpoint                            |
+| `GET`  | `/checkpoints`              | List checkpoints (filters: status, mission_id) |
+| `GET`  | `/checkpoints/{id}`         | Get a single checkpoint                        |
+| `PUT`  | `/checkpoints/{id}/resolve` | Resolve a checkpoint                           |
 
 ### Claims (v2.0)
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/claims` | Create a claim manually or trigger extraction from a journal entry |
-| `GET` | `/claims` | List claims (filters: type, confidence, cluster_id, entry_id) |
-| `GET` | `/claims/{id}` | Get a single claim with provenance links |
+| Method   | Endpoint          | Description                                                                   |
+| -------- | ----------------- | ----------------------------------------------------------------------------- |
+| `POST` | `/claims`       | Create a claim manually or trigger extraction from a journal entry            |
+| `GET`  | `/claims`       | List claims (filters: type, confidence, cluster_id, entry_id)                 |
+| `GET`  | `/claims/{id}`  | Get a single claim with provenance links                                      |
 | `POST` | `/claims/edges` | Create a claim edge (member_of, supports, contradicts, qualifies, supersedes) |
 
 ### Evidence Clusters (v2.0)
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/clusters` | Create an evidence cluster |
-| `GET` | `/clusters` | List clusters (filters: topic_id, has_synthesis, since) |
-| `GET` | `/clusters/{id}` | Get a single cluster with member claims |
-| `PUT` | `/clusters/{id}` | Update a cluster (revise synthesis, update topic) |
+| Method   | Endpoint           | Description                                             |
+| -------- | ------------------ | ------------------------------------------------------- |
+| `POST` | `/clusters`      | Create an evidence cluster                              |
+| `GET`  | `/clusters`      | List clusters (filters: topic_id, has_synthesis, since) |
+| `GET`  | `/clusters/{id}` | Get a single cluster with member claims                 |
+| `PUT`  | `/clusters/{id}` | Update a cluster (revise synthesis, update topic)       |
 
 ### Topics (v2.0)
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/topics` | Create a topic |
-| `GET` | `/topics` | List topics (filters: parent_id, depth) |
-| `GET` | `/topics/{id}` | Get a single topic |
-| `PUT` | `/topics/{id}` | Update a topic |
-| `GET` | `/topics/tree` | Get the full hierarchical topic tree |
+| Method   | Endpoint         | Description                             |
+| -------- | ---------------- | --------------------------------------- |
+| `POST` | `/topics`      | Create a topic                          |
+| `GET`  | `/topics`      | List topics (filters: parent_id, depth) |
+| `GET`  | `/topics/{id}` | Get a single topic                      |
+| `PUT`  | `/topics/{id}` | Update a topic                          |
+| `GET`  | `/topics/tree` | Get the full hierarchical topic tree    |
 
 ### Research Map (v2.0)
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/research-map` | Get the three-level research map: RQs, clusters, and representative claims |
-| `GET` | `/research-map/rq/{rq_id}/clusters` | Get all clusters under a research question |
-| `GET` | `/research-map/cluster/{cluster_id}/claims` | Get all claims within a cluster |
+| Method  | Endpoint                                      | Description                                                                |
+| ------- | --------------------------------------------- | -------------------------------------------------------------------------- |
+| `GET` | `/research-map`                             | Get the three-level research map: RQs, clusters, and representative claims |
+| `GET` | `/research-map/rq/{rq_id}/clusters`         | Get all clusters under a research question                                 |
+| `GET` | `/research-map/cluster/{cluster_id}/claims` | Get all claims within a cluster                                            |
 
 ### Review Queue (v2.0)
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/review-queue` | List review-queue items (filters: status, reason, since) |
-| `POST` | `/review-queue` | Add an item to the review queue manually |
-| `PUT` | `/review-queue/{id}/resolve` | Resolve a review-queue item with a disposition |
+| Method   | Endpoint                       | Description                                              |
+| -------- | ------------------------------ | -------------------------------------------------------- |
+| `GET`  | `/review-queue`              | List review-queue items (filters: status, reason, since) |
+| `POST` | `/review-queue`              | Add an item to the review queue manually                 |
+| `PUT`  | `/review-queue/{id}/resolve` | Resolve a review-queue item with a disposition           |
 
 ### Researcher Tools (v2.1)
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/changelog` | Cross-entity temporal view (query: `since`, `limit`) |
-| `GET` | `/assemble-evidence` | Assemble evidence as markdown (query: `research_question_id`, `format`) |
-| `POST` | `/clusters/split` | Split a cluster into multiple new clusters |
-| `POST` | `/clusters/merge` | Merge multiple clusters into one |
-| `POST` | `/literature/process-paper` | Process paper annotations into claims |
-| `POST` | `/research-questions/advance` | Advance an RQ lifecycle status |
+| Method   | Endpoint                        | Description                                                                |
+| -------- | ------------------------------- | -------------------------------------------------------------------------- |
+| `GET`  | `/changelog`                  | Cross-entity temporal view (query:`since`, `limit`)                    |
+| `GET`  | `/assemble-evidence`          | Assemble evidence as markdown (query:`research_question_id`, `format`) |
+| `POST` | `/clusters/split`             | Split a cluster into multiple new clusters                                 |
+| `POST` | `/clusters/merge`             | Merge multiple clusters into one                                           |
+| `POST` | `/literature/process-paper`   | Process paper annotations into claims                                      |
+| `POST` | `/research-questions/advance` | Advance an RQ lifecycle status                                             |
 
 ### Knowledge Freshness (v2.1)
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/freshness/flag-stale` | Flag an entity as stale with optional propagation |
-| `GET` | `/freshness/check` | Scan for potentially stale items |
+| Method   | Endpoint                             | Description                                                |
+| -------- | ------------------------------------ | ---------------------------------------------------------- |
+| `POST` | `/freshness/flag-stale`            | Flag an entity as stale with optional propagation          |
+| `GET`  | `/freshness/check`                 | Scan for potentially stale items                           |
 | `POST` | `/freshness/detect-contradictions` | Find contradiction candidates via vector similarity or FTS |
-| `GET` | `/integrity` | Run knowledge base integrity check |
+| `GET`  | `/integrity`                       | Run knowledge base integrity check                         |
 
 ### Search and Context
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/search` | Hybrid search (FTS5 + semantic) |
-| `POST` | `/context` | Generate a context package |
-| `POST` | `/summarize` | On-demand summarization |
-| `POST` | `/eviction-sweep` | Propose entries for archival |
+| Method   | Endpoint            | Description                     |
+| -------- | ------------------- | ------------------------------- |
+| `POST` | `/search`         | Hybrid search (FTS5 + semantic) |
+| `POST` | `/context`        | Generate a context package      |
+| `POST` | `/summarize`      | On-demand summarization         |
+| `POST` | `/eviction-sweep` | Propose entries for archival    |
 
 ### Project and Knowledge Packs
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/projects` | List project metadata |
-| `POST` | `/projects` | Create a project |
-| `DELETE` | `/projects/{id}?confirm=true` | Delete a project and all its data (requires confirm=true) |
-| `GET` | `/projects/{id}/entity-counts` | Get entity counts for a project (pre-deletion check) |
-| `GET` | `/status` | Get project state |
-| `PUT` | `/status` | Update project state |
-| `GET` | `/projects/export` | Export the active project as a knowledge-pack zip |
-| `POST` | `/projects/import` | Import a knowledge-pack zip into a new project |
-| `GET` | `/maintenance` | Get pending maintenance manifest (provenance gaps, missing links) |
-| `GET` | `/health` | Health check (version, sqlite-vec status) |
+| Method     | Endpoint                         | Description                                                       |
+| ---------- | -------------------------------- | ----------------------------------------------------------------- |
+| `GET`    | `/projects`                    | List project metadata                                             |
+| `POST`   | `/projects`                    | Create a project                                                  |
+| `DELETE` | `/projects/{id}?confirm=true`  | Delete a project and all its data (requires confirm=true)         |
+| `GET`    | `/projects/{id}/entity-counts` | Get entity counts for a project (pre-deletion check)              |
+| `GET`    | `/status`                      | Get project state                                                 |
+| `PUT`    | `/status`                      | Update project state                                              |
+| `GET`    | `/projects/export`             | Export the active project as a knowledge-pack zip                 |
+| `POST`   | `/projects/import`             | Import a knowledge-pack zip into a new project                    |
+| `GET`    | `/maintenance`                 | Get pending maintenance manifest (provenance gaps, missing links) |
+| `GET`    | `/health`                      | Health check (version, sqlite-vec status)                         |
 
 ### LLM Configuration
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/llm/status` | LLM config, availability, model, context window |
-| `PUT` | `/llm/config` | Update LLM settings at runtime (persisted to DB) |
-| `POST` | `/llm/check` | Re-check LLM connectivity |
-| `GET` | `/llm/models` | List models from LM Studio/Ollama backend |
+| Method   | Endpoint        | Description                                      |
+| -------- | --------------- | ------------------------------------------------ |
+| `GET`  | `/llm/status` | LLM config, availability, model, context window  |
+| `PUT`  | `/llm/config` | Update LLM settings at runtime (persisted to DB) |
+| `POST` | `/llm/check`  | Re-check LLM connectivity                        |
+| `GET`  | `/llm/models` | List models from LM Studio/Ollama backend        |
 
 ### Notebook (Q&A + Summaries)
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/notebook/qa` | Ask a question grounded in the knowledge base |
-| `GET` | `/notebook/qa/sessions` | List Q&A sessions |
-| `POST` | `/notebook/summary` | Generate a summary (scope: project, phase, mission, tag) |
-| `GET` | `/notebook/summaries` | List generated summaries |
+| Method   | Endpoint                  | Description                                              |
+| -------- | ------------------------- | -------------------------------------------------------- |
+| `POST` | `/notebook/qa`          | Ask a question grounded in the knowledge base            |
+| `GET`  | `/notebook/qa/sessions` | List Q&A sessions                                        |
+| `POST` | `/notebook/summary`     | Generate a summary (scope: project, phase, mission, tag) |
+| `GET`  | `/notebook/summaries`   | List generated summaries                                 |
 
 ### Knowledge Graph
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/graph` | Get full entity relationship graph |
+| Method  | Endpoint                   | Description                         |
+| ------- | -------------------------- | ----------------------------------- |
+| `GET` | `/graph`                 | Get full entity relationship graph  |
 | `GET` | `/graph/ego/{entity_id}` | Get ego graph centered on an entity |
-| `GET` | `/graph/stats` | Graph statistics |
+| `GET` | `/graph/stats`           | Graph statistics                    |
 
 ### Artifacts and Figures
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/artifacts` | Register an artifact file for the active project |
-| `GET` | `/artifacts` | List artifacts |
-| `GET` | `/artifacts/{artifact_id}` | Get an artifact |
-| `POST` | `/artifacts/{artifact_id}/extract` | Extract figures and tables from an artifact |
-| `GET` | `/artifacts/{artifact_id}/figures` | List figures for an artifact |
-| `GET` | `/figures/{figure_id}` | Get a single extracted figure |
+| Method   | Endpoint                             | Description                                      |
+| -------- | ------------------------------------ | ------------------------------------------------ |
+| `POST` | `/artifacts`                       | Register an artifact file for the active project |
+| `GET`  | `/artifacts`                       | List artifacts                                   |
+| `GET`  | `/artifacts/{artifact_id}`         | Get an artifact                                  |
+| `POST` | `/artifacts/{artifact_id}/extract` | Extract figures and tables from an artifact      |
+| `GET`  | `/artifacts/{artifact_id}/figures` | List figures for an artifact                     |
+| `GET`  | `/figures/{figure_id}`             | Get a single extracted figure                    |
 
 ### Events and Tags
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
+| Method  | Endpoint    | Description                                                               |
+| ------- | ----------- | ------------------------------------------------------------------------- |
 | `GET` | `/events` | List audit events (filters: phase, event_type, entity_type, actor, since) |
-| `GET` | `/tags` | List tags with counts (filter: entity_type) |
+| `GET` | `/tags`   | List tags with counts (filter: entity_type)                               |
 
 ### Audit Log
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/audit` | List audit entries (filters: action, entity_type, entity_id, actor, since, limit, offset) |
-| `GET` | `/audit/counts` | Audit entry counts grouped by action type |
+| Method  | Endpoint          | Description                                                                               |
+| ------- | ----------------- | ----------------------------------------------------------------------------------------- |
+| `GET` | `/audit`        | List audit entries (filters: action, entity_type, entity_id, actor, since, limit, offset) |
+| `GET` | `/audit/counts` | Audit entry counts grouped by action type                                                 |
 
 ### Workspace Bootstrap
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/workspace/scan` | Scan a workspace folder and classify files for ingestion |
-| `POST` | `/workspace/ingest` | Ingest files from a scan manifest into the knowledge base |
-| `GET` | `/workspace/review/{scan_id}` | Review a completed bootstrap (entry counts, suggestions) |
+| Method   | Endpoint                        | Description                                               |
+| -------- | ------------------------------- | --------------------------------------------------------- |
+| `POST` | `/workspace/scan`             | Scan a workspace folder and classify files for ingestion  |
+| `POST` | `/workspace/ingest`           | Ingest files from a scan manifest into the knowledge base |
+| `GET`  | `/workspace/review/{scan_id}` | Review a completed bootstrap (entry counts, suggestions)  |
 
 ### Academic Import
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/import/bibtex` | Import literature entries from BibTeX content |
-| `POST` | `/import/bibtex-file` | Import literature entries from an uploaded .bib file |
+| Method   | Endpoint                        | Description                                                  |
+| -------- | ------------------------------- | ------------------------------------------------------------ |
+| `POST` | `/import/bibtex`              | Import literature entries from BibTeX content                |
+| `POST` | `/import/bibtex-file`         | Import literature entries from an uploaded .bib file         |
 | `POST` | `/literature/{id}/enrich-doi` | Enrich a literature entry by looking up its DOI via CrossRef |
-| `GET` | `/decisions/mermaid` | Export the decision tree as a Mermaid flowchart diagram |
-| `POST` | `/import/batch` | Batch import multiple entities of different types |
-| `POST` | `/ingest/document` | Ingest a markdown document by splitting into journal entries |
+| `GET`  | `/decisions/mermaid`          | Export the decision tree as a Mermaid flowchart diagram      |
+| `POST` | `/import/batch`               | Batch import multiple entities of different types            |
+| `POST` | `/ingest/document`            | Ingest a markdown document by splitting into journal entries |
 
 ### Onboarding (v2.0)
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
+| Method  | Endpoint                | Description                                                                                             |
+| ------- | ----------------------- | ------------------------------------------------------------------------------------------------------- |
 | `GET` | `/generate-claude-md` | Generate a customized CLAUDE.md for the active project and role (`?role=executor` or `?role=brain`) |
 
 ---
@@ -1145,20 +1167,20 @@ The Vite dev server runs at `http://localhost:5173` and proxies API calls to `:9
 
 ### Pages
 
-| Page | Path | Features |
-|------|------|----------|
-| **Dashboard** | `/` | Project overview, active missions, open checkpoints, recent entries, project selection, knowledge-pack export/import |
-| **Journal** | `/journal` | Timeline view grouped by date, markdown-rendered content with expand/collapse, type filters (note/log/directive), confidence filters, create/edit entries |
-| **Decisions** | `/decisions` | Interactive decision tree (React Flow + elkjs), click nodes for detail panel, supersession badges |
-| **Literature** | `/literature` | Table view with reading pipeline status tabs, add/update papers |
-| **Missions** | `/missions` | Active and historical missions with expandable detail view, task checklist with progress bar, checkpoint badges, context display, report viewer |
-| **Notebook** | `/notebook` | Q&A chat (ask questions grounded in your knowledge base) + summary generation |
-| **Timeline** | `/timeline` | Event stream grouped by date, entity/actor filters, causal chain visualization |
-| **Research Map** | `/research-map` | Three-level drill-down: research questions, evidence clusters, and claims. Clickable summary stats filter by gaps/contradictions. Cluster synthesis rendered as markdown |
-| **Knowledge Graph** | `/graph` | Entity relationship graph (React Flow), nodes colored by type, relationship edges, provenance chain traversal |
-| **Audit Log** | `/audit` | System audit trail table with action/entity/actor filters, action counts summary |
-| **Context Inspector** | `/context` | Generate context packages, view temperature badges (HOT/WARM/COLD), copy JSON |
-| **Settings** | `/settings` | LLM configuration + status, API health, DB stats, project configuration, quick links to `/docs` and `/api/health` |
+| Page                        | Path              | Features                                                                                                                                                                 |
+| --------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Dashboard**         | `/`             | Project overview, active missions, open checkpoints, recent entries, project selection, knowledge-pack export/import                                                     |
+| **Journal**           | `/journal`      | Timeline view grouped by date, markdown-rendered content with expand/collapse, type filters (note/log/directive), confidence filters, create/edit entries                |
+| **Decisions**         | `/decisions`    | Interactive decision tree (React Flow + elkjs), click nodes for detail panel, supersession badges                                                                        |
+| **Literature**        | `/literature`   | Table view with reading pipeline status tabs, add/update papers                                                                                                          |
+| **Missions**          | `/missions`     | Active and historical missions with expandable detail view, task checklist with progress bar, checkpoint badges, context display, report viewer                          |
+| **Notebook**          | `/notebook`     | Q&A chat (ask questions grounded in your knowledge base) + summary generation                                                                                            |
+| **Timeline**          | `/timeline`     | Event stream grouped by date, entity/actor filters, causal chain visualization                                                                                           |
+| **Research Map**      | `/research-map` | Three-level drill-down: research questions, evidence clusters, and claims. Clickable summary stats filter by gaps/contradictions. Cluster synthesis rendered as markdown |
+| **Knowledge Graph**   | `/graph`        | Entity relationship graph (React Flow), nodes colored by type, relationship edges, provenance chain traversal                                                            |
+| **Audit Log**         | `/audit`        | System audit trail table with action/entity/actor filters, action counts summary                                                                                         |
+| **Context Inspector** | `/context`      | Generate context packages, view temperature badges (HOT/WARM/COLD), copy JSON                                                                                            |
+| **Settings**          | `/settings`     | LLM configuration + status, API health, DB stats, project configuration, quick links to `/docs` and `/api/health`                                                    |
 
 ### Tech Stack
 
@@ -1186,24 +1208,25 @@ All data lives in a single `rka.db` file. The schema includes:
 
 All IDs follow the pattern: `{type_prefix}_{ulid}`
 
-| Entity | Prefix | Example |
-|--------|--------|---------|
-| Decision | `dec_` | `dec_01HXYZ9A2B3C4D5E6F7G` |
-| Literature | `lit_` | `lit_01HXYZ...` |
-| Journal | `jrn_` | `jrn_01HXYZ...` |
-| Mission | `mis_` | `mis_01HXYZ...` |
-| Checkpoint | `chk_` | `chk_01HXYZ...` |
-| Event | `evt_` | `evt_01HXYZ...` |
-| Scan | `scn_` | `scn_01HXYZ...` |
-| Claim | `clm_` | `clm_01HXYZ...` |
-| Evidence Cluster | `ecl_` | `ecl_01HXYZ...` |
-| Topic | `top_` | `top_01HXYZ...` |
-| Review Queue Item | `rev_` | `rev_01HXYZ...` |
-| Cross-Reference | `link_` | `link_01HXYZ...` |
+| Entity            | Prefix    | Example                      |
+| ----------------- | --------- | ---------------------------- |
+| Decision          | `dec_`  | `dec_01HXYZ9A2B3C4D5E6F7G` |
+| Literature        | `lit_`  | `lit_01HXYZ...`            |
+| Journal           | `jrn_`  | `jrn_01HXYZ...`            |
+| Mission           | `mis_`  | `mis_01HXYZ...`            |
+| Checkpoint        | `chk_`  | `chk_01HXYZ...`            |
+| Event             | `evt_`  | `evt_01HXYZ...`            |
+| Scan              | `scn_`  | `scn_01HXYZ...`            |
+| Claim             | `clm_`  | `clm_01HXYZ...`            |
+| Evidence Cluster  | `ecl_`  | `ecl_01HXYZ...`            |
+| Topic             | `top_`  | `top_01HXYZ...`            |
+| Review Queue Item | `rev_`  | `rev_01HXYZ...`            |
+| Cross-Reference   | `link_` | `link_01HXYZ...`           |
 
 ### Event Sourcing
 
 Every write operation emits an event to the `events` table with:
+
 - `event_type` — created, updated, resolved, distilled, superseded, etc.
 - `entity_type` + `entity_id` — what changed
 - `actor` — who made the change (brain, executor, pi, llm, web_ui, system)
@@ -1245,6 +1268,7 @@ The Context Engine builds focused knowledge packages for a given topic:
 4. **Narrative generation** — Optionally use LLM to synthesize a coherent narrative
 
 Request a context package:
+
 ```bash
 curl -X POST http://localhost:9712/api/context \
   -H 'Content-Type: application/json' \
@@ -1260,6 +1284,7 @@ curl -X POST http://localhost:9712/api/context \
 As of v2.0, all knowledge enrichment is handled by the Brain (Claude Desktop/Code) during sessions, not by a local LLM. The background worker only processes embedding jobs for semantic search.
 
 **What the Brain does during maintenance sessions:**
+
 - Extracts claims from journal entries
 - Clusters related claims into evidence groups
 - Writes synthesis narratives for evidence clusters
@@ -1272,10 +1297,12 @@ As of v2.0, all knowledge enrichment is handled by the Brain (Claude Desktop/Cod
 ### Optional LLM Features
 
 When `RKA_LLM_ENABLED=true`, two tools gain LLM-powered capabilities:
+
 - `rka_ask(question)` — Answer research questions grounded in knowledge base evidence
 - `rka_generate_summary(scope)` — Generate narrative summaries of research progress
 
 These use LiteLLM as a unified gateway, supporting:
+
 - **LM Studio** (local)
 - **Ollama** (local)
 - **OpenAI API** (cloud)
@@ -1287,6 +1314,7 @@ Configure from the web UI Settings page or via environment variables (`RKA_LLM_E
 ### Review Queue
 
 The review queue collects items flagged for Brain attention:
+
 - Low-confidence claims needing verification
 - Contradictions between claims
 - Evidence clusters needing synthesis
@@ -1413,18 +1441,20 @@ rka/
 
 ## Build Phases
 
-| Phase | Focus | Status |
-|-------|-------|--------|
-| **Phase 1** | Core MCP + SQLite — schema, CRUD, MCP tools, REST endpoints, CLI | Complete |
-| **Phase 2** | LLM + Semantic Search — LiteLLM, FastEmbed, FTS5, Context Engine, auto-enrichment | Complete |
-| **Phase 3** | Web Dashboard — React + Vite, core pages, decision tree visualization, static serving | Complete |
-| **Phase 4** | Exploration Visualizations — Timeline page (event stream + causal chains), Knowledge Graph page (entity relationships with React Flow) | Complete |
-| **Phase 5** | Academic APIs + Audit — BibTeX import, DOI enrichment (CrossRef), Semantic Scholar + arXiv search, Mermaid decision tree export, batch import, document ingestion, Audit Log viewer + API | Complete |
-| **Phase 6** | Workspace Bootstrap — Folder scanning with regex + LLM classification, batch ingestion pipeline, duplicate detection, Brain handoff review | Complete |
-| **Phase 7** | Notebook + LLM Config — Q&A chat, summary generation, runtime LLM configuration, context window auto-detection, knowledge graph, Docker deployment | Complete |
-| **Phase 8** | Multi-Project + Knowledge Packs — project isolation, dashboard project management, portable project export/import, artifact-safe import remapping, MCP multi-project tools | Complete |
-| **Phase 9** | v2.0 — Progressive distillation pipeline (entries -> claims -> clusters -> research map), three-level Research Map page, Brain-augmented enrichment via review queue, decision superseding with re-distillation, provenance chains, typed cross-references (link_), hierarchical topic taxonomy, background worker process, onboarding tools (rka_generate_claude_md), simplified journal entry types (note/log/directive) | Complete |
-| **Phase 10** | v2.1 — Skills plugin (role-specific SKILL.md as MCP prompts), interactive Research Map with cluster detail panels, researcher experience tools (changelog, evidence assembly, cluster split/merge, literature processing, RQ lifecycle), three-layer defense-in-depth (actor alignment protocol, knowledge freshness with staleness propagation, validation gates), knowledge pack redesign with table registry and integrity checks, `rka_check_integrity` tool | Complete |
+| Phase              | Focus                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Status   |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| **Phase 1**  | Core MCP + SQLite — schema, CRUD, MCP tools, REST endpoints, CLI                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Complete |
+| **Phase 2**  | LLM + Semantic Search — LiteLLM, FastEmbed, FTS5, Context Engine, auto-enrichment                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Complete |
+| **Phase 3**  | Web Dashboard — React + Vite, core pages, decision tree visualization, static serving                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Complete |
+| **Phase 4**  | Exploration Visualizations — Timeline page (event stream + causal chains), Knowledge Graph page (entity relationships with React Flow)                                                                                                                                                                                                                                                                                                                                                                                                         | Complete |
+| **Phase 5**  | Academic APIs + Audit — BibTeX import, DOI enrichment (CrossRef), Semantic Scholar + arXiv search, Mermaid decision tree export, batch import, document ingestion, Audit Log viewer + API                                                                                                                                                                                                                                                                                                                                                      | Complete |
+| **Phase 6**  | Workspace Bootstrap — Folder scanning with regex + LLM classification, batch ingestion pipeline, duplicate detection, Brain handoff review                                                                                                                                                                                                                                                                                                                                                                                                     | Complete |
+| **Phase 7**  | Notebook + LLM Config — Q&A chat, summary generation, runtime LLM configuration, context window auto-detection, knowledge graph, Docker deployment                                                                                                                                                                                                                                                                                                                                                                                             | Complete |
+| **Phase 8**  | Multi-Project + Knowledge Packs — project isolation, dashboard project management, portable project export/import, artifact-safe import remapping, MCP multi-project tools                                                                                                                                                                                                                                                                                                                                                                     | Complete |
+| **Phase 9**  | v2.0 — Progressive distillation pipeline (entries -> claims -> clusters -> research map), three-level Research Map page, Brain-augmented enrichment via review queue, decision superseding with re-distillation, provenance chains, typed cross-references (link_), hierarchical topic taxonomy, background worker process, onboarding tools (rka_generate_claude_md), simplified journal entry types (note/log/directive)                                                                                                                     | Complete |
+| **Phase 10** | v2.1 — Skills plugin (role-specific SKILL.md as MCP prompts), interactive Research Map with cluster detail panels, researcher experience tools (changelog, evidence assembly, cluster split/merge, literature processing, RQ lifecycle), three-layer defense-in-depth (actor alignment protocol, knowledge freshness with staleness propagation, validation gates), knowledge pack redesign with table registry and integrity checks,`rka_check_integrity` tool                                                                              | Complete |
+| **Phase 11** | v2.2 — Multi-choice decision UX grounded in HCI literature (sycophancy, decoy effects, choice overload, cognitive forcing, calibrated trust, RPDM):`decision_options` table (migration 017), Pareto dominance computation, `rka_present_decision` strip-then-re-inject protocol, `rka_record_pi_selection`, `rka_record_outcome` writing to `calibration_outcomes` (migration 018), Brier-score / ECE / override-rate calibration metrics, bi-temporal `valid_until`, Streamable HTTP MCP transport, Agent Skills format migration | Complete |
+| **Phase 12** | v2.3 — Hook system v1 (migration 019): 5 hook event types, 3 built-in handlers, 8 MCP tools (`rka_add_hook`, `rka_list_hooks`, `rka_enable_hook`, `rka_disable_hook`, `rka_delete_hook`, `rka_get_hook_executions`, `rka_get_brain_notifications`, `rka_clear_brain_notifications`) for event-driven Brain notifications and drift detection                                                                                                                                                                                   | Complete |
 
 ---
 

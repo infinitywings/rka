@@ -1,21 +1,35 @@
-# RKA Usage Guide — For Researchers Using Claude Desktop & Claude Code (v2.1)
+# RKA Usage Guide — Setting Up Claude Desktop + Claude Code as Brain & Executor (v2.3)
 
-This guide is written for PIs (researchers) who use **Claude Desktop** as the Brain and **Claude Code** as the Executor. It walks through the full research workflow from installation to producing research outputs.
+This guide walks PIs (researchers) through the full setup and research workflow, from a fresh laptop to producing research outputs with Brain (strategy) and Executor (implementation) actors.
 
-> **Three actors, one memory**: You (the PI) supervise. Claude Desktop (Brain) handles strategy, synthesis, and knowledge organization. Claude Code (Executor) handles implementation, experiments, and coding tasks. RKA is the shared memory that persists everything across sessions.
+> ### ⚠️ This guide requires the **Claude Desktop** native app — **NOT** the [claude.ai](https://claude.ai) website.
+>
+> RKA connects to Claude through MCP (Model Context Protocol), and **only the desktop and IDE apps support MCP servers** — the web app at claude.ai does not. You will need:
+>
+> | Actor | App | Role |
+> |-------|-----|------|
+> | **Brain** | [Claude Desktop](https://claude.ai/download) (macOS / Windows) | Strategy, synthesis, knowledge organization |
+> | **Executor** | [Claude Code](https://www.anthropic.com/claude-code) (VS Code extension or CLI) | Implementation, experiments, coding |
+> | **PI** | You, the human researcher | Supervises both, ratifies decisions |
+>
+> All three share one memory — RKA — so context survives across sessions.
 
 ---
 
 ## Table of Contents
 
-- [Setup](#setup)
-  - [Install Docker and Start RKA](#1-install-docker-and-start-rka)
-  - [Connect Claude Desktop (Brain)](#2-connect-claude-desktop-brain)
-  - [Connect Claude Code (Executor)](#3-connect-claude-code-executor)
-  - [Verify Everything Works](#4-verify-everything-works)
+- [Architecture at a glance](#architecture-at-a-glance)
+- [Prerequisites](#prerequisites)
+- [Setup — step by step](#setup--step-by-step)
+  - [Step 1. Install Docker Desktop](#step-1-install-docker-desktop)
+  - [Step 2. Clone and start RKA](#step-2-clone-and-start-rka)
+  - [Step 3. Install the RKA MCP binary](#step-3-install-the-rka-mcp-binary)
+  - [Step 4. Configure Claude Desktop (Brain)](#step-4-configure-claude-desktop-brain)
+  - [Step 5. Configure Claude Code (Executor)](#step-5-configure-claude-code-executor)
+  - [Step 6. Verify everything works](#step-6-verify-everything-works)
+  - [Step 7. Load the Brain skill in Claude Desktop](#step-7-load-the-brain-skill-in-claude-desktop)
+  - [Step 8. Load the Executor skill in Claude Code](#step-8-load-the-executor-skill-in-claude-code)
 - [Starting Your First Session](#starting-your-first-session)
-  - [Opening Claude Desktop (Brain)](#opening-claude-desktop-brain)
-  - [Loading the Brain Skill](#loading-the-brain-skill)
   - [What Happens at Session Start](#what-happens-at-session-start)
 - [The Research Lifecycle](#the-research-lifecycle)
   - [Phase 1: Define Your Research](#phase-1-define-your-research)
@@ -38,11 +52,65 @@ This guide is written for PIs (researchers) who use **Claude Desktop** as the Br
 
 ---
 
-## Setup
+## Architecture at a glance
 
-### 1. Install Docker and Start RKA
+```
+┌─────────────────────┐      ┌─────────────────────┐
+│  Claude Desktop     │      │  Claude Code        │
+│  (Brain)            │      │  (Executor)         │
+└─────────┬───────────┘      └─────────┬───────────┘
+          │ MCP stdio                   │ MCP stdio
+          ▼                             ▼
+   ┌──────────────────────────────────────────┐
+   │  rka MCP binary (~/.local/bin/rka)       │   ← installed via uv
+   │  Thin proxy: forwards calls over HTTP    │
+   └──────────────────┬───────────────────────┘
+                      │ HTTP (localhost:9712)
+                      ▼
+   ┌──────────────────────────────────────────┐
+   │  Docker containers                       │
+   │  ├─ rka-server  (FastAPI + web UI)       │   ← `docker compose up -d`
+   │  ├─ rka-worker  (background embeddings)  │
+   │  └─ SQLite database (persistent volume)  │
+   └──────────────────────────────────────────┘
+```
 
-Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) if you don't have it. Then:
+You install the Docker stack once, then point both Claude apps at the MCP binary. Switching between Brain and Executor is just switching apps — both read and write the same shared memory.
+
+---
+
+## Prerequisites
+
+Install these before running through Setup. Click the links to download.
+
+| # | Component | Why you need it | Where to get it |
+|---|-----------|-----------------|-----------------|
+| 1 | **Docker Desktop** | Runs RKA's API + database in containers | [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/) |
+| 2 | **uv** (Python package manager) | Installs the RKA MCP binary outside Docker | [docs.astral.sh/uv/getting-started/installation](https://docs.astral.sh/uv/getting-started/installation/) |
+| 3 | **git** | Clones the RKA repo | Built into macOS / [git-scm.com/downloads](https://git-scm.com/downloads) |
+| 4 | **Claude Desktop** (the **native app**, not [claude.ai](https://claude.ai) web) | Hosts the Brain | [claude.ai/download](https://claude.ai/download) |
+| 5 | **Claude Code** (VS Code extension or CLI) | Hosts the Executor | [anthropic.com/claude-code](https://www.anthropic.com/claude-code) |
+
+> **Why two Claude apps?** Brain and Executor are different roles, run in different sessions, with different skills loaded. Mixing them — using one Claude conversation to "do everything" — collapses the role separation that RKA's architecture is designed around.
+
+---
+
+## Setup — step by step
+
+### Step 1. Install Docker Desktop
+
+1. Download from [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/) (macOS / Windows / Linux)
+2. Install and launch the app. Wait until the whale icon in the menu bar / system tray says **"Docker Desktop is running"**.
+3. Verify on the command line:
+
+   ```bash
+   docker --version
+   docker compose version
+   ```
+
+Both should print version numbers without errors.
+
+### Step 2. Clone and start RKA
 
 ```bash
 git clone https://github.com/infinitywings/rka.git
@@ -50,29 +118,71 @@ cd rka
 docker compose up -d
 ```
 
-Open http://localhost:9712 in your browser — you should see the RKA web dashboard.
+The first run will pull base images and build the web UI — expect 3–5 minutes. Subsequent starts are seconds.
 
-### 2. Connect Claude Desktop (Brain)
-
-Claude Desktop communicates with RKA via MCP (Model Context Protocol). You need to:
-
-**a. Install the MCP binary** (runs outside Docker so Claude Desktop can reach it):
+Verify:
 
 ```bash
-# From the rka/ directory:
+docker compose ps
+# Should show rka-server (healthy) and rka-worker running
+```
+
+Open [http://localhost:9712](http://localhost:9712) in your browser — you should see the RKA web dashboard.
+
+> **Tip — keep this terminal handy.** When you bump RKA later, you'll come back here and run `git pull && docker compose up -d --build`.
+
+### Step 3. Install the RKA MCP binary
+
+Claude Desktop and Claude Code reach RKA through a small command-line binary that runs outside Docker. It's a thin proxy that forwards MCP tool calls to the container's REST API.
+
+From the **same `rka/` directory** as Step 2:
+
+```bash
 UV_CACHE_DIR=/tmp/uv-cache uv tool install --force .
 ```
 
-This installs `rka` at `~/.local/bin/rka`. The binary is a thin proxy — it receives MCP tool calls from Claude Desktop and forwards them to the Docker container's REST API.
+This installs `rka` at `~/.local/bin/rka`. Verify:
 
-**b. Configure Claude Desktop:**
+```bash
+~/.local/bin/rka --version
+```
 
-Open Claude Desktop → Settings → Developer → Edit Config, or directly edit:
+If `~/.local/bin` is not on your `PATH`, either add it (e.g. in `~/.zshrc`: `export PATH="$HOME/.local/bin:$PATH"`) or always reference the full path in the configs below.
 
-- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Linux**: `~/.config/Claude/claude_desktop_config.json`
+> **After upgrading RKA** (`git pull`), re-run this command **and** `docker compose up -d --build` to refresh both halves.
 
-Add:
+### Step 4. Configure Claude Desktop (Brain)
+
+1. Open **Claude Desktop**.
+2. Go to **Settings → Developer → Edit Config**, or open the file directly:
+   - **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+   - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+   - **Linux:** `~/.config/Claude/claude_desktop_config.json`
+3. Add (or merge into) the following. **Replace `<your-username>` with your actual username** — the path must be absolute, not `~`:
+
+   ```json
+   {
+     "mcpServers": {
+       "rka": {
+         "command": "/Users/<your-username>/.local/bin/rka",
+         "args": ["mcp"]
+       }
+     }
+   }
+   ```
+
+   On Windows the command is something like `C:\\Users\\<your-username>\\.local\\bin\\rka.exe`.
+4. Save the file and **fully quit Claude Desktop** (Cmd+Q on macOS / right-click tray icon → Quit on Windows), then reopen it. A reload alone is not always enough.
+
+You should now see RKA tools available in any new conversation.
+
+### Step 5. Configure Claude Code (Executor)
+
+Claude Code uses the same MCP binary. There are two common ways to register it:
+
+**Option A — VS Code extension (graphical):** Open VS Code → Claude Code panel → click the gear → **MCP Servers** → **Add Server**. Use the same JSON shape as Step 4.
+
+**Option B — Per-project config file (recommended for teams):** Create `.claude/mcp.json` in your repo root with:
 
 ```json
 {
@@ -85,76 +195,72 @@ Add:
 }
 ```
 
-Replace `<your-username>` with your actual username. Save and **restart Claude Desktop**.
+After saving, reload the VS Code window: **Cmd+Shift+P** (macOS) / **Ctrl+Shift+P** (Windows/Linux) → **"Developer: Reload Window"**.
 
-### 3. Connect Claude Code (Executor)
+If you're using the Claude Code CLI instead of the extension, the equivalent config lives in `~/.claude/settings.json` under the same `mcpServers` key.
 
-Claude Code also uses MCP. The same binary works for both.
+### Step 6. Verify everything works
 
-**In VS Code**: Open Claude Code settings and add the MCP server. The config goes in `.claude/mcp.json` in your project directory or in VS Code's MCP settings:
+**In Claude Desktop** (Brain), start a **new conversation** and ask:
 
-```json
-{
-  "mcpServers": {
-    "rka": {
-      "command": "/Users/<your-username>/.local/bin/rka",
-      "args": ["mcp"]
-    }
-  }
-}
-```
+> List my RKA projects.
 
-After saving, reload the VS Code window (Cmd+Shift+P → "Reload Window").
+Claude should call `rka_list_projects()` and return a list (an empty list is fine on a fresh install).
 
-### 4. Verify Everything Works
+**In Claude Code** (Executor), open any project and ask:
 
-**In Claude Desktop**, start a new conversation and type:
-
-> "List my RKA projects"
-
-Claude should call `rka_list_projects()` and show your projects (or an empty list if this is a fresh install).
-
-**In Claude Code**, type:
-
-> "Check RKA status"
+> Check the RKA status.
 
 Claude should call `rka_get_status()` and return the current project state.
 
-If either fails, check:
-- Is Docker running? (`docker compose ps` should show `rka-server` as healthy)
-- Is the MCP binary installed? (`~/.local/bin/rka mcp` should hang waiting for stdin — Ctrl+C to exit)
-- Did you restart Claude Desktop after editing the config?
+If either fails:
+- ✓ Is Docker running? `docker compose ps` should show `rka-server (healthy)`.
+- ✓ Is the binary installed? `~/.local/bin/rka mcp` should hang waiting for stdin — Ctrl+C to exit.
+- ✓ Did you fully quit-and-reopen Claude Desktop, or reload the VS Code window?
+- ✓ Is the path in the JSON config absolute (not `~/.local/bin/rka`)?
+
+### Step 7. Load the Brain skill in Claude Desktop
+
+The MCP server ships **role skills** as MCP prompts: `brain_skill`, `executor_skill`, and `pi_skill`. These are detailed workflow guides (~450 lines for the Brain) that teach Claude the session-start protocol, PI-attribution discipline, provenance rules, and anti-patterns.
+
+In Claude Desktop, the simplest way is to type:
+
+> Load your brain skill.
+
+Claude will call the `brain_skill` MCP prompt and adopt that workflow for the rest of the conversation.
+
+You can also invoke it explicitly: type `/` in the chat input → select **rka → brain_skill** from the prompt menu (Claude Desktop surfaces all `@mcp.prompt()` entries from connected servers there).
+
+The Brain skill covers:
+- Session start protocol (the exact tool-call sequence on every new conversation)
+- PI attribution discipline (`source="pi"`, `verbatim_input="..."` — preserving your exact words)
+- Provenance discipline (linking decisions ↔ journal ↔ missions ↔ literature)
+- Claim extraction best practices
+- Multi-task parsing (splitting compound instructions into separate missions)
+- Coordinating with the Executor
+- Research Map navigation
+- Anti-patterns to avoid
+
+> **Repeat at the start of every Brain conversation.** MCP prompts don't auto-load; loading the skill once at the top of a chat is the standard pattern.
+
+### Step 8. Load the Executor skill in Claude Code
+
+In Claude Code, ask:
+
+> Load your executor skill.
+
+Claude will call the `executor_skill` MCP prompt. The Executor skill covers:
+- How to pick up a mission (`rka_get_mission` → read `motivated_by_decision` → load context)
+- The **Backbrief** protocol (presenting your plan before starting)
+- When to raise a checkpoint vs. proceed autonomously
+- Mission-report format (summary / findings / anomalies / questions)
+- Scope discipline (no out-of-scope changes; raise a checkpoint instead)
+
+> **Tip — pin a project-level CLAUDE.md.** For repos where the Executor will work often, run `rka_generate_claude_md()` from the Brain. It auto-writes a project-specific CLAUDE.md that Claude Code reads on every session, so the Executor starts with the right context even before the skill is loaded.
 
 ---
 
 ## Starting Your First Session
-
-### Opening Claude Desktop (Brain)
-
-1. Open **Claude Desktop**
-2. Start a **new conversation** (click the "+" or Cmd+N)
-3. You should see the RKA MCP tools available — Claude Desktop will list them as available tools in the conversation
-
-The first time Claude sees the RKA MCP server, it will read the server instructions which tell it:
-- What RKA is
-- The session start protocol
-- How to load skill prompts for detailed guidance
-
-### Loading the Brain Skill
-
-Claude Desktop automatically receives brief instructions from the MCP server. For the **full Brain workflow guide** (450+ lines of detailed guidance), Claude should load the skill prompt. You can ask:
-
-> "Load your brain skill guide"
-
-or Claude may do this automatically. The Brain skill covers:
-- Session start protocol (exact tool call sequence)
-- PI attribution discipline (preserving your exact words)
-- Provenance discipline (linking everything to evidence)
-- Claim extraction best practices
-- Multi-task parsing (splitting your instructions into separate missions)
-- How to work with the Executor
-- Research Map navigation
-- Anti-patterns to avoid
 
 ### What Happens at Session Start
 
@@ -563,10 +669,21 @@ Before upgrading RKA to a new version:
 
 ### "RKA tools not showing up in Claude Desktop"
 
-1. Check the MCP config file path and JSON syntax
-2. Restart Claude Desktop completely (Cmd+Q, reopen)
-3. Verify the binary works: `~/.local/bin/rka mcp` (should hang waiting for stdin)
-4. Check Docker is running: `docker compose ps`
+1. Check the MCP config file path and JSON syntax (see [Step 4](#step-4-configure-claude-desktop-brain))
+2. Make sure the `command` path is **absolute** — `~/.local/bin/rka` will fail; use `/Users/<your-username>/.local/bin/rka`
+3. Fully quit Claude Desktop (Cmd+Q on macOS / right-click tray icon → Quit on Windows), then reopen — a window reload is not enough
+4. Verify the binary works: `~/.local/bin/rka mcp` should hang waiting for stdin (Ctrl+C to exit)
+5. Check Docker is running: `docker compose ps` should show `rka-server (healthy)`
+
+### "RKA tools not showing up in Claude Code"
+
+1. Check `.claude/mcp.json` (or VS Code's MCP settings) — same config shape as Claude Desktop
+2. Reload the VS Code window: Cmd+Shift+P → "Developer: Reload Window"
+3. If using the Claude Code CLI, edit `~/.claude/settings.json` instead
+
+### "Brain skill not loading / Claude doesn't follow the workflow"
+
+The skill is an MCP **prompt**, not a tool — it must be loaded explicitly at the top of each conversation. Type `/` in the chat input and look for the **rka → brain_skill** entry, or just ask: *"Load your brain skill."*
 
 ### "Tools return errors about connection refused"
 
@@ -594,9 +711,15 @@ Run `rka_check_integrity()` to check for issues. Common causes:
 - Tables missing from the registry (shows as explicit error naming the table)
 - Orphaned edges (the integrity check reports these)
 
-### "Claims show 0 in the research map"
+### "The web dashboard shows an old version number"
 
-This was a bug in v2.0 — the claim count query used the wrong column. Upgrade to v2.1 and rebuild Docker. The migration automatically recomputes counts.
+The version on the dashboard is read live from `/api/health`, which reflects the version baked into the running container — not the source code on disk. After `git pull`, rebuild the container:
+
+```bash
+docker compose up -d --build
+```
+
+If the build fails on macOS with errors about `._*` files (AppleDouble metadata on non-APFS volumes), run `dot_clean .` in the repo root and retry.
 
 ---
 
