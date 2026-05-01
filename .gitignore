@@ -24,6 +24,10 @@ venv/
 
 # OS
 .DS_Store
+._*
+
+# Playwright MCP runtime cache (page snapshots)
+.playwright-mcp/
 
 # Node (web UI)
 web/node_modules/
