@@ -192,7 +192,7 @@ rka_get_context(topic="...")   → Token-budgeted context package
 - [Web Dashboard](#web-dashboard)
 - [Data Model](#data-model)
 - [Search and Context Engine](#search-and-context-engine)
-- [LLM Integration](#llm-integration)
+- [Knowledge Enrichment](#knowledge-enrichment)
 - [Development](#development)
 - [Build Phases](#build-phases)
 
@@ -381,7 +381,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 }
 ```
 
-**No LLM required for core functionality.** The Brain (Claude Desktop) handles all knowledge enrichment — claim extraction, cluster synthesis, contradiction resolution — during normal sessions. The two non-essential tools `rka_ask` and `rka_generate_summary` are the only features that need an LLM; if you want them, plug in a cloud API key (Anthropic, OpenAI, or any OpenAI-compatible endpoint) from the web UI Settings page (`http://localhost:9712/settings`).
+**No LLM required.** The Brain (Claude Desktop) handles all knowledge enrichment — claim extraction, cluster synthesis, contradiction resolution — during normal sessions. There is nothing to configure beyond Docker and the MCP binary.
 
 **Connect Claude Code (MCP via uv tool):**
 
@@ -424,7 +424,6 @@ Prerequisites:
 
 - Python 3.11+
 - Node.js 18+ (for web dashboard)
-- Optional: a cloud LLM API key (Anthropic, OpenAI, or any OpenAI-compatible endpoint) — only needed for the optional `rka_ask` and `rka_generate_summary` tools. Core RKA needs no LLM.
 
 ```bash
 git clone https://github.com/infinitywings/rka.git
@@ -433,7 +432,7 @@ cd rka
 # Create venv and install
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[llm,academic,workspace]"
+pip install -e ".[academic,workspace]"
 
 # Build web UI
 cd web && npm install && npm run build && cd ..
@@ -476,21 +475,73 @@ rka serve
 
 The web dashboard is at `http://localhost:9712`. API docs are at `http://localhost:9712/docs`.
 
-### 2. (Optional) Configure a cloud LLM API
+### 2. Connect Claude Desktop and Claude Code
 
-**You can skip this step.** Core RKA works without any LLM — the Brain (Claude Desktop) handles all knowledge enrichment during normal sessions. Configure an LLM only if you want the two optional convenience tools `rka_ask` and `rka_generate_summary` to work outside a Claude session.
+RKA reaches both Claude apps through MCP (Model Context Protocol). You install one small binary and register it with each app.
 
-Open the **Settings** page in the web UI (`http://localhost:9712/settings`) and set a cloud LLM backend:
+> **Why two apps?** The Brain (strategy, synthesis) runs in **Claude Desktop**. The Executor (implementation, coding) runs in **Claude Code**. They share the same RKA knowledge base, so context survives across sessions and across roles.
+>
+> ⚠️ MCP is not available on the [claude.ai](https://claude.ai) website — you need the native Claude Desktop app and the Claude Code extension/CLI.
 
-- **Anthropic API**: API Base = leave empty, Model = `anthropic/claude-sonnet-4-5`
-- **OpenAI API**: API Base = leave empty, Model = `openai/gpt-4o`
-- **OpenAI-compatible endpoint**: API Base = your endpoint URL, Model = your model identifier
+**Step 2a — Install the RKA MCP binary** (one-time, runs outside Docker so the Claude apps can launch it directly):
 
-When configured, only `rka_ask` and `rka_generate_summary` become active; everything else (the distillation pipeline, claim extraction, cluster synthesis, contradiction detection) runs through the Brain in Claude Desktop and works without a configured LLM.
+```bash
+UV_CACHE_DIR=/tmp/uv-cache uv tool install --force .
+```
 
-### 3. Connect Claude Desktop or Claude Code
+This places `rka` at `~/.local/bin/rka`. Verify with `~/.local/bin/rka --version`.
 
-Add the MCP config (see Installation above). Both Claude Desktop and Claude Code now have access to all `rka_*` tools. Use `rka_list_projects`, `rka_set_project`, and `rka_create_project` for multi-project workflows.
+**Step 2b — Configure Claude Desktop (Brain).** Open Claude Desktop → **Settings → Developer → Edit Config**, or edit the file directly:
+
+| OS | Config file |
+|----|-------------|
+| macOS   | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Linux   | `~/.config/Claude/claude_desktop_config.json` |
+
+Add (or merge into) — replace `<your-username>` with your actual username; the path must be **absolute**, not `~`:
+
+```json
+{
+  "mcpServers": {
+    "rka": {
+      "command": "/Users/<your-username>/.local/bin/rka",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Save and **fully quit Claude Desktop** (Cmd+Q on macOS / right-click tray icon → Quit on Windows), then reopen. RKA tools will now be available in any new conversation.
+
+**Step 2c — Configure Claude Code (Executor).** Either through the VS Code extension's **MCP Servers** UI, or by creating a `.claude/mcp.json` in your repo root:
+
+```json
+{
+  "mcpServers": {
+    "rka": {
+      "command": "/Users/<your-username>/.local/bin/rka",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Reload the VS Code window: **Cmd+Shift+P** (macOS) / **Ctrl+Shift+P** (Windows/Linux) → **"Developer: Reload Window"**.
+
+If you use the Claude Code CLI rather than the VS Code extension, the same config goes in `~/.claude/settings.json` under `mcpServers`.
+
+**Step 2d — Verify.** In each app, ask:
+
+> "List my RKA projects"
+
+Each Claude should call `rka_list_projects()` and return a list (empty on a fresh install).
+
+**Step 2e — Load the role skill** (recommended each new session). MCP **prompts** ship with the binary; they teach Claude the session-start protocol, attribution discipline, and provenance rules.
+
+In Claude Desktop, ask: *"Load your brain skill."* In Claude Code, ask: *"Load your executor skill."* Or invoke explicitly via the `/` slash menu → **rka → brain_skill** / **executor_skill**.
+
+For the full setup walkthrough including troubleshooting, see [USAGE_GUIDE.md](USAGE_GUIDE.md).
 
 #### MCP Transport Modes
 
@@ -501,11 +552,11 @@ The `rka mcp` binary supports two transport modes:
 
 The tool surface is identical across transports. Docker's default command still launches stdio-nothing there has changed.
 
-### 4. Generate Onboarding Instructions (Optional)
+### 3. Generate Onboarding Instructions (Optional)
 
 Run `rka_generate_claude_md` from Claude Desktop or hit `GET /api/generate-claude-md?role=executor` to generate a customized `CLAUDE.md` for the current project and role. This gives new sessions immediate context on project goals, conventions, and active work.
 
-### 5. Try the Example Project (Optional)
+### 4. Try the Example Project (Optional)
 
 RKA ships with an example knowledge pack — the `rka_development` project used to build RKA itself. Import it to explore a fully populated knowledge base with 80 journal entries, 22 decisions, 10 literature references, 3 missions, and 279 cross-references:
 
@@ -518,7 +569,7 @@ Or use the web dashboard: open **Dashboard** → **Import Pack** → select `exa
 
 After import, switch to the project in the sidebar and explore the Decision Tree, Knowledge Graph, and Research Map to see how a real project looks.
 
-### 6. Start Researching
+### 5. Start Researching
 
 Use the web UI for browsing and Q&A, or use Claude Desktop/Code with MCP tools for the full Brain/Executor workflow. The dashboard lets you select the active project, browse the Research Map, manage the review queue, and export the active project as a knowledge pack.
 
@@ -694,21 +745,6 @@ All settings use environment variables with the `RKA_` prefix. Place them in a `
 | `RKA_PORT`        | `9712`                  | API server port            |
 | `RKA_API_URL`     | `http://localhost:9712` | REST API URL for MCP proxy |
 
-### LLM Settings (Optional)
-
-> **You can skip this section.** Core RKA — including the full distillation pipeline, claim extraction, and cluster synthesis — runs through the Brain (Claude Desktop) and needs no LLM configuration. These settings only affect the optional convenience tools `rka_ask` and `rka_generate_summary`.
-
-LLM configuration is managed from the **web UI Settings page**. Changes persist in the database and survive restarts without touching `.env`. Environment variables serve as initial defaults.
-
-| Variable                   | Default                       | Description                                                                          |
-| -------------------------- | ----------------------------- | ------------------------------------------------------------------------------------ |
-| `RKA_LLM_ENABLED`        | `false`                     | Enable the optional `rka_ask` / `rka_generate_summary` tools                       |
-| `RKA_LLM_MODEL`          | `anthropic/claude-sonnet-4-5` | LiteLLM model identifier (cloud backends recommended; any LiteLLM-supported model) |
-| `RKA_LLM_API_BASE`       | `None`                      | API base URL — leave empty for Anthropic / OpenAI                                    |
-| `RKA_LLM_API_KEY`        | `None`                      | Cloud API key                                                                        |
-| `RKA_LLM_THINK`          | `false`                     | Enable thinking/reasoning mode                                                       |
-| `RKA_LLM_CONTEXT_WINDOW` | `200000`                    | Context window in tokens                                                             |
-
 ### Embedding Settings
 
 | Variable                   | Default                            | Description                 |
@@ -723,35 +759,6 @@ LLM configuration is managed from the **web UI Settings page**. Changes persist 
 | `RKA_CONTEXT_HOT_DAYS`           | `3`    | Days for HOT temperature classification   |
 | `RKA_CONTEXT_WARM_DAYS`          | `14`   | Days for WARM temperature classification  |
 | `RKA_CONTEXT_DEFAULT_MAX_TOKENS` | `2000` | Default token budget for context packages |
-
-### LLM Provider Examples (for the optional tools only)
-
-**Anthropic API (recommended):**
-
-```env
-RKA_LLM_ENABLED=true
-RKA_LLM_MODEL=anthropic/claude-sonnet-4-5
-RKA_LLM_API_KEY=sk-ant-...
-```
-
-**OpenAI API:**
-
-```env
-RKA_LLM_ENABLED=true
-RKA_LLM_MODEL=openai/gpt-4o
-RKA_LLM_API_KEY=sk-...
-```
-
-**OpenAI-compatible endpoint (self-hosted vLLM, etc.):**
-
-```env
-RKA_LLM_ENABLED=true
-RKA_LLM_MODEL=openai/your-model
-RKA_LLM_API_BASE=http://localhost:8000/v1
-RKA_LLM_API_KEY=token-xxx
-```
-
-> **Tip:** You can change all LLM settings at runtime from the web UI Settings page without restarting the server.
 
 ---
 
@@ -1285,11 +1292,11 @@ curl -X POST http://localhost:9712/api/context \
 
 ---
 
-## LLM Integration
+## Knowledge Enrichment
 
-### Brain-Driven Enrichment (v2.0)
+### Brain-Driven Enrichment (v2.0+)
 
-As of v2.0, all knowledge enrichment is handled by the Brain (Claude Desktop/Code) during sessions, not by a local LLM. The background worker only processes embedding jobs for semantic search.
+All knowledge enrichment is handled by the Brain (Claude Desktop) during normal sessions. There is no local LLM, no background AI worker, and no LLM API key to configure. The background worker only processes embedding jobs for semantic search.
 
 **What the Brain does during maintenance sessions:**
 
@@ -1301,21 +1308,6 @@ As of v2.0, all knowledge enrichment is handled by the Brain (Claude Desktop/Cod
 - Repairs missing provenance links
 
 **Maintenance manifest:** `rka_get_pending_maintenance()` detects all provenance gaps with pure SQL queries. The Brain processes up to 10 items per session at startup.
-
-### Optional LLM Features
-
-When `RKA_LLM_ENABLED=true` and a cloud API key is configured, two tools gain LLM-powered capabilities:
-
-- `rka_ask(question)` — Answer research questions grounded in knowledge base evidence
-- `rka_generate_summary(scope)` — Generate narrative summaries of research progress
-
-These use LiteLLM as a unified gateway, supporting:
-
-- **Anthropic API** (recommended)
-- **OpenAI API**
-- Any OpenAI-compatible endpoint (e.g. self-hosted vLLM)
-
-Configure from the web UI Settings page or via environment variables (`RKA_LLM_ENABLED`, `RKA_LLM_MODEL`, `RKA_LLM_API_KEY`).
 
 ### Review Queue
 
