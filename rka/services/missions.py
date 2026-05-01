@@ -142,19 +142,25 @@ class MissionService(BaseService):
         return [await self._row_to_model(row) for row in rows]
 
     async def update(self, mis_id: str, data: MissionUpdate, actor: str = "executor") -> Mission:
-        """Update a mission (status, tasks)."""
+        """Update a mission. Generic dump-iterating (Pattern A) — every field
+        declared in MissionUpdate is persisted; undeclared fields are rejected
+        by Pydantic at request time (extra="forbid")."""
+        dump = data.model_dump(exclude_none=True)
+        tags = dump.pop("tags", None)
+
         updates = {}
+        for field, value in dump.items():
+            if field == "tasks":
+                updates[field] = json.dumps(value)
+            else:
+                updates[field] = value
 
-        if data.status is not None:
-            updates["status"] = data.status
-            if data.status in ("complete", "partial"):
-                updates["completed_at"] = _now()
+        # Side effect: terminal-status transitions advance completed_at.
+        if data.status in ("complete", "partial"):
+            updates["completed_at"] = _now()
 
-        if data.tasks is not None:
-            updates["tasks"] = json.dumps([t.model_dump() for t in data.tasks])
-
-        if data.objective is not None:
-            updates["objective"] = data.objective
+        if tags is not None:
+            await self._set_tags("mission", mis_id, tags)
 
         if not updates:
             return await self.get(mis_id)
@@ -167,6 +173,15 @@ class MissionService(BaseService):
             values + [self.project_id],
         )
         await self.db.commit()
+
+        # Materialize the motivated entity_link when the FK is set or changed,
+        # parallel to the behavior in create().
+        if data.motivated_by_decision:
+            await self.add_link(
+                "decision", data.motivated_by_decision,
+                "motivated", "mission", mis_id,
+                created_by=actor,
+            )
 
         # Emit events for status changes
         if data.status:
@@ -183,8 +198,8 @@ class MissionService(BaseService):
                 summary=f"Mission status → {data.status}",
             )
 
-        # Re-sync cheap FTS now; defer embeddings and optional tag enrichment.
-        if "objective" in updates:
+        # Re-sync FTS on content changes; defer embeddings.
+        if "objective" in updates or "context" in updates:
             row = await self.db.fetchone(
                 "SELECT objective, context FROM missions WHERE id = ? AND project_id = ?",
                 [mis_id, self.project_id],

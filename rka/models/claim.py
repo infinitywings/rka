@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ── Claims ──────────────────────────────────────────────────
@@ -27,7 +27,13 @@ class ClaimCreate(BaseModel):
 
 
 class ClaimUpdate(BaseModel):
-    """Partial update for a claim."""
+    """Partial update for a claim.
+
+    extra="forbid": undeclared fields raise 422 instead of silently stripping.
+    See mis_01KQJH9MB65AR0GSVPQBT8707X (silent-write-failure fix) for context.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     content: str | None = None
     claim_type: ClaimType | None = None
@@ -68,7 +74,13 @@ class EvidenceClusterCreate(BaseModel):
 
 
 class EvidenceClusterUpdate(BaseModel):
-    """Partial update for an evidence cluster."""
+    """Partial update for an evidence cluster.
+
+    extra="forbid": undeclared fields raise 422 instead of silently stripping.
+    See mis_01KQJH9MB65AR0GSVPQBT8707X (silent-write-failure fix) for context.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     label: str | None = None
     synthesis: str | None = None

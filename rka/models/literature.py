@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class LiteratureCreate(BaseModel):
@@ -31,7 +31,13 @@ class LiteratureCreate(BaseModel):
 
 
 class LiteratureUpdate(BaseModel):
-    """Partial update for literature."""
+    """Partial update for literature.
+
+    extra="forbid": undeclared fields raise 422 instead of silently stripping.
+    See mis_01KQJH9MB65AR0GSVPQBT8707X (silent-write-failure fix) for context.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     title: str | None = None
     authors: list[str] | None = None

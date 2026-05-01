@@ -154,7 +154,7 @@ class DecisionService(BaseService):
         for field, value in dump.items():
             if field == "options":
                 updates[field] = json.dumps([o.model_dump() for o in value])
-            elif field in ("related_missions", "related_literature", "related_journal"):
+            elif field in ("related_missions", "related_literature", "related_journal", "assumptions"):
                 updates[field] = self._json_dumps(value)
             else:
                 updates[field] = value

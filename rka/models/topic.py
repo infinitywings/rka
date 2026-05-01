@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class TopicCreate(BaseModel):
@@ -14,7 +14,13 @@ class TopicCreate(BaseModel):
 
 
 class TopicUpdate(BaseModel):
-    """Partial update for a topic."""
+    """Partial update for a topic.
+
+    extra="forbid": undeclared fields raise 422 instead of silently stripping.
+    See mis_01KQJH9MB65AR0GSVPQBT8707X (silent-write-failure fix) for context.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str | None = None
     parent_id: str | None = None

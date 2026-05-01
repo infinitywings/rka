@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,13 @@ class JournalEntryCreate(BaseModel):
 
 
 class JournalEntryUpdate(BaseModel):
-    """Partial update for journal entry."""
+    """Partial update for journal entry.
+
+    extra="forbid": undeclared fields raise 422 instead of silently stripping.
+    See mis_01KQJH9MB65AR0GSVPQBT8707X (silent-write-failure fix) for context.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     content: str | None = None
     type: AnyJournalType | None = None

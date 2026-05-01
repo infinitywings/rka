@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class MissionTask(BaseModel):
@@ -32,11 +32,26 @@ class MissionCreate(BaseModel):
 
 
 class MissionUpdate(BaseModel):
-    """Partial update for mission."""
+    """Partial update for mission.
+
+    extra="forbid": undeclared fields raise 422 instead of silently stripping.
+    See mis_01KQJH9MB65AR0GSVPQBT8707X (silent-write-failure fix) for context.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     status: Literal["pending", "active", "complete", "partial", "blocked", "cancelled"] | None = None
     tasks: list[MissionTask] | None = None
     objective: str | None = None
+    phase: str | None = None
+    context: str | None = None
+    acceptance_criteria: str | None = None
+    scope_boundaries: str | None = None
+    checkpoint_triggers: str | None = None
+    depends_on: str | None = None
+    parent_mission_id: str | None = None
+    motivated_by_decision: str | None = None
+    tags: list[str] | None = None
 
 
 class MissionReportCreate(BaseModel):

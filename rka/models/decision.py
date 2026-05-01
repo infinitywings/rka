@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class DecisionOption(BaseModel):
@@ -34,7 +34,13 @@ class DecisionCreate(BaseModel):
 
 
 class DecisionUpdate(BaseModel):
-    """Partial update for a decision."""
+    """Partial update for a decision.
+
+    extra="forbid": undeclared fields raise 422 instead of silently stripping.
+    See mis_01KQJH9MB65AR0GSVPQBT8707X (silent-write-failure fix) for context.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     question: str | None = None
     options: list[DecisionOption] | None = None
@@ -49,6 +55,8 @@ class DecisionUpdate(BaseModel):
     kind: Literal["research_question", "design_choice", "decision", "operational"] | None = None
     phase: str | None = None
     tags: list[str] | None = None
+    # Migration 014 — assumptions this decision rests on.
+    assumptions: list[str] | None = None
     # Migration 017 multi-choice columns (v2.2). pi_selected_option_id and
     # pi_override_rationale go through PUT /decisions/{id}/pi_selection rather
     # than this endpoint; only presentation_method is a general-update field.
