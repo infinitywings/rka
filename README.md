@@ -938,6 +938,12 @@ Interactive API docs available at `http://localhost:9712/docs` (Swagger UI).
 
 Most entity endpoints are project-scoped. Pass `X-RKA-Project: <project_id>` to target a specific project. If omitted, the server falls back to `proj_default`.
 
+#### Request validation (v2.3.1+)
+
+The eight core entity update models (`DecisionUpdate`, `MissionUpdate`, `JournalEntryUpdate`, `LiteratureUpdate`, `ClaimUpdate`, `EvidenceClusterUpdate`, `TopicUpdate`, `ProjectStateUpdate`) use Pydantic `extra="forbid"`. POST/PUT requests carrying fields not declared in the corresponding model now return **HTTP 422** instead of silently stripping them. Pre-2.3.1 the strip was a documented bug ([commit `02d7348`](https://github.com/infinitywings/rka/commit/02d7348) introduces the constraint). Anyone bisecting unexpected 422s on update endpoints should land at that commit.
+
+`MissionUpdate` was previously narrower than the read projection (3 declared fields). It now also accepts `phase`, `context`, `acceptance_criteria`, `scope_boundaries`, `checkpoint_triggers`, `depends_on`, `parent_mission_id`, `motivated_by_decision`, and `tags`. Writes to these fields via REST PUT now persist (and the `motivated_by_decision` write also materializes the corresponding `motivated` entity_link). `DecisionUpdate` similarly added `assumptions`.
+
 ### Notes (Journal Entries)
 
 | Method   | Endpoint        | Description                                                                                 |
