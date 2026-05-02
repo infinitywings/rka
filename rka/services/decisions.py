@@ -233,11 +233,13 @@ class DecisionService(BaseService):
         # Create new decision
         new_decision = await self.create(new_data, actor=actor)
 
-        # Update new decision's scope_version
+        # Update new decision's scope_version. Advance updated_at so downstream
+        # readers (change feeds, staleness propagation) see the version bump.
+        # See mis_01KQMWG5DADXY6TB3CKYKJZ583.
         new_version = (old.scope_version or 1) + 1
         await self.db.execute(
-            "UPDATE decisions SET scope_version = ? WHERE id = ? AND project_id = ?",
-            [new_version, new_decision.id, self.project_id],
+            "UPDATE decisions SET scope_version = ?, updated_at = ? WHERE id = ? AND project_id = ?",
+            [new_version, _now(), new_decision.id, self.project_id],
         )
 
         # Mark old decision as superseded
@@ -260,10 +262,18 @@ class DecisionService(BaseService):
                  AND link_type IN ('references', 'justified_by')""",
             [old_decision_id],
         )
-        # Also check related_decisions JSON field
+        # Also check related_decisions JSON field. Use json_each() for exact
+        # element-level matching — the previous `LIKE '%id%'` produced false
+        # positives when one decision's ID was a substring of another, and was
+        # vulnerable to JSON formatting drift. See mis_01KQMWG5DADXY6TB3CKYKJZ583.
         json_linked = await self.db.fetchall(
-            "SELECT id FROM journal WHERE project_id = ? AND related_decisions LIKE ?",
-            [self.project_id, f'%{old_decision_id}%'],
+            """SELECT id FROM journal
+               WHERE project_id = ?
+                 AND related_decisions IS NOT NULL
+                 AND EXISTS (
+                     SELECT 1 FROM json_each(related_decisions) WHERE value = ?
+                 )""",
+            [self.project_id, old_decision_id],
         )
 
         affected_entry_ids = set()

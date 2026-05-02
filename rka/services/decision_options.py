@@ -18,7 +18,7 @@ from rka.models.decision_option import (
     DecisionOptionCreate,
     EvidenceRef,
 )
-from rka.services.base import BaseService
+from rka.services.base import BaseService, _now
 
 
 def _row_to_model(row: dict) -> DecisionOption:
@@ -221,10 +221,11 @@ class DecisionOptionsService(BaseService):
             "UPDATE decision_options SET is_recommended = 1 WHERE id = ?",
             [option_id],
         )
-        # Mirror onto the decisions row.
+        # Mirror onto the decisions row. Advance updated_at so downstream
+        # readers see the recommendation change. See mis_01KQMWG5DADXY6TB3CKYKJZ583.
         await self.db.execute(
-            "UPDATE decisions SET recommended_option_id = ? WHERE id = ? AND project_id = ?",
-            [option_id, target.decision_id, self.project_id],
+            "UPDATE decisions SET recommended_option_id = ?, updated_at = ? WHERE id = ? AND project_id = ?",
+            [option_id, _now(), target.decision_id, self.project_id],
         )
         await self.db.commit()
 
@@ -263,14 +264,19 @@ class DecisionOptionsService(BaseService):
                     f"selected_option_id {selected_option_id!r} not found on "
                     f"decision {decision_id}"
                 )
+        # Advance updated_at so downstream readers (change feeds,
+        # staleness propagation) see the PI ratification.
+        # See mis_01KQMWG5DADXY6TB3CKYKJZ583.
         await self.db.execute(
             """UPDATE decisions
                SET pi_selected_option_id = ?,
-                   pi_override_rationale = ?
+                   pi_override_rationale = ?,
+                   updated_at = ?
                WHERE id = ? AND project_id = ?""",
             [
                 selected_option_id if has_selected else None,
                 override_rationale if has_override else None,
+                _now(),
                 decision_id,
                 self.project_id,
             ],
