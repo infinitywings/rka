@@ -7,6 +7,7 @@ import logging
 from fastapi import Depends, Header, HTTPException, Query, Request
 
 from rka.config import RKAConfig
+from rka.constants import DEFAULT_PROJECT_ID
 from rka.infra.database import Database
 from rka.infra.llm import LLMClient
 from rka.infra.embeddings import EmbeddingService
@@ -38,8 +39,6 @@ from rka.services.calibration import CalibrationService
 from rka.services.hooks_service import HooksService
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_PROJECT_ID = "proj_default"
 
 
 # ---- Core infrastructure dependencies (read from app.state) ----

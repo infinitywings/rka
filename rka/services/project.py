@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+from rka.constants import DEFAULT_PROJECT_ID, SENTINEL_PROJECT_ID
 from rka.infra.ids import generate_id
 from rka.models.project import ProjectCreate, ProjectInfo, ProjectState, ProjectStateUpdate
 from rka.services.base import BaseService, _now
@@ -12,7 +13,7 @@ from rka.services.base import BaseService, _now
 class ProjectService(BaseService):
     """Manages projects and per-project state."""
 
-    DEFAULT_PROJECT_ID = "proj_default"
+    DEFAULT_PROJECT_ID = DEFAULT_PROJECT_ID
 
     async def list_projects(self) -> list[ProjectInfo]:
         rows = await self.db.fetchall(
@@ -58,8 +59,9 @@ class ProjectService(BaseService):
             "SELECT * FROM project_states WHERE project_id = ?",
             [project_id],
         )
-        if row is None and project_id == self.DEFAULT_PROJECT_ID:
-            # Legacy fallback for pre-migration DBs
+        if row is None and project_id == SENTINEL_PROJECT_ID:
+            # Legacy fallback for pre-migration DBs (the legacy project_state
+            # table only ever held the truly-default project's state).
             row = await self.db.fetchone("SELECT * FROM project_state WHERE id = 1")
         if row is None:
             return None
@@ -171,7 +173,7 @@ class ProjectService(BaseService):
 
     async def delete_project(self, project_id: str, confirm: bool = False) -> dict:
         """Delete a project and all its scoped data. Requires confirm=True."""
-        if project_id == self.DEFAULT_PROJECT_ID:
+        if project_id == SENTINEL_PROJECT_ID:
             raise ValueError("Cannot delete the default project (proj_default)")
 
         # Verify project exists

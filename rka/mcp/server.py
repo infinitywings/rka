@@ -3853,11 +3853,10 @@ support; the Skill is authoritative.
 
 Always begin a session by loading context:
 
-1. If working with multiple projects, use `rka_list_projects()` to see available projects and `rka_set_project(id)` to select the right one. Skip if only one project exists or if the correct project is already active.
+1. **`rka_get_status()` first** — returns the active project plus phase, focus, next steps. **Verify the active project is correct before any write.** If it's `proj_default` (or any project other than the one you intend to work in), call `rka_list_projects()` then `rka_set_project(id)` to switch. Do NOT skip this step. The MCP `_session.project_id` is per-process and does not persist across subprocess restarts — previous-session project state is gone. Without explicit verification, writes silently land in `proj_default`. Set `RKA_PROJECT=<project_id>` in `claude_desktop_config.json` → `mcpServers.rka.env` to make this default automatic on session start.
 2. `rka_get_context()` — full project state (phase, open missions, recent notes, decisions)
-3. `rka_get_status()` — current phase, focus, next steps
-4. `rka_get_pending_maintenance()` — check for provenance gaps
-5. `rka_get_checkpoints(status="open")` — check for unresolved Executor blockers
+3. `rka_get_pending_maintenance()` — check for provenance gaps
+4. `rka_get_checkpoints(status="open")` — check for unresolved Executor blockers
 
 **Maintenance Protocol**: If maintenance items exist, silently process up to 10
 before greeting the user. Priority: decisions_without_justified_by > missions_without_motivated_by
@@ -3986,7 +3985,7 @@ Skill is authoritative.
 
 ## Session Start Protocol
 
-1. If working with multiple projects, use `rka_list_projects()` to see available projects and `rka_set_project(id)` to select the right one. Skip if only one project exists or if the correct project is already active.
+1. **`rka_get_status()` first** — returns the active project plus phase. **Verify the active project is correct before any write.** If it's `proj_default` (or any project other than the one you intend to work in), call `rka_list_projects()` then `rka_set_project(id)` to switch. Do NOT skip this step. The MCP `_session.project_id` is per-process and does not persist across subprocess restarts — previous-session project state is gone. Without explicit verification, writes silently land in `proj_default`. Set `RKA_PROJECT=<project_id>` in your MCP config (`claude_desktop_config.json` → `mcpServers.rka.env`, or your shell environment) to make this default automatic on session start.
 2. `rka_get_context()` — load current project state
 3. `rka_get_mission()` — finds the active or most recent pending mission automatically
 4. If a pending mission is found, call `rka_update_mission_status(id, "active")` to claim it

@@ -499,14 +499,17 @@ This places `rka` at `~/.local/bin/rka`. Verify with `~/.local/bin/rka --version
 | Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
 | Linux   | `~/.config/Claude/claude_desktop_config.json` |
 
-Add (or merge into) — replace `<your-username>` with your actual username; the path must be **absolute**, not `~`:
+Add (or merge into) — replace `<your-username>` with your actual username; the path must be **absolute**, not `~`. Set `RKA_PROJECT` to your primary project's id so every fresh session starts in that project (see "Pinning your default project" below):
 
 ```json
 {
   "mcpServers": {
     "rka": {
       "command": "/Users/<your-username>/.local/bin/rka",
-      "args": ["mcp"]
+      "args": ["mcp"],
+      "env": {
+        "RKA_PROJECT": "prj_01ABC..."
+      }
     }
   }
 }
@@ -521,7 +524,10 @@ Save and **fully quit Claude Desktop** (Cmd+Q on macOS / right-click tray icon �
   "mcpServers": {
     "rka": {
       "command": "/Users/<your-username>/.local/bin/rka",
-      "args": ["mcp"]
+      "args": ["mcp"],
+      "env": {
+        "RKA_PROJECT": "prj_01ABC..."
+      }
     }
   }
 }
@@ -530,6 +536,8 @@ Save and **fully quit Claude Desktop** (Cmd+Q on macOS / right-click tray icon �
 Reload the VS Code window: **Cmd+Shift+P** (macOS) / **Ctrl+Shift+P** (Windows/Linux) → **"Developer: Reload Window"**.
 
 If you use the Claude Code CLI rather than the VS Code extension, the same config goes in `~/.claude/settings.json` under `mcpServers`.
+
+**Pinning your default project (recommended).** Setting `RKA_PROJECT=<project_id>` in the MCP `env` block (or your shell environment for the API process) makes both the MCP `_session.project_id` AND the API-side fallback resolve to that project on every fresh session. Without it, fresh MCP subprocesses default to `proj_default` and writes silently land there if neither the Brain nor the Executor calls `rka_set_project()` first. To find your project id, run `rka_list_projects()` once in any session, or check `http://localhost:9712` in the dashboard URL bar.
 
 **Step 2d — Verify.** In each app, ask:
 
@@ -936,7 +944,7 @@ Base URL: `http://localhost:9712/api`
 
 Interactive API docs available at `http://localhost:9712/docs` (Swagger UI).
 
-Most entity endpoints are project-scoped. Pass `X-RKA-Project: <project_id>` to target a specific project. If omitted, the server falls back to `proj_default`.
+Most entity endpoints are project-scoped. Pass `X-RKA-Project: <project_id>` to target a specific project. If omitted, the server falls back to `DEFAULT_PROJECT_ID`, which reads from the `RKA_PROJECT` environment variable (v2.3.2+) at server startup, falling through to `proj_default` if unset. Pin your primary project by exporting `RKA_PROJECT=<project_id>` in the API process's environment (or in your MCP `env` block — see "Pinning your default project" above).
 
 #### Request validation (v2.3.1+)
 

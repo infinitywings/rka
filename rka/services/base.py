@@ -7,6 +7,7 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+from rka.constants import DEFAULT_PROJECT_ID
 from rka.infra.database import Database
 from rka.infra.ids import generate_id
 
@@ -15,7 +16,6 @@ if TYPE_CHECKING:
     from rka.infra.llm import LLMClient
 
 logger = logging.getLogger(__name__)
-DEFAULT_PROJECT_ID = "proj_default"
 VALID_ACTORS = frozenset({"brain", "executor", "pi", "llm", "web_ui", "system"})
 
 

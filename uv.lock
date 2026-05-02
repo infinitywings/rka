@@ -2376,7 +2376,7 @@ wheels = [
 
 [[package]]
 name = "rka"
-version = "2.0.1"
+version = "2.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },

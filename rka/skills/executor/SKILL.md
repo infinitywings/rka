@@ -19,8 +19,8 @@ Your counterparts: the **Brain** (`skills/brain/SKILL.md`) handles strategy. The
 
 ## Session Start
 
-1. `rka_get_context()` to load project state.
-2. `rka_get_status()` to understand the current phase and focus.
+1. **`rka_get_status()` first** — confirms the active project plus phase. If the active project is `proj_default` (or any project other than the one you intend to work in), call `rka_list_projects()` then `rka_set_project(id)` to switch. Do NOT skip — the MCP `_session.project_id` is per-process and ephemeral; previous-session project state is gone. Set `RKA_PROJECT=<project_id>` in your MCP config (`claude_desktop_config.json` → `mcpServers.rka.env` for Claude Desktop, or your shell environment for Claude Code) to make this default automatic.
+2. `rka_get_context()` to load project state.
 3. `rka_get_mission()` to pick up the active or pending mission.
 4. `rka_get_checkpoints(status="open")` to see blockers that may affect execution.
 

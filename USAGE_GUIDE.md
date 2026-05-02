@@ -158,14 +158,17 @@ If `~/.local/bin` is not on your `PATH`, either add it (e.g. in `~/.zshrc`: `exp
    - **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
    - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
    - **Linux:** `~/.config/Claude/claude_desktop_config.json`
-3. Add (or merge into) the following. **Replace `<your-username>` with your actual username** — the path must be absolute, not `~`:
+3. Add (or merge into) the following. **Replace `<your-username>` with your actual username** — the path must be absolute, not `~`. Set `RKA_PROJECT` to your primary project's id so every fresh session starts in that project (see "Pin your default project" below):
 
    ```json
    {
      "mcpServers": {
        "rka": {
          "command": "/Users/<your-username>/.local/bin/rka",
-         "args": ["mcp"]
+         "args": ["mcp"],
+         "env": {
+           "RKA_PROJECT": "prj_01ABC..."
+         }
        }
      }
    }
@@ -176,11 +179,13 @@ If `~/.local/bin` is not on your `PATH`, either add it (e.g. in `~/.zshrc`: `exp
 
 You should now see RKA tools available in any new conversation.
 
+**Pin your default project (highly recommended).** With `RKA_PROJECT=<project_id>` set in the MCP `env` block above, both the MCP `_session.project_id` AND the API-side fallback resolve to that project on every fresh session. Without it, MCP subprocesses default to `proj_default`, and writes silently land there if Brain or Executor doesn't call `rka_set_project()` first. To find your project id: open `http://localhost:9712`, switch to the project you want, and copy the id from the URL — or run `rka_list_projects()` once in a Claude session.
+
 ### Step 5. Configure Claude Code (Executor)
 
 Claude Code uses the same MCP binary. There are two common ways to register it:
 
-**Option A — VS Code extension (graphical):** Open VS Code → Claude Code panel → click the gear → **MCP Servers** → **Add Server**. Use the same JSON shape as Step 4.
+**Option A — VS Code extension (graphical):** Open VS Code → Claude Code panel → click the gear → **MCP Servers** → **Add Server**. Use the same JSON shape as Step 4 (including the `env.RKA_PROJECT` field).
 
 **Option B — Per-project config file (recommended for teams):** Create `.claude/mcp.json` in your repo root with:
 
@@ -189,7 +194,10 @@ Claude Code uses the same MCP binary. There are two common ways to register it:
   "mcpServers": {
     "rka": {
       "command": "/Users/<your-username>/.local/bin/rka",
-      "args": ["mcp"]
+      "args": ["mcp"],
+      "env": {
+        "RKA_PROJECT": "prj_01ABC..."
+      }
     }
   }
 }
@@ -594,7 +602,7 @@ RKA supports multiple isolated research projects in the same database.
 
 > "Switch to the IoT Broker Scalability project"
 
-All tool calls operate on the active project. The Brain should call `rka_set_project()` at the start of each session if you have multiple projects.
+All tool calls operate on the active project. **Brain and Executor must verify the active project at session start with `rka_get_status()`** — the MCP `_session.project_id` is per-process and ephemeral, so previous-session state is gone on every fresh subprocess. Without verification, writes silently land in `proj_default`. Set `RKA_PROJECT=<project_id>` in your MCP config (see Step 4) to make this default automatic.
 
 ---
 

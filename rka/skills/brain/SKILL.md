@@ -21,7 +21,7 @@ Your counterparts: the **Executor** (`skills/executor/SKILL.md`) handles impleme
 
 ## Session Start — Do This Every Time
 
-1. `rka_set_project(project_id)` — if multiple projects exist.
+1. **`rka_get_status()` first** — confirms the active project. If it returns `proj_default` (or any project other than the one you intend to work in), call `rka_list_projects()` then `rka_set_project(project_id)` to switch. Do NOT skip — the MCP `_session.project_id` is per-process and ephemeral; previous sessions' state is gone. Set `RKA_PROJECT=<project_id>` in `claude_desktop_config.json` → `mcpServers.rka.env` to make this default automatic.
 2. `rka_get_changelog(since="<last session date>")` — what changed since last time.
 3. `rka_get_pending_maintenance()` — provenance gaps, untagged entries.
 4. Process up to 10 maintenance items silently. Priority:
