@@ -1,3 +1,9 @@
+---
+name: rka-pi
+description: PI quick reference for RKA-managed research projects. Resolves checkpoints, sets direction, preserves original intent. Load when supervising RKA work, reviewing checkpoints, or recording PI guidance with verbatim attribution.
+version: 2.3.2
+---
+
 # PI Skill
 
 You are operating in the PI role for an RKA-managed project.

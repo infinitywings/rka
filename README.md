@@ -366,45 +366,19 @@ docker compose up -d
 
 That is it. Open `http://localhost:9712` in your browser.
 
-**Connect Claude Desktop (MCP):**
+**Connect Claude Desktop and Claude Code (MCP):**
 
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `~/.config/Claude/claude_desktop_config.json` (Linux):
-
-```json
-{
-  "mcpServers": {
-    "rka": {
-      "command": "docker",
-      "args": ["exec", "-i", "rka-server", "rka", "mcp"]
-    }
-  }
-}
-```
-
-**No LLM required.** The Brain (Claude Desktop) handles all knowledge enrichment — claim extraction, cluster synthesis, contradiction resolution — during normal sessions. There is nothing to configure beyond Docker and the MCP binary.
-
-**Connect Claude Code (MCP via uv tool):**
-
-Install the MCP binary outside Docker so Claude Code can launch it directly:
+Both clients reach RKA through the same small `rka` stdio binary. Install once outside Docker so Claude apps can launch it directly:
 
 ```bash
 UV_CACHE_DIR=/tmp/uv-cache uv tool install --force .
 ```
 
-The binary includes role-specific skill prompts (`brain_skill`, `executor_skill`, `pi_skill`) that Claude can load for full workflow guidance.
+The binary lands at `~/.local/bin/rka` and ships role skill prompts (`brain_skill`, `executor_skill`, `pi_skill`) that Claude can load for full workflow guidance.
 
-Add to your Claude Code MCP config (`.claude/mcp.json` or VS Code settings):
+Then register it in each client's MCP config — full step-by-step setup is in [Quick Start § 2](#2-connect-claude-desktop-and-claude-code) below, including the recommended `env.RKA_PROJECT` block (v2.3.2+) that pins your primary project so fresh sessions resolve correctly instead of silently writing to `proj_default`.
 
-```json
-{
-  "mcpServers": {
-    "rka": {
-      "command": "/Users/<you>/.local/bin/rka",
-      "args": ["mcp"]
-    }
-  }
-}
-```
+**No LLM required.** The Brain (Claude Desktop) handles all knowledge enrichment — claim extraction, cluster synthesis, contradiction resolution — during normal sessions. There is nothing to configure beyond Docker and the MCP binary.
 
 The MCP binary is stateless — it proxies all calls to the Docker container's REST API at `RKA_API_URL`.
 
@@ -448,16 +422,7 @@ rka serve
 UV_CACHE_DIR=/tmp/uv-cache uv tool install --force .
 ```
 
-```json
-{
-  "mcpServers": {
-    "rka": {
-      "command": "/Users/<you>/.local/bin/rka",
-      "args": ["mcp"]
-    }
-  }
-}
-```
+Register it in each Claude client per [Quick Start § 2](#2-connect-claude-desktop-and-claude-code) below — the recommended JSON includes an `env.RKA_PROJECT` block that pins your primary project across sessions.
 
 ---
 
