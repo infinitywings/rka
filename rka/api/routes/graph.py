@@ -5,11 +5,23 @@ from __future__ import annotations
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel, Field
 
-from rka.api.deps import get_graph_service, require_project
+from rka.api.deps import get_graph_service, get_scoped_search_service, require_project
 from rka.services.graph import GraphService
+from rka.services.search import SearchService
 
 router = APIRouter()
+
+
+class MultiHopRequest(BaseModel):
+    """Request for query-anchored multi-hop subgraph retrieval."""
+
+    query: str
+    seeds: list[str] | None = None
+    max_depth: int = Field(default=3, ge=1, le=5)
+    max_nodes: int = Field(default=50, ge=1, le=500)
+    edge_weights: dict[str, float] | None = None
 
 
 @router.get("/graph")
@@ -58,6 +70,31 @@ async def get_ego_graph(
 ):
     """Return subgraph centered on an entity up to `depth` hops."""
     return await svc.get_ego_graph(entity_id, depth=depth, project_id=project_id)
+
+
+@router.post("/graph/multi-hop")
+async def multi_hop_retrieval(
+    data: MultiHopRequest,
+    project_id: str = Depends(require_project),
+    svc: GraphService = Depends(get_graph_service),
+    search: SearchService = Depends(get_scoped_search_service),
+):
+    """Query-anchored ranked subgraph retrieval.
+
+    Seeds via SearchService.search(query) (or accepts explicit `seeds=` for
+    tests / when caller has anchor entities), BFS-expands using per-edge
+    weights from dec_01KQQRZ0CJHB68P2F6233AHEJ5, returns a connected
+    relevance-ranked subgraph capped at `max_nodes`.
+    """
+    return await svc.multi_hop_retrieval(
+        query=data.query,
+        seeds=data.seeds,
+        max_depth=data.max_depth,
+        max_nodes=data.max_nodes,
+        edge_weights=data.edge_weights,
+        project_id=project_id,
+        search_service=search,
+    )
 
 
 @router.get("/graph/decision-tree")

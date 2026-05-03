@@ -1,8 +1,12 @@
-"""Tests for the ContextEngine."""
+"""Tests for the v2.4 ContextEngine.
+
+Per dec_01KQQPD6Y6B362T3K08368BDMP: temperature classifier and token budget
+removed; ranking is SQL-time importance × entity_links centrality × recency.
+This test file replaces the pre-v2.4 HOT/WARM/COLD assertions.
+"""
 
 from __future__ import annotations
 
-import pytest
 import pytest_asyncio
 
 from rka.infra.database import Database
@@ -12,207 +16,179 @@ from rka.services.search import SearchService
 
 @pytest_asyncio.fixture
 async def context_engine(db_with_project: Database) -> ContextEngine:
-    """Context engine with test data populated."""
+    """Context engine with mixed-importance test data."""
     db = db_with_project
     search = SearchService(db=db, embeddings=None)
-    engine = ContextEngine(db=db, search=search, llm=None, hot_days=3, warm_days=14)
+    engine = ContextEngine(db=db, search=search, llm=None)
 
-    # Use strftime to produce ISO timestamps with 'Z' suffix — matches schema defaults
-    # and ensures the classifier can parse them as timezone-aware datetimes.
     NOW = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"
     OLD = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-30 days')"
 
-    # HOT: active + current phase + recent
+    # critical-importance journal (should rank highest)
     await db.execute(
-        f"""INSERT INTO journal (id, type, content, source, confidence, phase, project_id, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, {NOW}, {NOW})""",
-        ["jrn_hot", "finding", "Hot finding about timing attacks", "pi", "hypothesis", "phase_1", "proj_default"],
+        f"""INSERT INTO journal (id, type, content, source, confidence, importance,
+            phase, project_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, {NOW}, {NOW})""",
+        ["jrn_critical", "finding", "Critical finding about timing attacks",
+         "pi", "verified", "critical", "phase_1", "proj_default"],
+    )
+    # high-importance journal, older
+    await db.execute(
+        f"""INSERT INTO journal (id, type, content, source, confidence, importance,
+            phase, project_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, {OLD}, {OLD})""",
+        ["jrn_high_old", "finding", "High-importance older finding",
+         "pi", "verified", "high", "phase_1", "proj_default"],
+    )
+    # low-importance journal, recent (lower-ranked despite recency)
+    await db.execute(
+        f"""INSERT INTO journal (id, type, content, source, confidence, importance,
+            phase, project_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, {NOW}, {NOW})""",
+        ["jrn_low_recent", "note", "Low-importance recent observation",
+         "executor", "hypothesis", "low", "phase_1", "proj_default"],
+    )
+    # archived (should rank lowest)
+    await db.execute(
+        f"""INSERT INTO journal (id, type, content, source, confidence, importance,
+            phase, project_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, {NOW}, {NOW})""",
+        ["jrn_archived", "note", "Archived note", "executor", "verified",
+         "archived", "phase_1", "proj_default"],
     )
 
-    # Also HOT: active decision in current phase
+    # An active decision in current phase
     await db.execute(
         f"""INSERT INTO decisions (id, question, decided_by, status, phase, project_id, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, {NOW}, {NOW})""",
-        ["dec_hot", "Should we use approach A or B?", "brain", "active", "phase_1", "proj_default"],
+        ["dec_active", "Should we A or B?", "brain", "active", "phase_1", "proj_default"],
     )
 
-    # WARM: active but different phase
+    # An active mission
     await db.execute(
         f"""INSERT INTO missions (id, objective, phase, status, project_id, created_at)
            VALUES (?, ?, ?, ?, ?, {NOW})""",
-        ["mis_warm", "Future phase mission", "phase_2", "active", "proj_default"],
+        ["mis_active", "Test mission", "phase_1", "active", "proj_default"],
     )
 
-    # COLD: abandoned (note: _get_overview_candidates only fetches active decisions,
-    #        so this won't appear in overview — but useful for direct classification tests)
-    await db.execute(
-        f"""INSERT INTO decisions (id, question, decided_by, status, phase, project_id, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, {OLD}, {OLD})""",
-        ["dec_cold", "Old abandoned question", "brain", "abandoned", "phase_1", "proj_default"],
-    )
+    # Centrality fixture: jrn_high_old is highly connected. Vary target_id
+    # because entity_links is UNIQUE(project_id, source_id, link_type, target_id)
+    # post-migration 020.
+    centrality_targets = [
+        ("dec_active", "decision"),
+        ("mis_active", "mission"),
+        ("jrn_low_recent", "journal"),
+        ("jrn_archived", "journal"),
+        ("jrn_critical", "journal"),
+    ]
+    for i, (tgt_id, tgt_type) in enumerate(centrality_targets):
+        await db.execute(
+            """INSERT INTO entity_links (id, source_type, source_id, link_type,
+                target_type, target_id, project_id)
+               VALUES (?, 'journal', ?, 'references', ?, ?, ?)""",
+            [f"lnk_high_{i}", "jrn_high_old", tgt_type, tgt_id, "proj_default"],
+        )
 
-    # COLD: completed long ago (verified + old → cold)
-    await db.execute(
-        f"""INSERT INTO journal (id, type, content, source, confidence, phase, project_id, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, {OLD}, {OLD})""",
-        ["jrn_cold", "finding", "Very old verified entry", "pi", "verified", "phase_1", "proj_default"],
-    )
-
-    # FTS5 entries for search
+    # FTS rows so search-anchored path also has data
     await db.execute(
         "INSERT INTO fts_journal (id, content, summary) VALUES (?, ?, ?)",
-        ["jrn_hot", "Hot finding about timing attacks", ""],
-    )
-    await db.execute(
-        "INSERT INTO fts_decisions (id, question, rationale) VALUES (?, ?, ?)",
-        ["dec_hot", "Should we use approach A or B?", ""],
-    )
-
-    # Active literature
-    await db.execute(
-        f"""INSERT INTO literature (id, title, status, project_id, created_at, updated_at)
-           VALUES (?, ?, ?, ?, {NOW}, {NOW})""",
-        ["lit_warm", "Some paper", "to_read", "proj_default"],
+        ["jrn_critical", "Critical finding about timing attacks", ""],
     )
 
     await db.commit()
     return engine
 
 
-class TestTemperatureClassification:
-    """Test HOT/WARM/COLD classification."""
+class TestContextRankingByImportance:
+    async def test_critical_importance_ranks_first(self, context_engine: ContextEngine):
+        """A critical-importance journal entry ranks above a low-importance one,
+        even when the low-importance entry is more recent."""
+        pkg = await context_engine.get_context()
+        ranked_ids = pkg.sources
 
-    @pytest.mark.asyncio
-    async def test_overview_classifies_hot(self, context_engine: ContextEngine):
-        """Active + current phase + recent entries should be HOT."""
-        package = await context_engine.get_context(phase="phase_1", max_tokens=5000)
-        # hot_entries should include the recent hypothesis journal and active decision
-        hot_ids = [e for e in package.hot_entries if "jrn_hot" in e or "dec_hot" in e]
-        assert len(hot_ids) >= 1
+        crit_idx = ranked_ids.index("jrn_critical")
+        low_idx = ranked_ids.index("jrn_low_recent")
+        assert crit_idx < low_idx, (
+            f"jrn_critical (importance=critical) must rank before jrn_low_recent "
+            f"(importance=low, more recent). Got positions {crit_idx} vs {low_idx}."
+        )
 
-    @pytest.mark.asyncio
-    async def test_overview_classifies_cold(self, context_engine: ContextEngine):
-        """Old completed entries should be COLD."""
-        package = await context_engine.get_context(phase="phase_1", max_tokens=5000)
-        # jrn_cold is 'verified' + 30 days old → COLD
-        # The cold fallback renderer uses [entity_type] content (no ID),
-        # so check for the content text.
-        cold_content = [e for e in package.cold_entries if "Very old verified" in e]
-        assert len(cold_content) >= 1
+    async def test_archived_ranks_low(self, context_engine: ContextEngine):
+        """Archived entries appear at the bottom."""
+        pkg = await context_engine.get_context()
+        ranked_ids = pkg.sources
 
-    @pytest.mark.asyncio
-    async def test_overview_returns_context_package(self, context_engine: ContextEngine):
-        """Verify ContextPackage structure."""
-        package = await context_engine.get_context(max_tokens=5000)
-        assert package.phase == "phase_1"
-        assert isinstance(package.hot_entries, list)
-        assert isinstance(package.warm_entries, list)
-        assert isinstance(package.cold_entries, list)
-        assert isinstance(package.sources, list)
-        assert package.token_estimate > 0
+        archived_idx = ranked_ids.index("jrn_archived")
+        # All other journal entries should rank above archived.
+        for nid in ("jrn_critical", "jrn_high_old", "jrn_low_recent"):
+            assert ranked_ids.index(nid) < archived_idx, (
+                f"{nid} must rank above jrn_archived (importance=archived)."
+            )
 
-    @pytest.mark.asyncio
-    async def test_topic_search(self, context_engine: ContextEngine):
-        """Topic-focused context should search and classify."""
-        package = await context_engine.get_context(topic="timing attacks", max_tokens=5000)
-        assert package.topic == "timing attacks"
-        assert len(package.sources) >= 1
-
-    @pytest.mark.asyncio
-    async def test_token_budget_respected(self, context_engine: ContextEngine):
-        """Token estimate should not exceed budget."""
-        package = await context_engine.get_context(max_tokens=100)
-        assert package.token_estimate <= 200  # Small buffer allowed
+    async def test_pi_source_lift_applied_within_band(self, context_engine: ContextEngine):
+        """PI-sourced entries get a small lift; jrn_critical (pi) outranks
+        any equally-rated executor-sourced entries (none in this fixture, but
+        the PI entry is at top — sanity-check the scoring tuple respects it)."""
+        pkg = await context_engine.get_context()
+        # First entry should be jrn_critical (PI + critical).
+        assert pkg.sources[0] == "jrn_critical", (
+            f"Expected jrn_critical first; got {pkg.sources[0]}"
+        )
 
 
-class TestClassifyTemperatureDirect:
-    """Test _classify_temperature directly with synthetic entries."""
+class TestContextNoTokenBudget:
+    async def test_no_max_tokens_parameter(self, context_engine: ContextEngine):
+        """get_context no longer accepts max_tokens as a kwarg."""
+        # Should not raise — just accepts no max_tokens.
+        pkg = await context_engine.get_context()
+        # All eligible entries should be present (no budget truncation).
+        ranked_ids = pkg.sources
+        for nid in ("jrn_critical", "jrn_high_old", "jrn_low_recent",
+                    "jrn_archived", "dec_active", "mis_active"):
+            assert nid in ranked_ids, (
+                f"{nid} missing from ranked output — token budget should NOT be truncating."
+            )
 
-    def test_hot_classification(self):
-        """Active + current phase + recent → HOT."""
-        from datetime import datetime, timezone
-        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        entries = [
-            {"id": "j1", "entity_type": "journal", "confidence": "hypothesis",
-             "phase": "p1", "updated_at": now_str},
-        ]
-        engine = ContextEngine(db=None, search=None, llm=None, hot_days=3, warm_days=14)
-        hot, warm, cold = engine._classify_temperature(entries, "p1")
-        assert len(hot) == 1
-        assert hot[0]["id"] == "j1"
+    async def test_token_estimate_is_informational_only(self, context_engine: ContextEngine):
+        """token_estimate is reported but not enforced."""
+        pkg = await context_engine.get_context()
+        # token_estimate should reflect the rendered content's rough token count;
+        # crucially, NOT zero (meaning content was rendered) and NOT a low fixed
+        # cap.
+        assert pkg.token_estimate > 0, "token_estimate should report rendered token count"
 
-    def test_cold_abandoned(self):
-        """Abandoned status → COLD regardless of recency."""
-        from datetime import datetime, timezone
-        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        entries = [
-            {"id": "d1", "entity_type": "decision", "status": "abandoned",
-             "phase": "p1", "updated_at": now_str},
-        ]
-        engine = ContextEngine(db=None, search=None, llm=None, hot_days=3, warm_days=14)
-        hot, warm, cold = engine._classify_temperature(entries, "p1")
-        assert len(cold) == 1
-
-    def test_warm_active_wrong_phase(self):
-        """Active + wrong phase → WARM (not HOT)."""
-        from datetime import datetime, timezone
-        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        entries = [
-            {"id": "m1", "entity_type": "mission", "status": "active",
-             "phase": "p2", "updated_at": now_str},
-        ]
-        engine = ContextEngine(db=None, search=None, llm=None, hot_days=3, warm_days=14)
-        hot, warm, cold = engine._classify_temperature(entries, "p1")
-        assert len(warm) == 1
+    async def test_entries_field_populated(self, context_engine: ContextEngine):
+        """The new `entries` field carries the ranked list (not the legacy buckets)."""
+        pkg = await context_engine.get_context()
+        assert pkg.entries, "entries field must be populated (v2.4 single ranked list)"
+        # Legacy bucket fields stay empty.
+        assert pkg.hot_entries == []
+        assert pkg.warm_entries == []
+        assert pkg.cold_entries == []
 
 
-class TestRenderEntry:
-    """Test entry rendering."""
+class TestContextCentralityContribution:
+    async def test_high_centrality_lifts_within_importance_band(self, context_engine: ContextEngine):
+        """jrn_high_old (importance=high, 5 entity_links) should outrank an
+        un-linked normal-importance entry — but stay below the critical entry."""
+        pkg = await context_engine.get_context()
+        ranked = pkg.sources
 
-    def _engine(self):
-        return ContextEngine(db=None, search=None, llm=None)
+        crit_idx = ranked.index("jrn_critical")
+        high_old_idx = ranked.index("jrn_high_old")
+        low_recent_idx = ranked.index("jrn_low_recent")
 
-    def test_render_journal(self):
-        entry = {"entity_type": "journal", "id": "jrn_1", "type": "finding", "confidence": "hypothesis", "content": "Test content"}
-        text = self._engine()._render_entry(entry)
-        assert "finding" in text
-        assert "hypothesis" in text
-        assert "jrn_1" in text
-
-    def test_render_decision(self):
-        entry = {"entity_type": "decision", "id": "dec_1", "status": "active", "question": "Which approach?", "chosen": "A"}
-        text = self._engine()._render_entry(entry)
-        assert "decision" in text
-        assert "→ A" in text
-
-    def test_render_literature(self):
-        entry = {"entity_type": "literature", "id": "lit_1", "status": "reading", "title": "Some Paper"}
-        text = self._engine()._render_entry(entry)
-        assert "lit" in text
-        assert "Some Paper" in text
-
-    def test_render_mission(self):
-        entry = {"entity_type": "mission", "id": "mis_1", "status": "active", "objective": "Do something"}
-        text = self._engine()._render_entry(entry)
-        assert "mission" in text
-        assert "Do something" in text
-
-    def test_render_truncates(self):
-        entry = {"entity_type": "journal", "id": "j1", "type": "note", "confidence": "?", "content": "x" * 1000}
-        text = self._engine()._render_entry(entry, max_len=50)
-        assert len(text) < 200  # Should be truncated
+        # Sanity: critical above high (importance dominates centrality)
+        assert crit_idx < high_old_idx
+        # high+centrality above low+recent (importance still wins; centrality
+        # tie-breaks within importance bands)
+        assert high_old_idx < low_recent_idx
 
 
-class TestTokenEstimation:
-    """Test token estimation."""
-
-    def test_estimate_tokens_basic(self):
-        assert ContextEngine._estimate_tokens("hello world") >= 1
-
-    def test_estimate_tokens_empty(self):
-        assert ContextEngine._estimate_tokens("") == 1
-
-    def test_estimate_tokens_long(self):
-        text = "a" * 400
-        tokens = ContextEngine._estimate_tokens(text)
-        assert tokens == 100  # ~4 chars per token
+class TestContextNote:
+    async def test_note_describes_v2_4_ranking(self, context_engine: ContextEngine):
+        pkg = await context_engine.get_context()
+        assert pkg.note is not None
+        assert "importance" in pkg.note.lower()
+        # Should reference the v2.4 decision id for traceability.
+        assert "dec_01KQQPD6Y6B362T3K08368BDMP" in pkg.note

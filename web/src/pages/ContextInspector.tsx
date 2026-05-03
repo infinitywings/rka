@@ -26,7 +26,6 @@ export default function ContextInspector() {
     topic: "",
     phase: "",
     depth: "summary",
-    max_tokens: 4000,
   })
   const [result, setResult] = useState<ContextPackage | null>(null)
   const [copied, setCopied] = useState(false)
@@ -115,18 +114,10 @@ export default function ContextInspector() {
               </Select>
             </div>
             <div>
-              <Label className="text-xs">Max Tokens</Label>
-              <Input
-                type="number"
-                value={form.max_tokens ?? 4000}
-                onChange={(e) =>
-                  setForm({ ...form, max_tokens: parseInt(e.target.value) || 4000 })
-                }
-                min={500}
-                max={32000}
-                step={500}
-                className="h-8 text-xs"
-              />
+              <Label className="text-xs">Ranking</Label>
+              <div className="text-xs text-muted-foreground h-8 flex items-center px-1">
+                importance · centrality · recency
+              </div>
             </div>
           </div>
           <Button
@@ -306,8 +297,8 @@ export default function ContextInspector() {
                 </div>
               ) : (
                 <p className="text-sm text-muted-foreground">
-                  No narrative generated. Try increasing max_tokens or using
-                  "detailed" depth.
+                  No narrative generated. Use "detailed" depth to request one
+                  (requires LLM configuration).
                 </p>
               )}
 

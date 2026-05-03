@@ -20,6 +20,117 @@ class MaintenanceService(BaseService):
     def __init__(self, db: Database, project_id: str = "proj_default"):
         super().__init__(db, project_id=project_id)
 
+    async def get_backlog_summary(self) -> dict[str, Any]:
+        """Lightweight COUNT-only summary of the maintenance backlog.
+
+        Returns {total_items, top_categories: [{name, count}, ...]} sorted by
+        count descending, top 3. Designed to be sub-100ms so it can be
+        appended to high-traffic responses (rka_get_status, rka_search).
+        Per dec_01KQQPER3XSSBACGZANFJCVQ66 / dec_01KQQRZRY9NN0PYQNXPW07D732.
+        """
+        pid = self.project_id
+
+        # Each query is a COUNT(*) over an indexed table. Mirrors the WHERE
+        # predicates of the corresponding _<category> method above; if those
+        # change, change these in lockstep.
+        counts: dict[str, int] = {}
+
+        async def _count(name: str, sql: str, params: list[Any]) -> None:
+            row = await self.db.fetchone(sql, params)
+            counts[name] = int(row["c"]) if row else 0
+
+        await _count(
+            "entries_without_tags",
+            """SELECT COUNT(*) AS c FROM journal j
+               WHERE j.project_id = ? AND j.status != 'retracted'
+                 AND NOT EXISTS (
+                     SELECT 1 FROM tags t
+                     WHERE t.entity_type = 'journal' AND t.entity_id = j.id AND t.project_id = ?
+                 )""",
+            [pid, pid],
+        )
+        await _count(
+            "entries_without_claims",
+            """SELECT COUNT(*) AS c FROM journal j
+               WHERE j.project_id = ?
+                 AND j.type IN ('note', 'finding', 'insight', 'methodology', 'observation')
+                 AND j.status != 'retracted'
+                 AND NOT EXISTS (
+                     SELECT 1 FROM claims c
+                     WHERE c.source_entry_id = j.id AND c.project_id = ?
+                 )""",
+            [pid, pid],
+        )
+        await _count(
+            "clusters_needing_synthesis",
+            """SELECT COUNT(*) AS c FROM evidence_clusters ec
+               WHERE ec.project_id = ? AND ec.claim_count > 0
+                 AND ((ec.synthesis IS NULL OR ec.synthesis = '') OR ec.needs_reprocessing = 1)""",
+            [pid],
+        )
+        await _count(
+            "flagged_contradictions",
+            """SELECT COUNT(*) AS c FROM review_queue rq
+               WHERE rq.project_id = ? AND rq.flag = 'potential_contradiction' AND rq.status = 'pending'""",
+            [pid],
+        )
+        await _count(
+            "entries_missing_cross_refs",
+            """SELECT COUNT(*) AS c FROM journal j
+               WHERE j.project_id = ? AND j.status != 'retracted'
+                 AND (j.related_decisions IS NULL OR j.related_decisions = '[]' OR j.related_decisions = 'null')
+                 AND NOT EXISTS (SELECT 1 FROM entity_links el WHERE el.source_id = j.id AND el.project_id = ?)
+                 AND NOT EXISTS (SELECT 1 FROM entity_links el WHERE el.target_id = j.id AND el.project_id = ?)""",
+            [pid, pid, pid],
+        )
+        await _count(
+            "decisions_without_justified_by",
+            """SELECT COUNT(*) AS c FROM decisions d
+               WHERE d.project_id = ? AND d.status = 'active'
+                 AND NOT EXISTS (
+                     SELECT 1 FROM entity_links el
+                     WHERE el.source_type = 'decision' AND el.source_id = d.id
+                       AND el.link_type = 'justified_by' AND el.project_id = ?
+                 )""",
+            [pid, pid],
+        )
+        await _count(
+            "missions_without_motivated_by",
+            """SELECT COUNT(*) AS c FROM missions m
+               WHERE m.project_id = ? AND m.status NOT IN ('cancelled')
+                 AND NOT EXISTS (
+                     SELECT 1 FROM entity_links el
+                     WHERE el.target_type = 'mission' AND el.target_id = m.id
+                       AND el.link_type = 'motivated' AND el.project_id = ?
+                 )""",
+            [pid, pid],
+        )
+        await _count(
+            "unassigned_clusters",
+            """SELECT COUNT(*) AS c FROM evidence_clusters ec
+               WHERE ec.project_id = ? AND ec.claim_count > 0
+                 AND (ec.research_question_id IS NULL OR ec.research_question_id = '')""",
+            [pid],
+        )
+        await _count(
+            "stale_claims",
+            "SELECT COUNT(*) AS c FROM claims WHERE project_id = ? AND staleness IN ('yellow', 'red')",
+            [pid],
+        )
+        await _count(
+            "stale_clusters",
+            "SELECT COUNT(*) AS c FROM evidence_clusters WHERE project_id = ? AND staleness IN ('yellow', 'red')",
+            [pid],
+        )
+
+        total = sum(counts.values())
+        top = sorted(
+            [{"name": k, "count": v} for k, v in counts.items() if v > 0],
+            key=lambda d: d["count"],
+            reverse=True,
+        )[:3]
+        return {"total_items": total, "top_categories": top}
+
     async def get_pending_maintenance(self) -> dict[str, Any]:
         """Run all gap-detection queries and return a compact manifest."""
         pid = self.project_id
@@ -102,18 +213,25 @@ class MaintenanceService(BaseService):
         }
 
     async def _clusters_needing_synthesis(self, pid: str) -> dict:
+        # Surfaces both: (a) clusters with claims but no synthesis yet, and
+        # (b) clusters whose existing synthesis was invalidated by a downstream
+        # event (e.g. a contradicts edge inserted between cluster members; see
+        # ClaimService.create_edge / dec_01KQQPE47H56E40A8KBDDT4BZT).
         rows = await self.db.fetchall(
             """SELECT ec.id FROM evidence_clusters ec
                WHERE ec.project_id = ?
-                 AND (ec.synthesis IS NULL OR ec.synthesis = '')
                  AND ec.claim_count > 0
-               ORDER BY ec.claim_count DESC LIMIT 50""",
+                 AND (
+                     (ec.synthesis IS NULL OR ec.synthesis = '')
+                     OR ec.needs_reprocessing = 1
+                 )
+               ORDER BY ec.needs_reprocessing DESC, ec.claim_count DESC LIMIT 50""",
             [pid],
         )
         return {
             "count": len(rows),
             "ids": [r["id"] for r in rows],
-            "description": "Evidence clusters with claims but no synthesis",
+            "description": "Evidence clusters with claims but no synthesis, or whose synthesis is stale",
             "fix_action": "rka_review_cluster(cluster_id, confidence, synthesis)",
             "fix_calls_per_item": 1,
         }

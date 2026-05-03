@@ -24,3 +24,15 @@ async def get_pending_maintenance(
 ):
     """Return a maintenance manifest of all detected gaps in the knowledge base."""
     return await svc.get_pending_maintenance()
+
+
+@router.get("/maintenance/summary")
+async def get_maintenance_summary(
+    svc: MaintenanceService = Depends(_get_maintenance_service),
+):
+    """Lightweight COUNT-only summary used to decorate rka_get_status / rka_search.
+
+    Returns {total_items, top_categories: [{name, count}, ...]} sorted by
+    count descending, top 3. Per dec_01KQQPER3XSSBACGZANFJCVQ66.
+    """
+    return await svc.get_backlog_summary()

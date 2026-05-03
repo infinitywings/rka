@@ -666,11 +666,7 @@ The Settings page shows API health status, database statistics, LLM configuratio
 
 ### 18.3 — Context Engine
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `RKA_CONTEXT_HOT_DAYS` | `3` | Days for HOT temperature classification |
-| `RKA_CONTEXT_WARM_DAYS` | `14` | Days for WARM temperature classification |
-| `RKA_CONTEXT_DEFAULT_MAX_TOKENS` | `2000` | Default token budget for context packages |
+In v2.4 the context engine has no tunable settings. Ranking is deterministic SQL-time: `journal.importance` (CASE: critical=4 → archived=0) × `entity_links` centrality × `created_at` DESC, with a +0.5 lift for PI-sourced entries. The legacy `RKA_CONTEXT_HOT_DAYS`, `RKA_CONTEXT_WARM_DAYS`, and `RKA_CONTEXT_DEFAULT_MAX_TOKENS` env vars were removed (see `dec_01KQQPD6Y6B362T3K08368BDMP`). For multi-hop questions, use `rka_multi_hop_retrieval` instead of `rka_get_context`.
 
 ### 18.4 — LLM Settings (Optional)
 

@@ -133,8 +133,6 @@ async def lifespan(app: FastAPI):
         db=db,
         search=search,
         llm=llm,
-        hot_days=config.context_hot_days,
-        warm_days=config.context_warm_days,
     )
     app.state.context = context
 

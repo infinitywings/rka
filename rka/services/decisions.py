@@ -218,13 +218,16 @@ class DecisionService(BaseService):
         new_data: DecisionCreate,
         actor: str = "brain",
     ) -> Decision:
-        """Atomically supersede a decision and trigger re-distillation.
+        """Atomically supersede a decision and flag affected knowledge for Brain review.
 
         1. Mark old decision as superseded
         2. Create new decision with incremented scope_version
         3. Find journal entries linked to old decision
         4. Mark claims from those entries as stale
-        5. Enqueue re_distill jobs for affected entries
+        5. Mark clusters whose member-claims came from those entries as needs_reprocessing
+        6. Insert a review_queue row tagged 're_distill_review' so Brain re-extracts
+           claims during maintenance. (Re-distillation is a Brain task; this is a
+           bookkeeper.)
         """
         old = await self.get(old_decision_id)
         if old is None:
@@ -282,8 +285,8 @@ class DecisionService(BaseService):
         for row in json_linked:
             affected_entry_ids.add(row["id"])
 
-        # Mark claims as stale and enqueue re-distillation
-        queue = JobQueue(self.db)
+        # Mark claims as stale and flag affected clusters for Brain review.
+        # Re-distillation is now a Brain task — no worker queue is enqueued here.
         for entry_id in affected_entry_ids:
             # Mark claims stale
             await self.db.execute(

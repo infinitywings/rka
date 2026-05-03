@@ -1,9 +1,21 @@
-"""Context engine — prepares focused context packages for Brain and Executor."""
+"""Context engine — prepares importance-ranked context packages for Brain and Executor.
+
+v2.4 (Improvement 1, dec_01KQQPD6Y6B362T3K08368BDMP): the temperature classifier
+(HOT/WARM/COLD bucketing on day-thresholds) and the token-budget arithmetic were
+removed. Rationale per the probe report (mis_01KQQPHC2649SXJG30JMCR0WFK):
+
+- Day-threshold buckets systematically excluded older relevant content.
+- Frontier model context windows make a bookkeeper-imposed token budget
+  unnecessary; the bookkeeper invariant says compute at SQL time, not at
+  retrieval time.
+- The `journal.importance` column already exists with an index; pairing it
+  with `entity_links` centrality gives a deterministic SQL-time ranking that
+  doesn't drift with wall-clock time.
+"""
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from typing import Literal
 
 from rka.infra.database import Database
@@ -13,14 +25,27 @@ from rka.services.search import SearchService
 
 logger = logging.getLogger(__name__)
 
+# Importance text → numeric rank for ORDER BY. Mirrors the journal.importance
+# CHECK constraint in schema.sql.
+_IMPORTANCE_CASE = """CASE j.importance
+    WHEN 'critical' THEN 4
+    WHEN 'high' THEN 3
+    WHEN 'normal' THEN 2
+    WHEN 'low' THEN 1
+    WHEN 'archived' THEN 0
+    ELSE 2
+END"""
+
 
 class ContextEngine:
-    """Prepares focused context packages with temperature classification.
+    """Prepares importance-ranked context packages.
 
-    Temperature model:
-      HOT  — active + current phase + recently updated (< hot_days)
-      WARM — everything else that's active/recent
-      COLD — abandoned / superseded / old completed
+    Ranking signal (deterministic, SQL-time):
+      1. journal.importance (critical=4 → archived=0); other entity types
+         do not have an importance column and use a baseline of 2 ('normal').
+      2. entity_links centrality — sum of inbound + outbound edge degree
+         for the entity. High-centrality nodes surface first within a band.
+      3. created_at DESC as a tie-breaker; newer entries win ties.
     """
 
     def __init__(
@@ -28,193 +53,118 @@ class ContextEngine:
         db: Database,
         search: SearchService,
         llm: LLMClient | None = None,
-        hot_days: int = 3,
-        warm_days: int = 14,
     ):
         self.db = db
         self.search = search
         self.llm = llm
-        self.hot_days = hot_days
-        self.warm_days = warm_days
-
-    @property
-    def _default_max_tokens(self) -> int:
-        """Default context budget, scaled to LLM context window."""
-        if self.llm:
-            # Use ~25% of context window for context packages
-            return max(2000, self.llm.ctx // 4)
-        return 2000
 
     async def get_context(
         self,
         topic: str | None = None,
         phase: str | None = None,
         depth: Literal["summary", "detailed"] = "summary",
-        max_tokens: int | None = None,
         project_id: str = "proj_default",
     ) -> ContextPackage:
-        """Build a context package within token budget."""
-        if max_tokens is None:
-            max_tokens = self._default_max_tokens
-        # 1. Gather candidates
+        """Build a ranked context package.
+
+        Args:
+            topic: Optional search query. If provided, candidates are seeded by
+                hybrid search and then re-ranked by importance + centrality.
+            phase: Optional phase filter for the overview path. If both `topic`
+                and `phase` are None, falls through to the recent-with-importance
+                overview.
+            depth: 'summary' returns the ranked list as-is. 'detailed' adds an
+                LLM-generated narrative if an LLM is configured.
+            project_id: Project scope. Defaults to 'proj_default'; callers
+                normally inject from the API request.
+
+        Returns a ContextPackage with `entries` populated (legacy bucket fields
+        left empty).
+        """
         if topic:
             hits = await self.search.with_project(project_id).search(topic, limit=50)
             candidates = await self._hydrate_hits(hits, project_id=project_id)
+            candidates = await self._rerank_by_importance_and_centrality(
+                candidates, project_id=project_id
+            )
         else:
             candidates = await self._get_overview_candidates(phase, project_id=project_id)
 
-        # 2. Classify by temperature
         current_phase = phase or await self._get_current_phase(project_id=project_id)
-        hot, warm, cold = self._classify_temperature(candidates, current_phase)
 
-        # 3. Build context within token budget
         package = ContextPackage(topic=topic, phase=current_phase)
-        budget = max_tokens
 
-        # HOT entries: always included verbatim
-        for entry in hot:
-            text = self._render_entry(entry)
-            cost = self._estimate_tokens(text)
-            if budget - cost < 0 and package.hot_entries:
-                break
-            budget -= cost
-            package.hot_entries.append(text)
+        # Render the ranked list. PI-sourced entries get a small lift within
+        # their importance band — they're the human-anchored signal.
+        candidates.sort(key=self._sort_key, reverse=True)
+        rendered = [self._render_entry(entry) for entry in candidates]
+        package.entries = rendered
+        package.sources = [e["id"] for e in candidates]
 
-        if budget <= 0:
-            package.note = "Context truncated: too many active items"
-            package.sources = [e["id"] for e in hot + warm + cold]
-            package.token_estimate = max_tokens - budget
-            return package
-
-        # WARM entries: include verbatim if fits, else summarize
-        warm_texts = [self._render_entry(e) for e in warm]
-        warm_total = sum(self._estimate_tokens(t) for t in warm_texts)
-
-        if warm_total <= budget * 0.6:
-            package.warm_entries = warm_texts
-            budget -= warm_total
-        elif warm and self.llm:
+        # Optional narrative for callers that ask for `detailed`.
+        if depth == "detailed" and self.llm and candidates:
             try:
-                warm_summary = await self.llm.summarize_entries(
-                    warm, max_tokens=int(budget * 0.5),
+                narrative = await self.llm.produce_narrative(
+                    {"topic": topic, "phase": current_phase, "entries": rendered}
                 )
-                if warm_summary:
-                    package.warm_entries = [warm_summary]
-                    budget -= self._estimate_tokens(warm_summary)
-            except Exception:
-                # Fall back to truncated verbatim
-                for text in warm_texts:
-                    cost = self._estimate_tokens(text)
-                    if budget - cost < 200:
-                        break
-                    budget -= cost
-                    package.warm_entries.append(text)
-        else:
-            for text in warm_texts:
-                cost = self._estimate_tokens(text)
-                if budget - cost < 200:
-                    break
-                budget -= cost
-                package.warm_entries.append(text)
-
-        # COLD entries: always summarized
-        if budget > 200 and cold:
-            if self.llm:
-                try:
-                    cold_summary = await self.llm.summarize_entries(
-                        cold, max_tokens=min(budget, 300),
-                    )
-                    if cold_summary:
-                        package.cold_entries = [cold_summary]
-                        budget -= self._estimate_tokens(cold_summary)
-                except Exception:
-                    pass
-            if not package.cold_entries:
-                # Fallback: one-liners
-                for entry in cold[:5]:
-                    line = f"[{entry.get('entity_type', '?')}] {entry.get('title', entry.get('content', ''))[:80]}"
-                    package.cold_entries.append(line)
-                    budget -= self._estimate_tokens(line)
-                    if budget < 100:
-                        break
-
-        # 4. Source references
-        package.sources = [e["id"] for e in hot + warm + cold]
-
-        # 5. Optional narrative
-        if depth == "detailed" and self.llm:
-            try:
-                narrative = await self.llm.produce_narrative(package.model_dump())
                 if narrative:
                     package.narrative = narrative
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Narrative generation failed: %s", exc)
 
-        package.token_estimate = max_tokens - budget
+        package.note = (
+            "Importance-ranked context: ordered by journal.importance, then "
+            "entity_links centrality, then created_at. No token-budget truncation "
+            "(v2.4 / dec_01KQQPD6Y6B362T3K08368BDMP)."
+        )
+        # Informational; no longer drives truncation.
+        package.token_estimate = sum(self._estimate_tokens(t) for t in rendered)
         return package
 
-    def _classify_temperature(
-        self, candidates: list[dict], current_phase: str | None,
-    ) -> tuple[list[dict], list[dict], list[dict]]:
-        """Assign temperature based on status, recency, phase, and cross-refs."""
-        hot, warm, cold = [], [], []
-        now = datetime.now(timezone.utc)
+    @staticmethod
+    def _sort_key(entry: dict) -> tuple[int, int, str]:
+        """Sort key: (importance_rank, centrality_degree, created_at). Higher first."""
+        imp_map = {
+            "critical": 4,
+            "high": 3,
+            "normal": 2,
+            "low": 1,
+            "archived": 0,
+        }
+        imp = imp_map.get(entry.get("importance") or "normal", 2)
+        # PI-sourced entries get +0.5 lift within their importance band.
+        if entry.get("source") == "pi":
+            imp = imp * 10 + 5  # widen scale to allow non-integer-equivalent lift
+        else:
+            imp = imp * 10
+        centrality = int(entry.get("centrality_degree") or 0)
+        # Tuple of negatives gets DESC ordering when reverse=True is used.
+        return (imp, centrality, entry.get("created_at") or "")
 
-        for entry in candidates:
-            etype = entry.get("entity_type", "")
-            # Normalize "status" across entity types
-            # journal uses 'confidence' instead of 'status'
-            if etype == "journal":
-                status = entry.get("confidence", "hypothesis")
-            else:
-                status = entry.get("status", "")
-
-            phase = entry.get("phase")
-            updated_str = entry.get("updated_at") or entry.get("created_at")
-            days_old = 999
-            if updated_str:
-                try:
-                    updated = datetime.fromisoformat(updated_str.replace("Z", "+00:00"))
-                    days_old = (now - updated).days
-                except (ValueError, TypeError):
-                    pass
-
-            # HOT: active/in-progress + current phase + recent
-            hot_statuses = {"active", "open", "pending", "to_read", "reading", "hypothesis", "tested"}
-            cold_statuses = {"abandoned", "superseded", "retracted", "excluded", "cancelled"}
-            done_statuses = {"complete", "read", "cited", "verified"}
-
-            if (
-                status in hot_statuses
-                and (phase == current_phase or phase is None)
-                and days_old < self.hot_days
-            ):
-                hot.append(entry)
-            # COLD: abandoned/superseded/old completed
-            elif (
-                status in cold_statuses
-                or (status in done_statuses and days_old > self.warm_days)
-            ):
-                cold.append(entry)
-            # WARM: everything else
-            else:
-                warm.append(entry)
-
-        # Boost items with many cross-references to HOT items
-        hot_ids = {e["id"] for e in hot}
-        for entry in warm[:]:
-            refs = set(entry.get("related_decisions") or []) | set(entry.get("related_literature") or [])
-            if len(refs & hot_ids) >= 2:
-                warm.remove(entry)
-                hot.append(entry)
-
-        # Sort PI-sourced entries first within each band
-        def _pi_first(e: dict) -> int:
-            return 0 if e.get("source") == "pi" else 1
-        hot.sort(key=_pi_first)
-        warm.sort(key=_pi_first)
-
-        return hot, warm, cold
+    async def _rerank_by_importance_and_centrality(
+        self, candidates: list[dict], project_id: str
+    ) -> list[dict]:
+        """Annotate candidates with centrality_degree from entity_links."""
+        if not candidates:
+            return candidates
+        ids = [c["id"] for c in candidates]
+        placeholders = ",".join("?" for _ in ids)
+        rows = await self.db.fetchall(
+            f"""SELECT id, SUM(degree) AS centrality_degree FROM (
+                    SELECT source_id AS id, COUNT(*) AS degree FROM entity_links
+                    WHERE project_id = ? AND source_id IN ({placeholders})
+                    GROUP BY source_id
+                  UNION ALL
+                    SELECT target_id AS id, COUNT(*) AS degree FROM entity_links
+                    WHERE project_id = ? AND target_id IN ({placeholders})
+                    GROUP BY target_id
+                ) GROUP BY id""",
+            [project_id, *ids, project_id, *ids],
+        )
+        degree_map = {r["id"]: int(r["centrality_degree"]) for r in rows}
+        for c in candidates:
+            c["centrality_degree"] = degree_map.get(c["id"], 0)
+        return candidates
 
     async def _hydrate_hits(self, hits, project_id: str = "proj_default") -> list[dict]:
         """Convert search hits to full entity dicts."""
@@ -243,48 +193,68 @@ class ContextEngine:
         phase: str | None = None,
         project_id: str = "proj_default",
     ) -> list[dict]:
-        """Get general overview candidates when no topic is specified."""
-        candidates = []
+        """Get importance-ranked overview candidates when no topic is specified.
+
+        Pulls from journal (importance-aware ORDER BY), decisions (active),
+        literature (in-progress states), and missions (active/pending). The
+        per-entity-type LIMITs are upper bounds; the final ranker re-orders
+        across types so the top of the result list is the highest-importance
+        regardless of source table.
+        """
+        candidates: list[dict] = []
         phase_filter = "AND phase = ?" if phase else ""
-        phase_params = [project_id]
+
+        # Journal: ORDER BY importance, then created_at — uses idx_journal_importance.
+        params: list = [project_id]
         if phase:
-            phase_params.append(phase)
-
-        # Scale limits based on LLM context window
-        entries_limit = self.llm._entries_limit if self.llm else 20
-        dec_limit = max(10, entries_limit * 3 // 4)
-        lit_limit = max(5, entries_limit // 2)
-        msn_limit = max(3, entries_limit // 4)
-
-        # Recent journal entries
+            params.append(phase)
+        params.append(50)
         rows = await self.db.fetchall(
-            f"SELECT *, 'journal' as entity_type FROM journal WHERE project_id = ? AND confidence != 'superseded' {phase_filter} ORDER BY created_at DESC LIMIT ?",
-            phase_params + [entries_limit],
+            f"""SELECT *, 'journal' AS entity_type, {_IMPORTANCE_CASE} AS imp_rank
+                FROM journal j
+                WHERE project_id = ? AND confidence != 'superseded' {phase_filter}
+                ORDER BY imp_rank DESC, created_at DESC LIMIT ?""",
+            params,
         )
         candidates.extend(rows)
 
-        # Active decisions
+        # Decisions: active, ranked by recency.
+        params2: list = [project_id]
+        if phase:
+            params2.append(phase)
+        params2.append(30)
         rows = await self.db.fetchall(
-            f"SELECT *, 'decision' as entity_type FROM decisions WHERE project_id = ? AND status = 'active' {phase_filter} ORDER BY created_at DESC LIMIT ?",
-            phase_params + [dec_limit],
+            f"""SELECT *, 'decision' AS entity_type FROM decisions
+                WHERE project_id = ? AND status = 'active' {phase_filter}
+                ORDER BY created_at DESC LIMIT ?""",
+            params2,
         )
         candidates.extend(rows)
 
-        # Recent literature
+        # Literature: status filter, recency.
         rows = await self.db.fetchall(
-            "SELECT *, 'literature' as entity_type FROM literature WHERE project_id = ? AND status IN ('to_read', 'reading', 'read') ORDER BY created_at DESC LIMIT ?",
-            [project_id, lit_limit],
+            """SELECT *, 'literature' AS entity_type FROM literature
+                WHERE project_id = ? AND status IN ('to_read', 'reading', 'read')
+                ORDER BY created_at DESC LIMIT ?""",
+            [project_id, 20],
         )
         candidates.extend(rows)
 
-        # Active missions
+        # Missions: active/pending, recency.
+        params3: list = [project_id]
+        if phase:
+            params3.append(phase)
+        params3.append(15)
         rows = await self.db.fetchall(
-            f"SELECT *, 'mission' as entity_type FROM missions WHERE project_id = ? AND status IN ('active', 'pending') {phase_filter} ORDER BY created_at DESC LIMIT ?",
-            phase_params + [msn_limit],
+            f"""SELECT *, 'mission' AS entity_type FROM missions
+                WHERE project_id = ? AND status IN ('active', 'pending') {phase_filter}
+                ORDER BY created_at DESC LIMIT ?""",
+            params3,
         )
         candidates.extend(rows)
 
-        return candidates
+        # Annotate with centrality so the cross-type ranker can use it.
+        return await self._rerank_by_importance_and_centrality(candidates, project_id=project_id)
 
     async def _get_current_phase(self, project_id: str = "proj_default") -> str | None:
         """Get the current project phase."""
@@ -297,7 +267,12 @@ class ContextEngine:
         return row["current_phase"] if row else None
 
     def _render_entry(self, entry: dict, max_len: int | None = None) -> str:
-        """Render an entry as a concise text block."""
+        """Render an entry as a concise text block.
+
+        `max_len` defaults to the LLM's per-evidence-block hint when an LLM is
+        configured (~400 chars), else 400. This is a per-entry display cap, not
+        a context-engine token budget.
+        """
         if max_len is None:
             max_len = self.llm._evidence_block_limit if self.llm else 400
         etype = entry.get("entity_type", "unknown")
@@ -307,7 +282,11 @@ class ContextEngine:
             pi_tag = " [PI]" if entry.get("source") == "pi" else ""
             verbatim = entry.get("verbatim_input")
             verbatim_line = f"\n  PI said: \"{verbatim[:200]}\"" if verbatim else ""
-            return f"[{entry.get('type', 'note')}|{entry.get('confidence', '?')}]{pi_tag} {eid}: {(entry.get('content') or '')[:max_len]}{verbatim_line}"
+            return (
+                f"[{entry.get('type', 'note')}|{entry.get('confidence', '?')}|"
+                f"{entry.get('importance', 'normal')}]{pi_tag} {eid}: "
+                f"{(entry.get('content') or '')[:max_len]}{verbatim_line}"
+            )
         elif etype == "decision":
             chosen = f" → {entry['chosen']}" if entry.get("chosen") else ""
             return f"[decision|{entry.get('status', '?')}] {eid}: {(entry.get('question') or '')[:max_len]}{chosen}"
@@ -320,5 +299,7 @@ class ContextEngine:
 
     @staticmethod
     def _estimate_tokens(text: str) -> int:
-        """Rough token estimation: ~4 chars per token."""
+        """Rough token estimation: ~4 chars per token. Used only for the
+        informational `token_estimate` field on ContextPackage; no longer
+        drives truncation."""
         return max(1, len(text) // 4)
