@@ -1,0 +1,96 @@
+# rka — Claude Code plugin for the Research Knowledge Agent
+
+This is the official Claude Code plugin for [RKA](https://github.com/infinitywings/rka). It lives inside the upstream RKA repository at `plugin/`, distributed via the local marketplace at `.claude-plugin/marketplace.json` in the repo root.
+
+> **Quick install** — see [INSTALL.md at the repo root](../INSTALL.md). The TL;DR: clone the rka repo, `docker compose up -d`, then in Claude Code: `/plugin marketplace add /path/to/cloned/rka` followed by `/plugin install rka@rka`.
+
+---
+
+## What this plugin provides
+
+| Surface | What | When |
+|---|---|---|
+| **MCP server** (~110 tools) | Full RKA tool surface via `mcp__plugin_rka_rka__*` | Available in every Claude Code session after install |
+| **3 skills** | `rka:rka-brain`, `rka:rka-executor`, `rka:rka-pi` | Loaded on-demand when Claude needs role-specific guidance |
+| **5 slash commands** | `/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`, `/rka-setup-claude-desktop` | Quick shortcuts; the setup command is one-time |
+| **SessionStart hook** | Cross-platform Python; pings the backend, prints reachability + active-project status | Fires automatically on every new session |
+
+---
+
+## Cross-platform support
+
+Everything in this plugin works on **macOS, Windows, and Linux**:
+
+- **Wrapper script** (`bin/rka-mcp-bridge.py`): Python 3, no dependencies beyond stdlib. Replaces the deprecated bash wrapper.
+- **SessionStart hook** (`hooks/session-start.py`): Python 3, uses `urllib.request` for the health check.
+- **Setup helper** (`scripts/setup-claude-desktop.py`): Python 3, OS-detects to find the right `claude_desktop_config.json` path, atomic merge with backup.
+
+Path differences handled by the plugin:
+
+| OS | Claude Desktop config | RKA `integration.json` |
+|---|---|---|
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` | `~/Library/Application Support/RKA/integration.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` | `%APPDATA%\RKA\integration.json` |
+| Linux | `~/.config/Claude/claude_desktop_config.json` | `~/.local/share/RKA/integration.json` (XDG) |
+
+Microsoft Store install vs standalone `.exe` install of Claude Desktop on Windows: both write to the same `%APPDATA%\Claude\` path. The plugin handles them uniformly.
+
+---
+
+## Prerequisites
+
+- **RKA backend running** — Docker via `docker compose up -d` from the rka repo. Verify with `curl http://localhost:9712/api/health`.
+- **`rka` stdio binary OR `integration.json`** — the wrapper script needs one of:
+  1. `integration.json` written by RKA.app (future v2.4+; not yet shipped) at the OS-specific path above, with `binary_path` pointing at a working `rka` binary, OR
+  2. `rka` on `PATH` (install via `uv tool install --force --reinstall .` from the rka repo — lands at `~/.local/bin/rka` on macOS/Linux, `%USERPROFILE%\.local\bin\rka.exe` on Windows).
+
+  If neither is present, the wrapper exits with a clear error pointing at both options.
+- **Python 3** — required for the wrapper, hook, and setup helper. Ships with macOS by default; install from python.org with "Add to PATH" checked on Windows; standard package on Linux.
+
+---
+
+## Connecting Claude Desktop too
+
+Run `/rka-setup-claude-desktop` from any Claude Code chat. It calls `scripts/setup-claude-desktop.py`, which:
+
+1. Detects your OS and the right `claude_desktop_config.json` location.
+2. Verifies the RKA backend is reachable (refuses setup if not, unless `--force`).
+3. Backs up the existing config to `*.backup-YYYYMMDD-HHMMSS`.
+4. Atomically merges the `mcpServers.rka` entry pointing at this plugin's Python wrapper.
+5. Conflict-detects: refuses to replace an existing different entry without `--force`.
+6. Restores from backup if any post-backup step fails.
+7. Prints OS-specific quit-and-reopen instructions.
+
+Then fully quit + reopen Claude Desktop. RKA tools become available in any new chat.
+
+For natural-language equivalents, the `rka:rka-pi` skill teaches Claude Code to handle phrasings like *"set up RKA for Claude Desktop too"* by routing to the same command.
+
+---
+
+## Compatibility
+
+| Plugin version | Compatible RKA versions | Wrapper compatibility glob |
+|---|---|---|
+| 1.0.0 (this) | 2.3.* | `2.3.*` |
+
+If RKA's backend version is outside the wrapper's compatibility glob, the wrapper exits with a clear error message. Either upgrade the backend or downgrade the plugin to a matching version.
+
+---
+
+## Development
+
+This plugin lives at `plugin/` in the rka repo. The marketplace manifest is at `.claude-plugin/marketplace.json` in the repo root. To iterate on the plugin:
+
+1. Edit files under `plugin/`.
+2. From any Claude Code session: `/plugin uninstall rka@rka` then `/plugin install rka@rka` — install snapshots the source tree at install time, so changes to skills, commands, hooks, or the wrapper require this refresh.
+3. Restart your Claude Code session to load the new cache.
+
+For Claude Desktop, the wrapper picks up changes automatically (no install step), but you may need to fully quit + reopen Claude Desktop to clear its in-memory MCP server connection.
+
+---
+
+## Provenance
+
+This plugin was scaffolded as part of the empirical-verification probe for plugin architecture (`mis_01KQNN8YZG7A4ZAGDCQ8ZVA97Z`). Architectural decision: [`dec_01KQNPC7A683HK0KRX1PAGNNED`](../README.md) (Option B: wrapper exec's local stdio binary, no HTTP MCP bridge). The probe's findings shape the v1.0 design; future v2.4 RKA.app will automate the setup currently handled by `/rka-setup-claude-desktop`.
+
+Upstream RKA: [github.com/infinitywings/rka](https://github.com/infinitywings/rka)

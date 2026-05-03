@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "rka",
+  "description": "Research Knowledge Agent (RKA) — Claude Code plugin distribution from the local clone of the RKA repository. Add this marketplace via /plugin marketplace add <path-to-cloned-rka-repo>, then install the plugin via /plugin install rka@rka.",
+  "owner": {
+    "name": "Chenglong Fu",
+    "email": "cfu6@charlotte.edu"
+  },
+  "plugins": [
+    {
+      "name": "rka",
+      "description": "Connects Claude Code to a local RKA backend for provenance-tracked research workflows. Provides ~110 MCP tools, three role skills (Brain, Executor, PI), four convenience slash commands (/rka-status, /rka-search, /rka-pending, /rka-set-project, /rka-setup-claude-desktop), and a SessionStart hook that pings the backend on every new session. Activates when user mentions RKA, research knowledge, knowledge graph, research notes, decisions, missions, journal entries, evidence clusters, citing literature, organizing research, or tracking provenance.",
+      "author": {
+        "name": "Chenglong Fu"
+      },
+      "category": "research",
+      "source": "./plugin"
+    }
+  ]
+}
