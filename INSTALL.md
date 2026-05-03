@@ -11,7 +11,7 @@
 | Surface | What you'll have |
 |---|---|
 | **RKA backend** | FastAPI + worker + SQLite + FTS5 + sqlite-vec running in Docker on `localhost:9712`. Web dashboard at the same URL. |
-| **Claude Code (Executor)** | Full plugin: 3 role skills (`rka:rka-brain`, `rka:rka-executor`, `rka:rka-pi`), 4 slash commands (`/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`), a SessionStart hook that pings the backend on every new session, and the full `mcp__plugin_rka_rka__*` tool surface (~110 tools). |
+| **Claude Code (Executor)** | Full plugin: 3 role skills (`rka:rka-brain`, `rka:rka-executor`, `rka:rka-pi`), 5 slash commands (`/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`, `/rka-setup-claude-desktop`), a SessionStart hook that pings the backend on every new session, and the full `mcp__plugin_rka_rka__*` tool surface (~110 tools). |
 | **Claude Desktop (Brain)** | `mcp__rka__*` tool surface via the `mcpServers.rka` entry in `claude_desktop_config.json`. Wrapper-based config gives you version-checking + auto-pin to your active project. Skills and slash commands are Claude Code only (Claude Desktop's plugin format is separate). |
 
 ---
@@ -140,7 +140,7 @@ After Step 5, run these checks:
 
 ### In Claude Code
 
-1. `/help` should list four `rka:rka` slash commands: `/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`.
+1. `/help` should list five `rka:rka` slash commands: `/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`, `/rka-setup-claude-desktop`.
 2. `/context` should show three `rka:rka-*` skills available.
 3. Run `/rka-status`. Expected output: project name, phase, focus, open checkpoints (or "none").
 4. New chat sessions should start with an automatic line: `✅ RKA reachable at http://localhost:9712 (version 2.3.2, default project ...)`.
@@ -206,28 +206,28 @@ find ~/.claude/plugins/cache/rka/rka -name "rka-mcp-bridge.py" | sort | tail -1
 
 (macOS/Linux. On Windows: `dir /s /b %USERPROFILE%\.claude\plugins\cache\rka\rka\*rka-mcp-bridge.py`.)
 
-### 6.4 — Create or update `integration.json`
+### 6.4 — `integration.json` is optional in v1.0
 
-Read the active project from the backend:
+The wrapper script (`bin/rka-mcp-bridge.py`) auto-detects the `rka` stdio binary via PATH lookup when `integration.json` is missing. So setup can skip writing `integration.json` entirely and rely on the user having run `uv tool install --force --reinstall .` from the rka repo (binary lands at `~/.local/bin/rka` on macOS/Linux, `%USERPROFILE%\.local\bin\rka.exe` on Windows).
 
-```bash
-curl -s http://localhost:9712/api/state | python3 -c "import sys,json; print(json.load(sys.stdin).get('current_project_id', 'proj_default'))"
-```
-
-Then write `integration.json` (creating the parent directory if needed):
+If the user does want to pin a default project (recommended once the user knows their primary project id), write the file at the OS path in §4 with this minimal shape:
 
 ```json
 {
   "version": "2.3.2",
-  "binary_path": "<path-to-rka-stdio-binary or python3-with-args-equivalent>",
-  "default_project_id": "<active-project-id-from-backend>",
-  "api_endpoint_url": "http://localhost:9712",
-  "started_at": "<ISO-8601-now>",
-  "log_path": "~/Library/Logs/RKA/server.log"
+  "binary_path": "/Users/<you>/.local/bin/rka",
+  "default_project_id": "prj_01ABC...",
+  "api_endpoint_url": "http://localhost:9712"
 }
 ```
 
-If the user has run `uv tool install --force --reinstall .` from the rka repo, the binary lands at `~/.local/bin/rka` (macOS/Linux) or `%USERPROFILE%\.local\bin\rka.exe` (Windows). The wrapper script (`bin/rka-mcp-bridge.py`) auto-detects the binary via PATH lookup if `integration.json` is missing, so writing `integration.json` is optional but recommended — it's the design surface RKA.app v2.4 will use.
+Get the project id by listing projects via the API:
+
+```bash
+curl -s http://localhost:9712/api/projects | python3 -c "import sys,json; [print(f\"{p['id']}: {p['name']}\") for p in json.load(sys.stdin)]"
+```
+
+`integration.json` is the design surface RKA.app v2.4 will write at startup; for now the plugin treats it as optional metadata.
 
 ### 6.5 — Back up the existing Claude Desktop config
 
@@ -396,7 +396,7 @@ Same JSON shape, in `.claude/mcp.json` (per-project) or `~/.claude/settings.json
 ## 10. What this guide intentionally doesn't cover
 
 - **Local LLM setup (LM Studio, Ollama, etc.)** — RKA v2.3+ doesn't require a local LLM. The Brain (Claude Desktop) handles all knowledge enrichment during normal sessions.
-- **Cloud LLM API setup (OpenAI, Anthropic API key)** — same reason; not needed.
+- **Cloud LLM API setup (OpenAI, Anthropic API key)** — same reason; not needed for the core workflow. The optional `rka_ask` and `rka_generate_summary` tools do require an LLM key configured in the backend; see `docs/USER_MANUAL.md` Chapter 14 if you want them.
 - **Knowledge pack import/export** — covered in [USAGE_GUIDE.md](USAGE_GUIDE.md) and [docs/USER_MANUAL.md](docs/USER_MANUAL.md).
 - **Per-project conventions** (Brain orientation, Executor mission flow, PI attribution) — covered by the role skills the plugin loads automatically. Once installed, ask Claude Code to "load the rka brain skill" or "show me the executor session protocol" for the workflow guides.
 - **Migrating from a pre-v2.3 RKA install** — for users who set up RKA before the plugin existed. See the upgrade notes in [USAGE_GUIDE.md](USAGE_GUIDE.md).

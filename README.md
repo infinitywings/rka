@@ -535,10 +535,10 @@ RKA ships with an example knowledge pack — the `rka_development` project used 
 
 ```bash
 curl -X POST http://localhost:9712/api/projects/import \
-  -F "file=@examples/rka_development.rka-pack_v2.zip"
+  -F "file=@examples/rka_development.rka-pack.zip"
 ```
 
-Or use the web dashboard: open **Dashboard** → **Import Pack** → select `examples/rka_development.rka-pack_v2.zip`.
+Or use the web dashboard: open **Dashboard** → **Import Pack** → select `examples/rka_development.rka-pack.zip`.
 
 After import, switch to the project in the sidebar and explore the Decision Tree, Knowledge Graph, and Research Map to see how a real project looks.
 

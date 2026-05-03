@@ -1,8 +1,10 @@
-# RKA v2.0 User Manual
+# RKA User Manual (v2.3.2)
 
 **Design Philosophy · Concepts · Workflows · Reference**
 
-UNC Charlotte — CS / IoT / CPS Security Research | March 2026
+UNC Charlotte — CS / IoT / CPS Security Research
+
+> For the recommended cross-platform install path (Docker + Claude Code plugin + automated Claude Desktop setup), see [`INSTALL.md`](../INSTALL.md). This manual focuses on concepts and reference; install is covered in Chapter 5 below as a brief overview.
 
 ---
 
@@ -61,7 +63,7 @@ Without RKA, this context lives in the researcher's head, scattered across chat 
 
 RKA's governing principle is that it is a bookkeeper and message transmitter, not a thinker. RKA stores, retrieves, links, and surfaces knowledge. It does not make research decisions, interpret findings, or generate hypotheses. That intelligence belongs to the Brain (Claude) and the PI (you).
 
-This means RKA has no local LLM requirement. In v2.0, all intelligent enrichment — tagging, claim extraction, cluster synthesis, contradiction resolution — is performed by the Brain during sessions, not by a background process. RKA only runs fast, reliable, non-LLM operations automatically: full-text search indexing and embedding generation.
+This means RKA has no local LLM requirement. Since v2.0, all intelligent enrichment — tagging, claim extraction, cluster synthesis, contradiction resolution — is performed by the Brain during sessions, not by a background process. RKA only runs fast, reliable, non-LLM operations automatically: full-text search indexing and embedding generation.
 
 > **Why No Local LLM?** Earlier versions required a local LLM (e.g., qwen3.5 via LM Studio) for background enrichment. This caused two problems: (1) onboarding friction — users needed LM Studio + sufficient VRAM, and (2) silent accuracy degradation — a weak model produced confidently wrong claim types, garbage cluster syntheses, and misleading research maps. An un-processed entry is honest; a wrongly-processed entry is dangerous.
 
@@ -701,7 +703,7 @@ LLM configuration is optional and only needed for `rka_ask` and `rka_generate_su
 ### Frequently Asked Questions
 
 **Q: Do I need a local LLM (LM Studio, Ollama)?**
-No. RKA v2.0 removed the local LLM requirement. All intelligent enrichment is handled by the Brain (Claude) during sessions. The only local models are embeddings (FastEmbed, ~130MB, no GPU needed) for semantic search.
+No. RKA v2.0+ removed the local LLM requirement. All intelligent enrichment is handled by the Brain (Claude) during sessions. The only local models are embeddings (FastEmbed, ~130MB, no GPU needed) for semantic search. The optional `rka_ask` and `rka_generate_summary` tools are the exception — they need a configured LLM key — but the core workflow doesn't.
 
 **Q: Do I need to tell the Brain to maintain the knowledge base?**
 No. The Brain's MCP instructions include a maintenance protocol that runs automatically at session start. It checks for provenance gaps, untagged entries, and orphaned clusters, then silently processes up to 10 items before greeting you. You only need to ask explicitly after large batch operations (e.g., importing 30 papers).
@@ -720,6 +722,6 @@ Click the trash icon next to the project selector in the sidebar. A confirmation
 
 ---
 
-*RKA v2.0 — Research Knowledge Agent*
+*RKA v2.3.2 — Research Knowledge Agent*
 *UNC Charlotte, CS / IoT / CPS Security Research*
 *https://github.com/infinitywings/rka*

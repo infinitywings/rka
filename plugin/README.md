@@ -91,6 +91,6 @@ For Claude Desktop, the wrapper picks up changes automatically (no install step)
 
 ## Provenance
 
-This plugin was scaffolded as part of the empirical-verification probe for plugin architecture (`mis_01KQNN8YZG7A4ZAGDCQ8ZVA97Z`). Architectural decision: [`dec_01KQNPC7A683HK0KRX1PAGNNED`](../README.md) (Option B: wrapper exec's local stdio binary, no HTTP MCP bridge). The probe's findings shape the v1.0 design; future v2.4 RKA.app will automate the setup currently handled by `/rka-setup-claude-desktop`.
+This plugin was scaffolded as part of the empirical-verification probe for plugin architecture (mission `mis_01KQNN8YZG7A4ZAGDCQ8ZVA97Z`, decision `dec_01KQNPC7A683HK0KRX1PAGNNED` — Option B: wrapper exec's local stdio binary, no HTTP MCP bridge). The probe's findings shape the v1.0 design; future v2.4 RKA.app will automate the setup currently handled by `/rka-setup-claude-desktop`. Both ids are RKA knowledge-base entities; query them via any RKA tool (e.g., `mcp__plugin_rka_rka__rka_get(id="dec_01KQNPC7A683HK0KRX1PAGNNED")` from a Claude session, or visit the corresponding entity in the web dashboard at `http://localhost:9712`).
 
 Upstream RKA: [github.com/infinitywings/rka](https://github.com/infinitywings/rka)

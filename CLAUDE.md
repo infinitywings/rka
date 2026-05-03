@@ -19,7 +19,7 @@ When working here you are modifying the tool itself, not using it for research.
 ## Key Conventions
 
 - **Actor values**: `brain | executor | pi | llm | web_ui | system` — enforced by DB CHECK constraint
-- **ID prefix**: `jnl_` journal, `lit_` literature, `dec_` decision, `msn_` mission, `scn_` scan
+- **ID prefix**: `jrn_` journal, `lit_` literature, `dec_` decision, `mis_` mission, `clm_` claim, `ecl_` evidence cluster, `chk_` checkpoint, `prj_` project, `lnk_` entity link, `scn_` scan
 - **MCP tools**: all prefixed `rka_`, defined in `server.py` via `@mcp.tool()`
 - **MCP prompts**: defined at end of `server.py` via `@mcp.prompt()`
 - **API routes**: thin adapters only — no business logic, always delegate to service layer

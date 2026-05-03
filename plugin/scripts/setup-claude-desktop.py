@@ -75,21 +75,17 @@ def resolve_plugin_root() -> Path:
 
 
 def python_command_for_mcp_config() -> str:
-    """Pick the Python command to put in claude_desktop_config.json's `command` field.
+    """Use the absolute path to the Python interpreter that's running this script.
 
-    Windows often has `python` (not `python3`) on PATH after the standard installer.
-    macOS/Linux reliably have `python3`.
+    Hard-coding the absolute path avoids the brittle "is `python3` on PATH at
+    Claude Desktop's runtime?" question. Whatever Python the user has now will
+    still work after a Claude Desktop restart, even if PATH is stripped.
     """
-    if sys.platform == "win32":
-        # Prefer `python` if available, else `py` launcher.
-        return "python" if shutil.which("python") else "py"
-    return "python3"
+    return sys.executable
 
 
 def python_args_prefix() -> list[str]:
-    """Extra args needed before the script path (e.g. `-3` for Windows `py` launcher)."""
-    if sys.platform == "win32" and shutil.which("python") is None:
-        return ["-3"]
+    """No extra prefix args needed when invoking via sys.executable directly."""
     return []
 
 

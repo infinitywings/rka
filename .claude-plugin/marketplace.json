@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "rka",
-      "description": "Connects Claude Code to a local RKA backend for provenance-tracked research workflows. Provides ~110 MCP tools, three role skills (Brain, Executor, PI), four convenience slash commands (/rka-status, /rka-search, /rka-pending, /rka-set-project, /rka-setup-claude-desktop), and a SessionStart hook that pings the backend on every new session. Activates when user mentions RKA, research knowledge, knowledge graph, research notes, decisions, missions, journal entries, evidence clusters, citing literature, organizing research, or tracking provenance.",
+      "description": "Connects Claude Code to a local RKA backend for provenance-tracked research workflows. Provides ~110 MCP tools, three role skills (Brain, Executor, PI), five slash commands (/rka-status, /rka-search, /rka-pending, /rka-set-project, /rka-setup-claude-desktop), and a SessionStart hook that pings the backend on every new session. Activates when user mentions RKA, research knowledge, knowledge graph, research notes, decisions, missions, journal entries, evidence clusters, citing literature, organizing research, or tracking provenance.",
       "author": {
         "name": "Chenglong Fu"
       },

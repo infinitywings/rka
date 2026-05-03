@@ -3870,14 +3870,14 @@ If there are open checkpoints, resolve them before continuing new work.
 ## Core Workflow
 
 ### Directing the Executor
-- `rka_create_mission(phase, objective, tasks, context, acceptance_criteria)` — assign work; returns the full mission ID to pass to the Executor
+- `rka_create_mission(phase, objective, tasks, context, acceptance_criteria, motivated_by_decision="dec_01...")` — assign work; returns the full mission ID to pass to the Executor. `motivated_by_decision` is required for provenance.
 - `rka_get_mission(id)` — check progress
 - `rka_resolve_checkpoint(id, resolution)` — unblock the Executor
 
 ### Recording Knowledge
 - `rka_add_note(content, type="note", source="brain")` — observations, analyses, insights
 - `rka_add_note(content, type="directive")` — instructions to the Executor
-- `rka_add_decision(title, rationale, chosen_option, alternatives)` — record all non-trivial choices
+- `rka_add_decision(question, phase, decided_by, options=[...], chosen, rationale, related_journal=[...])` — record all non-trivial choices
 - `rka_add_literature(...)` or `rka_enrich_doi(doi)` — add papers; use `rka_search_semantic_scholar` / `rka_search_arxiv` to find related work
 
 ### PI Input Attribution (Critical)
@@ -3907,7 +3907,7 @@ Example: `rka_add_note(content="PI suggests focusing on...", source="pi", verbat
 You are responsible for maintaining provenance discipline. ALWAYS:
 - `rka_add_decision(..., related_journal=["jrn_01...", "jrn_02..."])` — what findings justify this
 - `rka_create_mission(..., motivated_by_decision="dec_01...")` — what decision triggers this work
-- `rka_add_note(..., related_decisions=["dec_01..."], related_mission="msn_01...")` — link context
+- `rka_add_note(..., related_decisions=["dec_01..."], related_mission="mis_01...")` — link context
 - `rka_trace_provenance(entity_id, direction="upstream")` — understand why something exists
 
 Orphaned entities (no links) degrade the knowledge graph. Fix them during maintenance.
@@ -3932,7 +3932,7 @@ Your syntheses are marked `synthesized_by: brain` — they are the authoritative
 
 ## Decision Lifecycle
 
-- To overturn a past decision: `rka_supersede_decision(old_id, question, chosen, rationale)`
+- To overturn a past decision: `rka_supersede_decision(old_decision_id, question, chosen, rationale)`
 - This automatically triggers re-distillation of affected knowledge
 - Raw journal entries are never changed — only the interpretive layer rebuilds
 
@@ -4040,7 +4040,7 @@ Old types (finding, insight, methodology, etc.) are accepted but mapped to these
 ### Cross-References — ALWAYS Link Your Work
 
 Every note and report MUST be linked to its context:
-- `rka_add_note(..., related_mission="msn_01...")` — link to active mission (MANDATORY)
+- `rka_add_note(..., related_mission="mis_01...")` — link to active mission (MANDATORY)
 - `rka_add_note(..., related_decisions=["dec_01..."])` — link to relevant decisions (MANDATORY when applicable)
 - `rka_submit_report(..., related_decisions=["dec_01..."])` — link findings to decisions they bear on
 

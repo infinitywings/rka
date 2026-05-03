@@ -4,11 +4,22 @@
 Reads integration.json (location is OS-specific), version-checks the recorded
 RKA version against the plugin's compatibility range, propagates
 default_project_id as RKA_PROJECT env var (caller-set RKA_PROJECT wins), and
-execs the local rka stdio binary with the `mcp` subcommand.
+runs the local rka stdio binary with the `mcp` subcommand.
 
-If integration.json is missing, falls back to invoking `rka mcp` from PATH
+Exec strategy:
+- POSIX (macOS/Linux): os.execvpe — replaces this Python process with the
+  rka binary so stdio passes through cleanly to Claude with no intermediate.
+- Windows: subprocess.run with inherited stdio — os.exec* on Windows spawns
+  a child and exits the original, which breaks stdio piping with Claude.
+  subprocess.run waits for the child and exits with its return code.
+
+If integration.json is missing, falls back to invoking `rka` from PATH
 (uv-tool installs land at ~/.local/bin/rka on macOS/Linux or
 %USERPROFILE%\\.local\\bin\\rka.exe on Windows).
+
+If `binary_path` points at a Python script (`.py` / `.pyw`), the wrapper
+re-execs it under the current Python interpreter — handles a possible
+RKA.app config that uses a Python script rather than a frozen executable.
 
 Errors emit to stderr; non-zero exit on failure so Claude Code's MCP layer
 surfaces "tool unavailable" with the wrapper's stderr captured to logs.
@@ -16,16 +27,17 @@ surfaces "tool unavailable" with the wrapper's stderr captured to logs.
 
 from __future__ import annotations
 
-import fnmatch
 import json
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
-# Plugin compatibility range. Bump the glob when shipping a plugin version
-# that requires a newer RKA backend.
-COMPATIBLE_GLOB = "2.3.*"
+# Plugin compatibility range. Bump when shipping a plugin version that
+# requires a newer RKA backend. Matched as `version.startswith(prefix)`,
+# so "2.3" prefix accepts "2.3.0", "2.3.1", "2.3.2-rc1", "2.3", etc.
+COMPATIBLE_VERSION_PREFIX = "2.3"
 
 
 def integration_path() -> Path:
@@ -59,9 +71,63 @@ def find_rka_on_path() -> str | None:
         return candidate
     # Common uv-tool install location not always on PATH.
     home_local = Path.home() / ".local" / "bin" / ("rka.exe" if sys.platform == "win32" else "rka")
-    if home_local.is_file() and os.access(home_local, os.X_OK):
+    if home_local.is_file():
         return str(home_local)
     return None
+
+
+def is_executable(path: str) -> bool:
+    """Check executability cross-platform.
+
+    os.access(X_OK) is unreliable on Windows (returns True for any readable
+    file). On Windows, treat any existing file as a candidate; the actual
+    runnability check happens at exec/spawn time.
+    """
+    p = Path(path)
+    if not p.is_file():
+        return False
+    if sys.platform == "win32":
+        return True
+    return os.access(path, os.X_OK)
+
+
+def is_python_script(path: str) -> bool:
+    """True if the binary is a Python source file we should re-exec via interpreter."""
+    return path.lower().endswith((".py", ".pyw"))
+
+
+def run_binary(binary_path: str, env: dict[str, str]) -> None:
+    """Replace this process with the rka binary (POSIX) or run-and-wait (Windows).
+
+    Both paths inherit stdin/stdout/stderr from this wrapper, which inherited
+    them from Claude — so MCP stdio passes through cleanly.
+    """
+    # If binary_path is actually a Python script, re-exec via current
+    # interpreter so we don't depend on shebang handling on Windows.
+    if is_python_script(binary_path):
+        argv = [sys.executable, binary_path, "mcp"]
+        prog = sys.executable
+    else:
+        argv = [binary_path, "mcp"]
+        prog = binary_path
+
+    if sys.platform == "win32":
+        # subprocess.run with default stdin/stdout/stderr=None inherits from
+        # this wrapper (which inherited from Claude). Wait for the child to
+        # exit, propagate its return code.
+        try:
+            result = subprocess.run(argv, env=env)
+            sys.exit(result.returncode)
+        except OSError as exc:
+            err(f"ERROR: failed to run {prog}: {exc}")
+            sys.exit(1)
+    else:
+        # POSIX: replace this process with the rka binary. No intermediate.
+        try:
+            os.execvpe(prog, argv, env)
+        except OSError as exc:
+            err(f"ERROR: failed to exec {prog}: {exc}")
+            sys.exit(1)
 
 
 def main() -> None:
@@ -78,9 +144,15 @@ def main() -> None:
             err(f"ERROR: integration.json is malformed JSON at {int_path}: {exc}")
             sys.exit(1)
 
-        version = (data.get("version") or "").strip() or None
-        binary_path = (data.get("binary_path") or "").strip() or None
-        default_project = (data.get("default_project_id") or "").strip() or None
+        # Defensive str() cast in case RKA.app ever writes non-string values.
+        version = str(data.get("version") or "").strip() or None
+        binary_path = str(data.get("binary_path") or "").strip() or None
+        default_project = str(data.get("default_project_id") or "").strip() or None
+
+        # Resolve relative binary_path against integration.json's directory.
+        # Absolute paths pass through unchanged.
+        if binary_path and not Path(binary_path).is_absolute():
+            binary_path = str((int_path.parent / binary_path).resolve())
     else:
         err(f"NOTICE: integration.json not found at {int_path} — falling back to PATH lookup for `rka`.")
         err("If RKA.app is supposed to be running, this means it isn't (or hasn't written its config yet).")
@@ -90,22 +162,24 @@ def main() -> None:
         binary_path = find_rka_on_path()
         if not binary_path:
             err("ERROR: rka binary not found. Either:")
-            err("  1. Install via `uv tool install --force .` from the rka repo (lands at ~/.local/bin/rka).")
+            err("  1. Install via `uv tool install --force --reinstall .` from the rka repo (lands at ~/.local/bin/rka).")
             err("  2. Start RKA.app so it writes integration.json with binary_path.")
             err("  3. Set RKA_INTEGRATION_FILE env var to the integration.json location.")
             sys.exit(1)
 
-    if not Path(binary_path).is_file() or not os.access(binary_path, os.X_OK):
+    if not is_executable(binary_path) and not is_python_script(binary_path):
         err(f"ERROR: RKA binary not executable at: {binary_path}")
-        err("Check integration.json's binary_path field, or rerun `uv tool install --force .` from the rka repo.")
+        err("Check integration.json's binary_path field, or rerun `uv tool install --force --reinstall .` from the rka repo.")
         sys.exit(1)
 
     # Version check (only if integration.json supplied a version; PATH-fallback
     # mode skips the check since we have no version metadata to verify against).
     if version is not None:
-        if not fnmatch.fnmatch(version, COMPATIBLE_GLOB):
-            err(f"ERROR: RKA version '{version}' is incompatible with this plugin (requires {COMPATIBLE_GLOB}).")
-            err(f"Either upgrade RKA to a {COMPATIBLE_GLOB} release, or install a matching plugin version.")
+        # Use startswith with a trailing dot for "2.3.x", but also accept
+        # bare "2.3" as a valid prerelease/dev marker.
+        if not (version == COMPATIBLE_VERSION_PREFIX or version.startswith(COMPATIBLE_VERSION_PREFIX + ".")):
+            err(f"ERROR: RKA version '{version}' is incompatible with this plugin (requires {COMPATIBLE_VERSION_PREFIX}.x).")
+            err(f"Either upgrade RKA to a {COMPATIBLE_VERSION_PREFIX}.x release, or install a matching plugin version.")
             sys.exit(1)
 
     # Propagate default_project_id as RKA_PROJECT (caller-set wins).
@@ -113,13 +187,7 @@ def main() -> None:
     if not env.get("RKA_PROJECT") and default_project:
         env["RKA_PROJECT"] = default_project
 
-    # Exec — replaces this Python process with the rka binary so stdio passes
-    # through cleanly to Claude.
-    try:
-        os.execvpe(binary_path, [binary_path, "mcp"], env)
-    except OSError as exc:
-        err(f"ERROR: failed to exec {binary_path}: {exc}")
-        sys.exit(1)
+    run_binary(binary_path, env)
 
 
 if __name__ == "__main__":
