@@ -46,10 +46,10 @@ class RKAConfig(BaseSettings):
     )
     embeddings_enabled: bool = Field(default=False, description="Enable embedding generation")
 
-    # Context Engine
-    context_hot_days: int = Field(default=3, description="Days to consider entries HOT")
-    context_warm_days: int = Field(default=14, description="Days before entries go COLD")
-    context_default_max_tokens: int = Field(default=2000, description="Default context budget")
+    # Context Engine — v2.4 (dec_01KQQPD6Y6B362T3K08368BDMP) removed temperature
+    # bucketing and token-budget arithmetic. Ranking is SQL-time importance ×
+    # centrality × recency. The former env vars (RKA_CONTEXT_HOT_DAYS,
+    # RKA_CONTEXT_WARM_DAYS, RKA_CONTEXT_DEFAULT_MAX_TOKENS) were removed.
 
     # Background jobs
     job_poll_interval: float = Field(default=1.0, description="Worker poll interval in seconds")

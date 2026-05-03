@@ -1438,14 +1438,30 @@ async def rka_search(
         r = await c.post("/api/search", json=body)
         _raise_with_detail(r)
         results = r.json()
+
+        # Backlog one-liner appended at the end of the result block
+        # (v2.4 / dec_01KQQPER3XSSBACGZANFJCVQ66). Best-effort: if the
+        # /maintenance/summary route is unavailable, omit the line silently.
+        backlog_line = ""
+        try:
+            mr = await c.get("/api/maintenance/summary")
+            if mr.status_code == 200:
+                backlog = mr.json()
+                if backlog.get("total_items", 0) > 0:
+                    top = backlog.get("top_categories") or []
+                    top_str = ", ".join(f"{c['name']} {c['count']}" for c in top)
+                    backlog_line = f"\n\nMaintenance: {backlog['total_items']} items (top: {top_str})"
+        except Exception:
+            pass
+
         if not results:
-            return f"No results for '{query}'"
+            return f"No results for '{query}'{backlog_line}"
         lines = []
         for res in results:
             lines.append(f"[{res['entity_type']}] {res['entity_id']}: {res['title']}")
             if res.get("snippet"):
                 lines.append(f"  {res['snippet'][:500]}")
-        return "\n".join(lines)
+        return "\n".join(lines) + backlog_line
 
 
 @tool()
@@ -1749,6 +1765,16 @@ async def rka_get_status() -> str:
         chk_r = await c.get("/api/checkpoints", params={"status": "open"})
         open_chks = chk_r.json() if chk_r.status_code == 200 else []
 
+        # Backlog summary (v2.4 / dec_01KQQPER3XSSBACGZANFJCVQ66). Best-effort:
+        # if the route is unavailable or errors, we silently omit the line.
+        backlog = None
+        try:
+            mr = await c.get("/api/maintenance/summary")
+            if mr.status_code == 200:
+                backlog = mr.json()
+        except Exception:
+            backlog = None
+
         lines = [
             f"## Project: {status['project_name']}",
             f"Phase: {status.get('current_phase', 'not set')}",
@@ -1770,6 +1796,11 @@ async def rka_get_status() -> str:
             for chk in open_chks[:5]:
                 flag = "🔴" if chk.get("blocking") else "🟡"
                 lines.append(f"  {flag} {chk['id']}: {chk['description'][:300]}")
+
+        if backlog and backlog.get("total_items", 0) > 0:
+            top = backlog.get("top_categories") or []
+            top_str = ", ".join(f"{c['name']} {c['count']}" for c in top)
+            lines.append(f"\nMaintenance: {backlog['total_items']} items (top: {top_str})")
 
         return "\n".join(lines)
 
@@ -2026,25 +2057,23 @@ async def rka_get_context(
     topic: str | None = None,
     phase: str | None = None,
     depth: str = "summary",
-    max_tokens: int = 2000,
 ) -> str:
-    """Get focused context package with relevant knowledge.
+    """Get an importance-ranked context package.
 
-    Returns temperature-classified entries (HOT/WARM/COLD) optimized
-    for the token budget. HOT entries are included verbatim; WARM/COLD
-    are summarized when needed.
+    v2.4 (dec_01KQQPD6Y6B362T3K08368BDMP): no token budget, no temperature
+    bucketing. Entries are ordered by journal.importance, entity_links
+    centrality, and recency. Frontier model context windows make a
+    bookkeeper-imposed truncation unnecessary.
 
     Args:
-        topic: Search topic for semantic context retrieval
-        phase: Filter to specific research phase
-        depth: "summary" (default) or "detailed" with LLM narrative
-        max_tokens: Token budget for context package (default: 2000)
+        topic: Search topic for semantic context retrieval. Omit for an
+            importance-ranked overview of recent project state.
+        phase: Filter to a specific research phase.
+        depth: "summary" (default) returns the ranked list as-is.
+            "detailed" adds an LLM-generated narrative if an LLM is configured.
     """
     async with _client() as c:
-        body = {
-            "topic": topic, "phase": phase,
-            "depth": depth, "max_tokens": max_tokens,
-        }
+        body = {"topic": topic, "phase": phase, "depth": depth}
         r = await c.post("/api/context", json={k: v for k, v in body.items() if v is not None})
         _raise_with_detail(r)
         pkg = r.json()
@@ -2055,19 +2084,14 @@ async def rka_get_context(
         if pkg.get("phase"):
             lines.append(f"Phase: {pkg['phase']}")
         if pkg.get("note"):
-            lines.append(f"⚠️ {pkg['note']}")
+            lines.append(f"ℹ️  {pkg['note']}")
 
-        if pkg.get("hot_entries"):
-            lines.append(f"\n### 🔴 Active ({len(pkg['hot_entries'])})")
-            lines.extend(pkg["hot_entries"])
-
-        if pkg.get("warm_entries"):
-            lines.append(f"\n### 🟡 Relevant ({len(pkg['warm_entries'])})")
-            lines.extend(pkg["warm_entries"])
-
-        if pkg.get("cold_entries"):
-            lines.append(f"\n### 🔵 Background ({len(pkg['cold_entries'])})")
-            lines.extend(pkg["cold_entries"])
+        # v2.4: prefer the new `entries` field (single ranked list).
+        # Fall back to legacy `hot_entries` only if the server is older.
+        ranked = pkg.get("entries") or pkg.get("hot_entries") or []
+        if ranked:
+            lines.append(f"\n### Ranked entries ({len(ranked)})")
+            lines.extend(ranked)
 
         if pkg.get("narrative"):
             lines.append("\n### Narrative")
@@ -3204,6 +3228,78 @@ async def rka_trace_provenance(
 
     if len(lines) <= 3:
         lines.append("  (no links found)")
+    return "\n".join(lines)
+
+
+@tool()
+async def rka_multi_hop_retrieval(
+    query: str,
+    seeds: list[str] | None = None,
+    max_depth: int = 3,
+    max_nodes: int = 50,
+    edge_weights: dict[str, float] | None = None,
+) -> str:
+    """Query-anchored multi-hop subgraph retrieval (v2.4).
+
+    Seeds the traversal with the top hits from rka_search(query), then BFS-expands
+    through entity_links and claim_edges with per-edge weights. Each node accumulates
+    a relevance score; results are capped by max_nodes and ordered by relevance
+    descending. Use this when a single rka_search isn't enough — when the answer
+    depends on connected entities multiple hops from the seeds (e.g., decisions
+    motivated by missions whose findings are recorded in journal entries
+    contradicted by later claims).
+
+    Per dec_01KQQPDHCKHS4YMD6QP7J7K2GW; default edge weights from
+    dec_01KQQRZ0CJHB68P2F6233AHEJ5.
+
+    Args:
+        query: Natural-language query for seed selection.
+        seeds: Optional explicit seed entity IDs. Bypasses search-based seeding.
+        max_depth: Max BFS depth (default 3, capped at 5 by the API).
+        max_nodes: Max nodes returned (default 50, capped at 500).
+        edge_weights: Per-relation weights override. Defaults are
+            justified_by/motivated/derived_from/evidence_for/member_of=1.0,
+            contradicts=1.1, supports/qualifies=0.9,
+            cites/references/informed_by=0.7, produced/resolved_as/builds_on=0.5,
+            supersedes=0.3.
+    """
+    body: dict = {"query": query, "max_depth": max_depth, "max_nodes": max_nodes}
+    if seeds is not None:
+        body["seeds"] = seeds
+    if edge_weights is not None:
+        body["edge_weights"] = edge_weights
+
+    async with _client() as c:
+        r = await c.post("/api/graph/multi-hop", json=body)
+        _raise_with_detail(r)
+    data = r.json()
+    nodes = data.get("nodes", [])
+    edges = data.get("edges", [])
+    seeds_used = data.get("seeds", [])
+
+    lines = [
+        f"## Multi-hop subgraph for: {query}",
+        f"Seeds: {', '.join(seeds_used) if seeds_used else '(none — search returned nothing)'}",
+        f"Returned {len(nodes)} nodes, {len(edges)} edges (max_depth={max_depth}, max_nodes={max_nodes}).",
+    ]
+    if not nodes:
+        lines.append("\n(empty result — try a broader query or explicit seeds)")
+        return "\n".join(lines)
+
+    lines.append("\n### Ranked nodes (by relevance score):")
+    for n in nodes:
+        score = n.get("score", 0.0)
+        depth = n.get("depth", 0)
+        label = (n.get("label") or "")[:80]
+        lines.append(f"  [{n.get('type', '?')}|d={depth}|s={score:.3f}] {n.get('id', '?')} {label}")
+
+    if edges:
+        lines.append(f"\n### Edges ({len(edges)} shown, weighted):")
+        # Show edges sorted by weight descending so the most-load-bearing surface first
+        for e in sorted(edges, key=lambda x: x.get("weight", 0.0), reverse=True)[:30]:
+            w = e.get("weight", 0.0)
+            lines.append(f"  {e.get('source', '?')} —[{e.get('link_type', '?')} w={w:.2f}]→ {e.get('target', '?')}")
+
     return "\n".join(lines)
 
 

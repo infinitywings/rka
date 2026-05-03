@@ -385,7 +385,6 @@ export interface ContextRequest {
   topic?: string
   phase?: string
   depth?: "summary" | "detailed"
-  max_tokens?: number
 }
 
 export interface ContextPackage {

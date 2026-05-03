@@ -37,7 +37,6 @@ async def get_context(
         topic=data.topic,
         phase=data.phase,
         depth=data.depth,
-        max_tokens=data.max_tokens,
         project_id=project_id,
     )
 

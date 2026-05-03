@@ -143,7 +143,8 @@ rka_get_research_map()         → Three-level view: RQs → clusters → claims
 rka_trace_provenance(id)       → Literature → decision → mission → finding → claim
 rka_get_review_queue()         → Items flagged for Brain's deep reasoning
 rka_search("MQTT scalability") → Entries, decisions, literature, claims
-rka_get_context(topic="...")   → Token-budgeted context package
+rka_get_context(topic="...")   → Importance-ranked context package
+rka_multi_hop_retrieval(query="...")  → Query-anchored ranked subgraph
 ```
 
 ---
@@ -337,18 +338,17 @@ When a decision is superseded by new evidence, RKA marks the old decision as sup
 
 Every entity can be linked to its sources via typed `link_` cross-references. Common link types include `derived_from`, `contradicts`, `supports`, `supersedes`, and `cites`. These edges form the provenance graph visible in the Knowledge Graph page.
 
-### Context Temperature
+### Context Ranking (v2.4+)
 
-Entries are classified by recency:
+The Context Engine returns a single ranked list of entries — no token-budget truncation, no temperature bucketing. Ordering is deterministic, computed at SQL time:
 
-| Temperature       | Age               | Behavior                             |
-| ----------------- | ----------------- | ------------------------------------ |
-| **HOT**     | <= 3 days         | Included in full, highest priority   |
-| **WARM**    | <= 14 days        | Included, may be compressed          |
-| **COLD**    | > 14 days         | Summarized or excluded               |
-| **ARCHIVE** | Manually archived | Excluded unless explicitly requested |
+1. **`journal.importance`** — `critical` > `high` > `normal` > `low` > `archived`. PI-sourced entries get a small lift within their importance band.
+2. **`entity_links` centrality** — sum of inbound + outbound edges; highly-connected nodes surface first within an importance band.
+3. **`created_at` DESC** — recency as the tie-breaker.
 
-The Context Engine uses these temperatures to build focused context packages within token budgets.
+> Earlier RKA versions (≤ v2.3) used HOT/WARM/COLD temperature bucketing on day-thresholds plus a token budget. Both were removed in v2.4 (see `dec_01KQQPD6Y6B362T3K08368BDMP`): day-thresholds systematically excluded older relevant content, and frontier model context windows make a bookkeeper-imposed budget unnecessary.
+
+For multi-hop questions where the answer depends on connected entities multiple hops from the seeds, see `rka_multi_hop_retrieval` — it returns a query-anchored relevance-ranked subgraph using the typed edge vocabulary with per-relation weights.
 
 ---
 
@@ -727,11 +727,7 @@ All settings use environment variables with the `RKA_` prefix. Place them in a `
 
 ### Context Engine Settings
 
-| Variable                           | Default  | Description                               |
-| ---------------------------------- | -------- | ----------------------------------------- |
-| `RKA_CONTEXT_HOT_DAYS`           | `3`    | Days for HOT temperature classification   |
-| `RKA_CONTEXT_WARM_DAYS`          | `14`   | Days for WARM temperature classification  |
-| `RKA_CONTEXT_DEFAULT_MAX_TOKENS` | `2000` | Default token budget for context packages |
+The v2.4 context engine has no tunable env vars — ranking is SQL-time importance × centrality × recency, deterministic and bookkeeper-only. The legacy `RKA_CONTEXT_HOT_DAYS`, `RKA_CONTEXT_WARM_DAYS`, and `RKA_CONTEXT_DEFAULT_MAX_TOKENS` env vars were removed in v2.4 (see "Context Ranking" section above).
 
 ---
 
@@ -851,7 +847,8 @@ All tools are prefixed with `rka_` and available through the MCP stdio interface
 | Tool                   | Purpose                                                              |
 | ---------------------- | -------------------------------------------------------------------- |
 | `rka_search`         | Hybrid search across all entity types                                |
-| `rka_get_context`    | Generate a focused context package for a topic within a token budget |
+| `rka_get_context`    | Importance-ranked context package (v2.4: no token budget; ordered by importance × centrality × recency) |
+| `rka_multi_hop_retrieval` | Query-anchored relevance-ranked subgraph traversing typed edges with per-relation weights |
 | `rka_ask`            | Ask a question grounded in the knowledge base (RAG)                  |
 | `rka_summarize`      | On-demand topic summarization                                        |
 | `rka_eviction_sweep` | Propose entries for archival based on staleness                      |
@@ -1173,7 +1170,7 @@ The Vite dev server runs at `http://localhost:5173` and proxies API calls to `:9
 | **Research Map**      | `/research-map` | Three-level drill-down: research questions, evidence clusters, and claims. Clickable summary stats filter by gaps/contradictions. Cluster synthesis rendered as markdown |
 | **Knowledge Graph**   | `/graph`        | Entity relationship graph (React Flow), nodes colored by type, relationship edges, provenance chain traversal                                                            |
 | **Audit Log**         | `/audit`        | System audit trail table with action/entity/actor filters, action counts summary                                                                                         |
-| **Context Inspector** | `/context`      | Generate context packages, view temperature badges (HOT/WARM/COLD), copy JSON                                                                                            |
+| **Context Inspector** | `/context`      | Generate importance-ranked context packages and copy JSON. (v2.4: HOT/WARM/COLD badges removed in favor of a single ranked list.) |
 | **Settings**          | `/settings`     | LLM configuration + status, API health, DB stats, project configuration, quick links to `/docs` and `/api/health`                                                    |
 
 ### Tech Stack
@@ -1252,21 +1249,23 @@ The hybrid approach catches both exact matches and semantically related content.
 
 Embeddings are generated asynchronously by the background worker when entries are created or updated.
 
-### Context Engine
+### Context Engine (v2.4)
 
-The Context Engine builds focused knowledge packages for a given topic:
+The Context Engine builds an importance-ranked package for a given topic. The pipeline is:
 
-1. **Search** — Find relevant entries using hybrid search
-2. **Temperature classification** — Assign HOT/WARM/COLD based on recency
-3. **Token budgeting** — Fit content within `max_tokens` limit, prioritizing HOT entries
-4. **Narrative generation** — Optionally use LLM to synthesize a coherent narrative
+1. **Search** — Hybrid FTS5 + vector search seeds the candidate pool.
+2. **Centrality annotation** — Each candidate gets an `entity_links` degree count.
+3. **SQL-time ranking** — `journal.importance` (CASE 4..0) × centrality × `created_at` DESC, with a +0.5 lift for PI-sourced entries.
+4. **Optional narrative** — Pass `depth="detailed"` to ask an LLM (if configured) to synthesize a coherent narrative over the ranked list.
+
+No token-budget truncation; the full ranked list is returned. For multi-hop questions where the answer depends on connected entities multiple hops from the seeds, use `rka_multi_hop_retrieval` instead.
 
 Request a context package:
 
 ```bash
 curl -X POST http://localhost:9712/api/context \
   -H 'Content-Type: application/json' \
-  -d '{"topic": "evaluation methodology", "max_tokens": 2000}'
+  -d '{"topic": "evaluation methodology"}'
 ```
 
 ---
@@ -1343,7 +1342,7 @@ rka/
 |   |   +-- onboarding.py       # CLAUDE.md generation
 |   |   +-- worker.py           # Background worker + job queue
 |   |   +-- search.py           # Hybrid FTS5 + vector search
-|   |   +-- context.py          # Context engine (temperature, token budgeting)
+|   |   +-- context.py          # Context engine (importance-ranked retrieval; v2.4)
 |   |   +-- graph.py            # Entity relationship graph
 |   |   +-- audit.py            # Audit log queries and counts
 |   |   +-- academic.py         # BibTeX import, DOI enrichment, Mermaid export

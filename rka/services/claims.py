@@ -173,6 +173,31 @@ class ClaimService(BaseService):
                 "UPDATE evidence_clusters SET claim_count = claim_count + 1, updated_at = ? WHERE id = ? AND project_id = ?",
                 [_now(), data.cluster_id, self.project_id],
             )
+        # When inserting a contradicts edge, flag any clusters that contain
+        # either endpoint as a member as needing re-synthesis. Brain reviews
+        # via rka_review_cluster which clears the flag. Per
+        # dec_01KQQPE47H56E40A8KBDDT4BZT (Improvement 3, mis_01KQQS3DYQ2EVJV288PNHX0CMY).
+        if data.relation == "contradicts":
+            affected_claims = [c for c in (data.source_claim_id, data.target_claim_id) if c]
+            if affected_claims:
+                claim_placeholders = ",".join("?" for _ in affected_claims)
+                await self.db.execute(
+                    f"""UPDATE evidence_clusters SET needs_reprocessing = 1, updated_at = ?
+                       WHERE id IN (
+                           SELECT DISTINCT cluster_id FROM claim_edges
+                           WHERE source_claim_id IN ({claim_placeholders})
+                             AND relation = 'member_of'
+                             AND project_id = ?
+                       ) AND project_id = ?""",
+                    [_now(), *affected_claims, self.project_id, self.project_id],
+                )
+            # Atypical but schema-allowed: contradicts edge inserted with a
+            # direct cluster_id rather than via member_of resolution.
+            if data.cluster_id:
+                await self.db.execute(
+                    "UPDATE evidence_clusters SET needs_reprocessing = 1, updated_at = ? WHERE id = ? AND project_id = ?",
+                    [_now(), data.cluster_id, self.project_id],
+                )
         await self.db.commit()
         return ClaimEdge(
             id=edge_id,

@@ -327,6 +327,199 @@ class GraphService:
         return {"nodes": list(nodes.values()), "edges": unique_edges}
 
     # ------------------------------------------------------------------
+    # Multi-hop recursive retrieval — query-anchored ranked subgraph
+    # ------------------------------------------------------------------
+
+    # Default per-relation weights for multi-hop traversal. Per Brain decision
+    # dec_01KQQRZ0CJHB68P2F6233AHEJ5 (Improvement 2, mis_01KQQS3DYQ2EVJV288PNHX0CMY).
+    DEFAULT_EDGE_WEIGHTS: dict[str, float] = {
+        # entity_links provenance edges
+        "justified_by": 1.0,
+        "motivated": 1.0,
+        "evidence_for": 1.0,
+        "derived_from": 1.0,
+        "cites": 0.7,
+        "references": 0.7,
+        "informed_by": 0.7,
+        "produced": 0.5,
+        "resolved_as": 0.5,
+        "builds_on": 0.5,
+        "supersedes": 0.3,
+        # claim_edges relations
+        "member_of": 1.0,
+        "supports": 0.9,
+        "qualifies": 0.9,
+        "contradicts": 1.1,
+    }
+
+    async def multi_hop_retrieval(
+        self,
+        query: str,
+        *,
+        seeds: list[str] | None = None,
+        max_depth: int = 3,
+        max_nodes: int = 50,
+        edge_weights: dict[str, float] | None = None,
+        project_id: str = "proj_default",
+        search_service: "SearchService | None" = None,
+    ) -> dict:
+        """Query-anchored ranked-subgraph traversal.
+
+        Seeds the traversal with the top hits from `SearchService.search(query)`,
+        then BFS-expands via `entity_links` and `claim_edges`. Each node accumulates
+        a relevance score = max(parent_score * edge_weight) over incoming edges.
+        Result is capped by `max_nodes` and ordered by relevance descending.
+
+        Args:
+            query: Natural-language query to seed the traversal.
+            seeds: Optional explicit seed entity IDs. If provided, bypasses the
+                search step (useful for tests + when caller has anchor entities).
+            max_depth: Maximum BFS depth (default 3).
+            max_nodes: Maximum nodes returned (default 50). Prevents traversal
+                explosion on hub entities.
+            edge_weights: Per-relation weights. Falls back to DEFAULT_EDGE_WEIGHTS.
+            project_id: Project scope.
+            search_service: SearchService to use for seeding (required when
+                `seeds` is None).
+
+        Returns: {nodes: [{id, type, label, score, depth}, ...], edges: [...],
+                  query: str, seeds: [str]}
+        """
+        weights = {**self.DEFAULT_EDGE_WEIGHTS, **(edge_weights or {})}
+
+        # Step 1: seed selection
+        if seeds is None:
+            if search_service is None:
+                raise ValueError("multi_hop_retrieval requires either explicit seeds or a search_service")
+            hits = await search_service.with_project(project_id).search(query, limit=10)
+            seeds = [h.entity_id for h in hits]
+        if not seeds:
+            return {"nodes": [], "edges": [], "query": query, "seeds": []}
+
+        # Step 2: BFS with relevance accumulation
+        # Each node stores (score, depth). A node's score is the max over all
+        # paths reaching it; depth is the shortest path that delivered the
+        # current best score. Seeds start at score=1.0, depth=0.
+        seeds_set: set[str] = set(seeds)
+        scores: dict[str, float] = {sid: 1.0 for sid in seeds_set}
+        depths: dict[str, int] = {sid: 0 for sid in seeds_set}
+        all_edges: list[dict] = []
+        edges_seen: set[tuple] = set()
+
+        frontier: set[str] = set(seeds_set)
+        for hop in range(max_depth):
+            if not frontier or len(scores) >= max_nodes * 2:
+                # Cap exploration before truncation; *2 lets us truncate ranked
+                # rather than truncating the BFS frontier blindly.
+                break
+            placeholders = ",".join("?" for _ in frontier)
+            frontier_list = list(frontier)
+
+            el_rows = await self.db.fetchall(
+                f"""SELECT source_type, source_id, link_type, target_type, target_id, created_at
+                    FROM entity_links
+                    WHERE {self._project_clause()}
+                      AND (source_id IN ({placeholders}) OR target_id IN ({placeholders}))""",
+                [project_id] + frontier_list + frontier_list,
+            )
+            ce_rows = await self.db.fetchall(
+                f"""SELECT source_claim_id, target_claim_id, cluster_id, relation, created_at
+                    FROM claim_edges
+                    WHERE {self._project_clause()} AND (
+                        source_claim_id IN ({placeholders})
+                        OR target_claim_id IN ({placeholders})
+                        OR cluster_id IN ({placeholders}))""",
+                [project_id] + frontier_list + frontier_list + frontier_list,
+            )
+
+            next_frontier: set[str] = set()
+
+            for row in el_rows:
+                src, tgt, link = row["source_id"], row["target_id"], row["link_type"]
+                w = weights.get(link, 0.5)
+                edge_key = (src, tgt, link)
+                if edge_key not in edges_seen:
+                    edges_seen.add(edge_key)
+                    all_edges.append({
+                        "source": src,
+                        "target": tgt,
+                        "link_type": link,
+                        "weight": w,
+                        "created_at": row["created_at"],
+                    })
+                # Propagate score across the edge (both directions count for
+                # relevance; an edge from a high-score seed to a neighbor
+                # makes that neighbor relevant).
+                for parent, child in ((src, tgt), (tgt, src)):
+                    parent_score = scores.get(parent)
+                    if parent_score is None:
+                        continue
+                    new_score = parent_score * w
+                    if child not in scores or new_score > scores[child]:
+                        scores[child] = new_score
+                        depths[child] = hop + 1
+                        if child not in frontier and child not in seeds_set:
+                            next_frontier.add(child)
+
+            for row in ce_rows:
+                src = row["source_claim_id"]
+                relation = row["relation"]
+                tgt = row["cluster_id"] if relation == "member_of" else row["target_claim_id"]
+                if not src or not tgt:
+                    continue
+                w = weights.get(relation, 0.5)
+                edge_key = (src, tgt, relation)
+                if edge_key not in edges_seen:
+                    edges_seen.add(edge_key)
+                    all_edges.append({
+                        "source": src,
+                        "target": tgt,
+                        "link_type": relation,
+                        "weight": w,
+                        "created_at": row["created_at"],
+                    })
+                for parent, child in ((src, tgt), (tgt, src)):
+                    parent_score = scores.get(parent)
+                    if parent_score is None:
+                        continue
+                    new_score = parent_score * w
+                    if child not in scores or new_score > scores[child]:
+                        scores[child] = new_score
+                        depths[child] = hop + 1
+                        next_frontier.add(child)
+
+            frontier = next_frontier
+
+        # Step 3: rank and cap
+        ranked_ids = sorted(scores.keys(), key=lambda nid: scores[nid], reverse=True)[:max_nodes]
+        ranked_set = set(ranked_ids)
+
+        # Hydrate node metadata
+        node_ids: dict[str, set[str]] = {}
+        for nid in ranked_ids:
+            etype = self._guess_type_from_id(nid)
+            node_ids.setdefault(etype, set()).add(nid)
+        nodes: dict[str, dict] = {}
+        await self._fill_missing_nodes(nodes, node_ids, project_id=project_id)
+
+        result_nodes = []
+        for nid in ranked_ids:
+            n = nodes.get(nid, {"id": nid, "type": self._guess_type_from_id(nid), "label": nid})
+            n["score"] = scores[nid]
+            n["depth"] = depths[nid]
+            result_nodes.append(n)
+
+        # Filter edges to those connecting two ranked nodes (drops noise)
+        result_edges = [e for e in all_edges if e["source"] in ranked_set and e["target"] in ranked_set]
+
+        return {
+            "nodes": result_nodes,
+            "edges": result_edges,
+            "query": query,
+            "seeds": list(seeds),
+        }
+
+    # ------------------------------------------------------------------
     # Decision tree (hierarchical)
     # ------------------------------------------------------------------
 
