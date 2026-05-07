@@ -202,10 +202,18 @@ async def test_fts_claims_table_exists(db: Database):
 
 @pytest.mark.asyncio
 async def test_entity_links_accepts_new_link_types(db: Database):
-    """entity_links accepts the new v2 link types without CHECK constraint issues."""
+    """entity_links accepts the v2 link types added by migrations 009-012.
+
+    The v1→v2 transition introduced informed_by (literature→decision),
+    justified_by (decision→journal), motivated (decision→mission), and
+    derived_from (claim→journal). Earlier versions of this test also covered
+    builds_on/supports/contradicts; those are claim_edges.relation values,
+    not entity_links.link_type values, and were dropped when migration 021
+    added a CHECK constraint enumerating only types that production code
+    actually emits into entity_links.
+    """
     new_types = [
-        "informed_by", "justified_by", "motivated",
-        "derived_from", "builds_on", "supports", "contradicts",
+        "informed_by", "justified_by", "motivated", "derived_from",
     ]
     for i, lt in enumerate(new_types):
         await db.execute(
