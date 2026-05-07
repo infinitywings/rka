@@ -306,3 +306,254 @@ async def test_knowledge_pack_import_rejects_duplicate_target_project_name(tmp_p
                 )
     finally:
         await db.close()
+
+
+# Defect 3 (mis_01KR1Z28QW9WYXG4VV8PGYWD8G T5):
+# _sync_imported_indexes now iterates claims and evidence_clusters; the import
+# transaction now runs check_integrity before commit and rolls back on
+# critical issues; the success path repairs non-critical claim_count drift.
+
+
+import zipfile  # noqa: E402
+
+from rka.services.knowledge_pack import (  # noqa: E402
+    KnowledgePackIntegrityError,
+    PACK_SCHEMA_VERSION,
+)
+
+
+def _write_synthetic_pack(
+    pack_path: Path,
+    *,
+    source_project_id: str,
+    source_project_name: str,
+    tables: dict[str, list[dict]],
+) -> None:
+    """Build a minimal pack zip with the supplied tables payload.
+
+    Used by integrity-gate tests that need to inject malformed rows the
+    export path would never produce on its own.
+    """
+    manifest = {
+        "pack_format_version": PACK_SCHEMA_VERSION,
+        "schema_version": 21,  # DB migration number; advisory only
+        "project": {
+            "id": source_project_id,
+            "name": source_project_name,
+            "description": "synthetic pack",
+            "created_by": "system",
+        },
+        "project_state": None,
+        "tables": tables,
+        "table_counts": {k: len(v) for k, v in tables.items()},
+    }
+    with zipfile.ZipFile(pack_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("manifest.json", json.dumps(manifest, indent=2, sort_keys=True))
+
+
+@pytest.mark.asyncio
+async def test_knowledge_pack_import_indexes_imported_claims_and_clusters(tmp_path: Path):
+    """T5: post-import, claim and cluster rows are in their FTS tables without a
+    manual reindex. Pre-v2.3.4 _sync_imported_indexes stopped at missions, so
+    imported claims/clusters were silently invisible to search.
+    """
+    db = await _make_db(tmp_path / "claim-cluster-fts.db")
+    try:
+        project_svc = ProjectService(db)
+        await project_svc.create_project(
+            ProjectCreate(id="proj_pack_src", name="Pack Source", description="s"),
+            actor="system",
+        )
+
+        # Seed a journal entry as the FK target for the claim's source_entry_id.
+        note_svc = NoteService(db, project_id="proj_pack_src")
+        seed = await note_svc.create(
+            JournalEntryCreate(content="seed entry for claim source.", type="note"),
+            actor="pi",
+        )
+
+        # Insert one cluster + one claim directly so they show up in the export.
+        await db.execute(
+            """INSERT INTO evidence_clusters (id, label, synthesis, project_id)
+               VALUES (?, ?, ?, ?)""",
+            ["ecl_t5_a", "Latency cluster",
+             "Synthesis: tuned configuration consistently lowers tail latency.",
+             "proj_pack_src"],
+        )
+        await db.execute(
+            """INSERT INTO claims
+               (id, source_entry_id, claim_type, content, confidence, project_id)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            ["clm_t5_a", seed.id, "observation",
+             "Tuned configuration reduces 99th-percentile latency by 18 percent.",
+             0.85, "proj_pack_src"],
+        )
+        await db.commit()
+
+        export_svc = KnowledgePackService(db, project_id="proj_pack_src")
+        pack_path, _ = await export_svc.export_pack()
+
+        with open(pack_path, "rb") as pack_file:
+            await KnowledgePackService(db).import_pack(
+                pack_file, project_id="proj_pack_dst", project_name="Pack Dest",
+            )
+
+        # FTS hit on the imported claim by content keyword.
+        claim_hits = await db.fetchall(
+            "SELECT id FROM fts_claims WHERE fts_claims MATCH ?", ["latency"],
+        )
+        # FTS hit on the imported cluster by label keyword.
+        cluster_hits = await db.fetchall(
+            "SELECT id FROM fts_clusters WHERE fts_clusters MATCH ?", ["Latency"],
+        )
+
+        # Both source and imported (remapped) IDs must be FTS-visible.
+        all_imported_claim_ids = await db.fetchall(
+            "SELECT id FROM claims WHERE project_id = ?", ["proj_pack_dst"],
+        )
+        all_imported_cluster_ids = await db.fetchall(
+            "SELECT id FROM evidence_clusters WHERE project_id = ?", ["proj_pack_dst"],
+        )
+        imported_claim_ids = {r["id"] for r in all_imported_claim_ids}
+        imported_cluster_ids = {r["id"] for r in all_imported_cluster_ids}
+
+        fts_claim_ids = {r["id"] for r in claim_hits}
+        fts_cluster_ids = {r["id"] for r in cluster_hits}
+
+        assert imported_claim_ids and imported_claim_ids.issubset(fts_claim_ids), (
+            f"Imported claims missing from fts_claims: imported={imported_claim_ids} "
+            f"fts={fts_claim_ids}"
+        )
+        assert imported_cluster_ids and imported_cluster_ids.issubset(fts_cluster_ids), (
+            f"Imported clusters missing from fts_clusters: imported={imported_cluster_ids} "
+            f"fts={fts_cluster_ids}"
+        )
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_knowledge_pack_import_rolls_back_on_orphan_entity_link(tmp_path: Path):
+    """T5: a pack carrying an entity_link whose target_id points at a
+    non-existent entity must roll back (orphaned_entity_link_targets is one of
+    the four critical-integrity categories) and leave NO rows for the target
+    project. Pre-v2.3.4 the integrity check was advisory-only; partial state
+    landed.
+    """
+    pack_path = tmp_path / "synthetic-orphan.rka-pack.zip"
+    _write_synthetic_pack(
+        pack_path,
+        source_project_id="proj_orphan_src",
+        source_project_name="Orphan Source",
+        tables={
+            "journal": [{
+                "id": "jrn_t5_orphan", "type": "note",
+                "content": "Will be rolled back.", "source": "pi",
+                "confidence": "tested", "status": "active",
+                "project_id": "proj_orphan_src",
+            }],
+            # entity_link references a decision_id that doesn't exist in the
+            # pack — orphan target by construction.
+            "entity_links": [{
+                "id": "lnk_t5_orphan",
+                "source_type": "journal", "source_id": "jrn_t5_orphan",
+                "link_type": "references",
+                "target_type": "decision", "target_id": "dec_does_not_exist",
+                "project_id": "proj_orphan_src",
+            }],
+        },
+    )
+
+    db = await _make_db(tmp_path / "orphan-rollback.db")
+    try:
+        with open(pack_path, "rb") as pack_file:
+            with pytest.raises(KnowledgePackIntegrityError) as excinfo:
+                await KnowledgePackService(db).import_pack(
+                    pack_file,
+                    project_id="proj_orphan_dst",
+                    project_name="Orphan Dest",
+                )
+        # The error carries the structured findings.
+        cats = {issue["category"] for issue in excinfo.value.issues}
+        assert "orphaned_entity_link_targets" in cats
+
+        # Critical: no rows for the target project survived. Check across
+        # projects, journal, and entity_links.
+        assert (await db.fetchall(
+            "SELECT id FROM projects WHERE id = ?", ["proj_orphan_dst"],
+        )) == []
+        assert (await db.fetchall(
+            "SELECT id FROM journal WHERE project_id = ?", ["proj_orphan_dst"],
+        )) == []
+        assert (await db.fetchall(
+            "SELECT id FROM entity_links WHERE project_id = ?", ["proj_orphan_dst"],
+        )) == []
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_knowledge_pack_import_recomputes_stale_claim_count(tmp_path: Path):
+    """T5 (Brain success-path addition): when the post-insert integrity check
+    reports a non-critical claim_count_mismatch, the import commits and the
+    success path runs a project-scoped recompute so the row lands with the
+    correct derived count instead of the stale value the pack carried.
+    """
+    pack_path = tmp_path / "synthetic-stale-count.rka-pack.zip"
+    _write_synthetic_pack(
+        pack_path,
+        source_project_id="proj_stale_src",
+        source_project_name="Stale Count Source",
+        tables={
+            "journal": [{
+                "id": "jrn_t5_stale", "type": "note",
+                "content": "seed", "source": "pi",
+                "confidence": "tested", "status": "active",
+                "project_id": "proj_stale_src",
+            }],
+            "claims": [{
+                "id": "clm_t5_stale_1", "source_entry_id": "jrn_t5_stale",
+                "claim_type": "observation",
+                "content": "single member claim",
+                "confidence": 0.7, "project_id": "proj_stale_src",
+            }],
+            "evidence_clusters": [{
+                "id": "ecl_t5_stale", "label": "Stale-count cluster",
+                # Pack carries claim_count = 99 (deliberately wrong).
+                "claim_count": 99,
+                "project_id": "proj_stale_src",
+            }],
+            "claim_edges": [{
+                "id": "clmedge_t5_stale_member", "source_claim_id": "clm_t5_stale_1",
+                "target_claim_id": None, "cluster_id": "ecl_t5_stale",
+                "relation": "member_of", "confidence": 0.9,
+                "project_id": "proj_stale_src",
+            }],
+        },
+    )
+
+    db = await _make_db(tmp_path / "stale-count.db")
+    try:
+        with open(pack_path, "rb") as pack_file:
+            result = await KnowledgePackService(db).import_pack(
+                pack_file,
+                project_id="proj_stale_dst",
+                project_name="Stale Count Dest",
+            )
+
+        # Issue surfaced (proves the gate ran) and import committed (success
+        # path returned a result).
+        issue_cats = {i["category"] for i in result.integrity_issues}
+        assert "claim_count_mismatch" in issue_cats
+
+        rows = await db.fetchall(
+            "SELECT id, claim_count FROM evidence_clusters WHERE project_id = ?",
+            ["proj_stale_dst"],
+        )
+        assert len(rows) == 1
+        assert rows[0]["claim_count"] == 1, (
+            "Success-path recompute should have repaired the stale claim_count "
+            f"(99 → 1 member_of edge); got {rows[0]['claim_count']}."
+        )
+    finally:
+        await db.close()
