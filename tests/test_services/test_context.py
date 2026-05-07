@@ -192,3 +192,70 @@ class TestContextNote:
         assert "importance" in pkg.note.lower()
         # Should reference the v2.4 decision id for traceability.
         assert "dec_01KQQPD6Y6B362T3K08368BDMP" in pkg.note
+
+
+class TestHydrateHitsClaimAndCluster:
+    """Defect 1 (mis_01KR1Z28QW9WYXG4VV8PGYWD8G T4): pre-v2.3.4 _hydrate_hits
+    silently dropped claim and cluster hits because the table_map only had
+    journal/decision/literature/mission entries. Multi-hop retrieval returned
+    these node types since v2.3.3, so the hydration drop was a silent
+    data-invisibility bug. These tests assert claim and cluster hits round-trip
+    through _hydrate_hits with an entity_type annotation.
+    """
+
+    async def test_claim_hit_hydrated(self, context_engine: ContextEngine):
+        from rka.services.search import SearchHit
+
+        await context_engine.db.execute(
+            """INSERT INTO claims
+               (id, source_entry_id, claim_type, content, confidence, project_id)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            ["clm_t4_alpha", "jrn_critical", "observation",
+             "Smoke claim for Defect 1 hydration coverage", 0.8, "proj_default"],
+        )
+        await context_engine.db.commit()
+
+        hits = [SearchHit(
+            entity_type="claim", entity_id="clm_t4_alpha",
+            title="Smoke claim", snippet="…",
+        )]
+        rows = await context_engine._hydrate_hits(hits, project_id="proj_default")
+        assert len(rows) == 1
+        assert rows[0]["id"] == "clm_t4_alpha"
+        assert rows[0]["entity_type"] == "claim"
+        assert rows[0]["content"].startswith("Smoke claim")
+
+    async def test_cluster_hit_hydrated(self, context_engine: ContextEngine):
+        from rka.services.search import SearchHit
+
+        await context_engine.db.execute(
+            """INSERT INTO evidence_clusters
+               (id, label, project_id)
+               VALUES (?, ?, ?)""",
+            ["ecl_t4_alpha", "Smoke cluster for Defect 1", "proj_default"],
+        )
+        await context_engine.db.commit()
+
+        hits = [SearchHit(
+            entity_type="cluster", entity_id="ecl_t4_alpha",
+            title="Smoke cluster", snippet="…",
+        )]
+        rows = await context_engine._hydrate_hits(hits, project_id="proj_default")
+        assert len(rows) == 1
+        assert rows[0]["id"] == "ecl_t4_alpha"
+        assert rows[0]["entity_type"] == "cluster"
+        assert rows[0]["label"] == "Smoke cluster for Defect 1"
+
+    async def test_unknown_entity_type_still_dropped(self, context_engine: ContextEngine):
+        """Hits with an entity_type not in the table_map are still dropped
+        silently — same fail-open behavior as before the fix; the fix only
+        added claim and cluster, did not turn unknown types into errors.
+        """
+        from rka.services.search import SearchHit
+
+        hits = [SearchHit(
+            entity_type="totally_unknown_type", entity_id="x",
+            title="t", snippet="s",
+        )]
+        rows = await context_engine._hydrate_hits(hits, project_id="proj_default")
+        assert rows == []

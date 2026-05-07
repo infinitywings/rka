@@ -167,12 +167,21 @@ class ContextEngine:
         return candidates
 
     async def _hydrate_hits(self, hits, project_id: str = "proj_default") -> list[dict]:
-        """Convert search hits to full entity dicts."""
+        """Convert search hits to full entity dicts.
+
+        Defect 1 (mis_01KR1Z28QW9WYXG4VV8PGYWD8G T4): pre-v2.3.4 the table_map
+        omitted claim and cluster, so v2.3.3's multi-hop retrieval primitive
+        returned claim/cluster nodes that ContextEngine then silently dropped.
+        Extension is symmetric with the existing render path: SELECT * gated
+        on (id, project_id) plus an entity_type annotation.
+        """
         table_map = {
             "journal": "journal",
             "decision": "decisions",
             "literature": "literature",
             "mission": "missions",
+            "claim": "claims",
+            "cluster": "evidence_clusters",
         }
         results = []
         for hit in hits:
