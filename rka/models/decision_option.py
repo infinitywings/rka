@@ -119,10 +119,11 @@ class DecisionOption(BaseModel):
 
 
 class PiSelectionPayload(BaseModel):
-    """Input to record_pi_selection — exactly one of the two fields must be set.
+    """Input to record_pi_selection — at least one of the two fields must be set.
 
-    The exclusivity is enforced by the service (which understands the decision
-    context). Pydantic here only accepts the shape; the XOR check lives in
+    Both may be set together (PI selects an option AND provides a rationale,
+    typical override-of-recommendation case). Neither set is rejected by the
+    service with a clear ValueError. The "at least one" check lives in
     DecisionOptionsService.record_pi_selection so the resulting ValueError
     surfaces with a clear message and consistent exception type.
     """

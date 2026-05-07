@@ -254,11 +254,22 @@ class TestRecordPiSelection:
         assert row["pi_override_rationale"] == "reframe — none of these fit"
 
     @pytest.mark.asyncio
-    async def test_both_set_rejected(self, svc_and_decision):
+    async def test_both_set_ok(self, svc_and_decision):
+        """Per Defect 6 (Mission A / mis_01KR1Z28QW9WYXG4VV8PGYWD8G): both
+        fields together is the override-of-recommendation case — PI chose an
+        option AND recorded a rationale for choosing it over the recommended
+        one. Earlier XOR rejection contradicted PI semantic intent and was
+        removed in v2.3.4.
+        """
         svc, dec_id = svc_and_decision
         a = await svc.create(dec_id, _make_option(label="A"))
-        with pytest.raises(ValueError):
-            await svc.record_pi_selection(dec_id, a.id, "also override")
+        await svc.record_pi_selection(dec_id, a.id, "chose A over recommended B because …")
+        row = await svc.db.fetchone(
+            "SELECT pi_selected_option_id, pi_override_rationale FROM decisions WHERE id = ?",
+            [dec_id],
+        )
+        assert row["pi_selected_option_id"] == a.id
+        assert row["pi_override_rationale"] == "chose A over recommended B because …"
 
     @pytest.mark.asyncio
     async def test_neither_set_rejected(self, svc_and_decision):

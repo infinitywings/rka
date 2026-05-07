@@ -657,9 +657,10 @@ async def rka_record_pi_selection(
 ) -> str:
     """Record the PI's response to a presented decision.
 
-    Exclusive: pass EITHER selected_option_id (PI chose one of the surviving
-    options) OR override_rationale (PI invoked an escape hatch). Both set or
-    neither set is rejected.
+    Pass at least one of selected_option_id (PI chose one of the surviving
+    options) or override_rationale (PI invoked an escape hatch). Both may be
+    set together when the PI selects an option AND provides a rationale —
+    the typical override-of-recommendation case. Neither set is rejected.
 
     Args:
         decision_id: The decision being responded to.
@@ -667,7 +668,9 @@ async def rka_record_pi_selection(
             its dop_... ID.
         override_rationale: If the PI used an escape hatch, one of the four
             canonical values per decision_ux.md: "defer", "reframe", "reject_all",
-            or "custom: <free text>".
+            or "custom: <free text>". May also accompany selected_option_id
+            to record the rationale for choosing that option over the
+            recommended one.
     """
     async with _client() as c:
         r = await c.put(
