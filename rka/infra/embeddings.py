@@ -105,6 +105,7 @@ class EmbeddingService:
             "literature": "vec_literature",
             "journal": "vec_journal",
             "mission": "vec_missions",
+            "claim": "vec_claims",
             "artifact": "vec_artifacts",
             "figure": "vec_artifacts",
         }

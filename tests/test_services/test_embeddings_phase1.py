@@ -184,7 +184,9 @@ class TestEmbeddingBackfill:
             batch_size=10,
             force=True,
         )
-        assert counts == {"artifact": 1, "figure": 1}
+        # Defect 2 (mis_01KR1Z28QW9WYXG4VV8PGYWD8G T3): backfill_embeddings now
+        # also iterates claims; proj_alpha has none, so claim count is 0.
+        assert counts == {"artifact": 1, "figure": 1, "claim": 0}
 
         rows = await db.fetchall(
             """SELECT entity_type, entity_id
