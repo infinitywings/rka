@@ -212,6 +212,9 @@ async def test_entity_links_accepts_new_link_types(db: Database):
     added a CHECK constraint enumerating only types that production code
     actually emits into entity_links.
     """
+    # NB: builds_on / supports / contradicts are claim_edges.relation values,
+    # NOT entity_links.link_type values. Don't re-add them here (architecture.md
+    # has historically conflated the two vocabularies — see jrn_01KR22DCTCH5XQQC4E3MMB89YK).
     new_types = [
         "informed_by", "justified_by", "motivated", "derived_from",
     ]
