@@ -15,7 +15,13 @@ ClaimType = Literal[
 
 
 class ClaimCreate(BaseModel):
-    """Create a new claim (typically by the distillation pipeline)."""
+    """Create a new claim (typically by the distillation pipeline).
+
+    extra="forbid" defense-in-depth — see Mission C
+    (mis_01KR43RX9KY11GAPTPPGK9XSDE) for context.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     source_entry_id: str
     claim_type: ClaimType
@@ -65,7 +71,13 @@ ClusterConfidence = Literal["strong", "moderate", "emerging", "contested", "refu
 
 
 class EvidenceClusterCreate(BaseModel):
-    """Create a new evidence cluster."""
+    """Create a new evidence cluster.
+
+    extra="forbid" defense-in-depth — see Mission C
+    (mis_01KR43RX9KY11GAPTPPGK9XSDE) for context.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     research_question_id: str | None = None
     label: str
@@ -115,7 +127,13 @@ ClaimRelationType = Literal[
 
 
 class ClaimEdgeCreate(BaseModel):
-    """Create a claim edge (relationship between claims or claim-to-cluster)."""
+    """Create a claim edge (relationship between claims or claim-to-cluster).
+
+    extra="forbid" defense-in-depth — see Mission C
+    (mis_01KR43RX9KY11GAPTPPGK9XSDE) for context.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     source_claim_id: str
     target_claim_id: str | None = None

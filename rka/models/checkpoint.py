@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class CheckpointOption(BaseModel):
@@ -16,7 +16,13 @@ class CheckpointOption(BaseModel):
 
 
 class CheckpointCreate(BaseModel):
-    """Create a new checkpoint (Executor submits)."""
+    """Create a new checkpoint (Executor submits).
+
+    extra="forbid" defense-in-depth — see Mission C
+    (mis_01KR43RX9KY11GAPTPPGK9XSDE) for context.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     mission_id: str
     task_reference: str | None = None

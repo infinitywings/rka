@@ -6,7 +6,13 @@ from pydantic import BaseModel, ConfigDict
 
 
 class TopicCreate(BaseModel):
-    """Create a new topic."""
+    """Create a new topic.
+
+    extra="forbid" defense-in-depth — see Mission C
+    (mis_01KR43RX9KY11GAPTPPGK9XSDE) for context.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str
     parent_id: str | None = None

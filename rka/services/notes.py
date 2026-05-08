@@ -43,11 +43,11 @@ class NoteService(BaseService):
 
         await self.db.execute(
             """INSERT INTO journal
-               (id, type, content, source, phase, verbatim_input, related_decisions, related_literature,
+               (id, type, content, summary, source, phase, verbatim_input, related_decisions, related_literature,
                 related_mission, supersedes, confidence, importance, status, pinned, project_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
-                entry_id, data.type, data.content, source, data.phase,
+                entry_id, data.type, data.content, data.summary, source, data.phase,
                 data.verbatim_input,
                 self._json_dumps(data.related_decisions),
                 self._json_dumps(data.related_literature),
