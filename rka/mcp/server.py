@@ -1105,6 +1105,69 @@ async def rka_update_mission_status(
 
 
 @tool()
+async def rka_update_mission(
+    id: str,
+    phase: str | None = None,
+    objective: str | None = None,
+    context: str | None = None,
+    acceptance_criteria: str | None = None,
+    scope_boundaries: str | None = None,
+    checkpoint_triggers: str | None = None,
+    depends_on: str | None = None,
+    parent_mission_id: str | None = None,
+    motivated_by_decision: str | None = None,
+    tags: list[str] | None = None,
+) -> str:
+    """Update mission body fields. Wraps the post-Bug-A MissionService.update.
+
+    For status + tasks, use the existing rka_update_mission_status tool —
+    those have a separate lifecycle and validation path.
+
+    Affordance D (Mission B / mis_01KR209WY4M6WQFEXRH79KC2ZF) — closes the
+    MCP wrapper gap that the 2026-05-02 manifest pass flagged: prior to
+    this tool, fields like motivated_by_decision could only be set at
+    create time; retroactive updates required direct REST PUT against
+    /api/missions/{id}.
+
+    When motivated_by_decision is set, MissionService.update materializes
+    the corresponding `motivated` entity_link parallel to create-path
+    behavior (see Bug A commit 02d7348).
+
+    Args:
+        id: Mission ID
+        phase: Research phase
+        objective: Updated objective
+        context: Background context for the Executor
+        acceptance_criteria: How to know when done
+        scope_boundaries: What NOT to do
+        checkpoint_triggers: When to escalate
+        depends_on: Mission ID this depends on
+        parent_mission_id: Parent mission ID
+        motivated_by_decision: Decision ID that triggered this mission
+            (creates motivated entity_link)
+        tags: Replacement tag list
+    """
+    async with _client() as c:
+        body = {
+            "phase": phase, "objective": objective, "context": context,
+            "acceptance_criteria": acceptance_criteria,
+            "scope_boundaries": scope_boundaries,
+            "checkpoint_triggers": checkpoint_triggers,
+            "depends_on": depends_on,
+            "parent_mission_id": parent_mission_id,
+            "motivated_by_decision": motivated_by_decision,
+            "tags": tags,
+        }
+        filtered = {k: v for k, v in body.items() if v is not None}
+        if not filtered:
+            return f"Mission {id}: no fields to update."
+        r = await c.put(f"/api/missions/{id}", json=filtered)
+        _raise_with_detail(r)
+        changed = list(filtered.keys())
+        return f"Updated mission {id} fields={','.join(changed)}"
+
+
+@tool()
 async def rka_submit_report(
     mission_id: str,
     summary: str,
