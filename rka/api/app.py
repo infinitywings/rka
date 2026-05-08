@@ -184,6 +184,29 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
             },
         )
 
+    # Affordance G (Mission B / mis_01KR209WY4M6WQFEXRH79KC2ZF):
+    # Replace the generic 500 the import route would otherwise surface
+    # for KnowledgePackIntegrityError with a structured 422 carrying
+    # the per-issue findings (category, severity, count, ids,
+    # description, fix_action). Severity field is populated by Affordance
+    # E so consumers can distinguish critical vs warning without knowing
+    # the category list.
+    from rka.services.knowledge_pack import KnowledgePackIntegrityError
+
+    @app.exception_handler(KnowledgePackIntegrityError)
+    async def knowledge_pack_integrity_handler(
+        request: Request, exc: KnowledgePackIntegrityError,
+    ):
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": "knowledge_pack_integrity_failed",
+                "detail": str(exc),
+                "issues": exc.issues,
+                "hint": "Resolve the listed integrity issues at the pack source, then retry the import.",
+            },
+        )
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[
