@@ -105,6 +105,12 @@ class MaintenanceService(BaseService):
                  )""",
             [pid, pid],
         )
+        # Affordance A: parent-chain walk requires Python-side traversal —
+        # delegate to the full method, then count its result. Counts are
+        # capped to _GATE_AUDIT_LIMIT (10) by construction; that's the
+        # intended advisory-cap behavior for the summary.
+        gate_audit = await self._missions_without_upstream_gate(pid)
+        counts["missions_without_upstream_gate"] = gate_audit["count"]
         await _count(
             "unassigned_clusters",
             """SELECT COUNT(*) AS c FROM evidence_clusters ec
@@ -142,6 +148,7 @@ class MaintenanceService(BaseService):
         entries_missing_cross_refs = await self._entries_missing_cross_refs(pid)
         decisions_without_justified_by = await self._decisions_without_justified_by(pid)
         missions_without_motivated_by = await self._missions_without_motivated_by(pid)
+        missions_without_upstream_gate = await self._missions_without_upstream_gate(pid)
         unassigned_clusters = await self._unassigned_clusters(pid)
         stale_claims = await self._stale_claims(pid)
         stale_clusters = await self._stale_clusters(pid)
@@ -154,6 +161,7 @@ class MaintenanceService(BaseService):
             "entries_missing_cross_refs": entries_missing_cross_refs,
             "decisions_without_justified_by": decisions_without_justified_by,
             "missions_without_motivated_by": missions_without_motivated_by,
+            "missions_without_upstream_gate": missions_without_upstream_gate,
             "unassigned_clusters": unassigned_clusters,
             "stale_claims": stale_claims,
             "stale_clusters": stale_clusters,
@@ -364,5 +372,90 @@ class MaintenanceService(BaseService):
             "ids": [r["id"] for r in rows],
             "description": "Clusters with stale evidence needing re-synthesis",
             "fix_action": "Brain re-reviews cluster with fresh evidence",
+            "fix_calls_per_item": 1,
+        }
+
+    # Affordance A (Mission B / mis_01KR209WY4M6WQFEXRH79KC2ZF) — gate-invariant
+    # audit. Replaces the rejected "first-class gate schema" recommendation
+    # from the v2.3.3 revision report at a fraction of the cost: mission's
+    # motivated_by_decision parent chain (decision.parent_id) is walked to
+    # find an ancestor decision tagged 'gate'. If none found, the mission is
+    # flagged. Surfaces in the manifest as advisory; lets PI/Brain decide
+    # whether write-time enforcement is worth pursuing later.
+    _GATE_AUDIT_LIMIT = 10
+    _GATE_AUDIT_MAX_DEPTH = 16  # Cycle / pathological-depth guard.
+
+    async def _missions_without_upstream_gate(self, pid: str) -> dict:
+        # Step 1: candidate missions — those with motivated_by_decision set
+        # AND not cancelled. A mission with no motivated_by_decision is
+        # already covered by _missions_without_motivated_by.
+        candidates = await self.db.fetchall(
+            """SELECT m.id, m.motivated_by_decision
+               FROM missions m
+               WHERE m.project_id = ?
+                 AND m.status NOT IN ('cancelled')
+                 AND m.motivated_by_decision IS NOT NULL
+               ORDER BY m.created_at DESC""",
+            [pid],
+        )
+        if not candidates:
+            return {
+                "count": 0, "ids": [],
+                "description": "Missions whose motivated_by_decision parent chain has no 'gate'-tagged ancestor",
+                "fix_action": "Tag the relevant decision with 'gate' or revisit motivated_by_decision",
+                "fix_calls_per_item": 1,
+            }
+
+        # Step 2: gate-tagged decisions in this project (single fetch).
+        gate_rows = await self.db.fetchall(
+            """SELECT t.entity_id FROM tags t
+               WHERE t.entity_type = 'decision'
+                 AND t.tag = 'gate'
+                 AND t.project_id = ?""",
+            [pid],
+        )
+        gate_set = {r["entity_id"] for r in gate_rows}
+
+        # Step 3: parent_id map for all decisions in this project (one query;
+        # avoids per-mission walk hitting the DB N times).
+        parent_rows = await self.db.fetchall(
+            """SELECT id, parent_id FROM decisions
+               WHERE project_id = ? AND parent_id IS NOT NULL""",
+            [pid],
+        )
+        parent_map: dict[str, str] = {r["id"]: r["parent_id"] for r in parent_rows}
+
+        # Step 4: per-mission walk from motivated_by_decision up the parent
+        # chain. Visited-set + max-depth guard against cycles or pathological
+        # depths.
+        flagged: list[str] = []
+        for cand in candidates:
+            cur = cand["motivated_by_decision"]
+            visited: set[str] = set()
+            found_gate = False
+            depth = 0
+            while cur is not None and depth < self._GATE_AUDIT_MAX_DEPTH:
+                if cur in visited:
+                    break  # cycle guard
+                visited.add(cur)
+                if cur in gate_set:
+                    found_gate = True
+                    break
+                cur = parent_map.get(cur)
+                depth += 1
+            if not found_gate:
+                flagged.append(cand["id"])
+                if len(flagged) >= self._GATE_AUDIT_LIMIT:
+                    break
+
+        return {
+            "count": len(flagged),
+            "ids": flagged,
+            "description": (
+                "Missions whose motivated_by_decision parent chain has no "
+                "'gate'-tagged ancestor decision (advisory; manifest cap "
+                f"= {self._GATE_AUDIT_LIMIT})"
+            ),
+            "fix_action": "Tag the relevant decision with 'gate' or revisit motivated_by_decision",
             "fix_calls_per_item": 1,
         }
