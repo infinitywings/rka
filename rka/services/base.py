@@ -214,6 +214,9 @@ class BaseService:
         "decision": ["question", "rationale"],
         "literature": ["title", "abstract"],
         "mission": ["objective", "context"],
+        # Cluster vector embeddings are parked (mission-A scope); cluster FTS
+        # populates via _FTS_CONFIG instead.
+        "claim": ["content"],
     }
 
     async def _sync_embedding(self, entity_type: str, entity_id: str, data: dict) -> None:

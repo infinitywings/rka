@@ -309,15 +309,17 @@ def backfill():
 @click.option("--batch-size", default=50, show_default=True, type=int, help="Rows per batch")
 @click.option("--figures/--no-figures", default=True, help="Backfill figure embeddings")
 @click.option("--artifacts/--no-artifacts", default=True, help="Backfill artifact embeddings")
+@click.option("--claims/--no-claims", default=True, help="Backfill claim embeddings")
 @click.option("--force", is_flag=True, help="Re-embed even if metadata is current")
 def backfill_embeddings_cmd(
     project_id: str,
     batch_size: int,
     figures: bool,
     artifacts: bool,
+    claims: bool,
     force: bool,
 ):
-    """Backfill artifact and figure embeddings for a project."""
+    """Backfill artifact, figure, and claim embeddings for a project."""
     from rka.config import RKAConfig
     from rka.infra.database import Database
     from rka.infra.embeddings import EmbeddingService
@@ -338,6 +340,7 @@ def backfill_embeddings_cmd(
             batch_size=batch_size,
             include_artifacts=artifacts,
             include_figures=figures,
+            include_claims=claims,
             force=force,
         )
         await db.close()

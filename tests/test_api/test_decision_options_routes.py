@@ -309,9 +309,13 @@ async def test_pi_selection_selected_ok(
 
 
 @pytest.mark.asyncio
-async def test_pi_selection_both_set_400(
+async def test_pi_selection_both_set_200(
     api_client: httpx.AsyncClient, decision_id: str,
 ):
+    """Per Defect 6 (Mission A / mis_01KR1Z28QW9WYXG4VV8PGYWD8G): both fields
+    together is the override-of-recommendation case. Earlier XOR rejection
+    contradicted PI semantic intent and was removed in v2.3.4.
+    """
     a = await api_client.post(
         f"/api/decisions/{decision_id}/options",
         json=_option_payload(label="A"),
@@ -321,8 +325,11 @@ async def test_pi_selection_both_set_400(
         f"/api/decisions/{decision_id}/pi_selection",
         json={
             "selected_option_id": a.json()["id"],
-            "override_rationale": "also override",
+            "override_rationale": "chose A over recommended B because …",
         },
         headers=HEADERS,
     )
-    assert r.status_code == 400
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["selected_option_id"] == a.json()["id"]
+    assert body["override_rationale"] == "chose A over recommended B because …"

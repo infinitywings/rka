@@ -50,8 +50,8 @@ class DecisionService(BaseService):
             """INSERT INTO decisions
                (id, parent_id, phase, question, options, chosen, rationale,
                 decided_by, status, related_missions, related_literature,
-                related_journal, kind, project_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                related_journal, kind, assumptions, project_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 dec_id, data.parent_id, data.phase, data.question,
                 options_json, data.chosen, data.rationale,
@@ -60,6 +60,8 @@ class DecisionService(BaseService):
                 self._json_dumps(data.related_literature),
                 self._json_dumps(data.related_journal),
                 data.kind,
+                # Mission C T5b: assumptions parallel to related_* JSON-list fields.
+                self._json_dumps(data.assumptions),
                 self.project_id,
             ],
         )

@@ -8,7 +8,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class LiteratureCreate(BaseModel):
-    """Create a new literature entry."""
+    """Create a new literature entry.
+
+    extra="forbid" defense-in-depth — see Mission C
+    (mis_01KR43RX9KY11GAPTPPGK9XSDE) for context.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     title: str
     authors: list[str] | None = None

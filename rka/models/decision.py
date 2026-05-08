@@ -16,7 +16,17 @@ class DecisionOption(BaseModel):
 
 
 class DecisionCreate(BaseModel):
-    """Create a new decision node."""
+    """Create a new decision node.
+
+    extra="forbid": undeclared fields raise 422 instead of silently stripping.
+    Mirrors the DecisionUpdate guard added by Bug A; closes the parallel
+    CREATE-path silent-write hole identified by Mission C
+    (mis_01KR43RX9KY11GAPTPPGK9XSDE) — `assumptions` was being silently
+    dropped by rka_add_decision callers because Bug A's commit added it
+    to DecisionUpdate but missed DecisionCreate.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     question: str
     options: list[DecisionOption] | None = None
@@ -31,6 +41,9 @@ class DecisionCreate(BaseModel):
     status: Literal["active", "abandoned", "superseded", "merged", "revisit"] = "active"
     kind: Literal["research_question", "design_choice", "decision", "operational"] = "decision"
     tags: list[str] = Field(default_factory=list)
+    # Migration 014 — assumptions this decision rests on. Bug A added this
+    # to DecisionUpdate but missed DecisionCreate; Mission C closes the gap.
+    assumptions: list[str] | None = None
 
 
 class DecisionUpdate(BaseModel):

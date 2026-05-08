@@ -18,6 +18,36 @@ from rka.services.base import BaseService, _now
 PACK_SCHEMA_VERSION = 2
 PACK_FILE_SUFFIX = ".rka-pack.zip"
 
+
+# Defect 3 (mis_01KR1Z28QW9WYXG4VV8PGYWD8G T5): integrity-gate categories
+# whose presence forces a pack-import rollback. Other categories (currently
+# only claim_count mismatch) are non-critical and repaired in the success
+# path via a project-scoped recompute. Brain-ratified during the upfront
+# Backbrief (jrn_01KR1ZH9HNVCX28VQV8KN3H4N7).
+_CRITICAL_INTEGRITY_CATEGORIES: frozenset[str] = frozenset({
+    "orphaned_entity_link_sources",
+    "orphaned_entity_link_targets",
+    "orphaned_claim_edge_sources",
+    "orphaned_claim_edge_clusters",
+})
+
+
+class KnowledgePackIntegrityError(RuntimeError):
+    """Raised when an imported pack fails the post-insert integrity gate.
+
+    Carries the structured `issues` list (the same shape returned by
+    KnowledgePackService.check_integrity) so the caller can surface the
+    cause to the operator. The transaction is rolled back before this is
+    raised; no partial state is left behind.
+    """
+
+    def __init__(self, issues: list[dict]):
+        self.issues = issues
+        cats = sorted({issue["category"] for issue in issues})
+        super().__init__(
+            "Pack import rejected: critical integrity issues — " + ", ".join(cats)
+        )
+
 # Categorized table registry — all tables with project_id MUST be listed here.
 # Export validation will FAIL if any uncategorized table has data.
 _TABLE_CATEGORIES: dict[str, list[str]] = {
@@ -335,17 +365,40 @@ class KnowledgePackService(BaseService):
 
                     imported_counts[table] = len(rows)
 
+                # Defect 3 (T5): integrity gate runs INSIDE the transaction so
+                # critical issues (orphaned edges / missing parents introduced
+                # by the imported rows) trigger a clean rollback instead of
+                # landing partial state. Non-critical issues (currently only
+                # claim_count mismatch) are repaired post-commit by
+                # _recompute_cluster_claim_counts.
+                integrity_issues = await self.check_integrity(target_project_id)
+                critical = [
+                    i for i in integrity_issues
+                    if i.get("category") in _CRITICAL_INTEGRITY_CATEGORIES
+                ]
+                if critical:
+                    await self.db.execute("ROLLBACK")
+                    if created_root and artifact_root.exists():
+                        shutil.rmtree(artifact_root.parent, ignore_errors=True)
+                    raise KnowledgePackIntegrityError(critical)
+
                 await self.db.commit()
+            except KnowledgePackIntegrityError:
+                # Already rolled back inside the try-block; just propagate.
+                raise
             except Exception:
                 await self.db.execute("ROLLBACK")
                 if created_root and artifact_root.exists():
                     shutil.rmtree(artifact_root.parent, ignore_errors=True)
                 raise
 
+        # Success path. Sync indexes for the (now committed) rows + repair
+        # non-critical findings so the import doesn't land with stale derived
+        # counts (Brain-ratified addition during the upfront Backbrief).
         await self._sync_imported_indexes(tables)
-
-        # Post-import integrity check
-        integrity_issues = await self.check_integrity(target_project_id)
+        if any(i.get("category") == "claim_count_mismatch"
+               for i in integrity_issues):
+            await self._recompute_cluster_claim_counts(target_project_id)
 
         return KnowledgePackImportResult(
             project_id=target_project_id,
@@ -714,6 +767,35 @@ class KnowledgePackService(BaseService):
             await self._sync_indexes("literature", row["id"], row)
         for row in tables.get("missions", []):
             await self._sync_indexes("mission", row["id"], row)
+        # Defect 3 (mis_01KR1Z28QW9WYXG4VV8PGYWD8G T5): pre-v2.3.4 the iteration
+        # stopped at missions, so imported claims and clusters were invisible
+        # to FTS / vec search until a manual reindex. _sync_indexes routes via
+        # _FTS_CONFIG (claim + cluster present) and _EMBED_TEXT_MAP (claim
+        # present; cluster vectors parked).
+        for row in tables.get("claims", []):
+            await self._sync_indexes("claim", row["id"], row)
+        for row in tables.get("evidence_clusters", []):
+            await self._sync_indexes("cluster", row["id"], row)
+
+    async def _recompute_cluster_claim_counts(self, project_id: str) -> None:
+        """Project-scoped recompute of evidence_clusters.claim_count from
+        claim_edges.relation='member_of'. Mirrors migration 016 but bound to
+        a single project so the import path can repair its own stale-derived
+        rows without touching other projects.
+        """
+        await self.db.execute(
+            """UPDATE evidence_clusters
+               SET claim_count = (
+                   SELECT COUNT(*) FROM claim_edges
+                   WHERE claim_edges.cluster_id = evidence_clusters.id
+                     AND claim_edges.relation = 'member_of'
+                     AND claim_edges.project_id = evidence_clusters.project_id
+               ),
+               updated_at = ?
+               WHERE project_id = ?""",
+            [_now(), project_id],
+        )
+        await self.db.commit()
 
     def _artifact_import_root(self, project_id: str) -> Path:
         db_dir = Path(self.db.db_path).resolve().parent

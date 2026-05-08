@@ -239,21 +239,17 @@ class DecisionOptionsService(BaseService):
     ) -> None:
         """Persist the PI's selection on the decisions row.
 
-        Exclusive: exactly one of ``selected_option_id`` or
-        ``override_rationale`` must be set. Both set or neither set raises
-        ``ValueError`` — that's the decision still being open, which is the
-        pre-selection default and doesn't need a write.
+        At least one of ``selected_option_id`` or ``override_rationale`` must
+        be set. Both may be set together when the PI selects an option AND
+        provides a rationale (typical override-of-recommendation case).
+        Neither set raises ``ValueError`` — that's the decision still being
+        open, which is the pre-selection default and doesn't need a write.
         """
         has_selected = selected_option_id is not None and selected_option_id != ""
         has_override = override_rationale is not None and override_rationale.strip() != ""
-        if has_selected and has_override:
-            raise ValueError(
-                "record_pi_selection: selected_option_id and override_rationale "
-                "are mutually exclusive; set exactly one"
-            )
         if not has_selected and not has_override:
             raise ValueError(
-                "record_pi_selection: exactly one of selected_option_id or "
+                "record_pi_selection: at least one of selected_option_id or "
                 "override_rationale must be set"
             )
         if has_selected:

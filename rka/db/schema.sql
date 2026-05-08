@@ -257,9 +257,25 @@ CREATE INDEX IF NOT EXISTS idx_bootstrap_scan ON bootstrap_log(scan_id);
 
 CREATE TABLE IF NOT EXISTS entity_links (
     id TEXT PRIMARY KEY,
-    source_type TEXT NOT NULL,  -- 'decision','mission','journal','literature','checkpoint'
+    source_type TEXT NOT NULL,  -- 'decision','mission','journal','literature','checkpoint','claim','cluster','artifact','figure'
     source_id   TEXT NOT NULL,
-    link_type   TEXT NOT NULL,  -- 'triggered','produced','references','resolved_as','cites','supersedes','evidence_for'
+    -- link_type CHECK enumerates every type emitted by production code
+    -- (services, api, mcp, backfill) plus the two legacy types preserved
+    -- for historical rows. Update via a follow-up migration when adding a
+    -- new type. See migration 021 for the rationale and per-type paths.
+    link_type   TEXT NOT NULL CHECK (link_type IN (
+        'justified_by',
+        'informed_by',
+        'supersedes',
+        'motivated',
+        'references',
+        'cites',
+        'produced',
+        'derived_from',
+        'resolved_as',
+        'evidence_for',
+        'triggered'
+    )),
     target_type TEXT NOT NULL,
     target_id   TEXT NOT NULL,
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),

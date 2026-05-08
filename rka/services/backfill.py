@@ -105,10 +105,11 @@ async def backfill_embeddings(
     *,
     include_artifacts: bool = True,
     include_figures: bool = True,
+    include_claims: bool = True,
     force: bool = False,
 ) -> dict[str, int]:
-    """Backfill artifact and figure embeddings for a project."""
-    counts = {"artifact": 0, "figure": 0}
+    """Backfill artifact, figure, and claim embeddings for a project."""
+    counts = {"artifact": 0, "figure": 0, "claim": 0}
     if include_artifacts:
         counts["artifact"] = await _backfill_artifact_embeddings(
             db,
@@ -119,6 +120,14 @@ async def backfill_embeddings(
         )
     if include_figures:
         counts["figure"] = await _backfill_figure_embeddings(
+            db,
+            embeddings,
+            project_id=project_id,
+            batch_size=batch_size,
+            force=force,
+        )
+    if include_claims:
+        counts["claim"] = await _backfill_claim_embeddings(
             db,
             embeddings,
             project_id=project_id,
@@ -235,6 +244,46 @@ async def _backfill_figure_embeddings(
                 continue
             if force or await embeddings.needs_reembed("figure", row["id"], text, project_id=project_id):
                 await embeddings.embed_and_store("figure", row["id"], text, project_id=project_id)
+                count += 1
+        offset += len(rows)
+    return count
+
+
+async def _backfill_claim_embeddings(
+    db: Database,
+    embeddings: EmbeddingService,
+    *,
+    project_id: str,
+    batch_size: int,
+    force: bool,
+) -> int:
+    """Backfill claim embeddings into vec_claims for a project.
+
+    Defect 2 (mis_01KR1Z28QW9WYXG4VV8PGYWD8G): pre-v2.3.4, EmbeddingService
+    omitted `claim` from its table_map, so claim embeddings were never
+    written to vec_claims even though ClaimService enqueued the embed jobs
+    and embedding_metadata was updated. Run this once per project after
+    upgrading to v2.3.4 to populate vec_claims for existing claims.
+    """
+    count = 0
+    offset = 0
+    while True:
+        rows = await db.fetchall(
+            """SELECT id, content
+               FROM claims
+               WHERE project_id = ?
+               ORDER BY created_at
+               LIMIT ? OFFSET ?""",
+            [project_id, batch_size, offset],
+        )
+        if not rows:
+            break
+        for row in rows:
+            text = (row.get("content") or "").strip()
+            if not text:
+                continue
+            if force or await embeddings.needs_reembed("claim", row["id"], text, project_id=project_id):
+                await embeddings.embed_and_store("claim", row["id"], text, project_id=project_id)
                 count += 1
         offset += len(rows)
     return count

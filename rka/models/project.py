@@ -54,7 +54,13 @@ class ProjectInfo(BaseModel):
 
 
 class ProjectCreate(BaseModel):
-    """Create a new project container."""
+    """Create a new project container.
+
+    extra="forbid" defense-in-depth — see Mission C
+    (mis_01KR43RX9KY11GAPTPPGK9XSDE) for context.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     id: str | None = None
     name: str

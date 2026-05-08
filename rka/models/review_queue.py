@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 ReviewFlag = Literal[
@@ -20,7 +20,13 @@ ReviewStatus = Literal["pending", "acknowledged", "resolved", "dismissed"]
 
 
 class ReviewItemCreate(BaseModel):
-    """Flag an item for Brain review."""
+    """Flag an item for Brain review.
+
+    extra="forbid" defense-in-depth — see Mission C
+    (mis_01KR43RX9KY11GAPTPPGK9XSDE) for context.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     item_type: str
     item_id: str

@@ -17,7 +17,15 @@ class MissionTask(BaseModel):
 
 
 class MissionCreate(BaseModel):
-    """Create a new mission."""
+    """Create a new mission.
+
+    extra="forbid": undeclared fields raise 422 instead of silently stripping.
+    Mirrors the MissionUpdate guard added by Bug A; closes the parallel
+    CREATE-path silent-write hole identified by Mission C
+    (mis_01KR43RX9KY11GAPTPPGK9XSDE).
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     phase: str
     objective: str
@@ -55,7 +63,12 @@ class MissionUpdate(BaseModel):
 
 
 class MissionReportCreate(BaseModel):
-    """Executor's structured report for a completed mission."""
+    """Executor's structured report for a completed mission.
+
+    extra="forbid" defense-in-depth — see MissionCreate for context.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     tasks_completed: list[str] | None = None
     findings: list[str] | None = None

@@ -54,10 +54,19 @@ def normalize_journal_type(raw_type: str) -> str:
 
 
 class JournalEntryCreate(BaseModel):
-    """Create a new journal entry."""
+    """Create a new journal entry.
+
+    extra="forbid": undeclared fields raise 422 instead of silently stripping.
+    Mirrors the JournalEntryUpdate guard added by Bug A; closes the parallel
+    CREATE-path silent-write hole identified by Mission C
+    (mis_01KR43RX9KY11GAPTPPGK9XSDE).
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     content: str
     type: AnyJournalType = "note"
+    summary: str | None = None
     source: Literal["brain", "executor", "pi", "web_ui", "llm"] = "pi"
     phase: str | None = None
     verbatim_input: str | None = None
