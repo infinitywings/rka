@@ -1457,14 +1457,27 @@ async def rka_search(
         except Exception:
             pass
 
+        # Affordance C (Mission B): degraded-mode one-liner when embeddings
+        # are unavailable so the search-result consumer knows the current
+        # output is FTS-only (no semantic recall). Best-effort.
+        degraded_line = ""
+        try:
+            cap_r = await c.get("/api/capabilities")
+            if cap_r.status_code == 200:
+                caps = cap_r.json()
+                if not caps.get("embedding", {}).get("available"):
+                    degraded_line = "\n\n⚠ FTS-only — embeddings unavailable; semantic recall is degraded."
+        except Exception:
+            pass
+
         if not results:
-            return f"No results for '{query}'{backlog_line}"
+            return f"No results for '{query}'{degraded_line}{backlog_line}"
         lines = []
         for res in results:
             lines.append(f"[{res['entity_type']}] {res['entity_id']}: {res['title']}")
             if res.get("snippet"):
                 lines.append(f"  {res['snippet'][:500]}")
-        return "\n".join(lines) + backlog_line
+        return "\n".join(lines) + degraded_line + backlog_line
 
 
 @tool()
@@ -1804,6 +1817,23 @@ async def rka_get_status() -> str:
             top = backlog.get("top_categories") or []
             top_str = ", ".join(f"{c['name']} {c['count']}" for c in top)
             lines.append(f"\nMaintenance: {backlog['total_items']} items (top: {top_str})")
+
+        # Affordance C (Mission B): capabilities block. Best-effort —
+        # silently omit on error so a missing /capabilities route doesn't
+        # break status display.
+        try:
+            cap_r = await c.get("/api/capabilities")
+            if cap_r.status_code == 200:
+                caps = cap_r.json()
+                emb = caps.get("embedding", {})
+                llm = caps.get("llm", {})
+                lines.append("\n### Capabilities")
+                emb_status = "✓ available" if emb.get("available") else f"✗ unavailable ({emb.get('reason_unavailable') or 'unknown'})"
+                llm_status = "✓ available" if llm.get("available") else f"✗ unavailable ({llm.get('reason_unavailable') or 'unknown'})"
+                lines.append(f"  embedding: {emb_status}")
+                lines.append(f"  llm:       {llm_status}")
+        except Exception:
+            pass
 
         return "\n".join(lines)
 
