@@ -19,11 +19,15 @@ PACK_SCHEMA_VERSION = 2
 PACK_FILE_SUFFIX = ".rka-pack.zip"
 
 
-# Defect 3 (mis_01KR1Z28QW9WYXG4VV8PGYWD8G T5): integrity-gate categories
-# whose presence forces a pack-import rollback. Other categories (currently
-# only claim_count mismatch) are non-critical and repaired in the success
-# path via a project-scoped recompute. Brain-ratified during the upfront
-# Backbrief (jrn_01KR1ZH9HNVCX28VQV8KN3H4N7).
+# Mission A T5 (mis_01KR1Z28QW9WYXG4VV8PGYWD8G) introduced a hardcoded
+# critical-categories set. Mission B Affordance E
+# (mis_01KR209WY4M6WQFEXRH79KC2ZF) replaces that with a per-issue
+# `severity` field on check_integrity output (see
+# KnowledgePackService._SEVERITY_BY_CATEGORY). The rollback gate in
+# import_pack now reads issue["severity"] == "critical" rather than
+# matching against this set; the set is preserved for backward-
+# compatibility with any external caller importing the symbol, but
+# new code SHOULD prefer the severity field.
 _CRITICAL_INTEGRITY_CATEGORIES: frozenset[str] = frozenset({
     "orphaned_entity_link_sources",
     "orphaned_entity_link_targets",
@@ -365,16 +369,19 @@ class KnowledgePackService(BaseService):
 
                     imported_counts[table] = len(rows)
 
-                # Defect 3 (T5): integrity gate runs INSIDE the transaction so
-                # critical issues (orphaned edges / missing parents introduced
-                # by the imported rows) trigger a clean rollback instead of
-                # landing partial state. Non-critical issues (currently only
-                # claim_count mismatch) are repaired post-commit by
-                # _recompute_cluster_claim_counts.
+                # Defect 3 (Mission A T5): integrity gate runs INSIDE the
+                # transaction so critical issues (orphaned edges / missing
+                # parents introduced by the imported rows) trigger a clean
+                # rollback instead of landing partial state. Affordance E
+                # (Mission B): the gate now reads the per-issue `severity`
+                # field rather than a hardcoded category set, so the
+                # severity-vs-category mapping lives in one place
+                # (_SEVERITY_BY_CATEGORY) and consumers don't need to know
+                # the category list.
                 integrity_issues = await self.check_integrity(target_project_id)
                 critical = [
                     i for i in integrity_issues
-                    if i.get("category") in _CRITICAL_INTEGRITY_CATEGORIES
+                    if i.get("severity") == "critical"
                 ]
                 if critical:
                     await self.db.execute("ROLLBACK")
@@ -848,8 +855,37 @@ class KnowledgePackService(BaseService):
         except Exception:
             return 0
 
+    # Affordance E (Mission B / mis_01KR209WY4M6WQFEXRH79KC2ZF):
+    # severity table mapping integrity-issue category → severity level. The
+    # 4 orphan-class categories are critical (rollback on import); the
+    # claim_count_mismatch category is warning (commit + recompute).
+    # New categories added later default to "warning" — explicit migration
+    # to "critical" is required if a future invariant violation should
+    # block imports. Mirrors the philosophy of Mission A T5's hardcoded
+    # gate (commit 716712c) but keeps severity explicit on each issue
+    # so consumers don't need to know the category list.
+    _SEVERITY_BY_CATEGORY: dict[str, str] = {
+        "orphaned_entity_link_sources": "critical",
+        "orphaned_entity_link_targets": "critical",
+        "orphaned_claim_edge_sources": "critical",
+        "orphaned_claim_edge_clusters": "critical",
+        "claim_count_mismatch": "warning",
+    }
+
+    @classmethod
+    def _severity_for(cls, category: str) -> str:
+        """Return severity for the given integrity category. Defaults to
+        'warning' for unknown categories so new advisory checks land
+        non-blocking by default."""
+        return cls._SEVERITY_BY_CATEGORY.get(category, "warning")
+
     async def check_integrity(self, project_id: str | None = None) -> list[dict]:
-        """Verify knowledge base integrity — check for orphaned edges, missing refs, count mismatches."""
+        """Verify knowledge base integrity — check for orphaned edges, missing refs, count mismatches.
+
+        Each issue dict carries a `severity` field (`critical | warning`) so
+        consumers can decide rollback vs warn-and-recompute without knowing
+        the category list. Affordance E (Mission B).
+        """
         pid = project_id or self.project_id
         issues: list[dict] = []
 
@@ -867,8 +903,10 @@ class KnowledgePackService(BaseService):
             [pid],
         )
         if orphaned_source:
+            cat = "orphaned_entity_link_sources"
             issues.append({
-                "category": "orphaned_entity_link_sources",
+                "category": cat,
+                "severity": self._severity_for(cat),
                 "count": len(orphaned_source),
                 "ids": [r["id"] for r in orphaned_source[:10]],
                 "description": "entity_links with source_id pointing to non-existent entities",
@@ -889,8 +927,10 @@ class KnowledgePackService(BaseService):
             [pid],
         )
         if orphaned_target:
+            cat = "orphaned_entity_link_targets"
             issues.append({
-                "category": "orphaned_entity_link_targets",
+                "category": cat,
+                "severity": self._severity_for(cat),
                 "count": len(orphaned_target),
                 "ids": [r["id"] for r in orphaned_target[:10]],
                 "description": "entity_links with target_id pointing to non-existent entities",
@@ -906,8 +946,10 @@ class KnowledgePackService(BaseService):
             [pid],
         )
         if orphaned_claims:
+            cat = "orphaned_claim_edge_sources"
             issues.append({
-                "category": "orphaned_claim_edge_sources",
+                "category": cat,
+                "severity": self._severity_for(cat),
                 "count": len(orphaned_claims),
                 "ids": [r["id"] for r in orphaned_claims[:10]],
                 "description": "claim_edges referencing non-existent claims",
@@ -923,8 +965,10 @@ class KnowledgePackService(BaseService):
             [pid],
         )
         if orphaned_clusters:
+            cat = "orphaned_claim_edge_clusters"
             issues.append({
-                "category": "orphaned_claim_edge_clusters",
+                "category": cat,
+                "severity": self._severity_for(cat),
                 "count": len(orphaned_clusters),
                 "ids": [r["id"] for r in orphaned_clusters[:10]],
                 "description": "claim_edges referencing non-existent clusters",
@@ -944,8 +988,10 @@ class KnowledgePackService(BaseService):
             [pid],
         )
         if mismatched:
+            cat = "claim_count_mismatch"
             issues.append({
-                "category": "claim_count_mismatch",
+                "category": cat,
+                "severity": self._severity_for(cat),
                 "count": len(mismatched),
                 "ids": [r["id"] for r in mismatched[:10]],
                 "description": "evidence_clusters with claim_count != actual claim_edges count",
