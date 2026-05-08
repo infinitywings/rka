@@ -96,14 +96,22 @@ class MaintenanceService(BaseService):
         )
         await _count(
             "missions_without_motivated_by",
+            # Affordance F (Mission B): exclude missions tagged
+            # 'motivated-by-explained' — kept in lockstep with
+            # _missions_without_motivated_by above.
             """SELECT COUNT(*) AS c FROM missions m
                WHERE m.project_id = ? AND m.status NOT IN ('cancelled')
                  AND NOT EXISTS (
                      SELECT 1 FROM entity_links el
                      WHERE el.target_type = 'mission' AND el.target_id = m.id
                        AND el.link_type = 'motivated' AND el.project_id = ?
+                 )
+                 AND NOT EXISTS (
+                     SELECT 1 FROM tags t
+                     WHERE t.entity_type = 'mission' AND t.entity_id = m.id
+                       AND t.tag = 'motivated-by-explained' AND t.project_id = ?
                  )""",
-            [pid, pid],
+            [pid, pid, pid],
         )
         # Affordance A: parent-chain walk requires Python-side traversal —
         # delegate to the full method, then count its result. Counts are
@@ -308,6 +316,12 @@ class MaintenanceService(BaseService):
         }
 
     async def _missions_without_motivated_by(self, pid: str) -> dict:
+        # Affordance F (Mission B / mis_01KR209WY4M6WQFEXRH79KC2ZF):
+        # explained-gap suppression. A mission tagged 'motivated-by-explained'
+        # opts out of this advisory category — used for missions whose
+        # missing motivated_by_decision is documented (e.g., Bug A which
+        # PI-directed a deliberate unlinked mission, or orphan-FK missions
+        # whose motivating decision was lost in pack import).
         rows = await self.db.fetchall(
             """SELECT m.id FROM missions m
                WHERE m.project_id = ?
@@ -317,14 +331,19 @@ class MaintenanceService(BaseService):
                      WHERE el.target_type = 'mission' AND el.target_id = m.id
                        AND el.link_type = 'motivated' AND el.project_id = ?
                  )
+                 AND NOT EXISTS (
+                     SELECT 1 FROM tags t
+                     WHERE t.entity_type = 'mission' AND t.entity_id = m.id
+                       AND t.tag = 'motivated-by-explained' AND t.project_id = ?
+                 )
                ORDER BY m.created_at DESC LIMIT 50""",
-            [pid, pid],
+            [pid, pid, pid],
         )
         return {
             "count": len(rows),
             "ids": [r["id"] for r in rows],
-            "description": "Missions without motivated_by_decision links",
-            "fix_action": "Brain creates missions with motivated_by_decision parameter",
+            "description": "Missions without motivated_by_decision links (excluding tagged 'motivated-by-explained')",
+            "fix_action": "Add motivated_by_decision via rka_update_mission, OR tag 'motivated-by-explained' if the gap is intentional",
             "fix_calls_per_item": 1,
         }
 
