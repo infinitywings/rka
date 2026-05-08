@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from rka.services.base import BaseService
+from rka.services.rendering import with_staleness_prefix
 
 
 class ResearchMapService(BaseService):
@@ -76,7 +77,10 @@ class ResearchMapService(BaseService):
             result.append({
                 "id": c["id"],
                 "label": c["label"],
-                "synthesis": c.get("synthesis"),
+                # Affordance B (Mission B): STALE prefix on stale synthesis.
+                "synthesis": with_staleness_prefix(
+                    c.get("synthesis"), c.get("needs_reprocessing")
+                ),
                 "confidence": c.get("confidence", "emerging"),
                 "claim_count": c.get("claim_count", 0),
                 "gap_count": c.get("gap_count", 0),
@@ -175,7 +179,10 @@ class ResearchMapService(BaseService):
             "id": cluster["id"],
             "research_question_id": cluster.get("research_question_id"),
             "label": cluster["label"],
-            "synthesis": cluster.get("synthesis"),
+            # Affordance B (Mission B): STALE prefix on stale synthesis.
+            "synthesis": with_staleness_prefix(
+                cluster.get("synthesis"), cluster.get("needs_reprocessing")
+            ),
             "confidence": cluster.get("confidence", "emerging"),
             "claim_count": len(claims),
             "gap_count": cluster.get("gap_count", 0),
