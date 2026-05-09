@@ -303,6 +303,14 @@ class ContextEngine:
             return f"[lit|{entry.get('status', '?')}] {eid}: {(entry.get('title') or '')[:max_len]}"
         elif etype == "mission":
             return f"[mission|{entry.get('status', '?')}] {eid}: {(entry.get('objective') or '')[:max_len]}"
+        elif etype == "cluster":
+            # Affordance B (Mission B): apply STALE prefix when cluster is
+            # flagged needs_reprocessing. Single helper, four call sites.
+            from rka.services.rendering import with_staleness_prefix
+            label = entry.get("label") or "?"
+            synthesis = (entry.get("synthesis") or "")[:max_len]
+            decorated = with_staleness_prefix(synthesis, entry.get("needs_reprocessing"))
+            return f"[cluster|{entry.get('confidence', '?')}] {eid} ({label}): {decorated or ''}"
         else:
             return f"[{etype}] {eid}: {str(entry)[:max_len]}"
 

@@ -671,6 +671,10 @@ class GraphService:
         project_id: str = "proj_default",
     ) -> None:
         """Look up entity metadata for IDs not already in the nodes dict."""
+        # Affordance B (Mission B): for clusters, additionally fetch
+        # needs_reprocessing so the multi-hop label gets the STALE prefix.
+        from rka.services.rendering import with_staleness_prefix
+
         table_map: dict[str, tuple[str, str, str, bool]] = {
             "decision": ("decisions", "question", "status", True),
             "mission": ("missions", "objective", "status", True),
@@ -692,14 +696,21 @@ class GraphService:
             table, label_col, status_col, has_phase = info
             placeholders = ",".join("?" for _ in missing)
             phase_col = "COALESCE(phase, '') as phase" if has_phase else "'' as phase"
+            extra_cols = ", needs_reprocessing" if etype == "cluster" else ""
             rows = await self.db.fetchall(
                 f"SELECT id, {label_col}, {status_col}, "
-                f"{phase_col}, created_at "
+                f"{phase_col}, created_at{extra_cols} "
                 f"FROM {table} WHERE {self._project_clause()} AND id IN ({placeholders})",
                 [project_id] + missing,
             )
             for r in rows:
                 label_text = r[label_col] or ""
+                if etype == "cluster":
+                    # Apply STALE prefix BEFORE the 120-char truncation so
+                    # the prefix isn't truncated off long cluster labels.
+                    label_text = with_staleness_prefix(
+                        label_text, r.get("needs_reprocessing")
+                    ) or ""
                 nodes[r["id"]] = {
                     "id": r["id"],
                     "type": etype,

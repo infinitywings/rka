@@ -11,6 +11,7 @@ from rka.models.claim import (
 )
 from rka.services.base import BaseService, _now
 from rka.services.jobs import JobQueue
+from rka.services.rendering import with_staleness_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -323,11 +324,17 @@ class ClusterService(BaseService):
 
     @staticmethod
     def _row_to_model(row: dict) -> EvidenceCluster:
+        # Affordance B (Mission B / mis_01KR209WY4M6WQFEXRH79KC2ZF): apply
+        # STALE prefix to the synthesis field whenever needs_reprocessing=1
+        # so that any consumer of EvidenceCluster (rka_list_clusters and
+        # rka_get_cluster among others) sees the stale signal prominently.
         return EvidenceCluster(
             id=row["id"],
             research_question_id=row.get("research_question_id"),
             label=row["label"],
-            synthesis=row.get("synthesis"),
+            synthesis=with_staleness_prefix(
+                row.get("synthesis"), row.get("needs_reprocessing")
+            ),
             confidence=row.get("confidence", "emerging"),
             claim_count=row.get("claim_count", 0),
             gap_count=row.get("gap_count", 0),

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
@@ -73,6 +73,52 @@ async def update_status(
     svc: ProjectService = Depends(get_project_service),
 ):
     return await svc.update(data, actor=actor, project_id=project_id)
+
+
+@router.get("/capabilities")
+async def get_capabilities(request: Request):
+    """Return embedding + LLM availability so consumers (rka_get_status,
+    rka_search) can adapt their output when a capability is degraded.
+
+    Affordance C (Mission B / mis_01KR209WY4M6WQFEXRH79KC2ZF). Pure
+    runtime introspection — no DB write, no schema change.
+    """
+    state = request.app.state
+    db = getattr(state, "db", None)
+    config = getattr(state, "config", None)
+
+    embeddings = getattr(state, "embeddings", None)
+    embeddings_available = bool(embeddings) and bool(getattr(db, "vec_available", False))
+    if embeddings_available:
+        emb_block = {"available": True, "reason_unavailable": None}
+    elif not embeddings:
+        emb_block = {
+            "available": False,
+            "reason_unavailable": "embeddings disabled (RKA_EMBEDDINGS_ENABLED=false)",
+        }
+    else:
+        emb_block = {
+            "available": False,
+            "reason_unavailable": "sqlite-vec extension not loaded",
+        }
+
+    llm = getattr(state, "llm", None)
+    llm_enabled = bool(getattr(config, "llm_enabled", False))
+    llm_available = bool(llm and getattr(llm, "available", False))
+    if llm_available:
+        llm_block = {"available": True, "reason_unavailable": None}
+    elif not llm_enabled:
+        llm_block = {
+            "available": False,
+            "reason_unavailable": "LLM disabled (RKA_LLM_ENABLED=false)",
+        }
+    else:
+        llm_block = {
+            "available": False,
+            "reason_unavailable": "LLM backend not reachable (configured but health check failed)",
+        }
+
+    return {"embedding": emb_block, "llm": llm_block}
 
 
 @router.delete("/projects/{project_id}")
