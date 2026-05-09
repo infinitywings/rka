@@ -80,3 +80,29 @@ After code changes to `rka/mcp/server.py` or other source files:
 - Large files (>10 MB) use fast composite hashing; text files are capped at 200K chars in scan
 - The database lives in the Docker volume `rka-data` at `/data/rka.db` — do not use a local `rka.db`
 - There is no local `.venv` — all server/worker processes run in Docker
+- `docker compose restart` does **not** reload service code — always use `docker compose up -d --build` for any change under `rka/`. Restart only suffices for migration-only changes (the migration runner queries `schema_migrations` on startup).
+
+## macOS / FuSpace AppleDouble Quirks
+
+The FuSpace volume creates `._*` resource-fork files alongside any file Python tools write to (in `build/`, `rka.egg-info/`, project root). These break both `docker compose build` (fails with "failed to xattr ... operation not permitted") and `uv tool install` (fails with "No such file or directory: '._requires.txt'") even with `COPYFILE_DISABLE=1` set.
+
+**Before any rebuild**, purge resource-fork files:
+
+```bash
+find . -maxdepth 2 -name '._*' -not -path './.git/*' -delete
+```
+
+**If `uv tool install --force .` still fails on `._requires.txt`** (the build process re-creates AppleDouble files in `build/` on FuSpace), install from a `/tmp` clone instead:
+
+```bash
+rm -rf /tmp/rka-build && git clone -q --depth 1 /Volumes/FuSpace/Projects/rka /tmp/rka-build
+cd /tmp/rka-build && UV_CACHE_DIR=/tmp/uv-cache uv tool install --force .
+```
+
+**If `docker compose build` succeeds but the new image isn't picked up**, force-recreate:
+
+```bash
+docker compose up -d --force-recreate
+```
+
+(Plain `docker compose up -d --build` can hit the build cache or skip recreation if Compose decides nothing changed; `--force-recreate` is the reliable post-rebuild path.)
