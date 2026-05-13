@@ -1,0 +1,2 @@
+# PyInstaller-built sidecar binaries land here before `cargo tauri build`.
+# See packaging/tauri/README.md for the copy + rename convention.

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "RKA",
+  "version": "0.1.0",
+  "identifier": "com.rka.desktop",
+  "build": {
+    "frontendDist": "../ui-src/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm --prefix ../ui-src run dev",
+    "beforeBuildCommand": "npm --prefix ../ui-src run build"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "RKA — Research Knowledge Agent",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "visible": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg", "app"],
+    "icon": [
+      "icons/icon.png"
+    ],
+    "shortDescription": "Research Knowledge Agent",
+    "longDescription": "RKA is a self-contained research knowledge base that bridges to MCP-capable coding agents (Claude Desktop, Claude Code, Cursor, VSCode-Copilot, Codex, Antigravity). The desktop app runs the SQLite + FTS5 + sqlite-vec backend locally with no cloud dependencies.",
+    "macOS": {
+      "minimumSystemVersion": "11.0",
+      "signingIdentity": "-",
+      "exceptionDomain": "localhost"
+    }
+  },
+  "plugins": {}
+}

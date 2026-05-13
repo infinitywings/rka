@@ -1,0 +1,3 @@
+# Placeholder so Tauri's `generate_context!` macro finds the frontendDist
+# directory during `cargo check`. `npm run build` overwrites this directory
+# with the real Vite output.
