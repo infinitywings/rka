@@ -18,4 +18,4 @@ semantic_backend: qwen3
 top_k: 10
 search_limit_for_hybrid: 30
 qwen3_base_url: http://192.168.86.24:1234
-qwen3_model: qwen3-embedding-8b-dwq
+qwen3_model: text-embedding-qwen3-embedding-8b
