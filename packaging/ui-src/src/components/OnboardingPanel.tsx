@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
+import { ClaudeDesktopInstallAssist } from "./ClaudeDesktopInstallAssist";
 import { ClientRow } from "./ClientRow";
 import { styles } from "../styles";
 import { ClientSummary, MergeSummary, VerifyResult } from "../types";
 
 interface Props {
   clients: ClientSummary[];
-  onComplete?: () => void;
+  /** Called after the merge action completes so the parent can refresh
+   *  detection state. Also wired into the Claude Desktop install-assist
+   *  Refresh button. */
+  onComplete?: () => Promise<void> | void;
 }
 
 export function OnboardingPanel({ clients, onComplete }: Props) {
@@ -16,6 +20,7 @@ export function OnboardingPanel({ clients, onComplete }: Props) {
   const [verifyState, setVerifyState] = useState<Record<string, VerifyResult>>({});
   const [mergeOutcome, setMergeOutcome] = useState<MergeSummary[] | null>(null);
   const [isMerging, setIsMerging] = useState<boolean>(false);
+  const [skippedAssist, setSkippedAssist] = useState<boolean>(false);
 
   useEffect(() => {
     setSelected(
@@ -31,6 +36,14 @@ export function OnboardingPanel({ clients, onComplete }: Props) {
     () => clients.filter((c) => !c.detection.detected),
     [clients],
   );
+  const claudeDesktop = useMemo(
+    () => clients.find((c) => c.id === "claude_desktop"),
+    [clients],
+  );
+  const showInstallAssist =
+    claudeDesktop !== undefined &&
+    !claudeDesktop.detection.detected &&
+    !skippedAssist;
 
   const toggleClient = useCallback((id: string) => {
     setSelected((prev) => {
@@ -66,9 +79,22 @@ export function OnboardingPanel({ clients, onComplete }: Props) {
     }
   }, [selected, onComplete]);
 
+  const handleAssistRefresh = useCallback(async () => {
+    if (onComplete) {
+      await onComplete();
+    }
+  }, [onComplete]);
+
   return (
-    <section style={styles.panel}>
-      <h2 style={styles.panelTitle}>Connect your coding agents</h2>
+    <>
+      {showInstallAssist && (
+        <ClaudeDesktopInstallAssist
+          onRefresh={handleAssistRefresh}
+          onSkip={() => setSkippedAssist(true)}
+        />
+      )}
+      <section style={styles.panel}>
+        <h2 style={styles.panelTitle}>Connect your coding agents</h2>
       <p style={styles.muted}>
         RKA can register itself as an MCP server in seven supported clients.
         Detected installs are pre-selected — toggle the checkboxes to control
@@ -90,6 +116,7 @@ export function OnboardingPanel({ clients, onComplete }: Props) {
       <button
         style={styles.toggleAll}
         onClick={() => setShowUndetected((p) => !p)}
+        type="button"
       >
         {showUndetected
           ? `Hide ${undetected.length} not-installed clients`
@@ -115,6 +142,7 @@ export function OnboardingPanel({ clients, onComplete }: Props) {
           style={styles.primaryBtn}
           disabled={selected.size === 0 || isMerging}
           onClick={runMerge}
+          type="button"
         >
           {isMerging
             ? "Installing…"
@@ -143,6 +171,7 @@ export function OnboardingPanel({ clients, onComplete }: Props) {
           </div>
         )}
       </div>
-    </section>
+      </section>
+    </>
   );
 }
