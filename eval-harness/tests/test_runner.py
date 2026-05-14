@@ -121,11 +121,15 @@ def test_call_rka_search_handles_dict_envelope_shape():
     assert [h["id"] for h in hits] == ["x"]
 
 
-def test_call_rka_search_passes_entity_types_param():
+def test_call_rka_search_uses_post_with_json_body():
+    """POST /api/search shape: project_id is a query param; query +
+    entity_types + limit live in the JSON body (SearchRequest schema)."""
     captured: dict = {}
 
     def respond(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
         captured["params"] = dict(request.url.params)
+        captured["body"] = json.loads(request.content) if request.content else None
         return httpx.Response(200, json=[])
 
     client = httpx.Client(
@@ -138,8 +142,28 @@ def test_call_rka_search_passes_entity_types_param():
         project_id="prj_abc",
         entity_types=["decision", "journal"],
     )
-    assert captured["params"]["entity_types"] == "decision,journal"
+    assert captured["method"] == "POST"
     assert captured["params"]["project_id"] == "prj_abc"
+    assert captured["body"] == {
+        "query": "q",
+        "limit": 10,
+        "entity_types": ["decision", "journal"],
+    }
+
+
+def test_call_rka_search_omits_entity_types_when_unset():
+    captured: dict = {}
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content) if request.content else None
+        return httpx.Response(200, json=[])
+
+    client = httpx.Client(
+        transport=_mock_transport(respond), base_url="http://x"
+    )
+    call_rka_search(client, query="q", limit=5, project_id=None, entity_types=None)
+    assert "entity_types" not in captured["body"]
+    assert captured["body"] == {"query": "q", "limit": 5}
 
 
 # ---------------------------------------------------------------------------

@@ -142,19 +142,32 @@ def call_rka_search(
     project_id: str | None,
     entity_types: list[str] | None,
 ) -> list[dict]:
-    """Call `/api/search` and return the raw hits list.
+    """Call `POST /api/search` and return the raw hits list.
+
+    `/api/search` is POST in the v2.3.5 API — `project_id` is a query
+    param; the rest of the request is the JSON body
+    (`SearchRequest`: `{query, entity_types?, limit, keyword_weight,
+    semantic_weight}`). Returns the parsed hits list.
 
     Hits shape (per `rka/services/search.py::SearchHit`):
         {id, entity_type, score, snippet?, ...}
     """
-    params: dict[str, Any] = {"q": query, "limit": limit}
+    params: dict[str, Any] = {}
     if project_id is not None:
         params["project_id"] = project_id
+    body: dict[str, Any] = {"query": query, "limit": limit}
     if entity_types:
-        params["entity_types"] = ",".join(entity_types)
-    response = client.get("/api/search", params=params)
+        body["entity_types"] = entity_types
+    response = client.post("/api/search", params=params, json=body)
     response.raise_for_status()
-    payload = response.json()
+    try:
+        payload = response.json()
+    except ValueError as e:
+        raise ValueError(
+            f"non-JSON response from /api/search (status={response.status_code}, "
+            f"content-type={response.headers.get('content-type')}, "
+            f"body_head={response.text[:120]!r}): {e}"
+        )
     # The /api/search route may return either a list of hits OR
     # {"hits": [...], "total": N, ...} depending on version. Normalize.
     if isinstance(payload, list):
@@ -397,9 +410,17 @@ def run_config(
                     project_id=project_id,
                     entity_types=config.entity_types,
                 )
-            except httpx.HTTPError as e:
-                sys.stderr.write(f"[runner] query {i} HTTP error: {e}\n")
+            except (httpx.HTTPError, ValueError) as e:
+                sys.stderr.write(f"[runner] query {i} search error: {e}\n")
                 hits = []
+
+            # Normalize `entity_id` → `id` on every hit so the rest of the
+            # runner (hybrid_rerank, _fetch_content_for_hit, etc.) sees a
+            # consistent field. /api/search returns `entity_id`; other
+            # legacy shapes return `id`.
+            for h in hits:
+                if "id" not in h and "entity_id" in h:
+                    h["id"] = h["entity_id"]
 
             if use_hybrid and embedder is not None:
                 try:
