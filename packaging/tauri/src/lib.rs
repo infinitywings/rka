@@ -13,7 +13,9 @@
 //!   5. On `WindowEvent::CloseRequested`: SIGTERM the sidecar, wait 2 s,
 //!      then SIGKILL if still alive.
 
+mod diag;
 mod launcher;
+mod log_writer;
 mod mcp_clients;
 mod sidecar;
 
@@ -198,6 +200,33 @@ async fn show_path_in_finder(path: String) -> Result<(), String> {
     }
 }
 
+/// Return the last `n` lines of `~/Library/Logs/RKA/server.log`.
+/// Powers the Logs panel tail view (auto-refresh ~500 ms).
+#[tauri::command]
+async fn tail_server_log(n: usize) -> Result<Vec<String>, String> {
+    let path = log_writer::default_log_path();
+    log_writer::tail(&path, n).map_err(|e| e.to_string())
+}
+
+/// Reveal the server log in Finder.
+#[tauri::command]
+async fn show_logs_in_finder() -> Result<(), String> {
+    let path = log_writer::default_log_path();
+    show_path_in_finder(path.display().to_string()).await
+}
+
+/// Assemble the diagnostic-copy blob (Markdown-ish) per the mid-mission
+/// directive: app + sidecar + OS + timestamp, 7-client verified matrix,
+/// /api/health + /api/capabilities JSON (redacted), 11-table DB schema
+/// state, log tail. Returned as a string the JS layer copies to the
+/// clipboard. NO TELEMETRY transmits.
+#[tauri::command]
+async fn copy_diagnostic_blob() -> Result<String, String> {
+    let log_path = log_writer::default_log_path();
+    let db_path = diag::default_db_path();
+    Ok(diag::assemble(&log_path, &db_path))
+}
+
 /// Open a URL in the user's default browser. Used by D9 Claude Desktop
 /// install-assist's "Open download page" button.
 #[tauri::command]
@@ -274,6 +303,9 @@ pub fn run() {
             rewrite_launcher,
             show_path_in_finder,
             open_external_url,
+            tail_server_log,
+            show_logs_in_finder,
+            copy_diagnostic_blob,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

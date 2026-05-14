@@ -2,12 +2,13 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
+import { LogsPanel } from "./components/LogsPanel";
 import { OnboardingPanel } from "./components/OnboardingPanel";
 import { SettingsTab } from "./components/SettingsTab";
 import { styles } from "./styles";
 import { ClientSummary, SidecarStatus } from "./types";
 
-type View = "onboarding" | "status" | "settings";
+type View = "onboarding" | "status" | "settings" | "logs";
 
 export default function App() {
   const [view, setView] = useState<View>("onboarding");
@@ -68,8 +69,16 @@ export default function App() {
             Settings
           </button>
           <button
+            style={view === "logs" ? styles.navActive : styles.navBtn}
+            onClick={() => setView("logs")}
+            type="button"
+          >
+            Logs
+          </button>
+          <button
             style={view === "status" ? styles.navActive : styles.navBtn}
             onClick={() => setView("status")}
+            type="button"
           >
             Status
           </button>
@@ -103,6 +112,8 @@ export default function App() {
       {view === "settings" && (
         <SettingsTab clients={clients} refreshClients={refreshClients} />
       )}
+
+      {view === "logs" && <LogsPanel />}
     </main>
   );
 }

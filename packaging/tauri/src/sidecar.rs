@@ -2,13 +2,16 @@
 //!
 //! Responsibilities:
 //!   - Locate the bundled binary inside the app's resource directory.
-//!   - Spawn it with stdio piped; record PID to disk so a later launch
-//!     can clean up an orphaned process from a crashed prior session.
+//!   - Spawn it with stdio piped; drain stdout+stderr into the rotating
+//!     log writer at `~/Library/Logs/RKA/server.log` (D5 deliverable).
+//!   - Record PID to disk so a later launch can clean up an orphaned
+//!     process from a crashed prior session.
 //!   - Provide graceful shutdown (SIGTERM → 2 s grace → SIGKILL).
 //!   - Run a periodic health check; emit `sidecar-unhealthy` after three
 //!     consecutive failures and attempt a restart.
 
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,6 +21,8 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 use tokio::time::sleep;
+
+use crate::log_writer::{self, RotatingLog};
 
 const HEALTH_URL: &str = "http://127.0.0.1:9712/api/health";
 const HEALTH_INTERVAL: Duration = Duration::from_secs(5);
@@ -29,15 +34,20 @@ pub struct SidecarManager {
     child: Option<Child>,
     consecutive_failures: u32,
     last_known_pid: Option<u32>,
+    log: Arc<Mutex<RotatingLog>>,
 }
 
 impl SidecarManager {
     pub fn new(runtime_dir: PathBuf) -> Self {
+        let log_path = log_writer::default_log_path();
+        let log = RotatingLog::open(log_path)
+            .expect("failed to open rotating log at default path");
         Self {
             runtime_dir,
             child: None,
             consecutive_failures: 0,
             last_known_pid: None,
+            log: Arc::new(Mutex::new(log)),
         }
     }
 
@@ -58,6 +68,9 @@ impl SidecarManager {
     }
 
     /// Look for a leftover PID from a prior crashed launch and kill it.
+    /// Only the PID file is touched — log files are untouchable from
+    /// here (matches Brain's mid-mission directive that PID-cleanup
+    /// must not race log rotation).
     fn reap_orphan(&self) {
         let pid_path = self.pid_file();
         let Ok(contents) = std::fs::read_to_string(&pid_path) else {
@@ -85,7 +98,6 @@ impl SidecarManager {
         if candidate.exists() {
             return Ok(candidate);
         }
-        // Development fallback: project-relative dist/ from a pyinstaller build.
         let dev_candidate = std::env::current_dir()
             .ok()
             .map(|p| p.join("packaging/pyinstaller/dist").join(SIDECAR_BINARY))
@@ -101,17 +113,24 @@ impl SidecarManager {
     pub async fn start(&mut self, app: &AppHandle) -> Result<()> {
         self.reap_orphan();
         let binary = self.resolve_binary_path(app)?;
-        let log_dir = self.runtime_dir.join("logs");
-        std::fs::create_dir_all(&log_dir).ok();
 
         let mut cmd = Command::new(&binary);
         cmd.env("RKA_PROJECT_DIR", &self.runtime_dir);
         cmd.env("RKA_DB_PATH", "rka.db");
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
         cmd.kill_on_drop(true);
 
-        let child = cmd
+        let mut child = cmd
             .spawn()
             .with_context(|| format!("failed to spawn sidecar {binary:?}"))?;
+
+        if let Some(stdout) = child.stdout.take() {
+            log_writer::drain_into(stdout, self.log.clone());
+        }
+        if let Some(stderr) = child.stderr.take() {
+            log_writer::drain_into(stderr, self.log.clone());
+        }
 
         let pid = child
             .id()
@@ -139,7 +158,6 @@ impl SidecarManager {
             let _ = kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
         }
 
-        // Wait up to 2 s for graceful exit.
         let exited = tokio::select! {
             _ = child.wait() => true,
             _ = sleep(Duration::from_secs(2)) => false,
@@ -172,11 +190,7 @@ impl SidecarManager {
 }
 
 async fn probe_health() -> bool {
-    let client = match reqwest_minimal::get(HEALTH_URL).await {
-        Ok(ok) => ok,
-        Err(_) => return false,
-    };
-    client
+    reqwest_minimal::get(HEALTH_URL).await.unwrap_or(false)
 }
 
 mod reqwest_minimal {
@@ -184,10 +198,7 @@ mod reqwest_minimal {
     use std::net::TcpStream;
     use std::time::Duration;
 
-    /// Tiny synchronous HTTP/1.1 GET for localhost — keeps the crate set lean.
-    /// Returns `true` only on a 2xx status.
     pub async fn get(url: &str) -> Result<bool, std::io::Error> {
-        // Run the blocking I/O off the executor thread.
         let url = url.to_string();
         tokio::task::spawn_blocking(move || blocking_get(&url))
             .await
