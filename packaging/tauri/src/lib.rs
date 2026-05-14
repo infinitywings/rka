@@ -172,6 +172,65 @@ async fn rewrite_launcher(app: tauri::AppHandle) -> Result<String, String> {
     Ok(path.display().to_string())
 }
 
+/// Reveal a file in macOS Finder (or open its containing dir on other
+/// platforms). Used by the Settings tab's per-client "Show in Finder"
+/// button and the global "Show all MCP config files" action.
+#[tauri::command]
+async fn show_path_in_finder(path: String) -> Result<(), String> {
+    let target = std::path::PathBuf::from(&path);
+    if !target.exists() {
+        return Err(format!("path does not exist: {path}"));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("-R")
+            .arg(&target)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let parent = target.parent().unwrap_or(std::path::Path::new("."));
+        opener::open(parent).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
+
+/// Open a URL in the user's default browser. Used by D9 Claude Desktop
+/// install-assist's "Open download page" button.
+#[tauri::command]
+async fn open_external_url(url: String) -> Result<(), String> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err(format!("refusing non-http(s) URL: {url}"));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &url])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -213,6 +272,8 @@ pub fn run() {
             verify_mcp_client,
             verify_all_mcp_clients,
             rewrite_launcher,
+            show_path_in_finder,
+            open_external_url,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
