@@ -12,5 +12,10 @@ export default defineConfig({
     outDir: "dist",
     target: "esnext",
     sourcemap: true,
+    // Leave dist/.gitkeep alone so fresh clones can `cargo check` Tauri
+    // before running `npm run build`. Stale .js bundles in dist/ get
+    // overwritten on the next build; only the committed .gitkeep is
+    // protected by leaving the directory non-empty.
+    emptyOutDir: false,
   },
 });
