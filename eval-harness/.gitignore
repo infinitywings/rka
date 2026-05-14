@@ -1,0 +1,20 @@
+# Python bytecode + caches
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# venv (if the eval-harness ever sprouts one)
+.venv/
+venv/
+
+# Runtime outputs — corpus + results JSONL files are the deliverables T1/T3/T4
+# generate. Keep the directory structure via .gitkeep but ignore generated
+# files until they're explicitly committed as part of T7's archive step.
+corpus/replayed_candidates.jsonl
+results/raw/*.jsonl
+results/labels/*.jsonl
+results/metrics.json
+results/per_query.csv

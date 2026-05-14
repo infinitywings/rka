@@ -1,0 +1,2 @@
+# T3 writes per-config retrieval results here: <config_name>.jsonl per config,
+# one line per (query, top-10 results) tuple.

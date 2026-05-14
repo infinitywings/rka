@@ -1,0 +1,5 @@
+# T2 fills this with the baseline config:
+#   RKA_FTS_QUERY_MODE: or          # current behavior
+#   RKA_EMBEDDINGS_ENABLED: false   # FTS-only retrieval
+#   top_k: 10
+#   ...

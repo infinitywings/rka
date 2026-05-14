@@ -1,0 +1,5 @@
+# T2 fills this with the OR + hybrid (FTS + semantic) config:
+#   RKA_FTS_QUERY_MODE: or          # current behavior
+#   RKA_EMBEDDINGS_ENABLED: true    # FTS + semantic hybrid
+#   top_k: 10
+#   ...

@@ -1,0 +1,5 @@
+# T2 fills this with the AND-fix FTS-only config:
+#   RKA_FTS_QUERY_MODE: and         # applies the Mission A revision-report fix
+#   RKA_EMBEDDINGS_ENABLED: false   # FTS-only retrieval
+#   top_k: 10
+#   ...
