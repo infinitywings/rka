@@ -56,6 +56,12 @@ DEFAULT_API_URL = "http://127.0.0.1:9712"
 DEFAULT_LOOKBACK_DAYS = 28
 PAGE_LIMIT = 200  # /api/notes server cap
 
+# /api/notes is project-scoped via the `project_id` query parameter
+# (or `X-RKA-Project` header). Missing both defaults to `proj_default`
+# server-side, which leaves recent entries in other projects invisible
+# to the extractor. Callers MUST supply --project-id when scanning
+# anything other than the default project.
+
 CONTEXT_CHARS_BEFORE = 120
 CONTEXT_CHARS_AFTER = 200
 
@@ -125,20 +131,21 @@ class ReplayCandidate:
 
 def _fetch_journal_page(
     client: httpx.Client,
+    project_id: str | None,
     since_iso: str,
     offset: int,
     limit: int,
 ) -> list[dict]:
     """Fetch one page of journal entries from /api/notes."""
-    response = client.get(
-        "/api/notes",
-        params={
-            "since": since_iso,
-            "limit": limit,
-            "offset": offset,
-            "hide_superseded": "true",
-        },
-    )
+    params: dict[str, str | int] = {
+        "since": since_iso,
+        "limit": limit,
+        "offset": offset,
+        "hide_superseded": "true",
+    }
+    if project_id is not None:
+        params["project_id"] = project_id
+    response = client.get("/api/notes", params=params)
     response.raise_for_status()
     payload = response.json()
     if not isinstance(payload, list):
@@ -149,14 +156,16 @@ def _fetch_journal_page(
 def _iter_journal_entries(
     api_url: str,
     since: datetime,
+    project_id: str | None = None,
     timeout: float = 10.0,
 ) -> Iterator[dict]:
-    """Yield every journal entry whose `created_at` >= `since`."""
+    """Yield every journal entry whose `created_at` >= `since` within the
+    `project_id` scope (server default is `proj_default` if unset)."""
     since_iso = since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     offset = 0
     with httpx.Client(base_url=api_url, timeout=timeout) as client:
         while True:
-            page = _fetch_journal_page(client, since_iso, offset, PAGE_LIMIT)
+            page = _fetch_journal_page(client, project_id, since_iso, offset, PAGE_LIMIT)
             if not page:
                 return
             yield from page
@@ -230,6 +239,7 @@ def extract_candidates_from_entry(entry: dict) -> list[ReplayCandidate]:
 def extract_candidates(
     api_url: str = DEFAULT_API_URL,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+    project_id: str | None = None,
     timeout: float = 10.0,
 ) -> list[ReplayCandidate]:
     """End-to-end: fetch recent journals, scan each, return all candidates.
@@ -239,7 +249,7 @@ def extract_candidates(
     """
     since = datetime.now(tz=timezone.utc) - timedelta(days=lookback_days)
     candidates: list[ReplayCandidate] = []
-    for entry in _iter_journal_entries(api_url, since, timeout=timeout):
+    for entry in _iter_journal_entries(api_url, since, project_id=project_id, timeout=timeout):
         candidates.extend(extract_candidates_from_entry(entry))
     return candidates
 
@@ -272,6 +282,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help=f"Days of journal history to scan (default: {DEFAULT_LOOKBACK_DAYS})",
     )
     parser.add_argument(
+        "--project-id",
+        default=None,
+        help=(
+            "Project ID to scope the /api/notes query (e.g. prj_01KKQM…). "
+            "If omitted, the server defaults to `proj_default` and recent "
+            "entries in other projects will be invisible."
+        ),
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         required=True,
@@ -292,6 +311,7 @@ def main(argv: list[str] | None = None) -> int:
         candidates = extract_candidates(
             api_url=args.api_url,
             lookback_days=args.lookback_days,
+            project_id=args.project_id,
             timeout=args.timeout,
         )
     except httpx.HTTPError as e:
