@@ -1,5 +1,16 @@
-# T2 fills this with the AND-fix FTS-only config:
-#   RKA_FTS_QUERY_MODE: and         # applies the Mission A revision-report fix
-#   RKA_EMBEDDINGS_ENABLED: false   # FTS-only retrieval
-#   top_k: 10
-#   ...
+# Config 2 of 4 — Mission A revision-report AND-fix candidate:
+#   _sanitize_fts_query in AND mode (explicit AND between quoted tokens).
+#   FTS-only (no semantic side).
+#
+# Container env required for this config's run:
+#   RKA_FTS_QUERY_MODE=and
+#   RKA_EMBEDDINGS_ENABLED=false
+#
+# Q19 (`distributed consensus algorithm Paxos Raft`) is the headline
+# diagnostic — OR over-recalls on token `consensus` (consensus-failure
+# detector mentions); AND-fix should tighten precision toward empty.
+name: and_fix
+rka_fts_query_mode: and
+rka_embeddings_enabled: false
+semantic_backend: null
+top_k: 10
