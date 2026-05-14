@@ -424,6 +424,62 @@ mod tests {
     }
 
     #[test]
+    fn verify_rka_entry_ok_after_merge() {
+        let p = tmp_config();
+        merge_rka_entry(&p, "mcpServers", &launcher(), false, false).unwrap();
+        let (syntax, present, reason) =
+            super::verify_rka_entry(&p, "mcpServers", &launcher());
+        assert!(syntax);
+        assert!(present);
+        assert!(reason.is_none());
+    }
+
+    #[test]
+    fn verify_rka_entry_command_mismatch_marks_not_present() {
+        let p = tmp_config();
+        merge_rka_entry(&p, "mcpServers", &launcher(), false, false).unwrap();
+        let different_launcher = PathBuf::from("/Users/test/elsewhere/rka-mcp.sh");
+        let (syntax, present, reason) =
+            super::verify_rka_entry(&p, "mcpServers", &different_launcher);
+        // Semantics: `present` means "the rka entry we expect is present
+        // (correct shape + correct command)". An entry pointing elsewhere
+        // is NOT the entry we wrote, so present=false and the reason
+        // explains the command-mismatch detail.
+        assert!(syntax, "config still parses");
+        assert!(!present);
+        let reason = reason.expect("mismatch should surface a reason");
+        assert!(reason.contains("command mismatch"));
+        assert!(reason.contains("elsewhere"));
+    }
+
+    #[test]
+    fn verify_rka_entry_missing_entry_surfaces_reason() {
+        let p = tmp_config();
+        std::fs::write(
+            &p,
+            r#"{"mcpServers":{"github":{"command":"/usr/local/bin/gh","args":[]}}}"#,
+        )
+        .unwrap();
+        let (syntax, present, reason) =
+            super::verify_rka_entry(&p, "mcpServers", &launcher());
+        assert!(syntax);
+        assert!(!present);
+        let reason = reason.expect("missing rka should surface a reason");
+        assert!(reason.contains("no `rka`"));
+    }
+
+    #[test]
+    fn verify_rka_entry_missing_file_reports_path() {
+        let p = tmp_config();
+        // Don't create the file.
+        let (syntax, present, reason) =
+            super::verify_rka_entry(&p, "mcpServers", &launcher());
+        assert!(!syntax);
+        assert!(!present);
+        assert!(reason.unwrap().contains("missing"));
+    }
+
+    #[test]
     fn vscode_root_key_servers_not_mcpServers() {
         let p = tmp_config();
         merge_rka_entry(&p, "servers", &launcher(), true, false).unwrap();

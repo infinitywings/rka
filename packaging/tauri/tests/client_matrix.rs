@@ -593,3 +593,96 @@ fn toml_remove_helper_idempotent_when_absent() {
     let r = toml_merger::remove_rka_entry(&cfg).unwrap();
     assert!(!r.removed);
 }
+
+// ---------------- D8 — per-client verify() trait integration ----------------
+
+/// D8 Check 1 (config syntax + rka entry pointing at OUR launcher) is
+/// exercised here against the full per-client `verify()` trait path.
+///
+/// Check 2 (backend reachability) is environment-dependent — these
+/// tests do NOT assert on `backend_reachable` / `capabilities_reachable`
+/// because the developer's machine may already have an RKA sidecar
+/// running on 127.0.0.1:9712 (Docker container, prior `cargo tauri
+/// build` leftover, etc.). The probe code is exercised by the test
+/// (verify() runs to completion in <100 ms in both cases), but the
+/// boolean outcome is left to integration on a known-state CI runner.
+///
+/// Both `verify()` and `read_merge_write_rka()` must reference the
+/// SAME launcher: `verify()` derives it from `stable_launcher_path()`
+/// which resolves under HOME, so merges must use that path too (the
+/// hardcoded `launcher()` helper points at a fixed string and would
+/// fail the command-match check under HOME override).
+const PROBE_URL: &str = "http://127.0.0.1:9712";
+
+fn home_launcher() -> std::path::PathBuf {
+    mcp_clients::stable_launcher_path()
+}
+
+#[test]
+fn d8_verify_claude_desktop_after_merge() {
+    let env = TestEnv::new();
+    let c = claude_desktop::ClaudeDesktop;
+    c.read_merge_write_rka(&home_launcher()).unwrap();
+    let v = c.verify(PROBE_URL);
+    assert!(v.config_syntax_ok, "Check 1 (a): config parses");
+    assert!(v.rka_entry_present, "Check 1 (b): rka entry points at our launcher");
+    let _ = env;
+}
+
+#[test]
+fn d8_verify_codex_cli_after_merge() {
+    let env = TestEnv::new();
+    let c = codex_cli::CodexCli;
+    c.read_merge_write_rka(&home_launcher()).unwrap();
+    let v = c.verify(PROBE_URL);
+    assert!(v.config_syntax_ok);
+    assert!(v.rka_entry_present);
+    let _ = env;
+}
+
+#[test]
+fn d8_verify_vscode_copilot_uses_servers_key_not_mcp_servers() {
+    let env = TestEnv::new();
+    let c = vscode_copilot::VscodeCopilot;
+    c.read_merge_write_rka(&home_launcher()).unwrap();
+    let v = c.verify(PROBE_URL);
+    // The verify path internally parses the JSON with VSCODE_ROOT_KEY = "servers".
+    // If it looked up "mcpServers" instead it would report rka_entry_present=false.
+    assert!(v.config_syntax_ok);
+    assert!(
+        v.rka_entry_present,
+        "vscode_copilot verify() must read `servers`, not `mcpServers`"
+    );
+    let _ = env;
+}
+
+#[test]
+fn d8_verify_reports_rka_missing_when_unboarded() {
+    let env = TestEnv::new();
+    // Don't merge — config doesn't exist or has no rka entry.
+    let v = claude_desktop::ClaudeDesktop.verify(PROBE_URL);
+    assert!(
+        !v.rka_entry_present,
+        "verify() must report rka missing when the client hasn't been onboarded"
+    );
+    assert!(v.reason.is_some(), "verify() must surface a reason string");
+    let _ = env;
+}
+
+#[test]
+fn d8_verify_all_clients_returns_one_result_per_id() {
+    let env = TestEnv::new();
+    let launcher = home_launcher();
+    // Onboard 3 clients; leave the other 4 un-onboarded.
+    for c in mcp_clients::registry().iter().take(3) {
+        c.read_merge_write_rka(&launcher).unwrap();
+    }
+    let mut results = Vec::new();
+    for c in mcp_clients::registry() {
+        results.push((c.id().to_string(), c.verify(PROBE_URL)));
+    }
+    assert_eq!(results.len(), 7);
+    let onboarded: Vec<bool> = results.iter().map(|(_, v)| v.rka_entry_present).collect();
+    assert_eq!(onboarded[..3], [true, true, true]);
+    let _ = env;
+}

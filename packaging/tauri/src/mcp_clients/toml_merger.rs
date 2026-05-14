@@ -281,6 +281,56 @@ args = []
     }
 
     #[test]
+    fn verify_rka_entry_ok_after_merge() {
+        let p = tmp_config();
+        merge_rka_entry(&p, &launcher(), false).unwrap();
+        let (syntax, present, reason) = super::verify_rka_entry(&p, &launcher());
+        assert!(syntax);
+        assert!(present);
+        assert!(reason.is_none());
+    }
+
+    #[test]
+    fn verify_rka_entry_command_mismatch_marks_not_present() {
+        let p = tmp_config();
+        merge_rka_entry(&p, &launcher(), false).unwrap();
+        let different_launcher = PathBuf::from("/Users/test/elsewhere/rka-mcp.sh");
+        let (syntax, present, reason) =
+            super::verify_rka_entry(&p, &different_launcher);
+        // Semantics match the JSON merger: present == "our expected rka
+        // entry is present (correct shape + correct command)". When the
+        // command differs, the entry exists but isn't OURS, so the UI
+        // surface should ✗ the rka-entry pill and show the reason.
+        assert!(syntax);
+        assert!(!present);
+        let reason = reason.expect("mismatch should surface a reason");
+        assert!(reason.contains("command mismatch"));
+    }
+
+    #[test]
+    fn verify_rka_entry_missing_table_surfaces_reason() {
+        let p = tmp_config();
+        std::fs::write(
+            &p,
+            "[mcp_servers.github]\ncommand = \"/usr/local/bin/gh\"\nargs = []\n",
+        )
+        .unwrap();
+        let (syntax, present, reason) = super::verify_rka_entry(&p, &launcher());
+        assert!(syntax);
+        assert!(!present);
+        assert!(reason.unwrap().contains("no `[mcp_servers.rka]`"));
+    }
+
+    #[test]
+    fn verify_rka_entry_missing_file_reports_path() {
+        let p = tmp_config();
+        let (syntax, present, reason) = super::verify_rka_entry(&p, &launcher());
+        assert!(!syntax);
+        assert!(!present);
+        assert!(reason.unwrap().contains("missing"));
+    }
+
+    #[test]
     fn remove_is_idempotent_when_absent() {
         let p = tmp_config();
         fs::write(&p, "[mcp_servers.other]\ncommand = \"/x\"\nargs = []\n").unwrap();
