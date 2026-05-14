@@ -1,0 +1,20 @@
+# Eval-harness env-toggle override (mission mis_01KRKJ9G20EM5XMA147JTKQCFF).
+#
+# Adds env-var substitution for the two settings the eval needs to
+# control between configs:
+#   - RKA_FTS_QUERY_MODE (or | and) — Mission A revision-report fix flag.
+#   - RKA_EMBEDDINGS_ENABLED (true | false) — kept at `false` for the
+#     eval since Option C has eval-harness own the semantic side via
+#     qwen3 directly; RKA's built-in FastEmbed path is NOT engaged.
+#
+# Both default to the production defaults if unset, so the override
+# is a no-op outside the eval run. Reversible by deleting the file.
+#
+# Authored on `feat/eval-harness`; will be reviewed at merge-to-main
+# time for whether to fold into the primary compose file.
+
+services:
+  rka:
+    environment:
+      RKA_FTS_QUERY_MODE: "${RKA_FTS_QUERY_MODE:-or}"
+      RKA_EMBEDDINGS_ENABLED: "${RKA_EMBEDDINGS_ENABLED:-false}"

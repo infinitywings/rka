@@ -1,0 +1,24 @@
+# Config 3 of 4 — OR + qwen3 hybrid (Option C, eval-harness-direct):
+#   _sanitize_fts_query in OR mode.
+#   Hybrid: eval-harness runs an additional qwen3-cosine pass on the
+#   FTS candidates and fuses via Reciprocal Rank Fusion (k=60).
+#   RKA's built-in semantic (FastEmbed) is NOT engaged — Option C
+#   keeps the eval-harness as the sole owner of the semantic side, so
+#   the T6 recommendation maps cleanly onto "should we adopt qwen3 as
+#   RKA's embedding backend?"
+#
+# Container env required for this config's run:
+#   RKA_FTS_QUERY_MODE=or
+#   RKA_EMBEDDINGS_ENABLED=false   # eval-harness owns semantic, not RKA
+#
+# qwen3 reachability is probed AT RUNNER START — observation #2
+# (reachability-first; no retry-loop on infra failure). Probe failure
+# → runner returns exit 2 (checkpoint).
+name: current_or_hybrid
+rka_fts_query_mode: or
+rka_embeddings_enabled: false
+semantic_backend: qwen3
+top_k: 10
+search_limit_for_hybrid: 30
+qwen3_base_url: http://192.168.86.24:1234
+qwen3_model: text-embedding-qwen3-embedding-8b

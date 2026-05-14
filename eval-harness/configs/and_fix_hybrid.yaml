@@ -1,0 +1,21 @@
+# Config 4 of 4 — AND-fix + qwen3 hybrid (Option C, eval-harness-direct):
+#   _sanitize_fts_query in AND mode.
+#   Hybrid via qwen3 cosine + RRF, same shape as current_or_hybrid.
+#
+# Container env required for this config's run:
+#   RKA_FTS_QUERY_MODE=and
+#   RKA_EMBEDDINGS_ENABLED=false   # eval-harness owns semantic, not RKA
+#
+# This is the comparison target for the AND × hybrid quadrant. If the
+# AND-fix wins under FTS-only AND under hybrid, that's a clear adopt
+# signal for the AND-fix default. If AND wins only in one quadrant,
+# T6 narrative surfaces the metric-divergence as the headline per
+# Brain skill rule #14.
+name: and_fix_hybrid
+rka_fts_query_mode: and
+rka_embeddings_enabled: false
+semantic_backend: qwen3
+top_k: 10
+search_limit_for_hybrid: 30
+qwen3_base_url: http://192.168.86.24:1234
+qwen3_model: text-embedding-qwen3-embedding-8b

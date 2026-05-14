@@ -172,17 +172,27 @@ class SearchService:
     def _sanitize_fts_query(query: str) -> str:
         """Convert a natural-language query to a safe FTS5 query.
 
-        Strategy: split into words, quote each individually, join with OR.
-        This avoids issues with hyphens, special chars, and FTS5 operators.
+        Strategy: split into words, quote each individually, then join
+        per the `RKA_FTS_QUERY_MODE` env var:
+
+          - `or` (default): space-joined → FTS5 implicit OR semantics
+            (preserves pre-eval production behavior).
+          - `and`: explicit `AND` separator → FTS5 AND semantics
+            (Mission A revision-report fix candidate; tightens precision
+            at the cost of recall — see mis_01KRKJ9G20EM5XMA147JTKQCFF).
+
+        Either way, quoting each word avoids issues with hyphens,
+        special characters, and FTS5 operators inside terms. Unknown
+        env values fall back silently to `or` (safe default).
         """
+        import os
         import re
-        # Split on non-word chars (hyphens, punctuation, etc.)
         words = re.findall(r"[a-zA-Z0-9]+", query)
         if not words:
             return query
-        # Quote each word and combine with OR for recall, but also try the full phrase
-        quoted = " ".join(f'"{w}"' for w in words)
-        return quoted
+        mode = os.environ.get("RKA_FTS_QUERY_MODE", "or").strip().lower()
+        separator = " AND " if mode == "and" else " "
+        return separator.join(f'"{w}"' for w in words)
 
     async def _fts_search(
         self, query: str, entity_types: list[str], limit: int,

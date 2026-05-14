@@ -1,0 +1,2 @@
+# T1 fills with synthetic_queries.jsonl (~20), replayed_queries.jsonl (~10-15),
+# and queries.jsonl (the union, canonical eval corpus).

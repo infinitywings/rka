@@ -1,0 +1,3 @@
+# T4 writes PI graded 0/1/2 labels here: labels.jsonl with one row per
+# (query, unique_result_id, rating) tuple. Dedup by labeler.py means
+# each unique result is rated ONCE across the 4 configs.
