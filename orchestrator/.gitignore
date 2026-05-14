@@ -1,0 +1,24 @@
+# Build artifacts
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.pyc
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.idea/
+.vscode/
+
+# macOS / FuSpace AppleDouble — purge regenerates these constantly
+._*
+.DS_Store
+
+# Local SqliteSaver checkpoint DBs
+*.sqlite
+*.sqlite3
+checkpoints.db

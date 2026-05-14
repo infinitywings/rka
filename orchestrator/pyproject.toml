@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rka-orchestrator"
+version = "0.1.0"
+description = "RKA + LangGraph orchestrator (Phase 1, agentic branch)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "RKA team" }]
+dependencies = [
+    "langgraph>=1.2,<2.0",
+    "langgraph-checkpoint-sqlite>=3.0,<4.0",
+    "claude-agent-sdk>=0.1.81,<0.2",
+    "mcp>=1.27,<2.0",
+    "httpx>=0.27",
+    "pydantic>=2.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5",
+]
+
+[project.scripts]
+rka-orchestrator = "orchestrator.main:cli"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["orchestrator*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning"]
