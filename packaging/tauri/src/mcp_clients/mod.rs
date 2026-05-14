@@ -1,21 +1,50 @@
 //! Per-client MCP-config registry.
 //!
-//! Each supported client (Claude Desktop, Claude Code, Cursor,
-//! VSCode-Copilot, Codex CLI, Codex Mac App, Antigravity) has a module
-//! that implements the [`McpClient`] trait. D3 fleshes out the
-//! per-client modules. This module declares the shared trait + the
-//! result types only.
+//! Seven clients (Claude Desktop, Claude Code, Cursor, VSCode-Copilot,
+//! Codex CLI, Codex Mac App, Antigravity) share a single trait
+//! ([`McpClient`]) but each module owns its own detection, config-path
+//! resolver, and format-aware merger.
 //!
-//! See `packaging/tauri/src/mcp_clients/README.md` for the registry
-//! pattern and the per-client config-format quirks (VSCode-Copilot's
-//! `servers`-not-`mcpServers`, Codex CLI+App shared config, Antigravity
-//! schema verification gate).
+//! Schema variance across the seven (from `jrn_01KRJ10CSJY14N3ZR7FFK186PX`):
+//!
+//! | Client | Format | Root key | `type: stdio` |
+//! |--------|--------|----------|---------------|
+//! | Claude Desktop | JSON | `mcpServers` | no |
+//! | Claude Code | JSON | `mcpServers` | yes |
+//! | Cursor | JSON | `mcpServers` | no |
+//! | VSCode-Copilot | JSON | **`servers`** | yes |
+//! | Codex CLI | TOML | `[mcp_servers.…]` | n/a |
+//! | Codex Mac App | TOML | `[mcp_servers.…]` (shares with CLI) | n/a |
+//! | Antigravity | JSON | `mcpServers` | no |
+//!
+//! Codex CLI + Mac App share `~/.codex/config.toml`. [`unique_write_targets`]
+//! dedupes the write target so onboarding selecting both checkboxes
+//! lands a single TOML write.
 
-use std::path::PathBuf;
+pub mod antigravity;
+pub mod claude_code;
+pub mod claude_desktop;
+pub mod codex_app;
+pub mod codex_cli;
+pub mod cursor;
+pub mod json_merger;
+pub mod toml_merger;
+pub mod verify;
+pub mod vscode_copilot;
+
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// Result of probing the filesystem to see whether a client is installed.
+use crate::rka_runtime_dir;
+
+const LAUNCHER_FILENAME: &str = "rka-mcp.sh";
+
+/// Path to the stable launcher script the per-client mergers point at.
+pub fn stable_launcher_path() -> PathBuf {
+    rka_runtime_dir().join("bin").join(LAUNCHER_FILENAME)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProbeResult {
     pub detected: bool,
@@ -32,7 +61,7 @@ pub enum ConfigFormat {
 pub enum MergeError {
     #[error("config not parseable: {0}")]
     Unparseable(String),
-    #[error("conflicting rka entry already present pointing elsewhere: {0}")]
+    #[error("conflicting rka entry already present: {0}")]
     Conflict(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
@@ -40,6 +69,12 @@ pub enum MergeError {
     Serde(String),
     #[error("verification failed after write: {0}")]
     VerifyFailed(String),
+}
+
+impl serde::Serialize for MergeError {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.to_string())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,39 +101,107 @@ pub struct VerifyResult {
     pub reason: Option<String>,
 }
 
-/// Shared interface every per-client module implements.
 pub trait McpClient: Send + Sync {
     fn id(&self) -> &'static str;
     fn display_name(&self) -> &'static str;
     fn config_format(&self) -> ConfigFormat;
-
-    /// Filesystem probe to determine whether the client is installed.
     fn detect(&self) -> ProbeResult;
-
-    /// Where the merged config lives. Returns `None` if the client is
-    /// detected only through its presence as an app bundle but RKA does
-    /// not yet know the actual user-scope config path (e.g. VSCode build
-    /// variance).
     fn config_path(&self) -> Option<PathBuf>;
-
-    /// Merge an `rka` entry into the user's existing config, atomically
-    /// and with backup. Implementations MUST refuse to overwrite a
-    /// config that cannot be parsed, and MUST surface a conflict when an
-    /// existing `rka` entry points elsewhere.
-    fn read_merge_write_rka(&self, launcher: &std::path::Path) -> Result<MergeResult, MergeError>;
-
-    /// Remove the RKA entry while preserving every other server.
+    fn read_merge_write_rka(&self, launcher: &Path) -> Result<MergeResult, MergeError>;
     fn remove_rka(&self) -> Result<RemoveResult, MergeError>;
-
-    /// Two-stage verification: config-syntax + backend reachability.
     fn verify(&self, backend_url: &str) -> VerifyResult;
 }
 
-/// Returns the canonical ordering of every client the registry knows about.
-/// The order is presentation-stable; D3 builds the onboarding grid from
-/// this list.
+/// Returns the seven supported clients in presentation order.
 pub fn registry() -> Vec<Box<dyn McpClient>> {
-    // D3 will fill in the modules. For scaffolding, return an empty Vec
-    // so the rest of the codebase compiles.
-    Vec::new()
+    vec![
+        Box::new(claude_desktop::ClaudeDesktop),
+        Box::new(claude_code::ClaudeCode),
+        Box::new(cursor::Cursor),
+        Box::new(vscode_copilot::VscodeCopilot),
+        Box::new(codex_cli::CodexCli),
+        Box::new(codex_app::CodexApp),
+        Box::new(antigravity::Antigravity),
+    ]
+}
+
+/// Look up a client by id without consuming the registry.
+pub fn find_client(id: &str) -> Option<Box<dyn McpClient>> {
+    registry().into_iter().find(|c| c.id() == id)
+}
+
+/// Compress a list of clients to one entry per unique config path so
+/// Codex CLI + Codex Mac App (which share `~/.codex/config.toml`) write
+/// once instead of twice. Preserves the original list ordering.
+pub fn unique_write_targets(ids: &[String]) -> Vec<String> {
+    let mut seen_paths: Vec<PathBuf> = Vec::new();
+    let mut out: Vec<String> = Vec::new();
+    for id in ids {
+        let Some(client) = find_client(id) else {
+            continue;
+        };
+        let Some(path) = client.config_path() else {
+            continue;
+        };
+        if !seen_paths.iter().any(|p| p == &path) {
+            seen_paths.push(path);
+            out.push(id.clone());
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn registry_has_seven_clients() {
+        let r = registry();
+        assert_eq!(r.len(), 7, "registry must surface exactly the seven supported clients");
+        let ids: Vec<&str> = r.iter().map(|c| c.id()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "claude_desktop",
+                "claude_code",
+                "cursor",
+                "vscode_copilot",
+                "codex_cli",
+                "codex_app",
+                "antigravity",
+            ]
+        );
+    }
+
+    #[test]
+    fn codex_cli_and_app_share_one_write_target() {
+        // Both checked → dedupes to a single write target.
+        let both = vec!["codex_cli".to_string(), "codex_app".to_string()];
+        let deduped = unique_write_targets(&both);
+        assert_eq!(deduped.len(), 1, "Codex CLI + Mac App must dedupe");
+
+        // Only CLI checked → CLI passes through.
+        let cli_only = vec!["codex_cli".to_string()];
+        assert_eq!(unique_write_targets(&cli_only), cli_only);
+
+        // Only App checked → App passes through.
+        let app_only = vec!["codex_app".to_string()];
+        assert_eq!(unique_write_targets(&app_only), app_only);
+    }
+
+    #[test]
+    fn unique_write_targets_preserves_other_clients() {
+        let mix = vec![
+            "claude_desktop".to_string(),
+            "codex_cli".to_string(),
+            "codex_app".to_string(),
+            "cursor".to_string(),
+        ];
+        let deduped = unique_write_targets(&mix);
+        assert_eq!(deduped.len(), 3); // codex_app drops, others stay
+        assert_eq!(deduped[0], "claude_desktop");
+        assert_eq!(deduped[1], "codex_cli");
+        assert_eq!(deduped[2], "cursor");
+    }
 }

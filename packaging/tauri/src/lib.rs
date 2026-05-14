@@ -19,9 +19,14 @@ mod sidecar;
 
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 use tokio::sync::Mutex;
 
+use mcp_clients::{
+    find_client, registry, unique_write_targets, ConfigFormat, MergeResult, ProbeResult,
+    RemoveResult, VerifyResult,
+};
 use sidecar::SidecarManager;
 
 pub struct AppState {
@@ -35,6 +40,15 @@ pub struct AppState {
 pub fn rka_runtime_dir() -> std::path::PathBuf {
     let base = dirs::data_dir().unwrap_or_else(|| std::env::temp_dir());
     base.join("RKA")
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClientSummary {
+    pub id: String,
+    pub display_name: String,
+    pub format: String,
+    pub detection: ProbeResult,
+    pub config_path: Option<String>,
 }
 
 #[tauri::command]
@@ -59,6 +73,103 @@ async fn restart_sidecar(
 ) -> Result<(), String> {
     let mut mgr = state.sidecar.lock().await;
     mgr.restart(&app).await.map_err(|e| e.to_string())
+}
+
+/// List the seven supported clients with their detection state.
+#[tauri::command]
+async fn list_mcp_clients() -> Result<Vec<ClientSummary>, String> {
+    Ok(registry()
+        .into_iter()
+        .map(|c| ClientSummary {
+            id: c.id().to_string(),
+            display_name: c.display_name().to_string(),
+            format: match c.config_format() {
+                ConfigFormat::Json => "json".to_string(),
+                ConfigFormat::Toml => "toml".to_string(),
+            },
+            detection: c.detect(),
+            config_path: c.config_path().map(|p| p.display().to_string()),
+        })
+        .collect())
+}
+
+/// Merge the `rka` entry into a single client's config.
+#[tauri::command]
+async fn merge_mcp_client(id: String) -> Result<MergeResult, String> {
+    let client = find_client(&id).ok_or_else(|| format!("unknown client: {id}"))?;
+    let launcher = mcp_clients::stable_launcher_path();
+    client
+        .read_merge_write_rka(&launcher)
+        .map_err(|e| e.to_string())
+}
+
+/// Merge across a list of selected clients, dedup-ing Codex CLI + Mac App
+/// to a single write target.
+#[derive(Debug, Clone, Serialize)]
+struct MergeSummary {
+    client_id: String,
+    result: Option<MergeResult>,
+    error: Option<String>,
+}
+
+#[tauri::command]
+async fn merge_mcp_clients(ids: Vec<String>) -> Result<Vec<MergeSummary>, String> {
+    let deduped = unique_write_targets(&ids);
+    let launcher = mcp_clients::stable_launcher_path();
+    Ok(deduped
+        .into_iter()
+        .map(|id| {
+            let client = find_client(&id);
+            match client {
+                Some(c) => match c.read_merge_write_rka(&launcher) {
+                    Ok(result) => MergeSummary {
+                        client_id: id,
+                        result: Some(result),
+                        error: None,
+                    },
+                    Err(e) => MergeSummary {
+                        client_id: id,
+                        result: None,
+                        error: Some(e.to_string()),
+                    },
+                },
+                None => MergeSummary {
+                    client_id: id,
+                    result: None,
+                    error: Some("unknown client".into()),
+                },
+            }
+        })
+        .collect())
+}
+
+#[tauri::command]
+async fn remove_mcp_client(id: String) -> Result<RemoveResult, String> {
+    let client = find_client(&id).ok_or_else(|| format!("unknown client: {id}"))?;
+    client.remove_rka().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn verify_mcp_client(id: String) -> Result<VerifyResult, String> {
+    let client = find_client(&id).ok_or_else(|| format!("unknown client: {id}"))?;
+    Ok(client.verify("http://127.0.0.1:9712"))
+}
+
+#[tauri::command]
+async fn verify_all_mcp_clients(ids: Vec<String>) -> Result<Vec<(String, VerifyResult)>, String> {
+    let backend = "http://127.0.0.1:9712";
+    Ok(ids
+        .into_iter()
+        .filter_map(|id| find_client(&id).map(|c| (id, c.verify(backend))))
+        .collect())
+}
+
+/// Force-rewrite the stable launcher script (Settings tab "Re-register MCP"
+/// recovery path).
+#[tauri::command]
+async fn rewrite_launcher(app: tauri::AppHandle) -> Result<String, String> {
+    let path = launcher::write_stable_launcher(&app).map_err(|e| e.to_string())?;
+    Ok(path.display().to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -95,14 +206,18 @@ pub fn run() {
             get_backend_url,
             sidecar_status,
             restart_sidecar,
+            list_mcp_clients,
+            merge_mcp_client,
+            merge_mcp_clients,
+            remove_mcp_client,
+            verify_mcp_client,
+            verify_all_mcp_clients,
+            rewrite_launcher,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
             let sidecar_clone = sidecar.clone();
 
-            // Best-effort: rewrite the stable launcher to point at this app's
-            // current bundle. Skipping is non-fatal — D4 surfaces a recovery
-            // action via the "Re-register MCP" button.
             if let Err(err) = launcher::write_stable_launcher(&handle) {
                 log::warn!("Failed to write stable launcher: {err}");
             }
