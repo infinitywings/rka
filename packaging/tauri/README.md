@@ -58,9 +58,18 @@ cp ../pyinstaller/dist/rka-mcp    binaries/rka-mcp-aarch64-apple-darwin
 
 # Build the Tauri app (ad-hoc signed dev DMG)
 cargo tauri build
+
+# Tauri's bundle_dmg.sh uses Finder via AppleScript to apply a window
+# layout to the DMG. That step times out unless macOS has explicitly
+# granted the running shell permission to control Finder
+# (Privacy & Security → Automation). When it times out, the .app is
+# still built and ad-hoc-signed correctly — just the DMG wrapper
+# fails. Run the bypass script to produce a functional UDZO DMG via
+# hdiutil instead:
+../build-dmg.sh
 ```
 
-The resulting DMG lands at `target/release/bundle/dmg/RKA_*.dmg`.
+The resulting DMG lands at `target/release/bundle/dmg/RKA_*.dmg` (~80–120 MB depending on which sidecar variants are bundled). The bypass DMG has no fancy window layout (no background image, no drag-to-Applications arrow) — Phase 2 distribution with paid Developer ID + notarization can layer those on later.
 
 ## Development
 

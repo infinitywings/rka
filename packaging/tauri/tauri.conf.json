@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../ui-src/dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "npm --prefix ../ui-src run dev",
-    "beforeBuildCommand": "npm --prefix ../ui-src run build"
+    "beforeDevCommand": "",
+    "beforeBuildCommand": ""
   },
   "app": {
     "withGlobalTauri": true,
@@ -40,7 +40,11 @@
       "minimumSystemVersion": "11.0",
       "signingIdentity": "-",
       "exceptionDomain": "localhost"
-    }
+    },
+    "externalBin": [
+      "binaries/rka-serve",
+      "binaries/rka-mcp"
+    ]
   },
   "plugins": {}
 }

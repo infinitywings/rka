@@ -117,3 +117,5 @@ cargo check       # or `cargo tauri build`, `cargo tauri dev`, etc.
 ```
 
 See `packaging/README.md` "FuSpace developer notes" on the `release/desktop` branch for the full workaround.
+
+**`cargo tauri build` DMG packaging on this machine**: Tauri 2.x's `bundle_dmg.sh` calls `osascript` to apply a window layout (icon positions, "drag to Applications" arrow) to the DMG. On macOS systems where the calling shell hasn't been granted Finder automation (Privacy & Security → Automation), the AppleScript times out as `Finder got an error: AppleEvent timed out (-1712)` and Tauri treats the whole DMG step as failed. The `.app` bundle under `release/bundle/macos/RKA.app` is still produced and ad-hoc-signed correctly — only the DMG wrapper fails. Use `packaging/build-dmg.sh` (on the `release/desktop` branch) to skip the AppleScript step and produce a functional UDZO DMG via `hdiutil` instead. Phase 2 distribution with paid Developer ID + notarization can layer the fancy DMG cosmetics back on once Finder automation is granted.

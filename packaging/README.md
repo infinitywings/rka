@@ -59,6 +59,31 @@ Both mitigations are no-ops on non-FuSpace volumes.
 
 Phase 2 is gated on Phase 1 manual QA. See `jrn_01KRH2M0CRXF9KW4RCG8TSCA2X` for the full split.
 
+### Phase 1 installer experience for end users
+
+The DMG produced by `cargo tauri build` ships ad-hoc-signed. macOS's
+Gatekeeper does not trust ad-hoc signatures by default, so the first
+launch surfaces:
+
+> "RKA" cannot be opened because it is from an unidentified developer.
+
+To install:
+
+1. Drag `RKA.app` from the mounted DMG into `/Applications/`.
+2. **Right-click (or Control-click)** `RKA.app` in `/Applications/`.
+3. Choose **Open** from the menu.
+4. macOS shows a confirmation dialog naming the unidentified developer.
+   Click **Open** to launch. The OS records this choice; future
+   double-clicks work normally.
+
+If macOS 15 Sequoia hides the right-click bypass, open
+**System Settings → Privacy & Security**, scroll to the "Security"
+section, and click **Open Anyway** next to the RKA.app reference that
+appeared after the first blocked launch. Same effect, different
+location.
+
+Phase 2 (paid Developer ID + notarization) removes this step entirely.
+
 ## Supported MCP clients (7)
 
 | # | Client | Config | Format | Root key |
