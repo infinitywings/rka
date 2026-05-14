@@ -13,10 +13,10 @@
 //!   5. On `WindowEvent::CloseRequested`: SIGTERM the sidecar, wait 2 s,
 //!      then SIGKILL if still alive.
 
-mod diag;
+pub mod diag;
 mod launcher;
-mod log_writer;
-mod mcp_clients;
+pub mod log_writer;
+pub mod mcp_clients;
 mod sidecar;
 
 use std::sync::Arc;
