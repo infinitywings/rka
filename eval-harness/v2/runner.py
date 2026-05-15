@@ -152,6 +152,30 @@ class EvalV2Runner:
             out.update(extra)
         return out
 
+    def _extract_json_entities(
+        self, resp: httpx.Response, path: str
+    ) -> tuple[list[str], str | None]:
+        """Try to parse the response body as JSON; on parse failure (e.g.,
+        SPA fallback returning HTML), return ([], divergence-note) so the
+        caller can attribute the empty bundle to a real shape mismatch.
+
+        Discovered during T5 live run: some endpoints that don't exist
+        fall through to the React SPA serving index.html with a 200,
+        which then makes `r.json()` raise JSONDecodeError. Defensive
+        handling here keeps the runner moving across the corpus instead
+        of crashing on the first bad endpoint.
+        """
+        if resp.status_code != 200:
+            return ([], None)
+        try:
+            payload = resp.json()
+        except (json.JSONDecodeError, ValueError) as exc:
+            return (
+                [],
+                f"{path}: 200 but body is not JSON ({exc!s}); likely SPA fallback for a missing route",
+            )
+        return (walk_for_entity_ids(payload), None)
+
     async def probe_health(self) -> None:
         """Probe `/api/health`; exit(2) on failure."""
         try:
@@ -232,31 +256,37 @@ class EvalV2Runner:
     async def _call_get_context(self) -> ToolInvocation:
         path = "/api/context"
         r = await self._client().post(path, json={}, params=self._params())
+        ids, div = self._extract_json_entities(r, path)
         return ToolInvocation(
             tool="rka_get_context",
             path=path,
             status_code=r.status_code,
-            entity_ids=walk_for_entity_ids(r.json()) if r.status_code == 200 else [],
+            entity_ids=ids,
+            divergence=div,
         )
 
     async def _call_get_status(self) -> ToolInvocation:
         path = "/api/status"
         r = await self._client().get(path, params=self._params())
+        ids, div = self._extract_json_entities(r, path)
         return ToolInvocation(
             tool="rka_get_status",
             path=path,
             status_code=r.status_code,
-            entity_ids=walk_for_entity_ids(r.json()) if r.status_code == 200 else [],
+            entity_ids=ids,
+            divergence=div,
         )
 
     async def _call_pending_maintenance(self) -> ToolInvocation:
         path = "/api/maintenance/summary"
         r = await self._client().get(path, params=self._params())
+        ids, div = self._extract_json_entities(r, path)
         return ToolInvocation(
             tool="rka_get_pending_maintenance",
             path=path,
             status_code=r.status_code,
-            entity_ids=walk_for_entity_ids(r.json()) if r.status_code == 200 else [],
+            entity_ids=ids,
+            divergence=div,
         )
 
     async def _call_get_checkpoints(self) -> ToolInvocation:
@@ -264,31 +294,37 @@ class EvalV2Runner:
         r = await self._client().get(
             path, params=self._params({"status": "open"})
         )
+        ids, div = self._extract_json_entities(r, path)
         return ToolInvocation(
             tool="rka_get_checkpoints",
             path=path,
             status_code=r.status_code,
-            entity_ids=walk_for_entity_ids(r.json()) if r.status_code == 200 else [],
+            entity_ids=ids,
+            divergence=div,
         )
 
     async def _call_review_queue(self) -> ToolInvocation:
         path = "/api/review-queue"
         r = await self._client().get(path, params=self._params())
+        ids, div = self._extract_json_entities(r, path)
         return ToolInvocation(
             tool="rka_get_review_queue",
             path=path,
             status_code=r.status_code,
-            entity_ids=walk_for_entity_ids(r.json()) if r.status_code == 200 else [],
+            entity_ids=ids,
+            divergence=div,
         )
 
     async def _call_research_map(self) -> ToolInvocation:
         path = "/api/research-map"
         r = await self._client().get(path, params=self._params())
+        ids, div = self._extract_json_entities(r, path)
         return ToolInvocation(
             tool="rka_get_research_map",
             path=path,
             status_code=r.status_code,
-            entity_ids=walk_for_entity_ids(r.json()) if r.status_code == 200 else [],
+            entity_ids=ids,
+            divergence=div,
         )
 
     async def _call_get_mission(self, mission_id: str | None) -> ToolInvocation:
@@ -297,22 +333,28 @@ class EvalV2Runner:
         else:
             path = f"/api/missions/{mission_id}"
         r = await self._client().get(path, params=self._params())
+        ids, div = self._extract_json_entities(r, path)
         return ToolInvocation(
             tool="rka_get_mission",
             path=path,
             status_code=r.status_code,
-            entity_ids=walk_for_entity_ids(r.json()) if r.status_code == 200 else [],
+            entity_ids=ids,
+            divergence=div,
             notes=f"anchor={mission_id or '(active)'}",
         )
 
     async def _call_get_journal(self) -> ToolInvocation:
-        path = "/api/journal"
+        # The actual route is /api/notes (journal entries are "notes" in
+        # the REST surface). Discovered during T5 live run.
+        path = "/api/notes"
         r = await self._client().get(path, params=self._params({"limit": 20}))
+        entity_ids, divergence = self._extract_json_entities(r, path)
         return ToolInvocation(
             tool="rka_get_journal",
             path=path,
             status_code=r.status_code,
-            entity_ids=walk_for_entity_ids(r.json()) if r.status_code == 200 else [],
+            entity_ids=entity_ids,
+            divergence=divergence,
         )
 
     async def _call_multi_hop(
@@ -333,12 +375,13 @@ class EvalV2Runner:
                 f"rka_multi_hop_retrieval: {r.status_code} "
                 f"(probable shape divergence — Brain T2-gate sister-uncertainty)"
             )
+        ids, div = self._extract_json_entities(r, path)
         return ToolInvocation(
             tool="rka_multi_hop_retrieval",
             path=path,
             status_code=r.status_code,
-            entity_ids=walk_for_entity_ids(r.json()) if r.status_code == 200 else [],
-            divergence=divergence,
+            entity_ids=ids,
+            divergence=divergence or div,
             notes=f"anchor={anchor or '(query-fallback)'}",
         )
 
@@ -359,12 +402,13 @@ class EvalV2Runner:
                 f"rka_get_ego_graph: {r.status_code} "
                 f"(cluster-anchored ego_graph — Brain T2-gate sister-uncertainty)"
             )
+        ids, div = self._extract_json_entities(r, path)
         return ToolInvocation(
             tool="rka_get_ego_graph",
             path=path,
             status_code=r.status_code,
-            entity_ids=walk_for_entity_ids(r.json()) if r.status_code == 200 else [],
-            divergence=divergence,
+            entity_ids=ids,
+            divergence=divergence or div,
             notes=f"anchor={anchor}",
         )
 
@@ -384,12 +428,13 @@ class EvalV2Runner:
                 f"rka_assemble_evidence: {r.status_code} "
                 f"(Brain T2-gate sister-uncertainty — shape unknown)"
             )
+        ids, div = self._extract_json_entities(r, path)
         return ToolInvocation(
             tool="rka_assemble_evidence",
             path=path,
             status_code=r.status_code,
-            entity_ids=walk_for_entity_ids(r.json()) if r.status_code == 200 else [],
-            divergence=divergence,
+            entity_ids=ids,
+            divergence=divergence or div,
             notes=f"anchor={anchor or '(none)'}",
         )
 
