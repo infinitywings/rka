@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rka.local/eval-harness/v2/scenario.schema.json",
+  "title": "Eval-v2 Scenario",
+  "description": "One context-need scenario for the composed-context coverage eval (Mission mis_01KRPF3DERZS2W5VFDYE9E9GKM). See schema.md for the field reference + diversity floor.",
+  "type": "object",
+  "required": [
+    "scenario_id",
+    "actor",
+    "trigger",
+    "tools_invoked",
+    "expected_entities"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "scenario_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{2,63}$",
+      "description": "Stable kebab-case slug (3-64 chars). Used as the raw-result filename."
+    },
+    "actor": {
+      "type": "string",
+      "enum": ["brain", "executor"]
+    },
+    "trigger": {
+      "type": "string",
+      "minLength": 10,
+      "description": "Free-text session-start context. Human-readable; not parsed."
+    },
+    "tools_invoked": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1,
+      "description": "Ordered MCP tool names the runner will invoke for this scenario."
+    },
+    "expected_entities": {
+      "type": "array",
+      "minItems": 5,
+      "description": "PI-ratified ground-truth set. Min 5 total; min 3 with importance='critical' (enforced by the validator separately).",
+      "items": {
+        "type": "object",
+        "required": ["entity_id", "entity_type", "importance"],
+        "additionalProperties": false,
+        "properties": {
+          "entity_id": {
+            "type": "string",
+            "pattern": "^(jrn_|dec_|mis_|clm_|ecl_|lit_|chk_)[a-zA-Z0-9_-]+$",
+            "description": "Full RKA entity ID with prefix."
+          },
+          "entity_type": {
+            "type": "string",
+            "enum": [
+              "journal",
+              "decision",
+              "mission",
+              "claim",
+              "cluster",
+              "literature",
+              "checkpoint"
+            ]
+          },
+          "importance": {
+            "type": "string",
+            "enum": ["critical", "useful", "nice-to-have"]
+          }
+        }
+      }
+    },
+    "context_length_budget_estimate": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Informational token budget; eval does not enforce."
+    },
+    "notes": {
+      "type": "string",
+      "description": "Brain's rationale or edge-case explanation. Not used by metrics."
+    }
+  }
+}
