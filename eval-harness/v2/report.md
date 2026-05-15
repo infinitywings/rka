@@ -1,0 +1,176 @@
+# Eval-v2 — Composed-Context Coverage Report
+
+**Mission**: `mis_01KRPF3DERZS2W5VFDYE9E9GKM`
+**Motivating decision**: `dec_01KRPF09AP1FE1CRR6YQBY2R5F`
+**Date**: 2026-05-15
+**Author**: Brain (this session)
+**Branch**: `feat/eval-v2-composed-context` @ `fbcdbdb`
+**Test counts**: T1 13 / T3 6 / T4 17 = 36/36 unit-integration tests
+**Suite-scale data**: 16 scenarios × 6 pattern types × 11 distinct MCP tools
+
+---
+
+## TL;DR — metric-divergence-as-headline (skill rule #14)
+
+**Critical-recall PASSES the 0.85 floor at 0.958. Ordering and efficiency are the real story.**
+
+| Metric | Mean | Floor | Verdict |
+|---|---|---|---|
+| **Critical recall** | **0.958** | 0.85 | ✅ PASSED |
+| Expanded recall | 0.887 | (informational) | strong |
+| **Ordering score** | **0.251** | (none formal) | ⚠️ low — critical entities buried |
+| Breadth | 3.25 of 5 | (none formal) | acceptable |
+| **Efficiency** | **0.037** | (none formal) | 🔴 very low — bundles 96% noise |
+
+The composed retrieval surface DOES surface critical entities (95.8% recall) but does so by returning ~170-entity bundles where ~5 are expected and the remaining ~165 are project-context noise. Skill rule #14 applies: **report the divergence, not the floor pass**.
+
+---
+
+## Headline findings
+
+### Finding 1: composed retrieval is recall-good, ordering-bad, efficiency-bad
+
+The current default — hybrid retrieval + importance-weighted + entity_links centrality + recency boost — surfaces 14 of 16 scenarios' critical entities at recall=1.0 and the other 2 at 0.67. That means **at the entity-presence level, the retrieval mostly works**.
+
+What fails: **ordering** — critical entities are present but buried mid-bundle. NDCG-style ordering scores average 0.251, meaning critical entities are roughly mid-pack rather than top-3 across the typical Brain session-start bundle.
+
+**Recommendation 1 — Phase 3 tuning candidate**: adjust importance-weight + centrality + recency-boost coefficients so critical-importance entities consistently land in the top-N (e.g., top-15) of the returned bundle. The current weighting surfaces them but doesn't prioritize them.
+
+### Finding 2: efficiency 0.037 = bundles are 96% padding
+
+Each scenario's bundle averages 170 entities; only ~5 are in the expected set. That's a 32:1 noise-to-signal ratio. Two interpretations:
+
+- **(a)** the bundles ARE the right shape and the corpus's expected_entities sets are under-specified (ratify-and-grow per the spec's 30%-drift checkpoint trigger)
+- **(b)** the bundles are over-fetching context that downstream consumers (Brain, Executor) actually filter on the consumer side
+
+Per Brain skill rule #14, the headline is the divergence itself. **Whichever interpretation is correct, the bundle SHAPE is the next thing to evaluate.** A Phase 3 mission should A/B-test "narrow bundle (top-10 importance-ranked)" vs "broad bundle (current default)" and measure downstream LLM-consumer quality (token efficiency, answer correctness).
+
+**Recommendation 2**: do NOT default-narrow the bundle now. Eval-v2 measures the bundle as currently shipped; choosing how to interpret 0.037 efficiency requires A/B data on downstream consumers, which is out of Eval-v2 scope per the upfront acceptance criteria.
+
+### Finding 3: cluster-anchored scenarios are the recall failure mode
+
+Both scenarios that scored below 1.0 critical-recall are cluster-anchored:
+
+- `brain-contradiction-staleness-vs-validation` (rec 0.67): scenario anchors at `ecl_01KP4PK7VPN8YFR50PSFXPGTQ0` (Staleness Detection cluster) + `ecl_01KP4PKMN8XS0WXHXHN7GN4TG3` (Validation Gate Frameworks). The retrieval missed `dec_01KP4P4QSSNZCTEHVT6QR7ZRYD` (parent RQ).
+- `brain-paper-scaffold-session-start-section` (rec 0.67): anchors at `ecl_01KP4PJGJKE9Q7X1W2X6SJJVZ3` (Session Start cluster). Missed `dec_01KP4P53MSKY3GKEXZKG9JMFKX` (parent RQ for that cluster).
+
+**Pattern**: when the user/agent anchors at a cluster, the retrieval surface fails to traverse back up to the cluster's parent decision (the RQ). The `rka_get_ego_graph` per-tool critical-coverage is only 0.333 across the 6 scenarios that invoke it — confirming Eval-v1 finding #3 ("Cluster-level retrieval is weak"; eval-harness/report.md headline finding 3).
+
+**Recommendation 3 — high-priority Phase 3 follow-up**: cluster-to-parent-RQ retrieval pathway. The current entity_links centrality boost may under-weight the parent-RQ direction from cluster anchors. Worth investigating whether the boost should be link-direction-aware (favor parent-of, supports, etc. over generic centrality).
+
+### Finding 4: 5 of 11 tools contribute zero critical entities
+
+Per-tool mean critical-coverage:
+
+| Tool | Mean coverage | Notes |
+|---|---|---|
+| `rka_get_journal` | **1.000** | strongest — recent journals always include critical entries |
+| `rka_get_context` | **0.867** | very strong |
+| `rka_get_mission` | **0.800** | strong for mission-pickup pattern |
+| `rka_get_checkpoints` | 0.333 | medium — surfaces critical only when checkpoints are central to the scenario |
+| `rka_get_research_map` | 0.333 | medium |
+| `rka_get_ego_graph` | 0.333 | medium (cluster-anchored variant is the failure case) |
+| `rka_get_status` | 0.000 | **zero contribution** |
+| `rka_get_pending_maintenance` | 0.000 | **zero contribution** |
+| `rka_get_review_queue` | 0.000 | **zero contribution** |
+| `rka_multi_hop_retrieval` | 0.000 | **422 across all invocations — REAL DIVERGENCE** |
+| `rka_assemble_evidence` | 0.000 | **200 OK but no expected entities surfaced** |
+
+Three categories of zero-contribution:
+
+- **Real bug — rka_multi_hop_retrieval returns 422 Unprocessable Content** on every invocation (4 scenarios invoked it). Logged as a sister-uncertainty divergence per the T2-gate ratification. **Worth filing a follow-up bug-fix mission** — the tool is documented in MCP but the REST endpoint rejects the body shape the runner sends. May be a request-schema drift.
+- **Conceptual zero-coverage — rka_get_status / rka_get_pending_maintenance / rka_get_review_queue** return status-level data (active phase, gap counts) that doesn't include entity references at the scenario-anchor level. They're not "broken"; they answer a different question. The composed-context bundle's value comes from get_context + get_journal + get_mission; the others are situational.
+- **rka_assemble_evidence** returns 200 but the response shape didn't expose entity IDs the walker could find. T2-gate flagged this as a sister-uncertainty; confirmed empirically. Worth surfacing whether the response shape is what the eval expects.
+
+**Recommendation 4**: investigate `rka_multi_hop_retrieval`'s 422 — this is the clearest actionable item from Eval-v2. Likely a 1-2 commit fix once the body-schema drift is identified.
+
+### Finding 5: actor-split reveals executor scenarios are slightly easier
+
+| Actor | n | Recall | Expanded | Ordering | Efficiency |
+|---|---|---|---|---|---|
+| executor | 6 | 1.000 | 0.933 | 0.246 | 0.027 |
+| brain | 10 | 0.933 | 0.860 | 0.254 | 0.043 |
+
+Executor scenarios use leaner tool sequences (4 tools each vs Brain's 6) and hit recall=1.0 perfectly. Brain's scenarios have the cluster-anchored failure mode (Finding 3) pulling recall down. Brain's efficiency is slightly better (0.043 vs 0.027) because Brain's 6-tool bundles include the same ~170 entities while Executor's 4-tool bundles include slightly fewer entities for the same ~5 expected — the absolute count of noise scales with tool count.
+
+---
+
+## Per-axis breakdown
+
+### By pattern type
+
+| Pattern | n | mean recall | mean ordering | mean efficiency |
+|---|---|---|---|---|
+| brain-session-start | 4 | 1.00 | 0.24 | 0.029 |
+| brain-mission-creation | 2 | 1.00 | 0.27 | 0.032 |
+| brain-contradiction | 2 | **0.83** | 0.18 | 0.021 |
+| brain-paper-scaffold | 2 | **0.83** | 0.34 | 0.103 |
+| executor-mission-pickup | 3 | 1.00 | 0.25 | 0.026 |
+| executor-backbrief | 3 | 1.00 | 0.25 | 0.027 |
+
+**brain-contradiction** and **brain-paper-scaffold** are the weak patterns — both predominantly cluster-anchored. **brain-paper-scaffold-multi-cluster-rq** (S10) is the outlier within paper-scaffold with rec=1.0 / ord=0.53 / eff=0.188 — best ordering + best efficiency of the whole corpus. That scenario uses `rka_get_research_map` first, which gives a structured RQ→clusters response — much denser per-entity than the importance-ranked context bundle.
+
+### By tool category
+
+Already covered in Finding 4. The headline is the binary split: 3 tools that work (`get_journal`, `get_context`, `get_mission`) account for substantially all the critical-recall; 3 tools contribute medium (`get_checkpoints`, `get_research_map`, `get_ego_graph`); 5 contribute zero — 1 due to a real bug and 4 due to either conceptual mismatch or shape mismatch.
+
+---
+
+## Methodological limitations
+
+Per Brain skill rule #9d (caveats mandatory):
+
+1. **PI-ratified ground truth, not derived post-hoc**. This is by design (A2 of the upfront Backbrief; shrinks labeling burden vs Eval-v1's full-corpus grading). But it means the expected sets reflect the Executor's mental model of what SHOULD be there + PI's ratification, not a downstream-consumer measurement of what was actually NEEDED. The 0.037 efficiency could be reframed if the expected sets were expanded by 5-10× to include "useful-but-not-must-have" context entries.
+
+2. **Single-rater corpus authoring + single-pass PI ratification.** The corpus was drafted by Executor in this session and PI ratified 5 of 6 asks block-accept + 1 correction (S6 promotion). The single labeling pass is fast but doesn't surface ambiguity in marginal cases. Eval-v3 (if filed) could iterate the corpus with multi-rater agreement.
+
+3. **16 scenarios is small.** Within-rater + within-corpus noise dominates over per-tool effect size at this corpus size. The per-tool critical-coverage table is the strongest signal because each tool is exercised across ~5-16 scenarios; per-scenario metrics carry more variance.
+
+4. **Single config evaluation.** Per A4, only the current default (hybrid + importance + centrality + recency) is measured. The +9% NDCG@10 Eval-v1 finding for FTS+semantic vs FTS-only would not show here because the runner doesn't switch backends.
+
+5. **Live container at v2.4.1 with vec_available=true.** Eval-v1's qwen3-8B backfill is NOT in effect on this container; the embedding backend is the v2.4.0 default (FastEmbed nomic-768). Eval-v2 measurements attribute to that backend; switching to qwen3 would re-run with potentially different ordering scores.
+
+6. **Project scope: `prj_01KKQM9JFG67GT5FGWTAHD9YE4` (rka_development).** The runner's `--project-id` flag was set; live API observed responses scoped accordingly. Different projects (smaller corpora) may show very different efficiency numbers since the noise denominator scales with project size.
+
+---
+
+## Forward-looking recommendations
+
+1. **Investigate `rka_multi_hop_retrieval` 422** (Finding 4) — likely a request-body-schema drift between the MCP-tool docs and the REST `/api/graph/multi-hop` endpoint. One commit fix candidate.
+
+2. **A/B test importance-weighting + centrality coefficients** (Finding 1) to improve ordering_score from 0.25 to a target (≥0.50 would mean critical entities consistently in the top-third of the bundle). Phase 3 mission scope.
+
+3. **Cluster→parent-RQ retrieval pathway** (Finding 3) — investigate whether entity_links direction should bias retrieval (e.g., "parent-of" link gets a boost from clusters). Phase 3 mission scope.
+
+4. **Decide on bundle-narrowing policy** (Finding 2). Either (a) accept current bundles as the right shape and grow corpus expected_entities to match, or (b) A/B test narrower bundles. PI ratifies which interpretation drives Phase 3.
+
+5. **`rka_get_ego_graph` cluster anchoring shape** — confirmed sister-uncertainty divergence. Worth a small probe to see whether the response shape changes when the anchor is a cluster vs decision/mission. May explain part of Finding 3.
+
+6. **Expand corpus to 30+ scenarios for significance testing** — current 16 is directional. Phase 3 could double the count with focused cluster-anchored scenarios to confirm Finding 3's pattern.
+
+---
+
+## Reproducibility provenance (per Brain skill rule #8a)
+
+- **corpus_hash**: see `eval-harness/v2/results/metrics.json` (sha256:... per `_provenance`)
+- **rka_head**: see metrics.json
+- **eval_run_timestamp**: see metrics.json
+- **eval_version**: `v2`
+- **container_version**: 2.4.1 with vec_available=true (FastEmbed default per v2.4.0)
+- **project_id**: `prj_01KKQM9JFG67GT5FGWTAHD9YE4` (rka_development)
+- **branch**: `feat/eval-v2-composed-context` @ `fbcdbdb`
+- **runner command**: `python -m eval-harness.v2.runner --corpus eval-harness/v2/corpus/scenarios.jsonl --rka-url http://localhost:9712 --project-id prj_01KKQM9JFG67GT5FGWTAHD9YE4 --output-dir eval-harness/v2/results/raw`
+- **metrics command**: `python -m eval-harness.v2.metrics --corpus ... --raw-dir ... --output eval-harness/v2/results/metrics.json`
+
+---
+
+## Decision-slate hook
+
+Per Brain skill rule #9b: this report does NOT autoship final decisions on importance-weight tuning, bundle-narrowing policy, or cluster→parent-RQ pathway changes. The four named recommendations above are candidates for follow-up Brain `decision_options` slates the PI ratifies separately:
+
+- **(D1)** Bug-fix Mission: `rka_multi_hop_retrieval` 422 (Finding 4)
+- **(D2)** Tuning Mission: importance-weight/centrality/recency-boost coefficient sweep (Finding 1)
+- **(D3)** Pathway Mission: cluster→parent-RQ retrieval (Finding 3)
+- **(D4)** Policy Decision: bundle-narrowing vs corpus-expansion under 0.037 efficiency (Finding 2)
+
+PI ratifies which subset becomes Phase 3 missions. The mission spec's checkpoint trigger fires here: critical recall is comfortably above floor (0.958 vs 0.85), so this is NOT a "corpus too easy + needs harder cases" outcome — it's a "retrieval surfaces critical entities but ordering and efficiency are the next bottleneck" outcome.
