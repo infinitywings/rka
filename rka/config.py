@@ -21,6 +21,10 @@ class RKAConfig(BaseSettings):
     # Project
     project_dir: Path = Field(default=Path("."), description="Project root directory")
     db_path: Path = Field(default=Path("rka.db"), description="SQLite database path")
+    # Volume mount that survives `docker compose up -d --build`. Houses
+    # `rka.db`, `embedding_config.json`, and other persistent state.
+    # Tests override via `RKAConfig(data_dir=tmp_path)`.
+    data_dir: Path = Field(default=Path("/data"), description="Persistent data directory")
 
     # Server
     host: str = Field(default="127.0.0.1", description="API server host")

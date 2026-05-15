@@ -18,6 +18,7 @@ from rka.api.routes import (
     artifacts as artifact_routes,
     audit as audit_routes,
     checkpoints as checkpoints_routes,
+    config as config_routes,
     context as context_routes,
     decisions as decisions_routes,
     enrich as enrich_routes,
@@ -245,6 +246,10 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
     app.include_router(maintenance_routes.router, prefix="/api", tags=["maintenance"])
     app.include_router(researcher_tools_routes.router, prefix="/api", tags=["researcher-tools"])
     app.include_router(hooks_routes.router, prefix="/api", tags=["hooks"])
+    # Mission D T3: pluggable embedding backend configuration.
+    # Routes carry their own /api/config/... prefix internally; mount with
+    # an empty prefix so the documented paths don't end up doubled.
+    app.include_router(config_routes.router, tags=["config"])
 
     @app.get("/api/health")
     async def health(request: Request):
