@@ -97,13 +97,16 @@ def test_rka_get_status_issues_get():
     assert http.calls[0]["path"] == "/api/status"
 
 
-def test_rka_get_context_passes_topic_and_limit():
+def test_rka_get_context_posts_with_body():
+    # The /api/context route is POST with topic+limit in the JSON body
+    # (discovered during T12 pilot — fixed in mcp_client.py).
     http = FakeHttp(canned=FakeResp(_json={"recent": []}))
     c = _client(http)
     c.rka_get_context(topic="orchestrator", limit=5)
     call = http.calls[0]
-    assert call["method"] == "GET"
-    assert call["params"] == {"topic": "orchestrator", "limit": 5}
+    assert call["method"] == "POST"
+    assert call["path"] == "/api/context"
+    assert call["json"] == {"topic": "orchestrator", "limit": 5}
 
 
 def test_rka_get_journal_joins_tags_csv():
@@ -170,11 +173,29 @@ def test_rka_add_note_default_tags_just_workflow_id():
 def test_rka_add_decision_carries_workflow_tag():
     http = FakeHttp(canned=FakeResp(_json={"id": "dec_001"}))
     c = _client(http)
-    out = c.rka_add_decision("draft", related_journal=["jrn_a"])
+    out = c.rka_add_decision("draft content", related_journal=["jrn_a"])
     assert out == "dec_001"
     body = http.calls[0]["json"]
     assert body["related_journal"] == ["jrn_a"]
     assert "thr_t9" in body["tags"]
+    # T12-discovered: REST DecisionCreate requires question/decided_by/phase
+    assert body["question"]
+    assert body["decided_by"] == "pi"
+    assert body["phase"] == "design"
+
+
+def test_rka_add_decision_maps_content_to_question_and_rationale():
+    http = FakeHttp(canned=FakeResp(_json={"id": "dec_002"}))
+    c = _client(http)
+    c.rka_add_decision(
+        "Q: Should Phase 2 proceed?\nDetails: ...",
+        related_journal=["jrn_x"],
+    )
+    body = http.calls[0]["json"]
+    # First-line → question (truncated to 280)
+    assert body["question"].startswith("Q: Should Phase 2 proceed?")
+    # Full text → rationale
+    assert "Details" in body["rationale"]
 
 
 def test_rka_submit_checkpoint_carries_workflow_tag():
@@ -195,11 +216,17 @@ def test_rka_submit_report_requires_mission():
 def test_rka_submit_report_targets_mission_path():
     http = FakeHttp(canned=FakeResp(_json={"id": "rep_001"}))
     c = _client(http)
-    c.rka_submit_report("report content", related_mission="mis_xyz", summary="s")
+    c.rka_submit_report("report content", related_mission="mis_xyz")
     call = http.calls[0]
-    assert call["path"] == "/api/missions/mis_xyz/reports"
-    assert call["json"]["summary"] == "s"
-    assert "thr_t9" in call["json"]["tags"]
+    # Discovered during T12 pilot: /report is singular in the REST surface;
+    # request body uses structured fields only (no `content`, `summary`,
+    # `tags` per MissionReportCreate schema). Free-form `content` is
+    # remapped to findings[0] for compatibility.
+    assert call["path"] == "/api/missions/mis_xyz/report"
+    assert call["json"]["findings"] == ["report content"]
+    assert "content" not in call["json"]
+    assert "summary" not in call["json"]
+    assert "tags" not in call["json"]
 
 
 def test_rka_create_mission_carries_decision_link():

@@ -210,10 +210,10 @@ class RestMCPClient:
         return self._request("GET", "/api/status") or {}
 
     def rka_get_context(self, topic: str | None = None, limit: int = 10) -> dict:
-        params = {"limit": limit}
+        body: dict = {"limit": limit}
         if topic:
-            params["topic"] = topic
-        return self._request("GET", "/api/context", params=params) or {}
+            body["topic"] = topic
+        return self._request("POST", "/api/context", json=body) or {}
 
     def rka_get_journal(
         self, *, tags: list[str] | None = None, limit: int = 20
@@ -262,13 +262,32 @@ class RestMCPClient:
         return result.get("id") or result.get("jrn_id") or ""
 
     def rka_add_decision(
-        self, content: str, *, related_journal: list[str], tags: list[str] | None = None
+        self,
+        content: str,
+        *,
+        related_journal: list[str],
+        tags: list[str] | None = None,
+        decided_by: str = "pi",
+        phase: str = "design",
+        rationale: str | None = None,
     ) -> str:
-        body = {
-            "content": content,
-            "related_journal": list(related_journal),
-            "tags": _merge_workflow_tag(tags, self.workflow_thread_id),
-        }
+        """POST /api/decisions.
+
+        The REST `DecisionCreate` schema requires `question + decided_by +
+        phase`. Free-form `content` is mapped to `question` (truncated to
+        keep the title-line readable; full text goes to `rationale`).
+        """
+        question = content.strip().split("\n", 1)[0][:280]
+        body = _drop_none(
+            {
+                "question": question or content[:280] or "Decision drafted by orchestrator",
+                "rationale": rationale or content,
+                "decided_by": decided_by,
+                "phase": phase,
+                "related_journal": list(related_journal),
+                "tags": _merge_workflow_tag(tags, self.workflow_thread_id),
+            }
+        )
         result = self._request("POST", "/api/decisions", json=body) or {}
         return result.get("id") or ""
 
@@ -291,23 +310,33 @@ class RestMCPClient:
         return result.get("id") or ""
 
     def rka_submit_report(self, content: str, **kw: Any) -> str:
+        """POST /api/missions/{mission}/report.
+
+        The REST schema (`MissionReportCreate`) accepts only structured
+        fields: tasks_completed, findings, anomalies, questions,
+        codebase_state, recommended_next. We map the free-form `content`
+        argument to `findings=[content]` when no structured findings were
+        passed, so the LLM-shaped output the executor node produces still
+        lands somewhere useful.
+        """
         mission = kw.get("related_mission")
         if not mission:
             raise ValueError("rka_submit_report requires related_mission")
+        findings = kw.get("findings")
+        if not findings and content:
+            findings = [content]
         body = _drop_none(
             {
-                "content": content,
-                "summary": kw.get("summary"),
-                "findings": kw.get("findings"),
+                "tasks_completed": kw.get("tasks_completed"),
+                "findings": findings,
                 "anomalies": kw.get("anomalies"),
                 "questions": kw.get("questions"),
                 "codebase_state": kw.get("codebase_state"),
                 "recommended_next": kw.get("recommended_next"),
-                "tags": [self.workflow_thread_id] if self.workflow_thread_id else [],
             }
         )
         result = self._request(
-            "POST", f"/api/missions/{mission}/reports", json=body
+            "POST", f"/api/missions/{mission}/report", json=body
         ) or {}
         return result.get("id") or ""
 
