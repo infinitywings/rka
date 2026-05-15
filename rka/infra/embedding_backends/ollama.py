@@ -48,7 +48,7 @@ class OllamaBackend:
         base_url: str,
         model: str,
         dim: int | None = None,
-        timeout_seconds: float = 30.0,
+        timeout_seconds: float = 600.0,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         if not base_url:
