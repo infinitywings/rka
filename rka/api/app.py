@@ -312,20 +312,15 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
 
     @app.get("/api/health")
     async def health(request: Request):
+        # Mission D (v2.4.0): /api/health no longer returns LLM fields per
+        # the LLM-capability-removal directive jrn_01KRNZBS50K250HHHHEC58E4GC.
+        # LLM availability is covered by the orchestrator's Claude Code SDK
+        # path in a follow-up release.
         db = request.app.state.db
-        llm = request.app.state.llm
-        config = request.app.state.config
-
-        llm_status = "disabled"
-        if llm:
-            llm_status = "available" if llm.available else "unavailable"
-
         return {
             "status": "ok",
             "version": __version__,
             "vec_available": db.vec_available,
-            "llm_status": llm_status,
-            "llm_model": config.llm_model if llm else None,
         }
 
     _candidates = [
