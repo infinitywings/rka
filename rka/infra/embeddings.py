@@ -1,10 +1,27 @@
-"""Embedding generation via FastEmbed (local ONNX inference)."""
+"""Embedding generation — pluggable backends via `embedding_backends/`.
+
+Public surface (`EmbeddingService`) is preserved for every existing
+caller. Internally, the work is delegated to a swappable
+`EmbeddingBackend` (FastEmbed local, OpenAI-compat HTTP, or Ollama HTTP)
+selected at construction time. Mission D (`feat/v2.4-pluggable-embeddings`)
+introduces this seam; the factory lives in `embedding_backends/__init__.py`.
+
+Construction modes:
+
+  - `EmbeddingService(model_name="...")` — legacy FastEmbed-only path,
+    preserved for tests + boot code that haven't been migrated yet.
+  - `EmbeddingService.from_config({"backend": "...", "config": {...}})` —
+    new path used by application startup once T2's
+    `EmbeddingConfigService` lands.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from rka.infra.embedding_backends import EmbeddingBackend, make_backend
 
 if TYPE_CHECKING:
     from rka.infra.database import Database
@@ -13,51 +30,68 @@ logger = logging.getLogger(__name__)
 
 
 class EmbeddingService:
-    """Local embedding generation via FastEmbed.
+    """High-level embedding facade.
 
-    Uses nomic-ai/nomic-embed-text-v1.5 (768-dim) by default.
-    The model is downloaded on first use (~130 MB).
+    The actual embed calls are dispatched to a backend that satisfies the
+    `EmbeddingBackend` Protocol. The legacy positional / keyword arg
+    construction defaults to FastEmbed to preserve historical behavior;
+    new callers should prefer `EmbeddingService.from_config(...)`.
     """
 
-    def __init__(self, model_name: str = "nomic-ai/nomic-embed-text-v1.5", db: "Database | None" = None):
-        self.model_name = model_name
+    def __init__(
+        self,
+        model_name: str = "nomic-ai/nomic-embed-text-v1.5",
+        db: "Database | None" = None,
+        *,
+        backend: EmbeddingBackend | None = None,
+    ) -> None:
         self.db = db
-        self._model = None
-        self._dim: int = 768  # nomic-embed-text-v1.5
+        if backend is not None:
+            self._backend: EmbeddingBackend = backend
+            self.model_name = backend.model_name
+        else:
+            self._backend = make_backend(
+                {"backend": "fastembed", "config": {"model_name": model_name}}
+            )
+            self.model_name = model_name
+
+    # ------------------------------------------------------------------
+    # Construction helpers
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_config(
+        cls, config: dict[str, Any], db: "Database | None" = None
+    ) -> "EmbeddingService":
+        """Build a service from a `/data/embedding_config.json`-shaped dict."""
+        backend = make_backend(config)
+        return cls(model_name=backend.model_name, db=db, backend=backend)
+
+    # ------------------------------------------------------------------
+    # Public surface — preserved from the pre-T1 EmbeddingService
+    # ------------------------------------------------------------------
 
     @property
     def dim(self) -> int:
-        return self._dim
+        return self._backend.dim
 
-    def _get_model(self):
-        """Lazy-load the embedding model."""
-        if self._model is None:
-            from fastembed import TextEmbedding
-            logger.info("Loading embedding model: %s (first load downloads ~130MB)", self.model_name)
-            self._model = TextEmbedding(model_name=self.model_name)
-        return self._model
+    @property
+    def backend(self) -> EmbeddingBackend:
+        return self._backend
 
     async def embed(self, text: str) -> list[float]:
-        """Embed a query string. Uses 'search_query:' prefix for nomic."""
-        model = self._get_model()
-        prefixed = f"search_query: {text}"
-        embeddings = list(model.embed([prefixed]))
-        return embeddings[0].tolist()
+        """Embed a query string."""
+        return await self._backend.embed(text, is_query=True)
 
     async def embed_document(self, text: str) -> list[float]:
-        """Embed a document for storage. Uses 'search_document:' prefix for nomic."""
-        model = self._get_model()
-        prefixed = f"search_document: {text}"
-        embeddings = list(model.embed([prefixed]))
-        return embeddings[0].tolist()
+        """Embed a document for storage."""
+        return await self._backend.embed(text, is_query=False)
 
-    async def embed_batch(self, texts: list[str], is_query: bool = False) -> list[list[float]]:
+    async def embed_batch(
+        self, texts: list[str], is_query: bool = False
+    ) -> list[list[float]]:
         """Batch embed multiple texts."""
-        model = self._get_model()
-        prefix = "search_query: " if is_query else "search_document: "
-        prefixed = [f"{prefix}{t}" for t in texts]
-        embeddings = list(model.embed(prefixed))
-        return [e.tolist() for e in embeddings]
+        return await self._backend.embed_batch(texts, is_query=is_query)
 
     @staticmethod
     def content_hash(content: str | bytes) -> str:
@@ -113,21 +147,27 @@ class EmbeddingService:
         if embedding is None:
             embedding = await self.embed_document(text)
 
-        # Upsert into vec table (only if sqlite-vec is loaded)
         if self.db.vec_available and table:
             import struct
+
             vec_blob = struct.pack(f"{len(embedding)}f", *embedding)
             await self.db.execute(
                 f"INSERT OR REPLACE INTO {table} (id, embedding) VALUES (?, ?)",
                 [entity_id, vec_blob],
             )
 
-        # Always upsert metadata (tracks what needs embedding, useful for batch re-embed)
         await self.db.execute(
             """INSERT OR REPLACE INTO embedding_metadata
                (project_id, entity_type, entity_id, content_hash, model_name, dimensions)
                VALUES (?, ?, ?, ?, ?, ?)""",
-            [project_id, entity_type, entity_id, self.content_hash(text), self.model_name, self._dim],
+            [
+                project_id,
+                entity_type,
+                entity_id,
+                self.content_hash(text),
+                self.model_name,
+                self._backend.dim,
+            ],
         )
         await self.db.commit()
 
