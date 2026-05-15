@@ -1,0 +1,45 @@
+{
+  "reproducibility": {
+    "corpus_hash": "sha256:72e51af67ed3df16f3f41e961a2a6c4bac5fc4dd23ef0885cdf285d7a61edf54",
+    "labels_hash": "sha256:40ac5b6a6d16599c45e464a9e351261d13d3383ef7d710680bcca06709900a8a",
+    "rka_head": "c8d83f3",
+    "timestamp": "2026-05-14T19:04:45Z",
+    "skill_rule": "8a"
+  },
+  "k": 10,
+  "n_configs": 4,
+  "configs": {
+    "and_fix": {
+      "config_fingerprint": "sha256:4f8ca2d6ea5ee4eb1f966ee1f78aa69e8e35c9c6cf62451c01671b712bc77467",
+      "n_queries": 31,
+      "n_queries_with_relevant_in_top_10": 21,
+      "precision_at_10": 0.2742,
+      "mrr": 0.6344,
+      "ndcg_at_10": 0.5845
+    },
+    "and_fix_hybrid": {
+      "config_fingerprint": "sha256:a562956d13a9359539a261a3408beb2058dec02d4a9c6805f0609ff571c25612",
+      "n_queries": 31,
+      "n_queries_with_relevant_in_top_10": 21,
+      "precision_at_10": 0.2839,
+      "mrr": 0.6774,
+      "ndcg_at_10": 0.6419
+    },
+    "current_or": {
+      "config_fingerprint": "sha256:ffd43f814e927f735abb74eb7fb9db1754ab297564f432668ac2e965767cf480",
+      "n_queries": 31,
+      "n_queries_with_relevant_in_top_10": 21,
+      "precision_at_10": 0.2742,
+      "mrr": 0.6344,
+      "ndcg_at_10": 0.5845
+    },
+    "current_or_hybrid": {
+      "config_fingerprint": "sha256:c44bb7faf19a229824fa5087a42a99d21d915b6b791a7018474278fc88e5d12b",
+      "n_queries": 31,
+      "n_queries_with_relevant_in_top_10": 21,
+      "precision_at_10": 0.2839,
+      "mrr": 0.6774,
+      "ndcg_at_10": 0.6369
+    }
+  }
+}

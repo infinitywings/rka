@@ -1,0 +1,125 @@
+query,config,precision_at_10,reciprocal_rank,ndcg_at_10,n_results,n_results_with_rating
+LangGraph orchestrator design decision,and_fix,0.5,1.0,0.9534,6,6
+decisions about agentic workflow architecture,and_fix,0.3,1.0,0.8946,10,10
+Tauri PyInstaller macOS app,and_fix,0.7,1.0,0.986,7,7
+what evidence led to the Tauri PyInstaller desktop app decision,and_fix,0.0,0.0,0.0,0,0
+Brain calibration discipline source-trace code-trace audit-symmetry,and_fix,0.3,1.0,0.7763,4,4
+what missions came from the v2.3.5 affordances decision,and_fix,0.0,0.0,0.0,0,0
+_sanitize_fts_query AND-fix evaluation,and_fix,0.5,1.0,0.9467,5,5
+KnowledgePackIntegrityError 422 structured response,and_fix,0.4,1.0,0.8401,4,4
+v2.3.5 release affordances,and_fix,0.8,1.0,0.7723,10,10
+validation observations from the conductor seat exercise,and_fix,0.1,1.0,1.0,1,1
+decisions made today,and_fix,0.0,0.0,0.0,3,3
+Brain synthesis for the agentic branch,and_fix,0.3,1.0,0.6534,7,7
+evidence clusters about staleness detection,and_fix,0.0,0.0,0.0,1,1
+what's in the workflow improvements research question,and_fix,0.0,0.0,0.0,6,6
+claims about PI attribution and intellectual provenance,and_fix,0.0,0.0,0.0,0,0
+PI directives this week about agentic branch and orchestrator,and_fix,0.2,1.0,1.0,2,2
+Brain acceptance reviews vs Executor mission reports,and_fix,0.2,0.3333,0.3038,10,10
+Executor upfront Backbrief showing pre-flight verifications,and_fix,0.2,1.0,1.0,2,2
+distributed consensus algorithm Paxos Raft,and_fix,0.0,0.0,0.0,1,1
+missions awaiting Executor pickup with pending status,and_fix,0.0,0.0,0.0,0,0
+wrong project,and_fix,0.8,1.0,0.8272,10,10
+proj_default silent,and_fix,0.6,1.0,0.8764,8,8
+observation window,and_fix,0.2,0.3333,0.4068,5,5
+Affordance C capabilities block in rka_get_status,and_fix,0.4,1.0,0.9047,5,5
+embedding LLM availability capabilities surfacing,and_fix,0.4,1.0,1.0,4,4
+STALE prefix rendering helper consumer surfaces,and_fix,0.4,1.0,1.0,4,4
+multi-hop retrieval BFS edge weights primitive,and_fix,0.6,1.0,0.977,6,6
+_fill_missing_nodes claim cluster hydration GraphService,and_fix,0.2,1.0,1.0,2,2
+maintenance backlog formatter rka_get_status rka_search,and_fix,0.4,1.0,1.0,4,4
+ResearchMapService cluster branch context engine,and_fix,0.0,0.0,0.0,0,0
+rka_get_research_map create_decision flag argument,and_fix,0.0,0.0,0.0,1,1
+LangGraph orchestrator design decision,and_fix_hybrid,0.5,1.0,0.9557,6,6
+decisions about agentic workflow architecture,and_fix_hybrid,0.3,1.0,0.9639,10,10
+Tauri PyInstaller macOS app,and_fix_hybrid,0.7,1.0,1.0,7,7
+what evidence led to the Tauri PyInstaller desktop app decision,and_fix_hybrid,0.0,0.0,0.0,0,0
+Brain calibration discipline source-trace code-trace audit-symmetry,and_fix_hybrid,0.3,1.0,0.9779,4,4
+what missions came from the v2.3.5 affordances decision,and_fix_hybrid,0.0,0.0,0.0,0,0
+_sanitize_fts_query AND-fix evaluation,and_fix_hybrid,0.5,1.0,0.8661,5,5
+KnowledgePackIntegrityError 422 structured response,and_fix_hybrid,0.4,1.0,0.8964,4,4
+v2.3.5 release affordances,and_fix_hybrid,0.8,1.0,0.9068,10,10
+validation observations from the conductor seat exercise,and_fix_hybrid,0.1,1.0,1.0,1,1
+decisions made today,and_fix_hybrid,0.0,0.0,0.0,3,3
+Brain synthesis for the agentic branch,and_fix_hybrid,0.3,1.0,0.8362,7,7
+evidence clusters about staleness detection,and_fix_hybrid,0.0,0.0,0.0,1,1
+what's in the workflow improvements research question,and_fix_hybrid,0.0,0.0,0.0,6,6
+claims about PI attribution and intellectual provenance,and_fix_hybrid,0.0,0.0,0.0,0,0
+PI directives this week about agentic branch and orchestrator,and_fix_hybrid,0.2,1.0,1.0,2,2
+Brain acceptance reviews vs Executor mission reports,and_fix_hybrid,0.4,1.0,0.877,10,10
+Executor upfront Backbrief showing pre-flight verifications,and_fix_hybrid,0.2,1.0,1.0,2,2
+distributed consensus algorithm Paxos Raft,and_fix_hybrid,0.0,0.0,0.0,1,1
+missions awaiting Executor pickup with pending status,and_fix_hybrid,0.0,0.0,0.0,0,0
+wrong project,and_fix_hybrid,0.8,1.0,0.9342,10,10
+proj_default silent,and_fix_hybrid,0.6,1.0,0.9873,8,8
+observation window,and_fix_hybrid,0.3,1.0,0.7453,8,8
+Affordance C capabilities block in rka_get_status,and_fix_hybrid,0.4,1.0,0.9558,5,5
+embedding LLM availability capabilities surfacing,and_fix_hybrid,0.4,1.0,1.0,4,4
+STALE prefix rendering helper consumer surfaces,and_fix_hybrid,0.4,1.0,1.0,4,4
+multi-hop retrieval BFS edge weights primitive,and_fix_hybrid,0.6,1.0,0.9951,6,6
+_fill_missing_nodes claim cluster hydration GraphService,and_fix_hybrid,0.2,1.0,1.0,2,2
+maintenance backlog formatter rka_get_status rka_search,and_fix_hybrid,0.4,1.0,1.0,4,4
+ResearchMapService cluster branch context engine,and_fix_hybrid,0.0,0.0,0.0,0,0
+rka_get_research_map create_decision flag argument,and_fix_hybrid,0.0,0.0,0.0,1,1
+LangGraph orchestrator design decision,current_or,0.5,1.0,0.9534,6,6
+decisions about agentic workflow architecture,current_or,0.3,1.0,0.8946,10,10
+Tauri PyInstaller macOS app,current_or,0.7,1.0,0.986,7,7
+what evidence led to the Tauri PyInstaller desktop app decision,current_or,0.0,0.0,0.0,0,0
+Brain calibration discipline source-trace code-trace audit-symmetry,current_or,0.3,1.0,0.7763,4,4
+what missions came from the v2.3.5 affordances decision,current_or,0.0,0.0,0.0,0,0
+_sanitize_fts_query AND-fix evaluation,current_or,0.5,1.0,0.9467,5,5
+KnowledgePackIntegrityError 422 structured response,current_or,0.4,1.0,0.8401,4,4
+v2.3.5 release affordances,current_or,0.8,1.0,0.7723,10,10
+validation observations from the conductor seat exercise,current_or,0.1,1.0,1.0,1,1
+decisions made today,current_or,0.0,0.0,0.0,3,3
+Brain synthesis for the agentic branch,current_or,0.3,1.0,0.6534,7,7
+evidence clusters about staleness detection,current_or,0.0,0.0,0.0,1,1
+what's in the workflow improvements research question,current_or,0.0,0.0,0.0,6,6
+claims about PI attribution and intellectual provenance,current_or,0.0,0.0,0.0,0,0
+PI directives this week about agentic branch and orchestrator,current_or,0.2,1.0,1.0,2,2
+Brain acceptance reviews vs Executor mission reports,current_or,0.2,0.3333,0.3038,10,10
+Executor upfront Backbrief showing pre-flight verifications,current_or,0.2,1.0,1.0,2,2
+distributed consensus algorithm Paxos Raft,current_or,0.0,0.0,0.0,1,1
+missions awaiting Executor pickup with pending status,current_or,0.0,0.0,0.0,0,0
+wrong project,current_or,0.8,1.0,0.8272,10,10
+proj_default silent,current_or,0.6,1.0,0.8764,8,8
+observation window,current_or,0.2,0.3333,0.4068,5,5
+Affordance C capabilities block in rka_get_status,current_or,0.4,1.0,0.9047,5,5
+embedding LLM availability capabilities surfacing,current_or,0.4,1.0,1.0,4,4
+STALE prefix rendering helper consumer surfaces,current_or,0.4,1.0,1.0,4,4
+multi-hop retrieval BFS edge weights primitive,current_or,0.6,1.0,0.977,6,6
+_fill_missing_nodes claim cluster hydration GraphService,current_or,0.2,1.0,1.0,2,2
+maintenance backlog formatter rka_get_status rka_search,current_or,0.4,1.0,1.0,4,4
+ResearchMapService cluster branch context engine,current_or,0.0,0.0,0.0,0,0
+rka_get_research_map create_decision flag argument,current_or,0.0,0.0,0.0,1,1
+LangGraph orchestrator design decision,current_or_hybrid,0.5,1.0,0.9557,6,6
+decisions about agentic workflow architecture,current_or_hybrid,0.3,1.0,0.9639,10,10
+Tauri PyInstaller macOS app,current_or_hybrid,0.7,1.0,1.0,7,7
+what evidence led to the Tauri PyInstaller desktop app decision,current_or_hybrid,0.0,0.0,0.0,0,0
+Brain calibration discipline source-trace code-trace audit-symmetry,current_or_hybrid,0.3,1.0,0.8821,4,4
+what missions came from the v2.3.5 affordances decision,current_or_hybrid,0.0,0.0,0.0,0,0
+_sanitize_fts_query AND-fix evaluation,current_or_hybrid,0.5,1.0,0.8661,5,5
+KnowledgePackIntegrityError 422 structured response,current_or_hybrid,0.4,1.0,0.8964,4,4
+v2.3.5 release affordances,current_or_hybrid,0.8,1.0,0.9068,10,10
+validation observations from the conductor seat exercise,current_or_hybrid,0.1,1.0,1.0,1,1
+decisions made today,current_or_hybrid,0.0,0.0,0.0,3,3
+Brain synthesis for the agentic branch,current_or_hybrid,0.3,1.0,0.8362,7,7
+evidence clusters about staleness detection,current_or_hybrid,0.0,0.0,0.0,1,1
+what's in the workflow improvements research question,current_or_hybrid,0.0,0.0,0.0,6,6
+claims about PI attribution and intellectual provenance,current_or_hybrid,0.0,0.0,0.0,0,0
+PI directives this week about agentic branch and orchestrator,current_or_hybrid,0.2,1.0,1.0,2,2
+Brain acceptance reviews vs Executor mission reports,current_or_hybrid,0.4,1.0,0.877,10,10
+Executor upfront Backbrief showing pre-flight verifications,current_or_hybrid,0.2,1.0,1.0,2,2
+distributed consensus algorithm Paxos Raft,current_or_hybrid,0.0,0.0,0.0,1,1
+missions awaiting Executor pickup with pending status,current_or_hybrid,0.0,0.0,0.0,0,0
+wrong project,current_or_hybrid,0.8,1.0,0.9342,10,10
+proj_default silent,current_or_hybrid,0.6,1.0,0.9873,8,8
+observation window,current_or_hybrid,0.3,1.0,0.7395,8,8
+Affordance C capabilities block in rka_get_status,current_or_hybrid,0.4,1.0,0.9047,5,5
+embedding LLM availability capabilities surfacing,current_or_hybrid,0.4,1.0,1.0,4,4
+STALE prefix rendering helper consumer surfaces,current_or_hybrid,0.4,1.0,1.0,4,4
+multi-hop retrieval BFS edge weights primitive,current_or_hybrid,0.6,1.0,0.9951,6,6
+_fill_missing_nodes claim cluster hydration GraphService,current_or_hybrid,0.2,1.0,1.0,2,2
+maintenance backlog formatter rka_get_status rka_search,current_or_hybrid,0.4,1.0,1.0,4,4
+ResearchMapService cluster branch context engine,current_or_hybrid,0.0,0.0,0.0,0,0
+rka_get_research_map create_decision flag argument,current_or_hybrid,0.0,0.0,0.0,1,1

@@ -82,6 +82,19 @@ After code changes to `rka/mcp/server.py` or other source files:
 - There is no local `.venv` — all server/worker processes run in Docker
 - `docker compose restart` does **not** reload service code — always use `docker compose up -d --build` for any change under `rka/`. Restart only suffices for migration-only changes (the migration runner queries `schema_migrations` on startup).
 
+## Embedding backend configuration (v2.4.0+)
+
+Pluggable embedding backends (FastEmbed, OpenAI-compat HTTP, Ollama) configurable
+in the web UI at **Settings → Embeddings**. Persistent config at
+`/data/embedding_config.json` (file-mode 0600, owner-readable only because of the
+optional `api_key`). Full reference: [`docs/embedding_backends.md`](docs/embedding_backends.md).
+
+LLM-driven features (`rka_ask`, `rka_generate_summary`, web-UI Q&A page) were
+removed in v2.4.0 per `jrn_01KRNZBS50K250HHHHEC58E4GC`; server-side LLM code is
+preserved for future re-wiring through the orchestrator's Claude Code SDK
+(separate Phase-2 mission). `/api/capabilities` no longer returns the `llm`
+field (BREAKING-IN-MINOR; documented in `CHANGELOG.md`).
+
 ## macOS / FuSpace AppleDouble Quirks
 
 The FuSpace volume creates `._*` resource-fork files alongside any file Python tools write to (in `build/`, `rka.egg-info/`, project root). These break both `docker compose build` (fails with "failed to xattr ... operation not permitted") and `uv tool install` (fails with "No such file or directory: '._requires.txt'") even with `COPYFILE_DISABLE=1` set.

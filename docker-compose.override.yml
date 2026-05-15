@@ -1,0 +1,19 @@
+# Env-toggle override for eval / integration runs.
+#
+# Originally authored on feat/eval-harness (mis_01KRKJ9G20EM5XMA147JTKQCFF)
+# to allow per-run toggling of two settings without editing
+# docker-compose.yml:
+#   - RKA_FTS_QUERY_MODE (or | and) — Mission A revision-report fix flag.
+#   - RKA_EMBEDDINGS_ENABLED (true | false) — eval Option C had this at
+#     false so the eval-harness owned the semantic side via qwen3
+#     directly. Mission D flipped the production default to true; the
+#     override default here matches so a no-op compose run gets the
+#     production behavior.
+#
+# Reversible by deleting the file.
+
+services:
+  rka:
+    environment:
+      RKA_FTS_QUERY_MODE: "${RKA_FTS_QUERY_MODE:-or}"
+      RKA_EMBEDDINGS_ENABLED: "${RKA_EMBEDDINGS_ENABLED:-true}"

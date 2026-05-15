@@ -1,0 +1,16 @@
+# Config 1 of 4 — baseline:
+#   _sanitize_fts_query in OR mode (current production behavior).
+#   FTS-only (no semantic side).
+#
+# Container env required for this config's run:
+#   RKA_FTS_QUERY_MODE=or
+#   RKA_EMBEDDINGS_ENABLED=false
+#
+# The runner does NOT set these — the T3 orchestration wrapper
+# (`run-eval.sh` or a PI manual `docker compose` restart) sets them
+# BEFORE invoking the runner against this config.
+name: current_or
+rka_fts_query_mode: or
+rka_embeddings_enabled: false
+semantic_backend: null
+top_k: 10

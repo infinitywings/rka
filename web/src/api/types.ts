@@ -440,34 +440,46 @@ export interface HealthStatus {
   status: string
   version: string
   vec_available: boolean
-  llm_status: string
-  llm_model: string | null
 }
 
-// ---- LLM ----
+// ---- Embedding configuration (v2.4.0, Mission D) ----
 
-export interface LLMStatus {
-  enabled: boolean
-  available: boolean
-  model: string
-  api_base: string | null
-  api_key_set: boolean
-  think: boolean
-  context_window: number
+export type EmbeddingBackendKind = "fastembed" | "openai_compat" | "ollama"
+
+export interface EmbeddingConfig {
+  backend: EmbeddingBackendKind
+  config: {
+    base_url?: string
+    model?: string
+    model_name?: string
+    api_key?: string
+    dim?: number
+  }
+  updated_at?: string | null
+  updated_by?: string | null
 }
 
-export interface LLMConfigUpdate {
-  enabled?: boolean
-  model?: string
-  api_base?: string
-  api_key?: string
-  think?: boolean
+export interface ConnectionTestResult {
+  ok: boolean
+  detail: string
+  detected_dim: number | null
+  latency_ms: number | null
 }
 
-export interface LLMModel {
-  id: string
-  owned_by: string | null
-  context_length: number | null
+export interface BackfillStatus {
+  job_id: string | null
+  state: "idle" | "pending" | "running" | "complete" | "failed"
+  processed?: number
+  total?: number
+  started_at?: string
+  elapsed_seconds?: number
+  error?: string | null
+}
+
+export interface EmbeddingConfigError {
+  error: "embedding_config_invalid"
+  detail: string
+  hint: string
 }
 
 // ---- Academic Import ----

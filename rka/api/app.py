@@ -18,6 +18,7 @@ from rka.api.routes import (
     artifacts as artifact_routes,
     audit as audit_routes,
     checkpoints as checkpoints_routes,
+    config as config_routes,
     context as context_routes,
     decisions as decisions_routes,
     enrich as enrich_routes,
@@ -122,8 +123,67 @@ async def lifespan(app: FastAPI):
 
     embeddings: EmbeddingService | None = None
     if config.embeddings_enabled:
-        embeddings = EmbeddingService(model_name=config.embedding_model, db=db)
-        logger.info("Embedding service enabled (model=%s)", config.embedding_model)
+        # Mission D first-run hook: persist DEFAULT_CONFIG to
+        # /data/embedding_config.json on first boot if it doesn't exist,
+        # then load whatever's on disk through the pluggable factory.
+        # Falls back to legacy FastEmbed if the config file is corrupt or
+        # the data_dir isn't writable (e.g. test fixtures with default
+        # `/data`, read-only volume mounts).
+        from rka.services.embedding_config import (
+            DEFAULT_CONFIG,
+            EmbeddingConfigError,
+            EmbeddingConfigService,
+        )
+        from rka.services.embedding_reshape import reshape_vec_claims_if_needed
+
+        cfg_svc = EmbeddingConfigService(config_dir=config.data_dir)
+        try:
+            if not cfg_svc.config_path.exists():
+                try:
+                    cfg_svc.save_config(DEFAULT_CONFIG.model_copy(), actor="system-default")
+                    logger.info(
+                        "first-run: persisted DEFAULT embedding config to %s",
+                        cfg_svc.config_path,
+                    )
+                except (OSError, EmbeddingConfigError) as exc:
+                    # data_dir not writable (e.g. read-only test fixture).
+                    # Silent fall-through to legacy FastEmbed below.
+                    logger.warning(
+                        "could not persist DEFAULT embedding config to %s: %s; "
+                        "continuing with in-memory default",
+                        cfg_svc.config_path,
+                        exc,
+                    )
+                    raise EmbeddingConfigError(
+                        "data_dir not writable; using legacy fastembed", hint=""
+                    )
+            embedding_cfg = cfg_svc.load_config()
+            embeddings = EmbeddingService.from_config(embedding_cfg.model_dump(), db=db)
+            logger.info(
+                "Embedding service enabled (backend=%s, dim=%d)",
+                embedding_cfg.backend,
+                embeddings.dim,
+            )
+
+            # Mission D T4 startup-hook: reshape vec_claims if its dim no
+            # longer matches the configured embedding dim.
+            target_dim = int(embedding_cfg.config.get("dim") or embeddings.dim or 768)
+            did_reshape, pending = await reshape_vec_claims_if_needed(db, dim=target_dim)
+            if did_reshape:
+                logger.info(
+                    "vec_claims reshaped at startup (dim=%d); %d claims now pending re-embed",
+                    target_dim,
+                    pending,
+                )
+        except EmbeddingConfigError as exc:
+            # Corrupt config OR unwritable data_dir: fall back to legacy
+            # FastEmbed so the API still starts. The Settings page renders
+            # the 422 hint on next GET.
+            logger.warning(
+                "embedding config error at startup: %s; falling back to legacy FastEmbed",
+                exc.detail,
+            )
+            embeddings = EmbeddingService(model_name=config.embedding_model, db=db)
     app.state.embeddings = embeddings
 
     search = SearchService(db=db, embeddings=embeddings)
@@ -245,23 +305,22 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
     app.include_router(maintenance_routes.router, prefix="/api", tags=["maintenance"])
     app.include_router(researcher_tools_routes.router, prefix="/api", tags=["researcher-tools"])
     app.include_router(hooks_routes.router, prefix="/api", tags=["hooks"])
+    # Mission D T3: pluggable embedding backend configuration.
+    # Routes carry their own /api/config/... prefix internally; mount with
+    # an empty prefix so the documented paths don't end up doubled.
+    app.include_router(config_routes.router, tags=["config"])
 
     @app.get("/api/health")
     async def health(request: Request):
+        # Mission D (v2.4.0): /api/health no longer returns LLM fields per
+        # the LLM-capability-removal directive jrn_01KRNZBS50K250HHHHEC58E4GC.
+        # LLM availability is covered by the orchestrator's Claude Code SDK
+        # path in a follow-up release.
         db = request.app.state.db
-        llm = request.app.state.llm
-        config = request.app.state.config
-
-        llm_status = "disabled"
-        if llm:
-            llm_status = "available" if llm.available else "unavailable"
-
         return {
             "status": "ok",
             "version": __version__,
             "vec_available": db.vec_available,
-            "llm_status": llm_status,
-            "llm_model": config.llm_model if llm else None,
         }
 
     _candidates = [
