@@ -293,3 +293,69 @@ async def test_run_backfill_status_total_set_to_initial_count(db):
     svc = BackfillService(db=db, embeddings=FakeEmbedder(dim=4), batch_size=2)
     result = await svc.run_backfill(status)
     assert result.total == 4
+
+
+# ---------------------------------------------------------------------------
+# v2.4.1 hotfix regression locks
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _NoMessageEmbedder:
+    """Raises an exception with no string representation on every batch.
+
+    Simulates `httpx.ReadTimeout()` which has an empty `__str__`. Before the
+    v2.4.1 hotfix, `status.error` rendered as `"...): "` (empty after the
+    colon) because the format string only consumed `str(exc)`. After the fix,
+    `type(exc).__name__` is always present so the operator sees the class.
+    """
+
+    async def embed_batch(self, texts: list[str], *, is_query: bool = False) -> list[list[float]]:
+        class _NoMsg(Exception):
+            def __str__(self) -> str:
+                return ""
+
+        raise _NoMsg()
+
+
+@pytest.mark.asyncio
+async def test_backfill_error_includes_exception_class_when_message_empty(db):
+    """v2.4.1: status.error always carries the exception class name."""
+    clear_registry()
+    await _setup_vec_claims_at_dim(db, dim=4)
+    status = register_job()
+    await _insert_journal(db, jid="jrn_v241_err")
+    await _insert_pending_claims(db, jid="jrn_v241_err", count=2, prefix="clm_v241_err_")
+
+    svc = BackfillService(db=db, embeddings=_NoMessageEmbedder(), batch_size=2)
+    result = await svc.run_backfill(status)
+
+    assert result.state == "failed"
+    # The class name MUST appear in status.error even when the exception has
+    # no message — otherwise PI sees a useless "...:" with nothing after.
+    assert "_NoMsg" in result.error, (
+        f"error must carry the exception class name; got: {result.error!r}"
+    )
+
+
+def test_backfill_default_batch_size_is_eight_v241():
+    """v2.4.1: batch_size default lowered from 32 → 8 so local 8B-class
+    embedding backends don't time out on a single batch."""
+    svc = BackfillService(db=None, embeddings=None)
+    assert svc._batch_size == 8
+
+
+def test_openai_compat_default_timeout_is_600_v241():
+    """v2.4.1: openai_compat timeout raised 30s → 600s for local heavy models."""
+    from rka.infra.embedding_backends.openai_compat import OpenAICompatBackend
+
+    b = OpenAICompatBackend(base_url="http://x", model="m", dim=4)
+    assert b._timeout == 600.0
+
+
+def test_ollama_default_timeout_is_600_v241():
+    """v2.4.1: ollama timeout raised 30s → 600s for consistency."""
+    from rka.infra.embedding_backends.ollama import OllamaBackend
+
+    b = OllamaBackend(base_url="http://x", model="m", dim=4)
+    assert b._timeout == 600.0

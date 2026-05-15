@@ -120,7 +120,8 @@ class BackfillService:
     """Iterates `claims WHERE embedding_pending=1` and re-embeds them.
 
       - `run_backfill(progress_callback=None)` is async.
-      - Default batch_size = 32.
+      - Default batch_size = 8 (v2.4.1: lowered from 32 so local 8B-class
+        embedding servers don't time out on a single batch).
       - Per-claim failures get logged + the claim left with
         embedding_pending=1 so a later run retries.
       - Batch-level failures (embed_batch raised) abort the run with
@@ -129,7 +130,7 @@ class BackfillService:
       - On clean exit, status.state = "complete".
     """
 
-    def __init__(self, *, db: Any, embeddings: Any, batch_size: int = 32) -> None:
+    def __init__(self, *, db: Any, embeddings: Any, batch_size: int = 8) -> None:
         self._db = db
         self._embeddings = embeddings
         self._batch_size = batch_size
@@ -187,7 +188,10 @@ class BackfillService:
                 vectors = await self._embeddings.embed_batch(texts, is_query=False)
             except Exception as exc:  # noqa: BLE001
                 status.state = "failed"
-                status.error = f"batch embed failed (cursor at {last_id}): {exc!s}"
+                status.error = (
+                    f"batch embed failed (cursor at {last_id}): "
+                    f"{type(exc).__name__}: {exc!s}"
+                )
                 logger.exception("backfill batch embed failed at cursor %s", last_id)
                 await _emit_progress(progress_callback, status)
                 return status

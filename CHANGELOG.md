@@ -3,6 +3,44 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [2.4.1] — 2026-05-15
+
+### Fixed
+
+- **`openai_compat` + `ollama` embedding backends: default httpx timeout
+  raised from 30s → 600s.** The prior 30s default made local 8B-class
+  embedding servers (LM Studio + qwen3-embedding-8b, Ollama + nomic-large
+  variants) fail the first backfill batch with `httpx.ReadTimeout` and no
+  claims would land. Constructor still accepts `timeout_seconds=...` so
+  fast hosted backends can opt back down.
+- **`BackfillService` default batch size lowered from 32 → 8.** A 32-text
+  batch against an 8B-class model on a single Mac is multiple seconds even
+  under ideal conditions; reducing the default lets the first batch
+  complete and keeps the polling UI honest. Constructor still accepts
+  `batch_size=...` for hosted-API workloads where 32+ is fine.
+- **Backfill failure message now includes the exception class name.** Prior
+  `status.error` rendered as `"batch embed failed (cursor at …): "` (empty
+  after the colon) when the underlying exception had no string
+  representation — e.g. `httpx.ReadTimeout()`. Now renders as
+  `"batch embed failed (cursor at …): ReadTimeout: <message>"`. Locked by
+  `test_backfill_error_includes_exception_class_when_message_empty`.
+
+### Tests
+
+- 4 new tests in `tests/test_services/test_embedding_backfill.py`:
+  - `test_backfill_error_includes_exception_class_when_message_empty`
+  - `test_backfill_default_batch_size_is_eight_v241`
+  - `test_openai_compat_default_timeout_is_600_v241`
+  - `test_ollama_default_timeout_is_600_v241`
+
+### Provenance
+
+- Triggered by PI UI failure observation post-v2.4.0 release: LM Studio
+  + qwen3-embedding-8b 4096-dim backfill failed at 0/827 claims after
+  ~23 min wall-clock with empty `status.error` after the colon.
+- Bookkeeper invariant `git diff main -- rka/services/worker.py` = 0 lines
+  held on the v2.4.1 hotfix branch.
+
 ## [2.4.0] — 2026-05-15
 
 ### ⚠ BREAKING CHANGES
