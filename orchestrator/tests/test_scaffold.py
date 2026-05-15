@@ -57,20 +57,33 @@ def test_pi_batch_review_threshold_default_is_ten():
     assert pi.PI_BATCH_REVIEW_THRESHOLD == 10
 
 
-@pytest.mark.parametrize(
-    "fn",
-    [
-        # T3-T5 have landed — covered by test_brain.py / test_executor.py /
-        # test_pi.py. The remaining 3 utility stubs land in T6.
+def test_all_fifteen_nodes_have_landed():
+    # T3-T6 complete — every node module exposes a real implementation.
+    # This test fires if anyone re-introduces a NotImplementedError stub
+    # for one of the 15 named nodes.
+    for fn in (
+        brain.strategy_node,
+        brain.confirmation_brief,
+        brain.decision_present,
+        brain.cluster_review,
+        brain.gate1_validation,
+        brain.final_synthesis,
+        executor.backbrief_draft,
+        executor.mission_execute,
+        executor.submit_report,
+        pi.pi_greenlight,
+        pi.pi_decision_select,
+        pi.pi_acceptance,
         utility.budget_check,
         utility.consensus_check,
         utility.escalation_router,
-    ],
-)
-def test_remaining_three_utility_nodes_are_stub_placeholders(fn):
-    # T6 nodes still raise NotImplementedError. Removed from list as they land.
-    with pytest.raises(NotImplementedError):
-        fn({})
+    ):
+        import inspect
+
+        src = inspect.getsource(fn)
+        assert "raise NotImplementedError" not in src, (
+            f"{fn.__name__} still looks like a placeholder stub"
+        )
 
 
 def test_brain_and_executor_nodes_have_three_arg_signature():

@@ -1,22 +1,217 @@
-"""Utility nodes (3).
+"""Utility nodes (3) — budget, consensus, and escalation routing.
 
-Scaffold stub. T6 will implement:
+  - `budget_check`        — abort/escalate on $ cap or loop bound
+  - `consensus_check`     — detect Brain⇄Executor disagreement → escalate
+  - `escalation_router`   — submit checkpoint + route to PI handoff
 
-  - budget_check        — abort/escalate on $ cap or loop bound
-  - consensus_check     — detect Brain⇄Executor disagreement → escalate
-  - escalation_router   — checkpoint creation + PI handoff selector
+These nodes do no LLM work; they're pure state inspection + RKA write.
+Signature is `(state, sdk, mcp)` for parity with Brain/Executor — `sdk`
+is unused but kept so the T7 topology binds all 9 the same way.
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from typing import Any
 
-def budget_check(state):  # pragma: no cover
-    raise NotImplementedError("utility.budget_check arrives in T6")
+from orchestrator.budgets import DEFAULT_BUDGET_USD, MAX_LOOP_DEPTH
+from orchestrator.llm_client import SDKClient  # noqa: F401 (signature parity)
+from orchestrator.mcp_client import MCPClient
+from orchestrator.state import (
+    CheckpointRecord,
+    ErrorRecord,
+    ResearchWorkflowState,
+)
 
 
-def consensus_check(state):  # pragma: no cover
-    raise NotImplementedError("utility.consensus_check arrives in T6")
+def _now_iso() -> str:
+    return datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def escalation_router(state):  # pragma: no cover
-    raise NotImplementedError("utility.escalation_router arrives in T6")
+def _error(node: str, error_type: str, detail: str) -> ErrorRecord:
+    return {
+        "node_name": node,
+        "error_type": error_type,
+        "detail": detail,
+        "timestamp": _now_iso(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# 1. budget_check
+# ---------------------------------------------------------------------------
+
+
+def budget_check(
+    state: ResearchWorkflowState,
+    sdk: Any = None,
+    mcp: Any = None,
+    *,
+    cap_usd: float = DEFAULT_BUDGET_USD,
+) -> dict:
+    """Verify the run is within its $ cap and loop-depth bound.
+
+    On breach, appends an error record and sets
+    `next_node_override="escalation_router"` so the topology routes to
+    checkpoint creation.
+    """
+    spent = float(state.get("usd_spent", 0.0))
+    loops = int(state.get("loop_iterations", 0))
+
+    if spent >= cap_usd:
+        return {
+            "current_node": "budget_check",
+            "next_node_override": "escalation_router",
+            "errors": [
+                _error(
+                    "budget_check",
+                    "budget_exceeded",
+                    f"usd_spent={spent} >= cap={cap_usd}",
+                )
+            ],
+        }
+    if loops >= MAX_LOOP_DEPTH:
+        return {
+            "current_node": "budget_check",
+            "next_node_override": "escalation_router",
+            "errors": [
+                _error(
+                    "budget_check",
+                    "loop_bound_exceeded",
+                    f"loop_iterations={loops} >= max={MAX_LOOP_DEPTH}",
+                )
+            ],
+        }
+
+    return {"current_node": "budget_check"}
+
+
+# ---------------------------------------------------------------------------
+# 2. consensus_check — Brain ⇄ Executor agreement gate
+# ---------------------------------------------------------------------------
+
+
+def consensus_check(
+    state: ResearchWorkflowState,
+    sdk: Any = None,
+    mcp: Any = None,
+) -> dict:
+    """Compare Brain and Executor positions; promote `consensus_state`.
+
+    Phase 1 heuristic — no LLM call:
+      - if both positions empty → unresolved
+      - if Brain explicitly says APPROVED in Gate 1 → agreed
+      - if loop_iterations >= MAX_LOOP_DEPTH and not yet agreed → disagree
+        + escalation hint via `next_node_override`
+      - otherwise → unresolved (loop continues)
+    """
+    brain_pos = (state.get("brain_position") or "").strip()
+    exec_pos = (state.get("executor_position") or "").strip()
+    gate_verdict = state.get("gate1_verdict") or ""
+    loops = int(state.get("loop_iterations", 0))
+
+    if not brain_pos and not exec_pos:
+        return {
+            "current_node": "consensus_check",
+            "consensus_state": "unresolved",
+        }
+
+    if gate_verdict == "approved":
+        return {
+            "current_node": "consensus_check",
+            "consensus_state": "agreed",
+        }
+
+    if loops >= MAX_LOOP_DEPTH:
+        return {
+            "current_node": "consensus_check",
+            "consensus_state": "disagree",
+            "next_node_override": "escalation_router",
+            "errors": [
+                _error(
+                    "consensus_check",
+                    "consensus_loop_exceeded",
+                    f"Brain⇄Executor unresolved after {loops} loops; "
+                    f"brain_position={brain_pos[:80]!r}; "
+                    f"executor_position={exec_pos[:80]!r}",
+                )
+            ],
+        }
+
+    return {
+        "current_node": "consensus_check",
+        "consensus_state": "unresolved",
+    }
+
+
+# ---------------------------------------------------------------------------
+# 3. escalation_router — submit checkpoint + route to PI
+# ---------------------------------------------------------------------------
+
+
+def _classify_checkpoint_type(error_type: str) -> str:
+    """Map an error_type to a checkpoint type per the executor protocol.
+
+    `decision` for must-escalate triggers (budget breach, consensus loop
+    exceeded, assumption invalidation). `clarification` for ambiguity-
+    class events. Defaults to `decision` when uncertain — conservative.
+    """
+    if error_type in {
+        "budget_exceeded",
+        "loop_bound_exceeded",
+        "consensus_loop_exceeded",
+        "assumption_invalidation",
+        "scope_expansion_required",
+        "contradictory_results",
+    }:
+        return "decision"
+    if error_type in {"ambiguous_acceptance", "missing_context", "unexpected_complexity"}:
+        return "clarification"
+    return "decision"
+
+
+def escalation_router(
+    state: ResearchWorkflowState,
+    sdk: Any = None,
+    mcp: MCPClient | None = None,
+) -> dict:
+    """Submit a checkpoint capturing the latest failure and route to PI.
+
+    Reads the most recent ErrorRecord in `state["errors"]`. If there is
+    none, escalates with a generic "unclassified" reason rather than
+    silently no-op'ing.
+    """
+    errors = state.get("errors", [])
+    latest = errors[-1] if errors else _error(
+        "escalation_router",
+        "unclassified",
+        "No prior error found in state['errors'].",
+    )
+    chk_type = _classify_checkpoint_type(latest.get("error_type", "unclassified"))
+    reason = (
+        f"[{latest.get('node_name')}] {latest.get('error_type')}: "
+        f"{latest.get('detail', '')}"
+    )
+
+    chk_id = ""
+    if mcp is not None:
+        chk_id = mcp.rka_submit_checkpoint(
+            reason=reason,
+            type=chk_type,
+            related_mission=state.get("mission_id"),
+        )
+
+    record: CheckpointRecord = {
+        "chk_id": chk_id or "chk_pending",
+        "type": chk_type,  # type: ignore[typeddict-item]
+        "reason": reason,
+        "resolved": False,
+    }
+    return {
+        "current_node": "escalation_router",
+        "current_phase": "escalated",
+        # Route to pi_acceptance so the PI sees the escalation + run digest
+        # and decides whether to accept the partial state or fail-the-run.
+        "next_node_override": "pi_acceptance",
+        "checkpoints": [record],
+    }
