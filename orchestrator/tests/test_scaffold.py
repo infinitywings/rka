@@ -60,27 +60,21 @@ def test_pi_batch_review_threshold_default_is_ten():
 @pytest.mark.parametrize(
     "fn",
     [
-        # T3 (Brain ×6) and T4 (Executor ×3) have landed — covered by
-        # test_brain.py / test_executor.py. The remaining 6 stubs land in T5-T6.
-        pi.pi_greenlight,
-        pi.pi_decision_select,
-        pi.pi_acceptance,
+        # T3-T5 have landed — covered by test_brain.py / test_executor.py /
+        # test_pi.py. The remaining 3 utility stubs land in T6.
         utility.budget_check,
         utility.consensus_check,
         utility.escalation_router,
     ],
 )
-def test_remaining_six_nodes_are_stub_placeholders(fn):
-    # T5-T6 nodes still raise NotImplementedError. As each task lands,
-    # remove its functions from this parametrize list and add behavioral
-    # tests in a dedicated module.
+def test_remaining_three_utility_nodes_are_stub_placeholders(fn):
+    # T6 nodes still raise NotImplementedError. Removed from list as they land.
     with pytest.raises(NotImplementedError):
         fn({})
 
 
-def test_implemented_nodes_have_three_arg_signature():
-    # Sanity guard: every implemented node accepts (state, sdk, mcp).
-    # Catches accidental signature regressions during T5-T6 expansion.
+def test_brain_and_executor_nodes_have_three_arg_signature():
+    # Brain + Executor share the (state, sdk, mcp) signature.
     import inspect
 
     for fn in (
@@ -97,4 +91,17 @@ def test_implemented_nodes_have_three_arg_signature():
         params = list(inspect.signature(fn).parameters.keys())
         assert params == ["state", "sdk", "mcp"], (
             f"{fn.__name__} should accept (state, sdk, mcp); got {params}"
+        )
+
+
+def test_pi_nodes_have_four_arg_signature_with_interrupt_fn():
+    # PI nodes additionally take `interrupt_fn` — T7 topology binds it
+    # via functools.partial so the wrapped node still presents a single
+    # `(state)` interface to LangGraph.
+    import inspect
+
+    for fn in (pi.pi_greenlight, pi.pi_decision_select, pi.pi_acceptance):
+        params = list(inspect.signature(fn).parameters.keys())
+        assert params == ["state", "sdk", "mcp", "interrupt_fn"], (
+            f"{fn.__name__} should accept (state, sdk, mcp, interrupt_fn); got {params}"
         )
