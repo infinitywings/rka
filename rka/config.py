@@ -44,11 +44,14 @@ class RKAConfig(BaseSettings):
     llm_context_window: int = Field(default=0, description="Model context window in tokens (0 = unknown/auto)")
     llm_request_timeout: int = Field(default=120, description="Timeout for LLM requests in seconds")
 
-    # Embeddings (Phase 2)
+    # Embeddings — v2.4.0 (Mission D) flips the default to ON. Persistent
+    # backend config lives at /data/embedding_config.json; this env var
+    # remains the master enable/disable switch for the in-process
+    # EmbeddingService.
     embedding_model: str = Field(
         default="nomic-ai/nomic-embed-text-v1.5", description="FastEmbed model"
     )
-    embeddings_enabled: bool = Field(default=False, description="Enable embedding generation")
+    embeddings_enabled: bool = Field(default=True, description="Enable embedding generation")
 
     # Context Engine — v2.4 (dec_01KQQPD6Y6B362T3K08368BDMP) removed temperature
     # bucketing and token-budget arithmetic. Ranking is SQL-time importance ×

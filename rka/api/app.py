@@ -123,8 +123,67 @@ async def lifespan(app: FastAPI):
 
     embeddings: EmbeddingService | None = None
     if config.embeddings_enabled:
-        embeddings = EmbeddingService(model_name=config.embedding_model, db=db)
-        logger.info("Embedding service enabled (model=%s)", config.embedding_model)
+        # Mission D first-run hook: persist DEFAULT_CONFIG to
+        # /data/embedding_config.json on first boot if it doesn't exist,
+        # then load whatever's on disk through the pluggable factory.
+        # Falls back to legacy FastEmbed if the config file is corrupt or
+        # the data_dir isn't writable (e.g. test fixtures with default
+        # `/data`, read-only volume mounts).
+        from rka.services.embedding_config import (
+            DEFAULT_CONFIG,
+            EmbeddingConfigError,
+            EmbeddingConfigService,
+        )
+        from rka.services.embedding_reshape import reshape_vec_claims_if_needed
+
+        cfg_svc = EmbeddingConfigService(config_dir=config.data_dir)
+        try:
+            if not cfg_svc.config_path.exists():
+                try:
+                    cfg_svc.save_config(DEFAULT_CONFIG.model_copy(), actor="system-default")
+                    logger.info(
+                        "first-run: persisted DEFAULT embedding config to %s",
+                        cfg_svc.config_path,
+                    )
+                except (OSError, EmbeddingConfigError) as exc:
+                    # data_dir not writable (e.g. read-only test fixture).
+                    # Silent fall-through to legacy FastEmbed below.
+                    logger.warning(
+                        "could not persist DEFAULT embedding config to %s: %s; "
+                        "continuing with in-memory default",
+                        cfg_svc.config_path,
+                        exc,
+                    )
+                    raise EmbeddingConfigError(
+                        "data_dir not writable; using legacy fastembed", hint=""
+                    )
+            embedding_cfg = cfg_svc.load_config()
+            embeddings = EmbeddingService.from_config(embedding_cfg.model_dump(), db=db)
+            logger.info(
+                "Embedding service enabled (backend=%s, dim=%d)",
+                embedding_cfg.backend,
+                embeddings.dim,
+            )
+
+            # Mission D T4 startup-hook: reshape vec_claims if its dim no
+            # longer matches the configured embedding dim.
+            target_dim = int(embedding_cfg.config.get("dim") or embeddings.dim or 768)
+            did_reshape, pending = await reshape_vec_claims_if_needed(db, dim=target_dim)
+            if did_reshape:
+                logger.info(
+                    "vec_claims reshaped at startup (dim=%d); %d claims now pending re-embed",
+                    target_dim,
+                    pending,
+                )
+        except EmbeddingConfigError as exc:
+            # Corrupt config OR unwritable data_dir: fall back to legacy
+            # FastEmbed so the API still starts. The Settings page renders
+            # the 422 hint on next GET.
+            logger.warning(
+                "embedding config error at startup: %s; falling back to legacy FastEmbed",
+                exc.detail,
+            )
+            embeddings = EmbeddingService(model_name=config.embedding_model, db=db)
     app.state.embeddings = embeddings
 
     search = SearchService(db=db, embeddings=embeddings)
