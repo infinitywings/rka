@@ -28,7 +28,11 @@ import time
 
 import httpx
 
-from rka.infra.embedding_backends.base import ConnectionTestResult
+from rka.infra.embedding_backends.base import (
+    ConnectionTestResult,
+    EmbeddingConfigError,
+    reconcile_dim,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -98,8 +102,8 @@ class OllamaBackend:
                     f"ollama /api/embeddings: unexpected response shape "
                     f"(missing 'embedding' field): {payload!r}"
                 )
-            if self._dim != len(vec):
-                self._dim = len(vec)
+            # T2.5 calibration: drift-check rather than silent mutate.
+            self._dim = reconcile_dim(self._dim, len(vec))
             return vec
         if last_exc:
             raise last_exc

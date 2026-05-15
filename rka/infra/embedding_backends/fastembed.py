@@ -16,7 +16,11 @@ import logging
 import time
 from typing import Any
 
-from rka.infra.embedding_backends.base import ConnectionTestResult
+from rka.infra.embedding_backends.base import (
+    ConnectionTestResult,
+    EmbeddingConfigError,
+    reconcile_dim,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,11 +35,19 @@ def _needs_nomic_prefix(model_name: str) -> bool:
 class FastEmbedBackend:
     """In-process ONNX inference via the `fastembed` package."""
 
-    def __init__(self, model_name: str = "nomic-ai/nomic-embed-text-v1.5") -> None:
+    def __init__(
+        self,
+        model_name: str = "nomic-ai/nomic-embed-text-v1.5",
+        *,
+        dim: int | None = None,
+    ) -> None:
         self._model_name = model_name
         self._model: Any = None
-        # nomic-768 is the default; backend-detected dim overrides on first embed.
-        self._dim: int = 768
+        # If `dim` is provided, that becomes the strict expectation enforced
+        # by `reconcile_dim`. If omitted (None), default to nomic-v1.5's 768
+        # for back-compat with pre-T2.5 callers; the first inference still
+        # cross-checks via reconcile_dim and raises on real drift.
+        self._dim: int = 768 if dim is None else dim
         self._uses_prefix = _needs_nomic_prefix(model_name)
 
     @property
@@ -67,11 +79,12 @@ class FastEmbedBackend:
         model = self._get_model()
         prefixed = [self._prefix(t, is_query=is_query) for t in texts]
         result = [v.tolist() for v in model.embed(prefixed)]
-        if result and len(result[0]) != self._dim:
-            # Detected dimensionality differs from default (e.g. user
-            # picked a different nomic variant). Sync the field so the
-            # config layer can see it via `dim`.
-            self._dim = len(result[0])
+        if result:
+            # T2.5 calibration: drift-check rather than silent mutate.
+            # `reconcile_dim` raises EmbeddingConfigError on drift; on
+            # `self._dim == 0` (advanced empty-dim config) it returns the
+            # observed dim so we can populate.
+            self._dim = reconcile_dim(self._dim, len(result[0]))
         return result
 
     async def embed(self, text: str, *, is_query: bool = False) -> list[float]:

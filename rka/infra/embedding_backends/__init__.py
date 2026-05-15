@@ -24,12 +24,16 @@ from typing import Any
 from rka.infra.embedding_backends.base import (
     ConnectionTestResult,
     EmbeddingBackend,
+    EmbeddingConfigError,
+    reconcile_dim,
 )
 
 __all__ = [
     "ConnectionTestResult",
     "EmbeddingBackend",
+    "EmbeddingConfigError",
     "make_backend",
+    "reconcile_dim",
 ]
 
 
@@ -52,6 +56,7 @@ def make_backend(config: dict[str, Any]) -> EmbeddingBackend:
 
         return FastEmbedBackend(
             model_name=sub.get("model_name", "nomic-ai/nomic-embed-text-v1.5"),
+            dim=sub.get("dim"),
         )
     if backend_kind == "openai_compat":
         from rka.infra.embedding_backends.openai_compat import OpenAICompatBackend

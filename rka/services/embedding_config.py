@@ -30,7 +30,19 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from rka.infra.embedding_backends import ConnectionTestResult, make_backend
+from rka.infra.embedding_backends import (
+    ConnectionTestResult,
+    EmbeddingConfigError,
+    make_backend,
+)
+
+__all__ = [
+    "BackendKind",
+    "DEFAULT_CONFIG",
+    "EmbeddingConfig",
+    "EmbeddingConfigError",  # re-exported from rka.infra.embedding_backends.base
+    "EmbeddingConfigService",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -194,19 +206,10 @@ class EmbeddingConfigService:
 
 
 # ---------------------------------------------------------------------------
-# Errors
+# Errors (re-exported from rka.infra.embedding_backends.base)
 # ---------------------------------------------------------------------------
-
-
-class EmbeddingConfigError(Exception):
-    """Surface for config-read/write failures.
-
-    T3's REST handlers catch this and map to a 422 with:
-        {"error": "embedding_config_invalid", "detail": str(exc),
-         "hint": exc.hint}
-    """
-
-    def __init__(self, detail: str, *, hint: str = "") -> None:
-        super().__init__(detail)
-        self.detail = detail
-        self.hint = hint
+# `EmbeddingConfigError` is imported above. The class is defined in
+# `rka/infra/embedding_backends/base.py` so backends can raise it without
+# a service-layer import cycle (T2.5 calibration). Re-exporting here keeps
+# `from rka.services.embedding_config import EmbeddingConfigError` working
+# for callers that landed before the relocation.

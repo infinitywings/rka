@@ -33,7 +33,11 @@ from typing import Any
 
 import httpx
 
-from rka.infra.embedding_backends.base import ConnectionTestResult
+from rka.infra.embedding_backends.base import (
+    ConnectionTestResult,
+    EmbeddingConfigError,
+    reconcile_dim,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -120,8 +124,11 @@ class OpenAICompatBackend:
             payload = resp.json()
             data = payload.get("data") or []
             vecs = [item["embedding"] for item in data]
-            if vecs and self._dim != len(vecs[0]):
-                self._dim = len(vecs[0])
+            if vecs:
+                # T2.5 calibration: drift-check rather than silent mutate.
+                # `reconcile_dim` returns the new self._dim (or raises on
+                # drift when self._dim was already non-zero).
+                self._dim = reconcile_dim(self._dim, len(vecs[0]))
             return vecs
         # unreachable — every loop branch either returns or raises
         if last_exc:

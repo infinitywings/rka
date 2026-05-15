@@ -16,6 +16,7 @@ import pytest
 from rka.infra.embedding_backends import (
     ConnectionTestResult,
     EmbeddingBackend,
+    EmbeddingConfigError,
     make_backend,
 )
 from rka.infra.embedding_backends.fastembed import FastEmbedBackend
@@ -354,6 +355,78 @@ async def test_factory_built_openai_compat_backend_round_trips():
     assert isinstance(b, EmbeddingBackend)
     vec = await b.embed("hi")
     assert len(vec) == 4
+
+
+# ---------------------------------------------------------------------------
+# T2.5 calibration — dim drift in production embed paths raises rather
+# than silently mutates self._dim (Brain greenlight dec_01KRP0WFMXAF0TQN6RDXY65WEX
+# redirect of upfront-Backbrief ask 5)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_openai_compat_embed_raises_on_dim_drift_after_construction():
+    """After non-zero-dim construction, an embed() that observes a
+    differently-sized vector must raise rather than silently update
+    self._dim. Real-world scenario: user mistypes dim in advanced UI."""
+    client = httpx.AsyncClient(transport=_openai_responder(dim=8), base_url="http://x")
+    b = OpenAICompatBackend(
+        base_url="http://x", model="m", dim=4, http_client=client  # configured 4, server 8
+    )
+    with pytest.raises(EmbeddingConfigError, match="dim mismatch"):
+        await b.embed("hello")
+    # Dim stays at the configured value on drift (not silently corrected).
+    assert b.dim == 4
+
+
+@pytest.mark.asyncio
+async def test_ollama_embed_raises_on_dim_drift_after_construction():
+    client = httpx.AsyncClient(transport=_ollama_responder(dim=5), base_url="http://x")
+    b = OllamaBackend(base_url="http://x", model="m", dim=3, http_client=client)
+    with pytest.raises(EmbeddingConfigError, match="dim mismatch"):
+        await b.embed("hi")
+    assert b.dim == 3
+
+
+@pytest.mark.asyncio
+async def test_fastembed_embed_raises_on_dim_drift_after_construction():
+    """FastEmbed's drift case: user picks a non-Nomic model whose actual
+    dim differs from the configured one; embed must raise."""
+
+    class _FakeVec:
+        def __init__(self, data: list[float]) -> None:
+            self._data = data
+
+        def tolist(self) -> list[float]:
+            return self._data
+
+    class _FakeModel:
+        def __init__(self, dim: int) -> None:
+            self._dim = dim
+
+        def embed(self, texts: list[str]) -> list[_FakeVec]:
+            return [_FakeVec([0.1] * self._dim) for _ in texts]
+
+    b = FastEmbedBackend(model_name="custom-model", dim=4)
+    # Bypass the real model loader; inject a fake that returns 768-dim vectors.
+    b._model = _FakeModel(dim=768)
+
+    import asyncio
+
+    with pytest.raises(EmbeddingConfigError, match="dim mismatch"):
+        await b.embed("hi")
+    assert b.dim == 4
+
+
+@pytest.mark.asyncio
+async def test_openai_compat_zero_dim_at_construction_populates_on_first_embed():
+    """The flip side: when constructed with dim=0 (advanced empty-config
+    or post-test_connection-from-zero path), the first embed populates."""
+    client = httpx.AsyncClient(transport=_openai_responder(dim=4), base_url="http://x")
+    b = OpenAICompatBackend(base_url="http://x", model="m", dim=0, http_client=client)
+    assert b.dim == 0
+    await b.embed("hi")
+    assert b.dim == 4  # populated from observed (legitimate case)
 
 
 @pytest.mark.asyncio
