@@ -8,13 +8,17 @@ import { ClientSummary, MergeSummary, VerifyResult } from "../types";
 
 interface Props {
   clients: ClientSummary[];
+  /** Backend URL of the bundled rka-serve sidecar. Used by the post-install
+   *  hint to open the web UI's Settings → Embeddings page (Mission
+   *  Desktop-v2.5 / v2.5.0-desktop, T2 refresh). */
+  backendUrl?: string;
   /** Called after the merge action completes so the parent can refresh
    *  detection state. Also wired into the Claude Desktop install-assist
    *  Refresh button. */
   onComplete?: () => Promise<void> | void;
 }
 
-export function OnboardingPanel({ clients, onComplete }: Props) {
+export function OnboardingPanel({ clients, backendUrl, onComplete }: Props) {
   const [showUndetected, setShowUndetected] = useState<boolean>(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [verifyState, setVerifyState] = useState<Record<string, VerifyResult>>({});
@@ -170,6 +174,29 @@ export function OnboardingPanel({ clients, onComplete }: Props) {
             ))}
           </div>
         )}
+        {mergeOutcome &&
+          mergeOutcome.some((m) => !m.error) &&
+          backendUrl && (
+            <div style={styles.outcomeBlock}>
+              <p style={styles.muted}>
+                <strong>Next step (recommended):</strong> configure your
+                embedding backend in the web UI. The default is FastEmbed
+                (nomic-768) and runs offline; LM Studio, Ollama, and
+                OpenAI-compatible HTTP backends are also supported.
+              </p>
+              <button
+                style={styles.secondaryBtn}
+                type="button"
+                onClick={() =>
+                  invoke("open_external_url", {
+                    url: `${backendUrl.replace(/\/$/, "")}/settings`,
+                  }).catch(() => {})
+                }
+              >
+                Open Settings → Embeddings
+              </button>
+            </div>
+          )}
       </div>
       </section>
     </>

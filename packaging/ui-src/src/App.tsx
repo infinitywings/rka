@@ -106,7 +106,11 @@ export default function App() {
       )}
 
       {view === "onboarding" && (
-        <OnboardingPanel clients={clients} onComplete={refreshClients} />
+        <OnboardingPanel
+          clients={clients}
+          backendUrl={backendUrl}
+          onComplete={refreshClients}
+        />
       )}
 
       {view === "settings" && (
