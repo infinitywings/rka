@@ -134,9 +134,9 @@ import type {
   ExplorationSummary,
   QAResult,
   QASession,
-  LLMStatus,
-  LLMConfigUpdate,
-  LLMModel,
+  EmbeddingConfig,
+  ConnectionTestResult,
+  BackfillStatus,
   KnowledgePackDownload,
   KnowledgePackImportResult,
   EvidenceClusterUpdateRequest,
@@ -349,11 +349,25 @@ export const api = {
   listQASessions: () => get<QASession[]>("/qa/sessions"),
   getQASession: (id: string) => get<QASession>(`/qa/sessions/${id}`),
 
-  // LLM
-  getLLMStatus: () => get<LLMStatus>("/llm/status"),
-  updateLLMConfig: (data: LLMConfigUpdate) => put<LLMStatus>("/llm/config", data),
-  checkLLM: () => post<LLMStatus>("/llm/check"),
-  getLLMModels: () => get<LLMModel[]>("/llm/models"),
+  // Embedding configuration (v2.4.0, Mission D)
+  // The LLM client methods that lived here pre-v2.4.0 (getLLMStatus,
+  // updateLLMConfig, checkLLM, getLLMModels) were removed per the
+  // LLM-capability-removal directive (jrn_01KRNZBS50K250HHHHEC58E4GC).
+  // Server-side /api/llm/* routes are PRESERVED for future re-wiring.
+  getEmbeddingConfig: () => get<EmbeddingConfig>("/config/embedding"),
+  updateEmbeddingConfig: (data: EmbeddingConfig) =>
+    put<EmbeddingConfig & { job_id?: string; status_url?: string }>(
+      "/config/embedding",
+      data,
+    ),
+  testEmbeddingConfig: (data: EmbeddingConfig) =>
+    post<ConnectionTestResult>("/config/embedding/test", data),
+  getEmbeddingBackfillStatus: (jobId?: string) =>
+    get<BackfillStatus>(
+      jobId
+        ? `/config/embedding/backfill/status?job_id=${encodeURIComponent(jobId)}`
+        : "/config/embedding/backfill/status",
+    ),
 
   // v2.0: Research Map
   getResearchMap: () => {

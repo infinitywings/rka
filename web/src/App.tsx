@@ -16,7 +16,6 @@ import KnowledgeGraph from "@/pages/KnowledgeGraph"
 import AuditLog from "@/pages/AuditLog"
 import ContextInspector from "@/pages/ContextInspector"
 import Settings from "@/pages/Settings"
-import Notebook from "@/pages/Notebook"
 import ResearchMap from "@/pages/ResearchMap"
 
 const queryClient = new QueryClient({
@@ -45,7 +44,6 @@ export default function App() {
               <Route path="timeline" element={<Timeline />} />
               <Route path="graph" element={<KnowledgeGraph />} />
               <Route path="research-map" element={<ResearchMap />} />
-              <Route path="notebook" element={<Notebook />} />
               <Route path="audit" element={<AuditLog />} />
               <Route path="context" element={<ContextInspector />} />
               <Route path="settings" element={<Settings />} />
