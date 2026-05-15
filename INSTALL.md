@@ -382,7 +382,7 @@ Same JSON shape, in `.claude/mcp.json` (per-project) or `~/.claude/settings.json
 |---|---|---|
 | Hook script fails with permission denied | Wrapper not executable | `chmod +x bin/rka-mcp-bridge.py` (the plugin should set this on install but may not) |
 | `python3` resolves to a Python 2 binary | Old system Python | Use `/usr/bin/python3` explicitly, or install via `brew install python3` |
-| Spotlight indexes integration.json and creates `._integration.json` | macOS metadata pollution on certain volumes (FuSpace, network mounts) | `dot_clean ~/Library/Application\ Support/RKA/` or move RKA data off the affected volume |
+| Spotlight indexes integration.json and creates `._integration.json` | macOS metadata pollution on volumes without full xattr support (external drives, SMB/AFP network mounts, OneDrive/Dropbox/iCloud sync folders) | `dot_clean ~/Library/Application\ Support/RKA/` or move RKA data off the affected volume |
 
 ### Linux specifically
 

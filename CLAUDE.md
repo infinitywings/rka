@@ -95,9 +95,9 @@ preserved for future re-wiring through the orchestrator's Claude Code SDK
 (separate Phase-2 mission). `/api/capabilities` no longer returns the `llm`
 field (BREAKING-IN-MINOR; documented in `CHANGELOG.md`).
 
-## macOS / FuSpace AppleDouble Quirks
+## macOS AppleDouble Quirks (external / network / sync volumes)
 
-The FuSpace volume creates `._*` resource-fork files alongside any file Python tools write to (in `build/`, `rka.egg-info/`, project root). These break both `docker compose build` (fails with "failed to xattr ... operation not permitted") and `uv tool install` (fails with "No such file or directory: '._requires.txt'") even with `COPYFILE_DISABLE=1` set.
+On macOS, certain volumes — external drives, SMB/AFP network mounts, OneDrive / Dropbox / iCloud sync folders, and some case-insensitive filesystems — don't fully support extended attributes. macOS works around this by creating `._*` AppleDouble companion files alongside every file Python tools write (in `build/`, `rka.egg-info/`, project root). These break both `docker compose build` (fails with "failed to xattr ... operation not permitted") and `uv tool install` (fails with "No such file or directory: '._requires.txt'") even with `COPYFILE_DISABLE=1` set. If you cloned the repo into `~/Documents` on a stock APFS volume you'll never see this; if you cloned it onto an external drive or a synced folder, you will.
 
 **Before any rebuild**, purge resource-fork files:
 
@@ -105,10 +105,10 @@ The FuSpace volume creates `._*` resource-fork files alongside any file Python t
 find . -maxdepth 2 -name '._*' -not -path './.git/*' -delete
 ```
 
-**If `uv tool install --force .` still fails on `._requires.txt`** (the build process re-creates AppleDouble files in `build/` on FuSpace), install from a `/tmp` clone instead:
+**If `uv tool install --force .` still fails on `._requires.txt`** (the build process re-creates AppleDouble files in `build/` on the fly), install from a `/tmp` clone instead — `/tmp` is on a stock APFS volume that doesn't have the xattr quirk:
 
 ```bash
-rm -rf /tmp/rka-build && git clone -q --depth 1 /Volumes/FuSpace/Projects/rka /tmp/rka-build
+rm -rf /tmp/rka-build && git clone -q --depth 1 "$PWD" /tmp/rka-build
 cd /tmp/rka-build && UV_CACHE_DIR=/tmp/uv-cache uv tool install --force .
 ```
 
