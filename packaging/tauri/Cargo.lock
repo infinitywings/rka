@@ -3122,7 +3122,7 @@ dependencies = [
 
 [[package]]
 name = "rka-desktop"
-version = "0.1.0"
+version = "2.5.0+desktop"
 dependencies = [
  "anyhow",
  "chrono",

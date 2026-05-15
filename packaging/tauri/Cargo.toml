@@ -1,6 +1,6 @@
 [package]
 name = "rka-desktop"
-version = "0.1.0"
+version = "2.5.0+desktop"
 description = "RKA Desktop — macOS shell for the Research Knowledge Agent"
 edition = "2021"
 rust-version = "1.77.2"
