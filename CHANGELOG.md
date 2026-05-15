@@ -3,6 +3,91 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [2.5.0+desktop] — 2026-05-15 (tag: `v2.5.0-desktop`; release/desktop branch ONLY)
+
+**Release line note.** v2.5.0-desktop ships from the `release/desktop`
+branch as a parallel distribution channel for the macOS .app +
+multi-client MCP onboarding. Per the motivating decision
+`dec_01KRPAVSTJ4H80VXJVN6DQ82WQ`, this release is **NOT merged into main**
+— main stays at v2.4.1 + future patches. Users who want the .app + Tauri
+shell pick the tagged build; users who deploy via Docker stay on main.
+
+PEP 440 normalization: the Python `version` field is
+`2.5.0+desktop` (local-version syntax per PEP 440). The git tag is
+`v2.5.0-desktop` — the hyphen form Brain ratified is preserved for the
+tag because git tag names have no PEP 440 constraint.
+
+### Added (release/desktop ONLY)
+
+- **macOS .app distribution path** via Tauri shell + PyInstaller binaries.
+  The .app launches `rka-serve` as a sidecar subprocess (not embedded
+  in-process), pipes its stdout/stderr into a rotating log writer
+  (`~/Library/Logs/RKA/server.log`, 10 MB × 5 rotation), and exposes the
+  bundled web UI at the configured backend URL.
+- **Multi-client MCP onboarding** in the Tauri shell for 7 clients:
+  Claude Desktop, Claude Code, Cursor, VSCode-Copilot, Codex CLI, Codex
+  Mac App, Antigravity. Per-client detection probes report whether each
+  client's config file exists and whether RKA is already merged; users
+  toggle which clients to install on; merge writes are atomic with
+  pre-flight backup; remove is reversible.
+- **Claude Desktop install-assist (D9)** for users who don't have Claude
+  Desktop yet — link-only download flow (no auto-install per Mac
+  Gatekeeper conventions).
+- **Logs panel (D5)** with diagnostic-copy (clipboard) command.
+- **Post-install Settings → Embeddings hint (T2)** in
+  `packaging/ui-src/src/components/OnboardingPanel.tsx`: after a
+  successful MCP merge, render a one-click "Open Settings → Embeddings"
+  button pointing at `${backendUrl}/settings`. Lets the user finish
+  embedding-backend setup right after MCP onboarding completes.
+
+### Preserved from v2.4.x (no regressions in the merged code)
+
+- v2.4.0's pluggable embedding backends (FastEmbed / OpenAI-compat /
+  Ollama) at `Settings → Embeddings` in the web UI
+- v2.4.0's first-run banner + persistent `/data/embedding_config.json`
+  with file-mode 0600 + atomic write + pre-flight backup
+- v2.4.0's BREAKING `/api/capabilities` shape change (`llm` field absent)
+- v2.4.1's httpx 600s default timeout + batch-size-8 default + exception-
+  class-in-error-message hotfix
+- Server-side LLM service code (`rka/infra/llm.py`, `rka/api/routes/llm.py`,
+  `rka_ask` / `rka_generate_summary` MCP tools, worker.py enrichment
+  paths) — graceful no-op when LLM unavailable
+
+### Branch + merge model (this release)
+
+- Merged main (v2.4.1 @ `2ad536c`) into `release/desktop` at T0 with
+  `--no-ff`. ZERO conflict markers — the mission spec's "3 conflict
+  files in `web/src/`" prediction was empirically wrong: per-commit
+  audit confirmed all 9 D-commits (D1-D9) live entirely in
+  `packaging/`, leaving the web UI untouched. Source-trace calibration
+  entry filed at `jrn_01KRPB24577087AH2F63F6CRDY`.
+- Brain ratified Option B at `dec_01KRPAVSTJ4H80VXJVN6DQ82WQ`: web UI
+  Settings.tsx stays Embeddings-only (no Tabs primitive); Tauri shell's
+  existing MCP Clients UI at `packaging/ui-src/` is the home for
+  per-client onboarding.
+- v2.5.0-desktop tag pushed at T8; release/desktop continues to track
+  the desktop release line independent of main.
+
+### Test counts at this release
+
+- Cargo: 63/63 in `packaging/tauri` (32 lib unit + 31 integration matrix
+  including the 5 D8 verify-path additions). Run via
+  `CARGO_TARGET_DIR=/tmp/rka-tauri-target cargo test --release` from
+  `packaging/tauri/` to bypass the FuSpace AppleDouble issue at the
+  Tauri permissions-scan build step.
+- Python: 599+ (v2.4.1 baseline + any v2.4.1 hotfix tests carried in
+  via T0 merge).
+
+### Mission reference
+
+- Mission: `mis_01KRPA2YK4HHQ0X90GX2T3GAVH`
+- Motivating decision: `dec_01KRP9ZV7XX7WC9PDWRRTGTEE9`
+- Prior Notebook-deletion directive: `jrn_01KRP5Q0FJ67V3HMHNJ0FSR02D`
+- Mid-mission gate ratification: `dec_01KRPAVSTJ4H80VXJVN6DQ82WQ`
+- Spec source-trace calibration: `jrn_01KRPB24577087AH2F63F6CRDY`
+
+---
+
 ## [2.4.1] — 2026-05-15
 
 ### Fixed
