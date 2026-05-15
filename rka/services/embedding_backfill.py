@@ -119,14 +119,14 @@ ProgressCallback = Callable[[JobStatus], Awaitable[None] | None]
 class BackfillService:
     """Iterates `claims WHERE embedding_pending=1` and re-embeds them.
 
-    T5 contract:
       - `run_backfill(progress_callback=None)` is async.
       - Default batch_size = 32.
       - Per-claim failures get logged + the claim left with
         embedding_pending=1 so a later run retries.
+      - Batch-level failures (embed_batch raised) abort the run with
+        status.state = "failed"; remaining claims keep their flag for
+        the next attempt.
       - On clean exit, status.state = "complete".
-      - On any unhandled exception, status.state = "failed" and
-        status.error carries the exception text.
     """
 
     def __init__(self, *, db: Any, embeddings: Any, batch_size: int = 32) -> None:
@@ -139,16 +139,96 @@ class BackfillService:
         status: JobStatus,
         progress_callback: ProgressCallback | None = None,
     ) -> JobStatus:
-        """Skeleton — T5 implements. Marks the job complete-with-zero-work
-        so T3's tests can exercise the registry path independently of T5."""
+        """Embed every pending claim in batches.
+
+        Cursor pattern: claims are iterated in `id`-ascending order with a
+        `id > last_id` filter so persistent per-claim failures (which keep
+        `embedding_pending=1`) don't trigger an infinite loop on re-fetch.
+
+        Wall-clock target per mission spec: ~0.5–1s per claim with
+        LM Studio qwen3-8b; 827 claims ≈ 7–14 min.
+        """
+        import struct
+
         status.state = "running"
-        if progress_callback:
-            await _maybe_await(progress_callback(status))
-        # T5 fills in the actual claim iteration here.
+
+        # Step 1: count pending claims (status.total snapshot for the polling UI).
+        row = await self._db.fetchone(
+            "SELECT COUNT(*) AS n FROM claims WHERE embedding_pending = 1"
+        )
+        status.total = int((row or {}).get("n") or 0)
+        await _emit_progress(progress_callback, status)
+
+        if status.total == 0:
+            status.state = "complete"
+            await _emit_progress(progress_callback, status)
+            return status
+
+        # Step 2: cursor-paginate through pending claims.
+        last_id = ""
+        vec_available = bool(getattr(self._db, "vec_available", False))
+
+        while True:
+            rows = await self._db.fetchall(
+                "SELECT id, content FROM claims "
+                "WHERE embedding_pending = 1 AND id > ? "
+                "ORDER BY id LIMIT ?",
+                [last_id, self._batch_size],
+            )
+            if not rows:
+                break
+
+            ids = [r["id"] for r in rows]
+            texts = [r["content"] for r in rows]
+            last_id = rows[-1]["id"]
+
+            # Step 3: embed the batch. Batch-level failure → mark failed + exit.
+            try:
+                vectors = await self._embeddings.embed_batch(texts, is_query=False)
+            except Exception as exc:  # noqa: BLE001
+                status.state = "failed"
+                status.error = f"batch embed failed (cursor at {last_id}): {exc!s}"
+                logger.exception("backfill batch embed failed at cursor %s", last_id)
+                await _emit_progress(progress_callback, status)
+                return status
+
+            # Step 4: write vec_claims rows + clear the per-claim flag.
+            for claim_id, vec in zip(ids, vectors):
+                try:
+                    if vec_available:
+                        vec_blob = struct.pack(f"{len(vec)}f", *vec)
+                        await self._db.execute(
+                            "INSERT OR REPLACE INTO vec_claims (id, embedding) VALUES (?, ?)",
+                            [claim_id, vec_blob],
+                        )
+                    await self._db.execute(
+                        "UPDATE claims SET embedding_pending = 0 WHERE id = ?",
+                        [claim_id],
+                    )
+                    status.processed += 1
+                except Exception as exc:  # noqa: BLE001
+                    # Per-claim failure: leave the flag set, log, continue.
+                    logger.warning(
+                        "claim %s vec-write failed (flag stays set for retry): %s",
+                        claim_id,
+                        exc,
+                    )
+
+            await self._db.commit()
+            await _emit_progress(progress_callback, status)
+
         status.state = "complete"
-        if progress_callback:
-            await _maybe_await(progress_callback(status))
+        await _emit_progress(progress_callback, status)
         return status
+
+
+async def _emit_progress(
+    cb: ProgressCallback | None, status: JobStatus
+) -> None:
+    """Fire the optional progress callback, awaiting if it returns a coroutine."""
+    if cb is None:
+        return
+    await _maybe_await(cb(status))
 
 
 async def _maybe_await(value: Any) -> None:
