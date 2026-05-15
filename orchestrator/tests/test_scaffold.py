@@ -60,11 +60,8 @@ def test_pi_batch_review_threshold_default_is_ten():
 @pytest.mark.parametrize(
     "fn",
     [
-        # T3 (Brain ×6) has landed — those nodes get covered by test_brain.py.
-        # The remaining 9 are still placeholders until T4-T6 land.
-        executor.backbrief_draft,
-        executor.mission_execute,
-        executor.submit_report,
+        # T3 (Brain ×6) and T4 (Executor ×3) have landed — covered by
+        # test_brain.py / test_executor.py. The remaining 6 stubs land in T5-T6.
         pi.pi_greenlight,
         pi.pi_decision_select,
         pi.pi_acceptance,
@@ -73,17 +70,17 @@ def test_pi_batch_review_threshold_default_is_ten():
         utility.escalation_router,
     ],
 )
-def test_remaining_nine_nodes_are_stub_placeholders(fn):
-    # T4-T6 nodes still raise NotImplementedError. As each task lands,
+def test_remaining_six_nodes_are_stub_placeholders(fn):
+    # T5-T6 nodes still raise NotImplementedError. As each task lands,
     # remove its functions from this parametrize list and add behavioral
-    # tests in a dedicated module (mirror test_brain.py).
+    # tests in a dedicated module.
     with pytest.raises(NotImplementedError):
         fn({})
 
 
-def test_brain_nodes_have_three_arg_signature():
-    # Sanity guard: the 6 Brain nodes accept (state, sdk, mcp). Catches
-    # accidental signature regressions during T4-T6 expansion.
+def test_implemented_nodes_have_three_arg_signature():
+    # Sanity guard: every implemented node accepts (state, sdk, mcp).
+    # Catches accidental signature regressions during T5-T6 expansion.
     import inspect
 
     for fn in (
@@ -93,6 +90,9 @@ def test_brain_nodes_have_three_arg_signature():
         brain.cluster_review,
         brain.gate1_validation,
         brain.final_synthesis,
+        executor.backbrief_draft,
+        executor.mission_execute,
+        executor.submit_report,
     ):
         params = list(inspect.signature(fn).parameters.keys())
         assert params == ["state", "sdk", "mcp"], (
