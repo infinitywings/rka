@@ -106,3 +106,70 @@ docker compose up -d --force-recreate
 ```
 
 (Plain `docker compose up -d --build` can hit the build cache or skip recreation if Compose decides nothing changed; `--force-recreate` is the reliable post-rebuild path.)
+
+---
+
+## Agentic Branch + Orchestrator Package
+
+The `agentic` branch hosts the `orchestrator/` package — a LangGraph-driven
+Brain ⇄ Executor ⇄ PI loop that runs against RKA via the REST API. It is a
+**peer to `rka/`**, not a submodule. The branch is long-lived parallel to
+`main`; merges are deliberate, not continuous.
+
+### Hard invariants
+
+When working on `agentic`:
+
+- **Bookkeeper invariant** — `git diff main -- rka/` must remain empty across
+  every commit. Touching `rka/` from this branch requires an explicit
+  checkpoint and Brain greenlight.
+- **Worker invariant** — `git diff main -- rka/services/worker.py` always empty.
+- **Grep-gate** — `grep -rn "from rka\|import rka" orchestrator/` returns
+  none. The orchestrator talks to RKA only through the `MCPClient` Protocol
+  (`orchestrator/mcp_client.py`); the production binding is `RestMCPClient`
+  hitting `http://localhost:9712`.
+- **CLAUDE.md (root) is the only file outside `orchestrator/` this branch
+  may modify.** The root appendage you're reading documents the branch's
+  existence; further root-file edits need their own checkpoint.
+
+`orchestrator/tests/test_invariants.py` automates all three checks.
+
+### Three-storage discipline
+
+- **RKA SQLite** — domain truth (decisions, missions, journals, claims).
+- **LangGraph SqliteSaver** — workflow position (which node ran, with what input).
+- **Claude SDK session** — transient prompt/response context per node.
+
+Never persist workflow position back to RKA; never use the SDK session as a
+state bus across nodes. The `workflow_thread_id` (set at workflow start) is
+auto-tagged onto every RKA write so a run's artifacts are recoverable via
+`rka_get_journal(tags=[workflow_thread_id])` — same shape as v2.3.5
+Affordance F.
+
+### Telemetry-zero default
+
+`orchestrator/notifications.py` sends to terminal bell + macOS osascript by
+default. The webhook channel is opt-in and gated by a `WEBHOOK_BLOCKLIST`
+floor of known telemetry endpoints (Segment, Amplitude, Mixpanel, Statsig,
+PostHog, Heap). Extend the blocklist if more surface.
+
+### Local install for development
+
+```bash
+cd orchestrator
+# Use the repo .venv (langgraph + sqlite checkpointer already installed there
+# as part of T7). Else create a local venv:
+python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+.venv/bin/pytest -q
+```
+
+Local pytest expects langgraph + langgraph-checkpoint-sqlite ≥ 1.x/3.x
+pinned in `orchestrator/pyproject.toml`. The 162+ unit tests run offline
+with fakes; only the e2e graph smoke + the test-count floor invoke the
+real LangGraph runtime.
+
+### Mission reference
+
+- Mission: `mis_01KRKG9K1SSDZNDH90K2Z7ZM92`
+- Decision: `dec_01KRKE6ERDPQTFQS6ZGY9A3CK0`
+- Skill-prompt deltas (17 ratified additions): `orchestrator/docs/skill-prompt-deltas.md`
