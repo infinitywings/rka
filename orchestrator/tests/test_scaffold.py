@@ -60,12 +60,8 @@ def test_pi_batch_review_threshold_default_is_ten():
 @pytest.mark.parametrize(
     "fn",
     [
-        brain.strategy_node,
-        brain.confirmation_brief,
-        brain.decision_present,
-        brain.cluster_review,
-        brain.gate1_validation,
-        brain.final_synthesis,
+        # T3 (Brain ×6) has landed — those nodes get covered by test_brain.py.
+        # The remaining 9 are still placeholders until T4-T6 land.
         executor.backbrief_draft,
         executor.mission_execute,
         executor.submit_report,
@@ -77,10 +73,28 @@ def test_pi_batch_review_threshold_default_is_ten():
         utility.escalation_router,
     ],
 )
-def test_all_fifteen_nodes_are_stub_placeholders(fn):
-    # Each node is still a placeholder in T1. The point of this test is
-    # to guarantee all 15 names are importable (so T3-T6 can drop in
-    # implementations without renaming) and that calling them surfaces
-    # a clear scaffold message rather than a NameError.
+def test_remaining_nine_nodes_are_stub_placeholders(fn):
+    # T4-T6 nodes still raise NotImplementedError. As each task lands,
+    # remove its functions from this parametrize list and add behavioral
+    # tests in a dedicated module (mirror test_brain.py).
     with pytest.raises(NotImplementedError):
         fn({})
+
+
+def test_brain_nodes_have_three_arg_signature():
+    # Sanity guard: the 6 Brain nodes accept (state, sdk, mcp). Catches
+    # accidental signature regressions during T4-T6 expansion.
+    import inspect
+
+    for fn in (
+        brain.strategy_node,
+        brain.confirmation_brief,
+        brain.decision_present,
+        brain.cluster_review,
+        brain.gate1_validation,
+        brain.final_synthesis,
+    ):
+        params = list(inspect.signature(fn).parameters.keys())
+        assert params == ["state", "sdk", "mcp"], (
+            f"{fn.__name__} should accept (state, sdk, mcp); got {params}"
+        )
