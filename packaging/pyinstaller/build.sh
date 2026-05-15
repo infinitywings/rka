@@ -8,8 +8,10 @@
 #
 # Side effects:
 #   - Creates / refreshes the packaging-only virtualenv at packaging/.venv.
-#   - Strips AppleDouble (._*) files before each spec build (FuSpace volumes
-#     mint resource forks that break PyInstaller; see CLAUDE.md d2a9388).
+#   - Strips AppleDouble (._*) files before each spec build (macOS mints
+#     these on volumes without full xattr support — external drives,
+#     SMB/AFP mounts, sync folders — and they break PyInstaller; see
+#     CLAUDE.md "AppleDouble Quirks").
 #   - Writes binaries to packaging/pyinstaller/dist/{rka-serve,rka-mcp}.
 
 set -euo pipefail

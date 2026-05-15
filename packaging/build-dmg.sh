@@ -22,7 +22,9 @@
 # Prerequisites:
 #   - `cargo tauri build` already run (RKA.app present under the
 #     Tauri target directory).
-#   - CARGO_TARGET_DIR set if you're routing target/ off FuSpace.
+#   - CARGO_TARGET_DIR set if you're routing target/ off a volume
+#     where macOS mints AppleDouble (`._*`) companion files (external
+#     drives, SMB/AFP mounts, sync folders, etc).
 
 set -euo pipefail
 

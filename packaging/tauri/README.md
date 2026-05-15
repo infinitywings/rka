@@ -34,12 +34,14 @@ UI lives under `../ui-src/` (sibling directory).
 ## Build
 
 ```bash
-# FuSpace developers only: route cargo's target dir off the volume,
-# otherwise Tauri's permissions-file scanner trips on `._*.toml` resource
-# forks. See packaging/README.md "FuSpace developer notes".
+# If your repo lives on a volume without full xattr support (external
+# drives, SMB/AFP mounts, OneDrive/Dropbox/iCloud sync folders), route
+# cargo's target dir off that volume — otherwise Tauri's permissions-file
+# scanner trips on `._*.toml` companion files. See packaging/README.md
+# "AppleDouble notes". No-op on stock APFS boot drives.
 export CARGO_TARGET_DIR="$HOME/.cache/rka-tauri-target"
 
-# Pre-flight: clean AppleDouble files (FuSpace volumes mint resource forks)
+# Pre-flight: clean AppleDouble files (macOS mints these on affected volumes)
 find . -maxdepth 6 -name '._*' -not -path './.git/*' -delete
 
 # Build the sidecar binaries first

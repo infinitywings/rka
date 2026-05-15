@@ -14,7 +14,7 @@ Two specs produce single-file executables embedded in `Contents/Resources/` of `
 ```
 
 The wrapper does:
-1. AppleDouble cleanup (FuSpace volumes mint `._*` resource forks that break PyInstaller).
+1. AppleDouble cleanup (macOS mints `._*` companion files on volumes without full xattr support — external drives, SMB/AFP mounts, sync folders — and these break PyInstaller).
 2. Ensure a virtualenv exists with `pyinstaller` + the LLM extras (`fastembed`, `sqlite-vec`, etc.) installed.
 3. Build both specs.
 4. Strip extended attributes from the resulting binaries (`xattr -cr dist/`).

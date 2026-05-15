@@ -25,7 +25,7 @@ packaging/
    git checkout release/desktop
    git merge --no-ff v<version>
    ```
-2. Run AppleDouble cleanup (FuSpace volumes mint `._*` resource forks that break builds):
+2. Run AppleDouble cleanup (macOS mints `._*` AppleDouble files on volumes without full xattr support — external drives, SMB/AFP network mounts, OneDrive/Dropbox/iCloud sync folders, some case-insensitive filesystems — and these break builds):
    ```
    find . -maxdepth 2 -name '._*' -not -path './.git/*' -delete
    ```
@@ -39,16 +39,16 @@ packaging/
    ```
 5. Verify the DMG installs cleanly on a test Mac with no prior RKA install.
 
-## FuSpace developer notes
+## AppleDouble notes (volumes without full xattr support)
 
-If the working tree lives on the FuSpace volume (the original RKA developer's setup), macOS mints AppleDouble (`._*`) resource-fork files for every file written. This breaks both PyInstaller and Tauri's build scripts (which scan directories for `.toml` / data files and choke on the resource forks).
+If your working tree lives on a volume without full xattr support — external drives, SMB/AFP network mounts, OneDrive/Dropbox/iCloud sync folders, certain case-insensitive filesystems — macOS mints AppleDouble (`._*`) companion files for every file written. This breaks both PyInstaller and Tauri's build scripts (which scan directories for `.toml` / data files and choke on the companion files). Stock APFS on the boot drive doesn't have this quirk; you can ignore this whole section if you cloned the repo into `~/Documents` or similar.
 
 Two mitigations, used together:
 
 1. **Pre-build AppleDouble purge** — `find . -maxdepth 6 -name '._*' -not -path './.git/*' -delete`. The `packaging/pyinstaller/build.sh` wrapper runs this automatically.
-2. **Route cargo's target directory off FuSpace** — `export CARGO_TARGET_DIR="$HOME/.cache/rka-tauri-target"` before any `cargo check` / `cargo tauri build` / `cargo tauri dev`. Otherwise Tauri's permissions-file scanner trips over `._default.toml` resource forks under `target/debug/build/tauri-*/out/permissions/`.
+2. **Route cargo's target directory off the affected volume** — `export CARGO_TARGET_DIR="$HOME/.cache/rka-tauri-target"` before any `cargo check` / `cargo tauri build` / `cargo tauri dev`. `$HOME` lives on the stock APFS boot drive so AppleDouble files don't appear there. Otherwise Tauri's permissions-file scanner trips over `._default.toml` companion files under `target/debug/build/tauri-*/out/permissions/`.
 
-Both mitigations are no-ops on non-FuSpace volumes.
+Both mitigations are no-ops on stock APFS volumes.
 
 ## Phase 1 vs Phase 2 distribution
 

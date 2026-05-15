@@ -42,7 +42,7 @@ cargo test --lib
 cargo test --test client_matrix
 ```
 
-FuSpace developers: set `CARGO_TARGET_DIR="$HOME/.cache/rka-tauri-target"` first (see top-level CLAUDE.md).
+If your repo lives on a volume without full xattr support (external drives, SMB/AFP mounts, sync folders), set `CARGO_TARGET_DIR="$HOME/.cache/rka-tauri-target"` first to keep AppleDouble companion files out of Tauri's permissions scan (see top-level CLAUDE.md).
 
 ## Manual QA — case (h) Gatekeeper / antivirus flagging
 

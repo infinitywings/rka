@@ -3,19 +3,30 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
-## [2.5.0+desktop] — 2026-05-15 (tag: `v2.5.0-desktop`; release/desktop branch ONLY)
+## [2.5.0+desktop] — 2026-05-15 (tag: `v2.5.0+desktop`; release/desktop branch ONLY)
 
-**Release line note.** v2.5.0-desktop ships from the `release/desktop`
+**Release line note.** v2.5.0+desktop ships from the `release/desktop`
 branch as a parallel distribution channel for the macOS .app +
 multi-client MCP onboarding. Per the motivating decision
 `dec_01KRPAVSTJ4H80VXJVN6DQ82WQ`, this release is **NOT merged into main**
 — main stays at v2.4.1 + future patches. Users who want the .app + Tauri
 shell pick the tagged build; users who deploy via Docker stay on main.
 
-PEP 440 normalization: the Python `version` field is
-`2.5.0+desktop` (local-version syntax per PEP 440). The git tag is
-`v2.5.0-desktop` — the hyphen form Brain ratified is preserved for the
-tag because git tag names have no PEP 440 constraint.
+Version-form unification (PI directive 2026-05-15 post-delivery review):
+Python `version` field, Cargo.toml, tauri.conf.json, AND the git tag all
+use `2.5.0+desktop` (PEP 440 local-version syntax; also a valid semver
+build-metadata identifier). The initial T8 tag `v2.5.0-desktop` was
+re-tagged to `v2.5.0+desktop` to unify the form. The `+desktop` choice
+is forced by PEP 440 — `-desktop` is rejected by Python's `packaging`
+module for version strings.
+
+**Post-delivery follow-ups landed on `release/desktop` after the v2.5.0
+tag was first published**: T2.5 FuSpace cleanup on packaging/* (12
+mentions across 6 files generalized to "volumes without full xattr
+support" framing — same pattern as commit `9ec95d5` on main for
+CLAUDE.md + INSTALL.md), Phase-2 forward pointer added below, version-
+form unification described above. All technical content (AppleDouble
+cleanup commands, `CARGO_TARGET_DIR` redirect approach) preserved.
 
 ### Added (release/desktop ONLY)
 
@@ -53,6 +64,18 @@ tag because git tag names have no PEP 440 constraint.
   `rka_ask` / `rka_generate_summary` MCP tools, worker.py enrichment
   paths) — graceful no-op when LLM unavailable
 
+### Forward pointer — Phase 2 orchestrator
+
+The server-side LLM code preserved above is the planned target for
+re-wiring through the Claude Code SDK orchestrator on the long-lived
+`agentic` branch. Phase 1 of the orchestrator (T1-T12, 169/169 tests)
+is complete locally on `agentic` at HEAD `1c0b56b`. Phase 2 — the real
+SDK binding via Claude Max subscription, replacing the current FakeSDK
+test scaffold — has not been scheduled yet; it will ship as its own
+`v2.x.y+agentic` tagged release on the `agentic` branch per the same
+hub-and-spoke architecture (`dec_01KRPAVSTJ4H80VXJVN6DQ82WQ`). No
+mission ID exists at v2.5.0+desktop time; this pointer is informational.
+
 ### Branch + merge model (this release)
 
 - Merged main (v2.4.1 @ `2ad536c`) into `release/desktop` at T0 with
@@ -65,16 +88,19 @@ tag because git tag names have no PEP 440 constraint.
   Settings.tsx stays Embeddings-only (no Tabs primitive); Tauri shell's
   existing MCP Clients UI at `packaging/ui-src/` is the home for
   per-client onboarding.
-- v2.5.0-desktop tag pushed at T8; release/desktop continues to track
-  the desktop release line independent of main.
+- v2.5.0-desktop tag pushed at T8; post-delivery review re-tagged to
+  `v2.5.0+desktop` to unify the version-form with the Python code field.
+  release/desktop continues to track the desktop release line independent
+  of main.
 
 ### Test counts at this release
 
 - Cargo: 63/63 in `packaging/tauri` (32 lib unit + 31 integration matrix
   including the 5 D8 verify-path additions). Run via
   `CARGO_TARGET_DIR=/tmp/rka-tauri-target cargo test --release` from
-  `packaging/tauri/` to bypass the FuSpace AppleDouble issue at the
-  Tauri permissions-scan build step.
+  `packaging/tauri/` if your repo lives on a volume without full xattr
+  support (Tauri's permissions-scan build step trips on AppleDouble
+  companion files otherwise).
 - Python: 599+ (v2.4.1 baseline + any v2.4.1 hotfix tests carried in
   via T0 merge).
 
