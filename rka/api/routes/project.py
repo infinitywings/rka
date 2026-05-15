@@ -77,15 +77,21 @@ async def update_status(
 
 @router.get("/capabilities")
 async def get_capabilities(request: Request):
-    """Return embedding + LLM availability so consumers (rka_get_status,
-    rka_search) can adapt their output when a capability is degraded.
+    """Return embedding availability so consumers (rka_get_status,
+    rka_search) can adapt their output when the capability is degraded.
 
     Affordance C (Mission B / mis_01KR209WY4M6WQFEXRH79KC2ZF). Pure
     runtime introspection — no DB write, no schema change.
+
+    Mission D (v2.4.0) removed the `llm` field per PI directive
+    `jrn_01KRNZBS50K250HHHHEC58E4GC`. **BREAKING-IN-MINOR**: any consumer
+    that read `response["llm"]` before v2.4.0 must update. LLM service
+    code is preserved server-side (`rka/infra/llm.py`,
+    `rka/api/routes/llm.py`, `rka_ask`/`rka_generate_summary` MCP tools)
+    for a future re-wiring through the orchestrator's Claude Code SDK.
     """
     state = request.app.state
     db = getattr(state, "db", None)
-    config = getattr(state, "config", None)
 
     embeddings = getattr(state, "embeddings", None)
     embeddings_available = bool(embeddings) and bool(getattr(db, "vec_available", False))
@@ -102,23 +108,7 @@ async def get_capabilities(request: Request):
             "reason_unavailable": "sqlite-vec extension not loaded",
         }
 
-    llm = getattr(state, "llm", None)
-    llm_enabled = bool(getattr(config, "llm_enabled", False))
-    llm_available = bool(llm and getattr(llm, "available", False))
-    if llm_available:
-        llm_block = {"available": True, "reason_unavailable": None}
-    elif not llm_enabled:
-        llm_block = {
-            "available": False,
-            "reason_unavailable": "LLM disabled (RKA_LLM_ENABLED=false)",
-        }
-    else:
-        llm_block = {
-            "available": False,
-            "reason_unavailable": "LLM backend not reachable (configured but health check failed)",
-        }
-
-    return {"embedding": emb_block, "llm": llm_block}
+    return {"embedding": emb_block}
 
 
 @router.delete("/projects/{project_id}")

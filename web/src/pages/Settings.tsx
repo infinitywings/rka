@@ -1,4 +1,5 @@
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -11,7 +12,14 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
-import { Switch } from "@/components/ui/switch"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { useProjectStatus } from "@/hooks/useProject"
 import { useHealth } from "@/hooks/useProject"
 import { useNotes } from "@/hooks/useNotes"
@@ -20,7 +28,13 @@ import { useLiterature } from "@/hooks/useLiterature"
 import { useMissions } from "@/hooks/useMissions"
 import { useCheckpoints } from "@/hooks/useCheckpoints"
 import { useTags } from "@/hooks/useSearch"
-import { useLLMStatus, useUpdateLLMConfig, useCheckLLM, useLLMModels } from "@/hooks/useLLM"
+import { api } from "@/api/client"
+import type {
+  BackfillStatus,
+  ConnectionTestResult,
+  EmbeddingConfig as EmbeddingConfigT,
+  EmbeddingBackendKind,
+} from "@/api/types"
 import { toast } from "sonner"
 import {
   Settings as SettingsIcon,
@@ -31,9 +45,9 @@ import {
   BookOpen,
   CheckCircle2,
   XCircle,
-  Brain,
-  RefreshCw,
+  Cpu,
   Loader2,
+  AlertTriangle,
 } from "lucide-react"
 
 export default function Settings() {
@@ -145,8 +159,8 @@ export default function Settings() {
         </CardContent>
       </Card>
 
-      {/* LLM Configuration — full width, prominent */}
-      <LLMConfigCard />
+      {/* Embeddings Configuration — full width, prominent (Mission D / v2.4.0) */}
+      <EmbeddingsConfigCard />
 
       <div className="grid gap-4 md:grid-cols-2">
         {/* API Health */}
@@ -354,254 +368,381 @@ export default function Settings() {
   )
 }
 
-// ── LLM Configuration Card ─────────────────────────────────────────────────
+// ── Embeddings Configuration Card (Mission D / v2.4.0) ─────────────────────
 
-function LLMConfigCard() {
-  const { data: llm, isLoading } = useLLMStatus()
-  const { data: availableModels, refetch: refetchModels } = useLLMModels()
-  const updateMutation = useUpdateLLMConfig()
-  const checkMutation = useCheckLLM()
+const POLL_INTERVAL_MS = 1500
 
-  const [editModel, setEditModel] = useState("")
-  const [editApiBase, setEditApiBase] = useState("")
-  const [editApiKey, setEditApiKey] = useState("")
-  const [dirty, setDirty] = useState(false)
+function EmbeddingsConfigCard() {
+  const queryClient = useQueryClient()
 
-  // Initialize form from server data
-  const initForm = () => {
-    if (llm) {
-      setEditModel(llm.model)
-      setEditApiBase(llm.api_base ?? "")
-      setEditApiKey("")
-      setDirty(false)
+  // Load the current config. 422 surfaces as a thrown error carrying
+  // {error, detail, hint} per the Affordance-G mapping.
+  const { data: config, isLoading, error: loadError } = useQuery({
+    queryKey: ["embedding-config"],
+    queryFn: () => api.getEmbeddingConfig(),
+    retry: false,
+  })
+
+  const testMutation = useMutation({
+    mutationFn: (payload: EmbeddingConfigT) => api.testEmbeddingConfig(payload),
+  })
+
+  const saveMutation = useMutation({
+    mutationFn: (payload: EmbeddingConfigT) => api.updateEmbeddingConfig(payload),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["embedding-config"] })
+      const jobId = (data as { job_id?: string }).job_id
+      if (jobId) {
+        toast.success(`Re-embed started (job ${jobId})`)
+        setActiveJobId(jobId)
+      } else {
+        toast.success("Config saved (no re-embed needed — only api_key changed)")
+      }
+      setConfirmOpen(false)
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "save failed")
+    },
+  })
+
+  // Local form state — initialized from server config on first load.
+  const [backend, setBackend] = useState<EmbeddingBackendKind>("fastembed")
+  const [baseUrl, setBaseUrl] = useState("")
+  const [model, setModel] = useState("")
+  const [modelName, setModelName] = useState("nomic-ai/nomic-embed-text-v1.5")
+  const [apiKey, setApiKey] = useState("")
+  const [dim, setDim] = useState("768")
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [activeJobId, setActiveJobId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!config) return
+    setBackend(config.backend)
+    const sub = config.config || {}
+    setBaseUrl(sub.base_url ?? "")
+    setModel(sub.model ?? "")
+    setModelName(sub.model_name ?? "nomic-ai/nomic-embed-text-v1.5")
+    // api_key returns as "***" on GET — start blank so the user types a new
+    // value only when they intend to change it.
+    setApiKey("")
+    setDim(String(sub.dim ?? 768))
+  }, [config])
+
+  // Backfill status polling while a job is active.
+  const { data: backfill } = useQuery({
+    queryKey: ["embedding-backfill", activeJobId],
+    queryFn: () => api.getEmbeddingBackfillStatus(activeJobId ?? undefined),
+    enabled: activeJobId !== null,
+    refetchInterval: (q) => {
+      const last = q.state.data as BackfillStatus | undefined
+      if (!last) return POLL_INTERVAL_MS
+      if (last.state === "complete" || last.state === "failed") return false
+      return POLL_INTERVAL_MS
+    },
+  })
+
+  // Stop polling once the job reaches a terminal state.
+  useEffect(() => {
+    if (backfill && (backfill.state === "complete" || backfill.state === "failed")) {
+      if (backfill.state === "complete") toast.success("Re-embed complete")
+      else toast.error(`Re-embed failed: ${backfill.error ?? "unknown"}`)
+    }
+  }, [backfill?.state])
+
+  const buildPayload = (): EmbeddingConfigT => {
+    if (backend === "fastembed") {
+      return {
+        backend: "fastembed",
+        config: { model_name: modelName, dim: Number(dim) || 768 },
+      }
+    }
+    if (backend === "ollama") {
+      return {
+        backend: "ollama",
+        config: { base_url: baseUrl, model, dim: Number(dim) || 0 },
+      }
+    }
+    return {
+      backend: "openai_compat",
+      config: {
+        base_url: baseUrl,
+        model,
+        api_key: apiKey || undefined,
+        dim: Number(dim) || 0,
+      },
     }
   }
 
-  // Initialize on first load
-  if (llm && !dirty && editModel === "" && editApiBase === "") {
-    setEditModel(llm.model)
-    setEditApiBase(llm.api_base ?? "")
+  const onTest = () => {
+    testMutation.mutate(buildPayload())
   }
 
-  const handleSave = () => {
-    updateMutation.mutate(
-      {
-        enabled: true,
-        model: editModel,
-        api_base: editApiBase || undefined,
-        api_key: editApiKey || undefined,
-      },
-      {
-        onSuccess: (data) => {
-          setDirty(false)
-          refetchModels()
-          if (data.available) {
-            toast.success("LLM connected successfully")
-          } else {
-            toast.error("LLM config saved but connection failed. Check that your LLM server is running.")
-          }
-        },
-        onError: () => toast.error("Failed to update LLM config"),
+  const onSave = () => {
+    // Open confirmation modal first; the modal's primary button kicks
+    // the mutation.
+    setConfirmOpen(true)
+  }
+
+  const onConfirmSave = () => {
+    saveMutation.mutate(buildPayload())
+  }
+
+  const testResult = testMutation.data as ConnectionTestResult | undefined
+
+  // 422 hint surfacing for corrupt config — render the server-provided hint
+  // verbatim per the Brain T2-gate refinement.
+  const loadErrorDetail = useMemo(() => {
+    if (!loadError) return null
+    try {
+      const parsed = JSON.parse((loadError as Error).message)
+      if (parsed && parsed.error === "embedding_config_invalid") {
+        return { detail: parsed.detail as string, hint: parsed.hint as string }
       }
-    )
-  }
-
-  const handleDisable = () => {
-    updateMutation.mutate(
-      { enabled: false },
-      {
-        onSuccess: () => {
-          toast.success("LLM disabled")
-        },
-      }
-    )
-  }
-
-  const handleCheck = () => {
-    checkMutation.mutate(undefined, {
-      onSuccess: (data) => {
-        if (data.available) {
-          toast.success("LLM is reachable")
-        } else {
-          toast.error("LLM is not reachable. Check that your LLM server is running.")
-        }
-      },
-    })
-  }
-
-  if (isLoading) {
-    return (
-      <Card>
-        <CardContent className="pt-6">
-          <div className="h-24 bg-muted rounded animate-pulse" />
-        </CardContent>
-      </Card>
-    )
-  }
-
-  const isAvailable = llm?.enabled && llm?.available
+    } catch {
+      // not JSON; fall through
+    }
+    return { detail: (loadError as Error).message, hint: "" }
+  }, [loadError])
 
   return (
-    <Card className={!isAvailable ? "border-amber-200" : "border-green-200"}>
-      <CardHeader className="pb-3">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-sm font-medium flex items-center gap-2">
-            <Brain className="h-4 w-4" />
-            Local LLM
-          </CardTitle>
-          <div className="flex items-center gap-3">
-            {llm?.enabled && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleCheck}
-                disabled={checkMutation.isPending}
-                className="h-7 text-xs gap-1"
-              >
-                {checkMutation.isPending ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : (
-                  <RefreshCw className="h-3 w-3" />
-                )}
-                Test
-              </Button>
-            )}
-            <Badge
-              variant="outline"
-              className={
-                isAvailable
-                  ? "bg-green-100 text-green-800 border-green-200"
-                  : llm?.enabled
-                  ? "bg-red-100 text-red-800 border-red-200"
-                  : "bg-gray-100 text-gray-600 border-gray-200"
-              }
-            >
-              {isAvailable ? "connected" : llm?.enabled ? "disconnected" : "disabled"}
-            </Badge>
-          </div>
-        </div>
-        {!isAvailable && (
-          <p className="text-xs text-amber-600 mt-1">
-            Q&A, summaries, and smart classification require a local LLM.
-            {!llm?.enabled
-              ? " Enable it below and point to your LM Studio or Ollama server."
-              : " Check that your LLM server is running."}
-          </p>
-        )}
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm font-medium flex items-center gap-2">
+          <Cpu className="h-4 w-4" />
+          Embeddings
+        </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <span className="text-sm font-medium">Enabled</span>
-            <p className="text-[11px] text-muted-foreground">Required for AI-powered features</p>
+        {isLoading && (
+          <div className="text-xs text-muted-foreground flex items-center gap-2">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Loading current config…
           </div>
-          <Switch
-            checked={llm?.enabled ?? false}
-            onCheckedChange={(checked) => {
-              if (checked) {
-                updateMutation.mutate({ enabled: true })
-              } else {
-                handleDisable()
-              }
-            }}
-          />
-        </div>
+        )}
 
-        {llm?.enabled && (
-          <>
-            <Separator />
-            <div className="space-y-3">
-              <div className="space-y-1">
-                <label className="text-xs font-medium">API Base URL</label>
-                <Input
-                  value={editApiBase}
-                  onChange={(e) => { setEditApiBase(e.target.value); setDirty(true) }}
-                  placeholder="http://localhost:1234/v1"
-                  className="text-xs h-8"
-                />
-                <p className="text-[10px] text-muted-foreground">
-                  LM Studio: http://localhost:1234/v1 — Ollama: leave empty
-                </p>
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs font-medium">Model</label>
-                {availableModels && availableModels.length > 0 ? (
-                  <Select
-                    value={editModel}
-                    onValueChange={(v) => { if (v) { setEditModel(v); setDirty(true) } }}
-                  >
-                    <SelectTrigger className="text-xs h-8">
-                      <SelectValue placeholder="Select a model…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {availableModels.map((m) => {
-                        const value = m.id.startsWith("openai/") ? m.id : `openai/${m.id}`
-                        return (
-                          <SelectItem key={m.id} value={value} className="text-xs">
-                            {m.id}
-                          </SelectItem>
-                        )
-                      })}
-                    </SelectContent>
-                  </Select>
-                ) : (
-                  <Input
-                    value={editModel}
-                    onChange={(e) => { setEditModel(e.target.value); setDirty(true) }}
-                    placeholder="openai/qwen3-32b"
-                    className="text-xs h-8"
-                  />
-                )}
-                <p className="text-[10px] text-muted-foreground">
-                  {availableModels && availableModels.length > 0
-                    ? `${availableModels.length} models available from LM Studio`
-                    : "LM Studio: openai/model-name — Ollama: ollama/model:tag"}
-                </p>
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs font-medium">API Key</label>
-                <Input
-                  value={editApiKey}
-                  onChange={(e) => { setEditApiKey(e.target.value); setDirty(true) }}
-                  placeholder={llm?.api_key_set ? "••••••••  (key is set)" : "Not required for local LM Studio / Ollama"}
-                  type="password"
-                  className="text-xs h-8"
-                />
-                <p className="text-[10px] text-muted-foreground">
-                  Only needed for remote APIs (OpenAI, Together, etc.). Leave blank for local LM Studio / Ollama.
-                </p>
-              </div>
-              <Separator />
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-xs font-medium">Thinking Mode</span>
-                  <p className="text-[10px] text-muted-foreground">
-                    Enable chain-of-thought reasoning for better Q&A quality (slower)
-                  </p>
-                </div>
-                <Switch
-                  checked={llm?.think ?? false}
-                  onCheckedChange={(checked) => {
-                    updateMutation.mutate({ think: checked }, {
-                      onSuccess: () => toast.success(checked ? "Thinking mode enabled" : "Thinking mode disabled"),
-                    })
-                  }}
-                />
-              </div>
-              {dirty && (
-                <div className="flex gap-2">
-                  <Button size="sm" onClick={handleSave} disabled={updateMutation.isPending} className="h-7 text-xs">
-                    {updateMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
-                    Save & Connect
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={initForm} className="h-7 text-xs">
-                    Cancel
-                  </Button>
-                </div>
+        {loadErrorDetail && (
+          <div className="rounded-md border border-amber-200 bg-amber-50/50 p-3 flex items-start gap-3">
+            <AlertTriangle className="h-5 w-5 text-amber-500 mt-0.5 shrink-0" />
+            <div className="space-y-1">
+              <p className="text-sm font-medium text-amber-800">
+                Embedding config could not be loaded
+              </p>
+              <p className="text-xs text-amber-700">{loadErrorDetail.detail}</p>
+              {loadErrorDetail.hint && (
+                <p className="text-xs text-amber-600 italic">{loadErrorDetail.hint}</p>
               )}
             </div>
-          </>
+          </div>
         )}
+
+        {/* Backend dropdown */}
+        <div className="space-y-2">
+          <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Backend
+          </label>
+          <Select
+            value={backend}
+            onValueChange={(v) => setBackend(v as EmbeddingBackendKind)}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="fastembed">FastEmbed (local, default)</SelectItem>
+              <SelectItem value="openai_compat">OpenAI-compat HTTP (LM Studio / vLLM / OpenAI)</SelectItem>
+              <SelectItem value="ollama">Ollama (local HTTP)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        {/* Conditional fields per backend */}
+        {backend === "fastembed" && (
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-2">
+              <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Model name
+              </label>
+              <Input
+                value={modelName}
+                onChange={(e) => setModelName(e.target.value)}
+                placeholder="nomic-ai/nomic-embed-text-v1.5"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Dim
+              </label>
+              <Input
+                value={dim}
+                onChange={(e) => setDim(e.target.value)}
+                placeholder="768"
+              />
+            </div>
+          </div>
+        )}
+
+        {(backend === "openai_compat" || backend === "ollama") && (
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Base URL
+              </label>
+              <Input
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                placeholder={
+                  backend === "ollama"
+                    ? "http://host.docker.internal:11434"
+                    : "http://host.docker.internal:1234"
+                }
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Model
+                </label>
+                <Input
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder={
+                    backend === "openai_compat"
+                      ? "text-embedding-qwen3-embedding-8b"
+                      : "nomic-embed-text"
+                  }
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Dim
+                </label>
+                <Input
+                  value={dim}
+                  onChange={(e) => setDim(e.target.value)}
+                  placeholder="4096"
+                />
+              </div>
+            </div>
+            {backend === "openai_compat" && (
+              <div className="space-y-2">
+                <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  API key (optional — LM Studio doesn't require)
+                </label>
+                <Input
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder={config?.config.api_key ? "•••• (already saved; type to replace)" : "(leave blank for unauthenticated)"}
+                />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Test + Save buttons */}
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={onTest}
+            disabled={testMutation.isPending}
+            className="gap-2"
+          >
+            {testMutation.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
+            Test connection
+          </Button>
+          <Button
+            onClick={onSave}
+            disabled={saveMutation.isPending}
+            className="gap-2"
+          >
+            {saveMutation.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
+            Save & re-embed
+          </Button>
+        </div>
+
+        {/* Test result */}
+        {testResult && (
+          <div
+            className={`rounded-md border p-3 text-xs ${
+              testResult.ok
+                ? "border-green-200 bg-green-50/50 text-green-800"
+                : "border-red-200 bg-red-50/50 text-red-800"
+            }`}
+          >
+            <div className="flex items-center gap-2 font-medium">
+              {testResult.ok ? (
+                <CheckCircle2 className="h-3 w-3" />
+              ) : (
+                <XCircle className="h-3 w-3" />
+              )}
+              {testResult.detail}
+            </div>
+            {testResult.ok && testResult.detected_dim !== null && (
+              <p className="mt-1 text-[11px]">
+                detected dim: {testResult.detected_dim}
+                {testResult.latency_ms !== null &&
+                  ` • latency: ${testResult.latency_ms.toFixed(0)} ms`}
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Backfill progress */}
+        {activeJobId && backfill && (
+          <div className="rounded-md border p-3 space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-semibold">Re-embedding claims</span>
+              <Badge variant="outline">{backfill.state}</Badge>
+            </div>
+            <div className="w-full bg-muted rounded h-2 overflow-hidden">
+              <div
+                className="bg-primary h-2 transition-all"
+                style={{
+                  width:
+                    backfill.total && backfill.total > 0
+                      ? `${Math.min(100, ((backfill.processed ?? 0) / backfill.total) * 100)}%`
+                      : "0%",
+                }}
+              />
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              {backfill.processed ?? 0} / {backfill.total ?? 0} claims •{" "}
+              {Math.round(backfill.elapsed_seconds ?? 0)}s elapsed
+            </p>
+            {backfill.state === "failed" && backfill.error && (
+              <p className="text-[11px] text-red-700">{backfill.error}</p>
+            )}
+          </div>
+        )}
+
+        {/* Confirmation modal */}
+        <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Re-embed all claims?</DialogTitle>
+              <DialogDescription>
+                Saving this config will drop existing embeddings and re-embed
+                every claim under the new backend. With qwen3-8b on LM Studio
+                this takes ~7–14 minutes for 827 claims. FTS continues to work
+                during the re-embed; semantic search is degraded until it
+                completes.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setConfirmOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={onConfirmSave}
+                disabled={saveMutation.isPending}
+                className="gap-2"
+              >
+                {saveMutation.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
+                Re-embed claims
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </CardContent>
     </Card>
   )
