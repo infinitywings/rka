@@ -3,6 +3,91 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [2.5.0] — 2026-05-15 (main branch; distinct from `v2.5.0+desktop` on release/desktop)
+
+**Release line note.** Per the hub-and-spoke architecture decision
+`dec_01KRPAVSTJ4H80VXJVN6DQ82WQ`, this v2.5.0 release on `main`
+is independent of `v2.5.0-desktop` on `release/desktop`. Main carries
+core RKA features; release/desktop carries macOS .app distribution.
+Eval-v2's composed-context coverage harness is core infrastructure, so
+it lands on main and bumps main's minor.
+
+### Added
+
+- **Eval-v2 composed-context coverage harness** at `eval-harness/v2/`,
+  extending (not replacing) the May 14 single-endpoint `rka_search`
+  eval (`mis_01KRKJ9G20EM5XMA147JTKQCFF`).
+  - **Corpus schema** (`eval-harness/v2/schema.md` +
+    `eval-harness/v2/schema.json`) with JSON Schema Draft 2020-12
+    validation. Each scenario carries: `scenario_id`, `actor`
+    (brain | executor), `trigger`, `tools_invoked`, `expected_entities`
+    with `importance` tags (critical | useful | nice-to-have), optional
+    `context_length_budget_estimate` + `notes`.
+  - **Schema validator** (`schema_validator.py`) with two runtime rules
+    JSON Schema can't express cleanly: critical-floor ≥3 per scenario,
+    and entity_id/entity_type prefix consistency.
+  - **Corpus of 16 scenarios** (`corpus/scenarios.jsonl`) spanning 6
+    pattern types: Brain session-start (4), Brain mission-creation (2),
+    Brain contradiction-investigation (2), Brain paper-scaffold-assembly
+    (2), Executor mission-pickup (3), Executor backbrief-gate (3).
+    All entity IDs anchored to real rka_development entities.
+  - **Runner** (`runner.py`) — REST-direct execution of the composed
+    call sequence per scenario (11 distinct MCP tools mapped), entity-ID
+    extraction via depth-first walker, anchor-entity logic for
+    multi_hop / ego_graph / assemble_evidence, defensive JSON parsing
+    for non-existent endpoints' SPA fallbacks, sister-uncertainty
+    probing with checkpoint-on-divergence per Brain T2-gate ratification.
+  - **Metrics** (`metrics.py`) — 5 per-scenario metrics (recall over
+    critical-only, expanded_recall, NDCG-style ordering_score, breadth,
+    efficiency) + per-corpus aggregation + per-actor breakdown +
+    per-tool critical-coverage breakdown + reproducibility provenance
+    (corpus SHA + rka HEAD + timestamp).
+  - **36 unit + integration tests** (13 T1 schema + 6 T3 runner +
+    17 T4 metrics) all passing.
+  - **Live run results** in `results/raw/<scenario_id>.jsonl` +
+    `results/metrics.json`:
+    - mean_recall (critical) = 0.958 — PASSES 0.85 floor
+    - mean_expanded_recall = 0.887
+    - mean_ordering_score = 0.251 (low — critical entities buried mid-bundle)
+    - mean_breadth = 3.25 of 5 entity types
+    - mean_efficiency = 0.037 (very low — bundles 96% noise)
+  - **Brain narrative report** at `eval-harness/v2/report.md` with 5
+    headline findings + 4 decision-slate hooks for Phase 3 (bug fix
+    on rka_multi_hop_retrieval 422, importance-weight tuning, cluster→
+    parent-RQ pathway, bundle-narrowing policy).
+
+### Surfaced bugs (next-mission candidates)
+
+- `rka_multi_hop_retrieval` returns **422 Unprocessable Content** on
+  every invocation during the live run — likely a request-body schema
+  drift between MCP-tool docs and the `/api/graph/multi-hop` REST
+  endpoint. Logged at `eval-harness/v2/results/raw/*.jsonl` and
+  surfaced as Phase-3 decision-slate hook D1 in
+  `eval-harness/v2/report.md`.
+
+### Mission reference
+
+- Mission: `mis_01KRPF3DERZS2W5VFDYE9E9GKM`
+- Motivating decision: `dec_01KRPF09AP1FE1CRR6YQBY2R5F`
+- Mid-mission gate ratification (Option B + S6 critical promotion):
+  PI greenlight 2026-05-15
+- Procedural-recurrence calibration: `jrn_01KRPGY39DJA2K9KV20XD733GK`
+- Working branch: `feat/eval-v2-composed-context`
+  (merged to main at this release via --no-ff)
+- Test suite at release: 36 in `eval-harness/v2/tests/` + the prior
+  v2.4.1 baseline
+
+### Bookkeeper invariant
+
+`git diff main -- rka/services/worker.py = 0 lines` held across every
+commit on the eval-v2 branch (verified at T1 ca61cbe, T2 ea4d32c,
+T2.1 8bde65f, T3 4ce5f09, T4 9043374, T5 fbcdbdb, T6 ec25052,
+T7 release commit). The mission's measurement-only constraint
+held too: `git diff main -- rka/` = 0 lines (Eval-v2 added no
+source-code changes to RKA proper).
+
+---
+
 ## [2.4.1] — 2026-05-15
 
 ### Fixed
