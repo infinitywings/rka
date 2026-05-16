@@ -361,12 +361,20 @@ class EvalV2Runner:
         self, anchor: str | None, scenario: dict
     ) -> ToolInvocation:
         path = "/api/graph/multi-hop"
-        body: dict[str, Any] = {"max_depth": 2}
+        # v2.5.1: route schema is `{query: Optional[str], seeds: Optional[list[str]]}`
+        # (rka/api/routes/graph.py:MultiHopRequest). Always populate `query`
+        # from the scenario trigger so the search-based seeding path is
+        # exercised when no anchor is present; ALSO pass `seeds=[anchor]`
+        # (note: list, not the v2.4-era singular `start_entity`) when the
+        # scenario provides one. Both-populated is accepted — the service
+        # layer's seeds-set branch bypasses the search step entirely
+        # (rka/services/graph.py:multi_hop_retrieval).
+        body: dict[str, Any] = {
+            "max_depth": 2,
+            "query": scenario.get("trigger", "")[:200],
+        }
         if anchor:
-            body["start_entity"] = anchor
-        else:
-            # Fall back to the scenario trigger as a search query.
-            body["query"] = scenario.get("trigger", "")[:200]
+            body["seeds"] = [anchor]
         r = await self._client().post(path, json=body, params=self._params())
         # Sister-uncertainty probe: any non-2xx is a divergence per T2 gate.
         divergence = None
