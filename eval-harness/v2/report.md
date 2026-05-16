@@ -228,3 +228,95 @@ Efficiency dipping by 0.0005 is the expected reflex of multi-hop now populating 
 - **metrics command**: `python eval-harness/v2/metrics.py --raw-dir eval-harness/v2/results/raw_v2.5.1 --output eval-harness/v2/results/metrics_v2.5.1.json`
 
 D2/D3/D4 remain candidates for Phase 3 missions; their findings carry forward unchanged from the v2.5.0 baseline section above.
+
+---
+
+## v2.5.2 addendum — D3 closed (Mission v2.5.2-D3)
+
+**Mission**: `mis_01KRS1D8C0E2FP52D0P6JNB3SX`
+**Fix-shape decision**: `dec_01KRS1ADPD4W6AW2X54MKVXMCR`
+**Sequencing decision**: `dec_01KRRM5WKSSX7C3ZXZME0BMVQ9`
+**Date**: 2026-05-16
+**Container**: rebuilt from `feat/v2.5.2-cluster-parent-rq` HEAD (commits 4ccd168 + ba9dd8e + 597f1b0 + cc8a1ca + e2db9b7)
+
+### Root cause (Brain 2026-05-16 code-trace)
+
+Finding 3 (S7 + S9 cluster-anchored 0.67 recall in v2.5.0/v2.5.1) was caused by a missing edge type, not a centrality-weighting miscalibration. Empirical evidence: `evidence_clusters.research_question_id` is a FOREIGN KEY column populated for 101/101 clusters across all 9 projects, but `GraphService.multi_hop_retrieval` and `GraphService.get_ego_graph` only walk `entity_links` + `claim_edges`. The FK column was invisible to traversal — every cluster anchor missed its parent RQ.
+
+### Fix shape (v2.5.2)
+
+1. **Migration 023** (`rka/db/migrations/023_cluster_answers_links.sql`):
+   - Extends the `entity_links.link_type` CHECK enum (from migration 021) to include `'answers'`. Uses migration 021's documented table-swap pattern (rename → CREATE new CHECK → INSERT SELECT → DROP old → recreate indexes).
+   - Backfills one row per `evidence_clusters` with non-null FK: `source=cluster`, `target=decision`, `link_type='answers'`, `link_weight=1.0`. INSERT OR IGNORE against the project-scoped UNIQUE triple from migration 020 → idempotent on re-runs.
+2. **DEFAULT_EDGE_WEIGHTS['answers'] = 1.0** in `rka/services/graph.py` (high-signal tier alongside `justified_by` / `motivated` / `evidence_for` / `derived_from`).
+3. **ClusterService hook** in `rka/services/clusters.py` — `.create` and `.update` write the `answers` link via `BaseService.add_link(...)` whenever a non-null `research_question_id` is set. INSERT OR IGNORE semantics keep parity going forward without re-running migrations.
+
+### Headline impact — per-scenario critical recall
+
+| Scenario | Anchor | v2.5.0 / v2.5.1 | v2.5.2 | Δ |
+|---|---|---|---|---|
+| S7 `brain-contradiction-staleness-vs-validation` | cluster `ecl_01KP4PK7VPN8YFR50PSFXPGTQ0` | 0.667 | **1.000** | +0.333 |
+| S9 `brain-paper-scaffold-session-start-section` | cluster `ecl_01KP4PJGJKE9Q7X1W2X6SJJVZ3` | 0.667 | **1.000** | +0.333 |
+| Other 14 scenarios | — | 1.000 | 1.000 | +0.000 |
+
+**Every scenario in the 16-scenario corpus now scores critical-recall = 1.0**, so aggregate `mean_recall (critical)` is **1.000** flat.
+
+### Headline impact — per-tool critical coverage
+
+The directly-affected tools:
+
+| Tool | v2.5.0 | v2.5.1 | v2.5.2 | Δ(.1→.2) |
+|---|---|---|---|---|
+| `rka_get_ego_graph` | 0.333 | 0.333 | **0.778** | **+0.444** |
+| `rka_multi_hop_retrieval` | 0.000 | 0.683 | **0.817** | +0.133 |
+
+ego_graph moved well past the spec target (≥0.5). multi_hop's bonus comes from the new edges populating BFS-expand neighborhoods.
+
+### Aggregate impact
+
+| Metric | v2.5.0 | v2.5.1 | v2.5.2 | Δ(.1→.2) |
+|---|---|---|---|---|
+| mean_recall (critical) | 0.9583 | 0.9583 | **1.0000** | **+0.0417** |
+| mean_expanded_recall | 0.8875 | 0.8875 | 0.9375 | +0.0500 |
+| mean_ordering_score | 0.2510 | 0.2533 | 0.2628 | +0.0096 |
+| mean_breadth | 3.25 | 3.25 | 3.25 | +0.0000 |
+| mean_efficiency | 0.0368 | 0.0362 | 0.0372 | +0.0010 |
+
+`mean_efficiency` ticked back up (+0.0010 from v2.5.1) because the new edges add directly-relevant entities to the bundle rather than tangential ones — the ordering also nudged.
+
+### Production data — migration 023 row count
+
+Verified live against `/data/rka.db` post-rebuild:
+
+| Project | `entity_links WHERE link_type='answers'` count |
+|---|---|
+| `prj_01KKQM9JFG67GT5FGWTAHD9YE4` (Eval-v2 project) | **16** |
+| `prj_01KMJQZXPZW0VZV5483QEJPNRN` | 28 |
+| `prj_01KMJTPHW2KR7JR9SP3GRB9210` | 11 |
+| `prj_01KMKREC3JKSJVPYR6KHEKWVN7` | 18 |
+| `prj_01KN51HD73DSY9ZR9C56JYRNYZ` | 7 |
+| `prj_01KP4D83G1F0TN209J258RZ0D6` | 6 |
+| `prj_01KPB91SAX28Z2KFE5EHPSGR01` | 6 |
+| `prj_01KPVB7NHJ0N33C024TD0E6CZ6` | 5 |
+| `proj_default` | 4 |
+| **Total** | **101** |
+
+Invariant verified: total equals `evidence_clusters WHERE research_question_id IS NOT NULL` count (101). The other 8 projects (85 clusters total) get the same fix collaterally — relevant if any of them are added to the Eval-v2 corpus later.
+
+### Reproducibility — v2.5.2 run
+
+- **rka_head**: e2db9b7 (`feat/v2.5.2-cluster-parent-rq` pre-merge)
+- **corpus_hash**: `sha256:b6b586d71d940f6bb430f90dd2fe6cb68501fdd7f1095a9ff68b5f72bb7f9e16` (unchanged from v2.5.0 — same 16 scenarios)
+- **raw bundles**: `eval-harness/v2/results/raw_v2.5.2/`
+- **metrics**: `eval-harness/v2/results/metrics_v2.5.2.json`
+- **baselines preserved**: v2.5.0 at `results/raw/` + `metrics.json`; v2.5.1 at `results/raw_v2.5.1/` + `metrics_v2.5.1.json`
+- **runner command**: `python eval-harness/v2/runner.py --output-dir eval-harness/v2/results/raw_v2.5.2`
+- **metrics command**: `python eval-harness/v2/metrics.py --raw-dir eval-harness/v2/results/raw_v2.5.2 --output eval-harness/v2/results/metrics_v2.5.2.json`
+
+### Phase 3 status
+
+D1 (v2.5.1) + D3 (v2.5.2) closed. Remaining Phase-3 hooks unchanged:
+- **D2** — importance-weight / centrality / recency-boost coefficient sweep (Finding 1)
+- **D4** — bundle-narrowing vs corpus-expansion under 0.037 efficiency (Finding 2)
+
+Note that the aggregate `mean_recall (critical) = 1.000` "ceiling" outcome means D2/D4 work shifts the success signal: recall is no longer the place to look for improvement. `mean_ordering_score` (0.263) and `mean_efficiency` (0.037) are now the headline gaps. Either next mission may want to consider re-grading the corpus for harder critical-recall cases (separate decision; out of v2.5.2 scope).

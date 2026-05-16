@@ -3,6 +3,107 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [2.5.2] — 2026-05-16 (patch release; cluster → parent-RQ traversal)
+
+**Mission**: `mis_01KRS1D8C0E2FP52D0P6JNB3SX`
+**Fix-shape decision**: `dec_01KRS1ADPD4W6AW2X54MKVXMCR`
+**Sequencing decision**: `dec_01KRRM5WKSSX7C3ZXZME0BMVQ9` (D3 ratified after D1 closed at v2.5.1)
+**Surfaced by**: Eval-v2 Finding 3 (S7 + S9 cluster-anchored scenarios stuck at 0.67 critical-recall across v2.5.0 + v2.5.1 baselines).
+
+### Root cause
+
+`evidence_clusters.research_question_id` is a FOREIGN KEY column populated for 101/101 clusters across all 9 projects, but `GraphService.multi_hop_retrieval` and `GraphService.get_ego_graph` only walk `entity_links` + `claim_edges`. The FK column was invisible to graph traversal — every cluster anchor missed its parent research-question. Not a weight-tuning problem (the original hypothesis); a missing-edge-type problem.
+
+### Added
+
+- **New `entity_links.link_type` value: `'answers'`** (cluster → parent-RQ direction).
+  Active-tier entry; rejects unknowns via the CHECK constraint same as the
+  other 11 link types.
+- **Migration 023** (`rka/db/migrations/023_cluster_answers_links.sql`):
+  - Extends the CHECK enum (from migration 021) to include `'answers'`.
+    Uses migration 021's documented table-swap pattern.
+  - Backfills one entity_link per `evidence_clusters` row with a non-null
+    `research_question_id` — `link_type='answers'`, `source=cluster`,
+    `target=decision`, `link_weight=1.0`, `link_reason='backfill from
+    evidence_clusters.research_question_id FK (migration 023)'`.
+    Idempotent via INSERT OR IGNORE against the project-scoped UNIQUE
+    triple from migration 020.
+  - Production row count post-migration: **101 entity_links** across 9
+    projects (16 for `prj_01KKQM9JFG67GT5FGWTAHD9YE4`, the Eval-v2 project).
+- **`DEFAULT_EDGE_WEIGHTS['answers'] = 1.0`** in `rka/services/graph.py`
+  (high-signal tier alongside `justified_by` / `motivated` / `evidence_for` /
+  `derived_from`).
+- **ClusterService hook for parity going forward** in
+  `rka/services/clusters.py` — `.create` and `.update` write the `answers`
+  link via `BaseService.add_link(...)` whenever a non-null
+  `research_question_id` is set. INSERT OR IGNORE semantics keep re-runs
+  safe; no future migration needed for new clusters.
+
+### Fixed
+
+- **Cluster-anchored graph traversal now surfaces the parent
+  research-question.** Both `GraphService.get_ego_graph` and
+  `GraphService.multi_hop_retrieval` walk the new `answers` edges
+  automatically (no graph-layer code changes required beyond the
+  weight-map entry).
+
+### Tests
+
+- **4 migration tests** at `tests/test_db/test_migration_023.py`:
+  CHECK extension accepts `'answers'`; CHECK still rejects unknown
+  link types (additive, not removal); backfill is idempotent across
+  two runs; row count invariant equals cluster count with non-null FK,
+  per-project breakdown propagates `project_id` correctly, orphan
+  null-FK clusters produce no link, provenance columns set as documented.
+- **4 regression tests** at `tests/test_services/test_graph.py`:
+  ego_graph from cluster anchor includes parent RQ (S7 anchor verbatim);
+  multi_hop_retrieval seeds-only cluster traversal returns parent RQ
+  (combined v2.5.1 + v2.5.2 regression-lock); ClusterService.create
+  emits exactly one link when FK set; ClusterService.create emits no
+  link when FK is NULL.
+
+### Eval-v2 impact — live re-run against v2.5.2 container
+
+| Per-scenario critical recall | v2.5.0 / v2.5.1 | v2.5.2 |
+|---|---|---|
+| S7 `brain-contradiction-staleness-vs-validation` | 0.667 | **1.000** |
+| S9 `brain-paper-scaffold-session-start-section`  | 0.667 | **1.000** |
+| Other 14 scenarios | 1.000 | 1.000 |
+
+| Aggregate | v2.5.1 | v2.5.2 | Δ |
+|---|---|---|---|
+| mean_recall (critical) | 0.9583 | **1.0000** | **+0.0417** |
+| mean_expanded_recall | 0.8875 | 0.9375 | +0.0500 |
+| mean_ordering_score | 0.2533 | 0.2628 | +0.0096 |
+| mean_efficiency | 0.0362 | 0.0372 | +0.0010 |
+
+| Per-tool critical-coverage (directly-affected tools) | v2.5.1 | v2.5.2 |
+|---|---|---|
+| `rka_get_ego_graph` | 0.333 | **0.778** (Δ +0.444) |
+| `rka_multi_hop_retrieval` | 0.683 | **0.817** (Δ +0.133) |
+
+**Every scenario in the 16-scenario corpus now scores critical-recall = 1.0.**
+
+Critical-recall floor (0.85) passes flat at the ceiling. v2.5.2 artifacts
+at `eval-harness/v2/results/raw_v2.5.2/` + `metrics_v2.5.2.json`. Baselines
+preserved: v2.5.0 at `results/raw/` + `metrics.json`; v2.5.1 at
+`results/raw_v2.5.1/` + `metrics_v2.5.1.json`. Full before/after analysis
+in `eval-harness/v2/report.md` § "v2.5.2 addendum — D3 closed".
+
+### Release-line scope
+
+Main only — `release/desktop` is independent per the hub-and-spoke
+architecture (`dec_01KRPAVSTJ4H80VXJVN6DQ82WQ`). No cherry-pick attempted.
+
+### Phase-3 hooks remaining
+
+D1 (v2.5.1) + D3 (v2.5.2) both closed. D2 (importance-weight tuning) and
+D4 (bundle-narrowing policy) remain candidate Phase-3 missions; their
+success signal has shifted from `mean_recall` (now at the 1.0 ceiling)
+to `mean_ordering_score` (0.263) and `mean_efficiency` (0.037).
+
+---
+
 ## [2.5.1] — 2026-05-16 (patch release; multi-hop schema relaxation)
 
 **Mission**: `mis_01KRRM8CJP34KTN8KJMZQH2PFP`
