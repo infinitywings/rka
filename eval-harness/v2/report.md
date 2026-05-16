@@ -168,9 +168,63 @@ Per Brain skill rule #9d (caveats mandatory):
 
 Per Brain skill rule #9b: this report does NOT autoship final decisions on importance-weight tuning, bundle-narrowing policy, or cluster→parent-RQ pathway changes. The four named recommendations above are candidates for follow-up Brain `decision_options` slates the PI ratifies separately:
 
-- **(D1)** Bug-fix Mission: `rka_multi_hop_retrieval` 422 (Finding 4)
+- **(D1)** Bug-fix Mission: `rka_multi_hop_retrieval` 422 (Finding 4) — **CLOSED in v2.5.1** (see addendum below)
 - **(D2)** Tuning Mission: importance-weight/centrality/recency-boost coefficient sweep (Finding 1)
 - **(D3)** Pathway Mission: cluster→parent-RQ retrieval (Finding 3)
 - **(D4)** Policy Decision: bundle-narrowing vs corpus-expansion under 0.037 efficiency (Finding 2)
 
 PI ratifies which subset becomes Phase 3 missions. The mission spec's checkpoint trigger fires here: critical recall is comfortably above floor (0.958 vs 0.85), so this is NOT a "corpus too easy + needs harder cases" outcome — it's a "retrieval surfaces critical entities but ordering and efficiency are the next bottleneck" outcome.
+
+---
+
+## v2.5.1 addendum — D1 closed (Mission v2.5.1-D1)
+
+**Mission**: `mis_01KRRM8CJP34KTN8KJMZQH2PFP`
+**Decision**: `dec_01KRRM5WKSSX7C3ZXZME0BMVQ9` (D1 sequencing ratified ahead of D2/D3/D4)
+**Date**: 2026-05-16
+**Container**: rebuilt from `feat/v2.5.1-multi-hop-fix` HEAD (commits 10cae50 + b6b7d06 + 5f786f0)
+
+### What changed
+
+Two-sided fix to the v2.5.0 baseline's `rka_multi_hop_retrieval` 422 wall:
+
+1. **API schema** — [rka/api/routes/graph.py](../../rka/api/routes/graph.py) — `MultiHopRequest.query` relaxed from required `str` to `Optional[str] = None`; route handler returns an Affordance-G structured 422 (`{error, detail, hint}`) when neither `query` nor `seeds` is provided. Seeds-only invocations now accepted, matching what the service layer already supported.
+2. **Runner body** — [eval-harness/v2/runner.py](runner.py) — `_call_multi_hop` now sends `seeds=[anchor]` (a list, not the v2.4-era singular `start_entity` key) and always populates `query` from `scenario.trigger[:200]`, so the schema's neither-set branch is unreachable from runner traffic.
+
+### Headline impact — per-tool critical coverage
+
+`per_tool_mean_critical_coverage[rka_multi_hop_retrieval]` is the directly-affected metric:
+
+| Run | rka_multi_hop_retrieval | divergences across 16 bundles |
+|---|---|---|
+| v2.5.0 baseline | **0.0000** (every call 422 → empty response) | 16 (one per scenario, all multi-hop) |
+| v2.5.1 | **0.6833** | 0 multi-hop divergences (2 unrelated scaffold ones unchanged) |
+
+Δ = **+0.6833** absolute. Other 10 tools were already 2xx in the baseline; their critical-coverage is identical between runs.
+
+### Aggregate impact
+
+Aggregate recall doesn't move (multi_hop was contributing zero entities; the other 10 tools already cleared the 0.85 floor). The one aggregate that nudges is `mean_ordering_score`, since multi-hop now adds critical IDs into the discovery-order combined ranking:
+
+| Metric | v2.5.0 | v2.5.1 | Δ |
+|---|---|---|---|
+| mean_recall (critical) | 0.9583 | 0.9583 | +0.0000 |
+| mean_expanded_recall | 0.8875 | 0.8875 | +0.0000 |
+| mean_ordering_score | 0.2510 | 0.2533 | **+0.0022** |
+| mean_breadth | 3.25 | 3.25 | +0.0000 |
+| mean_efficiency | 0.0368 | 0.0362 | -0.0005 |
+
+Efficiency dipping by 0.0005 is the expected reflex of multi-hop now populating the bundle with non-critical neighbors as well — the BFS-expand is doing what it should. Critical-recall floor still **PASSES** at 0.85.
+
+### Reproducibility — v2.5.1 run
+
+- **rka_head**: `b6b7d063f4d3` (from `feat/v2.5.1-multi-hop-fix`; merged to main as v2.5.1)
+- **corpus_hash**: `sha256:b6b586d71d940f6bb430f90dd2fe6cb68501fdd7f1095a9ff68b5f72bb7f9e16` (unchanged from v2.5.0 — same 16 scenarios)
+- **timestamp**: 2026-05-16T15:09:48Z
+- **raw bundles**: `eval-harness/v2/results/raw_v2.5.1/`
+- **metrics**: `eval-harness/v2/results/metrics_v2.5.1.json`
+- **baseline preserved**: `eval-harness/v2/results/raw/` + `metrics.json` (v2.5.0)
+- **runner command**: `python eval-harness/v2/runner.py --output-dir eval-harness/v2/results/raw_v2.5.1`
+- **metrics command**: `python eval-harness/v2/metrics.py --raw-dir eval-harness/v2/results/raw_v2.5.1 --output eval-harness/v2/results/metrics_v2.5.1.json`
+
+D2/D3/D4 remain candidates for Phase 3 missions; their findings carry forward unchanged from the v2.5.0 baseline section above.
