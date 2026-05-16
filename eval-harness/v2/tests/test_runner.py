@@ -356,3 +356,51 @@ def test_walker_extracts_entity_ids_in_discovery_order():
 def test_walker_ignores_strings_without_entity_prefix():
     out = walk_for_entity_ids({"a": "no entities here", "b": ["nor here"]})
     assert out == []
+
+
+# ---------------------------------------------------------------------------
+# v2.5.1 — _call_multi_hop body-shape regression
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_call_multi_hop_body_matches_v2_5_1_schema():
+    """The runner MUST send a body that matches the v2.5.1
+    MultiHopRequest schema in rka/api/routes/graph.py:
+
+      - `seeds` is a list[str] (NOT the v2.4-era singular `start_entity`)
+      - `query` is always present (so the schema's "neither query nor
+        seeds" branch never fires, even on seeds-only invocations)
+
+    Pre-fix bug: runner sent ``{"start_entity": "...", "max_depth": 2}``
+    which the schema rejected with FastAPI's default per-field 422, the
+    surfacing finding in jrn_01KRPGY39DJA2K9KV20XD733GK.
+    """
+    captured: dict[str, dict] = {}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/graph/multi-hop":
+            captured["body"] = json.loads(request.content.decode("utf-8"))
+            return httpx.Response(200, json={"entities": []})
+        return httpx.Response(404, json={"detail": "no fixture"})
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(_handler), base_url="http://test"
+    )
+    r = EvalV2Runner(rka_url="http://test", project_id="prj_test", http_client=client)
+
+    scenario = {"trigger": "investigate the v2.5.1 schema fix for multi-hop"}
+    await r._call_multi_hop("dec_01ABC0000000000000000000", scenario)
+
+    body = captured["body"]
+    # `seeds` is a LIST of strings — not the v2.4-era `start_entity` singular.
+    assert "start_entity" not in body, (
+        f"runner sent legacy `start_entity` key — schema drift not fixed: {body}"
+    )
+    assert body.get("seeds") == ["dec_01ABC0000000000000000000"], (
+        f"seeds must be [anchor] for anchored invocations; got {body!r}"
+    )
+    # `query` is always populated (even when seeds present), so the route
+    # schema's neither-set 422 branch never fires.
+    assert body.get("query"), f"query must always be populated; got {body!r}"
+    assert "v2.5.1" in body["query"]  # populated from scenario.trigger

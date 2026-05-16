@@ -3,6 +3,84 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [2.5.1] — 2026-05-16 (patch release; multi-hop schema relaxation)
+
+**Mission**: `mis_01KRRM8CJP34KTN8KJMZQH2PFP`
+**Motivating decision**: `dec_01KRRM5WKSSX7C3ZXZME0BMVQ9` (D1 sequencing from Eval-v2 report)
+**Surfaced by**: Eval-v2's v2.5.0 live run (Finding 4 in `eval-harness/v2/report.md`,
+journal `jrn_01KRPGY39DJA2K9KV20XD733GK`) — every `rka_multi_hop_retrieval`
+invocation in the 16-scenario corpus returned 422.
+
+### Fixed
+
+- **`POST /api/graph/multi-hop` now accepts seeds-only invocations.**
+  `MultiHopRequest.query` was a required `str` (no default), so any
+  body that only carried `seeds` was rejected by FastAPI's schema
+  validator with the default per-field-error 422 — even though the
+  service layer (`rka/services/graph.py:multi_hop_retrieval`) has
+  always had an explicit seeds-set branch that bypasses search.
+  ([rka/api/routes/graph.py](rka/api/routes/graph.py))
+- **422 body shape on neither-set requests is now the Affordance-G
+  structured object** (`{error, detail, hint}`) instead of FastAPI's
+  per-field-error array. Mirrors the Mission B precedent at
+  `rka/api/routes/config.py:_422`. The `hint` field is a fully-rendered
+  example so callers see actionable guidance instead of needing the
+  schema docs.
+- **Eval-v2 runner sends a v2.5.1-compliant body.** `_call_multi_hop`
+  now sends `seeds=[anchor]` (a list, not the v2.4-era singular
+  `start_entity` key that the schema never recognized) and always
+  populates `query` from `scenario.trigger[:200]`.
+  ([eval-harness/v2/runner.py](eval-harness/v2/runner.py))
+
+### Behavior preserved (regression-locked)
+
+- **Query-only invocations** still succeed (search-based seeding path).
+- **Both `query` + `seeds` provided** still succeed; the service uses
+  explicit seeds and bypasses the search step.
+- **MCP wrapper** (`rka_multi_hop_retrieval` in `rka/mcp/server.py`)
+  always sends `query`, so no MCP-side change is required.
+
+### Tests
+
+- 4 new regression tests at `tests/test_api/test_graph_route.py` —
+  seeds-only / query-only / neither (422 + Affordance-G shape) / both
+  combined.
+- 1 new test at `eval-harness/v2/tests/test_runner.py` —
+  `test_call_multi_hop_body_matches_v2_5_1_schema` asserting body
+  shape against the schema (no `start_entity` legacy key; `seeds` is
+  a list; `query` always populated).
+
+### Eval-v2 impact (live re-run against v2.5.1 container)
+
+- **`per_tool_mean_critical_coverage[rka_multi_hop_retrieval]`**
+  moved **0.000 → 0.683** (Δ +0.683).
+- Zero `rka_multi_hop_retrieval` divergences across the 16-scenario
+  corpus (was 16 — one per scenario).
+- Aggregate `mean_ordering_score` nudged **+0.0022** from the newly-
+  populated multi-hop contribution to the combined ranking.
+- Critical-recall floor (0.85) still PASSES at 0.958.
+- v2.5.1 artifacts: `eval-harness/v2/results/raw_v2.5.1/` +
+  `metrics_v2.5.1.json`. v2.5.0 baseline preserved at
+  `results/raw/` + `metrics.json`.
+- Full before/after analysis in `eval-harness/v2/report.md` § "v2.5.1
+  addendum — D1 closed".
+
+### Release-line scope
+
+This patch lands on **main only**. The `release/desktop` line is
+independent per the hub-and-spoke architecture
+(`dec_01KRPAVSTJ4H80VXJVN6DQ82WQ`); a future cherry-pick to
+`v2.5.0-desktop` is up to the desktop release cadence and is not part
+of this mission.
+
+### Phase-3 hooks (D2/D3/D4) unchanged
+
+D1 was the well-scoped first slice. D2 (importance-weight tuning),
+D3 (cluster→parent-RQ pathway), and D4 (bundle-narrowing policy) remain
+candidate Phase-3 missions, gated on PI ratification.
+
+---
+
 ## [2.5.0] — 2026-05-15 (main branch; distinct from `v2.5.0+desktop` on release/desktop)
 
 **Release line note.** Per the hub-and-spoke architecture decision
