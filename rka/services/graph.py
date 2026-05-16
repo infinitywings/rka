@@ -334,6 +334,7 @@ class GraphService:
     # dec_01KQQRZ0CJHB68P2F6233AHEJ5 (Improvement 2, mis_01KQQS3DYQ2EVJV288PNHX0CMY).
     DEFAULT_EDGE_WEIGHTS: dict[str, float] = {
         # entity_links provenance edges
+        "answers": 1.0,  # Cluster→parent-RQ; backfilled by migration 023 from evidence_clusters.research_question_id FK
         "justified_by": 1.0,
         "motivated": 1.0,
         "evidence_for": 1.0,
