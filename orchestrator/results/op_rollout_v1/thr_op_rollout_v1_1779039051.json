@@ -1,0 +1,24 @@
+{
+  "workflow_thread_id": "thr_op_rollout_v1_1779039051",
+  "mission_id": "mis_01KRVF159FEHMYD55Q6EQ7BD18",
+  "project_id": "prj_01KKQM9JFG67GT5FGWTAHD9YE4",
+  "terminal_state": "complete",
+  "current_phase": "pi_acceptance",
+  "interrupts_count": 2,
+  "checkpoints_count": 1,
+  "errors_count": 0,
+  "final_report_id": null,
+  "artifacts": [
+    {
+      "rka_id": "jrn_01KRVFWXZDY21T5FCMMKQR62TY",
+      "entity_type": "journal",
+      "node_name": "strategy_node"
+    },
+    {
+      "rka_id": "jrn_01KRVFYYAPZX4JG38JB085DPZS",
+      "entity_type": "journal",
+      "node_name": "confirmation_brief"
+    }
+  ],
+  "errors": []
+}
