@@ -1,0 +1,335 @@
+{
+  "provenance": {
+    "corpus_hash": "sha256:b6b586d71d940f6bb430f90dd2fe6cb68501fdd7f1095a9ff68b5f72bb7f9e16",
+    "rka_head": "775958db1ca5",
+    "timestamp": "2026-05-17T00:51:15Z",
+    "eval_version": "v2",
+    "skill_rule": "8a"
+  },
+  "n_scenarios_corpus": 16,
+  "n_scenarios_scored": 16,
+  "missing_bundles": [],
+  "aggregate": {
+    "n_scenarios": 16,
+    "mean_recall": 0.9583333333333334,
+    "mean_expanded_recall": 0.875,
+    "mean_ordering_score": 0.2776558673025913,
+    "mean_breadth": 3.0,
+    "mean_efficiency": 0.035240677029858704,
+    "per_actor": {
+      "executor": {
+        "n_scenarios": 6,
+        "mean_recall": 0.9444444444444445,
+        "mean_expanded_recall": 0.8333333333333334,
+        "mean_ordering_score": 0.23382703808969274,
+        "mean_breadth": 3.0,
+        "mean_efficiency": 0.022786672435988104
+      },
+      "brain": {
+        "n_scenarios": 10,
+        "mean_recall": 0.9666666666666666,
+        "mean_expanded_recall": 0.9,
+        "mean_ordering_score": 0.3039531648303304,
+        "mean_breadth": 3.0,
+        "mean_efficiency": 0.042713079786181066
+      }
+    },
+    "per_tool_mean_critical_coverage": {
+      "rka_get_context": 0.8666666666666667,
+      "rka_get_status": 0.0,
+      "rka_get_pending_maintenance": 0.0,
+      "rka_get_checkpoints": 0.3333333333333333,
+      "rka_get_review_queue": 0.0,
+      "rka_get_research_map": 0.3333333333333333,
+      "rka_multi_hop_retrieval": 0.8166666666666667,
+      "rka_get_journal": 0.0,
+      "rka_get_ego_graph": 0.7777777777777777,
+      "rka_assemble_evidence": 0.0,
+      "rka_get_mission": 0.8
+    },
+    "critical_recall_floor": 0.85,
+    "floor_passed": true
+  },
+  "per_scenario": [
+    {
+      "scenario_id": "brain-session-start-fresh-resume",
+      "actor": "brain",
+      "recall": 1.0,
+      "expanded_recall": 1.0,
+      "ordering_score": 0.28138739406096824,
+      "breadth": 4,
+      "efficiency": 0.03225806451612903,
+      "per_tool_critical_coverage": {
+        "rka_get_context": 1.0,
+        "rka_get_status": 0.0,
+        "rka_get_pending_maintenance": 0.0,
+        "rka_get_checkpoints": 0.3333333333333333,
+        "rka_get_review_queue": 0.0,
+        "rka_get_research_map": 0.0
+      },
+      "n_expected_critical": 3,
+      "n_expected_total": 6,
+      "n_returned": 186
+    },
+    {
+      "scenario_id": "brain-session-start-multi-mission-state",
+      "actor": "brain",
+      "recall": 1.0,
+      "expanded_recall": 1.0,
+      "ordering_score": 0.2893806254150727,
+      "breadth": 3,
+      "efficiency": 0.03225806451612903,
+      "per_tool_critical_coverage": {
+        "rka_get_context": 1.0,
+        "rka_get_status": 0.0,
+        "rka_get_research_map": 0.0,
+        "rka_get_checkpoints": 0.0
+      },
+      "n_expected_critical": 3,
+      "n_expected_total": 6,
+      "n_returned": 186
+    },
+    {
+      "scenario_id": "brain-session-start-post-release",
+      "actor": "brain",
+      "recall": 1.0,
+      "expanded_recall": 0.8,
+      "ordering_score": 0.2263981811262524,
+      "breadth": 4,
+      "efficiency": 0.024539877300613498,
+      "per_tool_critical_coverage": {
+        "rka_get_context": 1.0,
+        "rka_get_status": 0.0,
+        "rka_get_review_queue": 0.0,
+        "rka_get_pending_maintenance": 0.0
+      },
+      "n_expected_critical": 3,
+      "n_expected_total": 5,
+      "n_returned": 163
+    },
+    {
+      "scenario_id": "brain-session-start-checkpoint-review",
+      "actor": "brain",
+      "recall": 1.0,
+      "expanded_recall": 0.8,
+      "ordering_score": 0.24011398478400497,
+      "breadth": 3,
+      "efficiency": 0.024390243902439025,
+      "per_tool_critical_coverage": {
+        "rka_get_context": 1.0,
+        "rka_get_checkpoints": 0.6666666666666666,
+        "rka_get_status": 0.0
+      },
+      "n_expected_critical": 3,
+      "n_expected_total": 5,
+      "n_returned": 164
+    },
+    {
+      "scenario_id": "brain-mission-creation-from-hub-spoke-decision",
+      "actor": "brain",
+      "recall": 1.0,
+      "expanded_recall": 1.0,
+      "ordering_score": 0.27878111662117183,
+      "breadth": 3,
+      "efficiency": 0.033707865168539325,
+      "per_tool_critical_coverage": {
+        "rka_get_context": 1.0,
+        "rka_multi_hop_retrieval": 1.0,
+        "rka_get_journal": 0.0
+      },
+      "n_expected_critical": 3,
+      "n_expected_total": 6,
+      "n_returned": 178
+    },
+    {
+      "scenario_id": "brain-mission-creation-eval-extension",
+      "actor": "brain",
+      "recall": 1.0,
+      "expanded_recall": 0.8,
+      "ordering_score": 0.240604329847074,
+      "breadth": 3,
+      "efficiency": 0.01990049751243781,
+      "per_tool_critical_coverage": {
+        "rka_get_context": 1.0,
+        "rka_multi_hop_retrieval": 0.75,
+        "rka_get_journal": 0.0
+      },
+      "n_expected_critical": 4,
+      "n_expected_total": 5,
+      "n_returned": 201
+    },
+    {
+      "scenario_id": "brain-contradiction-staleness-vs-validation",
+      "actor": "brain",
+      "recall": 1.0,
+      "expanded_recall": 1.0,
+      "ordering_score": 0.2231776640214982,
+      "breadth": 2,
+      "efficiency": 0.027777777777777776,
+      "per_tool_critical_coverage": {
+        "rka_get_context": 0.3333333333333333,
+        "rka_get_ego_graph": 0.6666666666666666,
+        "rka_multi_hop_retrieval": 1.0
+      },
+      "n_expected_critical": 3,
+      "n_expected_total": 5,
+      "n_returned": 180
+    },
+    {
+      "scenario_id": "brain-contradiction-llm-removed-vs-enrichment-preserved",
+      "actor": "brain",
+      "recall": 0.6666666666666666,
+      "expanded_recall": 0.8,
+      "ordering_score": 0.19528007290507374,
+      "breadth": 3,
+      "efficiency": 0.02040816326530612,
+      "per_tool_critical_coverage": {
+        "rka_get_context": 0.6666666666666666,
+        "rka_multi_hop_retrieval": 0.6666666666666666,
+        "rka_get_journal": 0.0
+      },
+      "n_expected_critical": 3,
+      "n_expected_total": 5,
+      "n_returned": 196
+    },
+    {
+      "scenario_id": "brain-paper-scaffold-session-start-section",
+      "actor": "brain",
+      "recall": 1.0,
+      "expanded_recall": 0.8,
+      "ordering_score": 0.5383449341825097,
+      "breadth": 3,
+      "efficiency": 0.024390243902439025,
+      "per_tool_critical_coverage": {
+        "rka_get_context": 0.3333333333333333,
+        "rka_get_ego_graph": 0.6666666666666666,
+        "rka_assemble_evidence": 0.0
+      },
+      "n_expected_critical": 3,
+      "n_expected_total": 5,
+      "n_returned": 164
+    },
+    {
+      "scenario_id": "brain-paper-scaffold-multi-cluster-rq",
+      "actor": "brain",
+      "recall": 1.0,
+      "expanded_recall": 1.0,
+      "ordering_score": 0.5260633453396784,
+      "breadth": 2,
+      "efficiency": 0.1875,
+      "per_tool_critical_coverage": {
+        "rka_get_research_map": 1.0,
+        "rka_get_ego_graph": 1.0,
+        "rka_assemble_evidence": 0.0
+      },
+      "n_expected_critical": 3,
+      "n_expected_total": 6,
+      "n_returned": 32
+    },
+    {
+      "scenario_id": "executor-mission-pickup-eval-v2",
+      "actor": "executor",
+      "recall": 1.0,
+      "expanded_recall": 1.0,
+      "ordering_score": 0.25450148519807864,
+      "breadth": 3,
+      "efficiency": 0.027624309392265192,
+      "per_tool_critical_coverage": {
+        "rka_get_context": 1.0,
+        "rka_get_status": 0.0,
+        "rka_get_mission": 1.0,
+        "rka_get_journal": 0.0
+      },
+      "n_expected_critical": 3,
+      "n_expected_total": 5,
+      "n_returned": 181
+    },
+    {
+      "scenario_id": "executor-mission-pickup-orchestrator",
+      "actor": "executor",
+      "recall": 1.0,
+      "expanded_recall": 0.8,
+      "ordering_score": 0.26127811576161114,
+      "breadth": 3,
+      "efficiency": 0.0213903743315508,
+      "per_tool_critical_coverage": {
+        "rka_get_context": 1.0,
+        "rka_get_status": 0.0,
+        "rka_get_mission": 0.6666666666666666,
+        "rka_get_journal": 0.0
+      },
+      "n_expected_critical": 3,
+      "n_expected_total": 5,
+      "n_returned": 187
+    },
+    {
+      "scenario_id": "executor-mission-pickup-desktop-v2-5",
+      "actor": "executor",
+      "recall": 1.0,
+      "expanded_recall": 0.8,
+      "ordering_score": 0.216293117334887,
+      "breadth": 3,
+      "efficiency": 0.022099447513812154,
+      "per_tool_critical_coverage": {
+        "rka_get_context": 1.0,
+        "rka_get_status": 0.0,
+        "rka_get_mission": 1.0,
+        "rka_get_journal": 0.0
+      },
+      "n_expected_critical": 3,
+      "n_expected_total": 5,
+      "n_returned": 181
+    },
+    {
+      "scenario_id": "executor-backbrief-eval-v2-t2",
+      "actor": "executor",
+      "recall": 1.0,
+      "expanded_recall": 0.8,
+      "ordering_score": 0.24030654293438589,
+      "breadth": 3,
+      "efficiency": 0.022598870056497175,
+      "per_tool_critical_coverage": {
+        "rka_get_context": 1.0,
+        "rka_get_journal": 0.0,
+        "rka_get_mission": 0.6666666666666666
+      },
+      "n_expected_critical": 3,
+      "n_expected_total": 5,
+      "n_returned": 177
+    },
+    {
+      "scenario_id": "executor-backbrief-mid-mission-pattern-reference",
+      "actor": "executor",
+      "recall": 1.0,
+      "expanded_recall": 0.8,
+      "ordering_score": 0.23137800074454687,
+      "breadth": 3,
+      "efficiency": 0.022598870056497175,
+      "per_tool_critical_coverage": {
+        "rka_get_context": 1.0,
+        "rka_get_journal": 0.0,
+        "rka_get_mission": 0.6666666666666666
+      },
+      "n_expected_critical": 3,
+      "n_expected_total": 5,
+      "n_returned": 177
+    },
+    {
+      "scenario_id": "executor-backbrief-bookkeeper-invariant-check",
+      "actor": "executor",
+      "recall": 0.6666666666666666,
+      "expanded_recall": 0.8,
+      "ordering_score": 0.19920496656464703,
+      "breadth": 3,
+      "efficiency": 0.02040816326530612,
+      "per_tool_critical_coverage": {
+        "rka_get_context": 0.6666666666666666,
+        "rka_multi_hop_retrieval": 0.6666666666666666,
+        "rka_get_journal": 0.0
+      },
+      "n_expected_critical": 3,
+      "n_expected_total": 5,
+      "n_returned": 196
+    }
+  ]
+}
