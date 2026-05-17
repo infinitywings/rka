@@ -298,12 +298,40 @@ class RestMCPClient:
         type: str = "decision",
         related_mission: str | None = None,
     ) -> str:
+        """Submit a checkpoint via POST /api/checkpoints.
+
+        Phase 2.1 (mis_01KRSTZVCTFGF91QZXTYK7ZGDD T2): payload aligned with
+        RKA's current `CheckpointCreate` schema (rka/models/checkpoint.py).
+        Mission C (mis_01KR43RX9KY11GAPTPPGK9XSDE, v2.3.4) added
+        `extra="forbid"` as defense-in-depth; the orchestrator's pre-v2.4
+        field names (`reason`, `related_mission`, `tags`) were rejected,
+        causing the v2.5.3+agentic-rc1 422 cascade.
+
+        Schema-correct mapping:
+          - orchestrator `reason`           → RKA `description` (required)
+          - orchestrator `related_mission`  → RKA `mission_id`   (required)
+          - orchestrator `type`             → RKA `type`         (already aligned)
+          - orchestrator `tags`             → RKA has no `tags` on CheckpointCreate;
+            the workflow_thread_id survives via `context` as a structured prefix
+            (checkpoints are indexed by mission_id, not by tag, so Affordance-F
+            retrieval still works through the mission linkage).
+        """
+        if not related_mission:
+            raise ValueError(
+                "rka_submit_checkpoint requires related_mission (maps to "
+                "CheckpointCreate.mission_id which is required by RKA's schema)."
+            )
+        context = (
+            f"workflow_thread_id: {self.workflow_thread_id}"
+            if self.workflow_thread_id
+            else None
+        )
         body = _drop_none(
             {
-                "reason": reason,
+                "mission_id": related_mission,
                 "type": type,
-                "related_mission": related_mission,
-                "tags": [self.workflow_thread_id] if self.workflow_thread_id else [],
+                "description": reason,
+                "context": context,
             }
         )
         result = self._request("POST", "/api/checkpoints", json=body) or {}

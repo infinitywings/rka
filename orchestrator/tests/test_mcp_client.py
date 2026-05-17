@@ -198,13 +198,66 @@ def test_rka_add_decision_maps_content_to_question_and_rationale():
     assert "Details" in body["rationale"]
 
 
-def test_rka_submit_checkpoint_carries_workflow_tag():
+def test_rka_submit_checkpoint_payload_matches_current_rka_schema():
+    """Phase 2.1 (mis_01KRSTZVCTFGF91QZXTYK7ZGDD T2): the orchestrator's
+    payload must match RKA's CheckpointCreate schema (Mission C v2.3.4
+    added `extra="forbid"`). Pre-fix it sent {reason, related_mission,
+    tags} which were all rejected — the v2.5.3+agentic-rc1 422 cascade.
+    Post-fix it sends {description, mission_id, type, context}.
+    """
     http = FakeHttp(canned=FakeResp(_json={"id": "chk_001"}))
     c = _client(http)
-    out = c.rka_submit_checkpoint("reason text", type="decision")
+    out = c.rka_submit_checkpoint(
+        "reason text",
+        type="decision",
+        related_mission="mis_xyz",
+    )
     assert out == "chk_001"
     body = http.calls[0]["json"]
-    assert "thr_t9" in body["tags"]
+    # Schema-correct keys present:
+    assert body["mission_id"] == "mis_xyz"
+    assert body["description"] == "reason text"
+    assert body["type"] == "decision"
+    # Workflow tag folded into context (CheckpointCreate has no `tags`):
+    assert "thr_t9" in (body.get("context") or "")
+    # Pre-v2.5.3+agentic-rc1 field names MUST NOT appear (extra="forbid"
+    # would reject them):
+    assert "reason" not in body
+    assert "related_mission" not in body
+    assert "tags" not in body
+
+
+def test_rka_submit_checkpoint_requires_related_mission():
+    """`related_mission` maps to RKA's required `mission_id`. Caller-side
+    validation surfaces the missing-arg cleanly rather than letting RKA
+    return a 422."""
+    c = _client()
+    with pytest.raises(ValueError, match="related_mission"):
+        c.rka_submit_checkpoint("reason text", type="decision")
+
+
+def test_rka_submit_checkpoint_surfaces_422_with_structured_detail():
+    """If RKA returns a 422 (Affordance-G body), the CheckpointError must
+    carry the structured detail in `mcp_response` for downstream debugging.
+    Confirms the existing `_request` 422 handling stays wired."""
+    affordance_g_body = {
+        "error": "checkpoint_invalid_payload",
+        "detail": "field `mission_id` is required",
+        "hint": "send {'mission_id': 'mis_...', 'type': '...', 'description': '...'}",
+    }
+    http = FakeHttp(
+        canned=FakeResp(status_code=422, _json=affordance_g_body, content=b"x"),
+    )
+    c = _client(http)
+    with pytest.raises(CheckpointError) as exc_info:
+        c.rka_submit_checkpoint(
+            "reason text", type="decision", related_mission="mis_xyz"
+        )
+    err = exc_info.value
+    assert "422" in str(err)
+    # The body is preserved on .mcp_response for the escalation_router /
+    # debugging to inspect.
+    assert err.mcp_response == affordance_g_body
 
 
 def test_rka_submit_report_requires_mission():
