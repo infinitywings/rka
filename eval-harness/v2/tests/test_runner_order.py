@@ -146,3 +146,73 @@ class TestAnchorAwareToolOrderConstant:
             "rka_multi_hop_retrieval",
             "rka_assemble_evidence",
         )
+
+
+class TestRunSceneriaWiresReorderPolicy:
+    """T4 (mis_01KRSQ4GCRWPSXCWZHGZ2ZR830): lock the runner reorder as
+    the eval-v2 default by asserting `run_scenario` actually invokes
+    the reorder before iterating over tools. A behavioral test on the
+    bundle's recorded invocation order is more robust than asserting
+    on the method's existence — it locks the integration, not just the
+    API surface."""
+
+    @pytest.mark.asyncio
+    async def test_run_scenario_records_invocations_in_reordered_order(self):
+        """Construct a scenario whose corpus tools_invoked puts an
+        anchor-aware tool AFTER get_context; assert the bundle's
+        recorded invocations have the anchor-aware tool BEFORE
+        get_context. This locks the run_scenario → _reorder wiring."""
+        import httpx
+
+        from v2.runner import EvalV2Runner
+
+        # Hand a stub transport that 200s every relevant endpoint.
+        def _handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"entities": []})
+
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(_handler), base_url="http://test"
+        )
+        r = EvalV2Runner(rka_url="http://test", project_id="prj_test", http_client=client)
+
+        scenario = {
+            "scenario_id": "test-lock-reorder-wiring",
+            "actor": "brain",
+            "trigger": "lock-policy-assertion",
+            "tools_invoked": [
+                "rka_get_context",       # corpus position 0
+                "rka_get_ego_graph",     # corpus position 1 — should be pulled to 0
+                "rka_multi_hop_retrieval",  # corpus position 2 — should be pulled to 1
+                "rka_get_status",        # corpus position 3 — should stay after the anchors
+            ],
+            "expected_entities": [
+                {
+                    "entity_id": "dec_TEST_LOCK",
+                    "entity_type": "decision",
+                    "importance": "critical",
+                },
+                {
+                    "entity_id": "dec_TEST_LOCK_2",
+                    "entity_type": "decision",
+                    "importance": "critical",
+                },
+                {
+                    "entity_id": "dec_TEST_LOCK_3",
+                    "entity_type": "decision",
+                    "importance": "critical",
+                },
+            ],
+        }
+        bundle = await r.run_scenario(scenario)
+        invocation_order = [inv.tool for inv in bundle.invocations]
+        assert invocation_order == [
+            "rka_get_ego_graph",
+            "rka_multi_hop_retrieval",
+            "rka_get_context",
+            "rka_get_status",
+        ], (
+            "run_scenario must apply the anchor-aware reorder policy before "
+            "iterating; the bundle's invocation order is the canonical "
+            "evidence the policy is wired in. If this fails, T1's reorder "
+            "exists but isn't being called."
+        )
