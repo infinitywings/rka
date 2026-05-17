@@ -15,6 +15,18 @@ is **CODE-ONLY** per resolved checkpoint `chk_01KRSTFD7203NWAR8MYD91KSFV` (parap
 existing Rule + Why into a new skill-prompt section IS authoring per "no new rules"
 scope rule). PI smoke-test (fresh Claude Code session) is the final acceptance gate.
 
+**FOLDED 2026-05-17 (Python)** — Phase 2.5 mission `mis_01KRVJ240VXH7NQ0PMSHXHK888`
+applied an Option-C refinement on top of the Phase 2.3 fold: 9 *runtime-relevant*
+deltas land as prose in the orchestrator's hardcoded
+`orchestrator/orchestrator/nodes/{brain.py:BRAIN_SYSTEM,executor.py:EXECUTOR_SYSTEM}`
+constants (closes the gap where the Phase 2.3 marketplace-plugin fold doesn't
+reach the orchestrator's local-process Claude SDK system prompts). 7 *architectural*
+deltas are **SKIPPED-PYTHON** because the discipline is already enforced in
+orchestrator source code — each carries a code-path reference so the metadata
+serves as an index of where each architectural pattern lives. Per-delta resolution
+is recorded inline below. Mission spec decision: `dec_01KRVHZ4P3F1GXE75RRAQX3BTP`;
+scope refined at mid-mission gate (`chk_01KRVH890GKYCY9A28TM02STQ1`).
+
 Each addition lists:
 
 - **rule** — the discipline to add
@@ -26,6 +38,8 @@ Each addition lists:
 ## 1. Version-drift re-verification
 
 **FOLDED 2026-05-17** → `skills/executor/SKILL.md` "Backbrief — Confirm Your Plan" (plugin commit `86c3d34`).
+
+**FOLDED 2026-05-17 (Python)** → `orchestrator/orchestrator/nodes/executor.py:EXECUTOR_SYSTEM` "Backbrief — Confirm Your Plan" prose (commit `077c493`). Locked by test `tests/test_executor.py::test_EXECUTOR_SYSTEM_includes_phase_2_5_deltas` (substring `info.version`).
 
 **Rule.** When a Backbrief assumption about a library version is more than 6 months
 old, re-verify against PyPI's current `info.version` before pinning. Document the
@@ -47,6 +61,8 @@ pin where the line has been silent >6 months."*
 
 **FOLDED 2026-05-17** → `skills/brain/SKILL.md` "Gate cadence" (### subsection under Validation Gates; plugin commit `bef32d1`).
 
+**FOLDED 2026-05-17 (Python)** → `orchestrator/orchestrator/nodes/brain.py:BRAIN_SYSTEM` "Gate cadence" prose (commit `170ad57`). Locked by test `tests/test_brain.py::test_BRAIN_SYSTEM_includes_phase_2_5_deltas` (substring `foundation-locking`).
+
 **Rule.** When a mission spans more than ~5 tasks, designate a mid-mission
 Backbrief gate at the task that locks the core foundation (state schema, data
 model, API contract). The Brain re-ratifies before downstream tasks build on it.
@@ -64,6 +80,8 @@ empirical evidence the foundation work surfaced."*
 ## 3. Three-storage discipline
 
 **FOLDED 2026-05-17** → `skills/brain/SKILL.md` "Project workflows" (new ## section; plugin commit `bef32d1`).
+
+**SKIPPED-PYTHON 2026-05-17** — discipline is structurally encoded in orchestrator source: `orchestrator/orchestrator/state.py:138-148` docstring partitions append-only collections from last-write-wins scalars; the `Annotated[list[T], operator.add]` reducers at `state.py:189-193` make workflow-position state physically distinct from RKA domain truth (the LangGraph SqliteSaver writes here; RKA writes never touch this object). Folding paraphrased prose into BRAIN_SYSTEM would duplicate what the type system already enforces.
 
 **Rule.** When building orchestration over RKA, partition state ownership:
 
@@ -89,6 +107,8 @@ land in RKA; workflow-position decisions land in the checkpointer."*
 
 **FOLDED 2026-05-17** → `skills/executor/SKILL.md` "Repo-specific procedures" (bullet; plugin commit `86c3d34`).
 
+**SKIPPED-PYTHON 2026-05-17** — discipline is enforced at the MCP-client boundary: `orchestrator/orchestrator/mcp_client.py:_merge_workflow_tag` (line 124) injects the workflow tag into every `rka_add_note` / `rka_add_decision` / `rka_submit_*` call (callers at `mcp_client.py:256, 288`). Brains can't forget to tag because the wrapper does it unconditionally — system-prompt prose would be redundant.
+
 **Rule.** Every RKA write during a workflow run carries a stable
 `workflow_thread_id` tag. Use it to recover all artifacts a run produced:
 `rka_get_journal(tags=[thread_id])`.
@@ -107,6 +127,8 @@ bypass it, tag manually."*
 ## 5. Append-only reducers vs. last-write-wins scalars
 
 **FOLDED 2026-05-17** → `skills/brain/SKILL.md` "LangGraph workflows" (new ## section; plugin commit `bef32d1`).
+
+**SKIPPED-PYTHON 2026-05-17** — discipline is enforced by the state schema: `orchestrator/orchestrator/state.py:189-193` declares `artifacts`, `interrupts`, `checkpoints`, `errors`, `notifications` with `Annotated[list[T], operator.add]` reducers; everything else in `ResearchWorkflowState` is a plain field with LangGraph's default last-write-wins merge. The schema, not the prompt, prevents merge-strategy mistakes.
 
 **Rule.** In LangGraph state schemas, partition fields:
 
@@ -132,6 +154,8 @@ silently sum every write.
 
 **FOLDED 2026-05-17** → `skills/executor/SKILL.md` "Test method" (new ## section; plugin commit `86c3d34`).
 
+**SKIPPED-PYTHON 2026-05-17** — discipline is structural: `orchestrator/orchestrator/llm_client.py:SDKClient` (line 45) and `orchestrator/orchestrator/mcp_client.py:MCPClient` (line 53) are `typing.Protocol` definitions; node functions take them as parameters. `tests/_fakes.py` (and the per-test `_FakeMCP` doubles) substitute concrete fakes to drive unit tests without real network or subprocess calls. The Protocol surface, not a system-prompt rule, makes substitution mandatory.
+
 **Rule.** Workflow nodes depend on `SDKClient` and `MCPClient` Protocol types
 (typing.Protocol), not on concrete client classes. Tests inject Fake clients
 that satisfy the Protocol; production binding happens in the graph constructor.
@@ -149,6 +173,8 @@ Fake clients honoring the Protocol — no real HTTP, no real LLM."*
 
 **FOLDED 2026-05-17** → `skills/brain/SKILL.md` "Output parsing" (new ## section; plugin commit `bef32d1`).
 
+**FOLDED 2026-05-17 (Python)** → `orchestrator/orchestrator/nodes/brain.py:BRAIN_SYSTEM` "Output parsing" prose (commit `170ad57`). Locked by test `tests/test_brain.py::test_BRAIN_SYSTEM_includes_phase_2_5_deltas` (substring `default to the conservative branch`). Complements the existing structural enforcement at `brain.py:_parse_gate1_verdict` (line 376), which already returns `redirected` for any first line that doesn't match `APPROVED`.
+
 **Rule.** When an LLM response is malformed (verdict not parseable, expected
 key absent), default to the **conservative** outcome — for verdicts, that's
 "redirect", not "approve".
@@ -165,6 +191,8 @@ from your own LLM calls, default to the conservative branch if parsing fails."*
 ## 8. Defensive missing-required-field paths
 
 **FOLDED 2026-05-17** → `skills/executor/SKILL.md` "Guardrails" (bullet; plugin commit `86c3d34`).
+
+**FOLDED 2026-05-17 (Python)** → `orchestrator/orchestrator/nodes/executor.py:EXECUTOR_SYSTEM` "Guardrails" prose (commit `077c493`). Locked by test `tests/test_executor.py::test_EXECUTOR_SYSTEM_includes_phase_2_5_deltas` (substring `ErrorRecord over raising`). Complements the existing structural example at `executor.py:submit_report` (line 193), which appends an `ErrorRecord` and returns rather than raising when `mission_id` is absent.
 
 **Rule.** When a node requires a state field that should be present but might
 not be (mission_id at report submission, executor_backbrief at gate1), record
@@ -184,6 +212,8 @@ escalation path; raising bypasses it."*
 ## 9. Telemetry-zero default
 
 **FOLDED 2026-05-17** → `skills/executor/SKILL.md` "Repo-specific procedures" (bullet; plugin commit `86c3d34`).
+
+**SKIPPED-PYTHON 2026-05-17** — discipline is enforced by `orchestrator/orchestrator/notifications.py:DEFAULT_CHANNELS` (line 41) set to `("bell", "osascript")` — local-only by construction. Webhook channels require explicit opt-in via `notify_pi(channels=...)`; even then, `_is_blocked_webhook` (line 88) intercepts third-party hostnames before any network call. The default channel tuple, not a system-prompt rule, is what keeps autonomous runs telemetry-free.
 
 **Rule.** Outbound notifications use **terminal bell + macOS osascript** only
 by default. Webhook is **opt-in** and gated by an explicit `channels=["webhook"]`
@@ -219,6 +249,8 @@ this in `skills/executor/SKILL.md` whenever adding new outbound channels.
 
 **FOLDED 2026-05-17** → `skills/executor/SKILL.md` "LangGraph wiring" (new ## section; plugin commit `86c3d34`).
 
+**SKIPPED-PYTHON 2026-05-17** — discipline is implemented as a single chokepoint: `orchestrator/orchestrator/graph.py:_bind` (line 93) is the only call site that injects `sdk` + `mcp` (+ optional `interrupt_fn`) into a node callable; every `sg.add_node(...)` at `graph.py:130-159` routes through it. Topology can't drift from the binding convention because there's no alternative path.
+
 **Rule.** When a LangGraph node needs dependencies beyond `state` (sdk, mcp,
 interrupt_fn), bind them via `functools.partial` at graph-construction time so
 the LangGraph engine sees a uniform `(state,)` callable.
@@ -234,6 +266,8 @@ free variables) is brittle. `functools.partial` is the explicit idiom.
 ## 12. Conditional routing on next_node_override
 
 **FOLDED 2026-05-17** → `skills/brain/SKILL.md` "Routing patterns" (new ## section; plugin commit `bef32d1`).
+
+**SKIPPED-PYTHON 2026-05-17** — discipline is structural: `orchestrator/orchestrator/graph.py` defines all routing as pure functions named `_route_after_*` (lines 64 = pi_greenlight, 69 = gate1, 74 = budget_or_consensus, 83 = pi_decision). Each is wired via `sg.add_conditional_edges` at `graph.py:168, 178, 188, 197, 210`; brain nodes never call them. Routing logic is impossible to confuse with strategic logic because they live in physically separate functions.
 
 **Rule.** Utility nodes (budget_check, consensus_check) that need to escalate
 do so by setting `state["next_node_override"] = "escalation_router"`. The
@@ -253,6 +287,8 @@ in the state diff.
 ## 13. NODE_NAMES canonical tuple
 
 **FOLDED 2026-05-17** → `skills/executor/SKILL.md` "T11 audit checks" (new ## section; plugin commit `86c3d34`).
+
+**SKIPPED-PYTHON 2026-05-17** — discipline is encoded as a single source of truth: `orchestrator/orchestrator/graph.py:NODE_NAMES` (line 248) is the canonical tuple; `tests/test_invariants.py::test_audit_symmetry_current_node_writes_match_node_names` asserts every `current_node` write in `nodes/` matches a name in the tuple. Audit symmetry is enforced by test, not by prompt — adding prose to BRAIN_SYSTEM would be redundant.
 
 **Rule.** Maintain a single source of truth for the canonical node names
 (`orchestrator/graph.py:NODE_NAMES`). T11 audit-symmetry asserts:
@@ -274,6 +310,10 @@ a compile-time-style guard.
 
 **FOLDED 2026-05-17** → `skills/brain/SKILL.md` "Status reporting" (new ## section; plugin commit `bef32d1`) AND `skills/executor/SKILL.md` "Report Submission" (new ## section; plugin commit `86c3d34`).
 
+**FOLDED 2026-05-17 (Python)** — split into 14a + 14b mirroring the dual-skill fold:
+- **14a (brain)** → `orchestrator/orchestrator/nodes/brain.py:BRAIN_SYSTEM` "Status reporting" prose (commit `170ad57`). Locked by `tests/test_brain.py::test_BRAIN_SYSTEM_includes_phase_2_5_deltas` (substring `expected X, observed Y`).
+- **14b (executor)** → `orchestrator/orchestrator/nodes/executor.py:EXECUTOR_SYSTEM` "Report Submission" prose (commit `077c493`). Locked by `tests/test_executor.py::test_EXECUTOR_SYSTEM_includes_phase_2_5_deltas` (substring `expected X, observed Y`).
+
 **Rule.** When the expected and observed values of a measured metric
 diverge during a run, lead the next status update (report, journal note, or
 PI notification) with the **divergence**, not the raw numbers. Use the form
@@ -290,6 +330,8 @@ metric matters because the divergence matters.
 ## 15. PI batch-review affordance (obs #15 — adopted)
 
 **FOLDED 2026-05-17** → `skills/brain/SKILL.md` "PI interactions" (new ## section; plugin commit `bef32d1`).
+
+**FOLDED 2026-05-17 (Python)** → `orchestrator/orchestrator/nodes/brain.py:BRAIN_SYSTEM` "PI interactions" prose (commit `170ad57`). Locked by `tests/test_brain.py::test_BRAIN_SYSTEM_includes_phase_2_5_deltas` (substring `batched=True`).
 
 **Rule.** When a PI `interrupt()` payload exceeds `PI_BATCH_REVIEW_THRESHOLD`
 items (default 10), emit `batched=True`, `page_size=THRESHOLD`,
@@ -313,6 +355,8 @@ splitting into 3-5 item batches."*
 
 **FOLDED 2026-05-17** → `skills/brain/SKILL.md` "Affordances" (new ## section; plugin commit `bef32d1`).
 
+**FOLDED 2026-05-17 (Python)** → `orchestrator/orchestrator/nodes/brain.py:BRAIN_SYSTEM` "Affordances" prose (commit `170ad57`). Locked by `tests/test_brain.py::test_BRAIN_SYSTEM_includes_phase_2_5_deltas` (substring `workflow-membership tagging`).
+
 **Rule.** The `workflow_thread_id` tag is structurally identical to the
 v2.3.5 `motivated-by-explained` suppression tag: a deterministic value
 written on every artifact during a context, used to scope retrospective
@@ -329,6 +373,8 @@ similarity makes future generalizations cheap.
 ## 17. Affordance G surface re-exposed (KnowledgePackIntegrityError)
 
 **FOLDED 2026-05-17** → `skills/executor/SKILL.md` "Repo-specific procedures" (bullet; plugin commit `86c3d34`).
+
+**FOLDED 2026-05-17 (Python)** → `orchestrator/orchestrator/nodes/executor.py:EXECUTOR_SYSTEM` "Repo-specific procedures" prose (commit `077c493`). Locked by `tests/test_executor.py::test_EXECUTOR_SYSTEM_includes_phase_2_5_deltas` (substring `integrity error`). Complements the existing 422→CheckpointError mapping at `orchestrator/orchestrator/mcp_client.py:_request`.
 
 **Rule.** When an MCP write returns HTTP 422 with knowledge-pack-integrity
 detail, map it to `CheckpointError` and route via `escalation_router`. Do
@@ -363,6 +409,8 @@ report.
 
 ## Summary of fold-in surface
 
+### Phase 2.3 — marketplace plugin skills
+
 | File                              | Additions touching it |
 |-----------------------------------|----------------------|
 | `skills/brain/SKILL.md`           | 2, 3, 5, 7, 12, 14, 15, 16 |
@@ -371,3 +419,15 @@ report.
 | `orchestrator/notifications.py` (docstring) | 9, 10 (already in-file) |
 | `orchestrator/graph.py` (docstring) | 11, 12, 13 (already in-file) |
 | `orchestrator/mcp_client.py` (docstring) | 4, 17 (already in-file) |
+
+### Phase 2.5 — orchestrator Python constants
+
+| File / disposition                  | Additions touching it |
+|-------------------------------------|----------------------|
+| `orchestrator/nodes/brain.py:BRAIN_SYSTEM` (commit `170ad57`) | 2, 7, 14a, 15, 16 |
+| `orchestrator/nodes/executor.py:EXECUTOR_SYSTEM` (commit `077c493`) | 1, 8, 14b, 17 |
+| SKIPPED-PYTHON (already enforced in source) | 3, 4, 5, 6, 9, 11, 12, 13 |
+| CODE-ONLY (no plugin or Python prose) | 10 |
+| **Total accounted** | 17 deltas (split: 14 has dual 14a/14b targets) |
+
+Total: 9 deltas folded as runtime prose into the two Python constants (locked by 2 system-prompt-marker regression tests). 7 deltas skipped at Python layer because the discipline is structurally enforced in orchestrator source (each carries a code-path reference above for use as an index of where the architectural pattern lives). Delta 10 remains CODE-ONLY per the Phase 2.3 ratification.
