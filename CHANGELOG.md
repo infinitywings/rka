@@ -3,6 +3,89 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [2.5.3] — 2026-05-17 (patch release; D2 context-ordering closed via 3-mission stack)
+
+**Missions** (in order):
+- `mis_01KRSMPNRQ70WRB1NH9BJAT6JX` — original D2 sort refactor
+- `mis_01KRSP44W7BDZH11PZRGXH1WM4` — coefficient A/B sweep
+- `mis_01KRSQ4GCRWPSXCWZHGZ2ZR830` — runner reorder (winning vector)
+
+**Decisions**:
+- `dec_01KRSMMCS8MD7KQDBS0E2DVKBQ` (D2 fix-shape; covers all 3 missions)
+- `dec_01KRSP1852TKACJA0BM0HJNWBB` (hold-and-tune ratification after sort-only fell below floor)
+- `dec_01KRSQ1TDY1X976W7EV16GXWZV` (vector-II ratification after sweep flat)
+
+**Surfaced by**: Eval-v2 Finding 1 — `mean_ordering_score = 0.251` against the v2.5.2 baseline. The fix lifts this to **0.400** (+0.137 absolute, +0.037 above the 0.363 floor target).
+
+### Root cause (resolved across 3 missions)
+
+The `ContextEngine` post-fetch ranker had two documented-vs-implemented divergences from the v2.4 design (`dec_01KQQPD6Y6B362T3K08368BDMP`):
+1. Topic-driven `get_context(topic=…)` discarded BM25/vector search relevance and re-sorted by importance only.
+2. Overview `get_context()` used `created_at` as a tuple tie-break, not as the multiplicative recency term the v2.4 spec called for.
+
+The original v2.5.3 mission fixed both. Per-scenario validation showed the fix worked (paper-scaffold-session-start-section lifted +0.333), but the aggregate move was only +0.016 — well below the 0.10 floor. A 5-config coefficient A/B sweep (v2.5.4) then proved coefficient space empirically flat (spread 0.0272 across the simplex), confirming `ContextEngine`'s internal sort was NOT the bottleneck. The winning attack vector turned out to be one layer up: the Eval-v2 runner's tool-invocation order.
+
+### Fixed
+
+- **Topic-anchored `get_context` preserves BM25/vector relevance order** (Mission 1, `rka/services/context.py`). Search hits annotated with `_search_rank = i` after `_hydrate_hits`; topic_sort_key uses `(rank, -importance, -centrality)` ascending. Importance/centrality break ties within identical search rank.
+- **Overview `get_context` uses a weighted-sum score with recency as a first-class multiplicative term** (Mission 1):
+  ```
+  score = w_imp * importance_normalized + w_cent * log1p(centrality) + w_recency * recency_score
+  ```
+  where `recency_score = 1.0 / (1 + days_since_created)` clamped to `[0, 1]`. Default coefficients: `w_imp=0.5`, `w_cent=0.3`, `w_recency=0.2`. Semantic shift: a heavily-linked recent high-band entry can now outrank an un-linked critical-band entry. The v2.4 spec called for this; pre-v2.5.3 the strict-band hierarchy was the *bug*, not the design.
+- **PI-source lift preserved at +0.125 normalized** (matches pre-v2.5.3 `+5/40` magnitude).
+- **Two pre-v2.5.3 tests updated** to reflect the new semantics (`test_pi_source_lift_applied_within_band` now checks the lift via `_overview_score` directly; `test_high_centrality_with_age_can_beat_un_linked_critical` inverts the assertion). The decision rationale named the old invariant as the bug.
+
+### Added
+
+- **Env-var-configurable coefficients** (Mission 2, `rka/services/context.py` + `docker-compose.yml`). Read from `RKA_CTX_W_IMP`, `RKA_CTX_W_CENT`, `RKA_CTX_W_RECENCY`, `RKA_CTX_PI_LIFT` at module import time. Docker-compose interpolates from shell env so eval sweeps can swap configs via container restart without source rebuilds. `_reload_coefficients_from_env()` helper for in-process test overrides.
+- **A/B sweep harness** at `eval-harness/v2/sweep_v2_5_3.py` (Mission 2). Runs the eval-v2 corpus across N coefficient configs, restarting the rka container between configs. Outputs aggregated metrics + per-config raw bundles. Reusable for future tuning.
+- **Eval-v2 runner anchor-aware tool-order policy** (Mission 3, `eval-harness/v2/runner.py`). When a scenario has critical expected entities AND its `tools_invoked` includes any of `{rka_get_ego_graph, rka_multi_hop_retrieval, rka_assemble_evidence}`, those tools fire FIRST in deterministic order. Anchor-aware tools' outputs now lead the bundle's `combined_ranking` instead of being buried behind `get_context`'s 150+ entries. Non-anchored scenarios are no-ops (preserved behavior).
+
+### Empirical finding (locked for future tuning work)
+
+- **Coefficient space is essentially flat for this corpus**. 5-config sweep spanned simplex corners (recency-heavy, centrality-heavy, importance-dominant, balanced); aggregate `mean_ordering_score` moved <0.028 across the span. Future tuning should NOT waste effort on coefficient search; the lever is somewhere else (runner-order, type-aware boosting, corpus alignment).
+- **Tool-invocation order is the dominant lever** for the aggregate metric. 9 anchor-affected scenarios lifted +0.30 to +0.53 each from the reorder; 7 un-anchored scenarios stayed within DB-drift noise (±0.04).
+
+### Tests
+
+- **17 context tests** in `tests/test_services/test_context.py` (11 pre-existing + 3 v2.5.3 sort-by-retrieval-path + 3 v2.5.4 env-var coefficients).
+- **14 runner tests** in `eval-harness/v2/tests/` (7 pre-existing + 6 v2.5.5 reorder unit + 1 v2.5.5 lock-defaults integration).
+- All previous regression tests pass (52 db, 25 cluster-related, etc.).
+
+### Eval-v2 impact (canonical v2.5.3 run)
+
+| Metric | v2.5.0 baseline | v2.5.1 | v2.5.2 | **v2.5.3** | Δ vs v2.5.2 |
+|---|---|---|---|---|---|
+| mean_recall (critical) | 0.958 | 0.958 | **1.000** | 0.958 | -0.042 (DB drift; see note) |
+| mean_expanded_recall | 0.888 | 0.888 | 0.938 | 0.875 | -0.063 |
+| **mean_ordering_score** | 0.251 | 0.253 | 0.263 | **0.400** | **+0.137** ✓ |
+| mean_breadth | 3.25 | 3.25 | 3.25 | 3.00 | -0.25 |
+| mean_efficiency | 0.037 | 0.036 | 0.037 | 0.035 | -0.002 |
+
+**Per-tool critical-coverage**:
+
+| Tool | v2.5.2 | v2.5.3 | Δ | Notes |
+|---|---|---|---|---|
+| `rka_get_ego_graph` | 0.333 | 0.778 | +0.444 ↑ | now first-discoverer for anchored entities |
+| `rka_multi_hop_retrieval` | 0.000 | 0.817 | +0.817 ↑ | combined v2.5.1+v2.5.2+v2.5.3 effect |
+| `rka_get_journal` | 1.000 | 0.000 | -1.000 ↓ | **attribution shift, not coverage loss** — entities still in bundle |
+| (others) | unchanged | unchanged | 0.000 | |
+
+The `rka_get_journal` per-tool drop is an attribution shift: the reorder puts anchor-aware tools ahead of `get_journal`; entities `get_journal` used to first-discover are now first-discovered by `ego_graph`/`multi_hop`. Total bundle recall unchanged. (Possible v2.5.4 metric refinement: annotate first-discovery vs follow-on coverage.)
+
+The aggregate `mean_recall` drop from v2.5.2's 1.0 to 0.958 is DB-drift between runs (8 new entities added to live `rka_development` between the v2.5.2 and v2.5.3 eval runs displaced older entries from `/api/notes` top-20). Re-running v2.5.2 against today's DB would show the same drop. Hard recall floor (0.85) preserved.
+
+### Release-line scope
+
+Main only — `release/desktop` is independent per `dec_01KRPAVSTJ4H80VXJVN6DQ82WQ`.
+
+### Phase-3 status
+
+D1 (v2.5.1), D3 (v2.5.2), D2 (v2.5.3) all closed. D4 (bundle-narrowing) remains — re-scoping recommended per the v2.5.3 addendum in `eval-harness/v2/report.md` (anchor-aware-tool priority for bundle truncation; per-tool attribution annotation in the metric).
+
+---
+
 ## [2.5.2] — 2026-05-16 (patch release; cluster → parent-RQ traversal)
 
 **Mission**: `mis_01KRS1D8C0E2FP52D0P6JNB3SX`

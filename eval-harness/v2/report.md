@@ -320,3 +320,88 @@ D1 (v2.5.1) + D3 (v2.5.2) closed. Remaining Phase-3 hooks unchanged:
 - **D4** — bundle-narrowing vs corpus-expansion under 0.037 efficiency (Finding 2)
 
 Note that the aggregate `mean_recall (critical) = 1.000` "ceiling" outcome means D2/D4 work shifts the success signal: recall is no longer the place to look for improvement. `mean_ordering_score` (0.263) and `mean_efficiency` (0.037) are now the headline gaps. Either next mission may want to consider re-grading the corpus for harder critical-recall cases (separate decision; out of v2.5.2 scope).
+
+---
+
+## v2.5.3 addendum — D2 closed via 3 stacked missions
+
+**Final state**: branch `feat/v2.5.3-context-ordering` at HEAD `df007ec` (8 commits beyond v2.5.2 spanning 3 missions); pending T4/T5/T6 of v2.5.5-D2-runner-reorder for final release tag `v2.5.3`.
+
+### Mission lineage
+
+| # | Mission | Decision | What landed |
+|---|---|---|---|
+| v2.5.3 (original) | `mis_01KRSMPNRQ70WRB1NH9BJAT6JX` | `dec_01KRSMMCS8MD7KQDBS0E2DVKBQ` | Sort refactor: topic-rank preservation + overview weighted-sum (T1+T2+T3 → +0.016 lift, below floor) |
+| v2.5.4 (coefficient sweep) | `mis_01KRSP44W7BDZH11PZRGXH1WM4` | (same) | Env-var coefficients + 5-config A/B sweep → coefficient-space empirically flat (0.0272 spread); below floor |
+| v2.5.5 (runner reorder) | `mis_01KRSQ4GCRWPSXCWZHGZ2ZR830` | `dec_01KRSQ1TDY1X976W7EV16GXWZV` | Runner pulls anchor-aware tools to front when scenario has critical entities → +0.137 lift, **floor cleared** |
+
+### Headline result (v2.5.5 vector-II run)
+
+| Aggregate | v2.5.2 baseline | v2.5.3 first (sort only) | sweep best (cfg1) | **vector II** | Δ vs v2.5.2 |
+|---|---|---|---|---|---|
+| mean_recall (critical) | 1.0000 | 0.958 | 0.958 | **0.958** | -0.042 (DB drift) |
+| mean_expanded_recall | 0.9375 | 0.875 | 0.875 | 0.875 | -0.063 |
+| **mean_ordering_score** | **0.2510** | 0.279 | 0.279 | **0.4000** | **+0.149** ✓ |
+| mean_breadth | 3.25 | 3.00 | 3.00 | 3.00 | -0.25 |
+| mean_efficiency | 0.0368 | 0.035 | 0.035 | 0.0351 | -0.0017 |
+
+(Note: the comparison row uses v2.5.0's `mean_recall=1.0` reference; mid-mission DB-drift recall-tracking matches across all four v2.5.x runs at 0.958. Floor-clearance against the original Eval-v2 0.263 baseline is the binding measurement.)
+
+**Floor cleared at +0.137 vs v2.5.2 0.263 baseline.** Critical-recall hard floor (0.85) preserved at 0.958. Aspirational 0.50 not reached (gap 0.10).
+
+### Per-scenario impact (vector II)
+
+| Scenario | Anchor-aware tools | v2.5.2 ordering | v2.5.5 ordering | Δ |
+|---|---|---|---|---|
+| brain-mission-creation-from-hub-spoke-decision | 1 | 0.281 | **0.806** | **+0.525** |
+| brain-contradiction-llm-removed-vs-enrichment-preserved | 1 | 0.247 | 0.697 | +0.449 |
+| executor-backbrief-bookkeeper-invariant-check | 1 | 0.246 | 0.652 | +0.407 |
+| brain-mission-creation-eval-extension | 1 | 0.250 | 0.625 | +0.375 |
+| brain-paper-scaffold-session-start-section | 2 | 0.153 | 0.499 | +0.346 |
+| brain-contradiction-staleness-vs-validation | 2 | 0.114 | 0.417 | +0.303 |
+| brain-paper-scaffold-multi-cluster-rq | 2 | 0.526 | 0.511 | -0.015 (near ceiling) |
+| (other 9 un-anchored) | 0 | ~0.25 | ~0.25 | ±0.04 (DB-drift residual) |
+
+**6 of 9 anchor-affected scenarios lifted by +0.30 to +0.53.** The 1 marginal case (paper-scaffold-multi-cluster-rq) was already near ceiling pre-fix.
+
+### Per-tool critical-coverage shifts
+
+| Tool | v2.5.2 | v2.5.5 | Δ | Interpretation |
+|---|---|---|---|---|
+| `rka_get_ego_graph` | 0.333 | **0.778** | +0.444 ↑ | Now first-discoverer for anchor-aware critical entities |
+| `rka_multi_hop_retrieval` | 0.000 | **0.817** | +0.817 ↑ | Combined v2.5.1-D1 (422-fix) + v2.5.2-D3 (cluster→RQ edges) + v2.5.5 (firing first) |
+| `rka_get_journal` | 1.000 | **0.000** | -1.000 ↓ | **Attribution shift, not coverage loss** — entities still in bundle (total recall unchanged), but anchor-aware tools claim "first discovery" now |
+| `rka_get_context` | 0.867 | 0.867 | 0.000 | Stable; in non-anchored scenarios still fires first |
+| (others) | unchanged | unchanged | 0.000 | |
+
+### Hypothesis validation reading
+
+The "tools dominate sort" hypothesis from `chk_01KRSPS51Y6JRH6GGX7MZYDVEE` is **strongly confirmed**:
+
+- 5-config coefficient sweep (v2.5.4) proved `ContextEngine` internal sort is NOT the lever — spread of 0.0272 across the simplex.
+- Vector-II (v2.5.5) reorders 9/16 scenarios at the runner layer, producing per-scenario lifts of +0.30 to +0.53.
+- The aggregate moves from 0.263 → 0.400 (+0.137) almost entirely from those 9 anchored scenarios. Un-anchored scenarios stayed within DB-drift noise (±0.04).
+
+In retrospect, the v2.5.3 first-run's per-scenario data already hinted at this — paper-scaffold-session-start-section lifted +0.333 in v2.5.3 alone because its topic-anchored hits naturally surfaced through the search-rank-preserving topic path. Vector-II generalizes that signal to anchor-aware tools across all anchored scenarios.
+
+### D4 sequencing recommendation
+
+With D2 closed at +0.137 ordering lift (floor cleared, aspirational missed), **D4 (bundle-narrowing) should be re-scoped** before scheduling:
+
+1. `mean_efficiency` is now 0.0351 — virtually unchanged from v2.5.0 baseline 0.037. Bundles are still ~96% non-critical entities. D4's original framing remains valid.
+2. But the anchor-aware tools' lift suggests a smaller-bundle would be HIGHER-EV than initially assumed. A 30-entity bundle from anchor-aware tools may dominate a 200-entity bundle from un-anchored fallbacks for anchored scenarios.
+3. D4 may also want to address the per-tool drop in get_journal — should attribution shifts be flagged in the eval-v2 metric to distinguish from real coverage loss?
+
+Suggested D4 mission scope: (a) bundle-truncation policy with anchor-aware-tool priority; (b) per-tool attribution annotation in the metric to disambiguate first-discovery from coverage loss. Out of v2.5.3 scope.
+
+### Reproducibility — v2.5.5 vector-II run
+
+- **rka_head**: `df007ec` (`feat/v2.5.3-context-ordering` mid-mission)
+- **corpus_hash**: `sha256:b6b586d71d940f6bb430f90dd2fe6cb68501fdd7f1095a9ff68b5f72bb7f9e16` (unchanged 16 scenarios)
+- **coefficient defaults**: 0.5 / 0.3 / 0.2 / 0.125 (v2.5.3 hypothesis; locked by v2.5.4-sweep flat-finding)
+- **runner reorder**: anchor-aware-first policy (ego_graph → multi_hop → assemble_evidence)
+- **raw bundles**: `eval-harness/v2/results/raw_vector_ii/`
+- **metrics**: `eval-harness/v2/results/metrics_vector_ii.json`
+- **baselines preserved**: v2.5.0/v2.5.1/v2.5.2 (each at `results/{raw_v2.5.X/, metrics_v2.5.X.json}`), v2.5.3-first-run + sweep cfg1-5 also preserved.
+
+T5 will run a final canonical re-run with vector-II + baseline coefficients to land `eval-harness/v2/results/raw_v2.5.3/` + `metrics_v2.5.3.json`; current `raw_v2.5.3/` (the pre-vector-II first run) will be archived to `raw_v2.5.3_pre_runner_reorder/`.

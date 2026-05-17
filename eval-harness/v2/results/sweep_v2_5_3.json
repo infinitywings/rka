@@ -1,0 +1,431 @@
+{
+  "mission": "mis_01KRSP44W7BDZH11PZRGXH1WM4",
+  "decision": "dec_01KRSMMCS8MD7KQDBS0E2DVKBQ",
+  "sweep_elapsed_seconds": 51.664511919021606,
+  "db_snapshot_pre": {
+    "journal": 2254,
+    "decisions": 248,
+    "missions": 149,
+    "entity_links": 5214,
+    "evidence_clusters": 101
+  },
+  "db_snapshot_post": {
+    "journal": 2254,
+    "decisions": 248,
+    "missions": 149,
+    "entity_links": 5214,
+    "evidence_clusters": 101
+  },
+  "configs": [
+    {
+      "cfg_id": 1,
+      "label": "v2.5.3 baseline",
+      "coefficients": {
+        "w_imp": 0.5,
+        "w_cent": 0.3,
+        "w_recency": 0.2
+      },
+      "metrics_path": "eval-harness/v2/results/metrics_sweep_cfg1.json",
+      "mean_recall_critical": 0.9583333333333334,
+      "mean_expanded_recall": 0.875,
+      "mean_ordering_score": 0.2785230740555674,
+      "mean_breadth": 3.0,
+      "mean_efficiency": 0.035300343684178115,
+      "per_scenario_ordering": [
+        {
+          "scenario_id": "brain-session-start-fresh-resume",
+          "ordering_score": 0.28556563748375746
+        },
+        {
+          "scenario_id": "brain-session-start-multi-mission-state",
+          "ordering_score": 0.2877382226950821
+        },
+        {
+          "scenario_id": "brain-session-start-post-release",
+          "ordering_score": 0.22774201526508747
+        },
+        {
+          "scenario_id": "brain-session-start-checkpoint-review",
+          "ordering_score": 0.24597239431000437
+        },
+        {
+          "scenario_id": "brain-mission-creation-from-hub-spoke-decision",
+          "ordering_score": 0.28207761677964505
+        },
+        {
+          "scenario_id": "brain-mission-creation-eval-extension",
+          "ordering_score": 0.24187799579891736
+        },
+        {
+          "scenario_id": "brain-contradiction-staleness-vs-validation",
+          "ordering_score": 0.22483345726283965
+        },
+        {
+          "scenario_id": "brain-contradiction-llm-removed-vs-enrichment-preserved",
+          "ordering_score": 0.19151587288586716
+        },
+        {
+          "scenario_id": "brain-paper-scaffold-session-start-section",
+          "ordering_score": 0.5387202960048777
+        },
+        {
+          "scenario_id": "brain-paper-scaffold-multi-cluster-rq",
+          "ordering_score": 0.5260633453396784
+        },
+        {
+          "scenario_id": "executor-mission-pickup-eval-v2",
+          "ordering_score": 0.2559009410149485
+        },
+        {
+          "scenario_id": "executor-mission-pickup-orchestrator",
+          "ordering_score": 0.2487335539111952
+        },
+        {
+          "scenario_id": "executor-mission-pickup-desktop-v2-5",
+          "ordering_score": 0.22201724693814004
+        },
+        {
+          "scenario_id": "executor-backbrief-eval-v2-t2",
+          "ordering_score": 0.24251981603863146
+        },
+        {
+          "scenario_id": "executor-backbrief-mid-mission-pattern-reference",
+          "ordering_score": 0.23804692040633266
+        },
+        {
+          "scenario_id": "executor-backbrief-bookkeeper-invariant-check",
+          "ordering_score": 0.19704385275407427
+        }
+      ]
+    },
+    {
+      "cfg_id": 2,
+      "label": "recency-heavy",
+      "coefficients": {
+        "w_imp": 0.4,
+        "w_cent": 0.2,
+        "w_recency": 0.4
+      },
+      "metrics_path": "eval-harness/v2/results/metrics_sweep_cfg2.json",
+      "mean_recall_critical": 0.9583333333333334,
+      "mean_expanded_recall": 0.875,
+      "mean_ordering_score": 0.25859821193393345,
+      "mean_breadth": 3.0,
+      "mean_efficiency": 0.035240677029858704,
+      "per_scenario_ordering": [
+        {
+          "scenario_id": "brain-session-start-fresh-resume",
+          "ordering_score": 0.2836713281577875
+        },
+        {
+          "scenario_id": "brain-session-start-multi-mission-state",
+          "ordering_score": 0.28615455885299174
+        },
+        {
+          "scenario_id": "brain-session-start-post-release",
+          "ordering_score": 0.22563366411152497
+        },
+        {
+          "scenario_id": "brain-session-start-checkpoint-review",
+          "ordering_score": 0.2449342101798149
+        },
+        {
+          "scenario_id": "brain-mission-creation-from-hub-spoke-decision",
+          "ordering_score": 0.28111136733421893
+        },
+        {
+          "scenario_id": "brain-mission-creation-eval-extension",
+          "ordering_score": 0.2416160743466522
+        },
+        {
+          "scenario_id": "brain-contradiction-staleness-vs-validation",
+          "ordering_score": 0.22439396719676905
+        },
+        {
+          "scenario_id": "brain-contradiction-llm-removed-vs-enrichment-preserved",
+          "ordering_score": 0.19200332870271833
+        },
+        {
+          "scenario_id": "brain-paper-scaffold-session-start-section",
+          "ordering_score": 0.23213425778504132
+        },
+        {
+          "scenario_id": "brain-paper-scaffold-multi-cluster-rq",
+          "ordering_score": 0.5260633453396784
+        },
+        {
+          "scenario_id": "executor-mission-pickup-eval-v2",
+          "ordering_score": 0.2556142516642834
+        },
+        {
+          "scenario_id": "executor-mission-pickup-orchestrator",
+          "ordering_score": 0.24705135419781543
+        },
+        {
+          "scenario_id": "executor-mission-pickup-desktop-v2-5",
+          "ordering_score": 0.22124581554316916
+        },
+        {
+          "scenario_id": "executor-backbrief-eval-v2-t2",
+          "ordering_score": 0.2412290308978335
+        },
+        {
+          "scenario_id": "executor-backbrief-mid-mission-pattern-reference",
+          "ordering_score": 0.2380095357553339
+        },
+        {
+          "scenario_id": "executor-backbrief-bookkeeper-invariant-check",
+          "ordering_score": 0.1967053008773022
+        }
+      ]
+    },
+    {
+      "cfg_id": 3,
+      "label": "centrality-heavy",
+      "coefficients": {
+        "w_imp": 0.3,
+        "w_cent": 0.5,
+        "w_recency": 0.2
+      },
+      "metrics_path": "eval-harness/v2/results/metrics_sweep_cfg3.json",
+      "mean_recall_critical": 0.9583333333333334,
+      "mean_expanded_recall": 0.875,
+      "mean_ordering_score": 0.2776558673025913,
+      "mean_breadth": 3.0,
+      "mean_efficiency": 0.035240677029858704,
+      "per_scenario_ordering": [
+        {
+          "scenario_id": "brain-session-start-fresh-resume",
+          "ordering_score": 0.28138739406096824
+        },
+        {
+          "scenario_id": "brain-session-start-multi-mission-state",
+          "ordering_score": 0.2893806254150727
+        },
+        {
+          "scenario_id": "brain-session-start-post-release",
+          "ordering_score": 0.2263981811262524
+        },
+        {
+          "scenario_id": "brain-session-start-checkpoint-review",
+          "ordering_score": 0.24011398478400497
+        },
+        {
+          "scenario_id": "brain-mission-creation-from-hub-spoke-decision",
+          "ordering_score": 0.27878111662117183
+        },
+        {
+          "scenario_id": "brain-mission-creation-eval-extension",
+          "ordering_score": 0.240604329847074
+        },
+        {
+          "scenario_id": "brain-contradiction-staleness-vs-validation",
+          "ordering_score": 0.2231776640214982
+        },
+        {
+          "scenario_id": "brain-contradiction-llm-removed-vs-enrichment-preserved",
+          "ordering_score": 0.19528007290507374
+        },
+        {
+          "scenario_id": "brain-paper-scaffold-session-start-section",
+          "ordering_score": 0.5383449341825097
+        },
+        {
+          "scenario_id": "brain-paper-scaffold-multi-cluster-rq",
+          "ordering_score": 0.5260633453396784
+        },
+        {
+          "scenario_id": "executor-mission-pickup-eval-v2",
+          "ordering_score": 0.25450148519807864
+        },
+        {
+          "scenario_id": "executor-mission-pickup-orchestrator",
+          "ordering_score": 0.26127811576161114
+        },
+        {
+          "scenario_id": "executor-mission-pickup-desktop-v2-5",
+          "ordering_score": 0.216293117334887
+        },
+        {
+          "scenario_id": "executor-backbrief-eval-v2-t2",
+          "ordering_score": 0.24030654293438589
+        },
+        {
+          "scenario_id": "executor-backbrief-mid-mission-pattern-reference",
+          "ordering_score": 0.23137800074454687
+        },
+        {
+          "scenario_id": "executor-backbrief-bookkeeper-invariant-check",
+          "ordering_score": 0.19920496656464703
+        }
+      ]
+    },
+    {
+      "cfg_id": 4,
+      "label": "importance-dominant",
+      "coefficients": {
+        "w_imp": 0.7,
+        "w_cent": 0.2,
+        "w_recency": 0.1
+      },
+      "metrics_path": "eval-harness/v2/results/metrics_sweep_cfg4.json",
+      "mean_recall_critical": 0.9583333333333334,
+      "mean_expanded_recall": 0.875,
+      "mean_ordering_score": 0.25128317436317515,
+      "mean_breadth": 3.0,
+      "mean_efficiency": 0.035240677029858704,
+      "per_scenario_ordering": [
+        {
+          "scenario_id": "brain-session-start-fresh-resume",
+          "ordering_score": 0.2709147792808502
+        },
+        {
+          "scenario_id": "brain-session-start-multi-mission-state",
+          "ordering_score": 0.2775905029489198
+        },
+        {
+          "scenario_id": "brain-session-start-post-release",
+          "ordering_score": 0.21216620529912772
+        },
+        {
+          "scenario_id": "brain-session-start-checkpoint-review",
+          "ordering_score": 0.23271320946604862
+        },
+        {
+          "scenario_id": "brain-mission-creation-from-hub-spoke-decision",
+          "ordering_score": 0.27707789983810427
+        },
+        {
+          "scenario_id": "brain-mission-creation-eval-extension",
+          "ordering_score": 0.23063251580669414
+        },
+        {
+          "scenario_id": "brain-contradiction-staleness-vs-validation",
+          "ordering_score": 0.221293963004126
+        },
+        {
+          "scenario_id": "brain-contradiction-llm-removed-vs-enrichment-preserved",
+          "ordering_score": 0.18688148679362632
+        },
+        {
+          "scenario_id": "brain-paper-scaffold-session-start-section",
+          "ordering_score": 0.2225087516100959
+        },
+        {
+          "scenario_id": "brain-paper-scaffold-multi-cluster-rq",
+          "ordering_score": 0.5260633453396784
+        },
+        {
+          "scenario_id": "executor-mission-pickup-eval-v2",
+          "ordering_score": 0.24390754917219484
+        },
+        {
+          "scenario_id": "executor-mission-pickup-orchestrator",
+          "ordering_score": 0.23401677429145593
+        },
+        {
+          "scenario_id": "executor-mission-pickup-desktop-v2-5",
+          "ordering_score": 0.2204504189196251
+        },
+        {
+          "scenario_id": "executor-backbrief-eval-v2-t2",
+          "ordering_score": 0.2288199080853531
+        },
+        {
+          "scenario_id": "executor-backbrief-mid-mission-pattern-reference",
+          "ordering_score": 0.24643598501258251
+        },
+        {
+          "scenario_id": "executor-backbrief-bookkeeper-invariant-check",
+          "ordering_score": 0.1890574949423201
+        }
+      ]
+    },
+    {
+      "cfg_id": 5,
+      "label": "balanced (centrality bumped)",
+      "coefficients": {
+        "w_imp": 0.45,
+        "w_cent": 0.35,
+        "w_recency": 0.2
+      },
+      "metrics_path": "eval-harness/v2/results/metrics_sweep_cfg5.json",
+      "mean_recall_critical": 0.9583333333333334,
+      "mean_expanded_recall": 0.875,
+      "mean_ordering_score": 0.2776244170538182,
+      "mean_breadth": 3.0,
+      "mean_efficiency": 0.035240677029858704,
+      "per_scenario_ordering": [
+        {
+          "scenario_id": "brain-session-start-fresh-resume",
+          "ordering_score": 0.2833188133138231
+        },
+        {
+          "scenario_id": "brain-session-start-multi-mission-state",
+          "ordering_score": 0.28580325908237103
+        },
+        {
+          "scenario_id": "brain-session-start-post-release",
+          "ordering_score": 0.22693333482039418
+        },
+        {
+          "scenario_id": "brain-session-start-checkpoint-review",
+          "ordering_score": 0.24293514236773425
+        },
+        {
+          "scenario_id": "brain-mission-creation-from-hub-spoke-decision",
+          "ordering_score": 0.28040809770115604
+        },
+        {
+          "scenario_id": "brain-mission-creation-eval-extension",
+          "ordering_score": 0.24149359709809112
+        },
+        {
+          "scenario_id": "brain-contradiction-staleness-vs-validation",
+          "ordering_score": 0.22389058553267221
+        },
+        {
+          "scenario_id": "brain-contradiction-llm-removed-vs-enrichment-preserved",
+          "ordering_score": 0.19332366735877113
+        },
+        {
+          "scenario_id": "brain-paper-scaffold-session-start-section",
+          "ordering_score": 0.5384263699980303
+        },
+        {
+          "scenario_id": "brain-paper-scaffold-multi-cluster-rq",
+          "ordering_score": 0.5260633453396784
+        },
+        {
+          "scenario_id": "executor-mission-pickup-eval-v2",
+          "ordering_score": 0.25546613985323774
+        },
+        {
+          "scenario_id": "executor-mission-pickup-orchestrator",
+          "ordering_score": 0.2505913839533447
+        },
+        {
+          "scenario_id": "executor-mission-pickup-desktop-v2-5",
+          "ordering_score": 0.21917812958565241
+        },
+        {
+          "scenario_id": "executor-backbrief-eval-v2-t2",
+          "ordering_score": 0.24171823647094323
+        },
+        {
+          "scenario_id": "executor-backbrief-mid-mission-pattern-reference",
+          "ordering_score": 0.2344113359190695
+        },
+        {
+          "scenario_id": "executor-backbrief-bookkeeper-invariant-check",
+          "ordering_score": 0.19802923446612197
+        }
+      ]
+    }
+  ],
+  "winner_criteria": {
+    "primary": "mean_ordering_score (max)",
+    "hard_floor": "mean_recall_critical >= 0.85",
+    "lift_floor": "mean_ordering_score >= 0.363 (= v2.5.2 baseline 0.263 + 0.10 lift)"
+  }
+}
