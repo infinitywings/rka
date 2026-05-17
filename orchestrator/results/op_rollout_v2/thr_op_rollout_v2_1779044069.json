@@ -1,0 +1,64 @@
+{
+  "workflow_thread_id": "thr_op_rollout_v2_1779044069",
+  "mission_id": "mis_01KRVF159FEHMYD55Q6EQ7BD18",
+  "project_id": "prj_01KKQM9JFG67GT5FGWTAHD9YE4",
+  "terminal_state": "complete",
+  "current_phase": "pi_acceptance",
+  "interrupts_count": 3,
+  "checkpoints_count": 0,
+  "errors_count": 0,
+  "final_report_id": "mis_01KRVF159FEHMYD55Q6EQ7BD18",
+  "artifacts": [
+    {
+      "rka_id": "jrn_01KRVN24C6KQPMH4S07WBC1TV3",
+      "entity_type": "journal",
+      "node_name": "strategy_node"
+    },
+    {
+      "rka_id": "jrn_01KRVN4GQN4GPH93D9RNY2DTT0",
+      "entity_type": "journal",
+      "node_name": "confirmation_brief"
+    },
+    {
+      "rka_id": "jrn_01KRVN87N6ABKX32N346GJR8BH",
+      "entity_type": "journal",
+      "node_name": "backbrief_draft"
+    },
+    {
+      "rka_id": "jrn_01KRVN8SCM9RPTCFKFYEZMA93W",
+      "entity_type": "journal",
+      "node_name": "gate1_validation"
+    },
+    {
+      "rka_id": "jrn_01KRVND8YTFKCSHZ7WK0W7KSST",
+      "entity_type": "journal",
+      "node_name": "mission_execute"
+    },
+    {
+      "rka_id": "mis_01KRVF159FEHMYD55Q6EQ7BD18",
+      "entity_type": "report",
+      "node_name": "submit_report"
+    },
+    {
+      "rka_id": "jrn_01KRVNH1E22AP5XG56DARX1JG9",
+      "entity_type": "journal",
+      "node_name": "cluster_review"
+    },
+    {
+      "rka_id": "jrn_01KRVNJCFJXR2FGCVDDEQQM0MP",
+      "entity_type": "journal",
+      "node_name": "decision_present"
+    },
+    {
+      "rka_id": "dec_01KRVNJCG5TCCXAG04K6VBQ97T",
+      "entity_type": "decision",
+      "node_name": "pi_decision_select"
+    },
+    {
+      "rka_id": "jrn_01KRVNMRMHX8XX9HZ09SWSJV8T",
+      "entity_type": "journal",
+      "node_name": "final_synthesis"
+    }
+  ],
+  "errors": []
+}
