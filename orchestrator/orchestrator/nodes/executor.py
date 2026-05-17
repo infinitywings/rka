@@ -79,12 +79,51 @@ def _summarize_position(text: str, *, max_chars: int = 280) -> str:
     return first_line if len(first_line) <= max_chars else first_line[: max_chars - 1] + "…"
 
 
+def _format_mission_body(mission: dict | None, *, task_char_cap: int = 240) -> str:
+    """Render a mission's body fields into a compact prompt section.
+
+    Phase 2.5 (mis_01KRVJ240VXH7NQ0PMSHXHK888 T5): backbrief_draft needs to
+    SEE the mission body in the LLM prompt — same data-flow fix applied to
+    `brain.strategy_node` + `brain.confirmation_brief` in T4. Duplicated
+    here rather than imported across orchestrator nodes so each node module
+    remains self-contained against a single-responsibility helper surface;
+    if a third call site appears, lift into a shared `nodes/_prompts.py`.
+    """
+    if not mission or not isinstance(mission, dict):
+        return "(mission body unavailable)"
+
+    objective = (mission.get("objective") or "").strip()
+    acceptance = (mission.get("acceptance_criteria") or "").strip()
+    scope = (mission.get("scope_boundaries") or "").strip()
+    tasks = mission.get("tasks") or []
+
+    lines: list[str] = []
+    if objective:
+        lines.append(f"Objective: {objective}")
+    if tasks:
+        lines.append(f"Tasks ({len(tasks)}):")
+        for i, t in enumerate(tasks, 1):
+            desc = (t.get("description") if isinstance(t, dict) else str(t)) or ""
+            status = (t.get("status") if isinstance(t, dict) else "") or "pending"
+            if len(desc) > task_char_cap:
+                desc = desc[: task_char_cap - 1] + "…"
+            lines.append(f"  {i}. [{status}] {desc}")
+    if acceptance:
+        lines.append(f"Acceptance criteria:\n{acceptance}")
+    if scope:
+        lines.append(f"Scope boundaries:\n{scope}")
+
+    return "\n".join(lines) if lines else "(mission body empty)"
+
+
 # ---------------------------------------------------------------------------
 # 1. backbrief_draft — produces the upfront Backbrief journal entry
 # ---------------------------------------------------------------------------
 
 
-def _build_backbrief_prompt(state: ResearchWorkflowState) -> str:
+def _build_backbrief_prompt(
+    state: ResearchWorkflowState, mission: dict | None
+) -> str:
     return (
         "Draft an upfront Backbrief for the mission. Cover:\n"
         "  1. Plan summary (numbered steps).\n"
@@ -94,6 +133,7 @@ def _build_backbrief_prompt(state: ResearchWorkflowState) -> str:
         "  5. Approach (files touched, test method, invariants preserved).\n\n"
         f"Mission: {state.get('mission_id', '(unset)')}\n"
         f"Motivated-by decision: {state.get('motivated_by_decision_id', '(unset)')}\n"
+        f"Mission body:\n{_format_mission_body(mission)}\n\n"
         f"Brain's strategy context:\n{state.get('brain_strategy', '(empty)')}\n"
     )
 
@@ -101,7 +141,11 @@ def _build_backbrief_prompt(state: ResearchWorkflowState) -> str:
 def backbrief_draft(
     state: ResearchWorkflowState, sdk: SDKClient, mcp: MCPClient
 ) -> dict:
-    prompt = _build_backbrief_prompt(state)
+    mission_id = state.get("mission_id")
+    # Phase 2.5 T5: same data-flow fix as brain.strategy_node — fetch the
+    # mission body so the upfront Backbrief is grounded in objective/tasks/AC.
+    mission = mcp.rka_get_mission(id=mission_id) if mission_id else None
+    prompt = _build_backbrief_prompt(state, mission)
     backbrief_text = sdk.complete(prompt=prompt, system=EXECUTOR_SYSTEM)
 
     note_id = mcp.rka_add_note(

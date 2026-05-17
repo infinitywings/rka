@@ -63,6 +63,44 @@ def test_backbrief_draft_sdk_uses_executor_system_prompt():
     assert sdk.calls[0]["system"] == executor.EXECUTOR_SYSTEM
 
 
+def test_backbrief_draft_includes_mission_body():
+    """Phase 2.5 (mis_01KRVJ240VXH7NQ0PMSHXHK888 T5): backbrief_draft must
+    fetch the mission via rka_get_mission and include objective + tasks +
+    acceptance_criteria + scope_boundaries in the LLM prompt. Mirrors the
+    T4 fix in brain.strategy_node / brain.confirmation_brief — without the
+    body, real Claude produces a SKELETON Backbrief and gate1 correctly
+    REDIRECTS."""
+    sdk = FakeSDK()
+    mcp = FakeMCP()
+    mcp.mission_response = {
+        "id": "mis_t4_target",
+        "objective": "BB_OBJECTIVE_MARKER",
+        "tasks": [
+            {"description": "BB_TASK_ALPHA", "status": "pending"},
+            {"description": "BB_TASK_BETA", "status": "active"},
+        ],
+        "acceptance_criteria": "BB_ACCEPTANCE_MARKER",
+        "scope_boundaries": "BB_SCOPE_MARKER",
+    }
+    state = _state()
+
+    executor.backbrief_draft(state, sdk, mcp)
+
+    mission_calls = [c for c in mcp.calls if c["op"] == "rka_get_mission"]
+    assert mission_calls, "backbrief_draft must call rka_get_mission"
+    assert mission_calls[0]["id"] == "mis_t4_target"
+
+    prompt = sdk.calls[0]["prompt"]
+    for marker in (
+        "BB_OBJECTIVE_MARKER",
+        "BB_TASK_ALPHA",
+        "BB_TASK_BETA",
+        "BB_ACCEPTANCE_MARKER",
+        "BB_SCOPE_MARKER",
+    ):
+        assert marker in prompt, f"backbrief_draft prompt missing mission body marker: {marker}"
+
+
 # ---------------------------------------------------------------------------
 # 2. mission_execute
 # ---------------------------------------------------------------------------
