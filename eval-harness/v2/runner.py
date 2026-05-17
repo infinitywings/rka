@@ -450,11 +450,66 @@ class EvalV2Runner:
     # Per-scenario orchestration
     # ------------------------------------------------------------------
 
+    # Anchor-aware tools — those whose REST callers consume the scenario's
+    # critical-anchor entity (`_invoke_one` selects `critical[0]['entity_id']`
+    # when present). When the scenario carries critical entities AND any of
+    # these tools appear in `tools_invoked`, they fire FIRST so their
+    # entity-id outputs land at the head of the bundle's combined_ranking
+    # (v2.5.5-D2-runner-reorder; mis_01KRSQ4GCRWPSXCWZHGZ2ZR830).
+    #
+    # Order within the prefix is deterministic: ego_graph (single-anchor
+    # graph neighbourhood) → multi_hop (BFS-expanded subgraph) → assemble_
+    # evidence (claim-cluster assembly). This mirrors how Brain/Executor
+    # consumers anchor-first when investigating a known entity.
+    _ANCHOR_AWARE_TOOL_ORDER: tuple[str, ...] = (
+        "rka_get_ego_graph",
+        "rka_multi_hop_retrieval",
+        "rka_assemble_evidence",
+    )
+
+    @classmethod
+    def _reorder_tools_for_scenario(
+        cls, scenario: dict[str, Any], tools_invoked: list[str]
+    ) -> list[str]:
+        """Pull anchor-aware tools to the front when the scenario has an anchor.
+
+        Predicate: scenario carries at least one ``importance='critical'``
+        expected entity AND ``tools_invoked`` lists at least one anchor-
+        aware tool. By corpus rule each scenario has ≥3 critical entities;
+        the second clause is the live differentiator (9/16 scenarios in
+        the v2.5.2 corpus include an anchor-aware tool).
+
+        Non-anchored scenarios — those with zero anchor-aware tools in
+        ``tools_invoked`` — return the list unchanged. This preserves the
+        ordering metric for those 7 scenarios (per spec assumption 4).
+
+        Within the anchor-aware prefix, order is the class-level
+        ``_ANCHOR_AWARE_TOOL_ORDER`` (ego_graph → multi_hop → assemble_
+        evidence). Within the remaining suffix, the corpus's original
+        order is preserved.
+        """
+        critical = [
+            e for e in scenario.get("expected_entities", [])
+            if e.get("importance") == "critical"
+        ]
+        if not critical:
+            return list(tools_invoked)
+
+        anchor_prefix = [t for t in cls._ANCHOR_AWARE_TOOL_ORDER if t in tools_invoked]
+        if not anchor_prefix:
+            return list(tools_invoked)
+
+        remaining = [t for t in tools_invoked if t not in anchor_prefix]
+        return anchor_prefix + remaining
+
     async def run_scenario(self, scenario: dict[str, Any]) -> ScenarioBundle:
         bundle = ScenarioBundle(
             scenario_id=scenario["scenario_id"], actor=scenario["actor"]
         )
-        for tool in scenario["tools_invoked"]:
+        ordered_tools = self._reorder_tools_for_scenario(
+            scenario, scenario["tools_invoked"]
+        )
+        for tool in ordered_tools:
             invocation = await self._invoke_one(tool, scenario)
             bundle.invocations.append(invocation)
         bundle.compute_combined_ranking()
