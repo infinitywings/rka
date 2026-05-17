@@ -64,6 +64,13 @@ class _FakeMCP:
         self._record("rka_get_context", topic=topic, limit=limit)
         return {"recent": []}
 
+    def rka_get_mission(self, id: str | None = None) -> dict:
+        # Phase 2.5 T4: strategy_node + confirmation_brief now fetch the
+        # mission body before composing the prompt. Return an empty stub —
+        # these tests assert on system-prompt format, not body content.
+        self._record("rka_get_mission", id=id)
+        return {"id": id or "mis_test_xyz"}
+
     def rka_add_note(self, content: str, **kwargs: Any) -> str:
         self.note_id_counter += 1
         note_id = f"jrn_phase_2_1_{self.note_id_counter:03d}"

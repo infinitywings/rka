@@ -132,18 +132,64 @@ def _summarize_position(text: str, *, max_chars: int = 280) -> str:
     return first_line[: max_chars - 1] + "…"
 
 
+def _format_mission_body(mission: dict | None, *, task_char_cap: int = 240) -> str:
+    """Render a mission's body fields into a compact prompt section.
+
+    Phase 2.5 (mis_01KRVJ240VXH7NQ0PMSHXHK888 T4): the autonomous brain_node
+    + confirmation_brief + backbrief_draft need to SEE the mission body in
+    the LLM prompt — Phase 2.4 confirmed empirically that without it, the
+    brain produces SKELETON Backbriefs and gate1 correctly REDIRECTs (the
+    PilotSDK fixture happened to mask the gap with canned responses).
+
+    Format is keys-and-values with mild truncation on long task descriptions
+    so a 15-task mission doesn't blow the context budget. Returns
+    "(mission body unavailable)" if the fetch returned None or empty.
+    """
+    if not mission or not isinstance(mission, dict):
+        return "(mission body unavailable)"
+
+    objective = (mission.get("objective") or "").strip()
+    acceptance = (mission.get("acceptance_criteria") or "").strip()
+    scope = (mission.get("scope_boundaries") or "").strip()
+    tasks = mission.get("tasks") or []
+
+    lines: list[str] = []
+    if objective:
+        lines.append(f"Objective: {objective}")
+    if tasks:
+        lines.append(f"Tasks ({len(tasks)}):")
+        for i, t in enumerate(tasks, 1):
+            desc = (t.get("description") if isinstance(t, dict) else str(t)) or ""
+            status = (t.get("status") if isinstance(t, dict) else "") or "pending"
+            if len(desc) > task_char_cap:
+                desc = desc[: task_char_cap - 1] + "…"
+            lines.append(f"  {i}. [{status}] {desc}")
+    if acceptance:
+        lines.append(f"Acceptance criteria:\n{acceptance}")
+    if scope:
+        lines.append(f"Scope boundaries:\n{scope}")
+
+    return "\n".join(lines) if lines else "(mission body empty)"
+
+
 # ---------------------------------------------------------------------------
 # 1. strategy_node
 # ---------------------------------------------------------------------------
 
 
-def _build_strategy_prompt(state: ResearchWorkflowState, context: dict, status: dict) -> str:
+def _build_strategy_prompt(
+    state: ResearchWorkflowState,
+    context: dict,
+    status: dict,
+    mission: dict | None,
+) -> str:
     return (
         "Session-start strategy synthesis.\n\n"
         f"Project status:\n{status}\n\n"
         f"Relevant prior context:\n{context}\n\n"
         f"Current mission: {state.get('mission_id', '(none)')}\n"
         f"Motivated by decision: {state.get('motivated_by_decision_id', '(none)')}\n\n"
+        f"Mission body:\n{_format_mission_body(mission)}\n\n"
         "Produce a short strategy outline: what this run should do, in what "
         "order, with what evidence checks. Cite RKA IDs you reference."
     )
@@ -152,9 +198,15 @@ def _build_strategy_prompt(state: ResearchWorkflowState, context: dict, status: 
 def strategy_node(
     state: ResearchWorkflowState, sdk: SDKClient, mcp: MCPClient
 ) -> dict:
-    context = mcp.rka_get_context(topic=state.get("mission_id", ""))
+    mission_id = state.get("mission_id")
+    # Phase 2.5 (mis_01KRVJ240VXH7NQ0PMSHXHK888 T4): without the mission body
+    # the LLM can't produce a substantive strategy — Phase 2.4 retry confirmed
+    # this empirically (skeleton Backbrief → gate1 REDIRECT). Fetch up front
+    # and feed into _build_strategy_prompt.
+    mission = mcp.rka_get_mission(id=mission_id) if mission_id else None
+    context = mcp.rka_get_context(topic=mission_id or "")
     status = mcp.rka_get_status()
-    prompt = _build_strategy_prompt(state, context, status)
+    prompt = _build_strategy_prompt(state, context, status, mission)
     # _POSITION_FORMAT ensures real Claude's reply begins with a one-line
     # position summary (consumed by _summarize_position below). Phase 1's
     # PilotSDK happened to satisfy this naturally; real Claude needs the hint.
@@ -183,21 +235,28 @@ def strategy_node(
 # ---------------------------------------------------------------------------
 
 
-def _build_confirmation_prompt(state: ResearchWorkflowState) -> str:
+def _build_confirmation_prompt(
+    state: ResearchWorkflowState, mission: dict | None
+) -> str:
     return (
         "Produce a Confirmation Brief for the PI summarizing:\n"
         "  1. What this workflow run will attempt.\n"
         "  2. Key assumptions the PI should validate.\n"
         "  3. The decision points where PI input will be requested.\n"
         "  4. Estimated budget envelope.\n\n"
-        f"Strategy so far:\n{state.get('brain_strategy', '(empty)')}\n"
+        f"Strategy so far:\n{state.get('brain_strategy', '(empty)')}\n\n"
+        f"Mission body:\n{_format_mission_body(mission)}\n"
     )
 
 
 def confirmation_brief(
     state: ResearchWorkflowState, sdk: SDKClient, mcp: MCPClient
 ) -> dict:
-    prompt = _build_confirmation_prompt(state)
+    mission_id = state.get("mission_id")
+    # Phase 2.5 T4: same data-flow fix as strategy_node — feed the mission
+    # body so the Confirmation Brief is grounded in objective/tasks/AC.
+    mission = mcp.rka_get_mission(id=mission_id) if mission_id else None
+    prompt = _build_confirmation_prompt(state, mission)
     brief_text = sdk.complete(prompt=prompt, system=BRAIN_SYSTEM)
 
     note_id = mcp.rka_add_note(

@@ -55,6 +55,10 @@ class FakeMCP:
     status_response: dict = field(default_factory=lambda: {"phase": "design"})
     context_response: dict = field(default_factory=lambda: {"recent": []})
     research_map_response: dict = field(default_factory=lambda: {"clusters": []})
+    # Phase 2.5 T4: strategy_node + confirmation_brief now fetch the mission
+    # body via rka_get_mission. Tests can override `mission_response` to
+    # inject objective/tasks/AC/scope into the LLM prompt.
+    mission_response: dict = field(default_factory=lambda: {"id": "mis_test_xyz"})
 
     def _record(self, op: str, **kw: Any) -> None:
         self.calls.append({"op": op, **kw})
@@ -71,6 +75,10 @@ class FakeMCP:
     def rka_get_research_map(self) -> dict:
         self._record("rka_get_research_map")
         return self.research_map_response
+
+    def rka_get_mission(self, id: str | None = None) -> dict:
+        self._record("rka_get_mission", id=id)
+        return self.mission_response
 
     # --- writes ---
     def rka_add_note(self, content: str, **kwargs: Any) -> str:
@@ -182,6 +190,75 @@ def test_confirmation_brief_prompt_includes_existing_strategy():
 
     brain.confirmation_brief(state, sdk, mcp)
     assert "Previously synthesized strategy text." in sdk.calls[0]["prompt"]
+
+
+def test_strategy_node_includes_mission_body():
+    """Phase 2.5 (mis_01KRVJ240VXH7NQ0PMSHXHK888 T4): strategy_node must
+    fetch the mission via rka_get_mission and include objective + tasks +
+    acceptance_criteria + scope_boundaries in the LLM prompt. Phase 2.4
+    retry confirmed that without this, the brain produces a SKELETON
+    Backbrief and gate1_validation correctly REDIRECTS."""
+    sdk = FakeSDK()
+    mcp = FakeMCP()
+    mcp.mission_response = {
+        "id": "mis_test_xyz",
+        "objective": "PROBE_OBJECTIVE_MARKER",
+        "tasks": [
+            {"description": "PROBE_TASK_ALPHA", "status": "pending"},
+            {"description": "PROBE_TASK_BETA", "status": "pending"},
+        ],
+        "acceptance_criteria": "PROBE_ACCEPTANCE_MARKER",
+        "scope_boundaries": "PROBE_SCOPE_MARKER",
+    }
+    state = _initial_state()
+
+    brain.strategy_node(state, sdk, mcp)
+
+    # rka_get_mission must have been called with the state's mission_id.
+    mission_calls = [c for c in mcp.calls if c["op"] == "rka_get_mission"]
+    assert mission_calls, "strategy_node must call rka_get_mission"
+    assert mission_calls[0]["id"] == "mis_test_xyz"
+
+    prompt = sdk.calls[0]["prompt"]
+    for marker in (
+        "PROBE_OBJECTIVE_MARKER",
+        "PROBE_TASK_ALPHA",
+        "PROBE_TASK_BETA",
+        "PROBE_ACCEPTANCE_MARKER",
+        "PROBE_SCOPE_MARKER",
+    ):
+        assert marker in prompt, f"strategy_node prompt missing mission body marker: {marker}"
+
+
+def test_confirmation_brief_includes_mission_body():
+    """Phase 2.5 T4 — same data-flow fix as strategy_node, applied to
+    confirmation_brief so the PI-facing brief is grounded in mission body."""
+    sdk = FakeSDK()
+    mcp = FakeMCP()
+    mcp.mission_response = {
+        "id": "mis_test_xyz",
+        "objective": "CB_OBJECTIVE_MARKER",
+        "tasks": [{"description": "CB_TASK_ALPHA", "status": "active"}],
+        "acceptance_criteria": "CB_ACCEPTANCE_MARKER",
+        "scope_boundaries": "CB_SCOPE_MARKER",
+    }
+    state = _initial_state()
+    state["brain_strategy"] = "Prior strategy text."
+
+    brain.confirmation_brief(state, sdk, mcp)
+
+    mission_calls = [c for c in mcp.calls if c["op"] == "rka_get_mission"]
+    assert mission_calls, "confirmation_brief must call rka_get_mission"
+    assert mission_calls[0]["id"] == "mis_test_xyz"
+
+    prompt = sdk.calls[0]["prompt"]
+    for marker in (
+        "CB_OBJECTIVE_MARKER",
+        "CB_TASK_ALPHA",
+        "CB_ACCEPTANCE_MARKER",
+        "CB_SCOPE_MARKER",
+    ):
+        assert marker in prompt, f"confirmation_brief prompt missing mission body marker: {marker}"
 
 
 # ---------------------------------------------------------------------------
