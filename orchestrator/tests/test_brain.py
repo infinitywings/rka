@@ -396,3 +396,39 @@ def test_brain_system_prompt_present_on_every_call():
             f"{fn.__name__}: system_prompt must contain BRAIN_SYSTEM "
             f"(possibly extended with a format hint). Got: {system!r}"
         )
+
+
+def test_BRAIN_SYSTEM_includes_phase_2_5_deltas():
+    """Phase 2.5 (mis_01KRVJ240VXH7NQ0PMSHXHK888 T2): BRAIN_SYSTEM is
+    extended with prose from 5 runtime-relevant deltas per the Brain-
+    ratified Option-C scope (dec_01KRVHZ4P3F1GXE75RRAQX3BTP +
+    chk_01KRVH890GKYCY9A28TM02STQ1):
+
+      Delta #2  — Mid-mission Backbrief gate (token: "Gate cadence")
+      Delta #7  — Conservative malformed-input defaults (token: "redirect, not approve")
+      Delta #14a — Metric divergence-as-headline (token: "expected X, observed Y")
+      Delta #15 — PI batch-review affordance (token: "batched=True")
+      Delta #16 — Affordance F propagation (token: "workflow_thread_id")
+
+    7 other deltas are SKIPPED-PYTHON (already enforced in orchestrator
+    source code; tracked in skill-prompt-deltas.md with code-path
+    references — see Phase 2.5 T6 metadata commit).
+    """
+    text = brain.BRAIN_SYSTEM
+    # Base identity preserved (Phase 2.1 substring guarantee).
+    assert "You are the Brain" in text
+
+    # Phase 2.5 delta markers — each from a runtime-relevant delta.
+    expected_markers = [
+        ("delta #2 Gate cadence",       "Gate cadence"),
+        ("delta #7 Conservative",       "redirect, not approve"),
+        ("delta #14a Divergence",       "expected X, observed Y"),
+        ("delta #15 PI batch-review",   "batched=True"),
+        ("delta #16 Affordance F",      "workflow_thread_id"),
+    ]
+    missing = [label for label, marker in expected_markers if marker not in text]
+    assert not missing, (
+        f"BRAIN_SYSTEM missing Phase 2.5 delta markers: {missing}. "
+        f"Each runtime-relevant delta's prose must include the substring "
+        f"locked by this test so future refactors can't silently drop them."
+    )
