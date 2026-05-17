@@ -37,6 +37,35 @@ BRAIN_SYSTEM = (
 )
 
 
+# Per-node system-prompt format requirements (v2.5.3+agentic-rc1 → final
+# transition; Phase 2.1 mis_01KRSTZVCTFGF91QZXTYK7ZGDD T1). Phase 1 PilotSDK
+# returned hardcoded strings that satisfied downstream parsers; real Claude
+# returns free-form prose. These per-call system-prompt extensions instruct
+# Claude to start replies with the exact tokens the parsers expect, so the
+# existing prefix parsers continue to work (option (a) from the resolved
+# checkpoint chk_01KRSTFD7203NWAR8MYD91KSFV; defer tool-use option (b) to
+# a hypothetical Phase 2.2 if (a) proves insufficient).
+
+_GATE1_FORMAT = (
+    "\n\nFORMAT REQUIREMENT (mechanical parsing — must follow exactly):\n"
+    "Begin your reply with the verdict token on line 1, column 1: either "
+    "`APPROVED:` (uppercase, colon-suffixed) or `REDIRECTED:` (same). "
+    "Follow with one paragraph of rationale on subsequent lines. The first "
+    "line is parsed by string match — anything else there breaks the gate."
+)
+
+_POSITION_FORMAT = (
+    "\n\nFORMAT REQUIREMENT: begin your reply with a one-line position "
+    "summary (≤200 chars) on line 1. Detail on subsequent lines. The first "
+    "line is captured verbatim into the workflow state as your position."
+)
+
+
+def _brain_system(format_hint: str = "") -> str:
+    """Compose the Brain system prompt with an optional per-node format hint."""
+    return BRAIN_SYSTEM + format_hint
+
+
 def _now_iso() -> str:
     """Current UTC timestamp in ISO-8601 with `Z` suffix."""
     return datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -87,7 +116,10 @@ def strategy_node(
     context = mcp.rka_get_context(topic=state.get("mission_id", ""))
     status = mcp.rka_get_status()
     prompt = _build_strategy_prompt(state, context, status)
-    strategy_text = sdk.complete(prompt=prompt, system=BRAIN_SYSTEM)
+    # _POSITION_FORMAT ensures real Claude's reply begins with a one-line
+    # position summary (consumed by _summarize_position below). Phase 1's
+    # PilotSDK happened to satisfy this naturally; real Claude needs the hint.
+    strategy_text = sdk.complete(prompt=prompt, system=_brain_system(_POSITION_FORMAT))
 
     note_id = mcp.rka_add_note(
         content=strategy_text,
@@ -274,7 +306,12 @@ def gate1_validation(
     state: ResearchWorkflowState, sdk: SDKClient, mcp: MCPClient
 ) -> dict:
     prompt = _build_gate1_prompt(state)
-    verdict_text = sdk.complete(prompt=prompt, system=BRAIN_SYSTEM)
+    # _GATE1_FORMAT enforces the APPROVED:/REDIRECTED: first-line token
+    # that _parse_gate1_verdict relies on. Phase 1's PilotSDK returned the
+    # token verbatim; real Claude needs the explicit format requirement so
+    # the verdict isn't mis-parsed as "redirected" and routed to
+    # escalation_router (the v2.5.3+agentic-rc1 cascade failure).
+    verdict_text = sdk.complete(prompt=prompt, system=_brain_system(_GATE1_FORMAT))
     verdict = _parse_gate1_verdict(verdict_text)
 
     note_id = mcp.rka_add_note(

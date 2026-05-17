@@ -387,4 +387,12 @@ def test_brain_system_prompt_present_on_every_call():
         state = _initial_state()
         fn(state, sdk, mcp)
         # Every Brain LLM call must carry the Brain system message.
-        assert sdk.calls[0]["system"] == brain.BRAIN_SYSTEM
+        # Phase 2.1 (mis_01KRSTZVCTFGF91QZXTYK7ZGDD T1) extends BRAIN_SYSTEM
+        # with per-node format hints at some call sites (gate1_validation
+        # gets _GATE1_FORMAT; strategy_node gets _POSITION_FORMAT) — the
+        # substring check honors both bare and extended forms.
+        system = sdk.calls[0]["system"] or ""
+        assert brain.BRAIN_SYSTEM in system, (
+            f"{fn.__name__}: system_prompt must contain BRAIN_SYSTEM "
+            f"(possibly extended with a format hint). Got: {system!r}"
+        )
