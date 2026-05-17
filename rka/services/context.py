@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -52,13 +53,68 @@ END"""
 
 # ---------------------------------------------------------------------------
 # v2.5.3 overview-path weighted-sum coefficients (dec_01KRSMMCS8MD7KQDBS0E2DVKBQ).
-# Module-level constants so A/B coefficient tuning is a single-file edit. The
-# weighted-sum applies ONLY to the overview path; the topic path uses search
-# relevance as primary sort key (importance/centrality/recency are tie-breaks).
+# Module-level constants so A/B coefficient tuning is a single-file edit.
+# The weighted-sum applies ONLY to the overview path; the topic path uses
+# search relevance as primary sort key.
+#
+# v2.5.4 (mis_01KRSP44W7BDZH11PZRGXH1WM4): coefficients are env-var-backed
+# so the eval-v2 A/B sweep swaps configs via docker restart (no source
+# rebuild per config). Read at module-import time. Tests that monkey-patch
+# env vars must call `_reload_coefficients_from_env()` after the patch.
 # ---------------------------------------------------------------------------
-_W_IMPORTANCE: float = 0.5
-_W_CENTRALITY: float = 0.3
-_W_RECENCY: float = 0.2
+
+# Sweep coefficient defaults. Spec-listed env var names per
+# mis_01KRSP44W7BDZH11PZRGXH1WM4 T1: RKA_CTX_W_IMP / W_CENT / W_RECENCY /
+# PI_LIFT. The v2.5.3-hypothesis defaults below are the Config 1 sweep
+# reference; T4 of the v2.5.4 mission updates them to the sweep winner.
+_DEFAULT_W_IMPORTANCE = 0.5
+_DEFAULT_W_CENTRALITY = 0.3
+_DEFAULT_W_RECENCY = 0.2
+# PI-source lift. Spec text references "0.05" but the v2.5.3 implementation
+# preserves the pre-v2.5.3 +5/40 = +0.125 normalized magnitude. Keeping
+# 0.125 here (matches existing test test_pi_source_lift_applied_within_band).
+# Per mission assumption 7, PI lift is NOT part of the A/B sweep; the env
+# var exists for operator flexibility only.
+_DEFAULT_PI_SOURCE_LIFT_NORMALIZED = 0.125
+
+
+def _read_coeff(env_var: str, default: float) -> float:
+    """Read a float coefficient from the env, falling back to `default`."""
+    raw = os.getenv(env_var)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid float in %s=%r; falling back to default %s", env_var, raw, default
+        )
+        return default
+
+
+def _reload_coefficients_from_env() -> None:
+    """Test helper: refresh module-level coefficient constants from env.
+
+    Production: env vars set at container startup; module imports happen
+    once. Tests: ``monkeypatch.setenv(...)`` + this call to pick up the
+    overrides. Sweep harness: docker restart between configs → fresh
+    process → fresh module import → fresh constants (no need to call this).
+    """
+    global _W_IMPORTANCE, _W_CENTRALITY, _W_RECENCY, _PI_SOURCE_LIFT_NORMALIZED
+    _W_IMPORTANCE = _read_coeff("RKA_CTX_W_IMP", _DEFAULT_W_IMPORTANCE)
+    _W_CENTRALITY = _read_coeff("RKA_CTX_W_CENT", _DEFAULT_W_CENTRALITY)
+    _W_RECENCY = _read_coeff("RKA_CTX_W_RECENCY", _DEFAULT_W_RECENCY)
+    _PI_SOURCE_LIFT_NORMALIZED = _read_coeff(
+        "RKA_CTX_PI_LIFT", _DEFAULT_PI_SOURCE_LIFT_NORMALIZED
+    )
+
+
+_W_IMPORTANCE: float = _read_coeff("RKA_CTX_W_IMP", _DEFAULT_W_IMPORTANCE)
+_W_CENTRALITY: float = _read_coeff("RKA_CTX_W_CENT", _DEFAULT_W_CENTRALITY)
+_W_RECENCY: float = _read_coeff("RKA_CTX_W_RECENCY", _DEFAULT_W_RECENCY)
+_PI_SOURCE_LIFT_NORMALIZED: float = _read_coeff(
+    "RKA_CTX_PI_LIFT", _DEFAULT_PI_SOURCE_LIFT_NORMALIZED
+)
 
 # Importance band normalized to [0, 1]. Mirrors _sort_key's importance map
 # divided by the critical=4 ceiling.
@@ -69,14 +125,6 @@ _IMPORTANCE_BAND_NORMALIZED: dict[str, float] = {
     "low": 0.25,
     "archived": 0.0,
 }
-
-# PI-source lift. Pre-v2.5.3 the lift was +5 on a [0, 40] importance scale =
-# +5/40 = +0.125 normalized. Preserving the existing relative magnitude so
-# PI-anchored entries keep their existing weight (and so the spec's stated
-# "PI-source +5 lift preserved" intent is honored — note the spec text
-# transcribes the value as "+0.05" but the parenthetical "+5/40 = 0.125" is
-# the existing math; preserving the existing math).
-_PI_SOURCE_LIFT_NORMALIZED: float = 0.125
 
 
 class ContextEngine:

@@ -447,3 +447,79 @@ class TestV2_5_3SortByRetrievalPath:
         assert ContextEngine._topic_sort_key(pi_entry) < ContextEngine._topic_sort_key(
             non_pi_entry
         )
+
+
+# ---------------------------------------------------------------------------
+# v2.5.4 — env-var-configurable coefficients (mis_01KRSP44W7BDZH11PZRGXH1WM4)
+# ---------------------------------------------------------------------------
+
+
+class TestV2_5_4EnvVarConfigurableCoefficients:
+    """Coefficients are read from RKA_CTX_W_IMP / W_CENT / W_RECENCY /
+    PI_LIFT at module-import time. Tests use monkeypatch.setenv plus
+    _reload_coefficients_from_env() to swap values mid-process."""
+
+    def test_defaults_match_v2_5_3_hypothesis_when_no_env_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """With no env vars set, the module constants must equal the
+        v2.5.3-hypothesis Config 1 defaults (0.5 / 0.3 / 0.2 / 0.125).
+        The 0.125 PI lift preserves the pre-v2.5.3 +5/40 normalized
+        magnitude (the spec text says "0.05" but the parenthetical
+        "+5/40 = 0.125" — the existing implementation matches the
+        parenthetical and that's what gets preserved across tuning)."""
+        import rka.services.context as ctx
+
+        for var in (
+            "RKA_CTX_W_IMP",
+            "RKA_CTX_W_CENT",
+            "RKA_CTX_W_RECENCY",
+            "RKA_CTX_PI_LIFT",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        ctx._reload_coefficients_from_env()
+        assert ctx._W_IMPORTANCE == 0.5
+        assert ctx._W_CENTRALITY == 0.3
+        assert ctx._W_RECENCY == 0.2
+        assert ctx._PI_SOURCE_LIFT_NORMALIZED == 0.125
+
+    def test_env_vars_override_defaults(self, monkeypatch: pytest.MonkeyPatch):
+        """Setting the four RKA_CTX_* env vars overrides the module-level
+        constants when _reload_coefficients_from_env() runs. This is the
+        production swap pattern: docker restart with env → fresh import
+        → fresh constants."""
+        import rka.services.context as ctx
+
+        monkeypatch.setenv("RKA_CTX_W_IMP", "0.7")
+        monkeypatch.setenv("RKA_CTX_W_CENT", "0.2")
+        monkeypatch.setenv("RKA_CTX_W_RECENCY", "0.1")
+        monkeypatch.setenv("RKA_CTX_PI_LIFT", "0.3")
+        ctx._reload_coefficients_from_env()
+        assert ctx._W_IMPORTANCE == 0.7
+        assert ctx._W_CENTRALITY == 0.2
+        assert ctx._W_RECENCY == 0.1
+        assert ctx._PI_SOURCE_LIFT_NORMALIZED == 0.3
+
+        # Restore defaults so subsequent tests in the same module aren't
+        # affected by env-var bleed.
+        for var in (
+            "RKA_CTX_W_IMP",
+            "RKA_CTX_W_CENT",
+            "RKA_CTX_W_RECENCY",
+            "RKA_CTX_PI_LIFT",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        ctx._reload_coefficients_from_env()
+
+    def test_invalid_float_falls_back_to_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Operator typo in env var (non-numeric) must not crash the
+        engine; falls back to the documented default."""
+        import rka.services.context as ctx
+
+        monkeypatch.setenv("RKA_CTX_W_IMP", "not-a-float")
+        ctx._reload_coefficients_from_env()
+        assert ctx._W_IMPORTANCE == 0.5  # default preserved
+        monkeypatch.delenv("RKA_CTX_W_IMP", raising=False)
+        ctx._reload_coefficients_from_env()
