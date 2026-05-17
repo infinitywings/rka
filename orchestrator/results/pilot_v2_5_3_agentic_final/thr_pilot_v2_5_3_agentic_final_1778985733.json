@@ -1,0 +1,62 @@
+{
+  "workflow_thread_id": "thr_pilot_v2_5_3_agentic_final_1778985733",
+  "terminal_state": "complete",
+  "artifact_count": 10,
+  "final_report_id": "mis_01KRKG9K1SSDZNDH90K2Z7ZM92",
+  "sdk_calls": null,
+  "use_real_sdk": true,
+  "artifacts": [
+    {
+      "rka_id": "jrn_01KRSX1R765J0KMGAPBD05Q4X4",
+      "entity_type": "journal",
+      "node_name": "strategy_node"
+    },
+    {
+      "rka_id": "jrn_01KRSX3EQ63ZXTRASEQDXWDZ20",
+      "entity_type": "journal",
+      "node_name": "confirmation_brief"
+    },
+    {
+      "rka_id": "jrn_01KRSX7S2RT0H3DW247G5DY1TR",
+      "entity_type": "journal",
+      "node_name": "backbrief_draft"
+    },
+    {
+      "rka_id": "jrn_01KRSX8CAJNP1TZR2115NVCYR2",
+      "entity_type": "journal",
+      "node_name": "gate1_validation"
+    },
+    {
+      "rka_id": "jrn_01KRSXD5JQ2ZT7B13QYA1EXMB7",
+      "entity_type": "journal",
+      "node_name": "mission_execute"
+    },
+    {
+      "rka_id": "mis_01KRKG9K1SSDZNDH90K2Z7ZM92",
+      "entity_type": "report",
+      "node_name": "submit_report"
+    },
+    {
+      "rka_id": "jrn_01KRSXG9267C3XENKNE7843BZR",
+      "entity_type": "journal",
+      "node_name": "cluster_review"
+    },
+    {
+      "rka_id": "jrn_01KRSXJ5R2QQ8EVY73MS455D2M",
+      "entity_type": "journal",
+      "node_name": "decision_present"
+    },
+    {
+      "rka_id": "dec_01KRSXJ5S1DRFNJN1NB1J2F2RG",
+      "entity_type": "decision",
+      "node_name": "pi_decision_select"
+    },
+    {
+      "rka_id": "jrn_01KRSXN0WBB9TTNWQSMDHN5TH9",
+      "entity_type": "journal",
+      "node_name": "final_synthesis"
+    }
+  ],
+  "errors": [],
+  "interrupts_count": 3
+}

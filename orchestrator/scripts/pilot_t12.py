@@ -184,7 +184,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  checkpoints:     {len(final.get('checkpoints', []))}")
     print(f"  errors:          {len(final.get('errors', []))}")
     print(f"  final_report_id: {final.get('final_report_id')}")
-    print(f"  SDK calls:       {sdk.call_count}")
+    sdk_calls = getattr(sdk, "call_count", "(n/a — real SDK)")
+    print(f"  SDK calls:       {sdk_calls}")
     print(f"\nArtifact IDs (retrievable via tags=[{args.workflow_thread_id}]):")
     for a in final.get("artifacts", []):
         print(f"  - {a.get('rka_id')}  ({a.get('entity_type')})  by {a.get('node_name')}")
