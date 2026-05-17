@@ -1,19 +1,22 @@
-"""T12 Phase-1 pilot — drive the compiled graph end-to-end against real RKA.
+"""T12 pilot — drive the compiled graph end-to-end against real RKA.
 
-This is the Phase 1 pilot deliverable. The LangGraph topology is wired to
-real `RestMCPClient` calls against the running RKA at localhost:9712, with
-FakeSDK + FakeInterrupt standing in for the claude-agent-sdk loop (the
-real SDK integration is Phase 2). Each node still writes real artifacts
-to RKA tagged with the run's `workflow_thread_id`, so the run produces
-genuine journal entries, a decision, and a mission report — exactly what
-a Phase 2 production run will produce, minus the LLM-quality dimension.
+Phase 1 (original): LangGraph topology wired to real RestMCPClient calls
+against the running RKA at localhost:9712, with FakeSDK + FakeInterrupt
+standing in for the claude-agent-sdk loop. Real LLM integration was
+deferred to Phase 2.
 
-Usage:
+Phase 2 (mis_01KRSRZX2P3BN4ZAP70ZM7YXGC T3): pass --use-real-sdk to swap
+PilotSDK with `orchestrator.llm_client.make_sdk()`, which binds the real
+claude-agent-sdk and routes through Claude Max (Keychain / credentials.json),
+scrubbing ANTHROPIC_API_KEY from the subprocess env.
 
-  python scripts/pilot_t12.py \\
+Usage (Phase 2):
+
+  python scripts/pilot_t12.py --use-real-sdk \\
+      --output-dir orchestrator/results/pilot_v2_5_3_agentic/ \\
       --project-id prj_01KKQM9JFG67GT5FGWTAHD9YE4 \\
       --mission-id mis_01KRKG9K1SSDZNDH90K2Z7ZM92 \\
-      --workflow-thread-id thr_pilot_t12_$(date +%s)
+      --workflow-thread-id thr_pilot_v2_5_3_agentic_$(date +%s)
 
 After the run, every artifact can be retrieved via
 `rka_get_journal(tags=[workflow_thread_id])` (Affordance F pattern).
@@ -107,6 +110,23 @@ def main(argv: list[str] | None = None) -> int:
         default=":memory:",
         help="SqliteSaver path (`:memory:` keeps it ephemeral).",
     )
+    parser.add_argument(
+        "--use-real-sdk",
+        action="store_true",
+        help=(
+            "Phase 2: swap PilotSDK with orchestrator.llm_client.make_sdk() "
+            "(real claude-agent-sdk; routes via Claude Max with "
+            "ANTHROPIC_API_KEY scrubbed)."
+        ),
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help=(
+            "If set, write a JSON pilot-artifact file under this directory "
+            "(named by workflow_thread_id). Created if absent."
+        ),
+    )
     args = parser.parse_args(argv)
 
     print(f"=== T12 pilot — workflow_thread_id={args.workflow_thread_id} ===")
@@ -119,7 +139,13 @@ def main(argv: list[str] | None = None) -> int:
         base_url=args.rka_url,
         project_id=args.project_id,
     )
-    sdk = PilotSDK()
+    if args.use_real_sdk:
+        from orchestrator.llm_client import make_sdk
+        sdk = make_sdk()
+        print("  SDK: REAL claude-agent-sdk (Claude Max routing)\n")
+    else:
+        sdk = PilotSDK()
+        print("  SDK: PilotSDK (Phase-1 FakeSDK variant)\n")
 
     # Quick smoke against RKA before running the graph.
     try:
@@ -163,6 +189,24 @@ def main(argv: list[str] | None = None) -> int:
     for a in final.get("artifacts", []):
         print(f"  - {a.get('rka_id')}  ({a.get('entity_type')})  by {a.get('node_name')}")
 
+    summary = {
+        "workflow_thread_id": args.workflow_thread_id,
+        "terminal_state": final.get("terminal_state"),
+        "artifact_count": len(final.get("artifacts", [])),
+        "final_report_id": final.get("final_report_id"),
+        "sdk_calls": getattr(sdk, "call_count", None),
+        "use_real_sdk": args.use_real_sdk,
+        "artifacts": [
+            {
+                "rka_id": a.get("rka_id"),
+                "entity_type": a.get("entity_type"),
+                "node_name": a.get("node_name"),
+            }
+            for a in final.get("artifacts", [])
+        ],
+        "errors": final.get("errors", []),
+        "interrupts_count": len(final.get("interrupts", [])),
+    }
     print(json.dumps(
         {
             "workflow_thread_id": args.workflow_thread_id,
@@ -172,6 +216,12 @@ def main(argv: list[str] | None = None) -> int:
         },
         indent=2,
     ))
+    if args.output_dir:
+        out_dir = Path(args.output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{args.workflow_thread_id}.json"
+        out_path.write_text(json.dumps(summary, indent=2) + "\n")
+        print(f"\nWrote pilot artifact: {out_path}")
 
     return 0 if final.get("terminal_state") == "complete" else 1
 

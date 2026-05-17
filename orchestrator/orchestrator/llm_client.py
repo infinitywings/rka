@@ -209,8 +209,12 @@ class _RealSDKClient:
         options = sdk.ClaudeAgentOptions(
             system_prompt=system,
             env=self._env,
-            max_turns=1,
             # Empty allowed_tools — pure text reply, no tool-use round-trips.
+            # (Don't pin max_turns; the SDK's default permits whatever turn
+            # count Claude needs to deliver the full assistant message. With
+            # no tools allowed, the run terminates at the first assistant
+            # reply anyway. Setting max_turns=1 over-constrains and the SDK
+            # raises before yielding the message.)
             allowed_tools=[],
         )
 

@@ -1,0 +1,69 @@
+ANTHROPIC_API_KEY is set in env (would route to API billing). make_sdk() scrubs it before SDK invocation so auth falls through to Claude Max (credentials.json / Keychain).
+=== T12 pilot — workflow_thread_id=thr_pilot_v2_5_3_agentic_1778982590 ===
+  project_id=prj_01KKQM9JFG67GT5FGWTAHD9YE4
+  mission_id=mis_01KRKG9K1SSDZNDH90K2Z7ZM92
+  rka_url=http://localhost:9712
+
+  SDK: REAL claude-agent-sdk (Claude Max routing)
+
+  RKA reachable; project phase: design
+
+--- invoking graph ---
+Traceback (most recent call last):
+  File "/Volumes/FuSpace/Projects/rka/orchestrator/scripts/pilot_t12.py", line 230, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "/Volumes/FuSpace/Projects/rka/orchestrator/scripts/pilot_t12.py", line 177, in main
+    final = g.invoke(initial, config=config)
+  File "/Volumes/FuSpace/Projects/rka/.venv/lib/python3.13/site-packages/langgraph/pregel/main.py", line 3880, in invoke
+    for chunk in self.stream(
+                 ~~~~~~~~~~~^
+        input,
+        ^^^^^^
+    ...<11 lines>...
+        **kwargs,
+        ^^^^^^^^^
+    ):
+    ^
+  File "/Volumes/FuSpace/Projects/rka/.venv/lib/python3.13/site-packages/langgraph/pregel/main.py", line 2936, in stream
+    for _ in runner.tick(
+             ~~~~~~~~~~~^
+        [t for t in loop.tasks.values() if not t.writes],
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+        schedule_task=loop.accept_push,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ):
+    ^
+  File "/Volumes/FuSpace/Projects/rka/.venv/lib/python3.13/site-packages/langgraph/pregel/_runner.py", line 207, in tick
+    run_with_retry(
+    ~~~~~~~~~~~~~~^
+        t,
+        ^^
+    ...<10 lines>...
+        },
+        ^^
+    )
+    ^
+  File "/Volumes/FuSpace/Projects/rka/.venv/lib/python3.13/site-packages/langgraph/pregel/_retry.py", line 585, in run_with_retry
+    return task.proc.invoke(task.input, config)
+           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/FuSpace/Projects/rka/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py", line 684, in invoke
+    input = context.run(step.invoke, input, config, **kwargs)
+  File "/Volumes/FuSpace/Projects/rka/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py", line 426, in invoke
+    ret = self.func(*args, **kwargs)
+  File "/Volumes/FuSpace/Projects/rka/orchestrator/orchestrator/nodes/utility.py", line 198, in escalation_router
+    chk_id = mcp.rka_submit_checkpoint(
+        reason=reason,
+        type=chk_type,
+        related_mission=state.get("mission_id"),
+    )
+  File "/Volumes/FuSpace/Projects/rka/orchestrator/orchestrator/mcp_client.py", line 309, in rka_submit_checkpoint
+    result = self._request("POST", "/api/checkpoints", json=body) or {}
+             ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/FuSpace/Projects/rka/orchestrator/orchestrator/mcp_client.py", line 195, in _request
+    raise CheckpointError(
+    ...<2 lines>...
+    )
+orchestrator.mcp_client.CheckpointError: RKA returned 422 (knowledge-pack integrity); path=/api/checkpoints
+During task with name 'escalation_router' and id '5d45579e-1963-212d-b96b-e68327404d2b'
