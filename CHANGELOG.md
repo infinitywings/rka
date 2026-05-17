@@ -3,6 +3,76 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [2.5.3+agentic] — 2026-05-17 (final; agentic-branch sibling track)
+
+**Branch**: `agentic` (sibling of `main` per `dec_01KRPAVSTJ4H80VXJVN6DQ82WQ`). Main's v2.5.3 (commit `c063673`) is unchanged. **Supersedes `v2.5.3+agentic-rc1`** — that tag is deleted from origin as part of this release.
+
+**Mission**: `mis_01KRSTZVCTFGF91QZXTYK7ZGDD` (Phase 2.1 shakedown)
+**Phase 2 parent mission**: `mis_01KRSRZX2P3BN4ZAP70ZM7YXGC`
+**Fix-shape decision**: `dec_01KRSRX25V4086K4TBHDYRHPDH` (Phase 2 narrow scope; covers both Phase 2 and 2.1)
+**Resolved checkpoint**: `chk_01KRSTFD7203NWAR8MYD91KSFV` (rc1 → final transition ratified by PI option C 2026-05-17)
+
+### Headline — autonomous Brain↔Executor loop validated end-to-end
+
+The Phase 2 pilot (`v2.5.3+agentic-rc1`) validated auth-routing but didn't complete e2e; Phase 2.1 closes the two integration-shakedown items, and the pilot now runs cleanly all the way through `pi_acceptance`:
+
+```
+terminal_state:  complete
+current_phase:   pi_acceptance
+interrupts:      3 (greenlight, decision_select, acceptance)
+artifacts:       10 (5 journals + 1 mission report + 1 decision + 3 more journals)
+checkpoints:     0
+errors:          0
+```
+
+Headline capabilities now real:
+- **Real `claude-agent-sdk` bound** via `make_sdk()` wrapping `claude_agent_sdk.query` (Phase 2 T1).
+- **Claude Max subscription routing** with `ANTHROPIC_API_KEY` scrubbed before SDK invocation; auth-path label logged (never the credential value) — `keychain` on this pilot (Phase 2 T2).
+- **All 10 LangGraph nodes fire cleanly** with real LLM output on each Brain/Executor node.
+- **Real artifacts in RKA** — 5 journals, 1 mission report, 1 decision, all tagged with the workflow_thread_id for Affordance-F retrieval.
+
+### Fixed (Phase 2.1)
+
+- **Orchestrator node parsers handle free-form Claude output** (`mis_01KRSTZVCTFGF91QZXTYK7ZGDD` T1, commit `e3f7fc4`).
+  T1 surveyed all 4 node files; reduced the load-bearing parser surface to exactly one site: `_parse_gate1_verdict` (looks for `APPROVED` substring in line 1). Pre-fix, real Claude's verdict prose lacked the prefix → parser returned `redirected` → routing cascaded into `escalation_router` → which then failed on `rka_submit_checkpoint`.
+  Fix follows Brain's option (a) from `chk_01KRSTFD7203NWAR8MYD91KSFV`: per-node `system_prompt` extensions instructing Claude to begin replies with the expected token. Two new constants in `orchestrator/orchestrator/nodes/brain.py`:
+  - `_GATE1_FORMAT`: `APPROVED:` / `REDIRECTED:` first-line requirement (mandatory; closes the cascade).
+  - `_POSITION_FORMAT`: one-line position-summary requirement (bonus; produces cleaner `state["brain_position"]` for `consensus_check`).
+  Helper `_brain_system(format_hint)` composes `BRAIN_SYSTEM + hint` per call site. Soft parsers (`_summarize_position`) unchanged — they just truncate; don't crash. PI-interrupt parsers (`pi.py:139,209`) untouched — they parse human input, not LLM.
+- **`RestMCPClient.rka_submit_checkpoint` payload aligned with `CheckpointCreate` schema** (`mis_01KRSTZVCTFGF91QZXTYK7ZGDD` T2, commit `3d4d0fd`).
+  Mission C (`mis_01KR43RX9KY11GAPTPPGK9XSDE`, v2.3.4) added `extra="forbid"` to `CheckpointCreate` as defense-in-depth. The orchestrator was designed pre-v2.4 with three field-name drifts that all got rejected at once: `reason → description`, `related_mission → mission_id`, `tags → (dropped; folded into context as the workflow_thread_id prefix)`. Caller-side guard added: `related_mission` is now required at the orchestrator boundary (raises `ValueError` with a clear message). Live smoke against `/api/checkpoints` with the new payload confirmed HTTP 201.
+
+### Tests
+
+- **191 orchestrator tests** total (169 inherited Phase 1 + 11 Phase 2 SDK/auth + 9 Phase 2.1 T1 format/parser + 2 net new Phase 2.1 T2 payload).
+- 4 new Phase 2.1 test files / additions:
+  - `orchestrator/tests/test_nodes_phase_2_1_format.py` (NEW) — 8 tests across `TestParseGate1VerdictHandlesPrefixedClaudeProse`, `TestNodesPassFormatHintInSystemPrompt`, `TestSummarizePositionHandlesRealisticClaudeOutput`.
+  - `orchestrator/tests/test_brain.py::test_brain_system_prompt_present_on_every_call` — loosened from exact-equality `==` to substring `in` (Phase 2.1 extends BRAIN_SYSTEM at some sites).
+  - `orchestrator/tests/test_mcp_client.py` — `test_rka_submit_checkpoint_payload_matches_current_rka_schema` (REPLACES the old `_carries_workflow_tag` test; new contract); `test_rka_submit_checkpoint_requires_related_mission`; `test_rka_submit_checkpoint_surfaces_422_with_structured_detail` (locks Affordance-G body preservation on CheckpointError).
+
+### Branch architecture
+
+Agentic stays a permanent sibling of main per `dec_01KRPAVSTJ4H80VXJVN6DQ82WQ`. **NO merge to main.** Main's `v2.5.3` (commit `c063673`) is unchanged. The `+agentic` build-metadata suffix follows the `v2.5.0+desktop` precedent.
+
+### Tag transition
+
+- `v2.5.3+agentic-rc1` — **DELETED from origin** as part of this release (released 2026-05-17; superseded same day).
+- `v2.5.3+agentic` — **FINAL** annotated tag at agentic HEAD post-Phase-2.1.
+
+### Bookkeeper invariant + agentic-branch invariant
+
+- `git diff main -- rka/services/worker.py = 0 lines` at every commit on agentic.
+- `git diff HEAD -- rka/ = 0 lines` (agentic-branch invariant) at every Phase 2.1 commit (T1, T2, T3 all strictly `orchestrator/`).
+
+### Deferred to future missions
+
+- **Anthropic tool-use refactor** for fully-structured node output — option (b) from the resolved checkpoint; defer to a hypothetical Phase 2.2 only if prompt-led prefixes prove insufficient in practice.
+- **19 skill-prompt-deltas fold** into `rka-test` marketplace plugin — separate marketplace-plugin mission.
+- **`final_report_id` rename** from Phase 1 backlog — hygiene.
+- **PilotSDK deprecation** — its hardcoded-string contracts are the source of the integration debt; could be a Phase 2.1 followup or separate cleanup mission.
+
+---
+
 ## [2.5.3+agentic-rc1] — 2026-05-17 (release candidate; agentic-branch sibling track)
 
 **Branch**: `agentic` (sibling of `main` per `dec_01KRPAVSTJ4H80VXJVN6DQ82WQ`). This entry documents the agentic-track release candidate; main's v2.5.3 is unchanged. **NOT a final release** — final `v2.5.3+agentic` tag waits for Phase 2.1 to close the integration shakedown surfaced at T3.
