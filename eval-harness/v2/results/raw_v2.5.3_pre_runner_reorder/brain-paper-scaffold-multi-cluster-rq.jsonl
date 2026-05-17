@@ -3,36 +3,6 @@
   "actor": "brain",
   "invocations": [
     {
-      "tool": "rka_get_ego_graph",
-      "path": "/api/graph/ego/dec_01KP4P4QSSNZCTEHVT6QR7ZRYD",
-      "status_code": 200,
-      "entity_ids": [
-        "lit_01KP4938ECWH5TVCCZMPEEXFF6",
-        "lit_01KP4938FJE4XEA1NFT8N5S4CN",
-        "lit_01KP4938FSCC598NR227815WEA",
-        "lit_01KP4938G5R1SE04RJ1259T938",
-        "lit_01KP4938GB97ZJGSXWX2HDYY5Q",
-        "ecl_01KP4PK7VPN8YFR50PSFXPGTQ0",
-        "ecl_01KP4PKMN8XS0WXHXHN7GN4TG3",
-        "ecl_01KP4PM090PTWGR81GXJAYH7MK",
-        "ecl_01KP4PMF0PSPNWYC298XJXYHJ9",
-        "jrn_01KP492B9CVKTMDE6ZNXQQ1FQ9",
-        "jrn_01KP496FMCQX4TEYJTMB8DHHTK",
-        "jrn_01KQQPCW47C65G4WBTMGXC4HV5",
-        "dec_01KP4P4QSSNZCTEHVT6QR7ZRYD"
-      ],
-      "divergence": null,
-      "notes": "anchor=dec_01KP4P4QSSNZCTEHVT6QR7ZRYD"
-    },
-    {
-      "tool": "rka_assemble_evidence",
-      "path": "/api/assemble-evidence",
-      "status_code": 422,
-      "entity_ids": [],
-      "divergence": "rka_assemble_evidence: 422 (Brain T2-gate sister-uncertainty \u2014 shape unknown)",
-      "notes": "anchor=dec_01KP4P4QSSNZCTEHVT6QR7ZRYD"
-    },
-    {
       "tool": "rka_get_research_map",
       "path": "/api/research-map",
       "status_code": 200,
@@ -64,27 +34,49 @@
       ],
       "divergence": null,
       "notes": ""
+    },
+    {
+      "tool": "rka_get_ego_graph",
+      "path": "/api/graph/ego/dec_01KP4P4QSSNZCTEHVT6QR7ZRYD",
+      "status_code": 200,
+      "entity_ids": [
+        "lit_01KP4938ECWH5TVCCZMPEEXFF6",
+        "lit_01KP4938FJE4XEA1NFT8N5S4CN",
+        "lit_01KP4938FSCC598NR227815WEA",
+        "lit_01KP4938G5R1SE04RJ1259T938",
+        "lit_01KP4938GB97ZJGSXWX2HDYY5Q",
+        "ecl_01KP4PK7VPN8YFR50PSFXPGTQ0",
+        "ecl_01KP4PKMN8XS0WXHXHN7GN4TG3",
+        "ecl_01KP4PM090PTWGR81GXJAYH7MK",
+        "ecl_01KP4PMF0PSPNWYC298XJXYHJ9",
+        "dec_01KP4P4QSSNZCTEHVT6QR7ZRYD",
+        "jrn_01KP492B9CVKTMDE6ZNXQQ1FQ9",
+        "jrn_01KP496FMCQX4TEYJTMB8DHHTK",
+        "jrn_01KQQPCW47C65G4WBTMGXC4HV5"
+      ],
+      "divergence": null,
+      "notes": "anchor=dec_01KP4P4QSSNZCTEHVT6QR7ZRYD"
+    },
+    {
+      "tool": "rka_assemble_evidence",
+      "path": "/api/assemble-evidence",
+      "status_code": 422,
+      "entity_ids": [],
+      "divergence": "rka_assemble_evidence: 422 (Brain T2-gate sister-uncertainty \u2014 shape unknown)",
+      "notes": "anchor=dec_01KP4P4QSSNZCTEHVT6QR7ZRYD"
     }
   ],
   "combined_ranking": [
-    "lit_01KP4938ECWH5TVCCZMPEEXFF6",
-    "lit_01KP4938FJE4XEA1NFT8N5S4CN",
-    "lit_01KP4938FSCC598NR227815WEA",
-    "lit_01KP4938G5R1SE04RJ1259T938",
-    "lit_01KP4938GB97ZJGSXWX2HDYY5Q",
-    "ecl_01KP4PK7VPN8YFR50PSFXPGTQ0",
-    "ecl_01KP4PKMN8XS0WXHXHN7GN4TG3",
-    "ecl_01KP4PM090PTWGR81GXJAYH7MK",
-    "ecl_01KP4PMF0PSPNWYC298XJXYHJ9",
-    "jrn_01KP492B9CVKTMDE6ZNXQQ1FQ9",
-    "jrn_01KP496FMCQX4TEYJTMB8DHHTK",
-    "jrn_01KQQPCW47C65G4WBTMGXC4HV5",
-    "dec_01KP4P4QSSNZCTEHVT6QR7ZRYD",
     "dec_01KPE2QWY247ZG92KA7BQX0P4H",
     "dec_01KP4P53MSKY3GKEXZKG9JMFKX",
     "ecl_01KP4PJQAVY11YJFA9M498ATVE",
     "ecl_01KP4PJGJKE9Q7X1W2X6SJJVZ3",
     "ecl_01KP4PJX4YT2A2QYPB7S9RADY4",
+    "dec_01KP4P4QSSNZCTEHVT6QR7ZRYD",
+    "ecl_01KP4PK7VPN8YFR50PSFXPGTQ0",
+    "ecl_01KP4PKMN8XS0WXHXHN7GN4TG3",
+    "ecl_01KP4PM090PTWGR81GXJAYH7MK",
+    "ecl_01KP4PMF0PSPNWYC298XJXYHJ9",
     "dec_01KMX18FDAMN7T5YVZ7V8HV6RK",
     "ecl_01KP4PN50J9FT2S0WPY1QBH8B3",
     "ecl_01KP4PMRHNS5HK4T1HF2N999Y8",
@@ -98,6 +90,14 @@
     "ecl_01KP4PR7G9MB8YNJAZP1ZZBGT4",
     "dec_01KMX18FDAMN7T5YVZ7V8HV6R6",
     "ecl_01KP4PRE5JFME3FH07RVRH5DMB",
-    "ecl_01KP4PRNA5NDP10ETXGDZQ55V4"
+    "ecl_01KP4PRNA5NDP10ETXGDZQ55V4",
+    "lit_01KP4938ECWH5TVCCZMPEEXFF6",
+    "lit_01KP4938FJE4XEA1NFT8N5S4CN",
+    "lit_01KP4938FSCC598NR227815WEA",
+    "lit_01KP4938G5R1SE04RJ1259T938",
+    "lit_01KP4938GB97ZJGSXWX2HDYY5Q",
+    "jrn_01KP492B9CVKTMDE6ZNXQQ1FQ9",
+    "jrn_01KP496FMCQX4TEYJTMB8DHHTK",
+    "jrn_01KQQPCW47C65G4WBTMGXC4HV5"
   ]
 }

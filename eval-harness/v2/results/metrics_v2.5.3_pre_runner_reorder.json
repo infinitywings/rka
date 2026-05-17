@@ -1,8 +1,8 @@
 {
   "provenance": {
     "corpus_hash": "sha256:b6b586d71d940f6bb430f90dd2fe6cb68501fdd7f1095a9ff68b5f72bb7f9e16",
-    "rka_head": "8dfb9f8ad50b",
-    "timestamp": "2026-05-17T01:18:12Z",
+    "rka_head": "397b2946afb6",
+    "timestamp": "2026-05-17T00:29:16Z",
     "eval_version": "v2",
     "skill_rule": "8a"
   },
@@ -13,25 +13,25 @@
     "n_scenarios": 16,
     "mean_recall": 0.9583333333333334,
     "mean_expanded_recall": 0.875,
-    "mean_ordering_score": 0.40000105065127817,
+    "mean_ordering_score": 0.2785230740555674,
     "mean_breadth": 3.0,
-    "mean_efficiency": 0.03505244661123526,
+    "mean_efficiency": 0.035300343684178115,
     "per_actor": {
       "executor": {
         "n_scenarios": 6,
         "mean_recall": 0.9444444444444445,
         "mean_expanded_recall": 0.8333333333333334,
-        "mean_ordering_score": 0.30484599613329694,
+        "mean_ordering_score": 0.23404372184388703,
         "mean_breadth": 3.0,
-        "mean_efficiency": 0.022662588991311364
+        "mean_efficiency": 0.022786672435988104
       },
       "brain": {
         "n_scenarios": 10,
         "mean_recall": 0.9666666666666666,
         "mean_expanded_recall": 0.9,
-        "mean_ordering_score": 0.45709408336206686,
+        "mean_ordering_score": 0.3052106853825757,
         "mean_breadth": 3.0,
-        "mean_efficiency": 0.04248636118318959
+        "mean_efficiency": 0.04280854643309212
       }
     },
     "per_tool_mean_critical_coverage": {
@@ -56,9 +56,9 @@
       "actor": "brain",
       "recall": 1.0,
       "expanded_recall": 1.0,
-      "ordering_score": 0.2766594603359624,
+      "ordering_score": 0.28556563748375746,
       "breadth": 4,
-      "efficiency": 0.031914893617021274,
+      "efficiency": 0.032432432432432434,
       "per_tool_critical_coverage": {
         "rka_get_context": 1.0,
         "rka_get_status": 0.0,
@@ -69,16 +69,16 @@
       },
       "n_expected_critical": 3,
       "n_expected_total": 6,
-      "n_returned": 188
+      "n_returned": 185
     },
     {
       "scenario_id": "brain-session-start-multi-mission-state",
       "actor": "brain",
       "recall": 1.0,
       "expanded_recall": 1.0,
-      "ordering_score": 0.2804553401753201,
+      "ordering_score": 0.2877382226950821,
       "breadth": 3,
-      "efficiency": 0.031914893617021274,
+      "efficiency": 0.032432432432432434,
       "per_tool_critical_coverage": {
         "rka_get_context": 1.0,
         "rka_get_status": 0.0,
@@ -87,16 +87,16 @@
       },
       "n_expected_critical": 3,
       "n_expected_total": 6,
-      "n_returned": 188
+      "n_returned": 185
     },
     {
       "scenario_id": "brain-session-start-post-release",
       "actor": "brain",
       "recall": 1.0,
       "expanded_recall": 0.8,
-      "ordering_score": 0.22033425580957414,
+      "ordering_score": 0.22774201526508747,
       "breadth": 4,
-      "efficiency": 0.024242424242424242,
+      "efficiency": 0.024691358024691357,
       "per_tool_critical_coverage": {
         "rka_get_context": 1.0,
         "rka_get_status": 0.0,
@@ -105,16 +105,16 @@
       },
       "n_expected_critical": 3,
       "n_expected_total": 5,
-      "n_returned": 165
+      "n_returned": 162
     },
     {
       "scenario_id": "brain-session-start-checkpoint-review",
       "actor": "brain",
       "recall": 1.0,
       "expanded_recall": 0.8,
-      "ordering_score": 0.2383405917322707,
+      "ordering_score": 0.24597239431000437,
       "breadth": 3,
-      "efficiency": 0.024096385542168676,
+      "efficiency": 0.024539877300613498,
       "per_tool_critical_coverage": {
         "rka_get_context": 1.0,
         "rka_get_checkpoints": 0.6666666666666666,
@@ -122,105 +122,105 @@
       },
       "n_expected_critical": 3,
       "n_expected_total": 5,
-      "n_returned": 166
+      "n_returned": 163
     },
     {
       "scenario_id": "brain-mission-creation-from-hub-spoke-decision",
       "actor": "brain",
       "recall": 1.0,
       "expanded_recall": 1.0,
-      "ordering_score": 0.8057909295050716,
+      "ordering_score": 0.28207761677964505,
       "breadth": 3,
-      "efficiency": 0.0335195530726257,
+      "efficiency": 0.033707865168539325,
       "per_tool_critical_coverage": {
-        "rka_multi_hop_retrieval": 1.0,
         "rka_get_context": 1.0,
+        "rka_multi_hop_retrieval": 1.0,
         "rka_get_journal": 0.0
       },
       "n_expected_critical": 3,
       "n_expected_total": 6,
-      "n_returned": 179
+      "n_returned": 178
     },
     {
       "scenario_id": "brain-mission-creation-eval-extension",
       "actor": "brain",
       "recall": 1.0,
       "expanded_recall": 0.8,
-      "ordering_score": 0.6247444066484552,
+      "ordering_score": 0.24187799579891736,
       "breadth": 3,
-      "efficiency": 0.019801980198019802,
+      "efficiency": 0.01990049751243781,
       "per_tool_critical_coverage": {
-        "rka_multi_hop_retrieval": 0.75,
         "rka_get_context": 1.0,
+        "rka_multi_hop_retrieval": 0.75,
         "rka_get_journal": 0.0
       },
       "n_expected_critical": 4,
       "n_expected_total": 5,
-      "n_returned": 202
+      "n_returned": 201
     },
     {
       "scenario_id": "brain-contradiction-staleness-vs-validation",
       "actor": "brain",
       "recall": 1.0,
       "expanded_recall": 1.0,
-      "ordering_score": 0.41720837777408437,
+      "ordering_score": 0.22483345726283965,
       "breadth": 2,
-      "efficiency": 0.027472527472527472,
+      "efficiency": 0.027932960893854747,
       "per_tool_critical_coverage": {
+        "rka_get_context": 0.3333333333333333,
         "rka_get_ego_graph": 0.6666666666666666,
-        "rka_multi_hop_retrieval": 1.0,
-        "rka_get_context": 0.3333333333333333
+        "rka_multi_hop_retrieval": 1.0
       },
       "n_expected_critical": 3,
       "n_expected_total": 5,
-      "n_returned": 182
+      "n_returned": 179
     },
     {
       "scenario_id": "brain-contradiction-llm-removed-vs-enrichment-preserved",
       "actor": "brain",
       "recall": 0.6666666666666666,
       "expanded_recall": 0.8,
-      "ordering_score": 0.6966293532802892,
+      "ordering_score": 0.19151587288586716,
       "breadth": 3,
-      "efficiency": 0.02030456852791878,
+      "efficiency": 0.02040816326530612,
       "per_tool_critical_coverage": {
-        "rka_multi_hop_retrieval": 0.6666666666666666,
         "rka_get_context": 0.6666666666666666,
+        "rka_multi_hop_retrieval": 0.6666666666666666,
         "rka_get_journal": 0.0
       },
       "n_expected_critical": 3,
       "n_expected_total": 5,
-      "n_returned": 197
+      "n_returned": 196
     },
     {
       "scenario_id": "brain-paper-scaffold-session-start-section",
       "actor": "brain",
       "recall": 1.0,
       "expanded_recall": 0.8,
-      "ordering_score": 0.4993549844169164,
+      "ordering_score": 0.5387202960048777,
       "breadth": 3,
-      "efficiency": 0.024096385542168676,
+      "efficiency": 0.024539877300613498,
       "per_tool_critical_coverage": {
+        "rka_get_context": 0.3333333333333333,
         "rka_get_ego_graph": 0.6666666666666666,
-        "rka_assemble_evidence": 0.0,
-        "rka_get_context": 0.3333333333333333
+        "rka_assemble_evidence": 0.0
       },
       "n_expected_critical": 3,
       "n_expected_total": 5,
-      "n_returned": 166
+      "n_returned": 163
     },
     {
       "scenario_id": "brain-paper-scaffold-multi-cluster-rq",
       "actor": "brain",
       "recall": 1.0,
       "expanded_recall": 1.0,
-      "ordering_score": 0.5114231339427248,
+      "ordering_score": 0.5260633453396784,
       "breadth": 2,
       "efficiency": 0.1875,
       "per_tool_critical_coverage": {
+        "rka_get_research_map": 1.0,
         "rka_get_ego_graph": 1.0,
-        "rka_assemble_evidence": 0.0,
-        "rka_get_research_map": 1.0
+        "rka_assemble_evidence": 0.0
       },
       "n_expected_critical": 3,
       "n_expected_total": 6,
@@ -231,9 +231,9 @@
       "actor": "executor",
       "recall": 1.0,
       "expanded_recall": 1.0,
-      "ordering_score": 0.2497862674968325,
+      "ordering_score": 0.2559009410149485,
       "breadth": 3,
-      "efficiency": 0.027472527472527472,
+      "efficiency": 0.027624309392265192,
       "per_tool_critical_coverage": {
         "rka_get_context": 1.0,
         "rka_get_status": 0.0,
@@ -242,16 +242,16 @@
       },
       "n_expected_critical": 3,
       "n_expected_total": 5,
-      "n_returned": 182
+      "n_returned": 181
     },
     {
       "scenario_id": "executor-mission-pickup-orchestrator",
       "actor": "executor",
       "recall": 1.0,
       "expanded_recall": 0.8,
-      "ordering_score": 0.24400209513097235,
+      "ordering_score": 0.2487335539111952,
       "breadth": 3,
-      "efficiency": 0.02127659574468085,
+      "efficiency": 0.0213903743315508,
       "per_tool_critical_coverage": {
         "rka_get_context": 1.0,
         "rka_get_status": 0.0,
@@ -260,16 +260,16 @@
       },
       "n_expected_critical": 3,
       "n_expected_total": 5,
-      "n_returned": 188
+      "n_returned": 187
     },
     {
       "scenario_id": "executor-mission-pickup-desktop-v2-5",
       "actor": "executor",
       "recall": 1.0,
       "expanded_recall": 0.8,
-      "ordering_score": 0.21539883333571258,
+      "ordering_score": 0.22201724693814004,
       "breadth": 3,
-      "efficiency": 0.02197802197802198,
+      "efficiency": 0.022099447513812154,
       "per_tool_critical_coverage": {
         "rka_get_context": 1.0,
         "rka_get_status": 0.0,
@@ -278,16 +278,16 @@
       },
       "n_expected_critical": 3,
       "n_expected_total": 5,
-      "n_returned": 182
+      "n_returned": 181
     },
     {
       "scenario_id": "executor-backbrief-eval-v2-t2",
       "actor": "executor",
       "recall": 1.0,
       "expanded_recall": 0.8,
-      "ordering_score": 0.23547440732419775,
+      "ordering_score": 0.24251981603863146,
       "breadth": 3,
-      "efficiency": 0.02247191011235955,
+      "efficiency": 0.022598870056497175,
       "per_tool_critical_coverage": {
         "rka_get_context": 1.0,
         "rka_get_journal": 0.0,
@@ -295,16 +295,16 @@
       },
       "n_expected_critical": 3,
       "n_expected_total": 5,
-      "n_returned": 178
+      "n_returned": 177
     },
     {
       "scenario_id": "executor-backbrief-mid-mission-pattern-reference",
       "actor": "executor",
       "recall": 1.0,
       "expanded_recall": 0.8,
-      "ordering_score": 0.23204748962293345,
+      "ordering_score": 0.23804692040633266,
       "breadth": 3,
-      "efficiency": 0.02247191011235955,
+      "efficiency": 0.022598870056497175,
       "per_tool_critical_coverage": {
         "rka_get_context": 1.0,
         "rka_get_journal": 0.0,
@@ -312,24 +312,24 @@
       },
       "n_expected_critical": 3,
       "n_expected_total": 5,
-      "n_returned": 178
+      "n_returned": 177
     },
     {
       "scenario_id": "executor-backbrief-bookkeeper-invariant-check",
       "actor": "executor",
       "recall": 0.6666666666666666,
       "expanded_recall": 0.8,
-      "ordering_score": 0.6523668838891331,
+      "ordering_score": 0.19704385275407427,
       "breadth": 3,
-      "efficiency": 0.02030456852791878,
+      "efficiency": 0.02040816326530612,
       "per_tool_critical_coverage": {
-        "rka_multi_hop_retrieval": 0.6666666666666666,
         "rka_get_context": 0.6666666666666666,
+        "rka_multi_hop_retrieval": 0.6666666666666666,
         "rka_get_journal": 0.0
       },
       "n_expected_critical": 3,
       "n_expected_total": 5,
-      "n_returned": 197
+      "n_returned": 196
     }
   ]
 }
