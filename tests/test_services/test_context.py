@@ -7,6 +7,7 @@ This test file replaces the pre-v2.4 HOT/WARM/COLD assertions.
 
 from __future__ import annotations
 
+import pytest
 import pytest_asyncio
 
 from rka.infra.database import Database
@@ -126,14 +127,27 @@ class TestContextRankingByImportance:
             )
 
     async def test_pi_source_lift_applied_within_band(self, context_engine: ContextEngine):
-        """PI-sourced entries get a small lift; jrn_critical (pi) outranks
-        any equally-rated executor-sourced entries (none in this fixture, but
-        the PI entry is at top — sanity-check the scoring tuple respects it)."""
-        pkg = await context_engine.get_context()
-        # First entry should be jrn_critical (PI + critical).
-        assert pkg.sources[0] == "jrn_critical", (
-            f"Expected jrn_critical first; got {pkg.sources[0]}"
+        """PI-sourced entries get a +0.125 normalized lift in the importance
+        band — same magnitude as the pre-v2.5.3 +5/40 lift.
+
+        Post-v2.5.3 (dec_01KRSMMCS8MD7KQDBS0E2DVKBQ) the overview path is a
+        weighted-sum, not a strict-band hierarchy, so jrn_critical is not
+        guaranteed to be first when other entries have high centrality + high
+        recency. This test now asserts the lift is APPLIED (PI > non-PI at
+        equal importance / centrality / recency) by comparing scores from
+        the engine's classmethod directly — a more precise check than relying
+        on the fixture's ordering after centrality changes shift the leader.
+        """
+        pi_entry = {"importance": "normal", "source": "pi", "centrality_degree": 0, "created_at": "2026-05-17T00:00:00Z"}
+        non_pi_entry = {"importance": "normal", "source": "executor", "centrality_degree": 0, "created_at": "2026-05-17T00:00:00Z"}
+        pi_score = ContextEngine._overview_score(pi_entry)
+        non_pi_score = ContextEngine._overview_score(non_pi_entry)
+        assert pi_score > non_pi_score, (
+            f"PI lift must produce a higher score at equal importance/centrality/"
+            f"recency. Got pi={pi_score!r} vs non_pi={non_pi_score!r}."
         )
+        # Lift magnitude is _PI_SOURCE_LIFT_NORMALIZED * _W_IMPORTANCE = 0.125 * 0.5 = 0.0625.
+        assert pi_score - non_pi_score == pytest.approx(0.0625, abs=1e-9)
 
 
 class TestContextNoTokenBudget:
@@ -168,9 +182,22 @@ class TestContextNoTokenBudget:
 
 
 class TestContextCentralityContribution:
-    async def test_high_centrality_lifts_within_importance_band(self, context_engine: ContextEngine):
-        """jrn_high_old (importance=high, 5 entity_links) should outrank an
-        un-linked normal-importance entry — but stay below the critical entry."""
+    async def test_high_centrality_with_age_can_beat_un_linked_critical(
+        self, context_engine: ContextEngine
+    ):
+        """Pre-v2.5.3 this test asserted critical-strict-dominance-over-
+        centrality. The fix-shape decision dec_01KRSMMCS8MD7KQDBS0E2DVKBQ
+        explicitly identifies that invariant as the bug ("a 'critical' entry
+        from 6 months ago beats a 'high' from yesterday" — the design intent
+        was importance × centrality × recency, not strict-band hierarchy).
+
+        Post-v2.5.3 the weighted-sum lets a heavily-linked high-band entry
+        outrank an un-linked critical-band entry. The fixture's jrn_high_old
+        has 5 entity_links and PI source; jrn_critical has 0 entity_links
+        and PI source. Computed scores (w_imp=0.5, w_cent=0.3, w_recency=0.2):
+          jrn_critical: 0.5*1.125 + 0 + 0.2*1.0 = 0.7625
+          jrn_high_old: 0.5*0.875 + 0.3*log1p(5) + 0.2*(~0)  ≈ 0.98
+        """
         pkg = await context_engine.get_context()
         ranked = pkg.sources
 
@@ -178,10 +205,13 @@ class TestContextCentralityContribution:
         high_old_idx = ranked.index("jrn_high_old")
         low_recent_idx = ranked.index("jrn_low_recent")
 
-        # Sanity: critical above high (importance dominates centrality)
-        assert crit_idx < high_old_idx
-        # high+centrality above low+recent (importance still wins; centrality
-        # tie-breaks within importance bands)
+        # Post-v2.5.3 invariant: heavily-linked high beats un-linked critical.
+        assert high_old_idx < crit_idx, (
+            "v2.5.3 weighted-sum: high-importance with high centrality should "
+            "outrank un-linked critical (dec_01KRSMMCS8MD7KQDBS0E2DVKBQ)."
+        )
+        # Importance still helps within similar centrality/recency cohorts:
+        # high+centrality > low+recency+zero-centrality.
         assert high_old_idx < low_recent_idx
 
 

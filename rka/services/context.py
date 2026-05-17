@@ -11,11 +11,25 @@ removed. Rationale per the probe report (mis_01KQQPHC2649SXJG30JMCR0WFK):
 - The `journal.importance` column already exists with an index; pairing it
   with `entity_links` centrality gives a deterministic SQL-time ranking that
   doesn't drift with wall-clock time.
+
+v2.5.3 (D2, dec_01KRSMMCS8MD7KQDBS0E2DVKBQ): the post-fetch ranker grew two
+shapes that close documented-vs-implemented gaps surfaced by Eval-v2's
+ordering_score = 0.251 finding:
+
+- Topic path (``get_context(topic=...)``): preserves search relevance as the
+  primary sort key. Pre-v2.5.3 the BM25/vector relevance ordering returned
+  by ``SearchService.search`` was discarded by the importance-only re-sort.
+- Overview path (``get_context()``): weighted-sum score lifts recency from
+  tie-break to multiplicative term, matching the v2.4 design at
+  ``dec_01KQQPD6Y6B362T3K08368BDMP`` ("ordered by importance + centrality
+  + recency"). Pre-v2.5.3 recency was a tuple tie-break only.
 """
 
 from __future__ import annotations
 
 import logging
+import math
+from datetime import datetime, timezone
 from typing import Literal
 
 from rka.infra.database import Database
@@ -35,6 +49,34 @@ _IMPORTANCE_CASE = """CASE j.importance
     WHEN 'archived' THEN 0
     ELSE 2
 END"""
+
+# ---------------------------------------------------------------------------
+# v2.5.3 overview-path weighted-sum coefficients (dec_01KRSMMCS8MD7KQDBS0E2DVKBQ).
+# Module-level constants so A/B coefficient tuning is a single-file edit. The
+# weighted-sum applies ONLY to the overview path; the topic path uses search
+# relevance as primary sort key (importance/centrality/recency are tie-breaks).
+# ---------------------------------------------------------------------------
+_W_IMPORTANCE: float = 0.5
+_W_CENTRALITY: float = 0.3
+_W_RECENCY: float = 0.2
+
+# Importance band normalized to [0, 1]. Mirrors _sort_key's importance map
+# divided by the critical=4 ceiling.
+_IMPORTANCE_BAND_NORMALIZED: dict[str, float] = {
+    "critical": 1.0,
+    "high": 0.75,
+    "normal": 0.5,
+    "low": 0.25,
+    "archived": 0.0,
+}
+
+# PI-source lift. Pre-v2.5.3 the lift was +5 on a [0, 40] importance scale =
+# +5/40 = +0.125 normalized. Preserving the existing relative magnitude so
+# PI-anchored entries keep their existing weight (and so the spec's stated
+# "PI-source +5 lift preserved" intent is honored — note the spec text
+# transcribes the value as "+0.05" but the parenthetical "+5/40 = 0.125" is
+# the existing math; preserving the existing math).
+_PI_SOURCE_LIFT_NORMALIZED: float = 0.125
 
 
 class ContextEngine:
@@ -84,6 +126,10 @@ class ContextEngine:
         if topic:
             hits = await self.search.with_project(project_id).search(topic, limit=50)
             candidates = await self._hydrate_hits(hits, project_id=project_id)
+            # Preserve search relevance order as the primary sort signal
+            # before centrality re-annotation. Lower rank = more relevant.
+            for i, c in enumerate(candidates):
+                c["_search_rank"] = i
             candidates = await self._rerank_by_importance_and_centrality(
                 candidates, project_id=project_id
             )
@@ -94,9 +140,15 @@ class ContextEngine:
 
         package = ContextPackage(topic=topic, phase=current_phase)
 
-        # Render the ranked list. PI-sourced entries get a small lift within
-        # their importance band — they're the human-anchored signal.
-        candidates.sort(key=self._sort_key, reverse=True)
+        # Render the ranked list. v2.5.3 splits the sort by retrieval path:
+        # topic-driven queries preserve search relevance (BM25/vector ranking);
+        # overview queries use a weighted-sum that lifts recency from
+        # tie-break to multiplicative term. PI-sourced entries get a small
+        # lift within their importance band on either path.
+        if topic:
+            candidates.sort(key=self._topic_sort_key)
+        else:
+            candidates.sort(key=self._overview_score, reverse=True)
         rendered = [self._render_entry(entry) for entry in candidates]
         package.entries = rendered
         package.sources = [e["id"] for e in candidates]
@@ -112,34 +164,100 @@ class ContextEngine:
             except Exception as exc:
                 logger.debug("Narrative generation failed: %s", exc)
 
-        package.note = (
-            "Importance-ranked context: ordered by journal.importance, then "
-            "entity_links centrality, then created_at. No token-budget truncation "
-            "(v2.4 / dec_01KQQPD6Y6B362T3K08368BDMP)."
-        )
+        if topic:
+            package.note = (
+                "Topic-anchored context: ordered by search relevance "
+                "(BM25/vector); importance/centrality break ties within rank. "
+                "No token-budget truncation (v2.4 / dec_01KQQPD6Y6B362T3K08368BDMP; "
+                "v2.5.3 / dec_01KRSMMCS8MD7KQDBS0E2DVKBQ)."
+            )
+        else:
+            package.note = (
+                "Importance-ranked context: weighted-sum of journal.importance, "
+                "entity_links centrality, and recency (recency as multiplicative "
+                "term, not tie-break). No token-budget truncation "
+                "(v2.4 / dec_01KQQPD6Y6B362T3K08368BDMP; "
+                "v2.5.3 / dec_01KRSMMCS8MD7KQDBS0E2DVKBQ)."
+            )
         # Informational; no longer drives truncation.
         package.token_estimate = sum(self._estimate_tokens(t) for t in rendered)
         return package
 
     @staticmethod
-    def _sort_key(entry: dict) -> tuple[int, int, str]:
-        """Sort key: (importance_rank, centrality_degree, created_at). Higher first."""
-        imp_map = {
-            "critical": 4,
-            "high": 3,
-            "normal": 2,
-            "low": 1,
-            "archived": 0,
-        }
-        imp = imp_map.get(entry.get("importance") or "normal", 2)
-        # PI-sourced entries get +0.5 lift within their importance band.
+    def _importance_band_normalized(entry: dict) -> float:
+        """Normalized importance ∈ [0, 1.125] (1.0 critical + 0.125 PI lift).
+
+        Used by the overview-path weighted-sum. The PI-source lift preserves
+        the pre-v2.5.3 +5/40 = +0.125 magnitude (dec_01KRSMMCS8MD7KQDBS0E2DVKBQ).
+        """
+        imp = _IMPORTANCE_BAND_NORMALIZED.get(
+            entry.get("importance") or "normal", 0.5
+        )
         if entry.get("source") == "pi":
-            imp = imp * 10 + 5  # widen scale to allow non-integer-equivalent lift
-        else:
-            imp = imp * 10
-        centrality = int(entry.get("centrality_degree") or 0)
-        # Tuple of negatives gets DESC ordering when reverse=True is used.
-        return (imp, centrality, entry.get("created_at") or "")
+            imp += _PI_SOURCE_LIFT_NORMALIZED
+        return imp
+
+    @staticmethod
+    def _recency_score(entry: dict) -> float:
+        """1.0 / (1 + days_since_created), clamped to [0, 1].
+
+        Naturally in (0, 1]; the clamp is defensive against future-dated rows
+        (would compute to >1) and parse failures (default 0.0 = ancient).
+        """
+        raw = entry.get("created_at") or ""
+        if not raw:
+            return 0.0
+        try:
+            # SQLite default format: 'YYYY-MM-DDTHH:MM:SSZ'.
+            ts = datetime.strptime(raw, "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=timezone.utc
+            )
+        except ValueError:
+            return 0.0
+        delta = (datetime.now(timezone.utc) - ts).total_seconds() / 86400.0
+        # Future-dated rows (clock skew, fixtures) clamp to "today".
+        days = max(0.0, delta)
+        score = 1.0 / (1.0 + days)
+        return max(0.0, min(1.0, score))
+
+    @classmethod
+    def _overview_score(cls, entry: dict) -> float:
+        """Weighted-sum score for the overview path (no topic).
+
+        score = _W_IMPORTANCE * importance_band_normalized
+              + _W_CENTRALITY * log1p(centrality_degree)
+              + _W_RECENCY    * recency_score
+
+        Sort DESC (higher = first). Module-level constants make A/B
+        coefficient tuning a single-file edit.
+        """
+        imp = cls._importance_band_normalized(entry)
+        centrality = float(entry.get("centrality_degree") or 0)
+        recency = cls._recency_score(entry)
+        return (
+            _W_IMPORTANCE * imp
+            + _W_CENTRALITY * math.log1p(centrality)
+            + _W_RECENCY * recency
+        )
+
+    @classmethod
+    def _topic_sort_key(cls, entry: dict) -> tuple[int, float, float]:
+        """Topic-path sort key. Sort ASC (no reverse=True).
+
+        Primary: ``_search_rank`` (lower = more relevant, rank 0 = best hit).
+        Tie-breaks (within identical search rank, which essentially never
+        happens because BM25/vector hits have distinct positions): importance
+        band DESC, then centrality DESC. Negate DESC terms so the tuple
+        sorts cleanly ascending.
+
+        Entries lacking ``_search_rank`` (defensive; shouldn't happen on the
+        topic path) sort last via a large sentinel rank.
+        """
+        rank = entry.get("_search_rank")
+        rank_int = int(rank) if rank is not None else 10**9
+        imp = cls._importance_band_normalized(entry)
+        centrality = float(entry.get("centrality_degree") or 0)
+        return (rank_int, -imp, -centrality)
 
     async def _rerank_by_importance_and_centrality(
         self, candidates: list[dict], project_id: str
