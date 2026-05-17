@@ -3,6 +3,57 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [2.5.3+agentic-rc1] — 2026-05-17 (release candidate; agentic-branch sibling track)
+
+**Branch**: `agentic` (sibling of `main` per `dec_01KRPAVSTJ4H80VXJVN6DQ82WQ`). This entry documents the agentic-track release candidate; main's v2.5.3 is unchanged. **NOT a final release** — final `v2.5.3+agentic` tag waits for Phase 2.1 to close the integration shakedown surfaced at T3.
+
+**Mission**: `mis_01KRSRZX2P3BN4ZAP70ZM7YXGC` (Phase 2 orchestrator)
+**Fix-shape decision**: `dec_01KRSRX25V4086K4TBHDYRHPDH` (narrow Phase 2 scope)
+**Architecture decision**: `dec_01KRPAVSTJ4H80VXJVN6DQ82WQ` (agentic = permanent sibling; never merges to main)
+**PI directive**: `jrn_01KRNXR4GK3PB70M9T24X6AV66` (route via Claude Max, scrub `ANTHROPIC_API_KEY`)
+**Checkpoint resolution**: `chk_01KRSTFD7203NWAR8MYD91KSFV` (PI option C — ship as -rc1; final after Phase 2.1)
+**Phase 2.1 follow-up**: `mis_01KRSTZVCTFGF91QZXTYK7ZGDD` (orchestrator integration shakedown)
+
+### Headline capability — VALIDATED
+
+Real `claude-agent-sdk` binding routed through Claude Max subscription. The Phase 2 thesis from the PI directive — "use the Claude Code SDK with my Claude Max subscription, which should give me enough usage" — is empirically met:
+
+- `ANTHROPIC_API_KEY` is scrubbed from the SDK subprocess env before invocation. Auth falls through to `~/.claude/.credentials.json` or macOS Keychain (`Claude Code-credentials`).
+- `make_sdk()` logs the auth-path LABEL (`credentials_json` / `keychain` / `env_oauth_token`) — never the credential value.
+- WARNING emitted when `ANTHROPIC_API_KEY` is found-and-scrubbed.
+- T3 pilot against live `rka_development` confirmed the first real Claude Max LLM call succeeded with the API key scrubbed.
+
+### Added
+
+- **`orchestrator/orchestrator/llm_client.py`** — real `make_sdk()` implementation. Wraps `claude_agent_sdk.query` (async generator) via `asyncio.run` per call. Returns an `SDKClient`-Protocol-satisfying object; each `complete()` is one-shot with `allowed_tools=[]` (no tool-use round-trips). 4-path auth-priority probe (`_verify_claude_max_routing()`) + env scrubbing (`_scrubbed_env()`).
+- **`orchestrator/tests/test_llm_client_real.py`** — 11 production-path tests covering: factory shape, mocked `complete()` return-value contract, 6 auth-path priority cases (credentials_json / keychain / oauth_token / api_key-with-Max / api_key-only / no-creds), error-path surface, env-scrub helper, scrubbed-env-passed-to-SDK lock.
+- **`orchestrator/scripts/pilot_t12.py`** — `--use-real-sdk` flag swaps `PilotSDK` with `make_sdk()`; `--output-dir` writes a JSON summary per run.
+- **`orchestrator/results/pilot_v2_5_3_agentic/`** — T3 pilot artifacts (raw log + README documenting acceptance-criteria readout).
+
+### Inherited from main (via T0 merge `722e34a`)
+
+48 commits picked up from main HEAD `c063673` (v2.5.3): D1 multi-hop schema fix, D3 cluster→parent-RQ traversal, D2 context-ordering 3-mission stack, pluggable embedding backends, eval-harness/v2. Merge auto-completed with zero conflicts (predicted ~7 — actual zero); 169/169 inherited Phase 1 orchestrator tests pass post-merge.
+
+### Known integration shakedown (Phase 2.1 work)
+
+T3 pilot validated the auth-routing thesis but did NOT complete end-to-end. Two downstream issues surfaced when swapping `PilotSDK` (Phase 1 hardcoded-string fake) with the real SDK:
+
+1. **Downstream node parsers** expect hardcoded string tokens (e.g., `APPROVED` / `accept` prefixes) that PilotSDK returned verbatim; real Claude's free-form replies don't carry those tokens, so `gate_1` / `gate_2` / `pi_acceptance` etc. raise on parse.
+2. **`mcp.rka_submit_checkpoint`** payload doesn't include fields RKA v2.5.3's `check_integrity` gate requires (Mission B structured-body 422 contracts hardened in v2.3.5; orchestrator was designed pre-v2.4). When (1) routes to `escalation_router`, its checkpoint submission fails with HTTP 422 *"knowledge-pack integrity"*.
+
+Phase 2.1 mission `mis_01KRSTZVCTFGF91QZXTYK7ZGDD` resolves both via: (a) prompt-led structured prefixes (update `system_prompt` so Claude prepends expected tokens; existing parsers continue to work) + (b) align `rka_submit_checkpoint` payload to current RKA schema. Final `v2.5.3+agentic` tag lands when Phase 2.1's T3 re-run greens.
+
+### Release-line scope
+
+**Agentic branch only.** Per `dec_01KRPAVSTJ4H80VXJVN6DQ82WQ`, agentic is a permanent sibling of main; it NEVER merges back. Main's `v2.5.3` (commit `c063673`) is unchanged. The `+agentic-rc1` build-metadata suffix follows the `v2.5.0+desktop` precedent.
+
+### Bookkeeper invariant + measurement-only constraint
+
+- `git diff main -- rka/services/worker.py = 0 lines` at every commit on agentic post-merge.
+- `git diff main -- rka/` = 0 lines for every NEW commit added by this mission (T1+T2 + T3 touched only `orchestrator/*` + `CHANGELOG.md` at T4).
+
+---
+
 ## [2.5.3] — 2026-05-17 (patch release; D2 context-ordering closed via 3-mission stack)
 
 **Missions** (in order):
