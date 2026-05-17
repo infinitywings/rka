@@ -8,6 +8,13 @@ A candidate #18 (*service-up ≠ service-correct*) is **held** — only adopted 
 the corresponding failure mode. T9 landed clean (162/162 tests, no MCP-up-but-wrong
 incidents), so #18 stays parked for Phase-2 polish.
 
+**FOLDED 2026-05-17** — Phase 2.3 mission `mis_01KRV21Q6EMXFJY02GSRXQZPP4` folded
+16 of 17 deltas into `/Users/ceron/Code/rka-test-plugin/skills/{brain,executor}/SKILL.md`
+(plugin baseline `c5875d1` → brain fold `bef32d1` → executor fold `86c3d34`). Delta 10
+is **CODE-ONLY** per resolved checkpoint `chk_01KRSTFD7203NWAR8MYD91KSFV` (paraphrasing
+existing Rule + Why into a new skill-prompt section IS authoring per "no new rules"
+scope rule). PI smoke-test (fresh Claude Code session) is the final acceptance gate.
+
 Each addition lists:
 
 - **rule** — the discipline to add
@@ -17,6 +24,8 @@ Each addition lists:
 ---
 
 ## 1. Version-drift re-verification
+
+**FOLDED 2026-05-17** → `skills/executor/SKILL.md` "Backbrief — Confirm Your Plan" (plugin commit `86c3d34`).
 
 **Rule.** When a Backbrief assumption about a library version is more than 6 months
 old, re-verify against PyPI's current `info.version` before pinning. Document the
@@ -36,6 +45,8 @@ pin where the line has been silent >6 months."*
 
 ## 2. Mid-mission Backbrief gate at structural milestones
 
+**FOLDED 2026-05-17** → `skills/brain/SKILL.md` "Gate cadence" (### subsection under Validation Gates; plugin commit `bef32d1`).
+
 **Rule.** When a mission spans more than ~5 tasks, designate a mid-mission
 Backbrief gate at the task that locks the core foundation (state schema, data
 model, API contract). The Brain re-ratifies before downstream tasks build on it.
@@ -51,6 +62,8 @@ empirical evidence the foundation work surfaced."*
 ---
 
 ## 3. Three-storage discipline
+
+**FOLDED 2026-05-17** → `skills/brain/SKILL.md` "Project workflows" (new ## section; plugin commit `bef32d1`).
 
 **Rule.** When building orchestration over RKA, partition state ownership:
 
@@ -74,6 +87,8 @@ land in RKA; workflow-position decisions land in the checkpointer."*
 
 ## 4. workflow_thread_id auto-tagging
 
+**FOLDED 2026-05-17** → `skills/executor/SKILL.md` "Repo-specific procedures" (bullet; plugin commit `86c3d34`).
+
 **Rule.** Every RKA write during a workflow run carries a stable
 `workflow_thread_id` tag. Use it to recover all artifacts a run produced:
 `rka_get_journal(tags=[thread_id])`.
@@ -90,6 +105,8 @@ bypass it, tag manually."*
 ---
 
 ## 5. Append-only reducers vs. last-write-wins scalars
+
+**FOLDED 2026-05-17** → `skills/brain/SKILL.md` "LangGraph workflows" (new ## section; plugin commit `bef32d1`).
 
 **Rule.** In LangGraph state schemas, partition fields:
 
@@ -113,6 +130,8 @@ silently sum every write.
 
 ## 6. Protocol abstraction for SDK + MCP
 
+**FOLDED 2026-05-17** → `skills/executor/SKILL.md` "Test method" (new ## section; plugin commit `86c3d34`).
+
 **Rule.** Workflow nodes depend on `SDKClient` and `MCPClient` Protocol types
 (typing.Protocol), not on concrete client classes. Tests inject Fake clients
 that satisfy the Protocol; production binding happens in the graph constructor.
@@ -128,6 +147,8 @@ Fake clients honoring the Protocol — no real HTTP, no real LLM."*
 
 ## 7. Conservative malformed-input defaults
 
+**FOLDED 2026-05-17** → `skills/brain/SKILL.md` "Output parsing" (new ## section; plugin commit `bef32d1`).
+
 **Rule.** When an LLM response is malformed (verdict not parseable, expected
 key absent), default to the **conservative** outcome — for verdicts, that's
 "redirect", not "approve".
@@ -142,6 +163,8 @@ from your own LLM calls, default to the conservative branch if parsing fails."*
 ---
 
 ## 8. Defensive missing-required-field paths
+
+**FOLDED 2026-05-17** → `skills/executor/SKILL.md` "Guardrails" (bullet; plugin commit `86c3d34`).
 
 **Rule.** When a node requires a state field that should be present but might
 not be (mission_id at report submission, executor_backbrief at gate1), record
@@ -160,6 +183,8 @@ escalation path; raising bypasses it."*
 
 ## 9. Telemetry-zero default
 
+**FOLDED 2026-05-17** → `skills/executor/SKILL.md` "Repo-specific procedures" (bullet; plugin commit `86c3d34`).
+
 **Rule.** Outbound notifications use **terminal bell + macOS osascript** only
 by default. Webhook is **opt-in** and gated by an explicit `channels=["webhook"]`
 plus a non-empty `webhook_url`.
@@ -176,6 +201,8 @@ default."*
 
 ## 10. Webhook blocklist by substring match
 
+**CODE-ONLY 2026-05-17** — rule lives in `orchestrator/notifications.py:_is_blocked_webhook` (already in-file pre-fold). NO plugin-side prose added per Brain's Option-C ratification on `chk_01KRVCWNKYBZ29RVTJZETKBKNG`: paraphrasing existing Rule + Why into a new skill-prompt section IS authoring for prompt-content purposes, violating the mission's binding "no new rules; just fold what's already ratified" scope rule.
+
 **Rule.** Compare blocklist hosts as **substrings** of the URL, not exact-host
 matches. This catches `us.api.posthog.com`, `staging.app.posthog.com`, etc.
 
@@ -190,6 +217,8 @@ this in `skills/executor/SKILL.md` whenever adding new outbound channels.
 
 ## 11. functools.partial node binding
 
+**FOLDED 2026-05-17** → `skills/executor/SKILL.md` "LangGraph wiring" (new ## section; plugin commit `86c3d34`).
+
 **Rule.** When a LangGraph node needs dependencies beyond `state` (sdk, mcp,
 interrupt_fn), bind them via `functools.partial` at graph-construction time so
 the LangGraph engine sees a uniform `(state,)` callable.
@@ -203,6 +232,8 @@ free variables) is brittle. `functools.partial` is the explicit idiom.
 ---
 
 ## 12. Conditional routing on next_node_override
+
+**FOLDED 2026-05-17** → `skills/brain/SKILL.md` "Routing patterns" (new ## section; plugin commit `bef32d1`).
 
 **Rule.** Utility nodes (budget_check, consensus_check) that need to escalate
 do so by setting `state["next_node_override"] = "escalation_router"`. The
@@ -220,6 +251,8 @@ in the state diff.
 ---
 
 ## 13. NODE_NAMES canonical tuple
+
+**FOLDED 2026-05-17** → `skills/executor/SKILL.md` "T11 audit checks" (new ## section; plugin commit `86c3d34`).
 
 **Rule.** Maintain a single source of truth for the canonical node names
 (`orchestrator/graph.py:NODE_NAMES`). T11 audit-symmetry asserts:
@@ -239,6 +272,8 @@ a compile-time-style guard.
 
 ## 14. Metric divergence-as-headline
 
+**FOLDED 2026-05-17** → `skills/brain/SKILL.md` "Status reporting" (new ## section; plugin commit `bef32d1`) AND `skills/executor/SKILL.md` "Report Submission" (new ## section; plugin commit `86c3d34`).
+
 **Rule.** When the expected and observed values of a measured metric
 diverge during a run, lead the next status update (report, journal note, or
 PI notification) with the **divergence**, not the raw numbers. Use the form
@@ -253,6 +288,8 @@ metric matters because the divergence matters.
 ---
 
 ## 15. PI batch-review affordance (obs #15 — adopted)
+
+**FOLDED 2026-05-17** → `skills/brain/SKILL.md` "PI interactions" (new ## section; plugin commit `bef32d1`).
 
 **Rule.** When a PI `interrupt()` payload exceeds `PI_BATCH_REVIEW_THRESHOLD`
 items (default 10), emit `batched=True`, `page_size=THRESHOLD`,
@@ -274,6 +311,8 @@ splitting into 3-5 item batches."*
 
 ## 16. Affordance F propagation (workflow_thread_id mirrors motivated-by tags)
 
+**FOLDED 2026-05-17** → `skills/brain/SKILL.md` "Affordances" (new ## section; plugin commit `bef32d1`).
+
 **Rule.** The `workflow_thread_id` tag is structurally identical to the
 v2.3.5 `motivated-by-explained` suppression tag: a deterministic value
 written on every artifact during a context, used to scope retrospective
@@ -288,6 +327,8 @@ similarity makes future generalizations cheap.
 ---
 
 ## 17. Affordance G surface re-exposed (KnowledgePackIntegrityError)
+
+**FOLDED 2026-05-17** → `skills/executor/SKILL.md` "Repo-specific procedures" (bullet; plugin commit `86c3d34`).
 
 **Rule.** When an MCP write returns HTTP 422 with knowledge-pack-integrity
 detail, map it to `CheckpointError` and route via `escalation_router`. Do
