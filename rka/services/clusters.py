@@ -36,6 +36,14 @@ class ClusterService(BaseService):
         await self._sync_fts("cluster", cluster_id, {
             "label": data.label, "synthesis": data.synthesis or "",
         })
+        # Mirror the FK as an entity_link so graph traversal sees it. Migration
+        # 023 backfilled the existing rows; this hook keeps parity going forward.
+        if data.research_question_id:
+            await self.add_link(
+                "cluster", cluster_id,
+                "answers",
+                "decision", data.research_question_id,
+            )
         await self.audit("create", "cluster", cluster_id, "llm")
         return await self.get(cluster_id)
 
@@ -116,6 +124,15 @@ class ClusterService(BaseService):
             )
             if row:
                 await self._sync_fts("cluster", cluster_id, dict(row))
+        # Mirror the FK as an entity_link when the RQ assignment changes.
+        # INSERT OR IGNORE via add_link keeps repeats safe; the existing
+        # link is preserved across re-runs.
+        if dump.get("research_question_id"):
+            await self.add_link(
+                "cluster", cluster_id,
+                "answers",
+                "decision", dump["research_question_id"],
+            )
         await self.audit("update", "cluster", cluster_id, "system", {"fields": list(dump.keys())})
         return await self.get(cluster_id)
 

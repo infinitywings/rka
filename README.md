@@ -1051,14 +1051,31 @@ The eight core entity update models (`DecisionUpdate`, `MissionUpdate`, `Journal
 | `GET`    | `/maintenance`                 | Get pending maintenance manifest (provenance gaps, missing links) |
 | `GET`    | `/health`                      | Health check (version, sqlite-vec status)                         |
 
-### LLM Configuration
+### Embedding Configuration (v2.4.0)
 
-| Method   | Endpoint        | Description                                      |
-| -------- | --------------- | ------------------------------------------------ |
-| `GET`  | `/llm/status` | LLM config, availability, model, context window  |
-| `PUT`  | `/llm/config` | Update LLM settings at runtime (persisted to DB) |
-| `POST` | `/llm/check`  | Re-check LLM connectivity                        |
-| `GET`  | `/llm/models` | List models available on the configured cloud LLM backend |
+| Method   | Endpoint                                       | Description                                                |
+| -------- | ---------------------------------------------- | ---------------------------------------------------------- |
+| `GET`  | `/config/embedding`                          | Current embedding backend config (api_key redacted)        |
+| `PUT`  | `/config/embedding?actor=...`                | Save config + test + kick off backfill if backend/dim changed (202) or no-op (200) |
+| `POST` | `/config/embedding/test`                     | Probe backend reachability + dim detection (no persist)    |
+| `GET`  | `/config/embedding/backfill/status[?job_id=…]` | Poll the running backfill's progress                       |
+
+Full reference: [`docs/embedding_backends.md`](docs/embedding_backends.md).
+
+### LLM Routes (preserved; unconfigured at v2.4.0)
+
+The `/api/llm/*` routes and the `rka_ask` / `rka_generate_summary`
+MCP tools remain in the codebase but are no longer surfaced in the
+web UI. v2.4.0 removed the LLM config knob per PI directive
+`jrn_01KRNZBS50K250HHHHEC58E4GC`; a future release will re-wire LLM
+features through the orchestrator's Claude Code SDK path.
+
+| Method   | Endpoint        | Description                                                |
+| -------- | --------------- | ---------------------------------------------------------- |
+| `GET`  | `/llm/status` | LLM config, availability, model, context window (graceful no-op) |
+| `PUT`  | `/llm/config` | Update LLM settings (no longer driven by the UI)           |
+| `POST` | `/llm/check`  | Re-check LLM connectivity                                  |
+| `GET`  | `/llm/models` | List models available on the configured backend            |
 
 ### Notebook (Q&A + Summaries)
 

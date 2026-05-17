@@ -223,3 +223,156 @@ class TestGuessType:
 
     def test_unknown_prefix(self):
         assert GraphService._guess_type_from_id("zzz_bar") == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# v2.5.2 — cluster→parent-RQ traversal (migration 023 + 'answers' link_type)
+# ---------------------------------------------------------------------------
+
+
+class TestClusterAnswersTraversal:
+    """Cluster anchors must surface the parent research-question via the
+    new 'answers' edge type. Pre-v2.5.2 these tests would fail because
+    no 'answers' edges existed in entity_links (FK column was invisible
+    to graph traversal). Anchor IDs are Eval-v2 S7's anchor pair so the
+    regression-lock matches the surfaced finding's anchors verbatim.
+
+    Provenance: mission mis_01KRS1D8C0E2FP52D0P6JNB3SX (D3); decision
+    dec_01KRS1ADPD4W6AW2X54MKVXMCR.
+    """
+
+    # Eval-v2 S7's anchor pair (eval-harness/v2/corpus/scenarios.jsonl →
+    # brain-contradiction-staleness-vs-validation).
+    S7_CLUSTER_ID = "ecl_01KP4PK7VPN8YFR50PSFXPGTQ0"
+    S7_RQ_ID = "dec_01KP4P4QSSNZCTEHVT6QR7ZRYD"
+
+    @pytest_asyncio.fixture
+    async def graph_svc_with_s7_cluster(self, db: Database) -> GraphService:
+        """Seed the S7 cluster + parent-RQ + the 'answers' entity_link.
+
+        This is the minimal fixture that exercises the post-migration-023
+        state. The cluster has a non-null FK and a parallel entity_link
+        — matching what migration 023 produces in production.
+        """
+        await db.execute(
+            "INSERT INTO decisions (id, question, decided_by, status, phase, project_id) VALUES (?, ?, ?, ?, ?, ?)",
+            [self.S7_RQ_ID, "S7 research question", "brain", "active", "phase_1", "proj_default"],
+        )
+        await db.execute(
+            "INSERT INTO evidence_clusters (id, research_question_id, label, project_id) VALUES (?, ?, ?, ?)",
+            [self.S7_CLUSTER_ID, self.S7_RQ_ID, "S7 cluster", "proj_default"],
+        )
+        await db.execute(
+            """INSERT INTO entity_links
+               (id, source_type, source_id, link_type, target_type, target_id,
+                link_weight, created_by, project_id)
+               VALUES (?, 'cluster', ?, 'answers', 'decision', ?, 1.0, 'migration_023', 'proj_default')""",
+            ["lnk_test_s7_answers", self.S7_CLUSTER_ID, self.S7_RQ_ID],
+        )
+        await db.commit()
+        return GraphService(db=db)
+
+    @pytest.mark.asyncio
+    async def test_ego_graph_from_cluster_anchor_includes_parent_rq(
+        self, graph_svc_with_s7_cluster: GraphService
+    ):
+        """T4 (a): get_ego_graph anchored at the S7 cluster MUST return
+        the parent-RQ decision in nodes. Pre-v2.5.2 this returned only
+        the cluster itself (cluster's `answers` edge didn't exist)."""
+        result = await graph_svc_with_s7_cluster.get_ego_graph(
+            entity_id=self.S7_CLUSTER_ID, depth=1
+        )
+        node_ids = {n["id"] for n in result["nodes"]}
+        assert self.S7_RQ_ID in node_ids, (
+            f"ego_graph from cluster anchor must include parent RQ "
+            f"{self.S7_RQ_ID}; got nodes {sorted(node_ids)}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_multi_hop_seeds_only_cluster_traversal_returns_parent_rq(
+        self, graph_svc_with_s7_cluster: GraphService
+    ):
+        """T4 (b): multi_hop_retrieval with seeds=[cluster_id] (the
+        v2.5.1 seeds-only invocation surface) MUST surface the parent-RQ
+        decision. Combined regression-lock: v2.5.1 schema relaxation +
+        v2.5.2 'answers' edge."""
+        result = await graph_svc_with_s7_cluster.multi_hop_retrieval(
+            query="",
+            seeds=[self.S7_CLUSTER_ID],
+            max_depth=2,
+            max_nodes=50,
+            project_id="proj_default",
+        )
+        node_ids = {n["id"] for n in result["nodes"]}
+        assert self.S7_RQ_ID in node_ids, (
+            f"multi_hop from cluster seed must include parent RQ "
+            f"{self.S7_RQ_ID}; got nodes {sorted(node_ids)}"
+        )
+
+
+class TestClusterServiceAnswersLinkHook:
+    """T3 hook (ClusterService.create/.update writing 'answers' entity_link).
+
+    T4 (c) per spec: isolated unit test that exercises the hook in
+    create — assert one entity_link with link_type='answers' lands when
+    a cluster is created with a non-null research_question_id.
+    """
+
+    @pytest.mark.asyncio
+    async def test_cluster_service_creates_entity_link_alongside_fk(
+        self, db: Database
+    ):
+        from rka.models import EvidenceClusterCreate
+        from rka.services.clusters import ClusterService
+
+        # Seed a parent-RQ decision the cluster can point at.
+        rq_id = "dec_test_t3_hook_rq"
+        await db.execute(
+            "INSERT INTO decisions (id, question, decided_by, status, phase, project_id) VALUES (?, ?, ?, ?, ?, ?)",
+            [rq_id, "T3 hook RQ", "brain", "active", "phase_1", "proj_default"],
+        )
+        await db.commit()
+
+        svc = ClusterService(db=db)
+        cluster = await svc.create(
+            EvidenceClusterCreate(
+                research_question_id=rq_id,
+                label="T3 hook test cluster",
+                synthesis="seed",
+                confidence="emerging",
+            )
+        )
+
+        rows = await db.fetchall(
+            """SELECT source_id, target_id, link_type
+               FROM entity_links
+               WHERE link_type = 'answers' AND source_id = ?""",
+            [cluster.id],
+        )
+        assert len(rows) == 1, (
+            f"ClusterService.create should write exactly one 'answers' "
+            f"entity_link when FK is set; got {len(rows)} rows"
+        )
+        assert rows[0]["target_id"] == rq_id
+
+    @pytest.mark.asyncio
+    async def test_cluster_service_skips_link_when_fk_is_null(self, db: Database):
+        """The hook is gated on a non-null FK; a cluster created without
+        an RQ should not emit a link (no orphan link target)."""
+        from rka.models import EvidenceClusterCreate
+        from rka.services.clusters import ClusterService
+
+        svc = ClusterService(db=db)
+        cluster = await svc.create(
+            EvidenceClusterCreate(
+                research_question_id=None,
+                label="Cluster without RQ",
+                synthesis="seed",
+                confidence="emerging",
+            )
+        )
+        rows = await db.fetchall(
+            "SELECT 1 FROM entity_links WHERE link_type = 'answers' AND source_id = ?",
+            [cluster.id],
+        )
+        assert rows == [], "no link should be emitted when FK is NULL"

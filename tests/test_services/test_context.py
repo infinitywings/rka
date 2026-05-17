@@ -7,6 +7,7 @@ This test file replaces the pre-v2.4 HOT/WARM/COLD assertions.
 
 from __future__ import annotations
 
+import pytest
 import pytest_asyncio
 
 from rka.infra.database import Database
@@ -126,14 +127,27 @@ class TestContextRankingByImportance:
             )
 
     async def test_pi_source_lift_applied_within_band(self, context_engine: ContextEngine):
-        """PI-sourced entries get a small lift; jrn_critical (pi) outranks
-        any equally-rated executor-sourced entries (none in this fixture, but
-        the PI entry is at top — sanity-check the scoring tuple respects it)."""
-        pkg = await context_engine.get_context()
-        # First entry should be jrn_critical (PI + critical).
-        assert pkg.sources[0] == "jrn_critical", (
-            f"Expected jrn_critical first; got {pkg.sources[0]}"
+        """PI-sourced entries get a +0.125 normalized lift in the importance
+        band — same magnitude as the pre-v2.5.3 +5/40 lift.
+
+        Post-v2.5.3 (dec_01KRSMMCS8MD7KQDBS0E2DVKBQ) the overview path is a
+        weighted-sum, not a strict-band hierarchy, so jrn_critical is not
+        guaranteed to be first when other entries have high centrality + high
+        recency. This test now asserts the lift is APPLIED (PI > non-PI at
+        equal importance / centrality / recency) by comparing scores from
+        the engine's classmethod directly — a more precise check than relying
+        on the fixture's ordering after centrality changes shift the leader.
+        """
+        pi_entry = {"importance": "normal", "source": "pi", "centrality_degree": 0, "created_at": "2026-05-17T00:00:00Z"}
+        non_pi_entry = {"importance": "normal", "source": "executor", "centrality_degree": 0, "created_at": "2026-05-17T00:00:00Z"}
+        pi_score = ContextEngine._overview_score(pi_entry)
+        non_pi_score = ContextEngine._overview_score(non_pi_entry)
+        assert pi_score > non_pi_score, (
+            f"PI lift must produce a higher score at equal importance/centrality/"
+            f"recency. Got pi={pi_score!r} vs non_pi={non_pi_score!r}."
         )
+        # Lift magnitude is _PI_SOURCE_LIFT_NORMALIZED * _W_IMPORTANCE = 0.125 * 0.5 = 0.0625.
+        assert pi_score - non_pi_score == pytest.approx(0.0625, abs=1e-9)
 
 
 class TestContextNoTokenBudget:
@@ -168,9 +182,22 @@ class TestContextNoTokenBudget:
 
 
 class TestContextCentralityContribution:
-    async def test_high_centrality_lifts_within_importance_band(self, context_engine: ContextEngine):
-        """jrn_high_old (importance=high, 5 entity_links) should outrank an
-        un-linked normal-importance entry — but stay below the critical entry."""
+    async def test_high_centrality_with_age_can_beat_un_linked_critical(
+        self, context_engine: ContextEngine
+    ):
+        """Pre-v2.5.3 this test asserted critical-strict-dominance-over-
+        centrality. The fix-shape decision dec_01KRSMMCS8MD7KQDBS0E2DVKBQ
+        explicitly identifies that invariant as the bug ("a 'critical' entry
+        from 6 months ago beats a 'high' from yesterday" — the design intent
+        was importance × centrality × recency, not strict-band hierarchy).
+
+        Post-v2.5.3 the weighted-sum lets a heavily-linked high-band entry
+        outrank an un-linked critical-band entry. The fixture's jrn_high_old
+        has 5 entity_links and PI source; jrn_critical has 0 entity_links
+        and PI source. Computed scores (w_imp=0.5, w_cent=0.3, w_recency=0.2):
+          jrn_critical: 0.5*1.125 + 0 + 0.2*1.0 = 0.7625
+          jrn_high_old: 0.5*0.875 + 0.3*log1p(5) + 0.2*(~0)  ≈ 0.98
+        """
         pkg = await context_engine.get_context()
         ranked = pkg.sources
 
@@ -178,10 +205,13 @@ class TestContextCentralityContribution:
         high_old_idx = ranked.index("jrn_high_old")
         low_recent_idx = ranked.index("jrn_low_recent")
 
-        # Sanity: critical above high (importance dominates centrality)
-        assert crit_idx < high_old_idx
-        # high+centrality above low+recent (importance still wins; centrality
-        # tie-breaks within importance bands)
+        # Post-v2.5.3 invariant: heavily-linked high beats un-linked critical.
+        assert high_old_idx < crit_idx, (
+            "v2.5.3 weighted-sum: high-importance with high centrality should "
+            "outrank un-linked critical (dec_01KRSMMCS8MD7KQDBS0E2DVKBQ)."
+        )
+        # Importance still helps within similar centrality/recency cohorts:
+        # high+centrality > low+recency+zero-centrality.
         assert high_old_idx < low_recent_idx
 
 
@@ -259,3 +289,237 @@ class TestHydrateHitsClaimAndCluster:
         )]
         rows = await context_engine._hydrate_hits(hits, project_id="proj_default")
         assert rows == []
+
+
+# ---------------------------------------------------------------------------
+# v2.5.3 — sort-by-retrieval-path regression tests (dec_01KRSMMCS8MD7KQDBS0E2DVKBQ)
+# ---------------------------------------------------------------------------
+
+
+class TestV2_5_3SortByRetrievalPath:
+    """Regression-lock the v2.5.3 sort semantics:
+
+    - Topic path preserves search-relevance order (regardless of importance
+      tags).
+    - Overview path uses weighted-sum with recency as multiplicative term
+      (today's normal entry beats 30-day-old normal entry).
+    - PI-source lift applies on BOTH paths (topic and overview).
+    """
+
+    @pytest_asyncio.fixture
+    async def engine_with_known_search_hits(self, db_with_project: Database):
+        """ContextEngine wired to a stub SearchService that yields a fixed
+        relevance-ordered hit list. Lets us test that the topic path
+        preserves search order without depending on FTS/vector content."""
+        from rka.services.search import SearchHit
+
+        db = db_with_project
+
+        # 4 decisions with deliberately inverted importance order vs. the
+        # search-rank order, so importance-based re-sort would scramble them.
+        NOW = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"
+        for did, q in (
+            ("dec_topic_A", "topic anchor A"),
+            ("dec_topic_B", "topic anchor B"),
+            ("dec_topic_C", "topic anchor C"),
+            ("dec_topic_D", "topic anchor D"),
+        ):
+            await db.execute(
+                f"""INSERT INTO decisions (id, question, decided_by, status, phase,
+                    project_id, created_at, updated_at)
+                   VALUES (?, ?, 'brain', 'active', 'phase_1', 'proj_default',
+                           {NOW}, {NOW})""",
+                [did, q],
+            )
+        await db.commit()
+
+        class _StubSearch:
+            def __init__(self, hits):
+                self._hits = hits
+
+            def with_project(self, project_id):
+                return self
+
+            async def search(self, topic, limit=50):
+                return list(self._hits)
+
+        # Order: A (best), B, C, D (worst). Re-sort by importance would
+        # scramble — they're all default 'normal' decisions with no
+        # importance tag, so importance is tied; centrality and created_at
+        # tie too (all NOW). The topic path must preserve [A,B,C,D].
+        hits = [
+            SearchHit(entity_type="decision", entity_id=did, title=did, snippet="")
+            for did in ("dec_topic_A", "dec_topic_B", "dec_topic_C", "dec_topic_D")
+        ]
+        engine = ContextEngine(db=db, search=_StubSearch(hits), llm=None)
+        return engine
+
+    async def test_topic_query_preserves_search_rank(
+        self, engine_with_known_search_hits: ContextEngine
+    ):
+        """Topic path must return entries in search-hit order, NOT importance
+        order. Pre-v2.5.3 the relevance ranking was discarded by the
+        importance-only re-sort."""
+        pkg = await engine_with_known_search_hits.get_context(topic="anchor")
+        assert pkg.sources == [
+            "dec_topic_A",
+            "dec_topic_B",
+            "dec_topic_C",
+            "dec_topic_D",
+        ], (
+            f"Topic path lost search-rank order; got {pkg.sources}. "
+            "v2.5.3 must preserve BM25/vector ranking from SearchService."
+        )
+
+    async def test_overview_uses_weighted_sum_recency(
+        self, db_with_project: Database
+    ):
+        """Overview path: two entries with the same importance band; the
+        more recent one ranks higher because recency is now a first-class
+        multiplicative term (pre-v2.5.3 it was tuple tie-break only)."""
+        db = db_with_project
+        NOW = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"
+        # 30 days back, so days_since_created ≈ 30; recency_score ≈ 1/31.
+        OLD = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-30 days')"
+        # Identical importance + source so the only differentiator is recency.
+        await db.execute(
+            f"""INSERT INTO journal (id, type, content, source, confidence,
+                importance, phase, project_id, created_at, updated_at)
+               VALUES ('jrn_recency_today', 'finding', 'recent content',
+                       'executor', 'verified', 'normal', 'phase_1',
+                       'proj_default', {NOW}, {NOW})"""
+        )
+        await db.execute(
+            f"""INSERT INTO journal (id, type, content, source, confidence,
+                importance, phase, project_id, created_at, updated_at)
+               VALUES ('jrn_recency_old', 'finding', 'old content',
+                       'executor', 'verified', 'normal', 'phase_1',
+                       'proj_default', {OLD}, {OLD})"""
+        )
+        await db.commit()
+
+        from rka.services.search import SearchService
+
+        search = SearchService(db=db, embeddings=None)
+        engine = ContextEngine(db=db, search=search, llm=None)
+
+        pkg = await engine.get_context()  # overview path
+        ranked = pkg.sources
+        today_idx = ranked.index("jrn_recency_today")
+        old_idx = ranked.index("jrn_recency_old")
+        assert today_idx < old_idx, (
+            "Overview path with weighted-sum: recent entry of same importance "
+            "MUST rank above 30-day-old entry. v2.5.3 lifts recency to a "
+            "multiplicative term (dec_01KRSMMCS8MD7KQDBS0E2DVKBQ)."
+        )
+
+    async def test_pi_source_lift_applied_on_both_paths(
+        self, db_with_project: Database
+    ):
+        """PI-source lift must apply on BOTH the topic and overview paths.
+
+        Overview path is exercised by scoring two same-importance same-recency
+        entries with different sources via ContextEngine._overview_score
+        directly (deterministic). Topic path uses the same scoring logic for
+        tie-breaks within identical search_rank — also verified via
+        _topic_sort_key.
+        """
+        pi_entry = {
+            "_search_rank": 0,
+            "importance": "high",
+            "source": "pi",
+            "centrality_degree": 0,
+            "created_at": "2026-05-17T00:00:00Z",
+        }
+        non_pi_entry = {
+            "_search_rank": 0,
+            "importance": "high",
+            "source": "executor",
+            "centrality_degree": 0,
+            "created_at": "2026-05-17T00:00:00Z",
+        }
+        # Overview: PI score > non-PI score.
+        assert ContextEngine._overview_score(pi_entry) > ContextEngine._overview_score(
+            non_pi_entry
+        )
+        # Topic-path tie-break (same search_rank=0): -importance term is more
+        # negative for PI → PI tuple sorts first.
+        assert ContextEngine._topic_sort_key(pi_entry) < ContextEngine._topic_sort_key(
+            non_pi_entry
+        )
+
+
+# ---------------------------------------------------------------------------
+# v2.5.4 — env-var-configurable coefficients (mis_01KRSP44W7BDZH11PZRGXH1WM4)
+# ---------------------------------------------------------------------------
+
+
+class TestV2_5_4EnvVarConfigurableCoefficients:
+    """Coefficients are read from RKA_CTX_W_IMP / W_CENT / W_RECENCY /
+    PI_LIFT at module-import time. Tests use monkeypatch.setenv plus
+    _reload_coefficients_from_env() to swap values mid-process."""
+
+    def test_defaults_match_v2_5_3_hypothesis_when_no_env_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """With no env vars set, the module constants must equal the
+        v2.5.3-hypothesis Config 1 defaults (0.5 / 0.3 / 0.2 / 0.125).
+        The 0.125 PI lift preserves the pre-v2.5.3 +5/40 normalized
+        magnitude (the spec text says "0.05" but the parenthetical
+        "+5/40 = 0.125" — the existing implementation matches the
+        parenthetical and that's what gets preserved across tuning)."""
+        import rka.services.context as ctx
+
+        for var in (
+            "RKA_CTX_W_IMP",
+            "RKA_CTX_W_CENT",
+            "RKA_CTX_W_RECENCY",
+            "RKA_CTX_PI_LIFT",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        ctx._reload_coefficients_from_env()
+        assert ctx._W_IMPORTANCE == 0.5
+        assert ctx._W_CENTRALITY == 0.3
+        assert ctx._W_RECENCY == 0.2
+        assert ctx._PI_SOURCE_LIFT_NORMALIZED == 0.125
+
+    def test_env_vars_override_defaults(self, monkeypatch: pytest.MonkeyPatch):
+        """Setting the four RKA_CTX_* env vars overrides the module-level
+        constants when _reload_coefficients_from_env() runs. This is the
+        production swap pattern: docker restart with env → fresh import
+        → fresh constants."""
+        import rka.services.context as ctx
+
+        monkeypatch.setenv("RKA_CTX_W_IMP", "0.7")
+        monkeypatch.setenv("RKA_CTX_W_CENT", "0.2")
+        monkeypatch.setenv("RKA_CTX_W_RECENCY", "0.1")
+        monkeypatch.setenv("RKA_CTX_PI_LIFT", "0.3")
+        ctx._reload_coefficients_from_env()
+        assert ctx._W_IMPORTANCE == 0.7
+        assert ctx._W_CENTRALITY == 0.2
+        assert ctx._W_RECENCY == 0.1
+        assert ctx._PI_SOURCE_LIFT_NORMALIZED == 0.3
+
+        # Restore defaults so subsequent tests in the same module aren't
+        # affected by env-var bleed.
+        for var in (
+            "RKA_CTX_W_IMP",
+            "RKA_CTX_W_CENT",
+            "RKA_CTX_W_RECENCY",
+            "RKA_CTX_PI_LIFT",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        ctx._reload_coefficients_from_env()
+
+    def test_invalid_float_falls_back_to_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Operator typo in env var (non-numeric) must not crash the
+        engine; falls back to the documented default."""
+        import rka.services.context as ctx
+
+        monkeypatch.setenv("RKA_CTX_W_IMP", "not-a-float")
+        ctx._reload_coefficients_from_env()
+        assert ctx._W_IMPORTANCE == 0.5  # default preserved
+        monkeypatch.delenv("RKA_CTX_W_IMP", raising=False)
+        ctx._reload_coefficients_from_env()

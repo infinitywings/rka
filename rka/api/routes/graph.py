@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from rka.api.deps import get_graph_service, get_scoped_search_service, require_project
@@ -15,9 +16,26 @@ router = APIRouter()
 
 
 class MultiHopRequest(BaseModel):
-    """Request for query-anchored multi-hop subgraph retrieval."""
+    """Request for query-anchored multi-hop subgraph retrieval.
 
-    query: str
+    v2.5.1 (mis_01KRRM8CJP34KTN8KJMZQH2PFP / dec_01KRRM5WKSSX7C3ZXZME0BMVQ9):
+    ``query`` is now optional when ``seeds`` is provided. Either of:
+
+      - ``query`` only — SearchService.search(query) supplies the seeds
+        (existing v2.4-era behavior).
+      - ``seeds`` only — explicit anchor entities; bypasses search.
+      - both — explicit seeds win; query is recorded but search step is
+        bypassed by the service layer.
+
+    Neither-provided yields a 422 with the Affordance-G structured body
+    (``{error, detail, hint}``) from the route handler. Pre-v2.5.1 the
+    field was ``query: str`` with no default, which silently rejected
+    seeds-only invocations with FastAPI's default per-field-error 422 —
+    exactly the shape Eval-v2's runner ran into
+    (jrn_01KRPGY39DJA2K9KV20XD733GK live-run finding).
+    """
+
+    query: str | None = None
     seeds: list[str] | None = None
     max_depth: int = Field(default=3, ge=1, le=5)
     max_nodes: int = Field(default=50, ge=1, le=500)
@@ -85,9 +103,30 @@ async def multi_hop_retrieval(
     tests / when caller has anchor entities), BFS-expands using per-edge
     weights from dec_01KQQRZ0CJHB68P2F6233AHEJ5, returns a connected
     relevance-ranked subgraph capped at `max_nodes`.
+
+    v2.5.1: rejects a body that provides neither ``query`` nor ``seeds``
+    with a 422 carrying the Affordance-G shape so the caller sees an
+    actionable hint instead of FastAPI's default per-field array.
     """
+    if not data.query and not data.seeds:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": "multi_hop_invalid_request",
+                "detail": "either `query` or `seeds` must be provided",
+                "hint": (
+                    'send {"query": "<text>"} for search-based seeding, '
+                    'or {"seeds": ["<entity_id>", ...]} for explicit anchor '
+                    "entities (both together is also accepted; the service "
+                    "uses explicit seeds when present)"
+                ),
+            },
+        )
     return await svc.multi_hop_retrieval(
-        query=data.query,
+        # Service signature is `query: str`; pass empty string when the
+        # caller relied solely on seeds. The service's seeds-set branch
+        # bypasses the search step entirely, so an empty query is unused.
+        query=data.query or "",
         seeds=data.seeds,
         max_depth=data.max_depth,
         max_nodes=data.max_nodes,

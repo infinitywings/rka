@@ -82,9 +82,22 @@ After code changes to `rka/mcp/server.py` or other source files:
 - There is no local `.venv` — all server/worker processes run in Docker
 - `docker compose restart` does **not** reload service code — always use `docker compose up -d --build` for any change under `rka/`. Restart only suffices for migration-only changes (the migration runner queries `schema_migrations` on startup).
 
-## macOS / FuSpace AppleDouble Quirks
+## Embedding backend configuration (v2.4.0+)
 
-The FuSpace volume creates `._*` resource-fork files alongside any file Python tools write to (in `build/`, `rka.egg-info/`, project root). These break both `docker compose build` (fails with "failed to xattr ... operation not permitted") and `uv tool install` (fails with "No such file or directory: '._requires.txt'") even with `COPYFILE_DISABLE=1` set.
+Pluggable embedding backends (FastEmbed, OpenAI-compat HTTP, Ollama) configurable
+in the web UI at **Settings → Embeddings**. Persistent config at
+`/data/embedding_config.json` (file-mode 0600, owner-readable only because of the
+optional `api_key`). Full reference: [`docs/embedding_backends.md`](docs/embedding_backends.md).
+
+LLM-driven features (`rka_ask`, `rka_generate_summary`, web-UI Q&A page) were
+removed in v2.4.0 per `jrn_01KRNZBS50K250HHHHEC58E4GC`; server-side LLM code is
+preserved for future re-wiring through the orchestrator's Claude Code SDK
+(separate Phase-2 mission). `/api/capabilities` no longer returns the `llm`
+field (BREAKING-IN-MINOR; documented in `CHANGELOG.md`).
+
+## macOS AppleDouble Quirks (external / network / sync volumes)
+
+On macOS, certain volumes — external drives, SMB/AFP network mounts, OneDrive / Dropbox / iCloud sync folders, and some case-insensitive filesystems — don't fully support extended attributes. macOS works around this by creating `._*` AppleDouble companion files alongside every file Python tools write (in `build/`, `rka.egg-info/`, project root). These break both `docker compose build` (fails with "failed to xattr ... operation not permitted") and `uv tool install` (fails with "No such file or directory: '._requires.txt'") even with `COPYFILE_DISABLE=1` set. If you cloned the repo into `~/Documents` on a stock APFS volume you'll never see this; if you cloned it onto an external drive or a synced folder, you will.
 
 **Before any rebuild**, purge resource-fork files:
 
@@ -92,10 +105,10 @@ The FuSpace volume creates `._*` resource-fork files alongside any file Python t
 find . -maxdepth 2 -name '._*' -not -path './.git/*' -delete
 ```
 
-**If `uv tool install --force .` still fails on `._requires.txt`** (the build process re-creates AppleDouble files in `build/` on FuSpace), install from a `/tmp` clone instead:
+**If `uv tool install --force .` still fails on `._requires.txt`** (the build process re-creates AppleDouble files in `build/` on the fly), install from a `/tmp` clone instead — `/tmp` is on a stock APFS volume that doesn't have the xattr quirk:
 
 ```bash
-rm -rf /tmp/rka-build && git clone -q --depth 1 /Volumes/FuSpace/Projects/rka /tmp/rka-build
+rm -rf /tmp/rka-build && git clone -q --depth 1 "$PWD" /tmp/rka-build
 cd /tmp/rka-build && UV_CACHE_DIR=/tmp/uv-cache uv tool install --force .
 ```
 

@@ -6,9 +6,17 @@
 # Prerequisites:
 #   - Docker Desktop (macOS/Windows) or Docker Engine (Linux)
 #
-# Optional (for rka_ask / rka_generate_summary):
-#   - A cloud LLM API key (e.g. OpenAI, Anthropic via LiteLLM)
-#   - Or a local LLM server (LM Studio, Ollama)
+# Embeddings are ON by default in v2.4.0 with the FastEmbed backend
+# (nomic-ai/nomic-embed-text-v1.5, 768-dim). Switch to LM Studio,
+# Ollama, or any OpenAI-compatible HTTP backend at Settings → Embeddings
+# in the web UI (config persists at /data/embedding_config.json,
+# file-mode 0600).
+#
+# LLM-driven features (rka_ask, rka_generate_summary) are no longer
+# configured here. The orchestrator's Claude Code SDK path handles LLM
+# access (separate Phase-2 mission). The /api/llm/* REST routes + the
+# rka_ask / rka_generate_summary MCP tools remain in the codebase as a
+# graceful-no-op surface for future re-wiring.
 #
 # Usage:
 #   docker compose up -d          # start
@@ -38,13 +46,15 @@ services:
     volumes:
       - rka-data:/data
     environment:
-      # LLM is disabled by default. The background worker only needs embeddings.
-      # To enable rka_ask / rka_generate_summary, set RKA_LLM_ENABLED=true
-      # and configure the model/base below.
-      # RKA_LLM_ENABLED: "true"
-      # RKA_LLM_API_BASE: http://host.docker.internal:1234/v1
-      # RKA_LLM_MODEL: openai/qwen3-32b
-      PLACEHOLDER: ""
+      RKA_EMBEDDINGS_ENABLED: "true"
+      # v2.5.4 (mis_01KRSP44W7BDZH11PZRGXH1WM4): context-engine weighted-sum
+      # coefficients. Interpolated from shell env so eval-v2 sweep can swap
+      # configs by setting these before `docker compose up -d --force-recreate`.
+      # Defaults match the v2.5.3-hypothesis Config 1 in the sweep.
+      RKA_CTX_W_IMP: "${RKA_CTX_W_IMP:-0.5}"
+      RKA_CTX_W_CENT: "${RKA_CTX_W_CENT:-0.3}"
+      RKA_CTX_W_RECENCY: "${RKA_CTX_W_RECENCY:-0.2}"
+      RKA_CTX_PI_LIFT: "${RKA_CTX_PI_LIFT:-0.125}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -56,7 +66,16 @@ services:
       disable: true
     volumes:
       - rka-data:/data
-    # Worker only processes embedding jobs — no LLM needed
+    environment:
+      RKA_EMBEDDINGS_ENABLED: "true"
+      # v2.5.4 (mis_01KRSP44W7BDZH11PZRGXH1WM4): context-engine weighted-sum
+      # coefficients. Interpolated from shell env so eval-v2 sweep can swap
+      # configs by setting these before `docker compose up -d --force-recreate`.
+      # Defaults match the v2.5.3-hypothesis Config 1 in the sweep.
+      RKA_CTX_W_IMP: "${RKA_CTX_W_IMP:-0.5}"
+      RKA_CTX_W_CENT: "${RKA_CTX_W_CENT:-0.3}"
+      RKA_CTX_W_RECENCY: "${RKA_CTX_W_RECENCY:-0.2}"
+      RKA_CTX_PI_LIFT: "${RKA_CTX_PI_LIFT:-0.125}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

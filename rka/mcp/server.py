@@ -1884,17 +1884,24 @@ async def rka_get_status() -> str:
         # Affordance C (Mission B): capabilities block. Best-effort —
         # silently omit on error so a missing /capabilities route doesn't
         # break status display.
+        #
+        # Mission D (v2.4.0) removed the `llm` field from
+        # /api/capabilities per the LLM-capability-removal directive
+        # (jrn_01KRNZBS50K250HHHHEC58E4GC). The llm line is rendered
+        # conditionally so a future re-introduction works without code
+        # changes here.
         try:
             cap_r = await c.get("/api/capabilities")
             if cap_r.status_code == 200:
                 caps = cap_r.json()
                 emb = caps.get("embedding", {})
-                llm = caps.get("llm", {})
                 lines.append("\n### Capabilities")
                 emb_status = "✓ available" if emb.get("available") else f"✗ unavailable ({emb.get('reason_unavailable') or 'unknown'})"
-                llm_status = "✓ available" if llm.get("available") else f"✗ unavailable ({llm.get('reason_unavailable') or 'unknown'})"
                 lines.append(f"  embedding: {emb_status}")
-                lines.append(f"  llm:       {llm_status}")
+                if "llm" in caps:
+                    llm = caps["llm"] or {}
+                    llm_status = "✓ available" if llm.get("available") else f"✗ unavailable ({llm.get('reason_unavailable') or 'unknown'})"
+                    lines.append(f"  llm:       {llm_status}")
         except Exception:
             pass
 
