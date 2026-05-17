@@ -183,3 +183,40 @@ def test_every_executor_node_uses_executor_system_prompt():
         mcp = FakeMCP()
         fn(_state(), sdk, mcp)
         assert sdk.calls[0]["system"] == executor.EXECUTOR_SYSTEM
+
+
+def test_EXECUTOR_SYSTEM_includes_phase_2_5_deltas():
+    """Phase 2.5 (mis_01KRVJ240VXH7NQ0PMSHXHK888 T3): EXECUTOR_SYSTEM is
+    extended with prose from 4 runtime-relevant deltas per the Brain-
+    ratified Option-C scope (dec_01KRVHZ4P3F1GXE75RRAQX3BTP +
+    chk_01KRVH890GKYCY9A28TM02STQ1):
+
+      Delta #1  — Version-drift re-verification (token: "info.version")
+      Delta #8  — Defensive missing-required-field paths
+                    (token: "ErrorRecord over raising")
+      Delta #14b — Metric divergence-as-headline / Report Submission
+                    (token: "expected X, observed Y")
+      Delta #17 — Affordance G — 422 is integrity, not transient
+                    (token: "integrity error")
+
+    5 other deltas are SKIPPED-PYTHON (already enforced in orchestrator
+    source code; tracked in skill-prompt-deltas.md with code-path
+    references — see Phase 2.5 T6 metadata commit).
+    """
+    text = executor.EXECUTOR_SYSTEM
+    # Base identity preserved.
+    assert "You are the Executor" in text
+
+    # Phase 2.5 delta markers — each from a runtime-relevant delta.
+    expected_markers = [
+        ("delta #1 Version-drift",      "info.version"),
+        ("delta #8 ErrorRecord paths",  "ErrorRecord over raising"),
+        ("delta #14b Divergence",       "expected X, observed Y"),
+        ("delta #17 Affordance G/422",  "integrity error"),
+    ]
+    missing = [label for label, marker in expected_markers if marker not in text]
+    assert not missing, (
+        f"EXECUTOR_SYSTEM missing Phase 2.5 delta markers: {missing}. "
+        f"Each runtime-relevant delta's prose must include the substring "
+        f"locked by this test so future refactors can't silently drop them."
+    )
