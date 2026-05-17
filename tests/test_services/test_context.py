@@ -289,3 +289,161 @@ class TestHydrateHitsClaimAndCluster:
         )]
         rows = await context_engine._hydrate_hits(hits, project_id="proj_default")
         assert rows == []
+
+
+# ---------------------------------------------------------------------------
+# v2.5.3 — sort-by-retrieval-path regression tests (dec_01KRSMMCS8MD7KQDBS0E2DVKBQ)
+# ---------------------------------------------------------------------------
+
+
+class TestV2_5_3SortByRetrievalPath:
+    """Regression-lock the v2.5.3 sort semantics:
+
+    - Topic path preserves search-relevance order (regardless of importance
+      tags).
+    - Overview path uses weighted-sum with recency as multiplicative term
+      (today's normal entry beats 30-day-old normal entry).
+    - PI-source lift applies on BOTH paths (topic and overview).
+    """
+
+    @pytest_asyncio.fixture
+    async def engine_with_known_search_hits(self, db_with_project: Database):
+        """ContextEngine wired to a stub SearchService that yields a fixed
+        relevance-ordered hit list. Lets us test that the topic path
+        preserves search order without depending on FTS/vector content."""
+        from rka.services.search import SearchHit
+
+        db = db_with_project
+
+        # 4 decisions with deliberately inverted importance order vs. the
+        # search-rank order, so importance-based re-sort would scramble them.
+        NOW = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"
+        for did, q in (
+            ("dec_topic_A", "topic anchor A"),
+            ("dec_topic_B", "topic anchor B"),
+            ("dec_topic_C", "topic anchor C"),
+            ("dec_topic_D", "topic anchor D"),
+        ):
+            await db.execute(
+                f"""INSERT INTO decisions (id, question, decided_by, status, phase,
+                    project_id, created_at, updated_at)
+                   VALUES (?, ?, 'brain', 'active', 'phase_1', 'proj_default',
+                           {NOW}, {NOW})""",
+                [did, q],
+            )
+        await db.commit()
+
+        class _StubSearch:
+            def __init__(self, hits):
+                self._hits = hits
+
+            def with_project(self, project_id):
+                return self
+
+            async def search(self, topic, limit=50):
+                return list(self._hits)
+
+        # Order: A (best), B, C, D (worst). Re-sort by importance would
+        # scramble — they're all default 'normal' decisions with no
+        # importance tag, so importance is tied; centrality and created_at
+        # tie too (all NOW). The topic path must preserve [A,B,C,D].
+        hits = [
+            SearchHit(entity_type="decision", entity_id=did, title=did, snippet="")
+            for did in ("dec_topic_A", "dec_topic_B", "dec_topic_C", "dec_topic_D")
+        ]
+        engine = ContextEngine(db=db, search=_StubSearch(hits), llm=None)
+        return engine
+
+    async def test_topic_query_preserves_search_rank(
+        self, engine_with_known_search_hits: ContextEngine
+    ):
+        """Topic path must return entries in search-hit order, NOT importance
+        order. Pre-v2.5.3 the relevance ranking was discarded by the
+        importance-only re-sort."""
+        pkg = await engine_with_known_search_hits.get_context(topic="anchor")
+        assert pkg.sources == [
+            "dec_topic_A",
+            "dec_topic_B",
+            "dec_topic_C",
+            "dec_topic_D",
+        ], (
+            f"Topic path lost search-rank order; got {pkg.sources}. "
+            "v2.5.3 must preserve BM25/vector ranking from SearchService."
+        )
+
+    async def test_overview_uses_weighted_sum_recency(
+        self, db_with_project: Database
+    ):
+        """Overview path: two entries with the same importance band; the
+        more recent one ranks higher because recency is now a first-class
+        multiplicative term (pre-v2.5.3 it was tuple tie-break only)."""
+        db = db_with_project
+        NOW = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"
+        # 30 days back, so days_since_created ≈ 30; recency_score ≈ 1/31.
+        OLD = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-30 days')"
+        # Identical importance + source so the only differentiator is recency.
+        await db.execute(
+            f"""INSERT INTO journal (id, type, content, source, confidence,
+                importance, phase, project_id, created_at, updated_at)
+               VALUES ('jrn_recency_today', 'finding', 'recent content',
+                       'executor', 'verified', 'normal', 'phase_1',
+                       'proj_default', {NOW}, {NOW})"""
+        )
+        await db.execute(
+            f"""INSERT INTO journal (id, type, content, source, confidence,
+                importance, phase, project_id, created_at, updated_at)
+               VALUES ('jrn_recency_old', 'finding', 'old content',
+                       'executor', 'verified', 'normal', 'phase_1',
+                       'proj_default', {OLD}, {OLD})"""
+        )
+        await db.commit()
+
+        from rka.services.search import SearchService
+
+        search = SearchService(db=db, embeddings=None)
+        engine = ContextEngine(db=db, search=search, llm=None)
+
+        pkg = await engine.get_context()  # overview path
+        ranked = pkg.sources
+        today_idx = ranked.index("jrn_recency_today")
+        old_idx = ranked.index("jrn_recency_old")
+        assert today_idx < old_idx, (
+            "Overview path with weighted-sum: recent entry of same importance "
+            "MUST rank above 30-day-old entry. v2.5.3 lifts recency to a "
+            "multiplicative term (dec_01KRSMMCS8MD7KQDBS0E2DVKBQ)."
+        )
+
+    async def test_pi_source_lift_applied_on_both_paths(
+        self, db_with_project: Database
+    ):
+        """PI-source lift must apply on BOTH the topic and overview paths.
+
+        Overview path is exercised by scoring two same-importance same-recency
+        entries with different sources via ContextEngine._overview_score
+        directly (deterministic). Topic path uses the same scoring logic for
+        tie-breaks within identical search_rank — also verified via
+        _topic_sort_key.
+        """
+        pi_entry = {
+            "_search_rank": 0,
+            "importance": "high",
+            "source": "pi",
+            "centrality_degree": 0,
+            "created_at": "2026-05-17T00:00:00Z",
+        }
+        non_pi_entry = {
+            "_search_rank": 0,
+            "importance": "high",
+            "source": "executor",
+            "centrality_degree": 0,
+            "created_at": "2026-05-17T00:00:00Z",
+        }
+        # Overview: PI score > non-PI score.
+        assert ContextEngine._overview_score(pi_entry) > ContextEngine._overview_score(
+            non_pi_entry
+        )
+        # Topic-path tie-break (same search_rank=0): -importance term is more
+        # negative for PI → PI tuple sorts first.
+        assert ContextEngine._topic_sort_key(pi_entry) < ContextEngine._topic_sort_key(
+            non_pi_entry
+        )
