@@ -107,10 +107,16 @@ class FakeMCP:
         return rid
 
     def rka_submit_report(self, content: str, **kwargs: Any) -> str:
+        """Phase 2.7 T5 (jrn_01KRXQJJXKRAH1GB6FTZEQDAXQ): aligned with the real
+        RestMCPClient contract. RKA stores reports inline on missions —
+        there is no separate `Report` entity. The return value is the
+        mission_id under which the report was filed, mirroring what the
+        live `POST /api/missions/{id}/report` endpoint returns. Phase 2.5
+        FakeMCP used a `rep_fake_NNN` prefix that was never accurate."""
         self.report_counter += 1
-        rid = f"rep_fake_{self.report_counter:03d}"
-        self._record("rka_submit_report", content=content, report_id=rid, **kwargs)
-        return rid
+        mission_id = kwargs.get("related_mission") or f"mis_fake_unknown_{self.report_counter:03d}"
+        self._record("rka_submit_report", content=content, report_id=mission_id, **kwargs)
+        return mission_id
 
     def rka_create_mission(self, objective: str, **kwargs: Any) -> str:
         self.mission_counter += 1

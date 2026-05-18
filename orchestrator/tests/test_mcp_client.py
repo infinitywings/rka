@@ -424,3 +424,32 @@ def test_rka_update_note_rejects_empty_id():
     c = _client()
     with pytest.raises(ValueError, match="non-empty note id"):
         c.rka_update_note("")
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.7 T5 — rka_submit_report return-value contract (mission_id, NOT rep_*)
+# (jrn_01KRXQJJXKRAH1GB6FTZEQDAXQ triage — RKA stores reports inline on
+#  missions; no separate Report entity exists in the data model)
+# ---------------------------------------------------------------------------
+
+
+def test_rka_submit_report_returns_mission_id_not_rep_prefix():
+    """The REST endpoint `POST /api/missions/{mis_id}/report` returns the
+    mission object (schema=Mission) with `id=mission_id`. There is no
+    `rep_*` prefix in the RKA data model. Phase 2.7 T5 locks the
+    orchestrator's understanding of this contract — `final_report_id` is
+    the mission_id under which the report was filed, NOT a fresh entity
+    id with `rep_` prefix."""
+    http = FakeHttp(canned=FakeResp(_json={"id": "mis_target_01ABC"}))
+    c = _client(http)
+    returned = c.rka_submit_report(
+        "report body text",
+        related_mission="mis_target_01ABC",
+    )
+    # The mission_id is echoed back — this IS the contract.
+    assert returned == "mis_target_01ABC"
+    assert not returned.startswith("rep_"), (
+        "Phase 2.7 T5: RKA's data model does not mint rep_* IDs for "
+        "reports. They live inline on missions. The `final_report_id` "
+        "field carries the mission_id under which the report was filed."
+    )

@@ -92,10 +92,18 @@ def interactive_interrupt(payload: dict) -> str:
       r            — reject (return "reject"; orchestrator routes to escalation)
       c <text>     — correct (the rest of the line becomes the response text)
 
-    Anything else is treated as free-form input and passed through. The
-    orchestrator's interrupt-response contract is "string" — every node that
-    reads the response either substring-matches a specific token or treats
-    the whole thing as a freeform PI directive.
+    Anything else (non-empty) is treated as free-form input and passed
+    through. The orchestrator's interrupt-response contract is "string" —
+    every node that reads the response either substring-matches a specific
+    token or treats the whole thing as a freeform PI directive.
+
+    Phase 2.7 T4 (mis_01KRXNAJDM2DQ3K1VH6CXAPK8R) — **empty Enter
+    re-prompts**, never falls through to `_default_accept_token`. Phase 2.6
+    run `thr_op_rollout_v2_1779044069` showed that a buffered newline after
+    PI typed `a` at pi_greenlight auto-accepted both pi_decision_select and
+    pi_acceptance via the prior `return raw if raw else _default_accept_token(kind)`
+    fallback. Only `EOFError` (Ctrl-D / closed stdin in non-interactive mode)
+    now falls through to the type-aware default token.
     """
     kind = payload.get("type", "(unknown)")
     print()
@@ -114,22 +122,42 @@ def interactive_interrupt(payload: dict) -> str:
     print()
     print("Respond:  a = accept  |  r = reject  |  c <text> = correct  |  <freeform>")
     print()
-    try:
-        raw = input("PI > ").strip()
-    except EOFError:
-        # Non-interactive stdin — default to the type-appropriate accept token
-        # so the driver is testable but log a warning so misuse is visible.
-        accept_token = _default_accept_token(kind)
-        print(f"(stdin closed; defaulting to {accept_token!r})", file=sys.stderr)
-        return accept_token
+    return _read_pi_response_loop(kind)
 
-    if raw == "a":
-        return _default_accept_token(kind)
-    if raw == "r":
-        return "reject"
-    if raw.startswith("c "):
-        return raw[2:].strip()
-    return raw if raw else _default_accept_token(kind)
+
+def _read_pi_response_loop(kind: str) -> str:
+    """Read a non-empty PI response from stdin, re-prompting on empty input.
+
+    Only `EOFError` (Ctrl-D / non-interactive stdin) falls through to
+    `_default_accept_token(kind)`. Bare Enter is treated as "no input yet,
+    please type something" — re-prompts with a brief reminder. Phase 2.6
+    surfaced the buffered-newline-auto-accept hazard; this loop closes it.
+    """
+    while True:
+        try:
+            raw = input("PI > ").strip()
+        except EOFError:
+            # Non-interactive stdin — default to the type-appropriate accept
+            # token so the driver remains testable, but log a warning so
+            # misuse is visible.
+            accept_token = _default_accept_token(kind)
+            print(f"(stdin closed; defaulting to {accept_token!r})", file=sys.stderr)
+            return accept_token
+
+        if raw == "a":
+            return _default_accept_token(kind)
+        if raw == "r":
+            return "reject"
+        if raw.startswith("c "):
+            return raw[2:].strip()
+        if raw:
+            return raw
+        # Empty Enter: re-prompt instead of silently auto-accepting.
+        print(
+            "(empty input; please type 'a' to accept, 'r' to reject, "
+            "'c <text>' to correct, or any freeform response)",
+            file=sys.stderr,
+        )
 
 
 def main(argv: list[str] | None = None) -> int:

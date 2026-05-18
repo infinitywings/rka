@@ -135,13 +135,72 @@ class TestInteractiveInterrupt:
         result = self._run_with_input(monkeypatch, "looks ok but flag for review later")
         assert result == "looks ok but flag for review later"
 
-    def test_empty_response_defaults_to_type_aware_accept_token(self, monkeypatch, capsys):
-        """Empty line for pi_greenlight defaults to "approve" (the type-aware
-        accept token), not the bare string "accept"."""
-        result = self._run_with_input(
-            monkeypatch, "", payload={"type": "pi_greenlight"}
-        )
+    def test_empty_enter_reprompts_and_does_not_default(self, monkeypatch, capsys):
+        """Phase 2.7 T4 (mis_01KRXNAJDM2DQ3K1VH6CXAPK8R; supersedes the prior
+        Phase 2.4 'empty defaults to type-aware accept' contract): bare Enter
+        on an interactive stdin must re-prompt, NOT auto-accept. The Phase 2.6
+        run thr_op_rollout_v2_1779044069 demonstrated the failure mode — a
+        buffered newline after PI typed `a` at pi_greenlight auto-accepted
+        both pi_decision_select and pi_acceptance, ratifying
+        dec_01KRVNJCG5TCCXAG04K6VBQ97T with `chosen=null` (hollow PI input).
+        Under T4, empty input loops until PI types something non-empty OR
+        stdin closes (EOFError fallback)."""
+
+        inputs = iter(["", "", "a"])
+
+        def _input_returns_then_accepts(_prompt=""):
+            return next(inputs)
+
+        monkeypatch.setattr("builtins.input", _input_returns_then_accepts)
+        result = driver_module.interactive_interrupt({"type": "pi_greenlight"})
+        # `a` returned the type-aware accept token (approve for greenlight).
         assert result == "approve"
+        # Both empty Enters surfaced re-prompt warnings to stderr.
+        captured = capsys.readouterr()
+        assert captured.err.count("empty input") == 2, (
+            "expected 2 re-prompt warnings (one per empty Enter); "
+            f"got stderr={captured.err!r}"
+        )
+
+    def test_buffered_newline_after_a_does_not_auto_accept_next_interrupt(
+        self, monkeypatch, capsys
+    ):
+        """Phase 2.7 T4 regression LOCK for the exact Phase 2.6 failure path:
+        the executor (this driver) is called twice — once for pi_greenlight
+        (PI types `a`), once for pi_decision_select. Between them, a
+        buffered newline lives in stdin. Under Phase 2.4 contract, that
+        newline auto-accepted the second interrupt with no PI review
+        (hollow ratification). Under Phase 2.7 T4, the second interrupt
+        re-prompts past the buffered newline, requiring an explicit PI
+        token for the decision-select traversal."""
+
+        # Simulated stdin sequence: greenlight `a`, then buffered "", then
+        # explicit `r` (reject) at decision-select.
+        inputs = iter(["a", "", "r"])
+
+        def _next_input(_prompt=""):
+            return next(inputs)
+
+        monkeypatch.setattr("builtins.input", _next_input)
+        # Call 1: greenlight gets explicit `a` → "approve".
+        greenlight = driver_module.interactive_interrupt({"type": "pi_greenlight"})
+        assert greenlight == "approve"
+
+        # Call 2: decision_select sees buffered "" → re-prompts → gets `r`.
+        # Under Phase 2.4 contract this would have returned "accept"
+        # (hollow auto-ratification); under Phase 2.7 T4 it returns "reject".
+        decision = driver_module.interactive_interrupt({"type": "pi_decision_select"})
+        assert decision == "reject", (
+            "Phase 2.6 hollow-ratification failure path: under T4, the "
+            "buffered newline must re-prompt and let PI's explicit `r` "
+            "land, not silently auto-accept"
+        )
+
+        captured = capsys.readouterr()
+        assert "empty input" in captured.err, (
+            "expected re-prompt warning surfaced to stderr; the buffered "
+            "newline was silently consumed instead"
+        )
 
     def test_closed_stdin_defaults_to_type_aware_token_and_warns(self, monkeypatch, capsys):
         """Non-interactive runs (CI, piped input) get EOFError. The fallback

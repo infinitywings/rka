@@ -362,6 +362,16 @@ class RestMCPClient:
         argument to `findings=[content]` when no structured findings were
         passed, so the LLM-shaped output the executor node produces still
         lands somewhere useful.
+
+        Return value: the mission_id under which the report was filed.
+        Phase 2.7 T5 triage (`jrn_01KRXQJJXKRAH1GB6FTZEQDAXQ`) confirmed RKA's
+        data model stores reports inline on missions — there is no separate
+        `Report` entity with a `rep_*` prefix. The Phase 2.6 finding
+        "returned mission_id as report_id" was an orchestrator-side
+        contract mismatch (incorrect assumption that a fresh `rep_*` id
+        would be minted), not a REST bug. The returned mission_id is the
+        canonical identity for retrieving the report via
+        `GET /api/missions/{id}/report`.
         """
         mission = kw.get("related_mission")
         if not mission:

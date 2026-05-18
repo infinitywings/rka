@@ -146,6 +146,13 @@ def test_mission_execute_updates_executor_position():
 
 
 def test_submit_report_calls_rka_submit_report_with_mission_id():
+    """Phase 2.7 T5 (jrn_01KRXQJJXKRAH1GB6FTZEQDAXQ) — corrected contract.
+    RKA's data model stores reports inline on missions; there is no
+    separate `Report` entity with a `rep_*` prefix. The return value of
+    rka_submit_report IS the mission_id under which the report was filed.
+    The Phase 2.5 assertion `final_report_id.startswith("rep_")` was wrong
+    against the real REST surface — only FakeMCP's fake `rep_fake_NNN`
+    let it pass."""
     sdk = FakeSDK(canned_reply="Report body with all sections.")
     mcp = FakeMCP()
     state = _state()
@@ -155,16 +162,22 @@ def test_submit_report_calls_rka_submit_report_with_mission_id():
     report_calls = [c for c in mcp.calls if c["op"] == "rka_submit_report"]
     assert len(report_calls) == 1
     assert report_calls[0]["related_mission"] == "mis_t4_target"
-    assert update["final_report_id"] == "rep_fake_001"
-    assert update["final_report_id"].startswith("rep_")
+    # Return value is the mission_id under which the report was filed.
+    assert update["final_report_id"] == "mis_t4_target"
+    assert update["final_report_id"] == state["mission_id"]
 
 
 def test_submit_report_records_report_as_artifact():
+    """The artifact records the report submission; rka_id is the
+    mission_id (inline-report convention), entity_type tagged 'report' so
+    audit walks can still distinguish report-submissions from other
+    journal writes against the same mission."""
     sdk = FakeSDK()
     mcp = FakeMCP()
     update = executor.submit_report(_state(), sdk, mcp)
     assert update["artifacts"][0]["entity_type"] == "report"
-    assert update["artifacts"][0]["rka_id"].startswith("rep_")
+    # rka_id matches mission_id, NOT a synthetic `rep_*` prefix.
+    assert update["artifacts"][0]["rka_id"] == "mis_t4_target"
 
 
 def test_submit_report_without_mission_id_records_error():
