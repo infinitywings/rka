@@ -416,6 +416,48 @@ def test_t2_refactor_preserves_anthropic_api_key_scrub(
     assert opts.env.get("PATH") == "/usr/bin"
 
 
+# ---------------------------------------------------------------------------
+# Phase 2.9 T2 — READ_TOOLS allowlist expansion (9 → 11)
+# (mis_01KRY2KP0GGZY21BA4Z2R2S718; PI-handed-off scope per
+#  dec_01KRY2EXCSTSSCFZJ96VG4MGDW Option A — belt-and-suspenders for the
+#  brain LLM's self-recovery path if Phase 2.9 T1 env propagation regresses)
+# ---------------------------------------------------------------------------
+
+
+def test_phase_2_9_read_tools_includes_project_selectors():
+    """Phase 2.9 T2 adds `rka_list_projects` + `rka_set_project` to the
+    READ_TOOLS allowlist as belt-and-suspenders. Without this expansion,
+    if Phase 2.9 T1's RKA_PROJECT env propagation ever regresses, the
+    brain LLM has no self-recovery path (Phase 2.8 demonstrated this
+    exact denial empirically). Both tools are read-side (select session
+    context; cannot mutate entities)."""
+    assert "rka_list_projects" in READ_TOOLS, (
+        "Phase 2.9 T2: rka_list_projects must be in READ_TOOLS so brain "
+        "LLM can self-recover by enumerating projects if RKA_PROJECT env "
+        "propagation regresses"
+    )
+    assert "rka_set_project" in READ_TOOLS, (
+        "Phase 2.9 T2: rka_set_project must be in READ_TOOLS so brain "
+        "LLM can switch session project as recovery path"
+    )
+    # READ_TOOLS expanded from 9 (Phase 2.7) to 11 (Phase 2.9).
+    assert len(READ_TOOLS) == 11, (
+        f"Phase 2.9 T2: READ_TOOLS should have exactly 11 entries "
+        f"(Phase 2.7's 9 + Phase 2.9's 2 project selectors); got {len(READ_TOOLS)}"
+    )
+
+
+def test_phase_2_9_project_selectors_not_in_write_tools():
+    """Critical safety check: rka_list_projects + rka_set_project must
+    NOT be in WRITE_TOOLS. They're read-side selectors that change
+    session routing context, not entity state. If either is incorrectly
+    classified as write, the parent-side execute_ratified_actions
+    pipeline would treat them as ratifiable mutations — wrong semantic
+    layer."""
+    assert "rka_list_projects" not in WRITE_TOOLS
+    assert "rka_set_project" not in WRITE_TOOLS
+
+
 def test_complete_falls_back_to_text_only_when_rka_binary_missing(
     monkeypatch: pytest.MonkeyPatch
 ):

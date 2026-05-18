@@ -59,6 +59,18 @@ READ_TOOLS: tuple[str, ...] = (
     "rka_search",
     "rka_get",
     "rka_trace_provenance",
+    # Phase 2.9 T2 (mis_01KRY2KP0GGZY21BA4Z2R2S718) — belt-and-suspenders
+    # additions. With Phase 2.9 T1's RKA_PROJECT env propagation, the
+    # subprocess should rarely need these. But if env propagation regresses
+    # for any reason (RKA_PROJECT unset, MCP child re-spawns without env),
+    # the brain LLM can self-recover by enumerating projects and switching
+    # session — without escalating. Phase 2.8 surfaced this gap empirically
+    # (brain attempted `rka_list_projects` for self-recovery and was correctly
+    # denied per `permission_mode="dontAsk"` because the tool was outside
+    # the Phase 2.7 T1-ratified READ_TOOLS set). Both are read-side: they
+    # select session context, not mutate entities. Confirmed NOT in WRITE_TOOLS.
+    "rka_list_projects",
+    "rka_set_project",
 )
 
 # Parent-side WRITE_TOOLS registry. Subprocess `disallowed_tools` mirrors this list
