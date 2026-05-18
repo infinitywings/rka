@@ -117,3 +117,9 @@ class FakeMCP:
         rid = f"mis_fake_{self.mission_counter:03d}"
         self._record("rka_create_mission", objective=objective, mission_id=rid, **kwargs)
         return rid
+
+    def rka_update_note(self, id: str, **kwargs: Any) -> str:
+        """Phase 2.7 T3a: matches the Protocol addition. Records the call so
+        tests can assert which note IDs received which updates."""
+        self._record("rka_update_note", id=id, **kwargs)
+        return id

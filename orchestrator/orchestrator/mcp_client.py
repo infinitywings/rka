@@ -114,6 +114,22 @@ class MCPClient(Protocol):
         motivated_by_decision: str,
         acceptance_criteria: list[str],
     ) -> str: ...
+    def rka_update_note(
+        self,
+        id: str,
+        *,
+        content: str | None = None,
+        type: str | None = None,
+        confidence: str | None = None,
+        importance: str | None = None,
+        verbatim_input: str | None = None,
+        related_decisions: list[str] | None = None,
+        related_literature: list[str] | None = None,
+        related_mission: str | None = None,
+        tags: list[str] | None = None,
+        phase: str | None = None,
+        source: str | None = None,
+    ) -> str: ...
 
 
 # ---------------------------------------------------------------------------
@@ -383,6 +399,44 @@ class RestMCPClient:
         }
         result = self._request("POST", "/api/missions", json=body) or {}
         return result.get("id") or ""
+
+    def rka_update_note(self, id: str, **kw: Any) -> str:
+        """PUT /api/notes/{note_id}.
+
+        Phase 2.7 (mis_01KRXNAJDM2DQ3K1VH6CXAPK8R T3): added to support the
+        Phase 2.4 → 2.6 acceptance criterion ("1+ items complete the cycle
+        with rka_update_note write"). PI ratified inclusion in MCPClient
+        Protocol at T1 mid-mission gate (jrn_01KRXP96THHEAKCGB0P0KGV7Y9).
+
+        Workflow_thread_id auto-tagging applies — if `tags` is provided,
+        the thread id is appended via `_merge_workflow_tag`; if `tags` is
+        None, no tag mutation (the endpoint preserves existing tags).
+        """
+        if not id:
+            raise ValueError("rka_update_note requires a non-empty note id")
+        body = _drop_none(
+            {
+                "content": kw.get("content"),
+                "type": kw.get("type"),
+                "confidence": kw.get("confidence"),
+                "importance": kw.get("importance"),
+                "verbatim_input": kw.get("verbatim_input"),
+                "related_decisions": kw.get("related_decisions"),
+                "related_literature": kw.get("related_literature"),
+                "related_mission": kw.get("related_mission"),
+                "tags": (
+                    _merge_workflow_tag(kw["tags"], self.workflow_thread_id)
+                    if kw.get("tags") is not None
+                    else None
+                ),
+                "phase": kw.get("phase"),
+                "source": kw.get("source"),
+            }
+        )
+        result = self._request("PUT", f"/api/notes/{id}", json=body) or {}
+        # PUT typically returns the updated entity; fall back to input id
+        # so callers can confirm the write succeeded.
+        return result.get("id") or id
 
 
 def make_client(

@@ -352,7 +352,8 @@ def test_make_client_returns_rest_implementation():
 
 
 def test_rest_mcp_client_satisfies_protocol_surface():
-    # Spot-check that the 13 documented methods exist on the impl.
+    # Spot-check that the documented methods exist on the impl. Phase 2.7 T3a
+    # added `rka_update_note` to the Protocol (14 methods now; was 13 in Phase 1).
     c = _client()
     for name in (
         "rka_search",
@@ -368,5 +369,58 @@ def test_rest_mcp_client_satisfies_protocol_surface():
         "rka_submit_report",
         "rka_get_checkpoints",
         "rka_trace_provenance",
+        "rka_update_note",   # Phase 2.7 T3a addition
     ):
         assert hasattr(c, name), f"RestMCPClient is missing {name}"
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.7 T3a — `rka_update_note` REST contract
+# ---------------------------------------------------------------------------
+
+
+def test_rka_update_note_issues_put_to_correct_path():
+    """The endpoint discovered via /openapi.json is PUT /api/notes/{note_id}."""
+    http = FakeHttp(canned=FakeResp(_json={"id": "jrn_fake_001"}))
+    c = _client(http)
+    returned_id = c.rka_update_note(
+        "jrn_target_001",
+        related_decisions=["dec_a", "dec_b"],
+    )
+    # PUT to the correct path.
+    assert len(http.calls) == 1
+    call = http.calls[0]
+    assert call["method"] == "PUT"
+    assert call["path"] == "/api/notes/jrn_target_001"
+    # Body carries the structured update fields; None-valued kwargs elided.
+    body = call["json"] or {}
+    assert body.get("related_decisions") == ["dec_a", "dec_b"]
+    # workflow_thread_id was merged onto tags ONLY if tags is provided (None preserves).
+    assert "tags" not in body
+    # Returns the REST response id, falling back to input id if missing.
+    assert returned_id == "jrn_fake_001"
+
+
+def test_rka_update_note_falls_back_to_input_id_when_response_empty():
+    """If the REST response is empty, return the input id so callers can
+    still confirm via a follow-up rka_get."""
+    http = FakeHttp(canned=FakeResp(_json={}))
+    c = _client(http)
+    returned_id = c.rka_update_note("jrn_target_002", content="updated")
+    assert returned_id == "jrn_target_002"
+
+
+def test_rka_update_note_merges_workflow_tag_when_tags_provided():
+    http = FakeHttp(canned=FakeResp(_json={"id": "jrn_x"}))
+    c = _client(http)
+    c.rka_update_note("jrn_target_003", tags=["existing-tag"])
+    body = http.calls[0]["json"] or {}
+    # Both the original tag and the workflow_thread_id are present.
+    assert "existing-tag" in body["tags"]
+    assert "thr_t9" in body["tags"]
+
+
+def test_rka_update_note_rejects_empty_id():
+    c = _client()
+    with pytest.raises(ValueError, match="non-empty note id"):
+        c.rka_update_note("")

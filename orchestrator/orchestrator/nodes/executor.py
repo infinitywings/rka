@@ -1,19 +1,29 @@
-"""Executor nodes (3) — Backbrief drafting, mission execution, report submission.
+"""Executor nodes (4) — Backbrief drafting, mission execution, report submission,
+ratification-gated action execution.
 
-  - `backbrief_draft`   — produces the upfront Backbrief journal entry
-  - `mission_execute`   — performs the mission work + records artifacts
-  - `submit_report`     — synthesizes and submits the final mission report
+  - `backbrief_draft`            — produces the upfront Backbrief journal entry
+  - `mission_execute`            — performs the mission work + emits structured
+                                   `proposed_actions` JSON for PI ratification
+  - `submit_report`              — synthesizes and submits the final mission report
+  - `execute_ratified_actions`   — Phase 2.7 T3e: iterates `state["ratified_actions"]`
+                                   and calls write-side MCP methods from the parent
+                                   process (subprocess is read-only per T2)
 
 Like the Brain nodes, each is a sync `(state, sdk, mcp) -> dict` function.
 """
 
 from __future__ import annotations
 
+import json
+import logging
+import re
 from datetime import datetime, timezone
 
-from orchestrator.llm_client import SDKClient
+from orchestrator.llm_client import SDKClient, WRITE_TOOLS
 from orchestrator.mcp_client import MCPClient
-from orchestrator.state import ArtifactRef, ResearchWorkflowState
+from orchestrator.state import ArtifactRef, ErrorRecord, ResearchWorkflowState
+
+logger = logging.getLogger(__name__)
 
 EXECUTOR_SYSTEM = (
     "You are the Executor in an RKA-managed research project. Your job "
@@ -57,7 +67,21 @@ EXECUTOR_SYSTEM = (
     "provenance) as structured HTTP 422 responses. The orchestrator's "
     "`RestMCPClient._request` maps these to `CheckpointError` and routes "
     "via `escalation_router`. Do NOT retry — it's a strategic problem "
-    "that needs PI input, not a network retry."
+    "that needs PI input, not a network retry.\n\n"
+    # ── Phase 2.7 (mis_01KRXNAJDM2DQ3K1VH6CXAPK8R T3; PI-ratified at T1 mid-mission
+    # gate per jrn_01KRXP96THHEAKCGB0P0KGV7Y9). Option C requires the executor LLM
+    # to emit a structured proposed_actions block so the orchestrator can route
+    # write-side MCP calls through pi_decision_select ratification before commit.
+    # ────────────────────────────────────────────────────────────────────────────
+    "Action proposals. When mission_execute runs, end your reply with a "
+    "structured JSON block under the key `proposed_actions`: a list of "
+    '`{"tool": str, "args": dict, "rationale": str}` objects naming write-side '
+    "RKA MCP methods you propose to call. The orchestrator parses this block "
+    "and surfaces it to PI via `pi_decision_select` before any write commits — "
+    "you do NOT call write tools directly. If planning concludes no action is "
+    "needed, emit `proposed_actions: []` explicitly — never omit the block. "
+    "Malformed JSON falls back to empty proposed_actions + ErrorRecord per the "
+    "conservative-malformed-input default."
 )
 
 
@@ -181,8 +205,125 @@ def _build_mission_execute_prompt(state: ResearchWorkflowState) -> str:
         "  - Anomalies encountered.\n"
         "  - Any assumption invalidation (escalate if found).\n\n"
         f"Approved Backbrief:\n{state.get('executor_backbrief', '(empty)')}\n"
-        f"Gate 1 verdict: {state.get('gate1_verdict', '(pending)')}\n"
+        f"Gate 1 verdict: {state.get('gate1_verdict', '(pending)')}\n\n"
+        "End your reply with a structured JSON block per the EXECUTOR_SYSTEM "
+        "'Action proposals' directive: `{\"proposed_actions\": [{...}, ...]}` "
+        "naming the write-side RKA MCP methods you propose to call (e.g., "
+        '`rka_update_note` with `id` + `related_decisions`). Emit '
+        "`proposed_actions: []` if no action is required. The orchestrator "
+        "routes these through `pi_decision_select` for PI ratification "
+        "before any write commits."
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.7 T3c — structured-output extraction for proposed_actions
+# ---------------------------------------------------------------------------
+
+
+# Fenced ```json ... ``` block carrying a proposed_actions object. The
+# LLM may emit either fenced OR bare-trailing JSON; the parser accepts both.
+_PROPOSED_ACTIONS_FENCE_RE = re.compile(
+    r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL
+)
+
+
+def _extract_last_balanced_object(text: str) -> str | None:
+    """Find the LAST balanced `{...}` substring in `text` by brace-counting.
+
+    Walks backwards from the rightmost `}` to find the matching `{` that
+    balances brace depth. Returns the substring or None. This is robust
+    to nested objects/arrays that a single-level regex would miss.
+    """
+    if not text:
+        return None
+    last_close = text.rfind("}")
+    if last_close < 0:
+        return None
+    depth = 0
+    for i in range(last_close, -1, -1):
+        ch = text[i]
+        if ch == "}":
+            depth += 1
+        elif ch == "{":
+            depth -= 1
+            if depth == 0:
+                return text[i : last_close + 1]
+    return None
+
+
+def _parse_proposed_actions(
+    text: str,
+) -> tuple[list[dict], ErrorRecord | None]:
+    """Extract the `proposed_actions` list from an LLM reply.
+
+    Returns `(actions, error_record)`. On a successful parse, `actions` is
+    the list and `error_record` is None. On any failure (no JSON block,
+    malformed JSON, missing key, wrong shape), `actions` is `[]` and
+    `error_record` is a populated ErrorRecord per Phase 2.5 Delta #7's
+    conservative-malformed-input default.
+
+    Robust to multi-level nesting: tries fenced ```json``` blocks first,
+    then falls back to the last balanced `{...}` substring (brace-counted,
+    not regex-matched).
+    """
+    if not text:
+        return [], _make_error(
+            "mission_execute",
+            "proposed_actions_parse_failure",
+            "empty LLM reply; no JSON to parse",
+        )
+
+    candidates: list[str] = []
+    fenced = list(_PROPOSED_ACTIONS_FENCE_RE.finditer(text))
+    if fenced:
+        candidates.append(fenced[-1].group(1))
+    trailing = _extract_last_balanced_object(text)
+    if trailing:
+        candidates.append(trailing)
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        actions = parsed.get("proposed_actions")
+        if actions is None:
+            continue
+        if not isinstance(actions, list):
+            return [], _make_error(
+                "mission_execute",
+                "proposed_actions_parse_failure",
+                f"proposed_actions is not a list (got {type(actions).__name__})",
+            )
+        # Validate each action shape.
+        valid: list[dict] = []
+        for a in actions:
+            if not isinstance(a, dict):
+                continue
+            if "tool" not in a or "args" not in a:
+                continue
+            if not isinstance(a.get("args"), dict):
+                continue
+            valid.append({"tool": a["tool"], "args": a["args"], "rationale": a.get("rationale", "")})
+        return valid, None
+
+    return [], _make_error(
+        "mission_execute",
+        "proposed_actions_parse_failure",
+        "no valid JSON object with proposed_actions key found in reply",
+    )
+
+
+def _make_error(node_name: str, error_type: str, detail: str) -> ErrorRecord:
+    return {
+        "node_name": node_name,
+        "error_type": error_type,
+        "detail": detail,
+        "timestamp": _now_iso(),
+    }
 
 
 def mission_execute(
@@ -203,12 +344,19 @@ def mission_execute(
         importance="normal",
     )
 
-    return {
+    # Phase 2.7 T3c: extract structured proposed_actions from the LLM reply.
+    proposed_actions, parse_error = _parse_proposed_actions(work_log)
+
+    update: dict = {
         "current_phase": "executor_mission",
         "current_node": "mission_execute",
         "executor_position": _summarize_position(work_log),
         "artifacts": [_artifact(note_id, "journal", "mission_execute")],
+        "proposed_actions": proposed_actions,
     }
+    if parse_error is not None:
+        update["errors"] = [parse_error]
+    return update
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +380,139 @@ def _build_report_prompt(state: ResearchWorkflowState) -> str:
         f"Artifacts produced this run:\n{artifact_lines}\n\n"
         f"Work log:\n{state.get('executor_position', '(empty)')}\n"
     )
+
+
+# ---------------------------------------------------------------------------
+# 4. execute_ratified_actions — Phase 2.7 T3e
+# ---------------------------------------------------------------------------
+
+
+# Map a WRITE_TOOL name to the entity_type the resulting RKA id implies.
+# Used to populate ArtifactRef.entity_type so the audit trail records what
+# kind of entity each ratified action produced. Centralized here (vs the
+# orchestrator/mcp_client.py prefix-conventions) because this is the only
+# node that needs the mapping.
+_WRITE_TOOL_ENTITY_TYPES: dict[str, str] = {
+    "rka_add_note": "journal",
+    "rka_add_decision": "decision",
+    "rka_submit_checkpoint": "checkpoint",
+    "rka_submit_report": "report",
+    "rka_create_mission": "mission",
+    "rka_update_note": "journal",
+}
+
+
+def execute_ratified_actions(
+    state: ResearchWorkflowState, sdk: SDKClient, mcp: MCPClient
+) -> dict:
+    """Phase 2.7 T3e — parent-process execution of PI-ratified write actions.
+
+    Iterates `state["ratified_actions"]` (populated by `pi_decision_select`
+    when the PI ratifies the brain-drafted decision packet, which now
+    carries `mission_execute`'s structured `proposed_actions`). For each
+    action, validates the `tool` name is in `WRITE_TOOLS` (defense in
+    depth against any LLM that bypasses the subprocess disallowlist) and
+    dispatches via `getattr(mcp, tool)(**args)`. Successful calls produce
+    `ArtifactRef`s; failures produce `ErrorRecord`s — both append-only
+    per the state schema's reducer convention.
+
+    A no-op when `state["ratified_actions"]` is empty (rejected, escaped,
+    or never populated). This means the node sits unconditionally between
+    `pi_decision_select` and `final_synthesis` in the graph without
+    requiring routing logic to skip it.
+    """
+    actions = state.get("ratified_actions", []) or []
+    new_artifacts: list[ArtifactRef] = []
+    new_errors: list[ErrorRecord] = []
+
+    for action in actions:
+        if not isinstance(action, dict):
+            new_errors.append(
+                _make_error(
+                    "execute_ratified_actions",
+                    "ratified_action_shape_error",
+                    f"action is not a dict (got {type(action).__name__})",
+                )
+            )
+            continue
+
+        tool = action.get("tool", "")
+        args = action.get("args", {}) or {}
+
+        # Defense in depth: only the static WRITE_TOOLS registry is callable.
+        if tool not in WRITE_TOOLS:
+            new_errors.append(
+                _make_error(
+                    "execute_ratified_actions",
+                    "ratified_action_tool_not_allowed",
+                    (
+                        f"tool {tool!r} is not in WRITE_TOOLS registry — "
+                        f"the executor LLM proposed an action the orchestrator "
+                        f"refuses to execute. Phase 2.7 Option C invariant."
+                    ),
+                )
+            )
+            continue
+
+        method = getattr(mcp, tool, None)
+        if method is None:
+            new_errors.append(
+                _make_error(
+                    "execute_ratified_actions",
+                    "ratified_action_method_missing",
+                    (
+                        f"tool {tool!r} is in WRITE_TOOLS but MCPClient has "
+                        f"no method by that name. Protocol drift; surface."
+                    ),
+                )
+            )
+            continue
+
+        if not isinstance(args, dict):
+            new_errors.append(
+                _make_error(
+                    "execute_ratified_actions",
+                    "ratified_action_args_shape_error",
+                    f"args for {tool!r} is not a dict",
+                )
+            )
+            continue
+
+        try:
+            rka_id = method(**args)
+        except Exception as e:  # noqa: BLE001 — surface all failures as ErrorRecord
+            new_errors.append(
+                _make_error(
+                    "execute_ratified_actions",
+                    "ratified_action_call_failed",
+                    f"tool={tool!r} args_keys={sorted(args.keys())!r} exc={e!r}",
+                )
+            )
+            continue
+
+        new_artifacts.append(
+            {
+                "rka_id": rka_id or "",
+                "entity_type": _WRITE_TOOL_ENTITY_TYPES.get(tool, "unknown"),
+                "node_name": "execute_ratified_actions",
+                "timestamp": _now_iso(),
+            }
+        )
+
+    update: dict = {
+        "current_phase": "executor_mission",
+        "current_node": "execute_ratified_actions",
+    }
+    if new_artifacts:
+        update["artifacts"] = new_artifacts
+    if new_errors:
+        update["errors"] = new_errors
+    return update
+
+
+# ---------------------------------------------------------------------------
+# 5. submit_report — mission acceptance writeup via rka_submit_report
+# ---------------------------------------------------------------------------
 
 
 def submit_report(

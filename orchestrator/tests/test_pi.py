@@ -281,3 +281,68 @@ def test_every_pi_node_records_a_single_interrupt(fn):
 def test_pi_threshold_constant_is_ten():
     # Locked by the upfront-Backbrief design; obs #15 floor.
     assert pi.PI_BATCH_REVIEW_THRESHOLD == 10
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.7 T3d — pi_decision_select copies proposed_actions → ratified_actions
+# (mis_01KRXNAJDM2DQ3K1VH6CXAPK8R; PI-ratified per jrn_01KRXP96THHEAKCGB0P0KGV7Y9)
+# ---------------------------------------------------------------------------
+
+
+def test_pi_decision_select_copies_proposed_to_ratified_on_accept():
+    """When PI says 'accept', the state["proposed_actions"] list (populated
+    by mission_execute) gets copied into state["ratified_actions"] so the
+    downstream execute_ratified_actions node will iterate + dispatch them."""
+    sdk = FakeSDK()
+    mcp = FakeMCP()
+    interrupt_fn = FakeInterrupt(canned_response="accept")
+    state = _state()
+    state["decisions_to_present"] = [
+        {"source_node": "decision_present", "context": "decision draft", "source_artifact": "jrn_x"},
+    ]
+    state["proposed_actions"] = [
+        {"tool": "rka_update_note", "args": {"id": "jrn_target"}, "rationale": "r1"},
+        {"tool": "rka_add_note", "args": {"content": "probe"}, "rationale": "r2"},
+    ]
+
+    update = pi.pi_decision_select(state, sdk, mcp, interrupt_fn=interrupt_fn)
+
+    assert update["ratified_actions"] == state["proposed_actions"]
+    assert len(update["ratified_actions"]) == 2
+
+
+def test_pi_decision_select_clears_ratified_on_reject():
+    """On reject, no actions get ratified — the field is set to []
+    explicitly so a prior workflow's value can't leak through."""
+    sdk = FakeSDK()
+    mcp = FakeMCP()
+    interrupt_fn = FakeInterrupt(canned_response="reject")
+    state = _state()
+    state["decisions_to_present"] = [
+        {"source_node": "decision_present", "context": "x", "source_artifact": "jrn_x"},
+    ]
+    state["proposed_actions"] = [
+        {"tool": "rka_update_note", "args": {"id": "jrn_target"}, "rationale": "r"},
+    ]
+
+    update = pi.pi_decision_select(state, sdk, mcp, interrupt_fn=interrupt_fn)
+
+    assert update["ratified_actions"] == []
+
+
+def test_pi_decision_select_empty_proposed_actions_passes_through_on_accept():
+    """When mission_execute produced no proposed_actions (LLM emitted
+    proposed_actions=[] explicitly, OR parse failed), the accept path
+    still works — ratified_actions is just []."""
+    sdk = FakeSDK()
+    mcp = FakeMCP()
+    interrupt_fn = FakeInterrupt(canned_response="accept")
+    state = _state()
+    state["decisions_to_present"] = [
+        {"source_node": "decision_present", "context": "x", "source_artifact": "jrn_x"},
+    ]
+    # proposed_actions deliberately absent.
+
+    update = pi.pi_decision_select(state, sdk, mcp, interrupt_fn=interrupt_fn)
+
+    assert update["ratified_actions"] == []

@@ -208,6 +208,17 @@ class ResearchWorkflowState(TypedDict, total=False):
     batch_review_active: bool
     batch_review_payload_size: int
 
+    # Phase 2.7 (mis_01KRXNAJDM2DQ3K1VH6CXAPK8R T3) — ratification-gated
+    # action execution. `mission_execute` writes proposed_actions (parsed
+    # from the LLM's structured JSON output block); `pi_decision_select`
+    # copies the ratified subset to ratified_actions on "accept";
+    # `executor.execute_ratified_actions` iterates ratified_actions and
+    # calls write-side mcp methods from the parent process. Both are
+    # last-write-wins scalars (not append-only) — only one node writes
+    # each in a single workflow pass.
+    proposed_actions: list[dict]
+    ratified_actions: list[dict]
+
     # Termination
     terminal_state: TerminalState
     final_report_id: str
@@ -253,6 +264,8 @@ def make_initial_state(
         decisions_to_present=[],
         batch_review_active=False,
         batch_review_payload_size=0,
+        proposed_actions=[],
+        ratified_actions=[],
     )
 
 

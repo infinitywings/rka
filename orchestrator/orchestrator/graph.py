@@ -8,7 +8,7 @@ Each node-callable is bound to its (sdk, mcp[, interrupt_fn]) dependencies
 via `functools.partial`, so the function LangGraph receives accepts only
 `(state,)` — keeping the engine-facing surface uniform.
 
-Topology (15 nodes; 5 conditional branches):
+Topology (16 nodes; 5 conditional branches):
 
   START
     → strategy_node
@@ -26,8 +26,9 @@ Topology (15 nodes; 5 conditional branches):
     → submit_report
     → cluster_review
     → decision_present
-    → pi_decision_select ── accept → final_synthesis
+    → pi_decision_select ── accept → execute_ratified_actions → final_synthesis
                          └─ else  → escalation_router
+    → execute_ratified_actions    # Phase 2.7 T3e — parent-side WRITE_TOOLS calls
     → final_synthesis
     → pi_acceptance     → END
     escalation_router   → pi_acceptance
@@ -81,8 +82,12 @@ def _route_after_budget_or_consensus(state: dict) -> str:
 
 
 def _route_after_pi_decision(state: dict) -> str:
+    # Phase 2.7 T3f: on accept, route through execute_ratified_actions first
+    # so any PI-ratified WRITE_TOOLS proposed by mission_execute land in RKA
+    # before final_synthesis closes the run. On reject/escape, escalate
+    # directly (no writes to commit).
     response = _latest_interrupt_response(state)
-    return "final_synthesis" if "accept" in response else "escalation_router"
+    return "execute_ratified_actions" if "accept" in response else "escalation_router"
 
 
 # ---------------------------------------------------------------------------
@@ -134,10 +139,14 @@ def build_graph(
     sg.add_node("gate1_validation", _bind(brain.gate1_validation, sdk, mcp))
     sg.add_node("final_synthesis", _bind(brain.final_synthesis, sdk, mcp))
 
-    # ---- 3 Executor nodes ----
+    # ---- 4 Executor nodes (Phase 2.7 T3e added execute_ratified_actions) ----
     sg.add_node("backbrief_draft", _bind(executor.backbrief_draft, sdk, mcp))
     sg.add_node("mission_execute", _bind(executor.mission_execute, sdk, mcp))
     sg.add_node("submit_report", _bind(executor.submit_report, sdk, mcp))
+    sg.add_node(
+        "execute_ratified_actions",
+        _bind(executor.execute_ratified_actions, sdk, mcp),
+    )
 
     # ---- 3 PI interrupt nodes ----
     sg.add_node(
@@ -209,11 +218,15 @@ def build_graph(
         "pi_decision_select",
         _route_after_pi_decision,
         {
-            "final_synthesis": "final_synthesis",
+            "execute_ratified_actions": "execute_ratified_actions",
             "escalation_router": "escalation_router",
         },
     )
 
+    # Phase 2.7 T3f: execute_ratified_actions sits between pi_decision_select
+    # (accept path) and final_synthesis. The node is a no-op when
+    # state["ratified_actions"] is empty, so no extra routing logic needed.
+    sg.add_edge("execute_ratified_actions", "final_synthesis")
     sg.add_edge("final_synthesis", "pi_acceptance")
     sg.add_edge("escalation_router", "pi_acceptance")
     sg.add_edge("pi_acceptance", END)
@@ -241,7 +254,7 @@ def open_checkpointer(db_path: str | None = None) -> SqliteSaver:
 # Names exported (for T11 audit-symmetry)
 # ---------------------------------------------------------------------------
 
-# The 15 canonical node names in topology order. T11 audit-symmetry
+# The 16 canonical node names in topology order. T11 audit-symmetry
 # cross-checks this against the set of nodes registered in the graph
 # and the set of node names referenced from any state["current_node"]
 # assignment in the codebase.
@@ -253,10 +266,11 @@ NODE_NAMES: tuple[str, ...] = (
     "cluster_review",
     "gate1_validation",
     "final_synthesis",
-    # Executor (3)
+    # Executor (4) — Phase 2.7 T3e added execute_ratified_actions
     "backbrief_draft",
     "mission_execute",
     "submit_report",
+    "execute_ratified_actions",
     # PI (3)
     "pi_greenlight",
     "pi_decision_select",

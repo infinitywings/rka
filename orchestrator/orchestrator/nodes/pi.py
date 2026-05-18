@@ -136,7 +136,8 @@ def pi_decision_select(
     # If PI selected "accept" or "modify", record a decision in RKA.
     artifacts: list[dict] = []
     response_text = str(pi_response).lower()
-    if items and "accept" in response_text:
+    is_accept = "accept" in response_text
+    if items and is_accept:
         first_item = items[0]
         rka_id = mcp.rka_add_decision(
             content=first_item.get("context", ""),
@@ -152,6 +153,13 @@ def pi_decision_select(
             }
         )
 
+    # Phase 2.7 T3d: ratification gates write-side action execution. On
+    # "accept", copy state["proposed_actions"] into ratified_actions so the
+    # downstream `executor.execute_ratified_actions` node will execute them
+    # from the parent process. On reject/escape, explicitly clear so a
+    # prior workflow's proposed_actions can't leak through.
+    ratified = list(state.get("proposed_actions", []) or []) if is_accept else []
+
     remaining = [d for d in pending if d.get("source_node") != "decision_present"]
     update = {
         "current_phase": "pi_decision",
@@ -159,6 +167,7 @@ def pi_decision_select(
         "decisions_to_present": remaining,
         "batch_review_active": batched,
         "batch_review_payload_size": len(items),
+        "ratified_actions": ratified,
         "interrupts": [
             _record_interrupt(
                 node_name="pi_decision_select",

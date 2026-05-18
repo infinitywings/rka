@@ -55,18 +55,32 @@ def test_build_graph_returns_compiled_runnable(sdk, mcp, fake_interrupt):
     assert hasattr(g, "stream")
 
 
-def test_build_graph_registers_all_fifteen_nodes(sdk, mcp, fake_interrupt):
+def test_build_graph_registers_all_canonical_nodes(sdk, mcp, fake_interrupt):
     g = graph.build_graph(sdk=sdk, mcp=mcp, interrupt_fn=fake_interrupt)
     # `get_graph()` returns a drawable representation; the node set on it
-    # should include all 15 canonical names plus LangGraph's __start__/__end__.
+    # should include all canonical names plus LangGraph's __start__/__end__.
     nodes = set(g.get_graph().nodes.keys())
     for expected in graph.NODE_NAMES:
         assert expected in nodes, f"node {expected} not registered"
 
 
-def test_node_names_tuple_has_exactly_fifteen():
-    assert len(graph.NODE_NAMES) == 15
-    assert len(set(graph.NODE_NAMES)) == 15  # no dupes
+def test_node_names_tuple_has_exactly_sixteen():
+    # Phase 2.7 T3e added `execute_ratified_actions` (16th node). Original
+    # Phase 1 count of 15 stays in git history for the v2.5.3 baseline.
+    assert len(graph.NODE_NAMES) == 16
+    assert len(set(graph.NODE_NAMES)) == 16  # no dupes
+
+
+def test_execute_ratified_actions_is_in_node_names():
+    """Phase 2.7 T3f: the new node is registered in the canonical tuple
+    and lives in the executor section between submit_report and the PI nodes."""
+    assert "execute_ratified_actions" in graph.NODE_NAMES
+    # Position check — keeps the executor group contiguous for T11 audit.
+    names = list(graph.NODE_NAMES)
+    submit_idx = names.index("submit_report")
+    exec_ratified_idx = names.index("execute_ratified_actions")
+    pi_greenlight_idx = names.index("pi_greenlight")
+    assert submit_idx < exec_ratified_idx < pi_greenlight_idx
 
 
 # ---------------------------------------------------------------------------
@@ -107,9 +121,14 @@ def test_route_after_budget_default_continue():
     assert graph._route_after_budget_or_consensus(state) == "__continue__"
 
 
-def test_route_after_pi_decision_accept_continues_to_final():
+def test_route_after_pi_decision_accept_routes_through_execute_ratified():
+    """Phase 2.7 T3f: on accept, pi_decision_select routes to
+    execute_ratified_actions FIRST (parent-side WRITE_TOOLS dispatch from
+    state["ratified_actions"]), then unconditionally to final_synthesis.
+    Phase 2.6 routed straight to final_synthesis, which was a bug — there
+    was nowhere to commit ratified writes."""
     state = {"interrupts": [{"response": "accept"}]}
-    assert graph._route_after_pi_decision(state) == "final_synthesis"
+    assert graph._route_after_pi_decision(state) == "execute_ratified_actions"
 
 
 def test_route_after_pi_decision_reject_escalates():

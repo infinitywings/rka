@@ -258,3 +258,187 @@ def test_EXECUTOR_SYSTEM_includes_phase_2_5_deltas():
         f"Each runtime-relevant delta's prose must include the substring "
         f"locked by this test so future refactors can't silently drop them."
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.7 T3c — mission_execute structured proposed_actions output contract
+# (mis_01KRXNAJDM2DQ3K1VH6CXAPK8R; PI-ratified per jrn_01KRXP96THHEAKCGB0P0KGV7Y9)
+# ---------------------------------------------------------------------------
+
+
+def test_EXECUTOR_SYSTEM_includes_phase_2_7_action_proposals_prose():
+    """Phase 2.7 T3c: EXECUTOR_SYSTEM is extended with the Action proposals
+    directive instructing the LLM to emit a structured JSON proposed_actions
+    block at the end of mission_execute's reply."""
+    text = executor.EXECUTOR_SYSTEM
+    assert "Action proposals" in text
+    assert "proposed_actions" in text
+    assert "pi_decision_select" in text
+
+
+def test_mission_execute_parses_proposed_actions_happy_path():
+    """When the LLM ends its reply with a well-formed JSON block carrying
+    `proposed_actions`, mission_execute extracts the list and writes it to
+    state["proposed_actions"]. No ErrorRecord."""
+    canned = (
+        "Did the cross-reference analysis. Item 1 cites 4 decisions in its "
+        "Provenance section.\n\n"
+        '```json\n'
+        '{"proposed_actions": ['
+        '  {"tool": "rka_update_note", "args": {"id": "jrn_target_1", '
+        '"related_decisions": ["dec_a", "dec_b"]}, "rationale": "Item 1 cites these"}'
+        ']}'
+        '\n```'
+    )
+    sdk = FakeSDK(canned_reply=canned)
+    mcp = FakeMCP()
+    update = executor.mission_execute(_state(), sdk, mcp)
+    assert update["proposed_actions"] == [
+        {
+            "tool": "rka_update_note",
+            "args": {"id": "jrn_target_1", "related_decisions": ["dec_a", "dec_b"]},
+            "rationale": "Item 1 cites these",
+        }
+    ]
+    # No ErrorRecord on happy path.
+    assert "errors" not in update
+
+
+def test_mission_execute_parses_proposed_actions_trailing_bare_json():
+    """The LLM may emit the JSON either fenced (```json ...```) or as a
+    bare trailing object. Both should parse."""
+    canned = (
+        "All done.\n\n"
+        '{"proposed_actions": [{"tool": "rka_update_note", "args": {"id": "jrn_x"}, "rationale": "r"}]}'
+    )
+    sdk = FakeSDK(canned_reply=canned)
+    mcp = FakeMCP()
+    update = executor.mission_execute(_state(), sdk, mcp)
+    assert len(update["proposed_actions"]) == 1
+    assert update["proposed_actions"][0]["tool"] == "rka_update_note"
+
+
+def test_mission_execute_falls_back_on_malformed_json():
+    """Phase 2.5 Delta #7 conservative-malformed-input default: when the
+    LLM emits malformed JSON (or omits the block entirely), mission_execute
+    writes proposed_actions=[] AND appends an ErrorRecord."""
+    canned = "All done. No JSON block at end of message."
+    sdk = FakeSDK(canned_reply=canned)
+    mcp = FakeMCP()
+    update = executor.mission_execute(_state(), sdk, mcp)
+    assert update["proposed_actions"] == []
+    assert "errors" in update
+    assert update["errors"][0]["error_type"] == "proposed_actions_parse_failure"
+
+
+def test_mission_execute_emits_empty_proposed_actions_explicitly():
+    """When the LLM emits `proposed_actions: []` (planning concluded no
+    action needed), the parse succeeds with an empty list and NO error."""
+    canned = 'Done. {"proposed_actions": []}'
+    sdk = FakeSDK(canned_reply=canned)
+    mcp = FakeMCP()
+    update = executor.mission_execute(_state(), sdk, mcp)
+    assert update["proposed_actions"] == []
+    assert "errors" not in update
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.7 T3e — execute_ratified_actions parent-side WRITE_TOOLS dispatch
+# ---------------------------------------------------------------------------
+
+
+def test_execute_ratified_actions_dispatches_to_mcp_methods():
+    """Happy path: each ratified action invokes the corresponding MCPClient
+    method via getattr(mcp, tool)(**args). Successful calls append
+    ArtifactRefs; entity_type matches _WRITE_TOOL_ENTITY_TYPES."""
+    mcp = FakeMCP()
+    sdk = FakeSDK()
+    state = _state()
+    state["ratified_actions"] = [
+        {
+            "tool": "rka_update_note",
+            "args": {"id": "jrn_target_1", "related_decisions": ["dec_a"]},
+            "rationale": "Provenance cite",
+        },
+        {
+            "tool": "rka_add_note",
+            "args": {"content": "Probe note", "related_mission": "mis_t4_target"},
+            "rationale": "Test write",
+        },
+    ]
+
+    update = executor.execute_ratified_actions(state, sdk, mcp)
+
+    # Two MCP write calls fired.
+    update_calls = [c for c in mcp.calls if c["op"] == "rka_update_note"]
+    add_calls = [c for c in mcp.calls if c["op"] == "rka_add_note"]
+    assert len(update_calls) == 1
+    assert update_calls[0]["id"] == "jrn_target_1"
+    assert update_calls[0]["related_decisions"] == ["dec_a"]
+    assert len(add_calls) == 1
+    # Two artifacts appended; one is `journal` (rka_update_note), other `journal` (rka_add_note).
+    assert len(update["artifacts"]) == 2
+    assert all(a["node_name"] == "execute_ratified_actions" for a in update["artifacts"])
+    assert all(a["entity_type"] == "journal" for a in update["artifacts"])
+
+
+def test_execute_ratified_actions_refuses_tool_not_in_WRITE_TOOLS():
+    """Defense in depth: even if the LLM bypasses the subprocess
+    disallowed_tools and a ratified_action carries a non-WRITE_TOOLS name,
+    execute_ratified_actions refuses + appends an ErrorRecord."""
+    mcp = FakeMCP()
+    sdk = FakeSDK()
+    state = _state()
+    state["ratified_actions"] = [
+        {"tool": "rka_get_status", "args": {}, "rationale": "should be rejected"},
+    ]
+
+    update = executor.execute_ratified_actions(state, sdk, mcp)
+
+    # No MCP write fired.
+    assert all(c["op"] != "rka_get_status" for c in mcp.calls)
+    # ErrorRecord appended.
+    assert "errors" in update
+    assert update["errors"][0]["error_type"] == "ratified_action_tool_not_allowed"
+    assert "rka_get_status" in update["errors"][0]["detail"]
+
+
+def test_execute_ratified_actions_no_op_when_empty():
+    """Default state: when state["ratified_actions"] is absent or empty
+    (PI rejected or never populated), the node is a no-op — no MCP calls,
+    no artifacts, no errors. Allows the graph topology to wire the node
+    unconditionally between pi_decision_select and final_synthesis."""
+    mcp = FakeMCP()
+    sdk = FakeSDK()
+    state = _state()
+    # ratified_actions intentionally not set; defaults to empty.
+
+    update = executor.execute_ratified_actions(state, sdk, mcp)
+
+    assert update["current_node"] == "execute_ratified_actions"
+    assert "artifacts" not in update
+    assert "errors" not in update
+    # No MCP calls of any kind.
+    assert mcp.calls == []
+
+
+def test_execute_ratified_actions_captures_call_failure_as_ErrorRecord():
+    """When the mcp call raises, surface as an ErrorRecord — don't crash
+    the workflow. Honors Phase 2.5 Delta #8 'ErrorRecord over raising'."""
+
+    class _BoomMCP(FakeMCP):
+        def rka_update_note(self, id, **kw):  # noqa: ARG002
+            raise RuntimeError("simulated REST 500")
+
+    mcp = _BoomMCP()
+    sdk = FakeSDK()
+    state = _state()
+    state["ratified_actions"] = [
+        {"tool": "rka_update_note", "args": {"id": "jrn_x"}, "rationale": "test"},
+    ]
+
+    update = executor.execute_ratified_actions(state, sdk, mcp)
+
+    assert "artifacts" not in update
+    assert "errors" in update
+    assert update["errors"][0]["error_type"] == "ratified_action_call_failed"
