@@ -109,11 +109,78 @@ def test_rka_get_context_posts_with_body():
     assert call["json"] == {"topic": "orchestrator", "limit": 5}
 
 
-def test_rka_get_journal_joins_tags_csv():
-    http = FakeHttp(canned=FakeResp(_json={"entries": []}))
+def test_rka_get_journal_hits_notes_endpoint_with_client_side_tag_filter():
+    """Phase 2.10 T1 (mis_01KRYBZ0W4Z9F1GXKP96ERKGKK; discharge of Phase 2.9
+    T3 debt per jrn_01KRY908A3RYX1TBH6CKKPJRGC):
+
+    - The endpoint is `/api/notes` (REST surface), NOT `/api/journal` (web
+      UI HTML route).
+    - REST `/api/notes` does NOT accept a `tags` query param — filtering
+      happens CLIENT-SIDE post-fetch. The request `params` should NOT
+      contain `tags`.
+    - Return shape is `list[dict]` (matching the REST surface), not
+      `dict[str, Any]`.
+
+    The pre-Phase-2.10 test asserted CSV-joined tags get sent in params;
+    that assumed the (broken) endpoint behavior. The new test locks the
+    corrected contract."""
+    # Two notes; one carries the tag, one doesn't. Client-side filter
+    # should return only the tagged one.
+    canned_response = [
+        {"id": "jrn_a", "type": "log", "tags": ["target-tag", "other"]},
+        {"id": "jrn_b", "type": "log", "tags": ["unrelated"]},
+    ]
+    http = FakeHttp(canned=FakeResp(_json=canned_response))
     c = _client(http)
-    c.rka_get_journal(tags=["a", "b"], limit=10)
-    assert http.calls[0]["params"]["tags"] == "a,b"
+    result = c.rka_get_journal(tags=["target-tag"], limit=10)
+
+    # Endpoint check: hits /api/notes, NOT /api/journal.
+    assert http.calls[0]["path"] == "/api/notes", (
+        f"Phase 2.10 T1: rka_get_journal must hit /api/notes (REST surface), "
+        f"not /api/journal (web UI HTML); got path={http.calls[0]['path']!r}"
+    )
+    # Tags NOT in request params — filtered client-side.
+    assert "tags" not in (http.calls[0]["params"] or {}), (
+        "Phase 2.10 T1: REST /api/notes doesn't accept tags query param; "
+        "filter must be client-side post-fetch"
+    )
+    # Limit IS still sent.
+    assert http.calls[0]["params"]["limit"] == 10
+    # Return shape: list filtered to matching entries.
+    assert isinstance(result, list), (
+        f"Phase 2.10 T1: return shape must be list[dict] not {type(result).__name__}"
+    )
+    assert len(result) == 1
+    assert result[0]["id"] == "jrn_a"
+
+
+def test_rka_get_journal_no_tags_returns_all_notes():
+    """When `tags=None` (or empty), return the full list with no client-side filter."""
+    canned_response = [
+        {"id": "jrn_a", "tags": ["x"]},
+        {"id": "jrn_b", "tags": ["y"]},
+    ]
+    http = FakeHttp(canned=FakeResp(_json=canned_response))
+    c = _client(http)
+    result = c.rka_get_journal(limit=20)
+    assert isinstance(result, list)
+    assert len(result) == 2
+
+
+def test_rka_get_journal_handles_non_list_response_gracefully():
+    """Defensive: if the REST endpoint returns a non-list (None, dict, str),
+    return an empty list rather than crashing the caller."""
+    # None response
+    http = FakeHttp(canned=FakeResp(_json=None))
+    c = _client(http)
+    result = c.rka_get_journal()
+    assert result == []
+
+    # Unexpected dict response
+    http = FakeHttp(canned=FakeResp(_json={"unexpected": "shape"}))
+    c = _client(http)
+    result = c.rka_get_journal()
+    assert result == []
 
 
 def test_rka_get_mission_default_active():

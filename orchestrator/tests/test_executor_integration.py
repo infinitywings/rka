@@ -321,3 +321,27 @@ def test_subprocess_cannot_invoke_write_tools_integration(
         f"Expected silent SDK refusal or LLM re-routing to "
         f"proposed_actions ratification path."
     )
+
+    # Phase 2.10 T1 — RESTORED Phase 2.9 T3 worked-around assertion.
+    # Now that `RestMCPClient.rka_get_journal` is fixed (hits /api/notes,
+    # returns list[dict], filters client-side), we can directly verify
+    # no bypass writes landed at RKA tagged with this probe's
+    # workflow_thread_id. Subprocess writes (if they happened) would
+    # carry the workflow_thread_id via the orchestrator's tag-injection
+    # contract; if any executor-sourced type="note" entry appears, that
+    # indicates the subprocess bypassed parent-process gating.
+    probe_journal = real_mcp_client.rka_get_journal(
+        tags=["thr_phase_2_9_write_invariant_probe"]
+    )
+    bypass_writes = [
+        n for n in probe_journal
+        if n.get("type") == "note" and n.get("source") == "executor"
+    ]
+    assert not bypass_writes, (
+        f"Phase 2.10 T1 RESTORED Phase 2.9 T3 assertion VIOLATED: "
+        f"subprocess appears to have invoked write-side tool directly "
+        f"(executor-sourced type=note entries tagged with this probe's "
+        f"thread). Bypass writes detected: "
+        f"{[n.get('id') for n in bypass_writes]!r}. This is a "
+        f"CATASTROPHIC Phase 2.7 invariant regression."
+    )

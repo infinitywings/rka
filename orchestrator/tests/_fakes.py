@@ -43,7 +43,11 @@ class FakeMCP:
     status_response: dict = field(default_factory=lambda: {"phase": "design"})
     context_response: dict = field(default_factory=lambda: {"recent": []})
     research_map_response: dict = field(default_factory=lambda: {"clusters": []})
-    journal_response: dict = field(default_factory=lambda: {"entries": []})
+    # Phase 2.10 T1 (mis_01KRYBZ0W4Z9F1GXKP96ERKGKK): aligned with real
+    # RestMCPClient.rka_get_journal shape. Was `dict={"entries": []}`
+    # (wrong shape that masked the upstream bug for multiple phases);
+    # now `list[dict]` matching the live REST `/api/notes` surface.
+    journal_response: list = field(default_factory=list)
     mission_response: dict = field(default_factory=lambda: {"id": "mis_test", "status": "active"})
     checkpoints_response: list = field(default_factory=list)
 
@@ -63,9 +67,22 @@ class FakeMCP:
         self._record("rka_get_research_map")
         return self.research_map_response
 
-    def rka_get_journal(self, *, tags: list[str] | None = None, limit: int = 20) -> dict:
+    def rka_get_journal(
+        self, *, tags: list[str] | None = None, limit: int = 20
+    ) -> list[dict]:
+        """Phase 2.10 T1: return type aligned with real RestMCPClient.
+        Client-side tag filter applied to match real REST behavior (REST
+        `/api/notes` doesn't accept a `tags` query param). Tests can
+        populate `journal_response` with a list of note dicts; tag filter
+        applies before return."""
         self._record("rka_get_journal", tags=tags, limit=limit)
-        return self.journal_response
+        if not tags:
+            return self.journal_response
+        wanted = set(tags)
+        return [
+            n for n in self.journal_response
+            if wanted.issubset(set(n.get("tags") or []))
+        ]
 
     def rka_get_mission(self, id: str | None = None) -> dict:
         self._record("rka_get_mission", id=id)

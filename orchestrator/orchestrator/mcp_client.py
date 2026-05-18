@@ -62,7 +62,9 @@ class MCPClient(Protocol):
     # --- reads ---
     def rka_get_status(self) -> dict[str, Any]: ...
     def rka_get_context(self, topic: str | None = None, limit: int = 10) -> dict[str, Any]: ...
-    def rka_get_journal(self, *, tags: list[str] | None = None, limit: int = 20) -> dict[str, Any]: ...
+    def rka_get_journal(
+        self, *, tags: list[str] | None = None, limit: int = 20
+    ) -> list[dict[str, Any]]: ...
     def rka_get_mission(self, id: str | None = None) -> dict[str, Any]: ...
     def rka_get_research_map(self) -> dict[str, Any]: ...
     def rka_get_checkpoints(self, status: str = "open") -> list[dict[str, Any]]: ...
@@ -233,11 +235,33 @@ class RestMCPClient:
 
     def rka_get_journal(
         self, *, tags: list[str] | None = None, limit: int = 20
-    ) -> dict:
+    ) -> list[dict[str, Any]]:
+        """GET /api/notes (REST endpoint per /openapi.json).
+
+        Phase 2.10 T1 (mis_01KRYBZ0W4Z9F1GXKP96ERKGKK; discharge of Phase 2.9
+        T3 debt per `jrn_01KRY908A3RYX1TBH6CKKPJRGC`):
+        - URL: was `/api/journal` (web UI HTML route, HTTP 200 but body is
+          `<!doctype html>` — fails callers expecting JSON); now `/api/notes`
+          which is the actual REST surface returning a list of note objects.
+        - Return shape: was `dict[str, Any]` per the (incorrect) Protocol; now
+          `list[dict[str, Any]]` matching the live REST surface.
+        - Tags filter: REST `/api/notes` does NOT accept a `tags` query param
+          (verified via /openapi.json — supported params are type, phase,
+          confidence, importance, source, status, since, hide_superseded,
+          limit, offset, project_id, X-RKA-Project). Filter client-side
+          post-fetch: a note matches if it carries ALL requested tags.
+        """
         params: dict = {"limit": limit}
-        if tags:
-            params["tags"] = ",".join(tags)
-        return self._request("GET", "/api/journal", params=params) or {}
+        result = self._request("GET", "/api/notes", params=params)
+        # Real REST returns a list; tolerate `None` (empty response).
+        notes: list[dict[str, Any]] = result if isinstance(result, list) else []
+        if not tags:
+            return notes
+        wanted = set(tags)
+        return [
+            n for n in notes
+            if wanted.issubset(set(n.get("tags") or []))
+        ]
 
     def rka_get_mission(self, id: str | None = None) -> dict:
         path = f"/api/missions/{id}" if id else "/api/missions/active"
