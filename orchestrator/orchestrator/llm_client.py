@@ -41,6 +41,70 @@ _AUTH_PATH_OAUTH_TOKEN = "env_oauth_token"
 _AUTH_PATH_ENV_API_KEY = "env_api_key"  # only set if scrubbing was bypassed
 _AUTH_PATH_NONE = "none"
 
+# Phase 2.7 (mis_01KRXNAJDM2DQ3K1VH6CXAPK8R T1; PI-ratified per
+# jrn_01KRXP96THHEAKCGB0P0KGV7Y9) — Option C read-only-subprocess MCP scope.
+# Subprocess SDK sees `mcp__rka__rka_*` tools via a strict MCP server config;
+# `allowed_tools` permits the 9 Protocol-anchored read methods; `disallowed_tools`
+# explicitly denies the write methods as belt-and-suspenders. Writes execute from
+# the parent process after `pi_decision_select` ratifies — see Phase 2.7 T3.
+_MCP_SERVER_NAME = "rka"
+
+READ_TOOLS: tuple[str, ...] = (
+    "rka_get_status",
+    "rka_get_context",
+    "rka_get_journal",
+    "rka_get_mission",
+    "rka_get_research_map",
+    "rka_get_checkpoints",
+    "rka_search",
+    "rka_get",
+    "rka_trace_provenance",
+)
+
+# Parent-side WRITE_TOOLS registry. Subprocess `disallowed_tools` mirrors this list
+# (prefixed); the orchestrator's `executor.execute_ratified_actions` node (T3) is the
+# only call site that invokes these. `rka_update_note` joins MCPClient Protocol in T3
+# (pre-registered here per T1 ratification).
+WRITE_TOOLS: tuple[str, ...] = (
+    "rka_add_note",
+    "rka_add_decision",
+    "rka_submit_checkpoint",
+    "rka_submit_report",
+    "rka_create_mission",
+    "rka_update_note",
+)
+
+
+def _prefixed_tools(names: tuple[str, ...]) -> list[str]:
+    """Prefix MCP tool names with `mcp__<server_name>__` per the SDK's
+    allowed_tools / disallowed_tools naming convention."""
+    return [f"mcp__{_MCP_SERVER_NAME}__{n}" for n in names]
+
+
+def _find_rka_mcp_binary() -> str | None:
+    """Locate the local `rka` MCP stdio binary on PATH. Returns the absolute
+    path if found, None otherwise. Discovered at SDK-call time (not import
+    time) so tests can monkeypatch this independently."""
+    return shutil.which("rka")
+
+
+def _build_mcp_servers_config(rka_binary: str | None) -> dict:
+    """Build the McpStdioServerConfig dict for the subprocess. Returns `{}`
+    if no binary found — subprocess falls back to Phase 1 text-only mode
+    (caller logs a warning). Note: McpStdioServerConfig.env is intentionally
+    omitted; the claude CLI's scrubbed env propagates transitively to its
+    mcp children. End-to-end scrub-propagation is a Phase 2.8 integration
+    test (requires real subprocess)."""
+    if not rka_binary:
+        return {}
+    return {
+        _MCP_SERVER_NAME: {
+            "type": "stdio",
+            "command": rka_binary,
+            "args": ["mcp"],
+        }
+    }
+
 
 class SDKClient(Protocol):
     """Synchronous wrapper around the Claude Agent SDK.
@@ -206,17 +270,34 @@ class _RealSDKClient:
         # only needs the SDKClient Protocol for typing).
         import claude_agent_sdk as sdk
 
-        options = sdk.ClaudeAgentOptions(
-            system_prompt=system,
-            env=self._env,
-            # Empty allowed_tools — pure text reply, no tool-use round-trips.
-            # (Don't pin max_turns; the SDK's default permits whatever turn
-            # count Claude needs to deliver the full assistant message. With
-            # no tools allowed, the run terminates at the first assistant
-            # reply anyway. Setting max_turns=1 over-constrains and the SDK
-            # raises before yielding the message.)
-            allowed_tools=[],
-        )
+        # Phase 2.7 Option C: subprocess gets read-only MCP scope. If the
+        # `rka` binary isn't on PATH, fall back to Phase 1 text-only mode so
+        # tests + clean environments still work; log so the degradation is
+        # visible.
+        rka_binary = _find_rka_mcp_binary()
+        mcp_servers = _build_mcp_servers_config(rka_binary)
+
+        if mcp_servers:
+            options = sdk.ClaudeAgentOptions(
+                system_prompt=system,
+                env=self._env,
+                mcp_servers=mcp_servers,
+                strict_mcp_config=True,   # only `rka` server; no host config bleed
+                allowed_tools=_prefixed_tools(READ_TOOLS),
+                disallowed_tools=_prefixed_tools(WRITE_TOOLS),
+                permission_mode="dontAsk",   # deny anything off-allowlist silently
+            )
+        else:
+            logger.warning(
+                "rka MCP binary not found on PATH; subprocess will have no MCP "
+                "scope (Phase 1 text-only fallback). executor.mission_execute "
+                "cannot do work in this configuration."
+            )
+            options = sdk.ClaudeAgentOptions(
+                system_prompt=system,
+                env=self._env,
+                allowed_tools=[],
+            )
 
         parts: list[str] = []
         async for message in sdk.query(prompt=prompt, options=options):
@@ -263,4 +344,10 @@ __all__ = [
     "make_sdk",
     "AuthRoutingReport",
     "_verify_claude_max_routing",  # exposed for tests + T2 instrumentation
+    # Phase 2.7 T2 — subprocess MCP scope (exposed for tests + T3 consumers)
+    "READ_TOOLS",
+    "WRITE_TOOLS",
+    "_prefixed_tools",
+    "_find_rka_mcp_binary",
+    "_build_mcp_servers_config",
 ]

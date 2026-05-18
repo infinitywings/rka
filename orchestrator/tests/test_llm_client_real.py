@@ -23,13 +23,17 @@ import pytest
 
 from orchestrator.llm_client import (
     AuthRoutingReport,
+    READ_TOOLS,
     SDKClient,
+    WRITE_TOOLS,
     _AUTH_PATH_CREDENTIALS_JSON,
     _AUTH_PATH_ENV_API_KEY,
     _AUTH_PATH_KEYCHAIN,
     _AUTH_PATH_NONE,
     _AUTH_PATH_OAUTH_TOKEN,
+    _MCP_SERVER_NAME,
     _RealSDKClient,
+    _prefixed_tools,
     _scrubbed_env,
     _verify_claude_max_routing,
     make_sdk,
@@ -277,3 +281,158 @@ def test_complete_passes_scrubbed_env_to_sdk():
     assert len(captured_envs) == 1
     assert "ANTHROPIC_API_KEY" not in captured_envs[0]
     assert captured_envs[0].get("PATH") == "/usr/bin"
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.7 T2 — Option C read-only-subprocess MCP scope
+# (mis_01KRXNAJDM2DQ3K1VH6CXAPK8R; PI-ratified per jrn_01KRXP96THHEAKCGB0P0KGV7Y9).
+# Three regression tests covering the three load-bearing behaviors:
+#  (1) READ_TOOLS land in subprocess options.allowed_tools (prefixed mcp__rka__)
+#  (2) WRITE_TOOLS land in subprocess options.disallowed_tools (same prefix);
+#      this is the belt-and-suspenders against the Phase 2.6 finding that the
+#      executor LLM in the subprocess tried to call write tools directly
+#  (3) Phase 2 auth-thesis regression check — ANTHROPIC_API_KEY still scrubbed
+#      from options.env even after the T2 refactor adds new option fields
+# ---------------------------------------------------------------------------
+
+
+def _capture_one_options():
+    """Helper: returns (capturing_query, captured_options_list) — patches
+    `claude_agent_sdk.query` to record the ClaudeAgentOptions instance for
+    inspection without firing a real SDK subprocess."""
+    captured: list = []
+
+    def _capturing_query(*, prompt, options=None, transport=None):
+        captured.append(options)
+        return _async_iter_messages([_fake_assistant_message("ok")])
+
+    return _capturing_query, captured
+
+
+def test_complete_passes_read_tools_allowlist_to_subprocess(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    """Phase 2.7 T2 (1): the SDK ClaudeAgentOptions must carry the 9
+    READ_TOOLS prefixed with `mcp__rka__` in allowed_tools, the rka stdio
+    mcp_servers config, strict_mcp_config=True, and permission_mode='dontAsk'."""
+    # Pretend `rka` is on PATH at a known location.
+    fake_rka = tmp_path / "rka"
+    fake_rka.write_text("#!/bin/sh\nexit 0\n")
+    fake_rka.chmod(0o755)
+    monkeypatch.setattr(
+        "orchestrator.llm_client._find_rka_mcp_binary", lambda: str(fake_rka)
+    )
+
+    capturing_query, captured = _capture_one_options()
+    with patch("claude_agent_sdk.query", side_effect=capturing_query):
+        client = _RealSDKClient(env={})
+        client.complete("smoke", max_tokens=128, system="sys")
+
+    assert len(captured) == 1
+    opts = captured[0]
+    # READ_TOOLS land in allowed_tools, prefixed.
+    expected_reads = _prefixed_tools(READ_TOOLS)
+    assert opts.allowed_tools == expected_reads, (
+        f"expected allowed_tools={expected_reads!r}, got {opts.allowed_tools!r}"
+    )
+    # mcp_servers carries rka stdio config pointing at the discovered binary.
+    assert _MCP_SERVER_NAME in opts.mcp_servers
+    rka_cfg = opts.mcp_servers[_MCP_SERVER_NAME]
+    assert rka_cfg["type"] == "stdio"
+    assert rka_cfg["command"] == str(fake_rka)
+    assert rka_cfg["args"] == ["mcp"]
+    # Strict scoping: only this server, no host config bleed.
+    assert opts.strict_mcp_config is True
+    # Deny silently anything off-allowlist.
+    assert opts.permission_mode == "dontAsk"
+    # System prompt + scrubbed env preserved from prior contract.
+    assert opts.system_prompt == "sys"
+
+
+def test_complete_passes_write_tools_disallowlist_to_subprocess(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    """Phase 2.7 T2 (2): WRITE_TOOLS must land in disallowed_tools as
+    belt-and-suspenders against the Phase 2.6 finding that the executor LLM
+    in the subprocess tried to call write-side MCP tools directly. The
+    `dontAsk` permission_mode + empty allowed_tools for writes is the
+    primary defense; disallowed_tools is the explicit redundancy."""
+    fake_rka = tmp_path / "rka"
+    fake_rka.write_text("#!/bin/sh\nexit 0\n")
+    fake_rka.chmod(0o755)
+    monkeypatch.setattr(
+        "orchestrator.llm_client._find_rka_mcp_binary", lambda: str(fake_rka)
+    )
+
+    capturing_query, captured = _capture_one_options()
+    with patch("claude_agent_sdk.query", side_effect=capturing_query):
+        client = _RealSDKClient(env={})
+        client.complete("smoke", max_tokens=128, system=None)
+
+    opts = captured[0]
+    expected_writes = _prefixed_tools(WRITE_TOOLS)
+    assert opts.disallowed_tools == expected_writes, (
+        f"expected disallowed_tools={expected_writes!r}, "
+        f"got {opts.disallowed_tools!r}"
+    )
+    # Sanity: writes must NOT also appear in allowed_tools (would be a
+    # contradictory contract).
+    for write_tool in expected_writes:
+        assert write_tool not in opts.allowed_tools, (
+            f"WRITE_TOOL {write_tool!r} unexpectedly in allowed_tools "
+            f"(contract violation)"
+        )
+
+
+def test_t2_refactor_preserves_anthropic_api_key_scrub(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    """Phase 2 T2 auth thesis regression check (load-bearing across phases):
+    even after the T2 refactor adds new option fields (mcp_servers,
+    strict_mcp_config, permission_mode, disallowed_tools), ANTHROPIC_API_KEY
+    must still be absent from the subprocess env handed to the SDK.
+
+    This is the test that would have caught a regression in the Phase 2.5
+    fold + Phase 2.7 refactor stack independently."""
+    fake_rka = tmp_path / "rka"
+    fake_rka.write_text("#!/bin/sh\nexit 0\n")
+    fake_rka.chmod(0o755)
+    monkeypatch.setattr(
+        "orchestrator.llm_client._find_rka_mcp_binary", lambda: str(fake_rka)
+    )
+
+    capturing_query, captured = _capture_one_options()
+    scrubbed_env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    scrubbed_env["PATH"] = "/usr/bin"
+    with patch("claude_agent_sdk.query", side_effect=capturing_query):
+        client = _RealSDKClient(env=scrubbed_env)
+        client.complete("smoke", max_tokens=128, system=None)
+
+    opts = captured[0]
+    assert "ANTHROPIC_API_KEY" not in opts.env, (
+        "Phase 2 T2 auth thesis regression — ANTHROPIC_API_KEY leaked back "
+        "into ClaudeAgentOptions.env after Phase 2.7 T2 refactor"
+    )
+    assert opts.env.get("PATH") == "/usr/bin"
+
+
+def test_complete_falls_back_to_text_only_when_rka_binary_missing(
+    monkeypatch: pytest.MonkeyPatch
+):
+    """Defense in depth: if `rka` is not on PATH (clean tooling env, CI
+    container without uv-installed binary, etc.), the SDK call must NOT
+    raise — it falls back to Phase 1 text-only mode (allowed_tools=[],
+    no mcp_servers). A warning log records the degradation."""
+    monkeypatch.setattr(
+        "orchestrator.llm_client._find_rka_mcp_binary", lambda: None
+    )
+
+    capturing_query, captured = _capture_one_options()
+    with patch("claude_agent_sdk.query", side_effect=capturing_query):
+        client = _RealSDKClient(env={})
+        client.complete("smoke", max_tokens=128, system=None)
+
+    opts = captured[0]
+    assert opts.allowed_tools == []
+    # No mcp_servers passed → SDK default (empty dict).
+    assert opts.mcp_servers == {} or opts.mcp_servers is None or not opts.mcp_servers
