@@ -174,6 +174,13 @@ class ResearchWorkflowState(TypedDict, total=False):
     workflow_thread_id: str
     mission_id: str
     motivated_by_decision_id: str
+    # Phase 2.9 (mis_01KRY2KP0GGZY21BA4Z2R2S718 T1): RKA project_id under
+    # which the workflow is scoped. Populated at workflow start from
+    # driver.py:--project-id. Threaded through `make_sdk(project_id=...)`
+    # to propagate as McpStdioServerConfig.env["RKA_PROJECT"] to the
+    # subprocess's `rka mcp` stdio child. Additive (TypedDict total=False);
+    # pre-Phase-2.9 state shapes continue to work without it.
+    project_id: str
 
     # Position
     current_phase: WorkflowPhase
@@ -234,18 +241,24 @@ def make_initial_state(
     workflow_thread_id: str,
     mission_id: str,
     motivated_by_decision_id: str,
+    project_id: str = "",
 ) -> ResearchWorkflowState:
     """Construct the canonical initial state at workflow start.
 
     The graph entry node should call this once, then write the result via
     `state.update(...)`. Subsequent nodes read fields; reducers handle the
     append-only ones.
+
+    Phase 2.9 T1: `project_id` is additive; defaults to empty string so
+    pre-Phase-2.9 callers continue to work without modification. When set,
+    it carries the RKA project context that scopes this workflow run.
     """
 
     return ResearchWorkflowState(
         workflow_thread_id=workflow_thread_id,
         mission_id=mission_id,
         motivated_by_decision_id=motivated_by_decision_id,
+        project_id=project_id,
         current_phase="init",
         current_node="",
         next_node_override="",

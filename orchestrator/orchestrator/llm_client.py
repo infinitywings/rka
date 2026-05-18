@@ -88,22 +88,35 @@ def _find_rka_mcp_binary() -> str | None:
     return shutil.which("rka")
 
 
-def _build_mcp_servers_config(rka_binary: str | None) -> dict:
+def _build_mcp_servers_config(
+    rka_binary: str | None, project_id: str | None = None
+) -> dict:
     """Build the McpStdioServerConfig dict for the subprocess. Returns `{}`
     if no binary found — subprocess falls back to Phase 1 text-only mode
-    (caller logs a warning). Note: McpStdioServerConfig.env is intentionally
-    omitted; the claude CLI's scrubbed env propagates transitively to its
-    mcp children. End-to-end scrub-propagation is a Phase 2.8 integration
-    test (requires real subprocess)."""
+    (caller logs a warning).
+
+    Phase 2.9 (mis_01KRY2KP0GGZY21BA4Z2R2S718 T1; PI-handed-off scope per
+    dec_01KRY2EXCSTSSCFZJ96VG4MGDW Option A): when `project_id` is non-None,
+    set `McpStdioServerConfig.env = {"RKA_PROJECT": project_id}` so the
+    `rka mcp` stdio binary spawned by claude-agent-sdk inherits the parent's
+    project context. Closes the 8th mandatory-pause trigger surfaced
+    empirically by Phase 2.8 (`mis_01KRXRF6VRFAAV1T8XKZ3RHJXJ`): subprocess
+    MCP session inheriting `Default Project` (proj_default) instead of the
+    parent's configured `project_id`.
+
+    When `project_id` is None (no parent context), the env key is omitted
+    for back-compat — subprocess falls through to its default session
+    (typically proj_default). Pre-Phase-2.9 behavior is preserved."""
     if not rka_binary:
         return {}
-    return {
-        _MCP_SERVER_NAME: {
-            "type": "stdio",
-            "command": rka_binary,
-            "args": ["mcp"],
-        }
+    server_config: dict = {
+        "type": "stdio",
+        "command": rka_binary,
+        "args": ["mcp"],
     }
+    if project_id:
+        server_config["env"] = {"RKA_PROJECT": project_id}
+    return {_MCP_SERVER_NAME: server_config}
 
 
 class SDKClient(Protocol):
@@ -252,8 +265,18 @@ class _RealSDKClient:
     if the caller's process env has it set.
     """
 
-    def __init__(self, *, env: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        env: dict[str, str] | None = None,
+        project_id: str | None = None,
+    ) -> None:
+        # Phase 2.9 T1: `project_id` propagates parent's project context to
+        # the claude-agent-sdk subprocess's `rka mcp` stdio child via
+        # McpStdioServerConfig.env={"RKA_PROJECT": project_id}. Stored at
+        # construction time so each `complete()` call uses the same project.
         self._env = env if env is not None else _scrubbed_env()
+        self._project_id = project_id
 
     def complete(
         self,
@@ -274,8 +297,10 @@ class _RealSDKClient:
         # `rka` binary isn't on PATH, fall back to Phase 1 text-only mode so
         # tests + clean environments still work; log so the degradation is
         # visible.
+        # Phase 2.9 T1: `project_id` threads through to McpStdioServerConfig.env
+        # so the subprocess inherits the parent's project context.
         rka_binary = _find_rka_mcp_binary()
-        mcp_servers = _build_mcp_servers_config(rka_binary)
+        mcp_servers = _build_mcp_servers_config(rka_binary, project_id=self._project_id)
 
         if mcp_servers:
             options = sdk.ClaudeAgentOptions(
@@ -309,8 +334,17 @@ class _RealSDKClient:
         return "".join(parts)
 
 
-def make_sdk() -> SDKClient:
+def make_sdk(project_id: str | None = None) -> SDKClient:
     """Construct the production SDK client.
+
+    Args:
+        project_id: Phase 2.9 T1 — when set, propagates as
+            `McpStdioServerConfig.env={"RKA_PROJECT": project_id}` to the
+            subprocess's `rka mcp` stdio child, so the subprocess MCP
+            session inherits the parent's project context. Phase 2.8
+            surfaced this gap empirically; Phase 2.9 closes it. Defaults
+            to None for back-compat (pre-Phase-2.9 callers continue to
+            work; subprocess falls through to its default project session).
 
     Pre-flight checks (in order):
       1. Auth-path verification — emit a single INFO log naming the
@@ -336,7 +370,7 @@ def make_sdk() -> SDKClient:
             "Keychain entry, no OAuth token in env). Run `claude login`."
         )
 
-    return _RealSDKClient(env=_scrubbed_env())
+    return _RealSDKClient(env=_scrubbed_env(), project_id=project_id)
 
 
 __all__ = [

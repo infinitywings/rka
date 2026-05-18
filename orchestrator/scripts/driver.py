@@ -237,9 +237,14 @@ def main(argv: list[str] | None = None) -> int:
     ) or ""
 
     # Real SDK only — Claude Max via the auth chain in llm_client.
+    # Phase 2.9 T1 (mis_01KRY2KP0GGZY21BA4Z2R2S718): thread `--project-id`
+    # into `make_sdk(project_id=...)` so the claude-agent-sdk subprocess's
+    # `rka mcp` stdio child inherits the parent's project context via
+    # McpStdioServerConfig.env["RKA_PROJECT"]. Closes the 8th mandatory-
+    # pause trigger surfaced empirically by Phase 2.8.
     try:
-        sdk = make_sdk()
-        print("  SDK: REAL claude-agent-sdk (Claude Max routing)\n")
+        sdk = make_sdk(project_id=args.project_id)
+        print(f"  SDK: REAL claude-agent-sdk (Claude Max routing; subprocess RKA_PROJECT={args.project_id})\n")
     except RuntimeError as e:
         print(f"  ERROR: {e}", file=sys.stderr)
         return 2
@@ -258,6 +263,7 @@ def main(argv: list[str] | None = None) -> int:
         workflow_thread_id=workflow_thread_id,
         mission_id=args.mission_id,
         motivated_by_decision_id=motivated_by,
+        project_id=args.project_id,
     )
 
     config: dict[str, Any] = (
