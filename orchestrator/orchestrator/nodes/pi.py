@@ -187,6 +187,47 @@ def pi_decision_select(
 # ---------------------------------------------------------------------------
 
 
+def _compose_acceptance_summary(state: ResearchWorkflowState) -> str:
+    """Build a structured one-line summary for the pi_acceptance payload.
+
+    Phase 2.9 T4 (mis_01KRY2KP0GGZY21BA4Z2R2S718): Phase 2.8 close-out
+    surfaced a cosmetic anomaly — `pi_acceptance` summary was sourced
+    from `state["brain_position"]` which carries the LAST brain-position
+    write, which (in the happy path) is `gate1_validation`'s verdict
+    text ("APPROVED:" / "REDIRECTED:"). Misleading: the summary
+    described the gate1 verdict, not the mission outcome.
+
+    Replacement is a composed summary based on counts + escalation
+    signal: clear, accurate, no leak. Falls back to a static placeholder
+    when state has no signal to summarize.
+    """
+    artifact_count = len(state.get("artifacts", []))
+    error_count = len(state.get("errors", []))
+    checkpoint_count = len(state.get("checkpoints", []))
+    final_report_id = state.get("final_report_id")
+
+    if error_count > 0:
+        return (
+            f"Mission ended with {error_count} error(s); "
+            f"{artifact_count} artifacts produced; "
+            f"{checkpoint_count} checkpoint(s) raised."
+        )
+    if checkpoint_count > 0:
+        return (
+            f"Mission escalated via {checkpoint_count} checkpoint(s); "
+            f"{artifact_count} artifacts produced; see checkpoint detail."
+        )
+    if final_report_id:
+        return (
+            f"Mission complete; final_report_id={final_report_id}; "
+            f"{artifact_count} artifacts produced."
+        )
+    return (
+        f"Workflow complete; {artifact_count} artifacts produced; "
+        f"see report for details."
+    )
+
+
 def pi_acceptance(
     state: ResearchWorkflowState,
     sdk: SDKClient,
@@ -195,6 +236,8 @@ def pi_acceptance(
 ) -> dict:
     # Acceptance payload is the run's complete state digest:
     # final_report_id + accumulated artifacts + interrupts + errors.
+    # Phase 2.9 T4: summary now composed from counts (no longer leaks
+    # gate1 verdict text via brain_position).
     items = [
         {
             "final_report_id": state.get("final_report_id"),
@@ -203,7 +246,7 @@ def pi_acceptance(
             "error_count": len(state.get("errors", [])),
             "checkpoint_count": len(state.get("checkpoints", [])),
             "usd_spent": state.get("usd_spent", 0.0),
-            "summary": state.get("brain_position", "")[:200],
+            "summary": _compose_acceptance_summary(state),
         }
     ]
 

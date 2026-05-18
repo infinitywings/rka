@@ -330,6 +330,91 @@ def test_pi_decision_select_clears_ratified_on_reject():
     assert update["ratified_actions"] == []
 
 
+# ---------------------------------------------------------------------------
+# Phase 2.9 T4 — pi_acceptance summary no longer leaks gate1 verdict text
+# (mis_01KRY2KP0GGZY21BA4Z2R2S718; cosmetic anomaly from Phase 2.8)
+# ---------------------------------------------------------------------------
+
+
+def test_pi_acceptance_summary_does_not_leak_gate1_verdict():
+    """Phase 2.9 T4: Phase 2.8 surfaced that `pi_acceptance.summary` was
+    sourced from `state["brain_position"]` which (in the happy path) is
+    gate1_validation's last write — the verdict text "APPROVED:" or
+    "REDIRECTED:". This was misleading: described the gate1 verdict, not
+    the mission outcome.
+
+    Fix: `_compose_acceptance_summary(state)` builds a structured summary
+    from counts + escalation signal; no longer reads brain_position."""
+    sdk = FakeSDK()
+    mcp = FakeMCP()
+    interrupt_fn = FakeInterrupt(canned_response="accept")
+    state = _state()
+    # Simulate the Phase 2.8 setup: gate1 wrote "APPROVED:" to brain_position.
+    state["brain_position"] = "APPROVED:"
+    state["final_report_id"] = "mis_target_01ABC"
+    state["artifacts"] = [
+        {"rka_id": "jrn_a", "entity_type": "journal", "node_name": "n1"},
+        {"rka_id": "jrn_b", "entity_type": "journal", "node_name": "n2"},
+    ]
+
+    update = pi.pi_acceptance(state, sdk, mcp, interrupt_fn=interrupt_fn)
+
+    # The payload presented to PI must NOT contain the gate1 verdict text.
+    payload = interrupt_fn.captured_payloads[0]
+    items = payload["items"]
+    summary = items[0]["summary"]
+    assert "APPROVED:" not in summary, (
+        f"Phase 2.9 T4: pi_acceptance summary leaked gate1 verdict text "
+        f"({summary!r}); should be a composed summary from counts."
+    )
+    # Sanity: the new composed summary mentions the actual signal.
+    assert "mis_target_01ABC" in summary
+    assert "2 artifacts" in summary
+
+
+def test_pi_acceptance_summary_reflects_error_count_when_present():
+    """T4 follow-up: when errors are present, the composed summary
+    leads with the error count (matches Phase 2.5 Delta #14b's
+    'divergence-as-headline' discipline at the report-submission layer
+    — same principle applied to acceptance summary)."""
+    sdk = FakeSDK()
+    mcp = FakeMCP()
+    interrupt_fn = FakeInterrupt(canned_response="accept")
+    state = _state()
+    state["brain_position"] = "APPROVED:"  # legacy field; should NOT be used
+    state["errors"] = [
+        {"node_name": "mission_execute", "error_type": "test_error", "detail": "x"}
+    ]
+    state["artifacts"] = [{"rka_id": "jrn_a", "entity_type": "journal", "node_name": "n1"}]
+
+    pi.pi_acceptance(state, sdk, mcp, interrupt_fn=interrupt_fn)
+
+    payload = interrupt_fn.captured_payloads[0]
+    summary = payload["items"][0]["summary"]
+    assert "error" in summary.lower()
+    assert "APPROVED:" not in summary
+
+
+def test_pi_acceptance_summary_reflects_escalation_when_checkpoints_raised():
+    """T4 follow-up: escalation path produces a summary that mentions
+    the checkpoint(s), not the gate1 verdict."""
+    sdk = FakeSDK()
+    mcp = FakeMCP()
+    interrupt_fn = FakeInterrupt(canned_response="accept")
+    state = _state()
+    state["brain_position"] = "APPROVED:"  # legacy field; should NOT be used
+    state["checkpoints"] = [
+        {"chk_id": "chk_test", "type": "decision", "reason": "test"}
+    ]
+
+    pi.pi_acceptance(state, sdk, mcp, interrupt_fn=interrupt_fn)
+
+    payload = interrupt_fn.captured_payloads[0]
+    summary = payload["items"][0]["summary"]
+    assert "escalat" in summary.lower() or "checkpoint" in summary.lower()
+    assert "APPROVED:" not in summary
+
+
 def test_pi_decision_select_empty_proposed_actions_passes_through_on_accept():
     """When mission_execute produced no proposed_actions (LLM emitted
     proposed_actions=[] explicitly, OR parse failed), the accept path
