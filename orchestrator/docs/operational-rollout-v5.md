@@ -298,3 +298,201 @@ Run-artifact JSON (errors + artifact metadata):
 Authentication: Claude Max keychain routing held (ANTHROPIC_API_KEY
 scrub via `make_sdk()`'s `_scrubbed_env`); no API-key leak in any
 artifact.
+
+---
+
+## 10. Phase 2.13 — WRITE_TOOLS registry expansion
+
+**Mission**: `mis_01KRYZMEAT01SMNNXQXS3JRC4W`
+**Decision**: `dec_01KRYZGF8N1SNJX5TSP0GM77Z7` (Option A — narrow:
+just `rka_bulk_update`)
+**Date**: 2026-05-19
+**Branch tip**: `eb7ab02` (Phase 2.12 close) → `d7a50b9` (Phase 2.13 T3)
+
+### 10.1 Frame
+
+Phase 2.12 surfaced the 10th trigger empirically: brain LLM
+methodologically chose `rka_bulk_update` for cross-reference hygiene
+(the target journal `jrn_01KQQ4K4GWFKHQBCQNC9F92JX4` documents using it
+for that exact purpose), but `rka_bulk_update` was not in the 6-entry
+`WRITE_TOOLS` registry. Phase 2.7 Option C parent-side defense-in-depth
+correctly rejected all 3 ratified actions with
+`ratified_action_tool_not_allowed` ErrorRecords. The run completed
+cleanly but landed 0/3 writes.
+
+Phase 2.13 closes that single mechanical gap with the same shape as
+Phase 2.9's READ_TOOLS expansion: surface a concrete need empirically,
+close it narrowly, retry empirically (Phase 2.14).
+
+### 10.2 What shipped
+
+Four atomic commits on `agentic`, push + `ls-remote` verified after
+each:
+
+| Task | Commit | Files | Lines |
+|---|---|---|---|
+| T1 | `bb6d008` | `mcp_client.py` + `tests/_fakes.py` | +102 |
+| T2 | `fd89ad0` | `llm_client.py` + `nodes/executor.py` | +14 |
+| T3 | `d7a50b9` | `test_llm_client_real.py` + `test_executor.py` | +106 |
+| T4 | (this commit) | `docs/operational-rollout-v5.md` | — |
+
+#### T1 — Protocol + adapter + Fake
+
+- `MCPClient` Protocol gains `rka_bulk_update(self, updates: list[dict]) -> str`.
+- `RestMCPClient.rka_bulk_update` implemented as a **fanout adapter**,
+  not a thin single-endpoint wrapper. RKA exposes no single bulk REST
+  endpoint; the MCP tool `rka/mcp/server.py:rka_bulk_update` is itself
+  the fanout layer (iterates updates → `PUT /api/notes/{id}` /
+  `PUT /api/decisions/{id}` / `PUT /api/literature/{id}`). The
+  orchestrator-side adapter mirrors that loop against the same
+  per-entity endpoints. Workflow-thread-id auto-tagging applied per
+  item when `data.tags` is provided; mirrors `rka_update_note`
+  semantics. Per-item errors aggregate into the summary string
+  (mirrors MCP-side per-item aggregation).
+- Docstring explicitly documents the duplication ("WHY a fanout
+  adapter, not a thin single-endpoint wrapper") so future maintainers
+  can keep both in lockstep if RKA adds entity_types. Phase 2.15+ may
+  extract the shared shape to a utility module; that requires touching
+  `rka/` and is outside the agentic branch's scope.
+- `FakeMCP.rka_bulk_update` records the full updates list under
+  `calls[].updates` and returns `f"Updated {n}/{n}"` so tests can
+  assert which entity IDs received which updates.
+
+#### T2 — WRITE_TOOLS expansion + dispatch
+
+- `WRITE_TOOLS` tuple in `orchestrator/orchestrator/llm_client.py`:
+  6 → 7 entries (`rka_bulk_update` added). Subprocess
+  `disallowed_tools` (assembled via `_prefixed_tools(WRITE_TOOLS)` at
+  `llm_client.py:324`) auto-extends; Phase 2.7 Option C read-only
+  subprocess invariant preserved without further change.
+- `_WRITE_TOOL_ENTITY_TYPES` map in
+  `orchestrator/orchestrator/nodes/executor.py`: gains
+  `"rka_bulk_update": "bulk"`. Per-entity provenance is recoverable
+  from the bulk summary string stored in `ArtifactRef.rka_id`.
+- **No dispatch-table edit needed** — `execute_ratified_actions` uses
+  dynamic `getattr(mcp, tool)(**args)` at `executor.py:478`. T0
+  discovery confirmed this (Brain ratified the simplification in the
+  T0 Backbrief response).
+
+#### T3 — Regression tests (+4; 259 → 263)
+
+- `test_write_tools_contains_rka_bulk_update` — registry membership.
+- `test_write_tools_length_7` — tuple shape catches silent drift.
+- `test_rka_bulk_update_not_in_read_tools` — read/write separation
+  safety (matches Phase 2.9 pattern for project-selectors).
+- `test_execute_ratified_actions_dispatches_rka_bulk_update` —
+  end-to-end dispatch path. Test fixture mirrors Phase 2.12's Item 1
+  cross-reference target (`jrn_01KQQ4K4GWFKHQBCQNC9F92JX4` + the 4
+  decision IDs from its Provenance section), so the test shape
+  matches what Phase 2.14 will retry empirically. Asserts the dispatch
+  succeeds, an ArtifactRef is appended with `entity_type="bulk"`, and
+  no `ratified_action_tool_not_allowed` ErrorRecord fires.
+
+#### T4 — Narrative (this section)
+
+Appended to `operational-rollout-v5.md` (keeps Phase 2.12 + 2.13
+context co-located; aids comprehension of the chain).
+
+### 10.3 Suite progression
+
+| Phase | Baseline | After | Delta |
+|---|---|---|---|
+| 2.12 close | 259 passed, 2 skipped | (same) | 0 |
+| 2.13 T1 | 259 passed, 2 skipped | 259 passed, 2 skipped | 0 (impl only) |
+| 2.13 T2 | 259 passed, 2 skipped | 259 passed, 2 skipped | 0 (impl only) |
+| 2.13 T3 | 259 passed, 2 skipped | **263 passed, 2 skipped** | **+4** |
+
+Matches Brain's spec assumption #7 exactly.
+
+### 10.4 Pre-flight discoveries (T0)
+
+Three deviations from the upfront spec assumptions surfaced during T0
+RKA-side discovery; all three were ratified non-blocking by Brain
+before T1:
+
+- **A9a** — `orchestrator/orchestrator/mcp_client_fake.py` does not
+  exist as a separate module; the shared `FakeMCP` lives at
+  `orchestrator/tests/_fakes.py:33`. T1 appends there. Spec-wording
+  correction, not scope expansion.
+- **A9b** — `execute_ratified_actions` dispatch is dynamic
+  `getattr(mcp, tool)(**args)` at `executor.py:478`. T2's "dispatch
+  table" reduces to just the `_WRITE_TOOL_ENTITY_TYPES` map (1 line).
+- **A10 (new)** — `rka_bulk_update` has no single REST endpoint; the
+  MCP tool itself is the fanout layer. RestMCPClient adapter mirrors
+  that fanout against the same per-entity endpoints (see T1 above).
+
+### 10.5 Phase 2.14 readiness statement
+
+**Confidence: HIGH** (revised up from Phase 2.12's moderate).
+
+The architecture is now empirically complete at every layer:
+
+- **Subprocess MCP scope** (Phase 2.4–2.6 → 2.7 Option C) — read-only
+  subprocess via `allowed_tools` / `disallowed_tools` / strict MCP
+  config; **validated** at Phase 2.12 runtime.
+- **Cross-process project env propagation** (Phase 2.8 → 2.9) —
+  `McpStdioServerConfig.env={"RKA_PROJECT": project_id}` threads
+  parent's project to subprocess MCP child; READ_TOOLS belt-and-
+  suspenders covers self-recovery.
+- **Wrapper-vs-target framing** (Phase 2.10 → 2.11 T2) —
+  `EXECUTOR_SYSTEM` 10th delta with canonical marker "work-target is
+  the `mission_id` field"; **validated** at Phase 2.12 runtime (brain
+  produced 3 target-scoped proposals, not 1× wrapper-scoped stub).
+- **`decision_present` early-bypass** (Phase 2.11 T1) — when
+  `state["proposed_actions"]` non-empty, surface by identity, not
+  re-LLM detour; **validated** at Phase 2.12 runtime.
+- **Parent-side defense-in-depth** (Phase 2.7 Option C +
+  `_WRITE_TOOL_ENTITY_TYPES`) — `execute_ratified_actions` rejects
+  any non-allowlisted tool with `ratified_action_tool_not_allowed`
+  ErrorRecord; **validated** at Phase 2.12 runtime (3 rejections, run
+  continued clean).
+- **WRITE_TOOLS registry membership for the methodologically-correct
+  bulk-update path** (Phase 2.12 trigger → Phase 2.13) —
+  `rka_bulk_update` now allowlisted with matching Protocol/adapter/
+  Fake; **shipped this phase**.
+
+Phase 2.14 retries against the same target mission
+`mis_01KRVF159FEHMYD55Q6EQ7BD18` with a fresh
+`thr_op_rollout_v6_<unix_ts>`. The same 3 cross-reference items
+(`jrn_01KQQ4K4GWFKHQBCQNC9F92JX4`, `jrn_01KMX18FDBEE9T8JNHHAP649TE`,
+`jrn_01KP4QR4XFP0ZHKR14B9ET6CN2`) should now satisfy the deferred
+Phase 2 acceptance criterion: 1+ of 3 items completes the full cycle
+with the write verified via
+`rka_get(<jrn_id>).related_decisions` non-empty AND matching
+PI-ratified IDs.
+
+If Phase 2.14 satisfies the floor (1+/3), Phase 2 chapter is
+EMPIRICALLY VALIDATED. If it surfaces an 11th trigger, that becomes
+Phase 2.15 — but the pattern has reached architectural saturation, so
+any further blocker is expected to be even narrower than registry
+membership of one tool name.
+
+### 10.6 Phase 2.15+ tech-debt note (deferred)
+
+Brain flagged structural duplication during T0 ratification:
+`rka/mcp/server.py:rka_bulk_update` and
+`RestMCPClient.rka_bulk_update` both fan out to the same per-entity
+endpoints. If RKA's fanout shape changes (e.g., a new entity_type joins
+notes/decisions/literature), both must update in lockstep. Phase 2.13
+ships the duplication intentionally. Candidate Phase 2.15+ fixes (only
+if motivated by Phase 2.14+ outcome):
+
+- Extract the fanout pattern into a shared utility module (requires
+  touching `rka/`, so a main-branch mission).
+- Add a CI test that asserts RestMCPClient's fanout matches RKA's.
+- Accept the duplication as cheap-to-maintain.
+
+Not Phase 2.13 scope.
+
+### 10.7 Phase 2.13 invariants summary
+
+- `git diff main -- rka/`: empty across all 4 commits.
+- `git diff main -- rka/services/worker.py`: empty.
+- `grep -rn 'from rka\|import rka' orchestrator/`: returns none
+  (production code).
+- Push-after-every-commit + `git ls-remote origin agentic` verified at
+  each of T1 (`bb6d008`), T2 (`fd89ad0`), T3 (`d7a50b9`), T4 (this
+  commit).
+- Authentication: Claude Max keychain routing held throughout
+  (no `ANTHROPIC_API_KEY` leak; no API-key billing path activated).
+- No new release tag; no merge to main; `agentic`-only.
