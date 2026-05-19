@@ -76,9 +76,9 @@ These are dogfood-level discipline rules and apply project-wide without exceptio
 
 ## Structural detectors
 
-Lexical rules alone over-flag. The structural layer catches the rhythmic patterns LLMs produce regardless of vocabulary:
+Lexical rules alone over-flag. The structural layer catches the rhythmic patterns LLMs produce regardless of vocabulary. Verdicts are WARN-only (not BLOCK): structural signals contribute to the style score, which can drive an auto-revise loop, but a single structural hit on its own is suggestive evidence rather than a hard violation.
 
-1. **Sentence-length variance.** Compute the standard deviation of sentence lengths (in words) per paragraph. Flag any paragraph where the standard deviation drops below 5. Natural human prose has high variance; uniform sentence rhythm is the strongest non-lexical LLM signal.
+1. **Sentence-length variance.** Compute the standard deviation of sentence lengths (in words) per paragraph. Flag any paragraph with at least 5 sentences where the standard deviation drops below 5 words. Short paragraphs (under 5 sentences) inherently have low variance and would over-flag; the Matsui 2025 and Kobak 2025 empirical signal is about uniform rhythm across substantive paragraphs.
 
 2. **Transition-word ratio.** Count occurrences of `however`, `nevertheless`, `furthermore`, `moreover`, `additionally`, `consequently`, `thus`, `therefore`, `hence`, `accordingly` across a section. Compare to total word count. Flag if the ratio exceeds 0.5 percent.
 

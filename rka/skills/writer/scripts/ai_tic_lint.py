@@ -353,14 +353,20 @@ def count_words(text: str) -> int:
 def sentence_length_variance(text: str) -> StructuralVerdict:
     """Flag paragraphs where the standard deviation of sentence length is under 5 words.
 
-    Reports the minimum across all paragraphs with at least 3 sentences. If
-    no paragraph qualifies, returns PASS with value None placeholder (0.0).
+    Reports the minimum across all paragraphs with at least 5 sentences. Short
+    paragraphs (under 5 sentences) inherently have low variance and would
+    over-flag; the empirical signal in Matsui 2025 and Kobak 2025 is about
+    uniform rhythm across substantive paragraphs, not over 3-sentence excerpts.
+
+    Verdict is WARN rather than BLOCK: structural detectors contribute to the
+    style score (which can BLOCK via the auto-revise loop), but a low variance
+    on its own is suggestive evidence, not a hard violation.
     """
     paragraphs = split_paragraphs(text)
     paragraph_stds: list[float] = []
     for para in paragraphs:
         sentences = split_sentences(para)
-        if len(sentences) < 3:
+        if len(sentences) < 5:
             continue
         lengths = [count_words(s) for s in sentences]
         try:
@@ -375,7 +381,7 @@ def sentence_length_variance(text: str) -> StructuralVerdict:
             verdict="PASS",
         )
     min_std = min(paragraph_stds)
-    verdict = "BLOCK" if min_std < 5.0 else "PASS"
+    verdict = "WARN" if min_std < 5.0 else "PASS"
     return StructuralVerdict(
         detector="sentence_length_variance",
         value=min_std,

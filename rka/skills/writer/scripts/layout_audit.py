@@ -244,6 +244,7 @@ def audit(
     aux_text = _read_or_empty(aux_path)
     tex_text = _read_or_empty(tex_path)
     pages = get_pdf_page_count(pdf_path) if pdf_path else 0
+    rendered_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     verdicts = [
         check_pages_over_limit(pages, page_limit),
@@ -262,7 +263,7 @@ def audit(
 
     report = AuditReport(
         manuscript=str(tex_path) if tex_path else "",
-        rendered_at=datetime.datetime.utcnow().isoformat() + "Z",
+        rendered_at=rendered_at,
         pdf_path=str(pdf_path) if pdf_path else "",
         venue=venue,
         page_limit=page_limit,
