@@ -289,6 +289,72 @@ def test_EXECUTOR_SYSTEM_includes_phase_2_7_action_proposals_prose():
     assert "pi_decision_select" in text
 
 
+def test_EXECUTOR_SYSTEM_includes_phase_2_11_wrapper_vs_target_delta():
+    """Phase 2.11 T2 (mis_01KRYT62XQK5NK3BY7G9BGRAPS; Brain-ratified scope
+    per dec_01KRYT1GCP5N9CJZ2YE2N3BTBH Option A): EXECUTOR_SYSTEM gets a
+    10th delta covering wrapper-vs-target distinction at mission_execute.
+
+    Phase 2.10 surfaced that the brain `mission_execute` LLM interpreted
+    the Phase 2.10 wrapper mission's T0-T7 task structure (from the
+    Backbrief) as the work to execute, emitting a single rka_submit_report
+    stub instead of 3× rka_update_note for the target mission's 3 cross-
+    reference items. This delta locks the distinction at the prompt layer.
+
+    Canonical marker phrase (chosen at scope-decision time for greppable
+    locking): "work-target is the `mission_id` field"."""
+    text = executor.EXECUTOR_SYSTEM
+    assert "Wrapper-vs-target distinction" in text, (
+        "Phase 2.11 T2: EXECUTOR_SYSTEM must include the wrapper-vs-target "
+        "delta heading"
+    )
+    assert "work-target is the `mission_id` field" in text, (
+        "Phase 2.11 T2: canonical marker phrase 'work-target is the "
+        "`mission_id` field' missing from EXECUTOR_SYSTEM"
+    )
+    # Distinction-anchoring phrase: T0-T7 wrapper scaffolding callout.
+    assert "wrapper scaffolding" in text, (
+        "Phase 2.11 T2: delta must explicitly call out T0-T7 wrapper "
+        "scaffolding as NOT the executor's work-target"
+    )
+    # The fix instruction: read target mission before planning.
+    assert "rka_get_mission" in text, (
+        "Phase 2.11 T2: delta must instruct LLM to read target mission "
+        "via rka_get_mission before planning proposed_actions"
+    )
+
+
+def test_EXECUTOR_SYSTEM_delta_count_advances_through_phase_2_11():
+    """Phase 2.11 T2 soft assertion — guard against accidental deletion of
+    earlier deltas during future folds. Counts the section markers that
+    indicate each fold layer's presence:
+
+      - Phase 2.5 deltas: "Backbrief — Confirm Your Plan", "Guardrails.",
+        "Report Submission.", "Repo-specific procedures." (4 markers)
+      - Phase 2.7 action-proposals: "Action proposals."
+      - Phase 2.11 wrapper-vs-target: "Wrapper-vs-target distinction"
+
+    Total: 6 distinct section markers. If any are missing, a prior delta
+    was likely overwritten."""
+    text = executor.EXECUTOR_SYSTEM
+    required_markers = [
+        # Phase 2.5 deltas (4)
+        "Backbrief — Confirm Your Plan",
+        "Guardrails.",
+        "Report Submission.",
+        "Repo-specific procedures.",
+        # Phase 2.7
+        "Action proposals.",
+        # Phase 2.11 (this T2)
+        "Wrapper-vs-target distinction",
+    ]
+    missing = [m for m in required_markers if m not in text]
+    assert not missing, (
+        f"Phase 2.11 T2 soft assertion: EXECUTOR_SYSTEM is missing required "
+        f"section markers: {missing!r}. A prior delta may have been "
+        f"accidentally overwritten during a fold."
+    )
+
+
 def test_mission_execute_parses_proposed_actions_happy_path():
     """When the LLM ends its reply with a well-formed JSON block carrying
     `proposed_actions`, mission_execute extracts the list and writes it to
