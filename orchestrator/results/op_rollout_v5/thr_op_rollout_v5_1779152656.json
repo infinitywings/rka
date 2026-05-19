@@ -1,0 +1,83 @@
+{
+  "workflow_thread_id": "thr_op_rollout_v5_1779152656",
+  "mission_id": "mis_01KRVF159FEHMYD55Q6EQ7BD18",
+  "project_id": "prj_01KKQM9JFG67GT5FGWTAHD9YE4",
+  "terminal_state": "complete",
+  "current_phase": "pi_acceptance",
+  "interrupts_count": 3,
+  "checkpoints_count": 0,
+  "errors_count": 3,
+  "final_report_id": "mis_01KRVF159FEHMYD55Q6EQ7BD18",
+  "artifacts": [
+    {
+      "rka_id": "jrn_01KRYWVY6TZZSCH8M2SMTNQ0GH",
+      "entity_type": "journal",
+      "node_name": "strategy_node"
+    },
+    {
+      "rka_id": "jrn_01KRYWXN8RHPAK6ECHP1628MCV",
+      "entity_type": "journal",
+      "node_name": "confirmation_brief"
+    },
+    {
+      "rka_id": "jrn_01KRYXEH7VW9XR4CB0MEBT54J4",
+      "entity_type": "journal",
+      "node_name": "backbrief_draft"
+    },
+    {
+      "rka_id": "jrn_01KRYXF03YQ2ZJ10PVXWQ1P2FR",
+      "entity_type": "journal",
+      "node_name": "gate1_validation"
+    },
+    {
+      "rka_id": "jrn_01KRYXP8MVD3MR15BPQSPH0J1W",
+      "entity_type": "journal",
+      "node_name": "mission_execute"
+    },
+    {
+      "rka_id": "mis_01KRVF159FEHMYD55Q6EQ7BD18",
+      "entity_type": "report",
+      "node_name": "submit_report"
+    },
+    {
+      "rka_id": "jrn_01KRYXYE2X9Y7WQH8EVW3EPC0H",
+      "entity_type": "journal",
+      "node_name": "cluster_review"
+    },
+    {
+      "rka_id": "jrn_01KRYXYE3N8QZMJCBV0VCT4NYQ",
+      "entity_type": "journal",
+      "node_name": "decision_present"
+    },
+    {
+      "rka_id": "dec_01KRYY4DDTX4YEFR62F0E47EH9",
+      "entity_type": "decision",
+      "node_name": "pi_decision_select"
+    },
+    {
+      "rka_id": "jrn_01KRYY8448KAAD7PZ9Z09NVQBR",
+      "entity_type": "journal",
+      "node_name": "final_synthesis"
+    }
+  ],
+  "errors": [
+    {
+      "node_name": "execute_ratified_actions",
+      "error_type": "ratified_action_tool_not_allowed",
+      "detail": "tool 'rka_bulk_update' is not in WRITE_TOOLS registry \u2014 the executor LLM proposed an action the orchestrator refuses to execute. Phase 2.7 Option C invariant.",
+      "timestamp": "2026-05-19T01:38:15Z"
+    },
+    {
+      "node_name": "execute_ratified_actions",
+      "error_type": "ratified_action_tool_not_allowed",
+      "detail": "tool 'rka_bulk_update' is not in WRITE_TOOLS registry \u2014 the executor LLM proposed an action the orchestrator refuses to execute. Phase 2.7 Option C invariant.",
+      "timestamp": "2026-05-19T01:38:15Z"
+    },
+    {
+      "node_name": "execute_ratified_actions",
+      "error_type": "ratified_action_tool_not_allowed",
+      "detail": "tool 'rka_bulk_update' is not in WRITE_TOOLS registry \u2014 the executor LLM proposed an action the orchestrator refuses to execute. Phase 2.7 Option C invariant.",
+      "timestamp": "2026-05-19T01:38:15Z"
+    }
+  ]
+}
