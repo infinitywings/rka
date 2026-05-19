@@ -521,3 +521,62 @@ def test_execute_ratified_actions_captures_call_failure_as_ErrorRecord():
     assert "artifacts" not in update
     assert "errors" in update
     assert update["errors"][0]["error_type"] == "ratified_action_call_failed"
+
+
+def test_execute_ratified_actions_dispatches_rka_bulk_update():
+    """Phase 2.13 T3 (mis_01KRYZMEAT01SMNNXQXS3JRC4W): exercises the
+    dispatch path for the newly-allowlisted rka_bulk_update tool. Closes
+    the 10th trigger surfaced empirically by Phase 2.12, where brain
+    proposed rka_bulk_update for cross-reference hygiene and the
+    Phase 2.7 Option C defense-in-depth correctly rejected the action
+    (`ratified_action_tool_not_allowed`). Phase 2.13 T1+T2 added the
+    Protocol method, RestMCPClient fanout adapter, FakeMCP impl, and
+    WRITE_TOOLS entry; this test asserts the dispatch now succeeds end
+    to end.
+
+    Mirror of Phase 2.12's three target cross-reference items so the
+    test shape matches what Phase 2.14 will retry empirically."""
+    mcp = FakeMCP()
+    sdk = FakeSDK()
+    state = _state()
+    state["ratified_actions"] = [
+        {
+            "tool": "rka_bulk_update",
+            "args": {
+                "updates": [
+                    {
+                        "entity_type": "note",
+                        "id": "jrn_01KQQ4K4GWFKHQBCQNC9F92JX4",
+                        "data": {
+                            "related_decisions": [
+                                "dec_01KQNPC7A683HK0KRX1PAGNNED",
+                                "dec_01KMX18FDAMN7T5YVZ7V8HV6RJ",
+                                "dec_01KMX18FDAMN7T5YVZ7V8HV6RK",
+                                "dec_01KP4P4QSSNZCTEHVT6QR7ZRYD",
+                            ],
+                        },
+                    },
+                ],
+            },
+            "rationale": "Item 1 — cross-reference hygiene",
+        },
+    ]
+
+    update = executor.execute_ratified_actions(state, sdk, mcp)
+
+    # The FakeMCP rka_bulk_update method was called exactly once.
+    bulk_calls = [c for c in mcp.calls if c["op"] == "rka_bulk_update"]
+    assert len(bulk_calls) == 1
+    assert bulk_calls[0]["updates"][0]["id"] == "jrn_01KQQ4K4GWFKHQBCQNC9F92JX4"
+    assert bulk_calls[0]["updates"][0]["entity_type"] == "note"
+
+    # One artifact appended; entity_type is "bulk" per Phase 2.13 T2's
+    # _WRITE_TOOL_ENTITY_TYPES map extension.
+    assert "artifacts" in update
+    assert len(update["artifacts"]) == 1
+    assert update["artifacts"][0]["entity_type"] == "bulk"
+    assert update["artifacts"][0]["node_name"] == "execute_ratified_actions"
+
+    # No ErrorRecord — the dispatch path that fired the
+    # ratified_action_tool_not_allowed error in Phase 2.12 now succeeds.
+    assert "errors" not in update

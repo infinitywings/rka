@@ -458,6 +458,53 @@ def test_phase_2_9_project_selectors_not_in_write_tools():
     assert "rka_set_project" not in WRITE_TOOLS
 
 
+# ---------------------------------------------------------------------------
+# Phase 2.13 T3 — WRITE_TOOLS allowlist expansion (6 → 7) for rka_bulk_update
+# (mis_01KRYZMEAT01SMNNXQXS3JRC4W; per dec_01KRYZGF8N1SNJX5TSP0GM77Z7 Option A
+#  — closes the 10th trigger surfaced empirically by Phase 2.12, where the
+#  brain LLM methodologically chose rka_bulk_update for cross-reference
+#  hygiene but it was not allowlisted)
+# ---------------------------------------------------------------------------
+
+
+def test_write_tools_contains_rka_bulk_update():
+    """Phase 2.13 T2: rka_bulk_update must be in WRITE_TOOLS so the
+    parent-side execute_ratified_actions can dispatch it when the brain
+    proposes it (which Phase 2.12 empirically demonstrated the brain
+    will do for cross-reference hygiene work). Without this entry, the
+    Phase 2.7 Option C defense-in-depth rejects the action even when
+    the brain's methodology is correct."""
+    assert "rka_bulk_update" in WRITE_TOOLS, (
+        "Phase 2.13 T2: rka_bulk_update must be in WRITE_TOOLS so the "
+        "parent-side dispatch path accepts brain-proposed bulk-update "
+        "actions ratified by PI."
+    )
+
+
+def test_write_tools_length_7():
+    """Phase 2.13 T2: WRITE_TOOLS expanded from 6 (Phase 2.7) to 7
+    (Phase 2.13 adds rka_bulk_update). Catches accidental deletion or
+    silent drift of the registry shape."""
+    assert len(WRITE_TOOLS) == 7, (
+        f"Phase 2.13 T2: WRITE_TOOLS should have exactly 7 entries "
+        f"(Phase 2.7's 6 + Phase 2.13's rka_bulk_update); got {len(WRITE_TOOLS)}"
+    )
+
+
+def test_rka_bulk_update_not_in_read_tools():
+    """Critical safety check: rka_bulk_update is a write-side tool
+    (mutates note/decision/literature entities via per-entity PUT
+    endpoints). It must NOT be in READ_TOOLS — if misclassified, the
+    subprocess SDK's allowed_tools would let the brain LLM call it
+    directly, bypassing the parent-side PI ratification gate the entire
+    Phase 2.7 Option C architecture is built on."""
+    assert "rka_bulk_update" not in READ_TOOLS, (
+        "Read/write separation: rka_bulk_update mutates entity state "
+        "and must never appear in READ_TOOLS — that would let the "
+        "subprocess LLM bypass the parent-side ratification gate."
+    )
+
+
 def test_complete_falls_back_to_text_only_when_rka_binary_missing(
     monkeypatch: pytest.MonkeyPatch
 ):
