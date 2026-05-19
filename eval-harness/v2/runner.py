@@ -110,14 +110,24 @@ class ScenarioBundle:
     # combined_ranking: deduped + ordered across tools in the order they
     # appear in `invocations` (preserves first-discovery per entity)
     combined_ranking: list[str] = field(default_factory=list)
+    # v2.5.4 D4 (mis_01KS0C8BKTHCA8GB38BGDR1PTQ T2): per-entity attribution
+    # — maps each entity_id in combined_ranking to the tool that
+    # first-discovered it. Enables the metrics layer to distinguish
+    # "attribution shift" (e.g., rka_get_journal's 1.000 → 0.000 in v2.5.5)
+    # from a real coverage loss; the entity is still covered, just credited
+    # to a different (typically anchor-aware) tool.
+    first_discovery_map: dict[str, str] = field(default_factory=dict)
 
     def compute_combined_ranking(self) -> None:
         seen: dict[str, None] = {}
+        first_map: dict[str, str] = {}
         for inv in self.invocations:
             for eid in inv.entity_ids:
                 if eid not in seen:
                     seen[eid] = None
+                    first_map[eid] = inv.tool
         self.combined_ranking = list(seen.keys())
+        self.first_discovery_map = first_map
 
 
 # ---------------------------------------------------------------------------
@@ -253,16 +263,40 @@ class EvalV2Runner:
     # Per-tool REST callers
     # ------------------------------------------------------------------
 
-    async def _call_get_context(self) -> ToolInvocation:
+    async def _call_get_context(
+        self,
+        *,
+        anchor_aware_present: bool = False,
+        anchor_aware_ids: list[str] | None = None,
+    ) -> ToolInvocation:
+        """v2.5.4 D4 (mis_01KS0C8BKTHCA8GB38BGDR1PTQ T2): propagate the
+        anchor-aware-tool firing signal + entity IDs to the context engine
+        so it can cap the bundle to top-K (default 30) while preserving
+        anchor-aware-tool outputs via UNION. Defaults preserve v2.5.3
+        behavior (no truncation) when the runner doesn't have anchor-aware
+        tool outputs in the same composed sequence.
+        """
         path = "/api/context"
-        r = await self._client().post(path, json={}, params=self._params())
+        body: dict = {}
+        if anchor_aware_present:
+            body["anchor_aware_present"] = True
+            if anchor_aware_ids:
+                body["anchor_aware_ids"] = list(anchor_aware_ids)
+        r = await self._client().post(path, json=body, params=self._params())
         ids, div = self._extract_json_entities(r, path)
+        notes = ""
+        if anchor_aware_present:
+            notes = (
+                f"anchor_aware_present=True; "
+                f"anchor_aware_ids_count={len(anchor_aware_ids or [])}"
+            )
         return ToolInvocation(
             tool="rka_get_context",
             path=path,
             status_code=r.status_code,
             entity_ids=ids,
             divergence=div,
+            notes=notes,
         )
 
     async def _call_get_status(self) -> ToolInvocation:
@@ -503,15 +537,34 @@ class EvalV2Runner:
         return anchor_prefix + remaining
 
     async def run_scenario(self, scenario: dict[str, Any]) -> ScenarioBundle:
+        """v2.5.4 D4 (mis_01KS0C8BKTHCA8GB38BGDR1PTQ T2): track entity IDs
+        surfaced by anchor-aware tools as they fire and pass them to
+        rka_get_context so the context engine can cap to top-K while
+        preserving anchor-aware-tool outputs via UNION (per the runner's
+        existing reorder policy: anchor-aware tools always precede
+        rka_get_context in ordered_tools).
+        """
         bundle = ScenarioBundle(
             scenario_id=scenario["scenario_id"], actor=scenario["actor"]
         )
         ordered_tools = self._reorder_tools_for_scenario(
             scenario, scenario["tools_invoked"]
         )
+        anchor_aware_ids_so_far: list[str] = []
         for tool in ordered_tools:
-            invocation = await self._invoke_one(tool, scenario)
+            if tool == "rka_get_context":
+                invocation = await self._call_get_context(
+                    anchor_aware_present=bool(anchor_aware_ids_so_far),
+                    anchor_aware_ids=anchor_aware_ids_so_far or None,
+                )
+            else:
+                invocation = await self._invoke_one(tool, scenario)
             bundle.invocations.append(invocation)
+            if tool in self._ANCHOR_AWARE_TOOL_ORDER:
+                # Accumulate IDs to UNION through the context bundle's K cap.
+                for eid in invocation.entity_ids:
+                    if eid not in anchor_aware_ids_so_far:
+                        anchor_aware_ids_so_far.append(eid)
         bundle.compute_combined_ranking()
         return bundle
 

@@ -144,8 +144,22 @@ class ScenarioMetrics:
     ordering_score: float
     breadth: int
     efficiency: float
-    # Per-tool contribution: for each tool the scenario invoked, what
-    # fraction of the critical-set did THAT tool's response alone cover?
+    # v2.5.4 D4 (mis_01KS0C8BKTHCA8GB38BGDR1PTQ T2 / dec_01KS0C4PG88F29YBR91VQ3RRXY):
+    # Per-tool contribution is now disambiguated into TWO numbers:
+    #   total_coverage          — entities present in this tool's response
+    #                              for the critical set, regardless of which
+    #                              tool first-discovered them (the
+    #                              pre-v2.5.4 per_tool_critical_coverage)
+    #   first_discovery_coverage — entities where this tool was the FIRST
+    #                              to surface them in the bundle (walking
+    #                              tools in invocation order). A per-tool
+    #                              drop in this metric is "attribution
+    #                              shift" — the entity is still covered
+    #                              elsewhere — NOT a coverage regression.
+    # The pre-v2.5.4 alias `per_tool_critical_coverage` is preserved (== total)
+    # so existing dashboards keep working unchanged.
+    per_tool_total_coverage: dict[str, float] = field(default_factory=dict)
+    per_tool_first_discovery_coverage: dict[str, float] = field(default_factory=dict)
     per_tool_critical_coverage: dict[str, float] = field(default_factory=dict)
     n_expected_critical: int = 0
     n_expected_total: int = 0
@@ -160,6 +174,13 @@ def score_scenario(
     ``scenario`` is the corpus record; ``bundle`` is the runner's
     serialized ScenarioBundle (read from
     ``results/raw/<scenario_id>.jsonl``).
+
+    v2.5.4 D4: per-tool contribution is computed twice — once for
+    ``total_coverage`` (entities in this tool's response regardless of
+    first-discoverer) and once for ``first_discovery_coverage`` (entities
+    THIS tool first-discovered, walking invocations in order). The pair
+    distinguishes "attribution shift" (first_discovery drops, total
+    stays) from a real coverage loss (both drop).
     """
     expected_entities = scenario["expected_entities"]
     expected_all = {e["entity_id"] for e in expected_entities}
@@ -168,14 +189,40 @@ def score_scenario(
     }
     returned = list(bundle["combined_ranking"])
 
-    per_tool_coverage: dict[str, float] = {}
-    for inv in bundle.get("invocations", []):
+    invocations = bundle.get("invocations", []) or []
+
+    # First-discovery pass: walk invocations in order, credit each entity
+    # to the first tool that surfaced it (matches the combined_ranking
+    # walk in runner.compute_combined_ranking).
+    first_discoverer: dict[str, str] = {}
+    for inv in invocations:
+        tool = inv["tool"]
+        for eid in inv.get("entity_ids") or []:
+            if eid not in first_discoverer:
+                first_discoverer[eid] = tool
+
+    per_tool_total: dict[str, float] = {}
+    per_tool_first: dict[str, float] = {}
+    for inv in invocations:
+        tool = inv["tool"]
         tool_ids = set(inv.get("entity_ids") or [])
-        if expected_critical:
-            cov = len(tool_ids & expected_critical) / len(expected_critical)
-        else:
-            cov = 0.0
-        per_tool_coverage[inv["tool"]] = cov
+        # total: how many critical entities did this tool return at all
+        total_cov = (
+            len(tool_ids & expected_critical) / len(expected_critical)
+            if expected_critical
+            else 0.0
+        )
+        # first_discovery: how many critical entities did this tool first-introduce
+        first_for_tool = {
+            eid for eid, t in first_discoverer.items() if t == tool
+        }
+        first_cov = (
+            len(first_for_tool & expected_critical) / len(expected_critical)
+            if expected_critical
+            else 0.0
+        )
+        per_tool_total[tool] = total_cov
+        per_tool_first[tool] = first_cov
 
     return ScenarioMetrics(
         scenario_id=scenario["scenario_id"],
@@ -185,7 +232,12 @@ def score_scenario(
         ordering_score=ordering_score(returned, expected_entities),
         breadth=breadth(returned, expected_entities),
         efficiency=efficiency(returned, expected_all),
-        per_tool_critical_coverage=per_tool_coverage,
+        per_tool_total_coverage=per_tool_total,
+        per_tool_first_discovery_coverage=per_tool_first,
+        # Backward-compat alias: pre-v2.5.4 callers expected per_tool_critical_coverage
+        # to be the total (intersection) shape. Preserve the alias so existing
+        # dashboards keep working.
+        per_tool_critical_coverage=per_tool_total,
         n_expected_critical=len(expected_critical),
         n_expected_total=len(expected_all),
         n_returned=len(returned),
@@ -208,7 +260,12 @@ class CorpusAggregate:
     # Per-actor: same 5 metrics, restricted to scenarios with that actor
     per_actor: dict[str, dict[str, float]] = field(default_factory=dict)
     # Per-tool: mean critical-coverage contribution across scenarios that
-    # invoked this tool
+    # invoked this tool. v2.5.4 D4 (mis_01KS0C8BKTHCA8GB38BGDR1PTQ T2):
+    # disambiguated into total + first-discovery; the pre-v2.5.4 name
+    # `per_tool_mean_critical_coverage` is preserved as an alias for
+    # `per_tool_mean_total_coverage` so existing dashboards keep working.
+    per_tool_mean_total_coverage: dict[str, float] = field(default_factory=dict)
+    per_tool_mean_first_discovery_coverage: dict[str, float] = field(default_factory=dict)
     per_tool_mean_critical_coverage: dict[str, float] = field(default_factory=dict)
     # Floor check (per mission spec acceptance criteria): mean recall
     # over critical-tagged entities must be >=0.85
@@ -248,11 +305,26 @@ def aggregate(scenario_metrics: list[ScenarioMetrics]) -> CorpusAggregate:
     # Per-tool breakdown — average each tool's critical-coverage across
     # the scenarios that invoked it (NOT across all scenarios; tools that
     # never run for a scenario shouldn't pull its mean down).
-    tool_buckets: dict[str, list[float]] = {}
+    # v2.5.4 D4: dual-track total + first-discovery so attribution shifts
+    # are distinguishable from coverage losses in the report. Pre-v2.5.4
+    # callers that populate only `per_tool_critical_coverage` (the old
+    # field name) are still aggregated correctly — that field is the
+    # canonical total-coverage shape under the new dual split.
+    tool_buckets_total: dict[str, list[float]] = {}
+    tool_buckets_first: dict[str, list[float]] = {}
     for m in scenario_metrics:
-        for tool, coverage in m.per_tool_critical_coverage.items():
-            tool_buckets.setdefault(tool, []).append(coverage)
-    per_tool = {tool: _mean(vals) for tool, vals in tool_buckets.items()}
+        # Total path: prefer the new field, fall back to the pre-v2.5.4 alias.
+        total_map = m.per_tool_total_coverage or m.per_tool_critical_coverage
+        for tool, coverage in total_map.items():
+            tool_buckets_total.setdefault(tool, []).append(coverage)
+        for tool, coverage in m.per_tool_first_discovery_coverage.items():
+            tool_buckets_first.setdefault(tool, []).append(coverage)
+    per_tool_total = {
+        tool: _mean(vals) for tool, vals in tool_buckets_total.items()
+    }
+    per_tool_first = {
+        tool: _mean(vals) for tool, vals in tool_buckets_first.items()
+    }
 
     return CorpusAggregate(
         n_scenarios=len(scenario_metrics),
@@ -262,7 +334,10 @@ def aggregate(scenario_metrics: list[ScenarioMetrics]) -> CorpusAggregate:
         mean_breadth=_mean([float(m.breadth) for m in scenario_metrics]),
         mean_efficiency=_mean([m.efficiency for m in scenario_metrics]),
         per_actor=per_actor,
-        per_tool_mean_critical_coverage=per_tool,
+        per_tool_mean_total_coverage=per_tool_total,
+        per_tool_mean_first_discovery_coverage=per_tool_first,
+        # Backward-compat alias for pre-v2.5.4 dashboards.
+        per_tool_mean_critical_coverage=per_tool_total,
         floor_passed=mean_recall_v >= 0.85,
     )
 
@@ -395,6 +470,17 @@ def _cli() -> int:
     print(
         f"  critical-recall floor ({agg['critical_recall_floor']:.2f}): {mark}"
     )
+    # v2.5.4 D4: surface the attribution split so per-tool drops are
+    # interpretable as "shift" vs "loss" at-a-glance.
+    total = agg.get("per_tool_mean_total_coverage") or {}
+    first = agg.get("per_tool_mean_first_discovery_coverage") or {}
+    if total:
+        print("  per-tool coverage (first_discovery / total):")
+        for tool in sorted(total.keys()):
+            print(
+                f"    {tool:<32s} "
+                f"{first.get(tool, 0.0):.3f} / {total.get(tool, 0.0):.3f}"
+            )
     return 0 if agg["floor_passed"] else 1
 
 
