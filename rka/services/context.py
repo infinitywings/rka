@@ -116,6 +116,43 @@ _PI_SOURCE_LIFT_NORMALIZED: float = _read_coeff(
     "RKA_CTX_PI_LIFT", _DEFAULT_PI_SOURCE_LIFT_NORMALIZED
 )
 
+# ---------------------------------------------------------------------------
+# v2.5.4 (D4 — mis_01KS0C8BKTHCA8GB38BGDR1PTQ): bundle-truncation policy with
+# anchor-aware-tool priority. When a caller signals that anchor-aware tools
+# (rka_get_ego_graph / rka_multi_hop_retrieval / rka_assemble_evidence) are
+# firing in the same composed sequence, the overview-path bundle is capped at
+# top-K by the v2.5.3 weighted-sum score, and entities surfaced by those
+# anchor-aware tools UNION through the cap (always pass).
+#
+# Backward-compat: anchor_aware_present=False preserves v2.5.3 behavior (no
+# truncation). This is critical for un-anchored scenarios whose recall floor
+# depends on the full ranked list.
+# ---------------------------------------------------------------------------
+
+_DEFAULT_BUNDLE_K: int = 30
+
+
+def _read_bundle_k() -> int:
+    """Top-K cap for the anchor-aware-present truncation path.
+
+    Sweep-friendly: `RKA_CTX_BUNDLE_K` env var overrides the default. Test
+    discipline mirrors `_reload_coefficients_from_env`: monkeypatch the env
+    var, then call this helper at the assertion site (no global state to
+    reload because K is read per-call, not at module import).
+    """
+    raw = os.getenv("RKA_CTX_BUNDLE_K")
+    if raw is None or raw == "":
+        return _DEFAULT_BUNDLE_K
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid int in RKA_CTX_BUNDLE_K=%r; falling back to default %d",
+            raw,
+            _DEFAULT_BUNDLE_K,
+        )
+        return _DEFAULT_BUNDLE_K
+
 # Importance band normalized to [0, 1]. Mirrors _sort_key's importance map
 # divided by the critical=4 ceiling.
 _IMPORTANCE_BAND_NORMALIZED: dict[str, float] = {
@@ -154,6 +191,8 @@ class ContextEngine:
         phase: str | None = None,
         depth: Literal["summary", "detailed"] = "summary",
         project_id: str = "proj_default",
+        anchor_aware_present: bool = False,
+        anchor_aware_ids: list[str] | None = None,
     ) -> ContextPackage:
         """Build a ranked context package.
 
@@ -167,6 +206,20 @@ class ContextEngine:
                 LLM-generated narrative if an LLM is configured.
             project_id: Project scope. Defaults to 'proj_default'; callers
                 normally inject from the API request.
+            anchor_aware_present: v2.5.4 (D4). When True, the overview-path
+                bundle is capped at top-K (`RKA_CTX_BUNDLE_K`, default 30) by
+                the weighted-sum score. Anchor-aware-tool outputs always pass
+                through the cap (see ``anchor_aware_ids``). Defaults to False
+                for backward compat — un-anchored scenarios' recall floor
+                depends on the full ranked list (v2.5.3 baseline preserved).
+            anchor_aware_ids: v2.5.4 (D4). When provided AND
+                ``anchor_aware_present=True``, entities with matching ``id``
+                pass through the top-K cap regardless of weighted-sum
+                position. Typically populated by the caller from the
+                composed call sequence's anchor-aware-tool outputs
+                (rka_get_ego_graph / rka_multi_hop_retrieval /
+                rka_assemble_evidence). Ignored when ``anchor_aware_present``
+                is False.
 
         Returns a ContextPackage with `entries` populated (legacy bucket fields
         left empty).
@@ -197,6 +250,29 @@ class ContextEngine:
             candidates.sort(key=self._topic_sort_key)
         else:
             candidates.sort(key=self._overview_score, reverse=True)
+
+        # v2.5.4 D4 truncation: cap to top-K when anchor-aware tools are
+        # firing in the same composed sequence. Entities surfaced by those
+        # tools (passed via ``anchor_aware_ids``) UNION through the cap so
+        # the anchor-aware path's targeted retrieval is preserved regardless
+        # of K. Backward compat: anchor_aware_present=False leaves the full
+        # ranked list intact (v2.5.3 behavior preserved for un-anchored
+        # scenarios whose recall floor depends on it).
+        truncated_to_k: int | None = None
+        if anchor_aware_present:
+            k = _read_bundle_k()
+            head = candidates[:k]
+            head_ids = {e["id"] for e in head}
+            extras: list[dict] = []
+            if anchor_aware_ids:
+                anchor_set = set(anchor_aware_ids)
+                for entry in candidates[k:]:
+                    if entry["id"] in anchor_set and entry["id"] not in head_ids:
+                        extras.append(entry)
+                        head_ids.add(entry["id"])
+            candidates = head + extras
+            truncated_to_k = k
+
         rendered = [self._render_entry(entry) for entry in candidates]
         package.entries = rendered
         package.sources = [e["id"] for e in candidates]
@@ -218,6 +294,14 @@ class ContextEngine:
                 "(BM25/vector); importance/centrality break ties within rank. "
                 "No token-budget truncation (v2.4 / dec_01KQQPD6Y6B362T3K08368BDMP; "
                 "v2.5.3 / dec_01KRSMMCS8MD7KQDBS0E2DVKBQ)."
+            )
+        elif truncated_to_k is not None:
+            package.note = (
+                f"Importance-ranked context (anchor-aware truncation active): "
+                f"top-{truncated_to_k} by weighted-sum + UNION with anchor-aware "
+                f"tool outputs (v2.5.4 D4 / dec_01KS0C4PG88F29YBR91VQ3RRXY). "
+                "Backward-compat path (no truncation) remains the default when "
+                "anchor_aware_present=False."
             )
         else:
             package.note = (

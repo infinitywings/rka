@@ -55,6 +55,10 @@ services:
       RKA_CTX_W_CENT: "${RKA_CTX_W_CENT:-0.3}"
       RKA_CTX_W_RECENCY: "${RKA_CTX_W_RECENCY:-0.2}"
       RKA_CTX_PI_LIFT: "${RKA_CTX_PI_LIFT:-0.125}"
+      # v2.5.4 D4 (mis_01KS0C8BKTHCA8GB38BGDR1PTQ T1): top-K cap for the
+      # anchor-aware-present truncation path. Sweep harness sets this to
+      # 30 / 50 / 75 across configs; default 30.
+      RKA_CTX_BUNDLE_K: "${RKA_CTX_BUNDLE_K:-30}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -76,6 +80,10 @@ services:
       RKA_CTX_W_CENT: "${RKA_CTX_W_CENT:-0.3}"
       RKA_CTX_W_RECENCY: "${RKA_CTX_W_RECENCY:-0.2}"
       RKA_CTX_PI_LIFT: "${RKA_CTX_PI_LIFT:-0.125}"
+      # v2.5.4 D4 (mis_01KS0C8BKTHCA8GB38BGDR1PTQ T1): top-K cap for the
+      # anchor-aware-present truncation path. Sweep harness sets this to
+      # 30 / 50 / 75 across configs; default 30.
+      RKA_CTX_BUNDLE_K: "${RKA_CTX_BUNDLE_K:-30}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

@@ -14,11 +14,21 @@ class ContextRequest(BaseModel):
     the context engine now ranks by SQL-time importance + entity_links centrality
     and returns the full ranked list. Frontier model context windows make a
     bookkeeper-imposed token budget unnecessary.
+
+    v2.5.4 (D4 — dec_01KS0C4PG88F29YBR91VQ3RRXY): `anchor_aware_present` and
+    `anchor_aware_ids` enable bundle-truncation when the caller's composed
+    sequence already includes anchor-aware tools (rka_get_ego_graph /
+    rka_multi_hop_retrieval / rka_assemble_evidence). The context engine caps
+    its overview-path bundle to top-K (env-configurable via
+    `RKA_CTX_BUNDLE_K`, default 30) and UNIONs anchor-aware tool outputs
+    through the cap. Backward compat: defaults preserve v2.5.3 behavior.
     """
 
     topic: str | None = None
     phase: str | None = None
     depth: Literal["summary", "detailed"] = "summary"
+    anchor_aware_present: bool = False
+    anchor_aware_ids: list[str] | None = None
 
 
 class ContextPackage(BaseModel):

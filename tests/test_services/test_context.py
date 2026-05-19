@@ -523,3 +523,113 @@ class TestV2_5_4EnvVarConfigurableCoefficients:
         assert ctx._W_IMPORTANCE == 0.5  # default preserved
         monkeypatch.delenv("RKA_CTX_W_IMP", raising=False)
         ctx._reload_coefficients_from_env()
+
+
+# ---------------------------------------------------------------------------
+# v2.5.4 D4 — bundle-truncation policy with anchor-aware-tool priority
+# (mis_01KS0C8BKTHCA8GB38BGDR1PTQ T1; per dec_01KS0C4PG88F29YBR91VQ3RRXY)
+# ---------------------------------------------------------------------------
+
+
+class TestV2_5_4D4BundleTruncation:
+    """When anchor-aware tools fire in the same composed sequence, the
+    overview-path bundle caps to top-K by weighted-sum score. Anchor-aware-
+    tool outputs UNION through the cap (always pass). Default K=30;
+    `RKA_CTX_BUNDLE_K` env var overrides. Backward-compat: when
+    anchor_aware_present=False, the full ranked list is preserved (v2.5.3
+    behavior — un-anchored scenarios' recall floor depends on it)."""
+
+    @pytest_asyncio.fixture
+    async def engine_with_many_entries(
+        self, db_with_project: Database
+    ) -> ContextEngine:
+        """Database fixture with 50+ journal entries across importance bands
+        so truncation behavior is observable (the un-truncated overview path
+        would return all of them; the truncated path caps to top-K)."""
+        db = db_with_project
+        NOW = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"
+        # 50 normal-importance journal entries — enough to exceed K=30.
+        for i in range(50):
+            await db.execute(
+                f"""INSERT INTO journal (id, type, content, source, confidence,
+                    importance, phase, project_id, created_at, updated_at)
+                   VALUES (?, 'note', ?, 'executor', 'verified', 'normal',
+                           'phase_1', 'proj_default', {NOW}, {NOW})""",
+                [f"jrn_d4_{i:03d}", f"D4 test entry {i}"],
+            )
+        await db.commit()
+        search = SearchService(db=db, embeddings=None)
+        return ContextEngine(db=db, search=search, llm=None)
+
+    async def test_truncation_applied_when_anchor_aware_present(
+        self, engine_with_many_entries: ContextEngine
+    ):
+        """When anchor_aware_present=True, the bundle MUST cap at top-K=30
+        (default). 50 entries in fixture → bundle size 30."""
+        pkg = await engine_with_many_entries.get_context(
+            anchor_aware_present=True
+        )
+        assert len(pkg.sources) == 30, (
+            f"D4 truncation: anchor_aware_present=True should cap to K=30; "
+            f"got {len(pkg.sources)} entries."
+        )
+
+    async def test_truncation_skipped_when_no_anchor_aware(
+        self, engine_with_many_entries: ContextEngine
+    ):
+        """Backward-compat path: anchor_aware_present=False (default) MUST
+        leave the full ranked list intact. v2.5.3 recall floor for
+        un-anchored scenarios depends on this preservation."""
+        pkg = await engine_with_many_entries.get_context()
+        assert len(pkg.sources) == 50, (
+            f"D4 backward-compat: anchor_aware_present=False (default) MUST "
+            f"preserve the full ranked list (50 entries in fixture); got "
+            f"{len(pkg.sources)}. v2.5.3 un-anchored recall floor depends on "
+            "this path being unmodified."
+        )
+
+    async def test_env_var_overrides_default_k(
+        self,
+        engine_with_many_entries: ContextEngine,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """`RKA_CTX_BUNDLE_K=50` env override propagates: anchor-aware-
+        present truncation caps at 50 instead of 30. Sweep harness uses
+        this for K-escalation (K=30 → K=50 → K=75)."""
+        monkeypatch.setenv("RKA_CTX_BUNDLE_K", "50")
+        pkg = await engine_with_many_entries.get_context(
+            anchor_aware_present=True
+        )
+        assert len(pkg.sources) == 50, (
+            f"D4 RKA_CTX_BUNDLE_K=50 override: expected 50 entries; got "
+            f"{len(pkg.sources)}. The fixture has 50 normal entries so K=50 "
+            "should pass all of them."
+        )
+
+    async def test_anchor_aware_outputs_pass_through_above_k(
+        self, engine_with_many_entries: ContextEngine
+    ):
+        """Anchor-aware-tool outputs UNION through the top-K cap regardless of
+        their weighted-sum rank. If the caller passes
+        `anchor_aware_ids=[<entity outside top-K>]`, that entity MUST appear
+        in the final bundle alongside the top-K head."""
+        # All 50 fixture entries are normal-importance + same recency, so
+        # weighted-sum order is essentially insertion order. Pick an id we
+        # know is far outside the top-K=30 head.
+        outside_top_k_id = "jrn_d4_049"
+
+        pkg = await engine_with_many_entries.get_context(
+            anchor_aware_present=True,
+            anchor_aware_ids=[outside_top_k_id],
+        )
+        assert outside_top_k_id in pkg.sources, (
+            f"D4 anchor-aware UNION: id {outside_top_k_id!r} (rank ~50, far "
+            f"below K=30) MUST pass through the truncation when passed via "
+            f"anchor_aware_ids. Got sources={pkg.sources[:5]}..."
+            f"{pkg.sources[-5:]}"
+        )
+        # Bundle size = K (30) + 1 extra anchor-aware UNION = 31.
+        assert len(pkg.sources) == 31, (
+            f"D4 bundle size: top-K=30 + 1 UNION extra = 31; got "
+            f"{len(pkg.sources)}."
+        )
