@@ -132,6 +132,7 @@ class MCPClient(Protocol):
         phase: str | None = None,
         source: str | None = None,
     ) -> str: ...
+    def rka_bulk_update(self, updates: list[dict]) -> str: ...
 
 
 # ---------------------------------------------------------------------------
@@ -471,6 +472,97 @@ class RestMCPClient:
         # PUT typically returns the updated entity; fall back to input id
         # so callers can confirm the write succeeded.
         return result.get("id") or id
+
+    def rka_bulk_update(self, updates: list[dict]) -> str:
+        """Bulk-update multiple entities; fan out to per-entity REST endpoints.
+
+        Phase 2.13 (mis_01KRYZMEAT01SMNNXQXS3JRC4W T1; per
+        dec_01KRYZGF8N1SNJX5TSP0GM77Z7 Option A) — closes the 10th trigger
+        surfaced empirically by Phase 2.12 (`mis_01KRYVYZ42H0ETXMYRE7318KM4`):
+        the brain LLM methodologically chose `rka_bulk_update` for
+        cross-reference hygiene (the target journal's own Provenance section
+        documents using it for the same target journals), but the orchestrator
+        had no Protocol method and Phase 2.7 Option C correctly rejected the
+        ratified action.
+
+        WHY a fanout adapter (not a thin single-endpoint wrapper): RKA does
+        NOT expose a single bulk REST endpoint. The MCP tool
+        `rka/mcp/server.py:rka_bulk_update` is itself the fanout layer — it
+        iterates the `updates` list and dispatches to `PUT /api/notes/{id}`
+        (note/journal), `PUT /api/decisions/{id}` (decision), or
+        `PUT /api/literature/{id}` (literature). This RestMCPClient method
+        mirrors that fanout loop against the same per-entity endpoints. The
+        endpoint-map and per-item error-aggregation shape are duplicated
+        from `rka/mcp/server.py:938-993`; if RKA extends the fanout (new
+        entity_type), both must update in lockstep. Phase 2.15+ may extract
+        the shared shape into a utility, but that requires touching `rka/`
+        which is outside the agentic branch's scope.
+
+        Args:
+            updates: list of `{"entity_type", "id", "data"}` dicts. Each
+                `data` is the entity-specific PUT body. `entity_type` is one
+                of `note` | `journal` | `decision` | `literature`.
+
+        Returns:
+            Multi-line summary string mirroring the MCP tool's return shape
+            (e.g. `"Updated 3/3\\n\\nSuccesses:\\n[0] note jrn_... OK"`).
+            execute_ratified_actions stores this in the ArtifactRef.rka_id
+            field; the `bulk` entity_type label (see
+            `_WRITE_TOOL_ENTITY_TYPES` in nodes/executor.py) tags the
+            artifact so the run-artifact JSON ledger preserves provenance.
+
+        Workflow-thread-id auto-tagging: when an update's
+            `data["tags"]` is provided, the workflow_thread_id is appended;
+            when omitted, tags are left untouched (preserves existing tags
+            on the entity, mirroring rka_update_note semantics).
+        """
+        endpoint_map = {
+            "note": "/api/notes/{eid}",
+            "journal": "/api/notes/{eid}",
+            "decision": "/api/decisions/{eid}",
+            "literature": "/api/literature/{eid}",
+        }
+        results: list[str] = []
+        errors: list[str] = []
+        for i, upd in enumerate(updates):
+            etype = upd.get("entity_type")
+            eid = upd.get("id")
+            data = dict(upd.get("data") or {})
+
+            if not etype or not eid:
+                errors.append(f"[{i}] missing entity_type or id")
+                continue
+
+            endpoint_template = endpoint_map.get(etype)
+            if not endpoint_template:
+                errors.append(f"[{i}] unknown entity_type: {etype}")
+                continue
+
+            if "tags" in data and data["tags"] is not None:
+                data["tags"] = _merge_workflow_tag(
+                    data["tags"], self.workflow_thread_id
+                )
+
+            endpoint = endpoint_template.format(eid=eid)
+            try:
+                self._request("PUT", endpoint, json=data)
+                results.append(f"[{i}] {etype} {eid} OK")
+            except Exception as e:  # noqa: BLE001 — mirror MCP-side per-item aggregation
+                errors.append(f"[{i}] {etype} {eid} -> error: {str(e)[:100]}")
+
+        summary = f"Updated {len(results)}/{len(updates)}"
+        if errors:
+            summary += f" ({len(errors)} errors)"
+        lines = [summary, ""]
+        if results:
+            lines.append("Successes:")
+            lines.extend(results[:20])
+            if len(results) > 20:
+                lines.append(f"  ... and {len(results) - 20} more")
+        if errors:
+            lines.append("Errors:")
+            lines.extend(errors)
+        return "\n".join(lines)
 
 
 def make_client(

@@ -146,3 +146,13 @@ class FakeMCP:
         tests can assert which note IDs received which updates."""
         self._record("rka_update_note", id=id, **kwargs)
         return id
+
+    def rka_bulk_update(self, updates: list[dict]) -> str:
+        """Phase 2.13 T1 (mis_01KRYZMEAT01SMNNXQXS3JRC4W): matches the Protocol
+        addition for the bulk-update fanout. Records the call (with the full
+        updates list under `updates`) so tests can assert which entity IDs
+        received which updates. Returns a summary string mirroring the real
+        RestMCPClient.rka_bulk_update shape."""
+        self._record("rka_bulk_update", updates=updates)
+        n = len(updates)
+        return f"Updated {n}/{n}"
