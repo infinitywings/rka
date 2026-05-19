@@ -77,6 +77,13 @@ READ_TOOLS: tuple[str, ...] = (
 # (prefixed); the orchestrator's `executor.execute_ratified_actions` node (T3) is the
 # only call site that invokes these. `rka_update_note` joins MCPClient Protocol in T3
 # (pre-registered here per T1 ratification).
+#
+# Phase 2.13 (mis_01KRYZMEAT01SMNNXQXS3JRC4W T2; per dec_01KRYZGF8N1SNJX5TSP0GM77Z7
+# Option A): `rka_bulk_update` added as 7th entry. Closes the 10th trigger surfaced
+# empirically by Phase 2.12 — brain LLM methodologically chose rka_bulk_update for
+# cross-reference hygiene (target journal documented using it), but it was not
+# allowlisted. The matching Protocol method + RestMCPClient fanout adapter shipped
+# in T1 (commit bb6d008).
 WRITE_TOOLS: tuple[str, ...] = (
     "rka_add_note",
     "rka_add_decision",
@@ -84,6 +91,7 @@ WRITE_TOOLS: tuple[str, ...] = (
     "rka_submit_report",
     "rka_create_mission",
     "rka_update_note",
+    "rka_bulk_update",
 )
 
 

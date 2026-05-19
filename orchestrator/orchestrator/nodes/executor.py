@@ -420,6 +420,12 @@ _WRITE_TOOL_ENTITY_TYPES: dict[str, str] = {
     "rka_submit_report": "report",
     "rka_create_mission": "mission",
     "rka_update_note": "journal",
+    # Phase 2.13 T2 (mis_01KRYZMEAT01SMNNXQXS3JRC4W): rka_bulk_update can
+    # update note/decision/literature in one call; "bulk" labels the
+    # artifact so the run-artifact JSON ledger surfaces the fanout
+    # cleanly. Per-entity provenance is recoverable from the bulk
+    # summary string stored in ArtifactRef.rka_id.
+    "rka_bulk_update": "bulk",
 }
 
 
