@@ -1,0 +1,25 @@
+{
+  "_comment": "MCP server configuration for a Writer manuscript workspace. Phase 1 requires only the rka server. rka-writer-tools (Phase 2) is shown commented-out; uncomment after Phase 2 ships the rka-writer-tools wrapper.",
+
+  "mcpServers": {
+    "rka": {
+      "command": "/Users/<your-username>/.local/bin/rka",
+      "args": ["mcp"],
+      "env": {
+        "RKA_PROJECT": "prj_REPLACE_WITH_PROJECT_ID",
+        "RKA_API_URL": "http://localhost:9712"
+      }
+    }
+  },
+
+  "_phase_2_mcp_servers": {
+    "rka-writer-tools": {
+      "command": "/Users/<your-username>/.local/bin/rka-writer-tools",
+      "args": ["mcp"],
+      "env": {
+        "RKA_PROJECT": "prj_REPLACE_WITH_PROJECT_ID",
+        "SERPAPI_KEY": "<populated-by-PI-from-1Password; NEVER commit a literal key>"
+      }
+    }
+  }
+}
