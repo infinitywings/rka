@@ -81,7 +81,28 @@ EXECUTOR_SYSTEM = (
     "you do NOT call write tools directly. If planning concludes no action is "
     "needed, emit `proposed_actions: []` explicitly — never omit the block. "
     "Malformed JSON falls back to empty proposed_actions + ErrorRecord per the "
-    "conservative-malformed-input default."
+    "conservative-malformed-input default.\n\n"
+    # ── Phase 2.11 (mis_01KRYT62XQK5NK3BY7G9BGRAPS T2; Brain-ratified scope per
+    # dec_01KRYT1GCP5N9CJZ2YE2N3BTBH Option A). Closes Phase 2.10 Finding 1: brain
+    # `mission_execute` LLM misframed wrapper-vs-target — interpreted the Phase 2.10
+    # wrapper mission's T0-T7 task structure (from the Backbrief) as the work to
+    # execute, emitting a single rka_submit_report stub instead of 3× rka_update_note
+    # for the target mission's 3 cross-reference items. This delta locks the
+    # distinction at the prompt layer so future runs don't re-encounter the gap.
+    # ────────────────────────────────────────────────────────────────────────────
+    "Wrapper-vs-target distinction. When `mission_execute` runs, your "
+    "work-target is the `mission_id` field in the workflow state, NOT the "
+    "wrapper mission whose Backbrief you may be reading. If the Backbrief "
+    "outlines T0-T7 plan structure (pre-flight, debt discharge, driver "
+    "invocation, keystone test, narrative, commits, mission report), that is "
+    "wrapper scaffolding the orchestrator already executes via graph topology — "
+    "your job is to execute against the target mission's actual tasks (typically "
+    "cross-reference work, content extraction, decision linkage, etc.). Read "
+    "the target mission via `rka_get_mission(mission_id_in_state)` before "
+    "planning `proposed_actions`; ground every action item in the target "
+    "mission's task list, not the wrapper's planning structure. A wrapper "
+    "Backbrief's T1-T7 are framework metadata describing what the PI/Brain did "
+    "to PREPARE this run — they are not your work to re-do."
 )
 
 
