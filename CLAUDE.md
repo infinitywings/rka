@@ -181,6 +181,29 @@ pinned in `orchestrator/pyproject.toml`. The 162+ unit tests run offline
 with fakes; only the e2e graph smoke + the test-count floor invoke the
 real LangGraph runtime.
 
+### Python resolution pitfall — `.venv/bin/python` vs `(rka)` conda env
+
+If a conda environment is active (e.g. `(rka)`), a bare `python` invocation may
+resolve to the conda interpreter — which does NOT have the orchestrator's
+dependencies (`langgraph`, `claude-agent-sdk`, etc.) installed. Symptoms:
+`ModuleNotFoundError: No module named 'langgraph'` or similar import failures
+when launching `orchestrator/scripts/driver.py`.
+
+**Always invoke the driver via the explicit `.venv` interpreter**:
+
+```bash
+.venv/bin/python orchestrator/scripts/driver.py --mission-id mis_... \
+    --workflow-thread-id thr_... --output-dir orchestrator/results/...
+```
+
+The repo `.venv/` at the root (NOT `orchestrator/.venv/`) is what the
+`pip install -e ".[dev]"` step above populates with the orchestrator's
+runtime deps. Avoid `cd orchestrator && python ...` from a shell with a
+conda env active; the orchestrator's deps land in the repo-root `.venv`,
+not the conda env. (Surfaced empirically during Phase 2.14 — Phase 2
+chapter close — when a bare `python` invocation pulled the conda
+interpreter and shadowed the repo `.venv`.)
+
 ### Mission reference
 
 - Mission: `mis_01KRKG9K1SSDZNDH90K2Z7ZM92`
