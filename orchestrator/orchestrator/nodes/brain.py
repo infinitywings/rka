@@ -303,9 +303,104 @@ def _build_decision_prompt(state: ResearchWorkflowState) -> str:
     )
 
 
+def _render_proposed_actions_packet(proposed_actions: list[dict]) -> str:
+    """Phase 2.11 T1 (mis_01KRYT62XQK5NK3BY7G9BGRAPS) — render the
+    `state["proposed_actions"]` list as a PI-facing decision packet body.
+
+    Each action is displayed by identity (tool, args, rationale) so PI can
+    verify the set before ratifying. No LLM intermediation — the packet
+    structure is mechanical so the proposed_actions PI sees ARE exactly
+    what `pi_decision_select` will copy to `ratified_actions` on accept.
+    Restores EC8 set-identity verifiability (which Phase 2.10 found
+    broken: PI saw a brain-generated strategic meta-decision instead of
+    the actual actions).
+    """
+    n = len(proposed_actions)
+    lines: list[str] = [
+        f"# Brain proposes {n} action(s) for PI ratification",
+        "",
+        "PI must verify the set below; on `accept`, these actions are copied "
+        "to `ratified_actions` for parent-process dispatch via "
+        "`execute_ratified_actions`. EC8 set-identity: ratified == proposed.",
+        "",
+        "## Proposed actions",
+    ]
+    for i, action in enumerate(proposed_actions, 1):
+        tool = action.get("tool", "<missing>")
+        args = action.get("args", {})
+        rationale = action.get("rationale", "(no rationale)")
+        lines.append("")
+        lines.append(f"### {i}. `{tool}`")
+        lines.append("")
+        lines.append(f"**args**: `{args}`")
+        lines.append("")
+        lines.append(f"**rationale**: {rationale}")
+    return "\n".join(lines)
+
+
+def _decision_present_from_proposed_actions(
+    state: ResearchWorkflowState,
+    mcp: MCPClient,
+    proposed_actions: list[dict],
+) -> dict:
+    """Phase 2.11 T1 early-bypass path. No brain LLM call; build the
+    decision packet directly from structured `state["proposed_actions"]`."""
+    n = len(proposed_actions)
+    packet_content = _render_proposed_actions_packet(proposed_actions)
+
+    note_id = mcp.rka_add_note(
+        content=packet_content,
+        type="note",
+        source="brain",
+        related_mission=state.get("mission_id"),
+        tags=["decision-draft", "proposed-actions-set"],
+        importance="high",
+    )
+
+    return {
+        "current_phase": "brain_review",
+        "current_node": "decision_present",
+        "artifacts": [_artifact(note_id, "journal", "decision_present")],
+        "decisions_to_present": [
+            {
+                "title": f"Brain proposes {n} action(s) — ratify the set?",
+                "options": ["accept", "modify", "reject"],
+                "context": packet_content,
+                "source_node": "decision_present",
+                "source_artifact": note_id,
+                # Structured view of the actions for PI UI / driver
+                # rendering. The driver's `interactive_interrupt` will JSON-
+                # dump this so PI sees the actions by identity, not just as
+                # markdown in `context`.
+                "proposed_actions": list(proposed_actions),
+                "summary": (
+                    f"Brain proposes {n} action item(s); ratify the set or "
+                    f"surface objections (EC8: ratified must equal proposed)"
+                ),
+            }
+        ],
+    }
+
+
 def decision_present(
     state: ResearchWorkflowState, sdk: SDKClient, mcp: MCPClient
 ) -> dict:
+    # Phase 2.11 T1 (mis_01KRYT62XQK5NK3BY7G9BGRAPS) — early-bypass when
+    # the workflow has structured `proposed_actions` to ratify. Phase 2.10
+    # surfaced that decision_present's strategic-meta-decision LLM call was
+    # decoupled from `state["proposed_actions"]`: PI saw a brain-generated
+    # A/B/C/D strategic question, NOT the actual writes the orchestrator
+    # would dispatch on accept. EC8 set-identity (Brain explicitly relied on
+    # it) was unverifiable by PI. The fix: when proposed_actions is non-empty,
+    # build the PI-facing packet directly from the structured data with no
+    # LLM intermediation. Strategic-meta-decision path preserved as the
+    # fall-through for empty proposed_actions (existing workflow shapes
+    # where the brain needs to surface an open strategic question).
+    proposed_actions = list(state.get("proposed_actions") or [])
+    if proposed_actions:
+        return _decision_present_from_proposed_actions(state, mcp, proposed_actions)
+
+    # Fall-through: existing strategic-meta-decision flow (Phase 2.7 design).
     prompt = _build_decision_prompt(state)
     decision_draft = sdk.complete(prompt=prompt, system=BRAIN_SYSTEM)
 
