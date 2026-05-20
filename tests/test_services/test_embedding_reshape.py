@@ -1,4 +1,8 @@
-"""Tests for migration 022 + the vec_claims reshape service (Mission D T4)."""
+"""Tests for migration 022 + the vec_claims reshape service (Mission D T4).
+
+v2.5.5 (mis_01KS1RFNM2T1HTB077G507T1FR T5) extends coverage to the
+five other vec_* tables generalised in T1.
+"""
 
 from __future__ import annotations
 
@@ -6,8 +10,11 @@ import pytest
 
 from rka.services.embedding_reshape import (
     current_vec_claims_dim,
+    current_vec_table_dim,
+    reshape_all_vec_tables_if_needed,
     reshape_vec_claims,
     reshape_vec_claims_if_needed,
+    reshape_vec_table,
 )
 
 
@@ -186,3 +193,102 @@ async def test_reshape_if_needed_returns_true_on_dim_change(db):
     assert did_reshape is True
     new_dim = await current_vec_claims_dim(db)
     assert new_dim == 4096
+
+
+# ---------------------------------------------------------------------------
+# v2.5.5 (mis_01KS1RFNM2T1HTB077G507T1FR T5) — generic reshape across 6 tables
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "vec_table",
+    ["vec_journal", "vec_decisions", "vec_literature", "vec_missions", "vec_artifacts"],
+)
+@pytest.mark.asyncio
+async def test_reshape_each_new_vec_table_at_target_dim(db, vec_table):
+    """Every non-claims vec_* table reshapes from float[768] to a new dim."""
+    if not db.vec_available:
+        pytest.skip("sqlite-vec extension not loaded")
+    # Baseline from schema_phase2.sql / migration 002.
+    baseline_dim = await current_vec_table_dim(db, vec_table)
+    assert baseline_dim == 768
+
+    await reshape_vec_table(db, vec_table, dim=4096)
+    new_dim = await current_vec_table_dim(db, vec_table)
+    assert new_dim == 4096
+
+
+@pytest.mark.asyncio
+async def test_reshape_vec_table_rejects_unknown_table(db):
+    with pytest.raises(ValueError, match="unknown table"):
+        await reshape_vec_table(db, "vec_does_not_exist", dim=4096)
+
+
+@pytest.mark.asyncio
+async def test_reshape_non_claims_deletes_matching_embedding_metadata(db):
+    """Reshape for journal/decision/literature/mission/artifact DELETEs
+    matching embedding_metadata rows so v2.5.5's 3-tuple needs_reembed
+    returns True for every affected entity until backfill repopulates."""
+    if not db.vec_available:
+        pytest.skip("sqlite-vec extension not loaded")
+    # Plant stale metadata for journal AND claim. Claim must survive
+    # the reshape (uses the flag-based signal); journal must be wiped.
+    await db.execute(
+        "INSERT INTO embedding_metadata "
+        "(project_id, entity_type, entity_id, content_hash, model_name, dimensions) "
+        "VALUES "
+        "('proj_default', 'journal', 'jrn_stale', 'h1', 'old-model', 768), "
+        "('proj_default', 'claim',   'clm_stale', 'h2', 'old-model', 768)"
+    )
+    await db.commit()
+
+    await reshape_vec_table(db, "vec_journal", dim=4096)
+
+    row = await db.fetchone(
+        "SELECT COUNT(*) AS n FROM embedding_metadata WHERE entity_type = 'journal'"
+    )
+    assert row["n"] == 0
+
+    # Claim metadata is untouched — claims rely on embedding_pending flag.
+    row = await db.fetchone(
+        "SELECT COUNT(*) AS n FROM embedding_metadata WHERE entity_type = 'claim'"
+    )
+    assert row["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_reshape_all_vec_tables_if_needed_iterates_every_table(db):
+    """reshape_all_vec_tables_if_needed reports per-table outcome for all six."""
+    if not db.vec_available:
+        pytest.skip("sqlite-vec extension not loaded")
+
+    results = await reshape_all_vec_tables_if_needed(db, dim=4096)
+
+    expected_tables = {
+        "vec_claims", "vec_journal", "vec_decisions",
+        "vec_literature", "vec_missions", "vec_artifacts",
+    }
+    assert set(results.keys()) == expected_tables
+
+    # Every table should report did_reshape=True (all were at 768 → 4096)
+    # except vec_claims which is also at 768 by default, so also True.
+    for table_name, (did_reshape, _pending) in results.items():
+        assert did_reshape is True, f"{table_name} should have reshaped"
+        dim = await current_vec_table_dim(db, table_name)
+        assert dim == 4096, f"{table_name} should be at dim=4096"
+
+
+@pytest.mark.asyncio
+async def test_reshape_all_vec_tables_if_needed_idempotent_no_op(db):
+    """Calling reshape_all_vec_tables_if_needed twice in a row at the same
+    dim → first call reshapes; second call reports did_reshape=False for
+    every table (idempotent fast-path)."""
+    if not db.vec_available:
+        pytest.skip("sqlite-vec extension not loaded")
+
+    await reshape_all_vec_tables_if_needed(db, dim=4096)
+    results = await reshape_all_vec_tables_if_needed(db, dim=4096)
+    for table_name, (did_reshape, _pending) in results.items():
+        assert did_reshape is False, (
+            f"second call must be a no-op for {table_name}"
+        )

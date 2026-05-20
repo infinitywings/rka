@@ -362,3 +362,253 @@ def test_ollama_default_timeout_is_600_v241():
 
     b = OllamaBackend(base_url="http://x", model="m", dim=4)
     assert b._timeout == 600.0
+
+
+# ---------------------------------------------------------------------------
+# v2.5.5 (mis_01KS1RFNM2T1HTB077G507T1FR T5) — all-entity-types iteration
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _AllTypesEmbedder:
+    """FakeEmbedder variant exposing dim + model_name for metadata writes."""
+
+    dim: int = 4
+    model_name: str = "fake-embedder-v0"
+    fail_on_text: str | None = None
+    calls: list[list[str]] = field(default_factory=list)
+
+    async def embed_batch(
+        self, texts: list[str], *, is_query: bool = False
+    ) -> list[list[float]]:
+        self.calls.append(list(texts))
+        if self.fail_on_text is not None and any(self.fail_on_text in t for t in texts):
+            raise RuntimeError(f"deliberate fault on text containing {self.fail_on_text!r}")
+        return [[float(i)] * self.dim for i in range(len(texts))]
+
+
+async def _seed_journal(db, *, jid: str, content: str = "journal body") -> None:
+    await db.execute(
+        "INSERT INTO journal (id, type, content, source, created_at) "
+        "VALUES (?, 'note', ?, 'pi', strftime('%Y-%m-%dT%H:%M:%SZ','now'))",
+        [jid, content],
+    )
+
+
+async def _seed_decision(db, *, did: str, question: str = "Why?") -> None:
+    await db.execute(
+        "INSERT INTO decisions (id, phase, question, rationale, decided_by) "
+        "VALUES (?, 'design', ?, ?, 'pi')",
+        [did, question, "because reasons"],
+    )
+
+
+async def _seed_literature(db, *, lid: str) -> None:
+    await db.execute(
+        "INSERT INTO literature (id, title, abstract) VALUES (?, ?, ?)",
+        [lid, f"title-{lid}", f"abstract-{lid}"],
+    )
+
+
+async def _seed_mission(db, *, mid: str) -> None:
+    await db.execute(
+        "INSERT INTO missions (id, phase, objective, context) "
+        "VALUES (?, 'design', ?, ?)",
+        [mid, f"objective-{mid}", f"context-{mid}"],
+    )
+
+
+async def _metadata_count_for(db, entity_type: str) -> int:
+    row = await db.fetchone(
+        "SELECT COUNT(*) AS n FROM embedding_metadata WHERE entity_type = ?",
+        [entity_type],
+    )
+    return int(row["n"])
+
+
+async def _reshape_all_to(db, dim: int) -> None:
+    """Bring every vec_* table to `dim` so the FakeEmbedder dim works."""
+    if not db.vec_available:
+        return
+    from rka.services.embedding_reshape import reshape_all_vec_tables_if_needed
+    await reshape_all_vec_tables_if_needed(db, dim=dim)
+
+
+@pytest.mark.asyncio
+async def test_run_backfill_iterates_all_six_default_entity_types(db):
+    """entity_types=None → claim + journal + decision + literature + mission
+    + artifact get embedded. status.processed = sum across types."""
+    clear_registry()
+    await _reshape_all_to(db, dim=4)
+    await _seed_journal(db, jid="jrn_all_a")
+    await _insert_pending_claims(db, jid="jrn_all_a", count=2, prefix="clm_all_")
+    await _seed_journal(db, jid="jrn_all_b")
+    await _seed_decision(db, did="dec_all_a")
+    await _seed_literature(db, lid="lit_all_a")
+    await _seed_mission(db, mid="mis_all_a")
+
+    status = register_job()
+    svc = BackfillService(
+        db=db, embeddings=_AllTypesEmbedder(dim=4), batch_size=4
+    )
+    result = await svc.run_backfill(status)  # default: all six types
+
+    assert result.state == "complete"
+    # 2 claims + 2 journals + 1 decision + 1 literature + 1 mission = 7
+    # (artifact table is empty so it contributes 0)
+    assert result.processed == 7
+    assert result.total == 7
+    # Metadata is populated for every embedded type.
+    assert await _metadata_count_for(db, "claim") == 2
+    assert await _metadata_count_for(db, "journal") == 2
+    assert await _metadata_count_for(db, "decision") == 1
+    assert await _metadata_count_for(db, "literature") == 1
+    assert await _metadata_count_for(db, "mission") == 1
+    # Recorded model + dim reflect the active embedder, not stale data.
+    row = await db.fetchone(
+        "SELECT model_name, dimensions FROM embedding_metadata "
+        "WHERE entity_type='journal' LIMIT 1"
+    )
+    assert row["model_name"] == "fake-embedder-v0"
+    assert int(row["dimensions"]) == 4
+
+
+@pytest.mark.asyncio
+async def test_run_backfill_restricts_to_named_entity_types(db):
+    """entity_types=('journal',) → claims left untouched even though pending."""
+    clear_registry()
+    await _reshape_all_to(db, dim=4)
+    await _seed_journal(db, jid="jrn_restrict")
+    claim_ids = await _insert_pending_claims(
+        db, jid="jrn_restrict", count=3, prefix="clm_restrict_"
+    )
+    await _seed_journal(db, jid="jrn_restrict_extra")
+
+    status = register_job()
+    svc = BackfillService(
+        db=db, embeddings=_AllTypesEmbedder(dim=4), batch_size=2
+    )
+    result = await svc.run_backfill(status, entity_types=("journal",))
+
+    assert result.state == "complete"
+    # Only the 2 journals counted; claims excluded.
+    assert result.total == 2
+    assert result.processed == 2
+    # Claims still pending (untouched).
+    row = await db.fetchone(
+        "SELECT COUNT(*) AS n FROM claims WHERE embedding_pending = 1 AND id IN "
+        "(" + ",".join(["?"] * len(claim_ids)) + ")",
+        claim_ids,
+    )
+    assert row["n"] == 3
+    assert await _metadata_count_for(db, "claim") == 0
+    assert await _metadata_count_for(db, "journal") == 2
+
+
+@pytest.mark.asyncio
+async def test_run_backfill_per_entity_type_failure_isolates(db):
+    """A batch-embed failure for one entity type does not stop the others."""
+    clear_registry()
+    await _reshape_all_to(db, dim=4)
+    await _seed_journal(db, jid="jrn_iso_target")  # FK for claims AND a journal we want embedded
+    claim_ids = await _insert_pending_claims(
+        db, jid="jrn_iso_target", count=2, prefix="clm_iso_fail_"
+    )
+    # Add another journal to ensure journals have rows to embed too.
+    await _seed_journal(db, jid="jrn_iso_other")
+
+    # Embedder fails when it sees the claim-text marker, but never the
+    # journal text (journals seed with "journal body").
+    embedder = _AllTypesEmbedder(dim=4, fail_on_text="clm_iso_fail_")
+    status = register_job()
+    svc = BackfillService(db=db, embeddings=embedder, batch_size=2)
+    result = await svc.run_backfill(status)
+
+    assert result.state == "failed", "any-type failure marks the run failed"
+    assert "claim" in (result.error or "")
+    # Journals still got embedded — failure isolation.
+    assert await _metadata_count_for(db, "journal") == 2
+    # Claims kept their pending flag for retry.
+    row = await db.fetchone(
+        "SELECT COUNT(*) AS n FROM claims WHERE embedding_pending = 1 AND id IN "
+        "(" + ",".join(["?"] * len(claim_ids)) + ")",
+        claim_ids,
+    )
+    assert row["n"] == 2
+
+
+@pytest.mark.asyncio
+async def test_run_backfill_rejects_unknown_entity_type(db):
+    """entity_types containing an unknown name → ValueError up front."""
+    clear_registry()
+    status = register_job()
+    svc = BackfillService(db=db, embeddings=_AllTypesEmbedder(dim=4))
+    with pytest.raises(ValueError, match="unknown entity_type"):
+        await svc.run_backfill(status, entity_types=("not_a_thing",))
+
+
+# ---------------------------------------------------------------------------
+# Integration tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_e2e_reshape_then_backfill_clears_stale_metadata(db):
+    """End-to-end: plant stale metadata for journal+decision → reshape
+    invalidates it → backfill repopulates with current model/dim."""
+    if not db.vec_available:
+        pytest.skip("sqlite-vec extension not loaded")
+    from rka.services.embedding_reshape import reshape_all_vec_tables_if_needed
+
+    # Plant entities + stale metadata that simulates the production bug
+    # state: rows exist, metadata says nomic-768, but the configured
+    # backend is now hypothetically fake-embedder-v0 / dim=4.
+    await _seed_journal(db, jid="jrn_e2e_a")
+    await _seed_decision(db, did="dec_e2e_a")
+    await db.execute(
+        "INSERT INTO embedding_metadata "
+        "(project_id, entity_type, entity_id, content_hash, model_name, dimensions) "
+        "VALUES "
+        "('proj_default', 'journal',  'jrn_e2e_a', 'stale', 'nomic-768', 768), "
+        "('proj_default', 'decision', 'dec_e2e_a', 'stale', 'nomic-768', 768)"
+    )
+    await db.commit()
+
+    # Reshape simulating PUT /api/config/embedding handler.
+    await reshape_all_vec_tables_if_needed(db, dim=4)
+    # Stale metadata gone for both types (non-claims path).
+    assert await _metadata_count_for(db, "journal") == 0
+    assert await _metadata_count_for(db, "decision") == 0
+
+    # Backfill repopulates.
+    clear_registry()
+    status = register_job()
+    svc = BackfillService(
+        db=db, embeddings=_AllTypesEmbedder(dim=4), batch_size=4
+    )
+    result = await svc.run_backfill(status)
+
+    assert result.state == "complete"
+    assert await _metadata_count_for(db, "journal") == 1
+    assert await _metadata_count_for(db, "decision") == 1
+    # The repopulated rows carry the CURRENT model_name + dim, not the stale ones.
+    row = await db.fetchone(
+        "SELECT model_name, dimensions FROM embedding_metadata "
+        "WHERE entity_type='journal' AND entity_id='jrn_e2e_a'"
+    )
+    assert row["model_name"] == "fake-embedder-v0"
+    assert int(row["dimensions"]) == 4
+
+
+@pytest.mark.asyncio
+async def test_e2e_no_op_when_nothing_pending(db):
+    """Fresh DB with no entities anywhere → default backfill completes
+    immediately with total=0 (the v2.5.5 'idle' path covering all six
+    types simultaneously)."""
+    clear_registry()
+    status = register_job()
+    svc = BackfillService(db=db, embeddings=_AllTypesEmbedder(dim=4))
+    result = await svc.run_backfill(status)  # default all-six entity_types
+    assert result.state == "complete"
+    assert result.total == 0
+    assert result.processed == 0
