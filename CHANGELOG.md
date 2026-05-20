@@ -3,6 +3,77 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [2.5.8] — 2026-05-20 (patch release; embedding subsystem bug-pair fix: BackfillService metadata guard + worker startup loads persisted config)
+
+**Mission**: `mis_01KS3E4S33B13EGR2NWRQM2QG4`
+**Motivating decision**: `dec_01KS3E1FGSK530N8HM04BNMCEW` (Option A: single bundled bug-pair fix with scope-limited bookkeeper exemption for `rka/cli.py`)
+**Surfaced by**: `mis_01KS0QEW21N2NG4EJTKJ3JTWTE` (Eval-v2 corpus refresh) — both bugs are pre-existing; corpus refresh exposed the silent-under-embedding failure mode.
+
+### Bug 1 — `BackfillService` writes `embedding_metadata` when `vec_available=False`
+
+`rka/services/embedding_backfill.py:run_backfill` unconditionally wrote rows into `embedding_metadata` for every batch element, including when `Database.vec_available` was `False` (sqlite-vec extension not loaded — vec_* INSERT was skipped). The v2.5.5 3-tuple `needs_reembed` then returned `False` permanently for these rows because metadata-by-content-hash matched, even though no vec_* row existed. Net effect: rows claimed to be "embedded at <model>/<dim>" with no underlying vector — silent under-embedding.
+
+**Fix**: moved the `embedding_metadata` INSERT inside the `if vec_available:` block. Metadata write is now **coupled** to the vec_* write — both gate on `vec_available`. Documented as an invariant in the source.
+
+**Tests added** (`tests/test_services/test_embedding_backfill.py`, +2 tests; suite 18 → 20):
+- `test_metadata_not_written_when_vec_available_false`: patches `Database.vec_available=False` at the class level (property has no setter) and asserts no metadata row is written.
+- `test_metadata_written_when_vec_available_true`: backward-compatibility positive case.
+
+### Bug 2 — `rka-worker` startup ignores `/data/embedding_config.json`
+
+`rka/cli.py:worker_main` constructed `EmbeddingService` directly from env vars (`RKA_EMBEDDING_MODEL` etc.) and passed it to `EnrichmentWorker(embeddings=...)`. The api-server boot path (`rka/api/app.py` v2.4.0+) had been updated to read the persisted config from `<data_dir>/embedding_config.json` via `EmbeddingConfigService.load_config()`, but the worker boot path was left on the legacy env-only constructor. Net effect: PI changing the embedding backend via webui (`PUT /api/config/embedding`) took effect for the api-server's hot path but **not** for the worker — every worker restart re-loaded the env-defaulted backend, silently serving stale embeddings until container rebuild.
+
+**Fix**: added `EnrichmentWorker.boot()` classmethod + `_resolve_embeddings()` staticmethod in `rka/services/worker.py`. Resolution order matches the api-server boot path:
+
+1. `embeddings_enabled=False` → worker has `embeddings=None`.
+2. Otherwise, attempt to read `<data_dir>/embedding_config.json` via `EmbeddingConfigService.load_config()` and construct `EmbeddingService.from_config(...)`.
+3. On any failure (file missing, corrupt, construction error), fall back to the legacy env-driven constructor (`EmbeddingService(model_name=env_fallback_model)`) and log WARNING.
+
+`rka/cli.py:worker_main` swapped to a 1-line `EnrichmentWorker.boot(...)` invocation (Brain-ratified `cli.py` exemption-extension; see below).
+
+**Tests added** (`tests/test_services/test_worker.py`, NEW file, +4 tests):
+- `test_resolve_embeddings_uses_persisted_config`: writes a fastembed config to tmp_path, mocks `EmbeddingService.from_config`, asserts the persisted config (not env) was passed.
+- `test_boot_classmethod_threads_data_dir_through`: smoke test for `EnrichmentWorker.boot()`.
+- `test_resolve_embeddings_falls_back_to_env_when_config_missing`: empty tmp_path; asserts env_fallback_model was used and the log line confirms the fallback path.
+- `test_resolve_embeddings_disabled_returns_none`: `embeddings_enabled=False` short-circuit.
+
+### Scope-limited bookkeeper exemption (binding for THIS mission only)
+
+This release is **bookkeeper-strict** for everything except a single 1-line glue change in `rka/cli.py` (Brain-ratified mid-mission per `dec_01KS3E1FGSK530N8HM04BNMCEW`).
+
+**ALLOWED for this mission:**
+
+- `rka/services/embedding_backfill.py`: Bug 1 fix (metadata-write guard).
+- `rka/services/worker.py`: Bug 2 fix (`boot()` + `_resolve_embeddings()`).
+- `rka/cli.py`: 1-line glue swap to `EnrichmentWorker.boot(...)` (Brain-ratified exemption-extension; Bug 2's env-only path lived in `cli.py:worker_main`, not `worker.py`).
+- `tests/test_services/test_embedding_backfill.py`: extended (+2 tests).
+- `tests/test_services/test_worker.py`: NEW (+4 tests).
+- `pyproject.toml`, `rka/__init__.py`, `CHANGELOG.md`: version bump.
+
+**NOT ALLOWED (remained strict):**
+
+- Other `rka/services/*` files: 0 modified.
+- `rka/api/`: 0 modified.
+- `rka/mcp/`: 0 modified.
+- `web/`: 0 modified.
+- Schema migrations: none.
+
+**Post-mission invariant**: future patch missions return to fully-strict bookkeeper (the `cli.py` exemption is for THIS mission's scope only; documented in `dec_01KS3E1FGSK530N8HM04BNMCEW`).
+
+### Ops note
+
+After deploying v2.5.8, **rebuild the container** (`docker compose up -d --build --force-recreate`) and **restart the worker** explicitly. The worker boot log will now indicate which config-resolution path was taken:
+
+- `worker boot: reading config from /data/embedding_config.json (backend=<backend>, dim=<dim>)` — persisted config loaded.
+- `worker boot: falling back to env defaults; persisted config not found at <path>` — file absent.
+- `worker boot: failed to load persisted config (<exc>); falling back to env defaults (model=<env_model>)` — load attempt errored.
+
+Operators can correlate these lines with webui config-changed events when troubleshooting embedding-drift symptoms.
+
+### Test count
+
+787 passing (including +6 new tests from this mission). No regressions.
+
 ## [2.5.7] — 2026-05-20 (patch release; Writer skill Phase 3: revision-loop handler + Brain mission integration + 3 optional MCP tools; BOOKKEEPER-EXEMPT)
 
 **Mission**: `mis_01KS2WW6MRN6AXP11EMCSCDFAR`
