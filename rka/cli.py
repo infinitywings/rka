@@ -152,14 +152,16 @@ def worker(
         await db.initialize_phase2_schema()
 
         try:
-            embeddings = (
-                EmbeddingService(model_name=config.embedding_model, db=db)
-                if config.embeddings_enabled
-                else None
-            )
-            runner = EnrichmentWorker(
+            # v2.5.8 (mis_01KS3E4S33B13EGR2NWRQM2QG4 T2; Brain-ratified
+            # exemption-extension): use EnrichmentWorker.boot() so the
+            # worker reads persisted /data/embedding_config.json rather
+            # than env-only. Falls back to env automatically when config
+            # missing or corrupt.
+            runner = EnrichmentWorker.boot(
                 db=db,
-                embeddings=embeddings,
+                data_dir=config.data_dir,
+                embeddings_enabled=config.embeddings_enabled,
+                env_fallback_model=config.embedding_model,
                 poll_interval=poll_interval or config.job_poll_interval,
                 lease_seconds=lease_seconds or config.job_lease_seconds,
                 max_attempts=max_attempts or config.job_max_attempts,
