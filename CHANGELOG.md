@@ -3,6 +3,75 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [2.5.7] — 2026-05-20 (patch release; Writer skill Phase 3: revision-loop handler + Brain mission integration + 3 optional MCP tools; BOOKKEEPER-EXEMPT)
+
+**Mission**: `mis_01KS2WW6MRN6AXP11EMCSCDFAR`
+**Motivating decision**: `dec_01KS2WPKMRVSJ2R0PP74722PEH` (Option A: single bundled Phase 3 mission with scope-limited bookkeeper exemption)
+**Depends on**: `mis_01KS2S871YPQ3D5RVY5K3PSQY6` (Writer Phase 2; landed on main at `31fd574` via PR #15 merge 2026-05-20T14:25:46Z)
+**Backbrief**: `jrn_01KS2X4MB80ERTPQ8M55NPZT5V` plus Brain ratification `jrn_01KS2XDDPSCRH2DF7X1MM4TDPQ`
+**Sequencing note**: `mis_01KS0QEW21N2NG4EJTKJ3JTWTE` (Eval-v2 corpus refresh) was planned for v2.5.7 per the v2.5.6 changelog. Writer Phase 3 closed first; corpus refresh now slots to v2.5.8 when it ships. Phase 3 is the final Writer-track deliverable per design Section 16.
+
+### Scope-limited bookkeeper exemption (binding for THIS mission only)
+
+Phase 1+2's strict bookkeeper invariant (`git diff main -- rka/services/ rka/api/ rka/mcp/ web/` empty) was RELAXED for Phase 3 per `dec_01KS2WPKMRVSJ2R0PP74722PEH`:
+
+**ALLOWED for Phase 3:**
+
+- `rka/mcp/server.py`: 3 new `@mcp.tool()` functions (plus necessary supporting imports per Brain ratification 2026-05-20).
+- `rka/api/routes/manuscripts.py`: NEW file with the 3 REST endpoints.
+- `rka/services/manuscript.py`: NEW file with `ManuscriptService` class.
+- `rka/api/app.py`: minimal 2-line glue (1 import + 1 `include_router`) to wire the new route. Brain extended the exemption mid-mission for this minimal touch (analogous to the imports-in-server.py allowance from T0 ratification).
+- `rka/skills/writer/`: extended (revision_handler.py + SKILL.md + workflows.md).
+- `tests/skills/writer/`: extended (4 new test files).
+- `pyproject.toml`, `rka/__init__.py`, `CHANGELOG.md`: version bump.
+
+**NOT ALLOWED (remained strict):**
+
+- Other `rka/services/*` files: 0 modified (manuscript.py only).
+- Other `rka/api/routes/*` files: 0 modified (manuscripts.py only).
+- `web/`: 0 modified.
+- Schema migrations: none.
+
+**Post-Phase-3 invariant**: future Writer phases return to strict bookkeeper (the exemption is for THIS mission's scope only; documented in `dec_01KS2WPKMRVSJ2R0PP74722PEH`).
+
+### Honest framing: branch-state vigilance side-finding
+
+Mid-mission, the T3 commit landed on the wrong branch (`feat/eval-v2-corpus-refresh-v2.5.6` instead of `feat/writer-role-phase-3`) due to an unexplained external branch switch during file edits. Recovered via cherry-pick to phase-3 (the orphan commit on corpus-refresh remained local-only; never pushed). T4+ work added explicit HEAD verification before every commit. Surfaced for executor discipline awareness.
+
+### Shipped (this release)
+
+- **Revision-loop handler** (`rka/skills/writer/scripts/revision_handler.py`, 657 lines): 4 comment_class shapes (factual_r1 / style_r2 / inconsistency_r3 / logical_r4) per design doc Section 14. Heuristic classifier (`classify_comment`) with regex/keyword/structural patterns; returns `ClassificationResult(cls, confidence, ambiguous, rationale, matched_patterns)`; ambiguous defaults to ESCALATE per Brain ratification (the Writer's Claude Code runtime IS the LLM-assisted reasoning layer). Per-class handler functions (`handle_factual_r1` invokes validate_references Stage B-G; `handle_style_r2` re-runs ai_tic_lint strict; `handle_inconsistency_r3` runs bridge_repetition_check; `handle_logical_r4` prepares writer_evidence_gap mission payload). REVIEW_STATE.md helpers (`read_review_state`, `advance_review_state`) implement the 3-iteration cap.
+
+- **Brain mission integration** (Writer SKILL.md Section 4 + references/workflows.md section 7): Writer now supports TWO invocation paths. (a) Direct PI invocation (Phase 1 default). (b) Mission-spawned invocation: Brain creates `writer-revision` mission with `tags=["writer-revision", "comment-class:<r1|r2|r3|r4>", "manuscript:<jrn_id>"]` plus the structured review comment in `context`. Writer reads via `rka_get_mission(id)`, extracts tags, classifies, dispatches. Uses existing MissionService tag surface (no schema migration). On `ambiguous=True` from classify_comment, Writer escalates via `rka_submit_checkpoint` before invoking any handler.
+
+- **3 optional MCP tools** (BOOKKEEPER EXEMPT):
+  - `rka_register_manuscript(venue, title, abstract, sections)`: POST /api/manuscripts; creates a jrn_ manifest with tags=['manuscript', f'venue:{venue}', 'phase:draft'].
+  - `rka_get_manuscript(manuscript_id)`: GET /api/manuscripts/{id}; returns 404 if not tagged 'manuscript' (regular jrn_ entries are not Writer manifests).
+  - `rka_validate_reference(manuscript_id, doi|title, author)`: POST /api/manuscripts/{id}/validate-reference; proxies to Phase 2's validate_references.py Stage B-G full pipeline; returns one of 7 status verdicts.
+  - All 3 use the existing thin-HTTP-proxy pattern (httpx via `_client()` to the REST API).
+
+- **REST endpoints** (`rka/api/routes/manuscripts.py`, NEW 147 lines): POST /api/manuscripts, GET /api/manuscripts/{id}, POST /api/manuscripts/{id}/validate-reference. Inline Pydantic models with `ConfigDict(extra='forbid')` per project's existing 422-on-unknown-field guard.
+
+- **Service layer** (`rka/services/manuscript.py`, NEW 223 lines): `ManuscriptService` class extending `BaseService`. Wraps `NoteService` for journal-entry CRUD with the manuscript-specific tagging convention (Option 2 representation per `dec_01KS0BKJ5ZJKJ4R19GYAK3QN9D` Q1). `validate_reference` shells out to `scripts/validate_references.py` via subprocess.
+
+- **37 new tests** under `tests/skills/writer/` (suite progression: 104 to 141): test_revision_handler.py (18 tests), test_manuscript_service.py (8 tests), test_manuscript_mcp_tools.py (6 tests), test_phase3_integration.py (5 tests). All 141 pass in 2.97s.
+
+### Em-dash absolute ban dogfooded
+
+Across all new Writer-managed files (revision_handler.py + 4 test files + manuscript.py + manuscripts.py): 0 U+2014 and 0 U+2013. CHANGELOG.md, rka/mcp/server.py, and rka/api/app.py are pre-existing project infrastructure; their em-dashes in section headings follow project style.
+
+### Out of scope (Phase 4+ deferred indefinitely)
+
+Per `dec_01KS2WPKMRVSJ2R0PP74722PEH` scope_boundaries:
+
+- Manuscript search/discovery UI in `web/` dashboard.
+- Manuscript versioning system (vs current single jrn_ manifest model).
+- Multi-author collaboration features.
+- OpenAlex/arXiv submission system integration.
+- Manuscript export to publisher submission portals.
+
+Design Section 16 ENDS at Phase 3. The Writer skill design is complete at Phase 3 close.
+
 ## [2.5.6] — 2026-05-20 (patch release; Writer skill Phase 2: rka-writer-tools MCP server + validation pipeline B-G + 5 venues + fetch_template lifecycle)
 
 **Mission**: `mis_01KS2S871YPQ3D5RVY5K3PSQY6`

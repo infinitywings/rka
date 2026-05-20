@@ -174,20 +174,38 @@ Procedure:
 
 Output: `main.pdf`, `audit.json`. The manuscript manifest's `related_journal` gains a pointer to the latest `audit.json` snapshot stored as a `jrn_` if the PI requests durable record.
 
-### 7. Revision-loop handler
+### 7. Revision-loop handler (Phase 3 implementation)
 
-Trigger: PI returns review comments on a draft (post Draft section checkpoint with `revise` option).
+Trigger paths:
 
-Procedure: classify each comment into R1, R2, R3, or R4 per the SKILL.md `Revision Loop` section:
+- **Direct PI invocation** (CLI): `python scripts/revision_handler.py --dispatch --comment "..." --section sections/03.tex --manuscript-id jrn_... --review-state .planning/REVIEW_STATE.md`.
+- **Brain-spawned mission**: a `writer-revision` mission lands with `tags=["writer-revision", "comment-class:<r1|r2|r3|r4>", "manuscript:<jrn_id>"]` plus the structured review comment in `context`. The Writer's Claude Code session reads the mission via `rka_get_mission(id)`, extracts the comment-class tag and the comment, then dispatches to the matching handler. Lifecycle: Brain creates -> Writer picks up -> dispatches -> `rka_submit_report` (success) or `rka_submit_checkpoint` (R4 escalation or REVIEW_STATE three-iteration cap).
 
-- **R1 Factual** (sentence-level): auto-fix inline; re-render; bump `REVIEW_STATE.md` iteration.
-- **R2 Style or AI-tic**: re-run `ai_tic_lint.py` at higher severity; auto-revise.
-- **R3 Inconsistency** (cross-section): structural rewrite of all affected sections; re-render full document.
-- **R4 Logical gap or unsupported claim**: ESCALATE via `rka_create_mission` so the Brain or Executor can gather evidence.
+Procedure:
 
-`.planning/REVIEW_STATE.md` tracks iteration with `iteration: N / max: 3 / verdict: CONTINUE | ESCALATE | COMPLETE`. Three failed iterations auto-escalate to a PI Style or Logical checkpoint with three resolution options.
+1. Classify each comment via `classify_comment(comment_text)` (heuristic-only; regex/keyword/structural patterns).
+2. If `ambiguous=True`, escalate to PI via `rka_submit_checkpoint(type="clarification", ...)` before invoking any handler.
+3. Otherwise dispatch:
 
-Phase 1 documents the Revision Loop; Phase 3 wires the Brain-mission-driven implementation.
+- **R1 Factual** (sentence-level): `handle_factual_r1(comment, section_path, citation_ids, validate_references_script=...)` invokes `validate_references.py` Stage B-G on cited references; produces a factual-correction proposal on VERIFIED; surfaces alternative candidates on HALLUCINATED / RETRACTED.
+- **R2 Style or AI-tic**: `handle_style_r2(comment, section_path, strict=True, ai_tic_lint_script=...)` re-runs `ai_tic_lint.py` at strict mode; reports verdict PASS / WARN / BLOCK; PI reviews residual violations.
+- **R3 Inconsistency** (cross-section): `handle_inconsistency_r3(comment, section_paths, bridge_check_script=...)` uses `bridge_repetition_check.py` at ratio >= 0.7 to surface near-duplicate sentence pairs across sections; the Writer reasons over each pair to decide if it is an intentional restatement or a contradiction.
+- **R4 Logical gap or unsupported claim**: `handle_logical_r4(comment, section_path, manuscript_id, rka_client=...)` ESCALATES by preparing a `writer_evidence_gap` mission payload addressed to Brain; Writer waits for Brain's evidence-gap response.
+
+Classifier discipline (per `dec_01KS2WPKMRVSJ2R0PP74722PEH` Brain ratification 2026-05-20): `classify_comment` is heuristic-only because the Writer is itself a Claude Code session. The Writer's runtime IS the LLM-assisted reasoning layer that reviews comment + heuristic result before invoking any handler. No server-side LLM call.
+
+REVIEW_STATE.md iteration tracking:
+
+- `read_review_state(path)` parses `.planning/REVIEW_STATE.md` per the workspace template schema.
+- `advance_review_state(state, success, note)` increments iteration and computes the verdict:
+  - `success=True` -> `COMPLETE`.
+  - `success=False` AND `iteration+1 < max` -> `CONTINUE`.
+  - `success=False` AND `iteration+1 >= max` -> `ESCALATE`.
+- Max iterations 3 per comment. The third failed iteration auto-escalates to a PI Style or Logical checkpoint with three resolution options.
+
+Venue-aware overrides: `load_venue_overrides(venue_md_path)` reads per-venue `references/venue/<venue>.md` Forbidden-constructions field for stricter rules. The R2 style handler optionally consults these on top of universal `ai_tic_lint` rules.
+
+Phase 3 ships the implementation. Phase 4+ (manuscript search UI, versioning, multi-author, OpenAlex/arXiv submission, manuscript export) is deferred indefinitely per `mis_01KS2WW6MRN6AXP11EMCSCDFAR` scope_boundaries.
 
 ## Checkpoint UX patterns
 

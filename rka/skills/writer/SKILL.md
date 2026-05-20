@@ -27,12 +27,21 @@ Iron Law: **draft but do not assert.** If you find yourself wanting to state a f
 
 ## Session Start
 
+Two invocation paths land in this skill (Phase 3 expansion per `dec_01KS2WPKMRVSJ2R0PP74722PEH`):
+
+(a) **Direct PI invocation** (Phase 1 default). The PI launches `claude` in a manuscript working directory and starts a fresh drafting session. Run the numbered steps below.
+
+(b) **Mission-spawned invocation** (Phase 3 NEW). The Brain spawns a `writer-revision` mission via `rka_create_mission(...)` with `tags=["writer-revision", "comment-class:<r1|r2|r3|r4>", "manuscript:<jrn_id>"]` and the structured review comment in `context`. A fresh Claude Code subagent picks up the mission, dispatches to `scripts/revision_handler.py` per the comment-class hint, and reports via `rka_submit_report` when revision completes (or escalates via `rka_submit_checkpoint` on R4 logical gap or REVIEW_STATE three-iteration cap). Full lifecycle: [`references/workflows.md`](references/workflows.md) section "Revision Loop (Phase 3)".
+
+### Steps (both invocation paths)
+
 1. **`rka_get_status()` first.** Confirms the active project. If it returns `proj_default` or a project other than the one you intend, call `rka_list_projects()` then `rka_set_project(project_id)` to switch. The MCP `_session.project_id` is per-process and ephemeral; previous-session state does not carry over. Set `RKA_PROJECT=<project_id>` in `.mcp.json` env to make the active project automatic for this workspace.
-2. `rka_get_changelog(since="<last writing session>")`: what changed in RKA since you last drafted on this project.
-3. `rka_get_research_map()`: structural overview of clusters and claims available to cite.
-4. Read `.planning/ACTIVE_WORKFLOW.md` if present. Resume the recorded `next_action`. If absent, infer phase from the working directory: no `OUTLINE.md` means start with the Venue checkpoint; outline present but no drafts in `sections/` means proceed to Table and figure planning.
-5. Verify `.mcp.json` lists the `rka` server (required). Phase 1 does not require `rka-writer-tools`; if absent, validation falls back to `scripts/validate_references.py` Stage A pass-through.
-6. Greet the PI with the inferred state and the next checkpoint or action.
+2. **If mission-spawned (path b)**: read `mission_id` from env var `WRITER_MISSION_ID` or CLI arg. Call `rka_get_mission(id=mission_id)`; extract `tags` (look for `comment-class:<r>` and `manuscript:<id>` markers) and `context` (review comment text). If `comment-class` tag is absent OR `classify_comment(context)` returns `ambiguous=True`, escalate to PI via `rka_submit_checkpoint(type="clarification", description="Ambiguous comment class; PI to classify or supersede the mission.")` before invoking any handler. Otherwise dispatch directly to `scripts/revision_handler.py` per the comment-class hint; skip steps 3-6.
+3. `rka_get_changelog(since="<last writing session>")`: what changed in RKA since you last drafted on this project.
+4. `rka_get_research_map()`: structural overview of clusters and claims available to cite.
+5. Read `.planning/ACTIVE_WORKFLOW.md` if present. Resume the recorded `next_action`. If absent, infer phase from the working directory: no `OUTLINE.md` means start with the Venue checkpoint; outline present but no drafts in `sections/` means proceed to Table and figure planning.
+6. Verify `.mcp.json` lists the `rka` server (required) plus `rka-writer-tools` (Phase 2; required for Stage B-G validation). The Phase 3 optional tools `rka_get_manuscript`, `rka_validate_reference`, `rka_register_manuscript` are available on the core `rka` MCP server when `rka` is installed at v2.5.7+ (see Phase 3 docs).
+7. Greet the PI (path a) or surface the mission state (path b) with the inferred next checkpoint or handler dispatch.
 
 Full worked walkthrough: [`references/workflows.md`](references/workflows.md) section "Session Start".
 
@@ -241,18 +250,20 @@ Full checklist with regex patterns: [`references/latex_audit.md`](references/lat
 
 ## Revision Loop
 
-When the PI returns review comments on a draft section, classify each comment into one of four shapes and apply the matching procedure:
+When the PI returns review comments on a draft section, classify each comment into one of four shapes and apply the matching procedure. The Phase 3 implementation lives in `scripts/revision_handler.py` (per `dec_01KS2WPKMRVSJ2R0PP74722PEH`) and is invoked either directly by the PI (CLI: `python scripts/revision_handler.py --dispatch --comment "..." --section sections/03.tex`) or via a Brain-spawned `writer-revision` mission (see Session Start path b above).
 
-| Class | Comment type | Procedure |
+| Class | Comment type | Procedure (handler) |
 |---|---|---|
-| R1 | Factual (sentence-level) | inline auto-fix; re-render; bump `REVIEW_STATE` iteration |
-| R2 | Style or AI-tic | apply `ai_tic_lint.py` at stricter threshold; auto-revise; track in `REVIEW_STATE` |
-| R3 | Inconsistency (cross-section) | structural rewrite of all affected sections; re-render the full document |
-| R4 | Logical gap or unsupported claim | ESCALATE: file `rka_create_mission` for the Brain or Executor to gather evidence |
+| R1 | Factual (sentence-level) | `handle_factual_r1`: re-validate cited reference via `validate_references.py` Stage B-G; draft factual correction on VERIFIED or surface alternative-candidate notes on HALLUCINATED/RETRACTED |
+| R2 | Style or AI-tic | `handle_style_r2`: re-run `ai_tic_lint.py` with strict mode; surface verdict (PASS/WARN/BLOCK); PI reviews residual violations |
+| R3 | Inconsistency (cross-section) | `handle_inconsistency_r3`: cross-section claim diff via `bridge_repetition_check.py` (ratio >= 0.7); high-similarity pairs flagged for reconciliation |
+| R4 | Logical gap or unsupported claim | `handle_logical_r4`: ESCALATE via `rka_create_mission(type="writer_evidence_gap", ...)` addressed to Brain; Writer waits for Brain's evidence-gap response |
 
-`.planning/REVIEW_STATE.md` tracks `iteration: N / max: 3 / verdict: CONTINUE | ESCALATE | COMPLETE`. The third failed iteration auto-escalates to a PI Style or Logical checkpoint with three resolution options.
+**Classifier discipline**: `classify_comment(comment_text)` is heuristic-only (regex/keyword/structural patterns; no server-side LLM call). The Writer's Claude Code session IS the LLM-assisted reasoning layer that reviews (comment + heuristic result) before invoking any handler. When `classify_comment` returns `ambiguous=True`, the Writer escalates to PI before dispatching.
 
-Phase 1 documents the Revision Loop as the contract; the Brain-mission-driven implementation lands in Phase 3 per the design doc Section 16.
+`.planning/REVIEW_STATE.md` tracks `iteration: N / max: 3 / verdict: CONTINUE | ESCALATE | COMPLETE`. The third failed iteration auto-escalates to a PI Style or Logical checkpoint with three resolution options. See `read_review_state` and `advance_review_state` helpers in `scripts/revision_handler.py`.
+
+Venue-aware overrides: per-venue `references/venue/<venue>.md` may carry stricter rules (Forbidden constructions field). The R2 style handler optionally loads these via `load_venue_overrides`.
 
 ---
 
