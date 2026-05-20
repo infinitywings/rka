@@ -53,12 +53,22 @@ services:
       # Defaults match the v2.5.3-hypothesis Config 1 in the sweep.
       RKA_CTX_W_IMP: "${RKA_CTX_W_IMP:-0.5}"
       RKA_CTX_W_CENT: "${RKA_CTX_W_CENT:-0.3}"
-      RKA_CTX_W_RECENCY: "${RKA_CTX_W_RECENCY:-0.2}"
+      # Phase-3.1 T5 cfg11 winner (mis_01KS3EB2671CDD4V9RZCMYCEH1; Brain
+      # ratification of chk_01KS3K40N6JRHV118969RMBNF0): w_recency default
+      # lowered 0.20 → 0.15.
+      RKA_CTX_W_RECENCY: "${RKA_CTX_W_RECENCY:-0.15}"
       RKA_CTX_PI_LIFT: "${RKA_CTX_PI_LIFT:-0.125}"
-      # v2.5.4 D4 (mis_01KS0C8BKTHCA8GB38BGDR1PTQ T1): top-K cap for the
-      # anchor-aware-present truncation path. Sweep harness sets this to
-      # 30 / 50 / 75 across configs; default 30.
-      RKA_CTX_BUNDLE_K: "${RKA_CTX_BUNDLE_K:-30}"
+      # Phase-3.1 T5 cfg11 winner: bundle_K default raised 50 → 80, the
+      # Pareto-best point on the recall × efficiency frontier (hits the
+      # structural recall ceiling 0.822 while preserving acceptable
+      # ordering). Always-on post-rank-merge truncation introduced in T2;
+      # T5 pins K at the sweep winner.
+      RKA_CTX_BUNDLE_K: "${RKA_CTX_BUNDLE_K:-80}"
+      # Phase-3.1 T5 cfg11 winner: recency-decay shape pinned at N=1 (the
+      # simplest shape; the sweep showed N ∈ {1, 30, 90, 365} effects were
+      # within noise, so backward-compat wins by tie-break). Operator
+      # override via RKA_CTX_RECENCY_SHAPE_N preserved.
+      RKA_CTX_RECENCY_SHAPE_N: "${RKA_CTX_RECENCY_SHAPE_N:-1}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -78,12 +88,22 @@ services:
       # Defaults match the v2.5.3-hypothesis Config 1 in the sweep.
       RKA_CTX_W_IMP: "${RKA_CTX_W_IMP:-0.5}"
       RKA_CTX_W_CENT: "${RKA_CTX_W_CENT:-0.3}"
-      RKA_CTX_W_RECENCY: "${RKA_CTX_W_RECENCY:-0.2}"
+      # Phase-3.1 T5 cfg11 winner (mis_01KS3EB2671CDD4V9RZCMYCEH1; Brain
+      # ratification of chk_01KS3K40N6JRHV118969RMBNF0): w_recency default
+      # lowered 0.20 → 0.15.
+      RKA_CTX_W_RECENCY: "${RKA_CTX_W_RECENCY:-0.15}"
       RKA_CTX_PI_LIFT: "${RKA_CTX_PI_LIFT:-0.125}"
-      # v2.5.4 D4 (mis_01KS0C8BKTHCA8GB38BGDR1PTQ T1): top-K cap for the
-      # anchor-aware-present truncation path. Sweep harness sets this to
-      # 30 / 50 / 75 across configs; default 30.
-      RKA_CTX_BUNDLE_K: "${RKA_CTX_BUNDLE_K:-30}"
+      # Phase-3.1 T5 cfg11 winner: bundle_K default raised 50 → 80, the
+      # Pareto-best point on the recall × efficiency frontier (hits the
+      # structural recall ceiling 0.822 while preserving acceptable
+      # ordering). Always-on post-rank-merge truncation introduced in T2;
+      # T5 pins K at the sweep winner.
+      RKA_CTX_BUNDLE_K: "${RKA_CTX_BUNDLE_K:-80}"
+      # Phase-3.1 T5 cfg11 winner: recency-decay shape pinned at N=1 (the
+      # simplest shape; the sweep showed N ∈ {1, 30, 90, 365} effects were
+      # within noise, so backward-compat wins by tie-break). Operator
+      # override via RKA_CTX_RECENCY_SHAPE_N preserved.
+      RKA_CTX_RECENCY_SHAPE_N: "${RKA_CTX_RECENCY_SHAPE_N:-1}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
