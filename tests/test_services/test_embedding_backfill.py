@@ -77,7 +77,10 @@ async def test_run_backfill_empty_pending_completes_immediately(db):
     await db.execute("UPDATE claims SET embedding_pending = 0")
     await db.commit()
 
-    result = await svc.run_backfill(status)
+    # v2.5.5: scope to claim type only — the v2.4 surface this test
+    # locks down. With entity_types=None the loop sweeps all six types
+    # which is exercised separately in the new T5 tests.
+    result = await svc.run_backfill(status, entity_types=("claim",))
     assert result.state == "complete"
     assert result.total == 0
     assert result.processed == 0
@@ -97,7 +100,7 @@ async def test_run_backfill_processes_all_pending_claims(db):
     ids = await _insert_pending_claims(db, jid="jrn_t5_full", count=7)
 
     svc = BackfillService(db=db, embeddings=FakeEmbedder(dim=4), batch_size=3)
-    result = await svc.run_backfill(status)
+    result = await svc.run_backfill(status, entity_types=("claim",))
 
     assert result.state == "complete"
     assert result.total == 7
@@ -140,7 +143,7 @@ async def test_run_backfill_progress_callback_receives_status(db):
         captured.append(s.snapshot())
 
     svc = BackfillService(db=db, embeddings=FakeEmbedder(dim=4), batch_size=2)
-    await svc.run_backfill(status, progress_callback=cb)
+    await svc.run_backfill(status, progress_callback=cb, entity_types=("claim",))
 
     # Callback fires at least at start + per-batch + at end.
     assert len(captured) >= 3
@@ -166,7 +169,7 @@ async def test_run_backfill_progress_callback_can_be_async(db):
         captured.append(s.processed)
 
     svc = BackfillService(db=db, embeddings=FakeEmbedder(dim=4), batch_size=2)
-    await svc.run_backfill(status, progress_callback=cb)
+    await svc.run_backfill(status, progress_callback=cb, entity_types=("claim",))
     assert captured  # at least one progress event recorded
 
 
@@ -186,7 +189,7 @@ async def test_run_backfill_marks_failed_on_batch_embed_error(db):
     # The embedder explodes when it sees content "text-clm_t5_fail_002".
     embedder = FakeEmbedder(dim=4, fail_on_text="clm_t5_fail_002")
     svc = BackfillService(db=db, embeddings=embedder, batch_size=4)
-    result = await svc.run_backfill(status)
+    result = await svc.run_backfill(status, entity_types=("claim",))
 
     assert result.state == "failed"
     assert "batch embed failed" in result.error
@@ -220,7 +223,7 @@ async def test_run_backfill_resumes_remaining_after_partial_completion(db):
     status1 = register_job()
     embedder1 = FakeEmbedder(dim=4, fail_on_text="clm_t5_resume_004")
     svc1 = BackfillService(db=db, embeddings=embedder1, batch_size=2)
-    r1 = await svc1.run_backfill(status1)
+    r1 = await svc1.run_backfill(status1, entity_types=("claim",))
     assert r1.state == "failed"
     # 4 claims succeeded before the failure.
     assert r1.processed == 4
@@ -237,7 +240,7 @@ async def test_run_backfill_resumes_remaining_after_partial_completion(db):
     status2 = register_job()
     embedder2 = FakeEmbedder(dim=4)  # no fault
     svc2 = BackfillService(db=db, embeddings=embedder2, batch_size=2)
-    r2 = await svc2.run_backfill(status2)
+    r2 = await svc2.run_backfill(status2, entity_types=("claim",))
     assert r2.state == "complete"
     assert r2.total == 2
     assert r2.processed == 2
@@ -270,7 +273,7 @@ async def test_run_backfill_iterates_in_id_ascending_order(db):
 
     embedder = FakeEmbedder(dim=4)
     svc = BackfillService(db=db, embeddings=embedder, batch_size=2)
-    await svc.run_backfill(status)
+    await svc.run_backfill(status, entity_types=("claim",))
 
     # Flatten all embed_batch calls in order and verify the texts are
     # monotonically increasing in id (which equals text order since the
@@ -291,7 +294,7 @@ async def test_run_backfill_status_total_set_to_initial_count(db):
     await _insert_pending_claims(db, jid="jrn_t5_total", count=4, prefix="clm_t5_total_")
 
     svc = BackfillService(db=db, embeddings=FakeEmbedder(dim=4), batch_size=2)
-    result = await svc.run_backfill(status)
+    result = await svc.run_backfill(status, entity_types=("claim",))
     assert result.total == 4
 
 
@@ -328,7 +331,7 @@ async def test_backfill_error_includes_exception_class_when_message_empty(db):
     await _insert_pending_claims(db, jid="jrn_v241_err", count=2, prefix="clm_v241_err_")
 
     svc = BackfillService(db=db, embeddings=_NoMessageEmbedder(), batch_size=2)
-    result = await svc.run_backfill(status)
+    result = await svc.run_backfill(status, entity_types=("claim",))
 
     assert result.state == "failed"
     # The class name MUST appear in status.error even when the exception has
