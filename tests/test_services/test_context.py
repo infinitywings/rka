@@ -475,6 +475,7 @@ class TestV2_5_4EnvVarConfigurableCoefficients:
             "RKA_CTX_W_CENT",
             "RKA_CTX_W_RECENCY",
             "RKA_CTX_PI_LIFT",
+            "RKA_CTX_RECENCY_SHAPE_N",
         ):
             monkeypatch.delenv(var, raising=False)
         ctx._reload_coefficients_from_env()
@@ -482,9 +483,12 @@ class TestV2_5_4EnvVarConfigurableCoefficients:
         assert ctx._W_CENTRALITY == 0.3
         assert ctx._W_RECENCY == 0.2
         assert ctx._PI_SOURCE_LIFT_NORMALIZED == 0.125
+        # Phase-3.1: N=1 is the backward-compat default (preserves the
+        # pre-refactor 1/(1+days) shape exactly).
+        assert ctx._RECENCY_SHAPE_N == 1.0
 
     def test_env_vars_override_defaults(self, monkeypatch: pytest.MonkeyPatch):
-        """Setting the four RKA_CTX_* env vars overrides the module-level
+        """Setting the five RKA_CTX_* env vars overrides the module-level
         constants when _reload_coefficients_from_env() runs. This is the
         production swap pattern: docker restart with env → fresh import
         → fresh constants."""
@@ -494,11 +498,13 @@ class TestV2_5_4EnvVarConfigurableCoefficients:
         monkeypatch.setenv("RKA_CTX_W_CENT", "0.2")
         monkeypatch.setenv("RKA_CTX_W_RECENCY", "0.1")
         monkeypatch.setenv("RKA_CTX_PI_LIFT", "0.3")
+        monkeypatch.setenv("RKA_CTX_RECENCY_SHAPE_N", "90")
         ctx._reload_coefficients_from_env()
         assert ctx._W_IMPORTANCE == 0.7
         assert ctx._W_CENTRALITY == 0.2
         assert ctx._W_RECENCY == 0.1
         assert ctx._PI_SOURCE_LIFT_NORMALIZED == 0.3
+        assert ctx._RECENCY_SHAPE_N == 90.0
 
         # Restore defaults so subsequent tests in the same module aren't
         # affected by env-var bleed.
@@ -507,6 +513,7 @@ class TestV2_5_4EnvVarConfigurableCoefficients:
             "RKA_CTX_W_CENT",
             "RKA_CTX_W_RECENCY",
             "RKA_CTX_PI_LIFT",
+            "RKA_CTX_RECENCY_SHAPE_N",
         ):
             monkeypatch.delenv(var, raising=False)
         ctx._reload_coefficients_from_env()
@@ -522,6 +529,158 @@ class TestV2_5_4EnvVarConfigurableCoefficients:
         ctx._reload_coefficients_from_env()
         assert ctx._W_IMPORTANCE == 0.5  # default preserved
         monkeypatch.delenv("RKA_CTX_W_IMP", raising=False)
+        ctx._reload_coefficients_from_env()
+
+
+# ---------------------------------------------------------------------------
+# Phase-3.1 T1 — recency_score env-var-configurable shape
+# (mis_01KS3EB2671CDD4V9RZCMYCEH1 T1; per dec_01KS3E6ZJXXV7542QPWZ9W8BQS)
+# ---------------------------------------------------------------------------
+
+
+class TestPhase3_1RecencyShape:
+    """Phase-3.1 generalizes ``recency_score`` from hardcoded
+    ``1/(1+days)`` to env-var-configurable ``1/(1+days/N)``. Default N=1
+    is bit-identical to the pre-refactor formula (backward-compat). Larger
+    N produces slower decay; the v2.5.4-D4 / corpus-refresh diagnosis
+    identified the steep N=1 shape as the source of recency
+    over-amplification (jrn_01KS0RM9VXT2HHXDN76VXKTFTS Brain sketch).
+
+    Pure-function tests of ``_compute_recency_score(days, shape_n)`` —
+    no DB fixtures, no clock dependence."""
+
+    def test_shape_n1_matches_pre_phase_3_1_formula(self):
+        """N=1 reproduces ``1/(1+days)`` bit-for-bit. This is the
+        backward-compat default. Tested at the boundary values that
+        appear in the Brain sketch's mechanism table
+        (jrn_01KS0RM9VXT2HHXDN76VXKTFTS):
+
+        ┌─────┬────────────────┐
+        │ days│  1/(1+days)    │
+        ├─────┼────────────────┤
+        │   0 │ 1.000          │
+        │   1 │ 0.500          │
+        │   3 │ 0.250          │
+        │   7 │ 0.125          │
+        │  30 │ 0.032258...    │
+        │  90 │ 0.010989...    │
+        │ 365 │ 0.002732...    │
+        └─────┴────────────────┘
+        """
+        from rka.services.context import _compute_recency_score
+
+        cases = [
+            (0.0, 1.0),
+            (1.0, 0.5),
+            (3.0, 0.25),
+            (7.0, 0.125),
+            (30.0, 1.0 / 31.0),
+            (90.0, 1.0 / 91.0),
+            (365.0, 1.0 / 366.0),
+        ]
+        for days, expected in cases:
+            got = _compute_recency_score(days, 1.0)
+            assert got == pytest.approx(expected, rel=1e-12), (
+                f"N=1 must reproduce 1/(1+days) bit-for-bit; days={days}: "
+                f"got {got!r}, expected {expected!r}."
+            )
+
+    def test_shape_n30_thirty_day_half_life(self):
+        """N=30 produces a 30-day half-life: an entry that is 30 days old
+        scores exactly 0.5 (versus 0.0323 at N=1). 90-day entries score
+        0.25 (versus 0.011 at N=1). The Brain sketch table confirms these
+        targets as the "smoother decay" lever for Phase-3.1's A/B sweep."""
+        from rka.services.context import _compute_recency_score
+
+        # 30-day half-life shape:
+        assert _compute_recency_score(0.0, 30.0) == pytest.approx(1.0)
+        assert _compute_recency_score(30.0, 30.0) == pytest.approx(0.5)
+        assert _compute_recency_score(60.0, 30.0) == pytest.approx(1.0 / 3.0)
+        assert _compute_recency_score(90.0, 30.0) == pytest.approx(0.25)
+        # Compare against N=1 to confirm the shape difference is in the
+        # expected direction (slower decay at higher N).
+        assert _compute_recency_score(30.0, 30.0) > _compute_recency_score(
+            30.0, 1.0
+        ), "N=30 must produce a LARGER recency_score at 30 days than N=1."
+
+    def test_shape_n365_year_half_life(self):
+        """N=365 produces a year half-life: a 365-day-old entry scores
+        exactly 0.5 (versus 0.0027 at N=1). This is the "most stable
+        against DB drift" extreme of the sweep matrix."""
+        from rka.services.context import _compute_recency_score
+
+        assert _compute_recency_score(0.0, 365.0) == pytest.approx(1.0)
+        assert _compute_recency_score(365.0, 365.0) == pytest.approx(0.5)
+        # 730 days = 2 years = 1/3 at year-half-life shape.
+        assert _compute_recency_score(730.0, 365.0) == pytest.approx(1.0 / 3.0)
+        # Confirm the shape is monotonically slower-decaying than N=1.
+        for days in [30.0, 90.0, 180.0, 365.0]:
+            assert _compute_recency_score(days, 365.0) > _compute_recency_score(
+                days, 1.0
+            ), f"N=365 must produce a larger score than N=1 at {days} days."
+
+    def test_env_var_recency_shape_n_loads_and_drives_score(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """``RKA_CTX_RECENCY_SHAPE_N`` env var feeds through
+        ``_reload_coefficients_from_env`` into ``_RECENCY_SHAPE_N``, which
+        the staticmethod ``ContextEngine._recency_score`` consults. End-
+        to-end: set env, reload, score an entry, verify the shape changed.
+
+        This is the production swap pattern the T4 sweep harness will use
+        (set RKA_CTX_RECENCY_SHAPE_N=30 / 90 / 365 between configs).
+        """
+        import rka.services.context as ctx
+
+        # Baseline: no env var → default N=1.
+        monkeypatch.delenv("RKA_CTX_RECENCY_SHAPE_N", raising=False)
+        ctx._reload_coefficients_from_env()
+        assert ctx._RECENCY_SHAPE_N == 1.0, "default must be N=1.0"
+
+        # Set N=30, reload, verify the constant changes.
+        monkeypatch.setenv("RKA_CTX_RECENCY_SHAPE_N", "30")
+        ctx._reload_coefficients_from_env()
+        assert ctx._RECENCY_SHAPE_N == 30.0
+
+        # A 30-day-old entry now scores 0.5 (not 0.0323 from N=1).
+        from datetime import datetime, timedelta, timezone
+
+        thirty_days_ago = (
+            datetime.now(timezone.utc) - timedelta(days=30)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        entry = {"created_at": thirty_days_ago}
+        score = ctx.ContextEngine._recency_score(entry)
+        # Allow a small tolerance for the sub-second clock between
+        # the fixture timestamp and `now` inside _recency_score.
+        assert score == pytest.approx(0.5, abs=0.005), (
+            f"At N=30, a 30-day-old entry should score ~0.5; got {score!r}."
+        )
+
+        # Cleanup: restore default for subsequent tests in the suite.
+        monkeypatch.delenv("RKA_CTX_RECENCY_SHAPE_N", raising=False)
+        ctx._reload_coefficients_from_env()
+
+    def test_invalid_shape_n_falls_back_to_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Operator typo (non-numeric or non-positive value) must not
+        crash the engine. Non-numeric → ``_read_coeff`` logs a warning
+        and returns the default. Zero/negative → ``_compute_recency_score``
+        defensively reproduces the backward-compat N=1 shape."""
+        import rka.services.context as ctx
+        from rka.services.context import _compute_recency_score
+
+        # Non-numeric env value → default preserved.
+        monkeypatch.setenv("RKA_CTX_RECENCY_SHAPE_N", "not-a-float")
+        ctx._reload_coefficients_from_env()
+        assert ctx._RECENCY_SHAPE_N == 1.0
+
+        # Zero / negative N → defensive fallback to N=1 inside the pure helper.
+        assert _compute_recency_score(30.0, 0.0) == pytest.approx(1.0 / 31.0)
+        assert _compute_recency_score(30.0, -1.0) == pytest.approx(1.0 / 31.0)
+
+        # Cleanup.
+        monkeypatch.delenv("RKA_CTX_RECENCY_SHAPE_N", raising=False)
         ctx._reload_coefficients_from_env()
 
 

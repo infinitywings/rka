@@ -76,6 +76,13 @@ _DEFAULT_W_RECENCY = 0.2
 # Per mission assumption 7, PI lift is NOT part of the A/B sweep; the env
 # var exists for operator flexibility only.
 _DEFAULT_PI_SOURCE_LIFT_NORMALIZED = 0.125
+# Phase-3.1 (mis_01KS3EB2671CDD4V9RZCMYCEH1 T1): recency decay shape
+# parameter. score = 1 / (1 + days/N). N=1 reproduces the pre-Phase-3.1
+# 1/(1+days) shape exactly (backward-compat default). Larger N produces
+# slower decay (N=30 → 30-day half-life; N=365 → year half-life). The
+# v2.5.4-D4 / corpus-refresh diagnosis identified the steep N=1 shape as
+# the source of recency over-amplification.
+_DEFAULT_RECENCY_SHAPE_N = 1.0
 
 
 def _read_coeff(env_var: str, default: float) -> float:
@@ -101,11 +108,15 @@ def _reload_coefficients_from_env() -> None:
     process → fresh module import → fresh constants (no need to call this).
     """
     global _W_IMPORTANCE, _W_CENTRALITY, _W_RECENCY, _PI_SOURCE_LIFT_NORMALIZED
+    global _RECENCY_SHAPE_N
     _W_IMPORTANCE = _read_coeff("RKA_CTX_W_IMP", _DEFAULT_W_IMPORTANCE)
     _W_CENTRALITY = _read_coeff("RKA_CTX_W_CENT", _DEFAULT_W_CENTRALITY)
     _W_RECENCY = _read_coeff("RKA_CTX_W_RECENCY", _DEFAULT_W_RECENCY)
     _PI_SOURCE_LIFT_NORMALIZED = _read_coeff(
         "RKA_CTX_PI_LIFT", _DEFAULT_PI_SOURCE_LIFT_NORMALIZED
+    )
+    _RECENCY_SHAPE_N = _read_coeff(
+        "RKA_CTX_RECENCY_SHAPE_N", _DEFAULT_RECENCY_SHAPE_N
     )
 
 
@@ -115,6 +126,31 @@ _W_RECENCY: float = _read_coeff("RKA_CTX_W_RECENCY", _DEFAULT_W_RECENCY)
 _PI_SOURCE_LIFT_NORMALIZED: float = _read_coeff(
     "RKA_CTX_PI_LIFT", _DEFAULT_PI_SOURCE_LIFT_NORMALIZED
 )
+_RECENCY_SHAPE_N: float = _read_coeff(
+    "RKA_CTX_RECENCY_SHAPE_N", _DEFAULT_RECENCY_SHAPE_N
+)
+
+def _compute_recency_score(days: float, shape_n: float) -> float:
+    """Pure ``1 / (1 + days / shape_n)`` clamped to [0, 1].
+
+    Phase-3.1 (mis_01KS3EB2671CDD4V9RZCMYCEH1 T1): generalizes the
+    pre-Phase-3.1 ``1/(1+days)`` to ``1/(1+days/N)``. N=1 is the
+    backward-compat default (bit-identical to the pre-refactor formula).
+    Larger N produces slower decay (a 30-day-old entry scores 0.5 at N=30
+    vs 0.032 at N=1; a 365-day-old entry scores 0.5 at N=365 vs 0.003 at
+    N=1). Negative or zero ``shape_n`` raises ZeroDivisionError-equivalent
+    behavior via a defensive fallback to N=1 — operators should set
+    positive values; tests should pin the shape they're exercising.
+    """
+    if shape_n <= 0:
+        # Defensive: a non-positive N would either divide-by-zero or invert
+        # the decay direction. Treat as misconfiguration and reproduce the
+        # backward-compat shape rather than crashing the engine.
+        shape_n = 1.0
+    days = max(0.0, days)
+    score = 1.0 / (1.0 + days / shape_n)
+    return max(0.0, min(1.0, score))
+
 
 # ---------------------------------------------------------------------------
 # v2.5.4 (D4 — mis_01KS0C8BKTHCA8GB38BGDR1PTQ): bundle-truncation policy with
@@ -331,10 +367,11 @@ class ContextEngine:
 
     @staticmethod
     def _recency_score(entry: dict) -> float:
-        """1.0 / (1 + days_since_created), clamped to [0, 1].
+        """``_compute_recency_score(days_since_created, _RECENCY_SHAPE_N)``.
 
-        Naturally in (0, 1]; the clamp is defensive against future-dated rows
-        (would compute to >1) and parse failures (default 0.0 = ancient).
+        Parses the entry's ``created_at`` timestamp, derives days-since,
+        and delegates to the pure helper. Backward-compat at N=1 reproduces
+        the pre-Phase-3.1 ``1/(1+days)`` shape bit-for-bit.
         """
         raw = entry.get("created_at") or ""
         if not raw:
@@ -349,8 +386,7 @@ class ContextEngine:
         delta = (datetime.now(timezone.utc) - ts).total_seconds() / 86400.0
         # Future-dated rows (clock skew, fixtures) clamp to "today".
         days = max(0.0, delta)
-        score = 1.0 / (1.0 + days)
-        return max(0.0, min(1.0, score))
+        return _compute_recency_score(days, _RECENCY_SHAPE_N)
 
     @classmethod
     def _overview_score(cls, entry: dict) -> float:
