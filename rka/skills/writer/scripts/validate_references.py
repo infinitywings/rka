@@ -587,6 +587,7 @@ def validate_all(
     refs: list[dict[str, Any]],
     *,
     budget=None,
+    project_dir=None,
     check_retraction: bool = True,
     check_disambiguation: bool = False,
 ) -> AuditReport:
@@ -594,9 +595,15 @@ def validate_all(
 
     Each input ref dict needs at least DOI or title. Additional fields
     (author, affiliation hints) refine Stages D/E.
+
+    Budget resolution order (per dec_01KS2S22VV5P5SWWXNBXQDHMGX T3):
+        1. Caller-supplied budget kwarg (highest precedence)
+        2. project_dir/ai_tic_config.yaml [serpapi.budget] overlay
+        3. SERPAPI_BUDGET env var
+        4. DEFAULT_BUDGET constant (200)
     """
     if budget is None and _serpapi is not None:
-        budget = _serpapi.default_budget_from_env()
+        budget = _serpapi.resolve_budget(project_dir=project_dir)
 
     verdicts: list[ReferenceVerdict] = []
     for ref in refs:
@@ -647,6 +654,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Skip Stage D retraction check")
     parser.add_argument("--check-disambiguation", action="store_true",
                         help="Run Stage E author disambiguation")
+    parser.add_argument("--project-dir", type=Path, default=None,
+                        help="Manuscript working dir; loads ai_tic_config.yaml SerpAPI budget overlay")
     args = parser.parse_args(argv)
 
     if args.check:
@@ -674,6 +683,7 @@ def main(argv: list[str] | None = None) -> int:
             refs = [refs]
         report = validate_all(
             refs,
+            project_dir=args.project_dir,
             check_retraction=not args.no_retraction,
             check_disambiguation=args.check_disambiguation,
         )

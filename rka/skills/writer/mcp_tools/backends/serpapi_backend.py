@@ -101,6 +101,68 @@ def default_budget_from_env() -> CreditBudget:
     return CreditBudget(budget=budget)
 
 
+def budget_from_project_config(project_dir) -> CreditBudget | None:
+    """Read per-project SerpAPI budget from ai_tic_config.yaml if present.
+
+    Per dec_01KS2S22VV5P5SWWXNBXQDHMGX (Phase 2 scope): the SerpAPI credit
+    budget is configurable via the SERPAPI_BUDGET env var OR a per-project
+    ai_tic_config.yaml overlay. The YAML schema for the overlay is:
+
+        # ai_tic_config.yaml (in a manuscripts/<project>/<venue>/ directory)
+        serpapi:
+          budget: 500
+
+    Resolution order (caller chooses):
+        1. Per-project ai_tic_config.yaml (this function)
+        2. SERPAPI_BUDGET env var (default_budget_from_env)
+        3. DEFAULT_BUDGET constant (200)
+
+    Args:
+        project_dir: Path-like pointing at a manuscript working directory
+            (must contain ai_tic_config.yaml).
+
+    Returns:
+        CreditBudget configured from project YAML, or None if no override
+        was found (caller falls back to env or default).
+    """
+    from pathlib import Path
+
+    project_path = Path(project_dir)
+    config_path = project_path / "ai_tic_config.yaml"
+    if not config_path.exists():
+        return None
+    try:
+        import yaml  # type: ignore
+    except ImportError:
+        # PyYAML is not a hard dep; project-config overlay degrades gracefully.
+        return None
+    try:
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return None
+    serpapi_section = (config or {}).get("serpapi") or {}
+    raw_budget = serpapi_section.get("budget")
+    if raw_budget is None:
+        return None
+    try:
+        budget = int(raw_budget)
+    except (TypeError, ValueError):
+        return None
+    return CreditBudget(budget=budget)
+
+
+def resolve_budget(project_dir=None) -> CreditBudget:
+    """Resolve a CreditBudget using the documented overlay order.
+
+    Order: per-project ai_tic_config.yaml -> SERPAPI_BUDGET env -> DEFAULT_BUDGET.
+    """
+    if project_dir is not None:
+        per_project = budget_from_project_config(project_dir)
+        if per_project is not None:
+            return per_project
+    return default_budget_from_env()
+
+
 def google_scholar_search(
     query: str,
     budget: CreditBudget,
