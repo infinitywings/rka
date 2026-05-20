@@ -1,0 +1,42 @@
+# ai_tic_config.yaml : per-project AI-tic linter overrides for this manuscript.
+#
+# Default behavior: HIGH-tier terms (PI verbatim list + Kobak 2025 + Matsui 2025)
+# block by default. CRITICAL hits and absolute bans (em-dash, en-dash, bullet
+# density) cannot be overridden. MEDIUM hits warn by default.
+#
+# Per dec_01KS12H9KT1T03DHX2Q6FKTXHH PATCH 2: anti-AI-tic rules anchor to
+# primary sources, not vendored third-party content.
+#
+# Verdict options per term:
+#   - enable    (default; HIGH terms block, MEDIUM terms warn)
+#   - disable   (skip this term entirely for this project)
+#   - downgrade (HIGH demoted to MEDIUM; MEDIUM demoted to PASS)
+#
+# Custom blocks: project-specific terms PI wants flagged.
+#
+# See: rka/skills/writer/references/ai_tics.md for the full tier table.
+
+# Example overrides (uncomment as appropriate for your manuscript).
+
+# facilitate:
+#   verdict: disable
+#   rationale: "Used in the medical sense (catheter facilitates drainage); domain-legitimate."
+
+# enhance:
+#   verdict: downgrade
+#   rationale: "Engineering manuscript: 'enhance signal-to-noise' is technical, not promotional."
+
+# elevate:
+#   verdict: downgrade
+#   rationale: "Used technically: 'elevate baseline' (a measurement); not generic puffery."
+
+# Project-specific additions (terms PI wants flagged beyond the default list):
+custom_blocks: []
+# Example:
+# custom_blocks:
+#   - term: "robust"
+#     tier: HIGH
+#     rationale: "Project policy: require specific quantification, not generic robustness claims."
+#   - term: "innovative"
+#     tier: HIGH
+#     rationale: "PI dislikes self-promotional contribution framing."
