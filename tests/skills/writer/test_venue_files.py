@@ -56,8 +56,77 @@ def test_emnlp_documents_mandatory_limitations(refs_dir: Path) -> None:
 
 
 def test_venue_files_em_dash_clean(refs_dir: Path) -> None:
-    """Em-dash absolute ban dogfooded in venue files."""
+    """Em-dash absolute ban dogfooded in Phase 1 venue files."""
     for name in ("CHI.md", "EMNLP.md"):
         text = _read(refs_dir / "venue" / name)
         assert chr(0x2014) not in text, f"{name} contains U+2014"
         assert chr(0x2013) not in text, f"{name} contains U+2013"
+
+
+# Phase 2 venue files (USENIX, IEEE-SP, NeurIPS, OSDI, Nature) per
+# dec_01KS2S22VV5P5SWWXNBXQDHMGX Option A deliverable 4.
+
+PHASE_2_VENUES = ["USENIX", "IEEE-SP", "NeurIPS", "OSDI", "Nature"]
+
+
+def test_phase_2_venue_files_all_exist(refs_dir: Path) -> None:
+    for venue in PHASE_2_VENUES:
+        assert (refs_dir / "venue" / f"{venue}.md").exists(), f"{venue}.md missing"
+
+
+def test_usenix_has_all_seven_schema_sections(refs_dir: Path) -> None:
+    text = _read(refs_dir / "venue" / "USENIX.md")
+    for section in REQUIRED_SCHEMA_SECTIONS:
+        assert section in text, f"USENIX.md missing schema section: {section}"
+
+
+def test_ieee_sp_has_all_seven_schema_sections(refs_dir: Path) -> None:
+    text = _read(refs_dir / "venue" / "IEEE-SP.md")
+    for section in REQUIRED_SCHEMA_SECTIONS:
+        assert section in text, f"IEEE-SP.md missing schema section: {section}"
+
+
+def test_neurips_has_all_seven_schema_sections(refs_dir: Path) -> None:
+    text = _read(refs_dir / "venue" / "NeurIPS.md")
+    for section in REQUIRED_SCHEMA_SECTIONS:
+        assert section in text, f"NeurIPS.md missing schema section: {section}"
+
+
+def test_osdi_has_all_seven_schema_sections(refs_dir: Path) -> None:
+    text = _read(refs_dir / "venue" / "OSDI.md")
+    for section in REQUIRED_SCHEMA_SECTIONS:
+        assert section in text, f"OSDI.md missing schema section: {section}"
+
+
+def test_nature_has_all_seven_schema_sections(refs_dir: Path) -> None:
+    text = _read(refs_dir / "venue" / "Nature.md")
+    for section in REQUIRED_SCHEMA_SECTIONS:
+        assert section in text, f"Nature.md missing schema section: {section}"
+
+
+def test_usenix_documents_threat_model_requirement(refs_dir: Path) -> None:
+    """USENIX Security expects an explicit Threat Model section."""
+    text = _read(refs_dir / "venue" / "USENIX.md")
+    assert "Threat Model" in text
+
+
+def test_neurips_documents_paper_checklist(refs_dir: Path) -> None:
+    """NeurIPS Paper Checklist is mandatory since 2021; venue file must say so."""
+    text = _read(refs_dir / "venue" / "NeurIPS.md")
+    assert "Paper Checklist" in text
+    assert "mandatory" in text.lower() or "required" in text.lower()
+
+
+def test_nature_documents_methods_at_end_convention(refs_dir: Path) -> None:
+    """Nature Articles place Methods at the END, unlike conference venues."""
+    text = _read(refs_dir / "venue" / "Nature.md")
+    assert "Methods" in text
+    assert "at end" in text.lower() or "at the end" in text.lower()
+
+
+def test_phase_2_venue_files_em_dash_clean(refs_dir: Path) -> None:
+    """Em-dash absolute ban dogfooded across the 5 new venue files."""
+    for venue in PHASE_2_VENUES:
+        text = _read(refs_dir / "venue" / f"{venue}.md")
+        assert chr(0x2014) not in text, f"{venue}.md contains U+2014"
+        assert chr(0x2013) not in text, f"{venue}.md contains U+2013"

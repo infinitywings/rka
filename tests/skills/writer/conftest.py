@@ -67,6 +67,37 @@ def chart_render():
     return _load_module("chart_render")
 
 
+# Phase 2 mcp_tools backends (proper Python subpackage; import via rka.* path).
+@pytest.fixture
+def crossref_backend():
+    from rka.skills.writer.mcp_tools.backends import crossref
+    return crossref
+
+
+@pytest.fixture
+def openalex_backend():
+    from rka.skills.writer.mcp_tools.backends import openalex
+    return openalex
+
+
+@pytest.fixture
+def semantic_scholar_backend():
+    from rka.skills.writer.mcp_tools.backends import semantic_scholar
+    return semantic_scholar
+
+
+@pytest.fixture
+def arxiv_backend():
+    from rka.skills.writer.mcp_tools.backends import arxiv_backend as ax
+    return ax
+
+
+@pytest.fixture
+def serpapi_backend():
+    from rka.skills.writer.mcp_tools.backends import serpapi_backend as sp
+    return sp
+
+
 @pytest.fixture
 def skill_dir() -> Path:
     return SKILL_DIR

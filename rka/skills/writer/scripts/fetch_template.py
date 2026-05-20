@@ -156,10 +156,18 @@ def compute_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def is_pin_tbd(value: str | None) -> bool:
-    """Return True if a registry pin field is unset or placeholder 'TBD'."""
+def is_pin_tbd(value) -> bool:
+    """Return True if a registry pin field is unset or placeholder 'TBD'.
+
+    Defensive against non-string values (e.g., YAML parsing a numeric-only
+    SHA-256 hex string as int). Treats numeric 0, empty/None, and the
+    literal string 'TBD' (case-insensitive) as TBD; any other non-empty
+    value is treated as set.
+    """
     if not value:
         return True
+    if not isinstance(value, str):
+        return False
     return value.strip().upper() == "TBD"
 
 
