@@ -3999,6 +3999,111 @@ async def rka_get_pending_maintenance() -> str:
 
 
 # ============================================================
+# Manuscript MCP tools (Phase 3 per dec_01KS2WPKMRVSJ2R0PP74722PEH)
+# ============================================================
+# Bookkeeper-exempt addition: 3 new @mcp.tool() functions wrap the
+# manuscript REST endpoints (rka/api/routes/manuscripts.py) which in
+# turn delegate to ManuscriptService (rka/services/manuscript.py).
+# Phase 1+2 strict bookkeeper invariant returns after Phase 3 merges.
+
+
+@tool()
+async def rka_register_manuscript(
+    venue: str,
+    title: str,
+    abstract: str | None = None,
+    sections: list[str] | None = None,
+) -> str:
+    """Create a new manuscript manifest (jrn_ entry tagged 'manuscript').
+
+    Phase 3 deliverable. Wraps the Option 2 manuscript representation
+    (file + jrn_ manifest) ratified in dec_01KS0BKJ5ZJKJ4R19GYAK3QN9D Q1.
+    The manifest carries the title and abstract verbatim plus a section
+    index; tags=['manuscript', f'venue:{venue}', 'phase:draft'].
+
+    Args:
+        venue: Target venue (CHI, EMNLP, USENIX, IEEE-SP, NeurIPS, OSDI, Nature).
+        title: Manuscript title (PI authored; stored verbatim).
+        abstract: Optional manuscript abstract (PI authored; stored verbatim).
+        sections: Optional initial section names; outlined status by default.
+    """
+    payload: dict[str, object] = {"venue": venue, "title": title}
+    if abstract is not None:
+        payload["abstract"] = abstract
+    if sections is not None:
+        payload["sections"] = sections
+    async with _client() as c:
+        r = await c.post("/api/manuscripts", json=payload)
+        _raise_with_detail(r)
+        data = r.json()
+    return json.dumps(data, indent=2)
+
+
+@tool()
+async def rka_get_manuscript(manuscript_id: str) -> str:
+    """Read a manuscript manifest by id.
+
+    Returns 404 if the journal entry does not exist OR if it is not
+    tagged 'manuscript' (in which case it is a regular journal entry,
+    not a Writer manuscript manifest).
+
+    Args:
+        manuscript_id: The jrn_ id of the manuscript manifest.
+    """
+    async with _client() as c:
+        r = await c.get(f"/api/manuscripts/{manuscript_id}")
+        _raise_with_detail(r)
+        data = r.json()
+    return json.dumps(data, indent=2)
+
+
+@tool()
+async def rka_validate_reference(
+    manuscript_id: str,
+    doi: str | None = None,
+    title: str | None = None,
+    author: list[dict] | None = None,
+) -> str:
+    """Validate a single reference via the Writer's Stage B-G pipeline.
+
+    Proxies to scripts/validate_references.py (the Phase 2 full pipeline:
+    Crossref to OpenAlex to Semantic Scholar to arXiv; cross-source
+    confirmation; retraction check; author disambiguation; SerpAPI niche
+    rescue). Returns one of 7 verdict statuses: VERIFIED / FIELD_ERROR /
+    UNVERIFIED / RETRACTED / HALLUCINATED / AUTHOR_MISMATCH /
+    LOW_CONFIDENCE.
+
+    Args:
+        manuscript_id: Manuscript jrn_ id (the reference is recorded
+            against this manuscript's manifest).
+        doi: Reference DOI; preferred identifier.
+        title: Reference title; fallback search key when DOI absent.
+        author: Optional CSL-JSON author list:
+            [{"family": "Smith", "given": "J"}, ...].
+    """
+    if not doi and not title:
+        return json.dumps({
+            "status": "error",
+            "message": "Provide at least one of doi or title.",
+        }, indent=2)
+    payload: dict[str, object] = {}
+    if doi is not None:
+        payload["DOI"] = doi
+    if title is not None:
+        payload["title"] = title
+    if author is not None:
+        payload["author"] = author
+    async with _client() as c:
+        r = await c.post(
+            f"/api/manuscripts/{manuscript_id}/validate-reference",
+            json=payload,
+        )
+        _raise_with_detail(r)
+        data = r.json()
+    return json.dumps(data, indent=2)
+
+
+# ============================================================
 # MCP Prompts — skill files and orientation guides
 # ============================================================
 

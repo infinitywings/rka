@@ -26,6 +26,7 @@ from rka.api.routes import (
     graph as graph_routes,
     literature as literature_routes,
     llm as llm_routes,
+    manuscripts as manuscripts_routes,
     missions as missions_routes,
     notes as notes_routes,
     project as project_routes,
@@ -288,6 +289,7 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
 
     app.include_router(project_routes.router, prefix="/api", tags=["project"])
     app.include_router(notes_routes.router, prefix="/api", tags=["notes"])
+    app.include_router(manuscripts_routes.router, prefix="/api", tags=["manuscripts"])
     app.include_router(decisions_routes.router, prefix="/api", tags=["decisions"])
     app.include_router(literature_routes.router, prefix="/api", tags=["literature"])
     app.include_router(missions_routes.router, prefix="/api", tags=["missions"])
