@@ -612,3 +612,86 @@ async def test_e2e_no_op_when_nothing_pending(db):
     assert result.state == "complete"
     assert result.total == 0
     assert result.processed == 0
+
+
+# ---------------------------------------------------------------------------
+# v2.5.8 Bug 1 regression: BackfillService metadata write coupled to vec_available
+# ---------------------------------------------------------------------------
+# Per dec_01KS3E1FGSK530N8HM04BNMCEW, surfaced empirically by corpus refresh
+# mis_01KS0QEW21N2NG4EJTKJ3JTWTE. Pre-fix behavior: vec_* INSERT was guarded
+# by `if vec_available` but the metadata INSERT was unconditional, leaving
+# rows claiming "embedded at <model>/<dim>" with no actual vec_* row. The
+# v2.5.5 3-tuple needs_reembed gate then returned False permanently. Fix
+# moves metadata INSERT inside the same vec_available guard.
+
+
+@pytest.mark.asyncio
+async def test_metadata_not_written_when_vec_available_false(db, monkeypatch):
+    """vec_available=False -> no vec_* INSERT and no metadata INSERT.
+
+    The entity must remain in "needs embedding" state (no metadata row)
+    so a later vec_available=True window triggers a re-embed instead of
+    silently skipping the row because needs_reembed returned False.
+    """
+    clear_registry()
+    status = register_job()
+    await _insert_journal(db, jid="jrn_bug1_skip")
+    ids = await _insert_pending_claims(db, jid="jrn_bug1_skip", count=3)
+
+    # Simulate sqlite-vec disabled (the bug's trigger scenario).
+    # vec_available is a property; patch at class level so getattr() resolves
+    # to the False shadow rather than the descriptor.
+    monkeypatch.setattr(type(db), "vec_available", False, raising=False)
+
+    svc = BackfillService(db=db, embeddings=FakeEmbedder(dim=4), batch_size=3)
+    result = await svc.run_backfill(status, entity_types=("claim",))
+
+    # The backfill reports the rows as "processed" (they completed without
+    # error), but the metadata table receives NO inserts because the
+    # vec_available guard skipped both the vec_* and metadata writes.
+    assert result.state == "complete"
+    metadata_rows = await db.fetchone(
+        "SELECT COUNT(*) AS n FROM embedding_metadata "
+        "WHERE entity_type = 'claim' AND entity_id IN "
+        "(" + ",".join(["?"] * len(ids)) + ")",
+        ids,
+    )
+    assert metadata_rows["n"] == 0, (
+        "vec_available=False must NOT write metadata; otherwise needs_reembed "
+        "returns False permanently for the under-embedded row (Bug 1)."
+    )
+
+
+@pytest.mark.asyncio
+async def test_metadata_written_when_vec_available_true(db):
+    """vec_available=True -> both vec_* and metadata INSERT (backward compat).
+
+    Explicit positive-case regression test: the pre-fix happy path must
+    continue to write metadata when vec_available is True. Other tests in
+    this file exercise this implicitly; this test makes it explicit so
+    future refactors of the vec_available guard structure can be evaluated
+    against both halves of the invariant.
+    """
+    if not db.vec_available:
+        pytest.skip("vec_available=False in this test environment; positive case unreachable.")
+
+    clear_registry()
+    await _setup_vec_claims_at_dim(db, dim=4)
+    status = register_job()
+    await _insert_journal(db, jid="jrn_bug1_ok")
+    ids = await _insert_pending_claims(db, jid="jrn_bug1_ok", count=2)
+
+    svc = BackfillService(db=db, embeddings=FakeEmbedder(dim=4), batch_size=2)
+    result = await svc.run_backfill(status, entity_types=("claim",))
+
+    assert result.state == "complete"
+    metadata_rows = await db.fetchone(
+        "SELECT COUNT(*) AS n FROM embedding_metadata "
+        "WHERE entity_type = 'claim' AND entity_id IN "
+        "(" + ",".join(["?"] * len(ids)) + ")",
+        ids,
+    )
+    assert metadata_rows["n"] == 2, (
+        "vec_available=True must write metadata for each processed row "
+        "(positive-case backward compat)."
+    )

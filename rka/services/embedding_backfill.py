@@ -461,6 +461,27 @@ class BackfillService:
                 ) from exc
 
             # Per-row: write vec_* + embedding_metadata + post_embed.
+            #
+            # Invariant (per dec_01KS3E1FGSK530N8HM04BNMCEW, surfaced empirically
+            # by corpus refresh mis_01KS0QEW21N2NG4EJTKJ3JTWTE):
+            #   metadata write is COUPLED to vec_* write; both gate on
+            #   vec_available to prevent silent under-embedding.
+            #
+            # Pre-fix behavior (v2.5.5 latent edge case): when vec_available=False,
+            # the vec_* INSERT was skipped but the metadata INSERT ran unconditionally,
+            # leaving the row claiming "embedded at <model>/<dim>" with no actual
+            # vec_* row. The v2.5.5 3-tuple needs_reembed gate then returned False
+            # permanently for those rows even after vec_available flipped True;
+            # the entity was never re-embedded.
+            #
+            # Note: the pre-fix "always update metadata" rationale (preserving
+            # model_name across config switches) is preserved by Bug 1 fix
+            # because the vec_available=True path still updates metadata on
+            # every backfill pass. The False path now leaves metadata in its
+            # prior state, which means stale model_name is possible during
+            # vec_available=False windows; that surfaces correctly as
+            # needs_reembed=True once vec_available recovers (the entity's
+            # stale row gets re-examined and re-embedded).
             for (row, text), vec in zip(work, vectors):
                 entity_id = row[cfg.id_column]
                 try:
@@ -472,24 +493,20 @@ class BackfillService:
                             "(id, embedding) VALUES (?, ?)",
                             [entity_id, vec_blob],
                         )
-                    # Always update metadata — the v2.5.5 3-tuple
-                    # needs_reembed gate reads it. Skipping the metadata
-                    # write was the v2.4 oversight that left the stale
-                    # nomic-768 model_name in place across config switches.
-                    await self._db.execute(
-                        """INSERT OR REPLACE INTO embedding_metadata
-                           (project_id, entity_type, entity_id,
-                            content_hash, model_name, dimensions)
-                           VALUES (?, ?, ?, ?, ?, ?)""",
-                        [
-                            project_id,
-                            cfg.entity_type,
-                            entity_id,
-                            _ES.content_hash(text),
-                            model_name,
-                            embed_dim,
-                        ],
-                    )
+                        await self._db.execute(
+                            """INSERT OR REPLACE INTO embedding_metadata
+                               (project_id, entity_type, entity_id,
+                                content_hash, model_name, dimensions)
+                               VALUES (?, ?, ?, ?, ?, ?)""",
+                            [
+                                project_id,
+                                cfg.entity_type,
+                                entity_id,
+                                _ES.content_hash(text),
+                                model_name,
+                                embed_dim,
+                            ],
+                        )
                     if cfg.post_embed_sql:
                         await self._db.execute(cfg.post_embed_sql, [entity_id])
                     status.processed += 1
