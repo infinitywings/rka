@@ -11,7 +11,7 @@
 | Surface | What you'll have |
 |---|---|
 | **RKA backend** | FastAPI + worker + SQLite + FTS5 + sqlite-vec running in Docker on `localhost:9712`. Web dashboard at the same URL. |
-| **Claude Code (Executor)** | Full plugin: 3 role skills (`rka:rka-brain`, `rka:rka-executor`, `rka:rka-pi`), 5 slash commands (`/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`, `/rka-setup-claude-desktop`), a SessionStart hook that pings the backend on every new session, and the full `mcp__plugin_rka_rka__*` tool surface (~110 tools). |
+| **Claude Code (Executor)** | Full plugin: 3 role skills (`rka:rka-brain`, `rka:rka-executor`, `rka:rka-pi`), 5 slash commands (`/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`, `/rka-setup-claude-desktop`), a SessionStart hook that pings the backend on every new session, and the full `mcp__plugin_rka_rka__*` tool surface (~90 tools). |
 | **Claude Desktop (Brain)** | `mcp__rka__*` tool surface via the `mcpServers.rka` entry in `claude_desktop_config.json`. Wrapper-based config gives you version-checking + auto-pin to your active project. Skills and slash commands are Claude Code only (Claude Desktop's plugin format is separate). |
 
 ---
@@ -49,7 +49,7 @@ Wait ~1 minute. Verify:
 
 ```bash
 curl http://localhost:9712/api/health
-# Expect: {"status":"ok","version":"2.3.x", ...}
+# Expect: {"status":"ok","version":"2.5.x", ...}
 ```
 
 Open http://localhost:9712 in your browser to confirm the dashboard loads.
@@ -110,7 +110,7 @@ Open a fresh chat in Claude Desktop. Ask:
 
 > List my RKA projects.
 
-Brain should call `rka_list_projects` and return the list (empty on a fresh install). If you also see a SessionStart hook line like `✅ RKA reachable at http://localhost:9712 (version 2.3.2, default project ...)` at session start in Claude Code, you're done.
+Brain should call `rka_list_projects` and return the list (empty on a fresh install). If you also see a SessionStart hook line like `✅ RKA reachable at http://localhost:9712 (version 2.5.x, default project ...)` at session start in Claude Code, you're done.
 
 ---
 
@@ -143,7 +143,7 @@ After Step 5, run these checks:
 1. `/help` should list five `rka:rka` slash commands: `/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`, `/rka-setup-claude-desktop`.
 2. `/context` should show three `rka:rka-*` skills available.
 3. Run `/rka-status`. Expected output: project name, phase, focus, open checkpoints (or "none").
-4. New chat sessions should start with an automatic line: `✅ RKA reachable at http://localhost:9712 (version 2.3.2, default project ...)`.
+4. New chat sessions should start with an automatic line: `✅ RKA reachable at http://localhost:9712 (version 2.5.x, default project ...)`.
 
 ### In Claude Desktop
 
@@ -151,7 +151,7 @@ Ask in any new chat:
 
 > What RKA tools do you have access to?
 
-Brain should respond with a list including `rka_list_projects`, `rka_get_status`, `rka_add_note`, etc. (~110 tools).
+Brain should respond with a list including `rka_list_projects`, `rka_get_status`, `rka_add_note`, etc. (~90 tools).
 
 ### Backend
 
@@ -160,7 +160,7 @@ docker compose ps
 # Expect both rka-server and rka-worker as "Up" / "healthy"
 
 curl http://localhost:9712/api/health
-# Expect {"status":"ok","version":"2.3.x", ...}
+# Expect {"status":"ok","version":"2.5.x", ...}
 ```
 
 ---
@@ -214,7 +214,7 @@ If the user does want to pin a default project (recommended once the user knows 
 
 ```json
 {
-  "version": "2.3.2",
+  "version": "2.5.10",
   "binary_path": "/Users/<you>/.local/bin/rka",
   "default_project_id": "prj_01ABC...",
   "api_endpoint_url": "http://localhost:9712"
@@ -395,8 +395,8 @@ Same JSON shape, in `.claude/mcp.json` (per-project) or `~/.claude/settings.json
 
 ## 10. What this guide intentionally doesn't cover
 
-- **Local LLM setup (LM Studio, Ollama, etc.)** — RKA v2.3+ doesn't require a local LLM. The Brain (Claude Desktop) handles all knowledge enrichment during normal sessions.
-- **Cloud LLM API setup (OpenAI, Anthropic API key)** — same reason; not needed for the core workflow. The optional `rka_ask` and `rka_generate_summary` tools do require an LLM key configured in the backend; see `docs/USER_MANUAL.md` Chapter 14 if you want them.
+- **Local LLM setup (LM Studio, Ollama, etc.) for chat/enrichment** — Chat-style enrichment tools (`rka_ask`, `rka_generate_summary`) were removed in v2.4.0 per `jrn_01KRNZBS50K250HHHHEC58E4GC`. The Brain (Claude Desktop) handles all knowledge enrichment during normal sessions. **However**, RKA v2.4.0+ supports pluggable embedding backends — configure FastEmbed (default, runs in-container), OpenAI-compatible HTTP (e.g., LM Studio, vLLM), or Ollama via **Settings → Embeddings** in the web dashboard at `http://localhost:9712`. Full reference: [`docs/embedding_backends.md`](docs/embedding_backends.md).
+- **Cloud LLM API setup (OpenAI, Anthropic API key)** — not required by RKA's core workflow.
 - **Knowledge pack import/export** — covered in [USAGE_GUIDE.md](USAGE_GUIDE.md) and [docs/USER_MANUAL.md](docs/USER_MANUAL.md).
 - **Per-project conventions** (Brain orientation, Executor mission flow, PI attribution) — covered by the role skills the plugin loads automatically. Once installed, ask Claude Code to "load the rka brain skill" or "show me the executor session protocol" for the workflow guides.
 - **Migrating from a pre-v2.3 RKA install** — for users who set up RKA before the plugin existed. See the upgrade notes in [USAGE_GUIDE.md](USAGE_GUIDE.md).

@@ -239,7 +239,7 @@ graph TD
 1. **MCP Tools Layer** — Thin adapter exposing `rka_*` tools over stdio. Keeps lightweight per-session state for output compaction and digests, but no core business logic.
 2. **REST API Layer** — FastAPI endpoints under `/api`. Same thin-adapter pattern, delegates to services.
 3. **Service Layer** — All business logic. CRUD operations, auto-enrichment, event emission, context preparation, distillation pipeline. Shared identically by MCP and REST.
-4. **Infrastructure Layer** — Database (SQLite + FTS5 + sqlite-vec), embeddings (FastEmbed), file storage. An optional LiteLLM gateway powers `rka_ask` / `rka_generate_summary` only when the user wires up a cloud-LLM API key.
+4. **Infrastructure Layer** — Database (SQLite + FTS5 + sqlite-vec), pluggable embedding backends (FastEmbed default; OpenAI-compatible HTTP; Ollama — configurable via Settings → Embeddings in the web dashboard, see [`docs/embedding_backends.md`](docs/embedding_backends.md)), file storage. The LiteLLM-gated `rka_ask` / `rka_generate_summary` tools were removed in v2.4.0; server-side code is preserved for future re-wiring through the orchestrator's Claude Code SDK.
 
 ### Three-Process Model
 
@@ -849,7 +849,6 @@ All tools are prefixed with `rka_` and available through the MCP stdio interface
 | `rka_search`         | Hybrid search across all entity types                                |
 | `rka_get_context`    | Importance-ranked context package (v2.4: no token budget; ordered by importance × centrality × recency) |
 | `rka_multi_hop_retrieval` | Query-anchored relevance-ranked subgraph traversing typed edges with per-relation weights |
-| `rka_ask`            | Ask a question grounded in the knowledge base (RAG)                  |
 | `rka_summarize`      | On-demand topic summarization                                        |
 | `rka_eviction_sweep` | Propose entries for archival based on staleness                      |
 
