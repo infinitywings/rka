@@ -1,0 +1,674 @@
+[
+  {
+    "scenario_id": "brain-session-start-fresh-resume",
+    "entity_id": "dec_01KRPAVSTJ4H80VXJVN6DQ82WQ",
+    "entity_type": "decision",
+    "importance": "critical",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "brain-session-start-fresh-resume",
+    "entity_id": "mis_01KRPF3DERZS2W5VFDYE9E9GKM",
+    "entity_type": "mission",
+    "importance": "critical",
+    "exists": true,
+    "status": "complete"
+  },
+  {
+    "scenario_id": "brain-session-start-fresh-resume",
+    "entity_id": "chk_01KPP53ZS3JKF1C3BW6TRYEC7C",
+    "entity_type": "checkpoint",
+    "importance": "critical",
+    "exists": true,
+    "status": "open"
+  },
+  {
+    "scenario_id": "brain-session-start-fresh-resume",
+    "entity_id": "dec_01KRNYJ966H6W4REMK2ZJY2Y9R",
+    "entity_type": "decision",
+    "importance": "useful",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "brain-session-start-fresh-resume",
+    "entity_id": "mis_01KRPA2YK4HHQ0X90GX2T3GAVH",
+    "entity_type": "mission",
+    "importance": "useful",
+    "exists": true,
+    "status": "complete"
+  },
+  {
+    "scenario_id": "brain-session-start-fresh-resume",
+    "entity_id": "ecl_01KP4PJGJKE9Q7X1W2X6SJJVZ3",
+    "entity_type": "cluster",
+    "importance": "nice-to-have",
+    "exists": true,
+    "status": null
+  },
+  {
+    "scenario_id": "brain-session-start-multi-mission-state",
+    "entity_id": "mis_01KRPF3DERZS2W5VFDYE9E9GKM",
+    "entity_type": "mission",
+    "importance": "critical",
+    "exists": true,
+    "status": "complete"
+  },
+  {
+    "scenario_id": "brain-session-start-multi-mission-state",
+    "entity_id": "mis_01KRKG9K1SSDZNDH90K2Z7ZM92",
+    "entity_type": "mission",
+    "importance": "critical",
+    "exists": true,
+    "status": "complete"
+  },
+  {
+    "scenario_id": "brain-session-start-multi-mission-state",
+    "entity_id": "mis_01KRPA2YK4HHQ0X90GX2T3GAVH",
+    "entity_type": "mission",
+    "importance": "critical",
+    "exists": true,
+    "status": "complete"
+  },
+  {
+    "scenario_id": "brain-session-start-multi-mission-state",
+    "entity_id": "dec_01KRKE6ERDPQTFQS6ZGY9A3CK0",
+    "entity_type": "decision",
+    "importance": "useful",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "brain-session-start-multi-mission-state",
+    "entity_id": "dec_01KRP9ZV7XX7WC9PDWRRTGTEE9",
+    "entity_type": "decision",
+    "importance": "useful",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "brain-session-start-multi-mission-state",
+    "entity_id": "jrn_01KRPCYWCXNDMBKX3MHS3H3ASB",
+    "entity_type": "journal",
+    "importance": "nice-to-have",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "brain-session-start-post-release",
+    "entity_id": "dec_01KRNYJ966H6W4REMK2ZJY2Y9R",
+    "entity_type": "decision",
+    "importance": "critical",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "brain-session-start-post-release",
+    "entity_id": "jrn_01KRKYCFZA8M9CC7ZHB9P0MX5W",
+    "entity_type": "journal",
+    "importance": "critical",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "brain-session-start-post-release",
+    "entity_id": "mis_01KRPF3DERZS2W5VFDYE9E9GKM",
+    "entity_type": "mission",
+    "importance": "critical",
+    "exists": true,
+    "status": "complete"
+  },
+  {
+    "scenario_id": "brain-session-start-post-release",
+    "entity_id": "ecl_01KP4PR7G9MB8YNJAZP1ZZBGT4",
+    "entity_type": "cluster",
+    "importance": "useful",
+    "exists": true,
+    "status": null
+  },
+  {
+    "scenario_id": "brain-session-start-post-release",
+    "entity_id": "chk_01KPP53GY40NJTCFVY9493J8A0",
+    "entity_type": "checkpoint",
+    "importance": "nice-to-have",
+    "exists": true,
+    "status": "open"
+  },
+  {
+    "scenario_id": "brain-session-start-checkpoint-review",
+    "entity_id": "chk_01KPP53ZS3JKF1C3BW6TRYEC7C",
+    "entity_type": "checkpoint",
+    "importance": "critical",
+    "exists": true,
+    "status": "open"
+  },
+  {
+    "scenario_id": "brain-session-start-checkpoint-review",
+    "entity_id": "chk_01KPP53GY40NJTCFVY9493J8A0",
+    "entity_type": "checkpoint",
+    "importance": "critical",
+    "exists": true,
+    "status": "open"
+  },
+  {
+    "scenario_id": "brain-session-start-checkpoint-review",
+    "entity_id": "dec_01KP4P4QSSNZCTEHVT6QR7ZRYD",
+    "entity_type": "decision",
+    "importance": "critical",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "brain-session-start-checkpoint-review",
+    "entity_id": "mis_01KRPF3DERZS2W5VFDYE9E9GKM",
+    "entity_type": "mission",
+    "importance": "useful",
+    "exists": true,
+    "status": "complete"
+  },
+  {
+    "scenario_id": "brain-session-start-checkpoint-review",
+    "entity_id": "ecl_01KP4PRE5JFME3FH07RVRH5DMB",
+    "entity_type": "cluster",
+    "importance": "nice-to-have",
+    "exists": true,
+    "status": null
+  },
+  {
+    "scenario_id": "brain-mission-creation-from-hub-spoke-decision",
+    "entity_id": "dec_01KRPAVSTJ4H80VXJVN6DQ82WQ",
+    "entity_type": "decision",
+    "importance": "critical",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "brain-mission-creation-from-hub-spoke-decision",
+    "entity_id": "dec_01KRP9ZV7XX7WC9PDWRRTGTEE9",
+    "entity_type": "decision",
+    "importance": "critical",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "brain-mission-creation-from-hub-spoke-decision",
+    "entity_id": "mis_01KRPA2YK4HHQ0X90GX2T3GAVH",
+    "entity_type": "mission",
+    "importance": "critical",
+    "exists": true,
+    "status": "complete"
+  },
+  {
+    "scenario_id": "brain-mission-creation-from-hub-spoke-decision",
+    "entity_id": "dec_01KRNYJ966H6W4REMK2ZJY2Y9R",
+    "entity_type": "decision",
+    "importance": "useful",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "brain-mission-creation-from-hub-spoke-decision",
+    "entity_id": "mis_01KRNYPVB8N3HDMZ9HK9HM3TB0",
+    "entity_type": "mission",
+    "importance": "useful",
+    "exists": true,
+    "status": "complete"
+  },
+  {
+    "scenario_id": "brain-mission-creation-from-hub-spoke-decision",
+    "entity_id": "jrn_01KRPAACKNRRBH6RRCXC1CM4VW",
+    "entity_type": "journal",
+    "importance": "nice-to-have",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "brain-mission-creation-eval-extension",
+    "entity_id": "mis_01KRKJ9G20EM5XMA147JTKQCFF",
+    "entity_type": "mission",
+    "importance": "critical",
+    "exists": true,
+    "status": "complete"
+  },
+  {
+    "scenario_id": "brain-mission-creation-eval-extension",
+    "entity_id": "mis_01KRPF3DERZS2W5VFDYE9E9GKM",
+    "entity_type": "mission",
+    "importance": "critical",
+    "exists": true,
+    "status": "complete"
+  },
+  {
+    "scenario_id": "brain-mission-creation-eval-extension",
+    "entity_id": "dec_01KRPF09AP1FE1CRR6YQBY2R5F",
+    "entity_type": "decision",
+    "importance": "critical",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "brain-mission-creation-eval-extension",
+    "entity_id": "jrn_01KRKYCFZA8M9CC7ZHB9P0MX5W",
+    "entity_type": "journal",
+    "importance": "critical",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "brain-mission-creation-eval-extension",
+    "entity_id": "ecl_01KP4PJGJKE9Q7X1W2X6SJJVZ3",
+    "entity_type": "cluster",
+    "importance": "nice-to-have",
+    "exists": true,
+    "status": null
+  },
+  {
+    "scenario_id": "brain-contradiction-staleness-vs-validation",
+    "entity_id": "ecl_01KP4PK7VPN8YFR50PSFXPGTQ0",
+    "entity_type": "cluster",
+    "importance": "critical",
+    "exists": true,
+    "status": null
+  },
+  {
+    "scenario_id": "brain-contradiction-staleness-vs-validation",
+    "entity_id": "ecl_01KP4PKMN8XS0WXHXHN7GN4TG3",
+    "entity_type": "cluster",
+    "importance": "critical",
+    "exists": true,
+    "status": null
+  },
+  {
+    "scenario_id": "brain-contradiction-staleness-vs-validation",
+    "entity_id": "dec_01KP4P4QSSNZCTEHVT6QR7ZRYD",
+    "entity_type": "decision",
+    "importance": "critical",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "brain-contradiction-staleness-vs-validation",
+    "entity_id": "ecl_01KP4PMF0PSPNWYC298XJXYHJ9",
+    "entity_type": "cluster",
+    "importance": "useful",
+    "exists": true,
+    "status": null
+  },
+  {
+    "scenario_id": "brain-contradiction-staleness-vs-validation",
+    "entity_id": "ecl_01KP4PM090PTWGR81GXJAYH7MK",
+    "entity_type": "cluster",
+    "importance": "nice-to-have",
+    "exists": true,
+    "status": null
+  },
+  {
+    "scenario_id": "brain-contradiction-llm-removed-vs-enrichment-preserved",
+    "entity_id": "dec_01KRNYJ966H6W4REMK2ZJY2Y9R",
+    "entity_type": "decision",
+    "importance": "critical",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "brain-contradiction-llm-removed-vs-enrichment-preserved",
+    "entity_id": "jrn_01KRNZBS50K250HHHHEC58E4GC",
+    "entity_type": "journal",
+    "importance": "critical",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "brain-contradiction-llm-removed-vs-enrichment-preserved",
+    "entity_id": "ecl_01KP4PR7G9MB8YNJAZP1ZZBGT4",
+    "entity_type": "cluster",
+    "importance": "critical",
+    "exists": true,
+    "status": null
+  },
+  {
+    "scenario_id": "brain-contradiction-llm-removed-vs-enrichment-preserved",
+    "entity_id": "mis_01KRNYPVB8N3HDMZ9HK9HM3TB0",
+    "entity_type": "mission",
+    "importance": "useful",
+    "exists": true,
+    "status": "complete"
+  },
+  {
+    "scenario_id": "brain-contradiction-llm-removed-vs-enrichment-preserved",
+    "entity_id": "jrn_01KRP5Q0FJ67V3HMHNJ0FSR02D",
+    "entity_type": "journal",
+    "importance": "nice-to-have",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "brain-paper-scaffold-session-start-section",
+    "entity_id": "ecl_01KP4PJGJKE9Q7X1W2X6SJJVZ3",
+    "entity_type": "cluster",
+    "importance": "critical",
+    "exists": true,
+    "status": null
+  },
+  {
+    "scenario_id": "brain-paper-scaffold-session-start-section",
+    "entity_id": "dec_01KP4P53MSKY3GKEXZKG9JMFKX",
+    "entity_type": "decision",
+    "importance": "critical",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "brain-paper-scaffold-session-start-section",
+    "entity_id": "dec_01KQQPD6Y6B362T3K08368BDMP",
+    "entity_type": "decision",
+    "importance": "critical",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "brain-paper-scaffold-session-start-section",
+    "entity_id": "mis_01KRKJ9G20EM5XMA147JTKQCFF",
+    "entity_type": "mission",
+    "importance": "useful",
+    "exists": true,
+    "status": "complete"
+  },
+  {
+    "scenario_id": "brain-paper-scaffold-session-start-section",
+    "entity_id": "ecl_01KP4PJQAVY11YJFA9M498ATVE",
+    "entity_type": "cluster",
+    "importance": "nice-to-have",
+    "exists": true,
+    "status": null
+  },
+  {
+    "scenario_id": "brain-paper-scaffold-multi-cluster-rq",
+    "entity_id": "dec_01KP4P4QSSNZCTEHVT6QR7ZRYD",
+    "entity_type": "decision",
+    "importance": "critical",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "brain-paper-scaffold-multi-cluster-rq",
+    "entity_id": "ecl_01KP4PK7VPN8YFR50PSFXPGTQ0",
+    "entity_type": "cluster",
+    "importance": "critical",
+    "exists": true,
+    "status": null
+  },
+  {
+    "scenario_id": "brain-paper-scaffold-multi-cluster-rq",
+    "entity_id": "ecl_01KP4PKMN8XS0WXHXHN7GN4TG3",
+    "entity_type": "cluster",
+    "importance": "critical",
+    "exists": true,
+    "status": null
+  },
+  {
+    "scenario_id": "brain-paper-scaffold-multi-cluster-rq",
+    "entity_id": "ecl_01KP4PM090PTWGR81GXJAYH7MK",
+    "entity_type": "cluster",
+    "importance": "useful",
+    "exists": true,
+    "status": null
+  },
+  {
+    "scenario_id": "brain-paper-scaffold-multi-cluster-rq",
+    "entity_id": "ecl_01KP4PMF0PSPNWYC298XJXYHJ9",
+    "entity_type": "cluster",
+    "importance": "useful",
+    "exists": true,
+    "status": null
+  },
+  {
+    "scenario_id": "brain-paper-scaffold-multi-cluster-rq",
+    "entity_id": "ecl_01KP4PRNA5NDP10ETXGDZQ55V4",
+    "entity_type": "cluster",
+    "importance": "nice-to-have",
+    "exists": true,
+    "status": null
+  },
+  {
+    "scenario_id": "executor-mission-pickup-eval-v2",
+    "entity_id": "mis_01KRPF3DERZS2W5VFDYE9E9GKM",
+    "entity_type": "mission",
+    "importance": "critical",
+    "exists": true,
+    "status": "complete"
+  },
+  {
+    "scenario_id": "executor-mission-pickup-eval-v2",
+    "entity_id": "dec_01KRPF09AP1FE1CRR6YQBY2R5F",
+    "entity_type": "decision",
+    "importance": "critical",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "executor-mission-pickup-eval-v2",
+    "entity_id": "mis_01KRKJ9G20EM5XMA147JTKQCFF",
+    "entity_type": "mission",
+    "importance": "critical",
+    "exists": true,
+    "status": "complete"
+  },
+  {
+    "scenario_id": "executor-mission-pickup-eval-v2",
+    "entity_id": "jrn_01KRKYCFZA8M9CC7ZHB9P0MX5W",
+    "entity_type": "journal",
+    "importance": "useful",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "executor-mission-pickup-eval-v2",
+    "entity_id": "dec_01KRPAVSTJ4H80VXJVN6DQ82WQ",
+    "entity_type": "decision",
+    "importance": "nice-to-have",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "executor-mission-pickup-orchestrator",
+    "entity_id": "mis_01KRKG9K1SSDZNDH90K2Z7ZM92",
+    "entity_type": "mission",
+    "importance": "critical",
+    "exists": true,
+    "status": "complete"
+  },
+  {
+    "scenario_id": "executor-mission-pickup-orchestrator",
+    "entity_id": "dec_01KRKE6ERDPQTFQS6ZGY9A3CK0",
+    "entity_type": "decision",
+    "importance": "critical",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "executor-mission-pickup-orchestrator",
+    "entity_id": "jrn_01KRP5Q0FJ67V3HMHNJ0FSR02D",
+    "entity_type": "journal",
+    "importance": "critical",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "executor-mission-pickup-orchestrator",
+    "entity_id": "dec_01KRNYJ966H6W4REMK2ZJY2Y9R",
+    "entity_type": "decision",
+    "importance": "useful",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "executor-mission-pickup-orchestrator",
+    "entity_id": "ecl_01KP4PNNTTH033SNYE0M93KV5P",
+    "entity_type": "cluster",
+    "importance": "nice-to-have",
+    "exists": true,
+    "status": null
+  },
+  {
+    "scenario_id": "executor-mission-pickup-desktop-v2-5",
+    "entity_id": "mis_01KRPA2YK4HHQ0X90GX2T3GAVH",
+    "entity_type": "mission",
+    "importance": "critical",
+    "exists": true,
+    "status": "complete"
+  },
+  {
+    "scenario_id": "executor-mission-pickup-desktop-v2-5",
+    "entity_id": "dec_01KRP9ZV7XX7WC9PDWRRTGTEE9",
+    "entity_type": "decision",
+    "importance": "critical",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "executor-mission-pickup-desktop-v2-5",
+    "entity_id": "dec_01KRPAVSTJ4H80VXJVN6DQ82WQ",
+    "entity_type": "decision",
+    "importance": "critical",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "executor-mission-pickup-desktop-v2-5",
+    "entity_id": "mis_01KQJGR4WZXYFSDP9DN2WEXTJJ",
+    "entity_type": "mission",
+    "importance": "useful",
+    "exists": true,
+    "status": "complete"
+  },
+  {
+    "scenario_id": "executor-mission-pickup-desktop-v2-5",
+    "entity_id": "jrn_01KRPAACKNRRBH6RRCXC1CM4VW",
+    "entity_type": "journal",
+    "importance": "nice-to-have",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "executor-backbrief-eval-v2-t2",
+    "entity_id": "mis_01KRPF3DERZS2W5VFDYE9E9GKM",
+    "entity_type": "mission",
+    "importance": "critical",
+    "exists": true,
+    "status": "complete"
+  },
+  {
+    "scenario_id": "executor-backbrief-eval-v2-t2",
+    "entity_id": "jrn_01KRPFVWNZZQDR2XH5MM6FX0KC",
+    "entity_type": "journal",
+    "importance": "critical",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "executor-backbrief-eval-v2-t2",
+    "entity_id": "dec_01KRPF09AP1FE1CRR6YQBY2R5F",
+    "entity_type": "decision",
+    "importance": "critical",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "executor-backbrief-eval-v2-t2",
+    "entity_id": "jrn_01KRKYCFZA8M9CC7ZHB9P0MX5W",
+    "entity_type": "journal",
+    "importance": "useful",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "executor-backbrief-eval-v2-t2",
+    "entity_id": "ecl_01KP4PJGJKE9Q7X1W2X6SJJVZ3",
+    "entity_type": "cluster",
+    "importance": "nice-to-have",
+    "exists": true,
+    "status": null
+  },
+  {
+    "scenario_id": "executor-backbrief-mid-mission-pattern-reference",
+    "entity_id": "jrn_01KRPAK399JBP1T0F8C92KFNNV",
+    "entity_type": "journal",
+    "importance": "critical",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "executor-backbrief-mid-mission-pattern-reference",
+    "entity_id": "jrn_01KRPAACKNRRBH6RRCXC1CM4VW",
+    "entity_type": "journal",
+    "importance": "critical",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "executor-backbrief-mid-mission-pattern-reference",
+    "entity_id": "mis_01KRPA2YK4HHQ0X90GX2T3GAVH",
+    "entity_type": "mission",
+    "importance": "critical",
+    "exists": true,
+    "status": "complete"
+  },
+  {
+    "scenario_id": "executor-backbrief-mid-mission-pattern-reference",
+    "entity_id": "dec_01KRP9ZV7XX7WC9PDWRRTGTEE9",
+    "entity_type": "decision",
+    "importance": "useful",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "executor-backbrief-mid-mission-pattern-reference",
+    "entity_id": "ecl_01KP4PNNTTH033SNYE0M93KV5P",
+    "entity_type": "cluster",
+    "importance": "nice-to-have",
+    "exists": true,
+    "status": null
+  },
+  {
+    "scenario_id": "executor-backbrief-bookkeeper-invariant-check",
+    "entity_id": "dec_01KRNYJ966H6W4REMK2ZJY2Y9R",
+    "entity_type": "decision",
+    "importance": "critical",
+    "exists": true,
+    "status": "active"
+  },
+  {
+    "scenario_id": "executor-backbrief-bookkeeper-invariant-check",
+    "entity_id": "mis_01KRNYPVB8N3HDMZ9HK9HM3TB0",
+    "entity_type": "mission",
+    "importance": "critical",
+    "exists": true,
+    "status": "complete"
+  },
+  {
+    "scenario_id": "executor-backbrief-bookkeeper-invariant-check",
+    "entity_id": "ecl_01KP4PQYZEYS1T0HY431H5Z514",
+    "entity_type": "cluster",
+    "importance": "critical",
+    "exists": true,
+    "status": null
+  },
+  {
+    "scenario_id": "executor-backbrief-bookkeeper-invariant-check",
+    "entity_id": "mis_01KRPF3DERZS2W5VFDYE9E9GKM",
+    "entity_type": "mission",
+    "importance": "useful",
+    "exists": true,
+    "status": "complete"
+  },
+  {
+    "scenario_id": "executor-backbrief-bookkeeper-invariant-check",
+    "entity_id": "jrn_01KRNZBS50K250HHHHEC58E4GC",
+    "entity_type": "journal",
+    "importance": "nice-to-have",
+    "exists": true,
+    "status": "active"
+  }
+]
