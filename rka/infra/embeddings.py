@@ -109,18 +109,37 @@ class EmbeddingService:
         text: str,
         project_id: str = "proj_default",
     ) -> bool:
-        """Check if stored embedding is stale (content changed)."""
+        """Check if the stored embedding is stale.
+
+        v2.5.5 (mis_01KS1RFNM2T1HTB077G507T1FR Bug 2): we now check the
+        full identity tuple (content_hash, model_name, dimensions). The
+        v2.4 implementation only compared content_hash, so a backend
+        swap (e.g. nomic-768 → qwen3-4096) left every unchanged entity
+        flagged "not stale" even though its stored vector belonged to a
+        retired model + dim.
+        """
         if self.db is None:
             return True
+        # Defensive: backend hasn't reported a dim yet (un-initialized
+        # / un-probed). Treat as needs re-embed so the upcoming
+        # store_embedding picks a fresh dim from the backend handshake.
+        if self._backend.dim == 0:
+            return True
         meta = await self.db.fetchone(
-            """SELECT content_hash
+            """SELECT content_hash, model_name, dimensions
                FROM embedding_metadata
                WHERE project_id = ? AND entity_type = ? AND entity_id = ?""",
             [project_id, entity_type, entity_id],
         )
         if meta is None:
             return True
-        return meta["content_hash"] != self.content_hash(text)
+        if meta["content_hash"] != self.content_hash(text):
+            return True
+        if meta["model_name"] != self.model_name:
+            return True
+        if int(meta["dimensions"]) != int(self._backend.dim):
+            return True
+        return False
 
     async def store_embedding(
         self,

@@ -1,16 +1,26 @@
 """Embedding-backfill orchestration.
 
-Phase 1 in v2.4.0: **synchronous foreground** job. "Synchronous" per the
-Brain T2-gate clarification means: "no Redis/Celery — runs in the API
-container process." It does NOT mean PUT blocks for 7-14 minutes — see
-`rka/api/routes/config.py:PUT /api/config/embedding`, which kicks off
-the backfill via FastAPI BackgroundTask and returns 202 + {job_id,
-status_url}.
+v2.4 (Mission D T2-gate): synchronous foreground job ("synchronous" =
+no Redis/Celery; runs in the API container's process). The PUT
+/api/config/embedding handler returns 202 + {job_id, status_url}
+immediately and the actual loop runs via FastAPI BackgroundTask.
 
-This module owns the **job-status registry** that T3's REST PUT/status
-endpoints use. T5 fills in `BackfillService.run_backfill`.
+v2.5.5 (mis_01KS1RFNM2T1HTB077G507T1FR Bug 3): the loop is generalized
+over all six entity types backed by a vec_* table — claim, journal,
+decision, literature, mission, artifact. The v2.4 implementation hit
+only `claims WHERE embedding_pending=1`, leaving the other five vec_*
+tables empty after a config change because nothing else ever ran a
+backfill cursor against them.
 
-Status snapshot shape (T3 status endpoint returns this verbatim):
+Pending-signal per entity type:
+  - `claim` uses the v2.4 `claims.embedding_pending` flag (the cursor
+    filters on it; we clear it post-embed).
+  - the other five use `embedding_metadata` absence — `reshape_vec_table`
+    (T1) DELETEs metadata rows on dim change, and the cursor here picks
+    up entities without a metadata row.
+
+Status snapshot shape (unchanged from v2.4 — T3 status endpoint returns
+it verbatim):
 
     {
       "job_id":          str,
@@ -26,11 +36,12 @@ Status snapshot shape (T3 status endpoint returns this verbatim):
 from __future__ import annotations
 
 import logging
+import struct
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Literal
+from typing import Any, Awaitable, Callable, Iterable, Literal, Mapping, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +58,8 @@ class JobStatus:
     """Per-run snapshot read by the GET status endpoint.
 
     `started_at` is set when the job is registered; `elapsed_seconds` is
-    computed from a monotonic clock so it remains correct across daylight-
-    savings + system-clock adjustments.
+    computed from a monotonic clock so it remains correct across
+    daylight-savings + system-clock adjustments.
     """
 
     job_id: str
@@ -62,24 +73,22 @@ class JobStatus:
     _started_perf: float = 0.0
 
     def snapshot(self) -> dict[str, Any]:
-        """Public-facing dict (excludes the underscored bookkeeping field)."""
         out = asdict(self)
         out.pop("_started_perf", None)
-        # Refresh elapsed_seconds at snapshot time so polling reflects reality.
         if self._started_perf > 0:
             out["elapsed_seconds"] = round(time.monotonic() - self._started_perf, 3)
         return out
 
 
 # ---------------------------------------------------------------------------
-# Job registry (module-level; one backfill at a time in v2.4.0)
+# Job registry (module-level; one backfill at a time)
 # ---------------------------------------------------------------------------
+
 
 _REGISTRY: dict[str, JobStatus] = {}
 
 
 def register_job() -> JobStatus:
-    """Create a new pending-state job; return its snapshot to the caller."""
     job_id = f"bf_{uuid.uuid4().hex[:12]}"
     status = JobStatus(
         job_id=job_id,
@@ -97,37 +106,225 @@ def get_status(job_id: str) -> JobStatus | None:
 
 
 def latest_status() -> JobStatus | None:
-    """Most recent job by insertion order (Python dict preserves it)."""
     if not _REGISTRY:
         return None
     return next(reversed(_REGISTRY.values()))
 
 
 def clear_registry() -> None:
-    """Test-only: wipe the in-memory registry between cases."""
     _REGISTRY.clear()
 
 
 # ---------------------------------------------------------------------------
-# BackfillService skeleton (T5 fills the loop)
+# Per-entity-type backfill configuration
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _EntityBackfillConfig:
+    """Parameterises the backfill cursor + write path for one entity type.
+
+    `pending_cursor_sql` MUST take two `?` placeholders for `last_id`
+    and `LIMIT`; `pending_count_sql` takes no placeholders. The cursor
+    must `SELECT id, project_id, ...content_columns...` so the loop
+    can compose text + write metadata under the right project.
+    """
+
+    entity_type: str
+    source_table: str
+    vec_table: str
+    pending_cursor_sql: str
+    pending_count_sql: str
+    compose_text: Callable[[Mapping[str, Any]], str]
+    post_embed_sql: str | None = None
+    id_column: str = "id"
+
+
+def _join_parts(*parts: Any) -> str:
+    """Join non-empty stripped string parts with single spaces."""
+    return " ".join(
+        str(p).strip() for p in parts if p and str(p).strip()
+    ).strip()
+
+
+def _build_artifact_text_from_row(r: Mapping[str, Any]) -> str:
+    # Imported lazily to avoid an import cycle with rka.services.artifacts.
+    from rka.services.artifacts import build_artifact_text
+
+    return build_artifact_text(
+        filename=r.get("filename") or "",
+        filetype=r.get("filetype"),
+        mime=r.get("mime"),
+        metadata=r.get("metadata"),
+    )
+
+
+# Cursor templates: each non-claims template uses an anti-join against
+# embedding_metadata so we only pull entities that lack a matching row.
+# Combined with T1's DELETE-on-reshape and T3's 3-tuple needs_reembed
+# gate, this is the v2.5.5 pending signal for the five new types.
+
+
+_ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
+    "claim": _EntityBackfillConfig(
+        entity_type="claim",
+        source_table="claims",
+        vec_table="vec_claims",
+        compose_text=lambda r: (r.get("content") or "").strip(),
+        pending_cursor_sql=(
+            "SELECT id, content, project_id FROM claims "
+            "WHERE embedding_pending = 1 AND id > ? "
+            "ORDER BY id LIMIT ?"
+        ),
+        pending_count_sql=(
+            "SELECT COUNT(*) AS n FROM claims WHERE embedding_pending = 1"
+        ),
+        post_embed_sql="UPDATE claims SET embedding_pending = 0 WHERE id = ?",
+    ),
+    "journal": _EntityBackfillConfig(
+        entity_type="journal",
+        source_table="journal",
+        vec_table="vec_journal",
+        compose_text=lambda r: _join_parts(r.get("content"), r.get("summary")),
+        pending_cursor_sql=(
+            "SELECT j.id, j.content, j.summary, j.project_id FROM journal j "
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM embedding_metadata m "
+            "  WHERE m.entity_type = 'journal' AND m.entity_id = j.id"
+            ") AND j.id > ? "
+            "ORDER BY j.id LIMIT ?"
+        ),
+        pending_count_sql=(
+            "SELECT COUNT(*) AS n FROM journal j "
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM embedding_metadata m "
+            "  WHERE m.entity_type = 'journal' AND m.entity_id = j.id"
+            ")"
+        ),
+    ),
+    "decision": _EntityBackfillConfig(
+        entity_type="decision",
+        source_table="decisions",
+        vec_table="vec_decisions",
+        compose_text=lambda r: _join_parts(r.get("question"), r.get("rationale")),
+        pending_cursor_sql=(
+            "SELECT d.id, d.question, d.rationale, d.project_id FROM decisions d "
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM embedding_metadata m "
+            "  WHERE m.entity_type = 'decision' AND m.entity_id = d.id"
+            ") AND d.id > ? "
+            "ORDER BY d.id LIMIT ?"
+        ),
+        pending_count_sql=(
+            "SELECT COUNT(*) AS n FROM decisions d "
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM embedding_metadata m "
+            "  WHERE m.entity_type = 'decision' AND m.entity_id = d.id"
+            ")"
+        ),
+    ),
+    "literature": _EntityBackfillConfig(
+        entity_type="literature",
+        source_table="literature",
+        vec_table="vec_literature",
+        compose_text=lambda r: _join_parts(r.get("title"), r.get("abstract")),
+        pending_cursor_sql=(
+            "SELECT l.id, l.title, l.abstract, l.project_id FROM literature l "
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM embedding_metadata m "
+            "  WHERE m.entity_type = 'literature' AND m.entity_id = l.id"
+            ") AND l.id > ? "
+            "ORDER BY l.id LIMIT ?"
+        ),
+        pending_count_sql=(
+            "SELECT COUNT(*) AS n FROM literature l "
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM embedding_metadata m "
+            "  WHERE m.entity_type = 'literature' AND m.entity_id = l.id"
+            ")"
+        ),
+    ),
+    "mission": _EntityBackfillConfig(
+        entity_type="mission",
+        source_table="missions",
+        vec_table="vec_missions",
+        compose_text=lambda r: _join_parts(r.get("objective"), r.get("context")),
+        pending_cursor_sql=(
+            "SELECT mi.id, mi.objective, mi.context, mi.project_id "
+            "FROM missions mi "
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM embedding_metadata m "
+            "  WHERE m.entity_type = 'mission' AND m.entity_id = mi.id"
+            ") AND mi.id > ? "
+            "ORDER BY mi.id LIMIT ?"
+        ),
+        pending_count_sql=(
+            "SELECT COUNT(*) AS n FROM missions mi "
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM embedding_metadata m "
+            "  WHERE m.entity_type = 'mission' AND m.entity_id = mi.id"
+            ")"
+        ),
+    ),
+    "artifact": _EntityBackfillConfig(
+        entity_type="artifact",
+        source_table="artifacts",
+        vec_table="vec_artifacts",
+        compose_text=_build_artifact_text_from_row,
+        pending_cursor_sql=(
+            "SELECT a.id, a.filename, a.filetype, a.mime, a.metadata, a.project_id "
+            "FROM artifacts a "
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM embedding_metadata m "
+            "  WHERE m.entity_type = 'artifact' AND m.entity_id = a.id"
+            ") AND a.id > ? "
+            "ORDER BY a.id LIMIT ?"
+        ),
+        pending_count_sql=(
+            "SELECT COUNT(*) AS n FROM artifacts a "
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM embedding_metadata m "
+            "  WHERE m.entity_type = 'artifact' AND m.entity_id = a.id"
+            ")"
+        ),
+    ),
+}
+
+
+_DEFAULT_ENTITY_TYPES: tuple[str, ...] = tuple(_ENTITY_BACKFILL_CONFIGS.keys())
+
+
+# ---------------------------------------------------------------------------
+# BackfillService
 # ---------------------------------------------------------------------------
 
 
 ProgressCallback = Callable[[JobStatus], Awaitable[None] | None]
 
 
-class BackfillService:
-    """Iterates `claims WHERE embedding_pending=1` and re-embeds them.
+class _BackfillBatchError(Exception):
+    """Per-type embed_batch failure; carries the formatted detail."""
 
-      - `run_backfill(progress_callback=None)` is async.
-      - Default batch_size = 8 (v2.4.1: lowered from 32 so local 8B-class
-        embedding servers don't time out on a single batch).
-      - Per-claim failures get logged + the claim left with
-        embedding_pending=1 so a later run retries.
-      - Batch-level failures (embed_batch raised) abort the run with
-        status.state = "failed"; remaining claims keep their flag for
-        the next attempt.
-      - On clean exit, status.state = "complete".
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        super().__init__(detail)
+
+
+class BackfillService:
+    """Iterates one or more entity types and (re-)embeds them.
+
+      - `run_backfill(status, progress_callback=None, entity_types=None)`
+        is async. With `entity_types=None` it processes all six known
+        types in stable order (claim → journal → decision → literature
+        → mission → artifact).
+      - Default `batch_size = 8` (v2.4.1: lowered from 32 so local
+        8B-class embedding backends don't time out on a single batch).
+      - Per-row write failures get logged + the row is left "pending"
+        for a later run.
+      - Per-type embed_batch failures are recorded as the type's error
+        but the loop continues to the next type (v2.5.5: isolated
+        failure). The final state is "failed" if any type errored,
+        "complete" otherwise.
     """
 
     def __init__(self, *, db: Any, embeddings: Any, batch_size: int = 8) -> None:
@@ -139,25 +336,38 @@ class BackfillService:
         self,
         status: JobStatus,
         progress_callback: ProgressCallback | None = None,
+        entity_types: Sequence[str] | None = None,
     ) -> JobStatus:
-        """Embed every pending claim in batches.
+        """Embed every pending entity, batch by batch.
 
-        Cursor pattern: claims are iterated in `id`-ascending order with a
-        `id > last_id` filter so persistent per-claim failures (which keep
-        `embedding_pending=1`) don't trigger an infinite loop on re-fetch.
+        Cursor pattern: rows are iterated in `id`-ascending order with an
+        `id > last_id` filter so persistent per-row failures don't
+        trigger an infinite re-fetch loop.
 
-        Wall-clock target per mission spec: ~0.5–1s per claim with
-        LM Studio qwen3-8b; 827 claims ≈ 7–14 min.
+        Wall-clock target per the v2.4 mission spec: ~0.5–1s per entity
+        with LM Studio qwen3-8b; the v2.5.5 surface includes the other
+        five entity types so the upper-bound batch is somewhat larger.
         """
-        import struct
-
         status.state = "running"
 
-        # Step 1: count pending claims (status.total snapshot for the polling UI).
-        row = await self._db.fetchone(
-            "SELECT COUNT(*) AS n FROM claims WHERE embedding_pending = 1"
-        )
-        status.total = int((row or {}).get("n") or 0)
+        if entity_types is None:
+            types = _DEFAULT_ENTITY_TYPES
+        else:
+            types = tuple(entity_types)
+            for et in types:
+                if et not in _ENTITY_BACKFILL_CONFIGS:
+                    raise ValueError(
+                        f"run_backfill: unknown entity_type {et!r}; "
+                        f"expected one of {_DEFAULT_ENTITY_TYPES}"
+                    )
+
+        # Step 1: snapshot per-type pending counts; total is the sum.
+        per_type_totals: dict[str, int] = {}
+        for et in types:
+            cfg = _ENTITY_BACKFILL_CONFIGS[et]
+            row = await self._db.fetchone(cfg.pending_count_sql)
+            per_type_totals[et] = int((row or {}).get("n") or 0)
+        status.total = sum(per_type_totals.values())
         await _emit_progress(progress_callback, status)
 
         if status.total == 0:
@@ -165,77 +375,144 @@ class BackfillService:
             await _emit_progress(progress_callback, status)
             return status
 
-        # Step 2: cursor-paginate through pending claims.
-        last_id = ""
-        vec_available = bool(getattr(self._db, "vec_available", False))
+        # Step 2: iterate entity types, isolating per-type batch failures.
+        type_errors: list[str] = []
+        for et in types:
+            if per_type_totals[et] == 0:
+                continue
+            cfg = _ENTITY_BACKFILL_CONFIGS[et]
+            try:
+                await self._backfill_one_type(cfg, status, progress_callback)
+            except _BackfillBatchError as exc:
+                type_errors.append(f"{et}: {exc.detail}")
+                logger.warning(
+                    "backfill %s batch failed: %s", et, exc.detail
+                )
 
+        # Step 3: terminal state.
+        if type_errors:
+            status.state = "failed"
+            if len(type_errors) == 1:
+                # v2.4 single-type error format: "batch embed failed (...)".
+                status.error = f"batch embed failed: {type_errors[0]}"
+            else:
+                status.error = (
+                    "batch embed failed across multiple types: "
+                    + "; ".join(type_errors)
+                )
+        else:
+            status.state = "complete"
+
+        await _emit_progress(progress_callback, status)
+        return status
+
+    async def _backfill_one_type(
+        self,
+        cfg: _EntityBackfillConfig,
+        status: JobStatus,
+        progress_callback: ProgressCallback | None,
+    ) -> None:
+        """Cursor-paginate through one entity type's pending rows."""
+        # Lazily import to avoid a hot-path import on every method call.
+        from rka.infra.embeddings import EmbeddingService as _ES
+
+        vec_available = bool(getattr(self._db, "vec_available", False))
+        model_name: str = getattr(self._embeddings, "model_name", "unknown")
+        embed_dim: int = int(getattr(self._embeddings, "dim", 0) or 0)
+
+        last_id = ""
         while True:
             rows = await self._db.fetchall(
-                "SELECT id, content FROM claims "
-                "WHERE embedding_pending = 1 AND id > ? "
-                "ORDER BY id LIMIT ?",
-                [last_id, self._batch_size],
+                cfg.pending_cursor_sql, [last_id, self._batch_size]
             )
             if not rows:
                 break
 
-            ids = [r["id"] for r in rows]
-            texts = [r["content"] for r in rows]
-            last_id = rows[-1]["id"]
-
-            # Step 3: embed the batch. Batch-level failure → mark failed + exit.
-            try:
-                vectors = await self._embeddings.embed_batch(texts, is_query=False)
-            except Exception as exc:  # noqa: BLE001
-                status.state = "failed"
-                status.error = (
-                    f"batch embed failed (cursor at {last_id}): "
-                    f"{type(exc).__name__}: {exc!s}"
-                )
-                logger.exception("backfill batch embed failed at cursor %s", last_id)
-                await _emit_progress(progress_callback, status)
-                return status
-
-            # Step 4: write vec_claims rows + clear the per-claim flag.
-            for claim_id, vec in zip(ids, vectors):
+            # Compose text per row; drop rows whose composed text is empty.
+            work: list[tuple[Mapping[str, Any], str]] = []
+            for r in rows:
                 try:
+                    text = cfg.compose_text(r)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "%s %s compose_text failed (skipping): %s",
+                        cfg.entity_type, r.get(cfg.id_column), exc,
+                    )
+                    continue
+                if text:
+                    work.append((r, text))
+
+            last_id = rows[-1][cfg.id_column]
+
+            if not work:
+                # Whole batch was empty-text; advance cursor and continue.
+                continue
+
+            # Batch-embed; a failure aborts THIS type only (the outer
+            # loop catches and continues to the next type).
+            try:
+                vectors = await self._embeddings.embed_batch(
+                    [t for _, t in work], is_query=False
+                )
+            except Exception as exc:  # noqa: BLE001
+                raise _BackfillBatchError(
+                    f"(cursor at {last_id}): "
+                    f"{type(exc).__name__}: {exc!s}"
+                ) from exc
+
+            # Per-row: write vec_* + embedding_metadata + post_embed.
+            for (row, text), vec in zip(work, vectors):
+                entity_id = row[cfg.id_column]
+                try:
+                    project_id = row.get("project_id") or "proj_default"
                     if vec_available:
                         vec_blob = struct.pack(f"{len(vec)}f", *vec)
                         await self._db.execute(
-                            "INSERT OR REPLACE INTO vec_claims (id, embedding) VALUES (?, ?)",
-                            [claim_id, vec_blob],
+                            f"INSERT OR REPLACE INTO {cfg.vec_table} "
+                            "(id, embedding) VALUES (?, ?)",
+                            [entity_id, vec_blob],
                         )
+                    # Always update metadata — the v2.5.5 3-tuple
+                    # needs_reembed gate reads it. Skipping the metadata
+                    # write was the v2.4 oversight that left the stale
+                    # nomic-768 model_name in place across config switches.
                     await self._db.execute(
-                        "UPDATE claims SET embedding_pending = 0 WHERE id = ?",
-                        [claim_id],
+                        """INSERT OR REPLACE INTO embedding_metadata
+                           (project_id, entity_type, entity_id,
+                            content_hash, model_name, dimensions)
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        [
+                            project_id,
+                            cfg.entity_type,
+                            entity_id,
+                            _ES.content_hash(text),
+                            model_name,
+                            embed_dim,
+                        ],
                     )
+                    if cfg.post_embed_sql:
+                        await self._db.execute(cfg.post_embed_sql, [entity_id])
                     status.processed += 1
                 except Exception as exc:  # noqa: BLE001
-                    # Per-claim failure: leave the flag set, log, continue.
+                    # Per-row failure: leave any pending signal intact,
+                    # log, continue.
                     logger.warning(
-                        "claim %s vec-write failed (flag stays set for retry): %s",
-                        claim_id,
-                        exc,
+                        "%s %s vec-write failed (leaving pending for retry): %s",
+                        cfg.entity_type, entity_id, exc,
                     )
 
             await self._db.commit()
             await _emit_progress(progress_callback, status)
 
-        status.state = "complete"
-        await _emit_progress(progress_callback, status)
-        return status
-
 
 async def _emit_progress(
     cb: ProgressCallback | None, status: JobStatus
 ) -> None:
-    """Fire the optional progress callback, awaiting if it returns a coroutine."""
     if cb is None:
         return
     await _maybe_await(cb(status))
 
 
 async def _maybe_await(value: Any) -> None:
-    """If `value` is awaitable, await it; otherwise no-op."""
     if hasattr(value, "__await__"):
         await value
