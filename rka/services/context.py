@@ -63,25 +63,39 @@ END"""
 # env vars must call `_reload_coefficients_from_env()` after the patch.
 # ---------------------------------------------------------------------------
 
-# Sweep coefficient defaults. Spec-listed env var names per
-# mis_01KRSP44W7BDZH11PZRGXH1WM4 T1: RKA_CTX_W_IMP / W_CENT / W_RECENCY /
-# PI_LIFT. The v2.5.3-hypothesis defaults below are the Config 1 sweep
-# reference; T4 of the v2.5.4 mission updates them to the sweep winner.
+# Sweep coefficient defaults.
+#
+# History:
+# - v2.5.3 hypothesis Config 1 (dec_01KRSMMCS8MD7KQDBS0E2DVKBQ): w_imp=0.5,
+#   w_cent=0.3, w_recency=0.2.
+# - v2.5.4 D2 5-config sweep (mis_01KRSP44W7BDZH11PZRGXH1WM4): same as
+#   Config 1 retained (no winner improvement found).
+# - Phase-3.1 T4 64-config sweep (mis_01KS3EB2671CDD4V9RZCMYCEH1; Brain
+#   ratification of chk_01KS3K40N6JRHV118969RMBNF0): cfg11 winner =
+#   N=1 / w_recency=0.15 / bundle_K=80. Recall improved +0.021 over v2.5.7
+#   (0.801 → 0.822); ordering improved +0.040 above floor (0.363 → 0.403).
+#   The 0.85 recall floor + 0.13 efficiency floor were NOT achievable via
+#   parameter tuning — both have STRUCTURAL ceilings (recall 0.822,
+#   efficiency 0.044) in the post-PR-#17 corpus + current candidate-
+#   generation surface. Phase-3 chapter closes PARTIAL; recall + efficiency
+#   deferred to Phase-3.2 (candidate-generation track, NOT coefficient
+#   tuning).
 _DEFAULT_W_IMPORTANCE = 0.5
 _DEFAULT_W_CENTRALITY = 0.3
-_DEFAULT_W_RECENCY = 0.2
+_DEFAULT_W_RECENCY = 0.15  # Phase-3.1 cfg11 winner (was 0.20 in v2.5.3 baseline)
 # PI-source lift. Spec text references "0.05" but the v2.5.3 implementation
 # preserves the pre-v2.5.3 +5/40 = +0.125 normalized magnitude. Keeping
 # 0.125 here (matches existing test test_pi_source_lift_applied_within_band).
 # Per mission assumption 7, PI lift is NOT part of the A/B sweep; the env
 # var exists for operator flexibility only.
 _DEFAULT_PI_SOURCE_LIFT_NORMALIZED = 0.125
-# Phase-3.1 (mis_01KS3EB2671CDD4V9RZCMYCEH1 T1): recency decay shape
-# parameter. score = 1 / (1 + days/N). N=1 reproduces the pre-Phase-3.1
-# 1/(1+days) shape exactly (backward-compat default). Larger N produces
-# slower decay (N=30 → 30-day half-life; N=365 → year half-life). The
-# v2.5.4-D4 / corpus-refresh diagnosis identified the steep N=1 shape as
-# the source of recency over-amplification.
+# Phase-3.1 T4: recency decay shape parameter. score = 1 / (1 + days/N).
+# Sweep across {1, 30, 90, 365} showed shape_N effect was within noise
+# (<0.005 recall variance) — the recency-amplification mechanism is real
+# but its magnitude is too small to bridge the structural floor gaps.
+# cfg11 winner pins N=1 (the simplest shape; reproduces the pre-Phase-3.1
+# 1/(1+days) shape exactly). Operator override via RKA_CTX_RECENCY_SHAPE_N
+# preserved for Phase-3.2 candidate-set experimentation.
 _DEFAULT_RECENCY_SHAPE_N = 1.0
 
 
@@ -180,7 +194,7 @@ def _compute_recency_score(days: float, shape_n: float) -> float:
 # gates truncation — the policy is post-rank-merge, unconditional.
 # ---------------------------------------------------------------------------
 
-_DEFAULT_BUNDLE_K: int = 50
+_DEFAULT_BUNDLE_K: int = 80  # Phase-3.1 cfg11 winner (T2 was 50; v2.5.4-D4 was 30)
 
 
 def _read_bundle_k() -> int:

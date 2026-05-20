@@ -459,15 +459,19 @@ class TestV2_5_4EnvVarConfigurableCoefficients:
     PI_LIFT at module-import time. Tests use monkeypatch.setenv plus
     _reload_coefficients_from_env() to swap values mid-process."""
 
-    def test_defaults_match_v2_5_3_hypothesis_when_no_env_set(
+    def test_defaults_match_phase_3_1_cfg11_winner_when_no_env_set(
         self, monkeypatch: pytest.MonkeyPatch
     ):
         """With no env vars set, the module constants must equal the
-        v2.5.3-hypothesis Config 1 defaults (0.5 / 0.3 / 0.2 / 0.125).
-        The 0.125 PI lift preserves the pre-v2.5.3 +5/40 normalized
-        magnitude (the spec text says "0.05" but the parenthetical
-        "+5/40 = 0.125" — the existing implementation matches the
-        parenthetical and that's what gets preserved across tuning)."""
+        Phase-3.1 T5 cfg11 winner defaults: w_imp=0.5, w_cent=0.3,
+        w_recency=0.15, pi_lift=0.125, recency_shape_n=1.
+
+        v2.5.3 hypothesis Config 1 had w_recency=0.2 (retained through
+        v2.5.4 sweep). Phase-3.1 64-config sweep (mis_01KS3EB2671CDD4V9RZCMYCEH1
+        T4; cfg11 winner per Brain ratification of
+        chk_01KS3K40N6JRHV118969RMBNF0) drops w_recency to 0.15.
+        The 0.125 PI lift preserves the pre-v2.5.3 +5/40 magnitude
+        unchanged across all sweeps."""
         import rka.services.context as ctx
 
         for var in (
@@ -481,10 +485,11 @@ class TestV2_5_4EnvVarConfigurableCoefficients:
         ctx._reload_coefficients_from_env()
         assert ctx._W_IMPORTANCE == 0.5
         assert ctx._W_CENTRALITY == 0.3
-        assert ctx._W_RECENCY == 0.2
+        assert ctx._W_RECENCY == 0.15  # Phase-3.1 cfg11 winner (was 0.2)
         assert ctx._PI_SOURCE_LIFT_NORMALIZED == 0.125
-        # Phase-3.1: N=1 is the backward-compat default (preserves the
-        # pre-refactor 1/(1+days) shape exactly).
+        # Phase-3.1: N=1 retained as cfg11 winner — shape_N effect was
+        # within noise across the {1, 30, 90, 365} sweep so the simplest
+        # shape wins by tie-break.
         assert ctx._RECENCY_SHAPE_N == 1.0
 
     def test_env_vars_override_defaults(self, monkeypatch: pytest.MonkeyPatch):
@@ -729,21 +734,28 @@ class TestPhase3_1T2BundleTruncation:
         search = SearchService(db=db, embeddings=None)
         return ContextEngine(db=db, search=search, llm=None)
 
-    async def test_default_bundle_k_is_50(self):
-        """Phase-3.1 T2 bumped the default K from 30 (v2.5.4 D4) to 50.
-        Anchored to the corpus-refresh diagnosis: avg bundle ~173,
-        efficiency 0.037 → need bundle ≈ 50 (with ~6 critical entities)
-        to clear 0.13 floor."""
+    async def test_default_bundle_k_is_80_cfg11_winner(self):
+        """Phase-3.1 evolution of the bundle_K default:
+        - v2.5.4 D4: K=30 (conditional on anchor_aware_present)
+        - Phase-3.1 T2: K=50 (always-on truncation)
+        - Phase-3.1 T5 cfg11 winner: K=80 (Pareto-best on recall ×
+          efficiency frontier per chk_01KS3K40N6JRHV118969RMBNF0
+          Brain ratification)
+
+        K=80 hits the structural recall ceiling 0.822 (vs K=30/K=50
+        which produce 0.713/0.783); ordering ranks well above floor
+        (0.403 vs 0.363 floor); efficiency at 0.034 (still below 0.13
+        floor — structural; deferred to Phase-3.2)."""
         from rka.services.context import _DEFAULT_BUNDLE_K, _read_bundle_k
 
-        assert _DEFAULT_BUNDLE_K == 50, (
-            "Phase-3.1 T2 default bundle_K is 50 (was 30 in v2.5.4 D4)."
+        assert _DEFAULT_BUNDLE_K == 80, (
+            "Phase-3.1 T5 default bundle_K is 80 (cfg11 sweep winner)."
         )
         # No env var set → read returns the default.
         import os
 
         os.environ.pop("RKA_CTX_BUNDLE_K", None)
-        assert _read_bundle_k() == 50
+        assert _read_bundle_k() == 80
 
     async def test_truncation_always_applied_after_phase_3_1_t2(
         self, engine_with_many_entries: ContextEngine
