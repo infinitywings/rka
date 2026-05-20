@@ -55,10 +55,16 @@ services:
       RKA_CTX_W_CENT: "${RKA_CTX_W_CENT:-0.3}"
       RKA_CTX_W_RECENCY: "${RKA_CTX_W_RECENCY:-0.2}"
       RKA_CTX_PI_LIFT: "${RKA_CTX_PI_LIFT:-0.125}"
-      # v2.5.4 D4 (mis_01KS0C8BKTHCA8GB38BGDR1PTQ T1): top-K cap for the
-      # anchor-aware-present truncation path. Sweep harness sets this to
-      # 30 / 50 / 75 across configs; default 30.
-      RKA_CTX_BUNDLE_K: "${RKA_CTX_BUNDLE_K:-30}"
+      # Phase-3.1 T2 (mis_01KS3EB2671CDD4V9RZCMYCEH1): post-rank-merge
+      # bundle_K truncation, now always-on. Default bumped 30 → 50 per the
+      # corpus-refresh diagnosis. Sweep harness sets this across {30, 50,
+      # 80, 150} in the 64-config matrix.
+      RKA_CTX_BUNDLE_K: "${RKA_CTX_BUNDLE_K:-50}"
+      # Phase-3.1 T1 (mis_01KS3EB2671CDD4V9RZCMYCEH1): recency-decay shape
+      # parameter for `recency_score = 1/(1+days/N)`. N=1 is the backward-
+      # compat default (reproduces the pre-Phase-3.1 1/(1+days) shape).
+      # Sweep harness sets this across {1, 30, 90, 365}.
+      RKA_CTX_RECENCY_SHAPE_N: "${RKA_CTX_RECENCY_SHAPE_N:-1}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -80,10 +86,16 @@ services:
       RKA_CTX_W_CENT: "${RKA_CTX_W_CENT:-0.3}"
       RKA_CTX_W_RECENCY: "${RKA_CTX_W_RECENCY:-0.2}"
       RKA_CTX_PI_LIFT: "${RKA_CTX_PI_LIFT:-0.125}"
-      # v2.5.4 D4 (mis_01KS0C8BKTHCA8GB38BGDR1PTQ T1): top-K cap for the
-      # anchor-aware-present truncation path. Sweep harness sets this to
-      # 30 / 50 / 75 across configs; default 30.
-      RKA_CTX_BUNDLE_K: "${RKA_CTX_BUNDLE_K:-30}"
+      # Phase-3.1 T2 (mis_01KS3EB2671CDD4V9RZCMYCEH1): post-rank-merge
+      # bundle_K truncation, now always-on. Default bumped 30 → 50 per the
+      # corpus-refresh diagnosis. Sweep harness sets this across {30, 50,
+      # 80, 150} in the 64-config matrix.
+      RKA_CTX_BUNDLE_K: "${RKA_CTX_BUNDLE_K:-50}"
+      # Phase-3.1 T1 (mis_01KS3EB2671CDD4V9RZCMYCEH1): recency-decay shape
+      # parameter for `recency_score = 1/(1+days/N)`. N=1 is the backward-
+      # compat default (reproduces the pre-Phase-3.1 1/(1+days) shape).
+      # Sweep harness sets this across {1, 30, 90, 365}.
+      RKA_CTX_RECENCY_SHAPE_N: "${RKA_CTX_RECENCY_SHAPE_N:-1}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

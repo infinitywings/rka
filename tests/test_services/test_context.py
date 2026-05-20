@@ -685,66 +685,89 @@ class TestPhase3_1RecencyShape:
 
 
 # ---------------------------------------------------------------------------
-# v2.5.4 D4 — bundle-truncation policy with anchor-aware-tool priority
-# (mis_01KS0C8BKTHCA8GB38BGDR1PTQ T1; per dec_01KS0C4PG88F29YBR91VQ3RRXY)
+# Phase-3.1 T2 — post-rank-merge bundle_K truncation (always-on)
+# (mis_01KS3EB2671CDD4V9RZCMYCEH1 T2; per dec_01KS3E6ZJXXV7542QPWZ9W8BQS)
+#
+# Replaces the v2.5.4-D4 conditional truncation (gated by
+# anchor_aware_present). Brain ratification of chk_01KS3FZDX78FD89CVR4K6VYJFK
+# moved the policy to unconditional post-rank-merge cap with anchor-aware
+# UNION protection. Default K=30 → 50.
 # ---------------------------------------------------------------------------
 
 
-class TestV2_5_4D4BundleTruncation:
-    """When anchor-aware tools fire in the same composed sequence, the
-    overview-path bundle caps to top-K by weighted-sum score. Anchor-aware-
-    tool outputs UNION through the cap (always pass). Default K=30;
-    `RKA_CTX_BUNDLE_K` env var overrides. Backward-compat: when
-    anchor_aware_present=False, the full ranked list is preserved (v2.5.3
-    behavior — un-anchored scenarios' recall floor depends on it)."""
+class TestPhase3_1T2BundleTruncation:
+    """Bundle-truncation policy. Always-on post-rank-merge cap at top-K
+    (default 50, `RKA_CTX_BUNDLE_K` env override). The v2.5.4-D4
+    `anchor_aware_present` gating has been removed — the policy is
+    unconditional because the un-anchored backward-compat path left the
+    efficiency floor structurally unreachable (corpus-refresh diagnosis
+    + chk_01KS3FZDX78FD89CVR4K6VYJFK Brain ratification).
+
+    Anchor-aware UNION is preserved: when `anchor_aware_ids` is provided,
+    those entities pass through the cap regardless of weighted-sum
+    rank."""
 
     @pytest_asyncio.fixture
     async def engine_with_many_entries(
         self, db_with_project: Database
     ) -> ContextEngine:
-        """Database fixture with 50+ journal entries across importance bands
-        so truncation behavior is observable (the un-truncated overview path
-        would return all of them; the truncated path caps to top-K)."""
+        """Database fixture with 70 journal entries — enough to exceed the
+        new default K=50 cap by a margin large enough to test UNION
+        protection of entities ranked >50."""
         db = db_with_project
         NOW = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"
-        # 50 normal-importance journal entries — enough to exceed K=30.
-        for i in range(50):
+        # 70 normal-importance journal entries — exceeds default K=50.
+        for i in range(70):
             await db.execute(
                 f"""INSERT INTO journal (id, type, content, source, confidence,
                     importance, phase, project_id, created_at, updated_at)
                    VALUES (?, 'note', ?, 'executor', 'verified', 'normal',
                            'phase_1', 'proj_default', {NOW}, {NOW})""",
-                [f"jrn_d4_{i:03d}", f"D4 test entry {i}"],
+                [f"jrn_d4_{i:03d}", f"Truncation test entry {i}"],
             )
         await db.commit()
         search = SearchService(db=db, embeddings=None)
         return ContextEngine(db=db, search=search, llm=None)
 
-    async def test_truncation_applied_when_anchor_aware_present(
+    async def test_default_bundle_k_is_50(self):
+        """Phase-3.1 T2 bumped the default K from 30 (v2.5.4 D4) to 50.
+        Anchored to the corpus-refresh diagnosis: avg bundle ~173,
+        efficiency 0.037 → need bundle ≈ 50 (with ~6 critical entities)
+        to clear 0.13 floor."""
+        from rka.services.context import _DEFAULT_BUNDLE_K, _read_bundle_k
+
+        assert _DEFAULT_BUNDLE_K == 50, (
+            "Phase-3.1 T2 default bundle_K is 50 (was 30 in v2.5.4 D4)."
+        )
+        # No env var set → read returns the default.
+        import os
+
+        os.environ.pop("RKA_CTX_BUNDLE_K", None)
+        assert _read_bundle_k() == 50
+
+    async def test_truncation_always_applied_after_phase_3_1_t2(
         self, engine_with_many_entries: ContextEngine
     ):
-        """When anchor_aware_present=True, the bundle MUST cap at top-K=30
-        (default). 50 entries in fixture → bundle size 30."""
-        pkg = await engine_with_many_entries.get_context(
-            anchor_aware_present=True
-        )
-        assert len(pkg.sources) == 30, (
-            f"D4 truncation: anchor_aware_present=True should cap to K=30; "
-            f"got {len(pkg.sources)} entries."
+        """Phase-3.1 T2: truncation is unconditional. Both the un-anchored
+        path (anchor_aware_present omitted/False, the v2.5.4-D4
+        backward-compat case) and the anchor-aware-present path MUST cap
+        at K=50. The fixture has 70 entries → bundle size 50 in both
+        cases."""
+        # Un-anchored path (v2.5.4-D4 used to skip truncation here):
+        pkg_unanchored = await engine_with_many_entries.get_context()
+        assert len(pkg_unanchored.sources) == 50, (
+            f"Phase-3.1 T2: un-anchored path MUST also cap at K=50 (was "
+            f"un-truncated under v2.5.4 D4); got "
+            f"{len(pkg_unanchored.sources)} entries."
         )
 
-    async def test_truncation_skipped_when_no_anchor_aware(
-        self, engine_with_many_entries: ContextEngine
-    ):
-        """Backward-compat path: anchor_aware_present=False (default) MUST
-        leave the full ranked list intact. v2.5.3 recall floor for
-        un-anchored scenarios depends on this preservation."""
-        pkg = await engine_with_many_entries.get_context()
-        assert len(pkg.sources) == 50, (
-            f"D4 backward-compat: anchor_aware_present=False (default) MUST "
-            f"preserve the full ranked list (50 entries in fixture); got "
-            f"{len(pkg.sources)}. v2.5.3 un-anchored recall floor depends on "
-            "this path being unmodified."
+        # Anchor-aware-present=True (same K=50 since the gating was removed):
+        pkg_anchored = await engine_with_many_entries.get_context(
+            anchor_aware_present=True
+        )
+        assert len(pkg_anchored.sources) == 50, (
+            f"Phase-3.1 T2: anchor_aware_present=True path also caps at "
+            f"K=50; got {len(pkg_anchored.sources)} entries."
         )
 
     async def test_env_var_overrides_default_k(
@@ -752,43 +775,79 @@ class TestV2_5_4D4BundleTruncation:
         engine_with_many_entries: ContextEngine,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        """`RKA_CTX_BUNDLE_K=50` env override propagates: anchor-aware-
-        present truncation caps at 50 instead of 30. Sweep harness uses
-        this for K-escalation (K=30 → K=50 → K=75)."""
-        monkeypatch.setenv("RKA_CTX_BUNDLE_K", "50")
-        pkg = await engine_with_many_entries.get_context(
-            anchor_aware_present=True
-        )
-        assert len(pkg.sources) == 50, (
-            f"D4 RKA_CTX_BUNDLE_K=50 override: expected 50 entries; got "
-            f"{len(pkg.sources)}. The fixture has 50 normal entries so K=50 "
-            "should pass all of them."
+        """`RKA_CTX_BUNDLE_K` env override drives the cap. Sweep harness
+        uses this for the bundle_K dimension of the 64-config matrix
+        (K ∈ {30, 50, 80, 150} per Brain ratification)."""
+        monkeypatch.setenv("RKA_CTX_BUNDLE_K", "30")
+        pkg = await engine_with_many_entries.get_context()
+        assert len(pkg.sources) == 30, (
+            f"Phase-3.1 T2 RKA_CTX_BUNDLE_K=30 override: expected 30 "
+            f"entries; got {len(pkg.sources)}. Fixture has 70 entries so "
+            "K=30 truncates."
         )
 
     async def test_anchor_aware_outputs_pass_through_above_k(
-        self, engine_with_many_entries: ContextEngine
+        self,
+        engine_with_many_entries: ContextEngine,
+        monkeypatch: pytest.MonkeyPatch,
     ):
-        """Anchor-aware-tool outputs UNION through the top-K cap regardless of
-        their weighted-sum rank. If the caller passes
-        `anchor_aware_ids=[<entity outside top-K>]`, that entity MUST appear
-        in the final bundle alongside the top-K head."""
-        # All 50 fixture entries are normal-importance + same recency, so
-        # weighted-sum order is essentially insertion order. Pick an id we
-        # know is far outside the top-K=30 head.
+        """Anchor-aware-tool outputs UNION through the top-K cap regardless
+        of weighted-sum rank. With K=30 and the SQL-LIMITed 50 candidates,
+        IDs at rank [30..49] are normally truncated; passing them via
+        anchor_aware_ids restores them.
+
+        (Note: the journal SQL has LIMIT 50, so candidates max out at 50
+        even when the fixture has 70 entries. Testing UNION with K=30
+        keeps the candidate count above K while leaving room for protected
+        entries that would otherwise be truncated.)"""
+        monkeypatch.setenv("RKA_CTX_BUNDLE_K", "30")
+
+        # The fixture inserts i=0..69; SQL LIMIT 50 + ORDER BY created_at
+        # DESC + ROWID-tiebreak → candidates ≈ jrn_d4_000..049 (the first
+        # 50 inserted, sharing the same created_at). jrn_d4_049 is at
+        # rank ~49, well outside K=30.
         outside_top_k_id = "jrn_d4_049"
 
         pkg = await engine_with_many_entries.get_context(
-            anchor_aware_present=True,
             anchor_aware_ids=[outside_top_k_id],
         )
         assert outside_top_k_id in pkg.sources, (
-            f"D4 anchor-aware UNION: id {outside_top_k_id!r} (rank ~50, far "
-            f"below K=30) MUST pass through the truncation when passed via "
-            f"anchor_aware_ids. Got sources={pkg.sources[:5]}..."
-            f"{pkg.sources[-5:]}"
+            f"Anchor-aware UNION: id {outside_top_k_id!r} (rank ~49, "
+            f"below K=30) MUST pass through truncation when passed via "
+            f"anchor_aware_ids. Got sources={pkg.sources[:3]}..."
+            f"{pkg.sources[-3:]}"
         )
         # Bundle size = K (30) + 1 extra anchor-aware UNION = 31.
         assert len(pkg.sources) == 31, (
-            f"D4 bundle size: top-K=30 + 1 UNION extra = 31; got "
+            f"Bundle size: top-K=30 + 1 UNION extra = 31; got "
             f"{len(pkg.sources)}."
+        )
+
+    async def test_anchor_aware_present_no_longer_gates_truncation(
+        self, engine_with_many_entries: ContextEngine
+    ):
+        """The v2.5.4-D4 `anchor_aware_present` parameter is retained for
+        API backward-compat (Pydantic models, REST callers, the eval-v2
+        runner's `_call_get_context`) but is now a no-op for the truncation
+        decision. Truncation behavior MUST be identical whether the param
+        is True, False, or omitted."""
+        pkg_omitted = await engine_with_many_entries.get_context()
+        pkg_false = await engine_with_many_entries.get_context(
+            anchor_aware_present=False
+        )
+        pkg_true = await engine_with_many_entries.get_context(
+            anchor_aware_present=True
+        )
+        # All three produce identical bundle sizes — anchor_aware_present
+        # no longer changes the truncation path.
+        assert (
+            len(pkg_omitted.sources)
+            == len(pkg_false.sources)
+            == len(pkg_true.sources)
+            == 50
+        ), (
+            "Phase-3.1 T2: anchor_aware_present is no-op for truncation; "
+            f"omitted={len(pkg_omitted.sources)}, "
+            f"False={len(pkg_false.sources)}, "
+            f"True={len(pkg_true.sources)} — all must equal 50."
         )

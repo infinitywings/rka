@@ -153,19 +153,34 @@ def _compute_recency_score(days: float, shape_n: float) -> float:
 
 
 # ---------------------------------------------------------------------------
-# v2.5.4 (D4 — mis_01KS0C8BKTHCA8GB38BGDR1PTQ): bundle-truncation policy with
-# anchor-aware-tool priority. When a caller signals that anchor-aware tools
-# (rka_get_ego_graph / rka_multi_hop_retrieval / rka_assemble_evidence) are
-# firing in the same composed sequence, the overview-path bundle is capped at
-# top-K by the v2.5.3 weighted-sum score, and entities surfaced by those
-# anchor-aware tools UNION through the cap (always pass).
+# Bundle-truncation policy.
 #
-# Backward-compat: anchor_aware_present=False preserves v2.5.3 behavior (no
-# truncation). This is critical for un-anchored scenarios whose recall floor
-# depends on the full ranked list.
+# v2.5.4 (D4 — mis_01KS0C8BKTHCA8GB38BGDR1PTQ): introduced post-rank-merge
+# top-K truncation with anchor-aware-tool UNION protection, gated by an
+# `anchor_aware_present` flag. Default K=30. Backward-compat path preserved
+# v2.5.3 behavior (no truncation) when the flag was False.
+#
+# Phase-3.1 T2 (mis_01KS3EB2671CDD4V9RZCMYCEH1; per Brain ratification of
+# chk_01KS3FZDX78FD89CVR4K6VYJFK Option B + K-placement refinement):
+# truncation is now **always-on**. The post-rank-merge cap is the bundle's
+# load-bearing efficiency lever — the v2.5.4-D4 conditional gating left
+# un-anchored bundles at ~200 entities, structurally unable to clear the
+# 0.13 efficiency floor. Empirical avg bundle size 173 (T0 baseline,
+# jrn_01KS3GH21FPSJ0EKCZKX1EQZ4X). Default K bumped 30 → 50 (the corpus-
+# refresh diagnosis estimated bundle ≈ 50 is needed to clear 0.13).
+#
+# The anchor-aware UNION protection is preserved: when `anchor_aware_ids`
+# is provided by the caller (composed call sequence that exercised
+# rka_get_ego_graph / rka_multi_hop_retrieval / rka_assemble_evidence),
+# those entity IDs pass through the cap regardless of weighted-sum
+# position. Critical-entity recall preserved.
+#
+# The `anchor_aware_present` parameter is retained for API/Pydantic
+# backward-compat (so v2.5.4-D4 callers don't break), but it no longer
+# gates truncation — the policy is post-rank-merge, unconditional.
 # ---------------------------------------------------------------------------
 
-_DEFAULT_BUNDLE_K: int = 30
+_DEFAULT_BUNDLE_K: int = 50
 
 
 def _read_bundle_k() -> int:
@@ -242,20 +257,19 @@ class ContextEngine:
                 LLM-generated narrative if an LLM is configured.
             project_id: Project scope. Defaults to 'proj_default'; callers
                 normally inject from the API request.
-            anchor_aware_present: v2.5.4 (D4). When True, the overview-path
-                bundle is capped at top-K (`RKA_CTX_BUNDLE_K`, default 30) by
-                the weighted-sum score. Anchor-aware-tool outputs always pass
-                through the cap (see ``anchor_aware_ids``). Defaults to False
-                for backward compat — un-anchored scenarios' recall floor
-                depends on the full ranked list (v2.5.3 baseline preserved).
-            anchor_aware_ids: v2.5.4 (D4). When provided AND
-                ``anchor_aware_present=True``, entities with matching ``id``
+            anchor_aware_present: v2.5.4 (D4) signal that anchor-aware
+                tools fired in the composed call sequence. **No longer gates
+                truncation as of Phase-3.1 T2** — the post-rank-merge
+                bundle_K cap is now unconditional. Parameter retained for
+                API backward-compat; v2.5.4-D4 callers continue to pass it
+                without effect.
+            anchor_aware_ids: When provided, entities with matching ``id``
                 pass through the top-K cap regardless of weighted-sum
-                position. Typically populated by the caller from the
-                composed call sequence's anchor-aware-tool outputs
-                (rka_get_ego_graph / rka_multi_hop_retrieval /
-                rka_assemble_evidence). Ignored when ``anchor_aware_present``
-                is False.
+                position (UNION protection). Typically populated by the
+                caller from the composed call sequence's anchor-aware-tool
+                outputs (rka_get_ego_graph / rka_multi_hop_retrieval /
+                rka_assemble_evidence). Independent of
+                ``anchor_aware_present`` after Phase-3.1 T2.
 
         Returns a ContextPackage with `entries` populated (legacy bucket fields
         left empty).
@@ -287,27 +301,26 @@ class ContextEngine:
         else:
             candidates.sort(key=self._overview_score, reverse=True)
 
-        # v2.5.4 D4 truncation: cap to top-K when anchor-aware tools are
-        # firing in the same composed sequence. Entities surfaced by those
-        # tools (passed via ``anchor_aware_ids``) UNION through the cap so
-        # the anchor-aware path's targeted retrieval is preserved regardless
-        # of K. Backward compat: anchor_aware_present=False leaves the full
-        # ranked list intact (v2.5.3 behavior preserved for un-anchored
-        # scenarios whose recall floor depends on it).
-        truncated_to_k: int | None = None
-        if anchor_aware_present:
-            k = _read_bundle_k()
-            head = candidates[:k]
-            head_ids = {e["id"] for e in head}
-            extras: list[dict] = []
-            if anchor_aware_ids:
-                anchor_set = set(anchor_aware_ids)
-                for entry in candidates[k:]:
-                    if entry["id"] in anchor_set and entry["id"] not in head_ids:
-                        extras.append(entry)
-                        head_ids.add(entry["id"])
-            candidates = head + extras
-            truncated_to_k = k
+        # Phase-3.1 T2 (post-rank-merge, always-on): cap the bundle to
+        # top-K by weighted-sum / search-relevance score. Entities surfaced
+        # by anchor-aware tools (passed via ``anchor_aware_ids``) UNION
+        # through the cap so the anchor-aware path's targeted retrieval is
+        # preserved regardless of K. The v2.5.4-D4 ``anchor_aware_present``
+        # gating has been removed — the policy is unconditional because
+        # the un-anchored backward-compat path left the efficiency floor
+        # structurally unreachable (corpus-refresh diagnosis).
+        k = _read_bundle_k()
+        head = candidates[:k]
+        head_ids = {e["id"] for e in head}
+        extras: list[dict] = []
+        if anchor_aware_ids:
+            anchor_set = set(anchor_aware_ids)
+            for entry in candidates[k:]:
+                if entry["id"] in anchor_set and entry["id"] not in head_ids:
+                    extras.append(entry)
+                    head_ids.add(entry["id"])
+        candidates = head + extras
+        truncated_to_k = k
 
         rendered = [self._render_entry(entry) for entry in candidates]
         package.entries = rendered
@@ -331,21 +344,21 @@ class ContextEngine:
                 "No token-budget truncation (v2.4 / dec_01KQQPD6Y6B362T3K08368BDMP; "
                 "v2.5.3 / dec_01KRSMMCS8MD7KQDBS0E2DVKBQ)."
             )
-        elif truncated_to_k is not None:
-            package.note = (
-                f"Importance-ranked context (anchor-aware truncation active): "
-                f"top-{truncated_to_k} by weighted-sum + UNION with anchor-aware "
-                f"tool outputs (v2.5.4 D4 / dec_01KS0C4PG88F29YBR91VQ3RRXY). "
-                "Backward-compat path (no truncation) remains the default when "
-                "anchor_aware_present=False."
-            )
         else:
+            anchor_note = (
+                f" + UNION with {len(extras)} anchor-aware-tool extras"
+                if extras
+                else ""
+            )
             package.note = (
-                "Importance-ranked context: weighted-sum of journal.importance, "
-                "entity_links centrality, and recency (recency as multiplicative "
-                "term, not tie-break). No token-budget truncation "
-                "(v2.4 / dec_01KQQPD6Y6B362T3K08368BDMP; "
-                "v2.5.3 / dec_01KRSMMCS8MD7KQDBS0E2DVKBQ)."
+                f"Importance-ranked context: weighted-sum of "
+                f"journal.importance, entity_links centrality, and recency "
+                f"(N={_RECENCY_SHAPE_N:g} decay shape). Bundle capped at top-"
+                f"{truncated_to_k} entities (Phase-3.1 T2 post-rank-merge "
+                f"truncation per dec_01KS3E6ZJXXV7542QPWZ9W8BQS){anchor_note}; "
+                f"anchor_aware_ids preserved via UNION regardless of K. "
+                "No token-budget truncation "
+                "(v2.4 / dec_01KQQPD6Y6B362T3K08368BDMP)."
             )
         # Informational; no longer drives truncation.
         package.token_estimate = sum(self._estimate_tokens(t) for t in rendered)
