@@ -3,6 +3,170 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [2.5.5] — 2026-05-20 (patch release; embedding-dim-flex generalization across all 6 entity types — coupled 3-bug fix)
+
+**Mission**: `mis_01KS1RFNM2T1HTB077G507T1FR`
+**Motivating decision**: `dec_01KS1RAAN8RNAAEYP2TEQPPAA9` (Option A bundled fix)
+**Surfaced by**: PI on a peer machine 2026-05-19; another Brain session worked
+around the bug via direct DB operations + a manually-triggered PUT.
+**Sequencing note**: `mis_01KS0QEW21N2NG4EJTKJ3JTWTE` (Eval-v2 corpus refresh)
+**slides from v2.5.5 to v2.5.6** because corpus refresh needs corrected
+embeddings to compute against. v2.5.5 takes the corpus refresh's
+originally-planned tag; corpus refresh ships next.
+
+### Honest framing — three coupled bugs
+
+After PI switched the embedding backend from `nomic-embed-text-v1.5` (768-dim)
+to `text-embedding-qwen3-embedding-8b` (4096-dim) on 2026-05-15, semantic
+search across journals — which dominates user retrieval — kept returning
+vectors from the retired nomic model, permanently. Triage surfaced three
+defects that compound:
+
+- **Bug 1** — Only `vec_claims` had dim-flex reshape (migration 022 + v2.4
+  `rka/services/embedding_reshape.py`). The other five vec_* tables
+  (`vec_journal`, `vec_decisions`, `vec_literature`, `vec_missions`,
+  `vec_artifacts`) were defined with hardcoded `float[768]` in
+  `rka/db/schema_phase2.sql` and migration 002; no reshape mechanism
+  existed. PUT `/api/config/embedding` propagated the new dim to
+  `vec_claims` only.
+- **Bug 2** — `rka/infra/embeddings.py:needs_reembed` compared only
+  `content_hash`; never `model_name` or `dimensions`. So a model swap left
+  every unchanged entity flagged "not stale" even though its stored vector
+  belonged to a retired backend. The metadata row's `model_name` field said
+  "nomic" forever.
+- **Bug 3** — `rka/services/embedding_backfill.py:BackfillService.run_backfill`
+  iterated `claims WHERE embedding_pending = 1` only; never touched
+  journal/decisions/literature/missions/artifacts. Even if Bug 1 were
+  patched, those five tables would stay empty after reshape.
+
+### Fixed (this release)
+
+- **`reshape_vec_table` generalization** (`rka/services/embedding_reshape.py`).
+  Added `current_vec_table_dim(db, table_name)`, `reshape_vec_table(db,
+  table_name, *, dim)`, and `reshape_all_vec_tables_if_needed(db, *, dim)`.
+  A `_TABLE_TO_ENTITY` map covers all six vec_* tables. The v2.4 surface
+  (`reshape_vec_claims`, `reshape_vec_claims_if_needed`,
+  `current_vec_claims_dim`) is preserved as thin wrappers; existing 11-test
+  reshape suite stays green.
+- **Per-entity-type pending signal**. `vec_claims` keeps the v2.4
+  `claims.embedding_pending` flag (the BackfillService cursor + existing
+  tests depend on it). The other five entity types use
+  `embedding_metadata`-absence: reshape DELETEs metadata rows for the
+  affected `entity_type`, and v2.5.5's 3-tuple `needs_reembed` (below)
+  returns True until backfill repopulates them.
+- **Startup hook + PUT handler now reshape every vec_* table**
+  (`rka/api/app.py`, `rka/api/routes/config.py`). The PUT handler's 202
+  response body now carries a `reshape` key with per-table outcome
+  alongside `job_id` + `status_url`.
+- **3-tuple `needs_reembed`** (`rka/infra/embeddings.py`). The query widens
+  to `SELECT content_hash, model_name, dimensions`. Returns True on ANY
+  mismatch OR metadata absence. Defensive `dim == 0` early-return forces
+  re-embed when the backend hasn't reported a dim yet.
+- **`BackfillService` iterates all six entity types**
+  (`rka/services/embedding_backfill.py`). New signature parameter
+  `entity_types: Sequence[str] | None = None` defaults to the full set
+  (claim, journal, decision, literature, mission, artifact). Per-entity-type
+  cursor + write loop is parameterized by `_ENTITY_BACKFILL_CONFIGS` keyed on
+  entity_type. Content composition matches the v2.4 entity write-path
+  callers (e.g. journal = `content + " " + summary`; decision = `question +
+  " " + rationale`; literature = `title + " " + abstract`; mission =
+  `objective + " " + context`; artifact = `build_artifact_text(filename,
+  filetype, mime, metadata)`). Per-type embed-batch failures are isolated:
+  one type's failure does not stop the others; the final state is "failed"
+  iff any type errored. v2.4 single-type-failure error format preserved
+  when only one type fails.
+- **Atomic metadata write in backfill loop**. The v2.4 backfill wrote only
+  to `vec_claims` and skipped the metadata update; v2.5.5 always writes the
+  matching `embedding_metadata` row with the active `content_hash +
+  model_name + dimensions` so the 3-tuple gate's invariant holds.
+- **Migration 024** (`024_dim_flex_all_vec_tables.sql`). Documentation-only
+  no-op SQL file mirroring the migration 022 pattern; reshape itself is a
+  runtime operation because the dim is config-driven (lives in
+  `/data/embedding_config.json`).
+- **Version-string drift fix**: `rka/__init__.py:__version__` had drifted
+  to "2.5.3" while `pyproject.toml` was at "2.5.4". Both bumped to "2.5.5"
+  together in this release.
+
+### Tests (+21 across 3 files; suite 732 → 753 passing)
+
+- `tests/test_services/test_embedding_reshape.py` (+9): 5 parametrized
+  cases for each new vec_* table; metadata-DELETE behavior on non-claims
+  reshape; claim metadata survives (uses flag); `reshape_all_vec_tables_if_needed`
+  iterates every table; idempotent second-call no-op; rejects unknown
+  table name.
+- `tests/test_services/test_embedding_backfill.py` (+6): default
+  iterates all six types; restricts to named entity_types; per-entity-type
+  failure isolation; rejects unknown entity_type; end-to-end reshape →
+  invalidate → backfill repopulates; idle (nothing pending) completes
+  immediately.
+- `tests/test_infra/test_embeddings_needs_reembed.py` (NEW, +6): full
+  3-tuple match → False; content_hash mismatch → True; model_name
+  mismatch → True (the Bug-2 trigger); dimensions mismatch → True;
+  metadata absent → True; defensive `dim == 0` → True.
+
+Existing v2.4 backfill tests preserved by passing `entity_types=("claim",)`
+explicitly so they continue to test the claims-specific path under the
+new all-types default.
+
+### Live verification (2026-05-20 against the production container)
+
+Before `docker compose up -d --build`:
+```
+vec_claims:     dim=4096  (already reshaped via prior manual op)
+vec_journal:    dim=768   ← Bug 1
+vec_decisions:  dim=768   ← Bug 1
+vec_literature: dim=768   ← Bug 1
+vec_missions:   dim=768   ← Bug 1
+vec_artifacts:  dim=768   ← Bug 1
+embedding_metadata: claim/decision/journal/mission all at dim=768
+                    model=nomic-ai/nomic-embed-text-v1.5 (Bug 2)
+```
+
+After rebuild + restart (T2 startup hook fires automatically):
+```
+vec_claims:     dim=4096
+vec_journal:    dim=4096  ✓
+vec_decisions:  dim=4096  ✓
+vec_literature: dim=4096  ✓
+vec_missions:   dim=4096  ✓
+vec_artifacts:  dim=4096  ✓
+embedding_metadata: journal/decision/mission rows DELETEd by startup hook
+                    (entries will be re-embedded via 3-tuple
+                    needs_reembed on next embed_and_store call OR via a
+                    PUT-triggered backfill)
+```
+
+Backfill kick-off requires an explicit PUT (background task fires only
+on PUT, not on startup). The operational note below describes the path.
+
+### Operational user note
+
+Users who switched the embedding backend before upgrading to v2.5.5 and
+whose `embedding_metadata` rows still carry an outdated `model_name` or
+`dimensions` tuple should re-PUT `/api/config/embedding` after upgrade to
+trigger the full all-entity reshape + backfill. The PUT body must have a
+different `(backend, model, dim)` signature than the current saved config
+for the handler to fire backfill — if your goal is just to refresh stale
+metadata under the same backend, the alternative is to let the 3-tuple
+`needs_reembed` gate refresh each entity individually as it is touched
+(read/write paths trigger embed-on-stale).
+
+The startup hook brings vec_* table dims into parity automatically on
+container restart without invoking the backfill loop.
+
+### Surfaced-by-empirical-state evidence
+
+PI's peer machine ran a manual reshape via direct DB SQL + PUT trigger as
+a workaround; this established the bug class, the empirical state we
+verify against, and the operational path for users on existing
+deployments.
+
+### Brain post-mortem reference
+
+- `jrn_01KS1S2QMVQPMXS8KHK1JS6HS1`: Executor Backbrief filed pre-implementation
+  with full empirical baseline of the 6 vec_* tables + embedding_metadata
+  aggregate + per-entity content-composition audit.
+
 ## [2.5.4] — 2026-05-19 (patch release; D4 bundle-narrowing + attribution metric — Phase-3 PARTIAL close)
 
 **Mission**: `mis_01KS0C8BKTHCA8GB38BGDR1PTQ`
