@@ -3,6 +3,40 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [2.5.10] — 2026-05-20 (docs-only patch; INSTALL.md + README.md staleness cleanup)
+
+**Surfaced by**: PI audit immediately following v2.5.9 GitHub release — checked whether the installation guide was fully consistent and correct with current state.
+
+Docs-only patch. No code changes. No test changes (suite stays at 799 passing). Ships to address documentation drift between INSTALL.md / README.md and the actual v2.4.0+ feature surface.
+
+### INSTALL.md — fixes
+
+- **5 stale `v2.3.x` / `v2.3.2` version references** replaced with `v2.5.x` (`/api/health` example output, SessionStart hook example line) or `v2.5.10` (integration.json `version` field example).
+- **2 stale "~110 tools" claims** corrected to "~90 tools" (actual count: 89 `rka_*` tools in `rka/mcp/server.py`).
+- **§10 "What this guide intentionally doesn't cover"** rewritten:
+  - Old text claimed `rka_ask` / `rka_generate_summary` are "optional tools" that require an LLM key. These tools were **removed in v2.4.0** per `jrn_01KRNZBS50K250HHHHEC58E4GC`; server-side code preserved for future re-wiring through the orchestrator's Claude Code SDK.
+  - New text correctly states the tool removal, then notes that v2.4.0+ does support **pluggable embedding backends** (FastEmbed default; OpenAI-compatible HTTP like LM Studio / vLLM; Ollama), configurable via **Settings → Embeddings** in the web dashboard. Links to [`docs/embedding_backends.md`](docs/embedding_backends.md).
+
+### README.md — fixes
+
+- **Infrastructure Layer description** (line 242) updated:
+  - Was: "embeddings (FastEmbed). An optional LiteLLM gateway powers `rka_ask` / `rka_generate_summary` only when the user wires up a cloud-LLM API key."
+  - Now: "pluggable embedding backends (FastEmbed default; OpenAI-compatible HTTP; Ollama — configurable via Settings → Embeddings)" + accurate note that the LLM-gated tools were removed in v2.4.0.
+- **Tool table** (line 852) removed the `rka_ask` row — tool no longer exposed.
+
+### Scope discipline
+
+Bookkeeper-strict observed. Touched files:
+- `INSTALL.md` (8 in-place edits, all surgical)
+- `README.md` (2 in-place edits)
+- `pyproject.toml` + `rka/__init__.py` + `CHANGELOG.md` — version bump 2.5.9 → 2.5.10 + this entry
+
+NOT touched: `rka/services/`, `rka/api/`, `rka/mcp/`, `web/`, tests, schema migrations.
+
+### Operator impact
+
+None at runtime. No rebuild required (`docker compose ps` will continue showing v2.5.9 containers as healthy; v2.5.10 brings nothing new at the API/MCP surface). Operators who fetch the v2.5.10 tag will see the corrected docs. A container rebuild is optional and only useful if the operator wants the `/api/health` `version` field to report `2.5.10`.
+
 ## [2.5.9] — 2026-05-20 (patch release; Phase-3.1 metric tuning — cfg11 sweep winner pinned; Phase-3 chapter closes PARTIAL)
 
 **Mission**: `mis_01KS3EB2671CDD4V9RZCMYCEH1`
