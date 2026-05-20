@@ -3,6 +3,67 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [2.5.6] — 2026-05-20 (patch release; Writer skill Phase 2: rka-writer-tools MCP server + validation pipeline B-G + 5 venues + fetch_template lifecycle)
+
+**Mission**: `mis_01KS2S871YPQ3D5RVY5K3PSQY6`
+**Motivating decision**: `dec_01KS2S22VV5P5SWWXNBXQDHMGX` (Option A: single bundled Phase 2 mission)
+**Depends on**: `mis_01KS0C3RP04XANCZAB3HTNAG0P` (Writer Phase 1; landed on main at `0d3886f` via PR #13 merge 2026-05-20T13:18:30Z)
+**Backbrief**: `jrn_01KS2SK48P78ERN55MC3GRSQ4E` plus Brain ratification `jrn_01KS2T0C2EFRDSYHDJ8J9HBWYW`
+**Sequencing note**: `mis_01KS0QEW21N2NG4EJTKJ3JTWTE` (Eval-v2 corpus refresh) was planned for v2.5.6 per the v2.5.5 changelog. Writer Phase 2 closed first; corpus refresh now slots to v2.5.7 when it ships. The two missions are parallel and touch disjoint paths (Writer touches `rka/skills/writer/` plus `tests/skills/writer/`; corpus refresh touches `eval-harness/v2/`).
+
+### Honest framing: Brain T0 Backbrief discovery
+
+The Phase 2 spec assumed (a) the PyPI package was named `serpapi-python`, (b) `acl-org/acl-style-files` used a year-branch convention, (c) all six PyPI dependencies were stable. T0 mandatory Backbrief verification corrected three spec errors:
+
+- `serpapi` is the correct PyPI package name (1.0.2, MIT; not `serpapi-python`).
+- `acl-org/acl-style-files` uses `master` branch plus frozen old year tags (`2020-12`, `2021-12`); year-branch convention does not exist. Pin strategy changed to `master_head_sha` at commit `2353f3ea58` (commit date 2025-11-13).
+- `arxiv` shipped 4.0.0 on 2026-05-17 (3 days before mission filing). Two majors in 5 weeks signals unstable change velocity. Pin to `>=3.0,<4.0` for safety; Phase 3 audits 4.x release notes and re-evaluates.
+
+Plus two version-drift advisories: `habanero` 11 months silent (last release 2025-06-06; functional, narrow Stage B/D surface) and `manubot` 22 months silent (last release 2024-07-20; functional, Stage F subprocess only). Both pinned at current latest per Brain ratification of T0 Backbrief; will surface to Brain if any Stage encounters API incompatibility during use.
+
+### Shipped (this release)
+
+- **`rka-writer-tools` combined MCP server** (`rka/skills/writer/mcp_tools/`). FastMCP-based stdio server exposing 4 high-level tools (validate_reference, disambiguate_author, find_citation, check_retraction) plus a diagnostic (report_backend_availability). Five backend wrappers under `mcp_tools/backends/`: crossref (habanero), openalex (pyalex), semantic_scholar (semanticscholar), arxiv_backend (arxiv 3.x), and serpapi_backend (serpapi 1.0.2) with CreditBudget plus SerpAPIBudgetExceededError. Each backend gracefully degrades when its PyPI package is absent or (for SerpAPI) when SERPAPI_API_KEY is unset.
+- **Validation pipeline Stages B through G** (`rka/skills/writer/scripts/validate_references.py`). Upgrades the Phase 1 stub (Stage A only; B-G raised NotImplementedError) to a full implementation. Stage B: Crossref to OpenAlex to Semantic Scholar to arXiv waterfall. Stage C: 2+ sources to VERIFIED; 1 to LOW_CONFIDENCE; 0 to UNVERIFIED. Stage D: Crossref update-to retraction check (RWDB feeds main API since Sept 2023 acquisition). Stage E: OpenAlex author disambiguation with optional SerpAPI tertiary on mismatch. Stage F: manubot then bibtex-tidy then betterbib subprocess (GPL never vendored). Stage G: SerpAPI niche-rescue before HALLUCINATED verdict. Status enum: VERIFIED / FIELD_ERROR / UNVERIFIED / RETRACTED / HALLUCINATED / AUTHOR_MISMATCH / LOW_CONFIDENCE. AuditReport.has_any_blocking helper for compile-gate.
+- **SerpAPI credit budget** (`rka/skills/writer/mcp_tools/backends/serpapi_backend.py`). Default 200/manuscript via SERPAPI_BUDGET env; per-project overlay via `ai_tic_config.yaml [serpapi.budget]` (T3 enhancement); graceful key-absence (Stage G falls back to HALLUCINATED with `note='no-serpapi-budget'`).
+- **5 additional venue files** (`rka/skills/writer/references/venue/`). USENIX (Security + ATC + NSDI), IEEE-SP (plus IEEE-CS broader), NeurIPS, OSDI (plus SOSP umbrella), Nature (plus Nature family). Each follows the Phase 1 seven-field schema (Section names + Page-limit + Tone + Forbidden + Citation + Required sections + Sample corpus). Documents per-venue threat-model requirements (USENIX/IEEE-SP), Paper Checklist (NeurIPS), Methods-at-end convention (Nature), engineering-first quantitative emphasis (OSDI).
+- **`template_registry.md` expanded** from 2 active entries (Phase 1) to 9 active (Phase 2). New entries for IEEE-SP / NeurIPS / OSDI / Nature; refreshed ieeetran / llncs / usenix / neurips / arxiv to remove Phase-1-only markers. ACL pin strategy updated to `master_head_sha`. SHA-256 placeholders remain `TBD` until first fetch per workstation; the fetch script captures plus prompts for ratification.
+- **`fetch_template.py` full lifecycle** (`rka/skills/writer/scripts/fetch_template.py`). Upgrades the Phase 1 lookup-only stub to download + SHA-256 verify + cache (with `.sha256` sidecar) + refuse-on-mismatch + TBD-pin PI ratification path. Error hierarchy: TemplateRegistryError base; TemplateChecksumMismatchError, TemplatePinMissingError, TemplateDownloadError. Archive format support: .zip, .tar / .tar.gz / .tgz, single-file .cls / .sty / .bst.
+- **61 new tests** under `tests/skills/writer/` (suite progression: 43 to 104). test_mcp_wrappers.py (12 tests): backend availability + graceful degradation + mocked-client paths. test_pipeline_stages.py (16 tests): per-stage isolation with module-attribute substitution; all 7 statuses round-trip. test_serpapi_budget.py (8 tests): CreditBudget basics + over-budget refusal + env/YAML overlay resolution order. test_fetch_template.py (15 tests): pin detection + SHA computation + lookup + error hierarchy + mismatch refusal + cache hit skips download. test_venue_files.py (extended +10): 5 new venues schema + USENIX threat model + NeurIPS Paper Checklist + Nature Methods-at-end + em-dash dogfood.
+
+### Dependencies
+
+New `[project.optional-dependencies] writer-tools` group:
+
+```
+habanero>=2.3.0          # Crossref; 11mo silent, narrow Stage B/D
+pyalex>=0.21             # OpenAlex; active
+semanticscholar>=0.12.0  # S2; active
+arxiv>=3.0,<4.0          # PIN AWAY FROM 4.0; two majors in 5 weeks
+serpapi>=1.0.2           # SerpAPI; not "serpapi-python"
+manubot>=0.6.1           # Stage F subprocess; 22mo silent, narrow surface
+```
+
+Existing rka installs unaffected. Install via:
+
+```
+UV_CACHE_DIR=/tmp/uv-cache uv tool install --force --reinstall '.[writer-tools]'
+```
+
+### Entry points
+
+Adds `rka-writer-tools = "rka.skills.writer.mcp_tools.server:main"` to `[project.scripts]`. Available after install as `~/.local/bin/rka-writer-tools`.
+
+### Bookkeeper invariant preserved
+
+`git diff main -- rka/services/ rka/api/ rka/mcp/ web/` was verified empty at every commit boundary across all 6 atomic Phase 2 commits. Writer Phase 2 adds code only under `rka/skills/writer/` plus `tests/skills/writer/`. The new MCP server lives at `rka/skills/writer/mcp_tools/`, NOT `rka/mcp/` (which remains the RKA core MCP per T0 Backbrief verification item 6).
+
+### Out of scope (deferred to Phase 3)
+
+- Revision-loop handler with 4 comment_class shapes (R1/R2/R3/R4).
+- Brain mission integration for Writer revisions.
+- Optional MCP tools `rka_get_manuscript`, `rka_validate_reference`, `rka_register_manuscript` (would be added to existing `rka` MCP server).
+
 ## [2.5.5] — 2026-05-20 (patch release; embedding-dim-flex generalization across all 6 entity types — coupled 3-bug fix)
 
 **Mission**: `mis_01KS1RFNM2T1HTB077G507T1FR`

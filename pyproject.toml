@@ -1,6 +1,6 @@
 [project]
 name = "rka"
-version = "2.5.5"
+version = "2.5.6"
 description = "Research Knowledge Agent — MCP server + REST API for AI-assisted research orchestration"
 requires-python = ">=3.11"
 dependencies = [
@@ -29,6 +29,20 @@ academic = [
     "semanticscholar>=0.11",
     "arxiv>=2.4",
 ]
+writer-tools = [
+    # Writer Phase 2 (mis_01KS2S871YPQ3D5RVY5K3PSQY6) external-API backends.
+    # Pin choices ratified by Brain 2026-05-20 per dec_01KS2S22VV5P5SWWXNBXQDHMGX:
+    #   - arxiv >=3.0,<4.0  (4.0 shipped 2026-05-17; pin away from fresh major)
+    #   - habanero >=2.3.0  (11mo silent but functional; narrow Stage B/D surface)
+    #   - manubot >=0.6.1   (22mo silent; Stage F subprocess only)
+    #   - serpapi (NOT serpapi-python; corrected from spec) >=1.0.2 MIT
+    "habanero>=2.3.0",
+    "pyalex>=0.21",
+    "semanticscholar>=0.12.0",
+    "arxiv>=3.0,<4.0",
+    "serpapi>=1.0.2",
+    "manubot>=0.6.1",
+]
 workspace = [
     "pymupdf>=1.24",
     "python-docx>=1.1",
@@ -41,6 +55,7 @@ dev = [
 
 [project.scripts]
 rka = "rka.cli:main"
+rka-writer-tools = "rka.skills.writer.mcp_tools.server:main"
 
 [build-system]
 requires = ["setuptools>=68.0"]
