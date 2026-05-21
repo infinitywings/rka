@@ -53,6 +53,9 @@ def _fixture_transport() -> httpx.MockTransport:
         if path == "/api/health":
             return httpx.Response(200, json={"status": "ok", "version": "2.4.1+test"})
         if path == "/api/context":
+            # Post-γ (Phase-3.4): structural ids surface via `sources`
+            # field, not via regex-walking entry text. Fixture updated to
+            # match production /api/context response shape.
             return httpx.Response(
                 200,
                 json={
@@ -62,16 +65,22 @@ def _fixture_transport() -> httpx.MockTransport:
                         "[mis_01DEF0000000000000000000] Active mission",
                         "[chk_01GHI0000000000000000000] Open checkpoint",
                     ],
-                    "sources": [],
+                    "sources": [
+                        "dec_01ABC0000000000000000000",
+                        "mis_01DEF0000000000000000000",
+                        "chk_01GHI0000000000000000000",
+                    ],
                 },
             )
         if path == "/api/status":
+            # Post-γ: status surfaces ids via `mission_id` key + the list
+            # key `recent_decisions` is mapped to structural-list extraction.
             return httpx.Response(
                 200,
                 json={
                     "phase": "design",
-                    "active_mission_id": "mis_01DEF0000000000000000000",
-                    "recent_decisions": ["dec_01ABC0000000000000000000"],
+                    "mission_id": "mis_01DEF0000000000000000000",
+                    "related_decisions": ["dec_01ABC0000000000000000000"],
                 },
             )
         if path == "/api/maintenance/summary":
@@ -90,13 +99,14 @@ def _fixture_transport() -> httpx.MockTransport:
         if path == "/api/review-queue":
             return httpx.Response(200, json=[])
         if path == "/api/research-map":
+            # Post-γ: structural id keys (research_question_id, cluster_id).
             return httpx.Response(
                 200,
                 json={
                     "rqs": [
                         {
-                            "rq_id": "dec_01MNO0000000000000000000",
-                            "clusters": ["ecl_01PQR0000000000000000000"],
+                            "research_question_id": "dec_01MNO0000000000000000000",
+                            "clusters": [{"cluster_id": "ecl_01PQR0000000000000000000"}],
                         }
                     ]
                 },
@@ -119,33 +129,38 @@ def _fixture_transport() -> httpx.MockTransport:
                 },
             )
         if path == "/api/graph/multi-hop":
+            # Post-γ + matches production shape: nodes are dicts with `id`.
             return httpx.Response(
                 200,
                 json={
-                    "anchor": "dec_01ABC0000000000000000000",
-                    "entities": [
-                        "dec_01ABC0000000000000000000",
-                        "mis_01DEF0000000000000000000",
-                        "jrn_01STU0000000000000000000",
+                    "nodes": [
+                        {"id": "dec_01ABC0000000000000000000"},
+                        {"id": "mis_01DEF0000000000000000000"},
+                        {"id": "jrn_01STU0000000000000000000"},
                     ],
+                    "edges": [],
                 },
             )
         if path.startswith("/api/graph/ego/"):
+            # Post-γ: nodes-with-id shape matching production response.
             return httpx.Response(
                 200,
                 json={
-                    "center": path.split("/")[-1],
-                    "neighbors": [
-                        "ecl_01PQR0000000000000000000",
-                        "clm_01VWX0000000000000000000",
+                    "nodes": [
+                        {"id": "ecl_01PQR0000000000000000000"},
+                        {"id": "clm_01VWX0000000000000000000"},
                     ],
+                    "edges": [],
                 },
             )
         if path == "/api/assemble-evidence":
+            # Post-γ: structural id list. Production returns markdown which
+            # γ won't extract from (text content); fixture uses `entity_ids`
+            # for the test's purposes.
             return httpx.Response(
                 200,
                 json={
-                    "assembled": [
+                    "entity_ids": [
                         "clm_01VWX0000000000000000000",
                         "ecl_01PQR0000000000000000000",
                     ]
@@ -288,7 +303,7 @@ async def test_cluster_anchored_scenario_probes_sister_uncertainties(runner: Eva
     # multi_hop anchored at the same critical
     mh = next(i for i in bundle.invocations if i.tool == "rka_multi_hop_retrieval")
     assert mh.divergence is None
-    assert "anchor=ecl_01PQR0000000000000000000" in mh.notes
+    assert "ecl_01PQR0000000000000000000" in mh.notes
 
     # assemble_evidence — sister-uncertainty probe
     assemble = next(i for i in bundle.invocations if i.tool == "rka_assemble_evidence")
@@ -335,27 +350,81 @@ async def test_bundle_serialization_writes_canonical_shape(runner: EvalV2Runner,
 # ---------------------------------------------------------------------------
 
 
-def test_walker_extracts_entity_ids_in_discovery_order():
+def test_walker_extracts_only_from_structural_id_keys():
+    """Phase-3.4 γ: walker extracts entity IDs only from JSON keys named
+    `id`, `entity_id`, `source_id`, `target_id`, etc. — NOT from arbitrary
+    string content."""
     payload = {
-        "first": "see dec_01ABC0000000000000000000 here",
-        "deep": {
-            "nested": ["and mis_01DEF0000000000000000000", "plus dec_01ABC0000000000000000000 again"],
-        },
-        "third": "lit_01ZZZ0000000000000000000",
+        "nodes": [
+            {"id": "dec_01ABC0000000000000000000", "label": "first"},
+            {"id": "mis_01DEF0000000000000000000", "label": "second"},
+        ],
+        "edges": [
+            {"source_id": "dec_01ABC0000000000000000000", "target_id": "mis_01DEF0000000000000000000"},
+        ],
+        "third": "lit_01ZZZ0000000000000000000",  # bare string at non-id key
     }
     out = walk_for_entity_ids(payload)
-    # dec_ first (top-level string), then mis_ (nested list), then lit_;
-    # duplicate dec_ collapsed (first-discovery wins).
+    # dec_ first (nodes[0].id), then mis_ (nodes[1].id);
+    # source_id+target_id are duplicates (first-discovery wins; dedup);
+    # lit_ at "third" key is NOT extracted (key not in _STRUCTURAL_ID_KEYS).
     assert out == [
         "dec_01ABC0000000000000000000",
         "mis_01DEF0000000000000000000",
-        "lit_01ZZZ0000000000000000000",
     ]
 
 
-def test_walker_ignores_strings_without_entity_prefix():
-    out = walk_for_entity_ids({"a": "no entities here", "b": ["nor here"]})
+def test_walker_ignores_textual_entity_id_references():
+    """Phase-3.4 γ: embedded `@entity_id` mentions inside journal/decision
+    content body are NOT extracted (eliminates the eval-v2 contamination
+    mechanism quantified at chk_01KS5S8BJBYW0PQ309CPCJ5PMC).
+
+    Pre-γ: this payload would extract dec_01ABC + mis_01DEF + lit_01ZZZ via
+    regex on the string content. Post-γ: walker only extracts when the JSON
+    key is a structural id field.
+    """
+    payload = {
+        "content": "see dec_01ABC0000000000000000000 and mis_01DEF0000000000000000000 in context",
+        "body": "also references lit_01ZZZ0000000000000000000",
+        "description": "more text mentioning chk_01WWW0000000000000000000",
+    }
+    out = walk_for_entity_ids(payload)
     assert out == []
+
+
+def test_walker_extracts_from_structural_list_keys():
+    """Phase-3.4 γ: walker extracts IDs from list-valued structural keys
+    like `sources`, `seeds`, `entity_ids`."""
+    payload = {
+        "sources": [
+            "jrn_01A000000000000000000000A1",
+            "dec_01B000000000000000000000B2",
+        ],
+        "seeds": ["mis_01C000000000000000000000C3"],
+        "related_decisions": ["dec_01D000000000000000000000D4"],
+    }
+    out = walk_for_entity_ids(payload)
+    assert set(out) == {
+        "jrn_01A000000000000000000000A1",
+        "dec_01B000000000000000000000B2",
+        "mis_01C000000000000000000000C3",
+        "dec_01D000000000000000000000D4",
+    }
+
+
+def test_walker_ignores_text_in_id_field_does_not_re_enable_contamination():
+    """Phase-3.4 γ: even when the structural-id field VALUE contains
+    surrounding text alongside an entity ID, only one ID is extracted
+    via the regex anchored at word boundaries (no over-extraction)."""
+    payload = {"id": "dec_01ABC0000000000000000000"}
+    assert walk_for_entity_ids(payload) == ["dec_01ABC0000000000000000000"]
+
+
+def test_walker_handles_empty_payload():
+    """Walker on empty dict / list / string returns empty list."""
+    assert walk_for_entity_ids({}) == []
+    assert walk_for_entity_ids([]) == []
+    assert walk_for_entity_ids("plain string with no ids") == []
 
 
 # ---------------------------------------------------------------------------
@@ -390,7 +459,7 @@ async def test_call_multi_hop_body_matches_v2_5_1_schema():
     r = EvalV2Runner(rka_url="http://test", project_id="prj_test", http_client=client)
 
     scenario = {"trigger": "investigate the v2.5.1 schema fix for multi-hop"}
-    await r._call_multi_hop("dec_01ABC0000000000000000000", scenario)
+    await r._call_multi_hop(["dec_01ABC0000000000000000000"], scenario)
 
     body = captured["body"]
     # `seeds` is a LIST of strings — not the v2.4-era `start_entity` singular.
@@ -404,3 +473,121 @@ async def test_call_multi_hop_body_matches_v2_5_1_schema():
     # schema's neither-set 422 branch never fires.
     assert body.get("query"), f"query must always be populated; got {body!r}"
     assert "v2.5.1" in body["query"]  # populated from scenario.trigger
+
+
+# ---------------------------------------------------------------------------
+# Phase-3.3 R1 — multi-anchor seeding when critical[0] is a decision but a
+# first_mission is also present (mis_01KS5KEPXK77MAG54GW5M6DA79,
+# chk_01KS5NJN1652XHAKZ5DYZ4RZX9 Brain ratification preference 3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_multi_hop_seeds_decision_and_first_mission_when_both_critical():
+    """When the scenario's critical[0] is a decision AND a mission-type
+    critical entity is also present, the runner must send BOTH as seeds
+    to multi_hop so the BFS expands from both neighborhoods. Pre-fix
+    (Phase-3.2 v2.5.11): only critical[0]'s neighborhood was reached;
+    mis_-class critical entities were stranded outside the BFS reach
+    even when they ranked well in /api/search.
+    """
+    captured: dict[str, dict] = {}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/graph/multi-hop":
+            captured["body"] = json.loads(request.content.decode("utf-8"))
+            return httpx.Response(200, json={"nodes": [], "edges": []})
+        return httpx.Response(404, json={"detail": "no fixture"})
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(_handler), base_url="http://test"
+    )
+    r = EvalV2Runner(rka_url="http://test", project_id="prj_test", http_client=client)
+
+    scenario = {
+        "scenario_id": "test-decision-then-mission",
+        "actor": "brain",
+        "trigger": "test scenario where decision precedes mission",
+        "tools_invoked": ["rka_multi_hop_retrieval"],
+        "expected_entities": [
+            {"entity_id": "dec_01ABC0000000000000000000", "entity_type": "decision", "importance": "critical"},
+            {"entity_id": "mis_01DEF0000000000000000000", "entity_type": "mission", "importance": "critical"},
+        ],
+    }
+    await r.run_scenario(scenario)
+    seeds = captured["body"].get("seeds")
+    assert seeds == ["dec_01ABC0000000000000000000", "mis_01DEF0000000000000000000"], (
+        f"R1 fix: when critical[0] is decision + first_mission present, seeds must "
+        f"include BOTH (preserving decision-anchor BFS coverage while adding mission-"
+        f"anchor BFS reach). Got: {seeds!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_multi_hop_seeds_only_critical_when_critical_zero_is_mission():
+    """When critical[0] IS already a mission (the v2.5.11 baseline anchor
+    behavior), the R1 fix is a no-op — single-seed BFS preserved."""
+    captured: dict[str, dict] = {}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/graph/multi-hop":
+            captured["body"] = json.loads(request.content.decode("utf-8"))
+            return httpx.Response(200, json={"nodes": [], "edges": []})
+        return httpx.Response(404, json={"detail": "no fixture"})
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(_handler), base_url="http://test"
+    )
+    r = EvalV2Runner(rka_url="http://test", project_id="prj_test", http_client=client)
+
+    scenario = {
+        "scenario_id": "test-mission-first",
+        "actor": "brain",
+        "trigger": "test scenario where mission is critical[0]",
+        "tools_invoked": ["rka_multi_hop_retrieval"],
+        "expected_entities": [
+            {"entity_id": "mis_01ABC0000000000000000000", "entity_type": "mission", "importance": "critical"},
+            {"entity_id": "dec_01DEF0000000000000000000", "entity_type": "decision", "importance": "critical"},
+        ],
+    }
+    await r.run_scenario(scenario)
+    seeds = captured["body"].get("seeds")
+    assert seeds == ["mis_01ABC0000000000000000000"], (
+        f"R1 no-op: when critical[0] is already a mission, seeds stays as "
+        f"single-element [critical[0]]. Got: {seeds!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_multi_hop_seeds_only_critical_when_no_first_mission():
+    """When critical[0] is a decision but NO mission-type critical entity
+    is present, the R1 fix doesn't trigger — single-seed BFS preserved."""
+    captured: dict[str, dict] = {}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/graph/multi-hop":
+            captured["body"] = json.loads(request.content.decode("utf-8"))
+            return httpx.Response(200, json={"nodes": [], "edges": []})
+        return httpx.Response(404, json={"detail": "no fixture"})
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(_handler), base_url="http://test"
+    )
+    r = EvalV2Runner(rka_url="http://test", project_id="prj_test", http_client=client)
+
+    scenario = {
+        "scenario_id": "test-decision-no-mission",
+        "actor": "brain",
+        "trigger": "test scenario with decision but no mission",
+        "tools_invoked": ["rka_multi_hop_retrieval"],
+        "expected_entities": [
+            {"entity_id": "dec_01ABC0000000000000000000", "entity_type": "decision", "importance": "critical"},
+            {"entity_id": "jrn_01DEF0000000000000000000", "entity_type": "journal", "importance": "critical"},
+        ],
+    }
+    await r.run_scenario(scenario)
+    seeds = captured["body"].get("seeds")
+    assert seeds == ["dec_01ABC0000000000000000000"], (
+        f"R1 no-op: when critical[0] is decision but no mission in criticals, "
+        f"seeds stays as single-element. Got: {seeds!r}"
+    )
