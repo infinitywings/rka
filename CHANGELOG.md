@@ -3,9 +3,25 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
-## [unreleased — Phase-3.4] — 2026-05-21 (Phase-3 chapter-close; γ structural-only walker — TRUE measurement surfaced; recall + efficiency PARTIAL on TRUE values; ordering MAINTAINED)
+## [2.5.11] — 2026-05-21 (Phase-3 chapter close — Phase-3.2 + 3.3 + 3.4 bundled; TRUE measurement surfaced; PARTIAL on recall + efficiency)
 
-> Version pending PI authorization. PI directive: batch-merge of Phase-3.2 + Phase-3.3 + Phase-3.4 with a single version bump. When shipping, replace this heading with the chosen version.
+Bundled patch release shipping the full Phase-3 chapter close across three sequential missions. PI directive held the version at v2.5.11 (no inflation across the bundle).
+
+**Chapter trajectory**: D1 (v2.5.1) + D2 (v2.5.3) + D3 (v2.5.2) + D4 ordering (v2.5.4 + v2.5.9 + this release) EMPIRICALLY VALIDATED. D4 recall + D4 efficiency PARTIAL on TRUE measurement (post-γ structural-only walker eliminated walker-extraction contamination that was inflating prior eval-v2 metrics by ~0.24 absolute on recall).
+
+**Chapter-close decision**: `dec_01KS5TJPVKKD8SQCFSTNNS92C4`
+**Chapter-close synthesis journal**: `jrn_01KS5TGWB2HWBYFW8X4J8BR4XK`
+
+**Floor scoreboard (TRUE measurement, post-γ)**:
+- `mean_recall_critical` = 0.774 (< 0.85 floor; Phase-3.5 spec'd: `mis_01KS5TTYSME88BQR5EC7BCXAGE`)
+- `mean_ordering_score` = 0.464 (≥ 0.363 floor; +0.101 above floor)
+- `mean_efficiency` = 0.042 (< 0.13 floor; structurally unreachable in v2; eval-v3 framework deferred as project-level)
+
+**Process discipline**: 4 falsification catches across the bundle (Phase-3.2 T3 seed_limit, Phase-3.2 T4 per-tool K, Phase-3.3 T2 R1 recall contamination, Phase-3.4 T1 γ-closes-efficiency) with near-zero code waste (~9 lines reverted). Bookkeeper invariant held: zero `rka/services/*`, `rka/api/*`, `rka/mcp/*`, `web/*` touches across the three missions.
+
+---
+
+### Phase-3.4 — γ structural-only walker (TRUE measurement surfaced; recall + efficiency PARTIAL; ordering MAINTAINED)
 
 **Mission**: `mis_01KS5KNXBBVYWTD5JH408K2X9R`
 **Motivating decision**: `dec_01KS5KJ774WN7WEEETXBK2J3KG` (Option A — walker structural redesign, diagnostic-first across α/β/γ/δ)
@@ -88,7 +104,7 @@ The structural efficiency limitation (combined_ranking dominated by BUNDLE_K=80 
 
 Under contaminated baseline (post-Phase-3.3): mean recall 0.969 across 16 scenarios. Under TRUE measurement (post-γ): 10 of 16 scenarios surface honest recall < 1.0. The remaining 6 scenarios retain recall=1.0 — these are scenarios where structural retrieval genuinely surfaces all critical entities.
 
-## [unreleased — Phase-3.3] — 2026-05-21 (patch; Phase-3.3 search-relevance — R1 runner-anchor multi-seed fix; SR3 deferred; DB contamination meta-finding)
+### Phase-3.3 — R1 runner-anchor multi-seed fix (SR3 deferred; DB contamination meta-finding)
 
 > Version number pending PI authorization. PI directive: batch Phase-3.3 + Phase-3.4 merges; version bump deferred until both PRs are ready. When shipping, replace this heading with the chosen version (e.g. `## [2.5.12]`).
 
@@ -170,7 +186,7 @@ Net real change (clean-DB methodology): scenarios 1, 3 close via R1 multi-anchor
 - **Phase-3.4 (walker-vs-cap structural + contamination methodology)**: scope EXTENDED by this finding. Pre-framed options α/β/γ/δ from chk_01KS5HZTE753XR1F0MFVFWG6MB now must establish TWO baselines per option (contaminated + clean) and report against both. γ (disable walker) becomes the contamination-elimination option as a side-effect.
 - **Phase-3.5 (SR3 search-relevance for scenarios 4, 6)**: future mission. Awaits Phase-3.4 close to use clean-DB methodology.
 
-## [2.5.11] — 2026-05-21 (patch release; Phase-3.2 candidate-generation track — recall floor CLOSED via Track A1; efficiency PARTIAL deferred to Phase-3.4)
+### Phase-3.2 — Track A1 candidate-generation (recall CLOSED via tools_invoked expansion; A2 falsified → Phase-3.3; B falsified → Phase-3.4)
 
 **Mission**: `mis_01KS5CRMZ0AGN0M5B694Q3M8B1`
 **Motivating decision**: `dec_01KS5CN0CF8N60T88E2HC8K1SD` (Option A — candidate-generation track, diagnostic-first, two coupled sub-tracks)
