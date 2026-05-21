@@ -3,6 +3,88 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [unreleased — Phase-3.3] — 2026-05-21 (patch; Phase-3.3 search-relevance — R1 runner-anchor multi-seed fix; SR3 deferred; DB contamination meta-finding)
+
+> Version number pending PI authorization. PI directive: batch Phase-3.3 + Phase-3.4 merges; version bump deferred until both PRs are ready. When shipping, replace this heading with the chosen version (e.g. `## [2.5.12]`).
+
+**Mission**: `mis_01KS5KEPXK77MAG54GW5M6DA79`
+**Motivating decision**: `dec_01KS5KAYRBC717G5J4X01F8FR4` (Option A — search-relevance work, diagnostic-first)
+**Related checkpoints**: `chk_01KS5NJN1652XHAKZ5DYZ4RZX9` (T1 diagnostic ratification) + `chk_01KS5PF3832RYCRPKEY090CV65` (T2 ship R1 + skip SR3 + document contamination)
+
+### Floor status
+
+| Metric | v2.5.9 cfg11 | v2.5.11 (Phase-3.2) | post-Phase-3.3 | Δ vs v2.5.11 | Floor | Status |
+|---|---|---|---|---|---|---|
+| mean_recall (critical) | 0.822 | 0.933 | **0.969** | +0.036 | ≥ 0.85 | ✅ CLOSED (contamination-inflated; see below) |
+| mean_ordering_score | 0.403 | 0.471 | **0.513** | **+0.042** | ≥ 0.363 | ✅ MAINTAINED & IMPROVED (REAL) |
+| mean_efficiency | 0.034 | 0.035 | 0.036 | +0.001 | ≥ 0.13 | ⚠️ PARTIAL (Phase-3.4) |
+| mean_expanded_recall | 0.760 | 0.817 | 0.855 | +0.038 | (informational) | improved |
+
+### Track A1 (R1 fix) — SHIPPED
+
+Per T1 diagnostic (chk_01KS5NJN1652XHAKZ5DYZ4RZX9, Brain-ratified): T1 surfaced a NEW sub-class beyond the spec's SR1/SR2/SR3/SR4 taxonomy:
+
+- **R1 (Runner-anchor BFS gap)**: 3 of 5 missing-critical instances are entities reachable via `/api/search` top-10 OR via first_mission anchor BFS — but blocked by the runner's `anchor_id = critical[0]["entity_id"]` heuristic when critical[0] is a decision.
+
+**Fix** (`eval-harness/v2/runner.py` `_invoke_one` + `_call_multi_hop`, preference 3 per Brain ratification): when critical[0] is a decision AND first_mission is present, seed multi_hop BFS with **both**. Multi-seed BFS catches both neighborhoods; preference 1 (anchor swap) produced a SWAP not a NET LIFT (surfacing one entity but losing another reachable only from the decision anchor).
+
+3 new R1 unit tests (`eval-harness/v2/tests/test_runner.py`):
+- positive: critical[0]=decision + first_mission set → BOTH in seeds
+- no-op: critical[0]=mission → single-seed preserved
+- no-op: critical[0]=decision but no mission critical → single-seed preserved
+
+**Verified empirical effect**:
+- Recall: +0.000 in current DB (DB contamination masks the recall benefit — see meta-finding)
+- Ordering: **+0.032 aggregate** (REAL; contamination-resistant — ordering measures placement, not presence)
+- Architectural correctness verified via direct `/api/graph/multi-hop` call with multi-seed: 27 nodes including `mis_01KRPF3` (which v2.5.11 single-anchor BFS didn't reach)
+
+### Track A2 (SR3 fix) — DEFERRED per chk_01KS5PF3832RYCRPKEY090CV65
+
+`/api/search` direct probes confirm SR3 entities still NOT in top-200:
+- scenario 4 trigger → `mis_01KRPF3`: NOT in top-200
+- scenario 6 trigger → `jrn_01KRP5Q0F`: NOT in top-200
+
+The eval-runner recall=1.0 for these scenarios is a **contamination artifact** (see below). Attempting SR3 fixes in contaminated DB is falsification-prone; deferred to a future mission with clean-DB methodology (Phase-3.4 territory, scope-extended for walker-vs-contamination work).
+
+### Meta-finding: eval-v2 metric contamination via diagnostic artifacts
+
+**Mechanism**: when a mission's T0/T1 diagnostic journals or checkpoints mention target entity IDs by ID in their content, the eval-runner's `walk_for_entity_ids` extracts those references from `rka_get_context`'s high-importance recent-content bundle. The walker's recursive entity-ID extraction inflates `combined_ranking` with entities that aren't actually retrieved by any tool's primary candidate set.
+
+**Empirical evidence**: with R1-stash (pure v2.5.11 code on current DB), scenarios 3, 4, 6 ALL show recall=1.0 (the same as post-R1). The "closures" are entirely from DB drift — `/api/search` confirms the SR3 entities are still genuinely below top-200.
+
+**True recall estimate (clean DB)**: approximately **0.92** (vs reported 0.969). R1's recall benefit (mis_01KRPF3 reach via multi-seed) materializes in clean DB; SR3 gaps remain. Ordering lift (+0.032) is unaffected by contamination.
+
+**Discipline locked** (added to feedback memory):
+- Future Phase-3.x diagnostic artifacts should either use placeholders (`<target_mission_id>` instead of actual IDs) OR verify recall changes via clean-DB methodology (direct REST probes, controlled stash-comparison, or snapshot-restore).
+- Eval-runner aggregate recall is NOT reliable for measuring fixes applied in missions where the diagnostic mentioned target entities by ID.
+
+### Bookkeeper invariant — final state
+
+`git diff` (since v2.5.11 / Phase-3.2 base):
+- `eval-harness/v2/runner.py` (R1 fix; multi-anchor `_call_multi_hop` signature)
+- `eval-harness/v2/tests/test_runner.py` (3 new R1 tests; 1 pre-existing signature update)
+- `CHANGELOG.md` (this entry)
+
+**Zero `rka/services/*`, `rka/api/*`, `rka/mcp/*`, `web/*` changes**. The R1 fix is purely runner-side — no service-layer or API changes shipped.
+
+### Per-scenario stability
+
+| Scenario | v2.5.11 | post-Phase-3.3 | Δ | Notes |
+|---|---|---|---|---|
+| brain-mission-creation-eval-extension | 0.833 | 1.000 | +0.167 | DB contamination closure (NOT R1) |
+| brain-session-start-checkpoint-review | 1.000 | 0.667 | **-0.333** | DB contamination regression (NOT R1; confirmed via db-drift baseline) |
+| brain-session-start-fresh-resume | 0.833 | 0.833 | +0.000 | R1 SWAP: mis_01KRPF3 found via multi-anchor; chk_01KS0Q38 lost via DB contamination |
+| brain-session-start-post-release | 0.600 | 1.000 | +0.400 | DB contamination closure (NOT R1) |
+| executor-mission-pickup-orchestrator | 0.667 | 1.000 | +0.333 | DB contamination closure (NOT R1) |
+| 11 other scenarios | 1.000 | 1.000 | +0.000 | Stable |
+
+Net real change (clean-DB methodology): scenarios 1, 3 close via R1 multi-anchor BFS. Scenario 4 / scenario 6 SR3 gaps remain. Phase-3.4 absorbs both walker-vs-cap-efficiency AND walker-vs-contamination scope.
+
+### Phase-3 chapter roadmap update
+
+- **Phase-3.4 (walker-vs-cap structural + contamination methodology)**: scope EXTENDED by this finding. Pre-framed options α/β/γ/δ from chk_01KS5HZTE753XR1F0MFVFWG6MB now must establish TWO baselines per option (contaminated + clean) and report against both. γ (disable walker) becomes the contamination-elimination option as a side-effect.
+- **Phase-3.5 (SR3 search-relevance for scenarios 4, 6)**: future mission. Awaits Phase-3.4 close to use clean-DB methodology.
+
 ## [2.5.11] — 2026-05-21 (patch release; Phase-3.2 candidate-generation track — recall floor CLOSED via Track A1; efficiency PARTIAL deferred to Phase-3.4)
 
 **Mission**: `mis_01KS5CRMZ0AGN0M5B694Q3M8B1`
