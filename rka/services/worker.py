@@ -4,6 +4,13 @@ Only processes embedding jobs. LLM-dependent enrichment (auto-tag, auto-link,
 auto-summarize, claim extraction, verification, theme synthesis, contradiction
 checks) has been removed — those tasks are now handled by the Brain during
 maintenance sessions.
+
+Worker boot reads the persisted embedding config from
+`/data/embedding_config.json` via `EmbeddingConfigService.load_config()`
+(see `EnrichmentWorker.boot()`). This matches the api-server boot path
+established in v2.4.0 (rka/api/app.py) and was added in v2.5.8 per
+dec_01KS3E1FGSK530N8HM04BNMCEW (Bug 2 fix; pre-existing bug surfaced by
+corpus refresh mis_01KS0QEW21N2NG4EJTKJ3JTWTE).
 """
 
 from __future__ import annotations
@@ -12,6 +19,7 @@ import asyncio
 import logging
 import os
 import socket
+from pathlib import Path
 from typing import Any
 
 from rka.infra.database import Database
@@ -38,6 +46,119 @@ class EnrichmentWorker:
         self.poll_interval = poll_interval
         self.queue = JobQueue(db, lease_seconds=lease_seconds, default_max_attempts=max_attempts)
         self.worker_id = worker_id or f"{socket.gethostname()}:{os.getpid()}"
+
+    # ------------------------------------------------------------------
+    # v2.5.8 boot path (Bug 2 fix per dec_01KS3E1FGSK530N8HM04BNMCEW)
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def boot(
+        cls,
+        *,
+        db: Database,
+        data_dir: Path | str = Path("/data"),
+        embeddings_enabled: bool = True,
+        env_fallback_model: str = "nomic-ai/nomic-embed-text-v1.5",
+        poll_interval: float = 1.0,
+        lease_seconds: int = 300,
+        max_attempts: int = 5,
+        worker_id: str | None = None,
+    ) -> "EnrichmentWorker":
+        """Construct a worker with embeddings loaded from persisted config.
+
+        Resolution order matches the api-server boot path (rka/api/app.py
+        v2.4.0+):
+
+        1. If embeddings_enabled is False: worker has embeddings=None.
+        2. Otherwise, attempt to read `<data_dir>/embedding_config.json`
+           via `EmbeddingConfigService.load_config()` and construct an
+           `EmbeddingService.from_config(...)`.
+        3. On any failure (file missing, corrupt, EmbeddingService
+           construction error), fall back to the legacy env-driven
+           constructor (`EmbeddingService(model_name=env_fallback_model)`)
+           and log WARNING.
+
+        Log lines explicitly indicate which path was taken so operators
+        can correlate worker boot logs with config-changed-via-webui events.
+        """
+        embeddings = cls._resolve_embeddings(
+            db=db,
+            data_dir=data_dir,
+            embeddings_enabled=embeddings_enabled,
+            env_fallback_model=env_fallback_model,
+        )
+        return cls(
+            db=db,
+            embeddings=embeddings,
+            poll_interval=poll_interval,
+            lease_seconds=lease_seconds,
+            max_attempts=max_attempts,
+            worker_id=worker_id,
+        )
+
+    @staticmethod
+    def _resolve_embeddings(
+        *,
+        db: Database,
+        data_dir: Path | str,
+        embeddings_enabled: bool,
+        env_fallback_model: str,
+    ):
+        """Load EmbeddingService from persisted config or fall back to env.
+
+        Isolated as a staticmethod so unit tests can exercise the resolution
+        logic without instantiating a full worker. Logs are informative-only
+        (no exceptions raised on fallback).
+        """
+        if not embeddings_enabled:
+            logger.info(
+                "worker boot: embeddings_enabled=False; running without EmbeddingService"
+            )
+            return None
+
+        # Lazy imports keep the worker.py top-level import surface small
+        # (embedding_config + embedding_backends pull in optional deps).
+        try:
+            from rka.infra.embeddings import EmbeddingService
+            from rka.services.embedding_config import EmbeddingConfigService
+
+            cfg_svc = EmbeddingConfigService(config_dir=data_dir)
+            if not cfg_svc.config_path.exists():
+                logger.info(
+                    "worker boot: falling back to env defaults; persisted config "
+                    "not found at %s",
+                    cfg_svc.config_path,
+                )
+                return EmbeddingService(model_name=env_fallback_model, db=db)
+
+            embedding_cfg = cfg_svc.load_config()
+            embeddings = EmbeddingService.from_config(
+                embedding_cfg.model_dump(), db=db
+            )
+            logger.info(
+                "worker boot: reading config from %s (backend=%s, dim=%d)",
+                cfg_svc.config_path,
+                embedding_cfg.backend,
+                embeddings.dim,
+            )
+            return embeddings
+        except Exception as exc:
+            logger.warning(
+                "worker boot: failed to load persisted config (%s); falling back "
+                "to env defaults (model=%s)",
+                exc,
+                env_fallback_model,
+            )
+            try:
+                from rka.infra.embeddings import EmbeddingService
+                return EmbeddingService(model_name=env_fallback_model, db=db)
+            except Exception as inner_exc:
+                logger.error(
+                    "worker boot: env-fallback EmbeddingService construction also "
+                    "failed (%s); running without embeddings",
+                    inner_exc,
+                )
+                return None
 
     async def run_once(self) -> bool:
         """Process one job if available."""

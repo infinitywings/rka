@@ -59,27 +59,90 @@ _ENTITY_ID_RX = re.compile(
     r"\b(jrn_|dec_|mis_|clm_|ecl_|lit_|chk_)[A-Za-z0-9_-]{16,32}\b"
 )
 
+# Phase-3.4 γ structural-only walker (mis_01KS5KNXBBVYWTD5JH408K2X9R;
+# chk_01KS5S8BJBYW0PQ309CPCJ5PMC Brain ratification: Option (I) ship γ).
+#
+# Known structural-id JSON keys whose VALUES are entity IDs. The walker
+# extracts IDs only when the JSON key matches one of these names — never
+# from arbitrary string content. This eliminates the eval-v2 contamination
+# mechanism where diagnostic-journal content body @entity_id mentions
+# would inflate combined_ranking with non-retrieved entities.
+#
+# Pre-γ (v2.5.7 – v2.5.11): the walker regex-extracted entity IDs from
+# ALL string values, including embedded text references. Phase-3.4 T1
+# evaluation surfaced that this contamination mechanism inflated
+# mean_recall_critical by ~0.24 absolute (0.732 TRUE → 0.969 reported)
+# across 10 of 16 scenarios.
+_STRUCTURAL_ID_KEYS = frozenset({
+    "id",
+    "entity_id",
+    "source_id",
+    "target_id",
+    "mission_id",
+    "decision_id",
+    "claim_id",
+    "cluster_id",
+    "research_question_id",
+    "parent_id",
+    "parent_mission_id",
+    "linked_decision_id",
+    "motivated_by_decision",
+    "depends_on",
+    "supersedes",
+    "superseded_by",
+    "source_claim_id",
+    "target_claim_id",
+})
+
+# List-valued keys whose elements are entity IDs (e.g., context's `sources`).
+_STRUCTURAL_LIST_KEYS = frozenset({
+    "sources",
+    "entity_ids",
+    "ids",
+    "seeds",
+    "related_journal",
+    "related_decisions",
+    "related_literature",
+    "related_missions",
+})
+
 
 def walk_for_entity_ids(payload: Any) -> list[str]:
-    """Recursively walk a JSON payload and yield every entity id found,
-    preserving discovery order (depth-first, dict-key-order preserving).
+    """Recursively walk a JSON payload and yield entity IDs from STRUCTURAL
+    id-typed fields only, preserving discovery order (depth-first,
+    dict-key-order preserving). Returns the de-duplicated list, where the
+    first occurrence wins.
 
-    Returns the de-duplicated list, where the first occurrence wins.
+    Phase-3.4 γ structural-only behavior: extracts entity IDs ONLY when
+    they appear as values at one of the known structural id-typed JSON
+    keys (see ``_STRUCTURAL_ID_KEYS`` and ``_STRUCTURAL_LIST_KEYS``).
+    Embedded ``@entity_id`` references in journal/decision/checkpoint
+    BODY content are NOT extracted — they're textual mentions, not
+    retrieval candidates.
+
+    The pre-γ implementation regex-walked every string value (including
+    rendered markdown content body). That behavior systematically
+    inflated combined_ranking with text-mentioned entities that no tool
+    actually retrieved — a contamination mechanism quantified at
+    chk_01KS5S8BJBYW0PQ309CPCJ5PMC.
     """
     seen: dict[str, None] = {}
 
-    def _walk(node: Any) -> None:
+    def _walk(node: Any, key_hint: str | None = None) -> None:
         if isinstance(node, dict):
-            for v in node.values():
-                _walk(v)
+            for k, v in node.items():
+                _walk(v, key_hint=k)
         elif isinstance(node, list):
-            for v in node:
-                _walk(v)
+            for item in node:
+                _walk(item, key_hint=key_hint)
         elif isinstance(node, str):
-            for match in _ENTITY_ID_RX.finditer(node):
-                eid = match.group(0)
-                if eid not in seen:
-                    seen[eid] = None
+            # Only extract when the parent JSON key is a structural id-typed
+            # field (e.g., {"id": "X"} or {"sources": ["X", "Y"]}).
+            if key_hint in _STRUCTURAL_ID_KEYS or key_hint in _STRUCTURAL_LIST_KEYS:
+                for match in _ENTITY_ID_RX.finditer(node):
+                    eid = match.group(0)
+                    if eid not in seen:
+                        seen[eid] = None
 
     _walk(payload)
     return list(seen.keys())
@@ -110,14 +173,24 @@ class ScenarioBundle:
     # combined_ranking: deduped + ordered across tools in the order they
     # appear in `invocations` (preserves first-discovery per entity)
     combined_ranking: list[str] = field(default_factory=list)
+    # v2.5.4 D4 (mis_01KS0C8BKTHCA8GB38BGDR1PTQ T2): per-entity attribution
+    # — maps each entity_id in combined_ranking to the tool that
+    # first-discovered it. Enables the metrics layer to distinguish
+    # "attribution shift" (e.g., rka_get_journal's 1.000 → 0.000 in v2.5.5)
+    # from a real coverage loss; the entity is still covered, just credited
+    # to a different (typically anchor-aware) tool.
+    first_discovery_map: dict[str, str] = field(default_factory=dict)
 
     def compute_combined_ranking(self) -> None:
         seen: dict[str, None] = {}
+        first_map: dict[str, str] = {}
         for inv in self.invocations:
             for eid in inv.entity_ids:
                 if eid not in seen:
                     seen[eid] = None
+                    first_map[eid] = inv.tool
         self.combined_ranking = list(seen.keys())
+        self.first_discovery_map = first_map
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +272,6 @@ class EvalV2Runner:
             e for e in scenario["expected_entities"]
             if e["importance"] == "critical"
         ]
-        anchor_id = critical[0]["entity_id"] if critical else None
         # Filter critical entities by type to pick the right kind of anchor
         # for tools that need a specific entity_type (e.g., rka_get_mission
         # needs a mis_ id, ego_graph anchors at any entity id).
@@ -207,6 +279,21 @@ class EvalV2Runner:
             (e["entity_id"] for e in critical if e["entity_type"] == "mission"),
             None,
         )
+        # Phase-3.3 R1 fix (mis_01KS5KEPXK77MAG54GW5M6DA79; chk_01KS5NJN1652XHAKZ5DYZ4RZX9
+        # Brain ratification preference 3): seed multi_hop BFS with BOTH critical[0]
+        # AND first_mission when both are present and differ. Preference 1 (anchor
+        # swap) produced a SWAP not a NET LIFT — surfacing mis_01KRPF3 but losing
+        # entities reachable only from the decision anchor's neighborhood. Multi-
+        # seed BFS expands from both, catching both neighborhoods.
+        # Single-anchor scalar `anchor_id` retained for ego_graph + assemble_evidence
+        # (they take one anchor each); multi_hop receives the list via `anchor_seeds`.
+        anchor_id = critical[0]["entity_id"] if critical else None
+        if critical and critical[0]["entity_type"] == "decision" and first_mission:
+            anchor_seeds = [anchor_id, first_mission]
+        elif anchor_id:
+            anchor_seeds = [anchor_id]
+        else:
+            anchor_seeds = []
 
         try:
             if tool == "rka_get_context":
@@ -226,7 +313,7 @@ class EvalV2Runner:
             if tool == "rka_get_journal":
                 return await self._call_get_journal()
             if tool == "rka_multi_hop_retrieval":
-                return await self._call_multi_hop(anchor_id, scenario)
+                return await self._call_multi_hop(anchor_seeds, scenario)
             if tool == "rka_get_ego_graph":
                 return await self._call_ego_graph(anchor_id)
             if tool == "rka_assemble_evidence":
@@ -253,16 +340,40 @@ class EvalV2Runner:
     # Per-tool REST callers
     # ------------------------------------------------------------------
 
-    async def _call_get_context(self) -> ToolInvocation:
+    async def _call_get_context(
+        self,
+        *,
+        anchor_aware_present: bool = False,
+        anchor_aware_ids: list[str] | None = None,
+    ) -> ToolInvocation:
+        """v2.5.4 D4 (mis_01KS0C8BKTHCA8GB38BGDR1PTQ T2): propagate the
+        anchor-aware-tool firing signal + entity IDs to the context engine
+        so it can cap the bundle to top-K (default 30) while preserving
+        anchor-aware-tool outputs via UNION. Defaults preserve v2.5.3
+        behavior (no truncation) when the runner doesn't have anchor-aware
+        tool outputs in the same composed sequence.
+        """
         path = "/api/context"
-        r = await self._client().post(path, json={}, params=self._params())
+        body: dict = {}
+        if anchor_aware_present:
+            body["anchor_aware_present"] = True
+            if anchor_aware_ids:
+                body["anchor_aware_ids"] = list(anchor_aware_ids)
+        r = await self._client().post(path, json=body, params=self._params())
         ids, div = self._extract_json_entities(r, path)
+        notes = ""
+        if anchor_aware_present:
+            notes = (
+                f"anchor_aware_present=True; "
+                f"anchor_aware_ids_count={len(anchor_aware_ids or [])}"
+            )
         return ToolInvocation(
             tool="rka_get_context",
             path=path,
             status_code=r.status_code,
             entity_ids=ids,
             divergence=div,
+            notes=notes,
         )
 
     async def _call_get_status(self) -> ToolInvocation:
@@ -358,23 +469,26 @@ class EvalV2Runner:
         )
 
     async def _call_multi_hop(
-        self, anchor: str | None, scenario: dict
+        self, anchors: list[str], scenario: dict
     ) -> ToolInvocation:
         path = "/api/graph/multi-hop"
         # v2.5.1: route schema is `{query: Optional[str], seeds: Optional[list[str]]}`
         # (rka/api/routes/graph.py:MultiHopRequest). Always populate `query`
         # from the scenario trigger so the search-based seeding path is
-        # exercised when no anchor is present; ALSO pass `seeds=[anchor]`
-        # (note: list, not the v2.4-era singular `start_entity`) when the
-        # scenario provides one. Both-populated is accepted — the service
-        # layer's seeds-set branch bypasses the search step entirely
-        # (rka/services/graph.py:multi_hop_retrieval).
+        # exercised when no anchor is present; ALSO pass `seeds=anchors`
+        # when the scenario provides any. Both-populated is accepted —
+        # the service layer's seeds-set branch bypasses the search step
+        # entirely (rka/services/graph.py:multi_hop_retrieval).
+        # Phase-3.3 R1 fix (chk_01KS5NJN1652XHAKZ5DYZ4RZX9 preference 3):
+        # accept a LIST of anchors so the runner can seed BFS with both
+        # critical[0] and first_mission when both are present in the
+        # scenario's critical entities. See _invoke_one.
         body: dict[str, Any] = {
             "max_depth": 2,
             "query": scenario.get("trigger", "")[:200],
         }
-        if anchor:
-            body["seeds"] = [anchor]
+        if anchors:
+            body["seeds"] = list(anchors)
         r = await self._client().post(path, json=body, params=self._params())
         # Sister-uncertainty probe: any non-2xx is a divergence per T2 gate.
         divergence = None
@@ -390,7 +504,7 @@ class EvalV2Runner:
             status_code=r.status_code,
             entity_ids=ids,
             divergence=divergence or div,
-            notes=f"anchor={anchor or '(query-fallback)'}",
+            notes=f"seeds={anchors or '(query-fallback)'}",
         )
 
     async def _call_ego_graph(self, anchor: str | None) -> ToolInvocation:
@@ -503,15 +617,34 @@ class EvalV2Runner:
         return anchor_prefix + remaining
 
     async def run_scenario(self, scenario: dict[str, Any]) -> ScenarioBundle:
+        """v2.5.4 D4 (mis_01KS0C8BKTHCA8GB38BGDR1PTQ T2): track entity IDs
+        surfaced by anchor-aware tools as they fire and pass them to
+        rka_get_context so the context engine can cap to top-K while
+        preserving anchor-aware-tool outputs via UNION (per the runner's
+        existing reorder policy: anchor-aware tools always precede
+        rka_get_context in ordered_tools).
+        """
         bundle = ScenarioBundle(
             scenario_id=scenario["scenario_id"], actor=scenario["actor"]
         )
         ordered_tools = self._reorder_tools_for_scenario(
             scenario, scenario["tools_invoked"]
         )
+        anchor_aware_ids_so_far: list[str] = []
         for tool in ordered_tools:
-            invocation = await self._invoke_one(tool, scenario)
+            if tool == "rka_get_context":
+                invocation = await self._call_get_context(
+                    anchor_aware_present=bool(anchor_aware_ids_so_far),
+                    anchor_aware_ids=anchor_aware_ids_so_far or None,
+                )
+            else:
+                invocation = await self._invoke_one(tool, scenario)
             bundle.invocations.append(invocation)
+            if tool in self._ANCHOR_AWARE_TOOL_ORDER:
+                # Accumulate IDs to UNION through the context bundle's K cap.
+                for eid in invocation.entity_ids:
+                    if eid not in anchor_aware_ids_so_far:
+                        anchor_aware_ids_so_far.append(eid)
         bundle.compute_combined_ranking()
         return bundle
 

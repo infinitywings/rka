@@ -1,0 +1,14 @@
+% refs.bib : manuscript bibliography.
+%
+% Populated via the Reference validator sub-procedure (see references/workflows.md).
+% Phase 1: PI assembles manually OR scripts/validate_references.py Stage A
+% converts CSL-JSON from rka_get_literature to BibTeX via manubot.
+% Phase 2: full pipeline (rka-writer-tools MCP server) wires Stages B through G.
+%
+% Conventional invocation for bibtex-tidy hygiene:
+%   bibtex-tidy --curly --numeric --sort=key --duplicates=key,doi --escape \
+%               --tidy-comments --remove-empty-fields --enclosing-braces=title \
+%               refs.bib
+%
+% Each entry should have a validation status tracked in RKA via
+% rka_update_literature(id="lit_...", validation_status="VERIFIED").

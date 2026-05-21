@@ -6,6 +6,7 @@ Use exactly one role skill for the current session:
 - `brain/SKILL.md` for strategy, literature review, research-map review, and decisions
 - `executor/SKILL.md` for implementation, experiments, mission work, and reports
 - `pi/SKILL.md` for supervision, checkpoint resolution, and preserving PI intent
+- `writer/SKILL.md` for manuscript drafting in Claude Code (VSCode); loaded in a `manuscripts/<project-id>/<venue>/` working directory. Phase 1 MVP per `dec_01KS0BKJ5ZJKJ4R19GYAK3QN9D`; mission `mis_01KS0C3RP04XANCZAB3HTNAG0P`.
 
 ## Common Rules
 

@@ -1,0 +1,40 @@
+-- Mission v2.5.5 (mis_01KS1RFNM2T1HTB077G507T1FR): generalize the
+-- vec_claims dim-flex pattern from migration 022 to ALL six vec_*
+-- tables (vec_journal, vec_decisions, vec_literature, vec_missions,
+-- vec_artifacts in addition to vec_claims). Documents the runtime
+-- generalization performed by rka/services/embedding_reshape.py; this
+-- file is intentionally a no-op (no DDL) so application of migration
+-- 024 is idempotent and safe to re-run.
+--
+-- Why no DDL here:
+--   - Reshape requires reading /data/embedding_config.json to discover
+--     the configured dim, which pure SQL cannot do.
+--   - Pending-signal differs per entity type:
+--       * vec_claims: keeps the v2.4 `claims.embedding_pending` column
+--         (added in migration 022) — the BackfillService cursor reads
+--         it directly.
+--       * vec_journal, vec_decisions, vec_literature, vec_missions,
+--         vec_artifacts: use `embedding_metadata` absence as the
+--         pending signal. Reshape DELETEs metadata rows for the
+--         affected entity_type; the v2.5.5 3-tuple `needs_reembed`
+--         (model_name + dimensions + content_hash) returns True until
+--         backfill repopulates them.
+--   - No new columns added to journal / decisions / literature /
+--     missions / artifacts: smaller migration footprint, no rewrite of
+--     each entity table's storage.
+--
+-- After this migration is recorded, the runtime hook in
+-- `rka/api/app.py` startup calls `reshape_all_vec_tables_if_needed`
+-- which inspects each vec_* table's current dim and drops+recreates
+-- any whose dim no longer matches the configured embedding dim. The
+-- PUT /api/config/embedding handler does the same prior to kicking
+-- off the BackfillService background task.
+--
+-- Operational note for users upgrading across this migration:
+--   If your embedding_metadata rows still show an outdated model_name
+--   or dimensions tuple (e.g. you ran a manual reshape earlier and
+--   metadata was never invalidated), re-PUT /api/config/embedding
+--   with the same body to trigger the all-tables reshape + backfill.
+
+-- Intentionally no DDL.
+SELECT 1 WHERE 0;

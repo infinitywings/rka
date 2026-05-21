@@ -39,6 +39,7 @@ from rka.services.embedding_config import (
     EmbeddingConfig,
     EmbeddingConfigService,
 )
+from rka.services.embedding_reshape import reshape_all_vec_tables_if_needed
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +154,19 @@ async def put_embedding_config(
     # Swap the app-level embeddings handle so subsequent requests use it.
     request.app.state.embeddings = new_embeddings
 
+    # v2.5.5 (mis_01KS1RFNM2T1HTB077G507T1FR): reshape EVERY vec_* table
+    # before backfill starts. The v2.4 path reshaped vec_claims only;
+    # this version covers vec_journal/decisions/literature/missions/
+    # artifacts too, plus invalidates their stale metadata so backfill
+    # picks them up.
+    target_dim = int(
+        (saved.config or {}).get("dim")
+        or test_result.detected_dim
+        or new_embeddings.dim
+        or 768
+    )
+    reshape_results = await reshape_all_vec_tables_if_needed(db, dim=target_dim)
+
     status_obj = register_job()
     backfill_svc = BackfillService(db=db, embeddings=new_embeddings)
     background_tasks.add_task(_run_backfill_safely, backfill_svc, status_obj)
@@ -163,6 +177,10 @@ async def put_embedding_config(
             **_redact(saved),
             "job_id": status_obj.job_id,
             "status_url": f"/api/config/embedding/backfill/status?job_id={status_obj.job_id}",
+            "reshape": {
+                table: {"did_reshape": did, "pending": pending}
+                for table, (did, pending) in reshape_results.items()
+            },
         },
     )
 

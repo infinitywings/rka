@@ -26,6 +26,7 @@ from rka.api.routes import (
     graph as graph_routes,
     literature as literature_routes,
     llm as llm_routes,
+    manuscripts as manuscripts_routes,
     missions as missions_routes,
     notes as notes_routes,
     project as project_routes,
@@ -134,7 +135,7 @@ async def lifespan(app: FastAPI):
             EmbeddingConfigError,
             EmbeddingConfigService,
         )
-        from rka.services.embedding_reshape import reshape_vec_claims_if_needed
+        from rka.services.embedding_reshape import reshape_all_vec_tables_if_needed
 
         cfg_svc = EmbeddingConfigService(config_dir=config.data_dir)
         try:
@@ -165,15 +166,23 @@ async def lifespan(app: FastAPI):
                 embeddings.dim,
             )
 
-            # Mission D T4 startup-hook: reshape vec_claims if its dim no
-            # longer matches the configured embedding dim.
+            # v2.5.5 startup-hook (mis_01KS1RFNM2T1HTB077G507T1FR): reshape
+            # every vec_* table whose dim no longer matches the configured
+            # embedding dim. The v2.4 path covered vec_claims only; the
+            # other five hardcoded float[768] tables were stuck at the old
+            # dim and their embedding_metadata kept the stale model_name.
             target_dim = int(embedding_cfg.config.get("dim") or embeddings.dim or 768)
-            did_reshape, pending = await reshape_vec_claims_if_needed(db, dim=target_dim)
-            if did_reshape:
+            reshape_results = await reshape_all_vec_tables_if_needed(
+                db, dim=target_dim
+            )
+            reshaped = [
+                (t, p) for t, (did, p) in reshape_results.items() if did
+            ]
+            if reshaped:
                 logger.info(
-                    "vec_claims reshaped at startup (dim=%d); %d claims now pending re-embed",
+                    "vec tables reshaped at startup (dim=%d): %s",
                     target_dim,
-                    pending,
+                    ", ".join(f"{t} pending={p}" for t, p in reshaped),
                 )
         except EmbeddingConfigError as exc:
             # Corrupt config OR unwritable data_dir: fall back to legacy
@@ -280,6 +289,7 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
 
     app.include_router(project_routes.router, prefix="/api", tags=["project"])
     app.include_router(notes_routes.router, prefix="/api", tags=["notes"])
+    app.include_router(manuscripts_routes.router, prefix="/api", tags=["manuscripts"])
     app.include_router(decisions_routes.router, prefix="/api", tags=["decisions"])
     app.include_router(literature_routes.router, prefix="/api", tags=["literature"])
     app.include_router(missions_routes.router, prefix="/api", tags=["missions"])

@@ -1,0 +1,28 @@
+{
+  "_comment": "MCP server configuration for a Writer manuscript workspace. Both rka (core) and rka-writer-tools (Phase 2 per dec_01KS2S22VV5P5SWWXNBXQDHMGX) are active. rka-writer-tools provides validate_reference, disambiguate_author, find_citation, check_retraction wrapping Crossref/OpenAlex/Semantic Scholar/arXiv/SerpAPI backends.",
+
+  "_install": "Install both binaries via: UV_CACHE_DIR=/tmp/uv-cache uv tool install --force --reinstall '.[writer-tools]' (from the rka repo root). rka-writer-tools requires the writer-tools optional dependency group (habanero + pyalex + semanticscholar + arxiv + serpapi + manubot).",
+
+  "mcpServers": {
+    "rka": {
+      "command": "/Users/<your-username>/.local/bin/rka",
+      "args": ["mcp"],
+      "env": {
+        "RKA_PROJECT": "prj_REPLACE_WITH_PROJECT_ID",
+        "RKA_API_URL": "http://localhost:9712"
+      }
+    },
+    "rka-writer-tools": {
+      "command": "/Users/<your-username>/.local/bin/rka-writer-tools",
+      "args": [],
+      "env": {
+        "_comment_keys": "Phase 2 env vars; all OPTIONAL. SerpAPI absent triggers graceful degradation per dec_01KS2S22VV5P5SWWXNBXQDHMGX (Stage G falls back to HALLUCINATED with note=no-serpapi-budget; Stage E.serpapi skipped).",
+        "SERPAPI_API_KEY": "<populated-by-PI-from-1Password; NEVER commit a literal key>",
+        "SERPAPI_BUDGET": "200",
+        "OPENALEX_EMAIL": "<your-email-for-OpenAlex-polite-pool>",
+        "CROSSREF_EMAIL": "<your-email-for-Crossref-polite-pool>",
+        "SEMANTIC_SCHOLAR_API_KEY": "<optional-S2-key-for-higher-rate-limits>"
+      }
+    }
+  }
+}

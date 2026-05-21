@@ -459,15 +459,19 @@ class TestV2_5_4EnvVarConfigurableCoefficients:
     PI_LIFT at module-import time. Tests use monkeypatch.setenv plus
     _reload_coefficients_from_env() to swap values mid-process."""
 
-    def test_defaults_match_v2_5_3_hypothesis_when_no_env_set(
+    def test_defaults_match_phase_3_1_cfg11_winner_when_no_env_set(
         self, monkeypatch: pytest.MonkeyPatch
     ):
         """With no env vars set, the module constants must equal the
-        v2.5.3-hypothesis Config 1 defaults (0.5 / 0.3 / 0.2 / 0.125).
-        The 0.125 PI lift preserves the pre-v2.5.3 +5/40 normalized
-        magnitude (the spec text says "0.05" but the parenthetical
-        "+5/40 = 0.125" — the existing implementation matches the
-        parenthetical and that's what gets preserved across tuning)."""
+        Phase-3.1 T5 cfg11 winner defaults: w_imp=0.5, w_cent=0.3,
+        w_recency=0.15, pi_lift=0.125, recency_shape_n=1.
+
+        v2.5.3 hypothesis Config 1 had w_recency=0.2 (retained through
+        v2.5.4 sweep). Phase-3.1 64-config sweep (mis_01KS3EB2671CDD4V9RZCMYCEH1
+        T4; cfg11 winner per Brain ratification of
+        chk_01KS3K40N6JRHV118969RMBNF0) drops w_recency to 0.15.
+        The 0.125 PI lift preserves the pre-v2.5.3 +5/40 magnitude
+        unchanged across all sweeps."""
         import rka.services.context as ctx
 
         for var in (
@@ -475,16 +479,21 @@ class TestV2_5_4EnvVarConfigurableCoefficients:
             "RKA_CTX_W_CENT",
             "RKA_CTX_W_RECENCY",
             "RKA_CTX_PI_LIFT",
+            "RKA_CTX_RECENCY_SHAPE_N",
         ):
             monkeypatch.delenv(var, raising=False)
         ctx._reload_coefficients_from_env()
         assert ctx._W_IMPORTANCE == 0.5
         assert ctx._W_CENTRALITY == 0.3
-        assert ctx._W_RECENCY == 0.2
+        assert ctx._W_RECENCY == 0.15  # Phase-3.1 cfg11 winner (was 0.2)
         assert ctx._PI_SOURCE_LIFT_NORMALIZED == 0.125
+        # Phase-3.1: N=1 retained as cfg11 winner — shape_N effect was
+        # within noise across the {1, 30, 90, 365} sweep so the simplest
+        # shape wins by tie-break.
+        assert ctx._RECENCY_SHAPE_N == 1.0
 
     def test_env_vars_override_defaults(self, monkeypatch: pytest.MonkeyPatch):
-        """Setting the four RKA_CTX_* env vars overrides the module-level
+        """Setting the five RKA_CTX_* env vars overrides the module-level
         constants when _reload_coefficients_from_env() runs. This is the
         production swap pattern: docker restart with env → fresh import
         → fresh constants."""
@@ -494,11 +503,13 @@ class TestV2_5_4EnvVarConfigurableCoefficients:
         monkeypatch.setenv("RKA_CTX_W_CENT", "0.2")
         monkeypatch.setenv("RKA_CTX_W_RECENCY", "0.1")
         monkeypatch.setenv("RKA_CTX_PI_LIFT", "0.3")
+        monkeypatch.setenv("RKA_CTX_RECENCY_SHAPE_N", "90")
         ctx._reload_coefficients_from_env()
         assert ctx._W_IMPORTANCE == 0.7
         assert ctx._W_CENTRALITY == 0.2
         assert ctx._W_RECENCY == 0.1
         assert ctx._PI_SOURCE_LIFT_NORMALIZED == 0.3
+        assert ctx._RECENCY_SHAPE_N == 90.0
 
         # Restore defaults so subsequent tests in the same module aren't
         # affected by env-var bleed.
@@ -507,6 +518,7 @@ class TestV2_5_4EnvVarConfigurableCoefficients:
             "RKA_CTX_W_CENT",
             "RKA_CTX_W_RECENCY",
             "RKA_CTX_PI_LIFT",
+            "RKA_CTX_RECENCY_SHAPE_N",
         ):
             monkeypatch.delenv(var, raising=False)
         ctx._reload_coefficients_from_env()
@@ -523,3 +535,331 @@ class TestV2_5_4EnvVarConfigurableCoefficients:
         assert ctx._W_IMPORTANCE == 0.5  # default preserved
         monkeypatch.delenv("RKA_CTX_W_IMP", raising=False)
         ctx._reload_coefficients_from_env()
+
+
+# ---------------------------------------------------------------------------
+# Phase-3.1 T1 — recency_score env-var-configurable shape
+# (mis_01KS3EB2671CDD4V9RZCMYCEH1 T1; per dec_01KS3E6ZJXXV7542QPWZ9W8BQS)
+# ---------------------------------------------------------------------------
+
+
+class TestPhase3_1RecencyShape:
+    """Phase-3.1 generalizes ``recency_score`` from hardcoded
+    ``1/(1+days)`` to env-var-configurable ``1/(1+days/N)``. Default N=1
+    is bit-identical to the pre-refactor formula (backward-compat). Larger
+    N produces slower decay; the v2.5.4-D4 / corpus-refresh diagnosis
+    identified the steep N=1 shape as the source of recency
+    over-amplification (jrn_01KS0RM9VXT2HHXDN76VXKTFTS Brain sketch).
+
+    Pure-function tests of ``_compute_recency_score(days, shape_n)`` —
+    no DB fixtures, no clock dependence."""
+
+    def test_shape_n1_matches_pre_phase_3_1_formula(self):
+        """N=1 reproduces ``1/(1+days)`` bit-for-bit. This is the
+        backward-compat default. Tested at the boundary values that
+        appear in the Brain sketch's mechanism table
+        (jrn_01KS0RM9VXT2HHXDN76VXKTFTS):
+
+        ┌─────┬────────────────┐
+        │ days│  1/(1+days)    │
+        ├─────┼────────────────┤
+        │   0 │ 1.000          │
+        │   1 │ 0.500          │
+        │   3 │ 0.250          │
+        │   7 │ 0.125          │
+        │  30 │ 0.032258...    │
+        │  90 │ 0.010989...    │
+        │ 365 │ 0.002732...    │
+        └─────┴────────────────┘
+        """
+        from rka.services.context import _compute_recency_score
+
+        cases = [
+            (0.0, 1.0),
+            (1.0, 0.5),
+            (3.0, 0.25),
+            (7.0, 0.125),
+            (30.0, 1.0 / 31.0),
+            (90.0, 1.0 / 91.0),
+            (365.0, 1.0 / 366.0),
+        ]
+        for days, expected in cases:
+            got = _compute_recency_score(days, 1.0)
+            assert got == pytest.approx(expected, rel=1e-12), (
+                f"N=1 must reproduce 1/(1+days) bit-for-bit; days={days}: "
+                f"got {got!r}, expected {expected!r}."
+            )
+
+    def test_shape_n30_thirty_day_half_life(self):
+        """N=30 produces a 30-day half-life: an entry that is 30 days old
+        scores exactly 0.5 (versus 0.0323 at N=1). 90-day entries score
+        0.25 (versus 0.011 at N=1). The Brain sketch table confirms these
+        targets as the "smoother decay" lever for Phase-3.1's A/B sweep."""
+        from rka.services.context import _compute_recency_score
+
+        # 30-day half-life shape:
+        assert _compute_recency_score(0.0, 30.0) == pytest.approx(1.0)
+        assert _compute_recency_score(30.0, 30.0) == pytest.approx(0.5)
+        assert _compute_recency_score(60.0, 30.0) == pytest.approx(1.0 / 3.0)
+        assert _compute_recency_score(90.0, 30.0) == pytest.approx(0.25)
+        # Compare against N=1 to confirm the shape difference is in the
+        # expected direction (slower decay at higher N).
+        assert _compute_recency_score(30.0, 30.0) > _compute_recency_score(
+            30.0, 1.0
+        ), "N=30 must produce a LARGER recency_score at 30 days than N=1."
+
+    def test_shape_n365_year_half_life(self):
+        """N=365 produces a year half-life: a 365-day-old entry scores
+        exactly 0.5 (versus 0.0027 at N=1). This is the "most stable
+        against DB drift" extreme of the sweep matrix."""
+        from rka.services.context import _compute_recency_score
+
+        assert _compute_recency_score(0.0, 365.0) == pytest.approx(1.0)
+        assert _compute_recency_score(365.0, 365.0) == pytest.approx(0.5)
+        # 730 days = 2 years = 1/3 at year-half-life shape.
+        assert _compute_recency_score(730.0, 365.0) == pytest.approx(1.0 / 3.0)
+        # Confirm the shape is monotonically slower-decaying than N=1.
+        for days in [30.0, 90.0, 180.0, 365.0]:
+            assert _compute_recency_score(days, 365.0) > _compute_recency_score(
+                days, 1.0
+            ), f"N=365 must produce a larger score than N=1 at {days} days."
+
+    def test_env_var_recency_shape_n_loads_and_drives_score(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """``RKA_CTX_RECENCY_SHAPE_N`` env var feeds through
+        ``_reload_coefficients_from_env`` into ``_RECENCY_SHAPE_N``, which
+        the staticmethod ``ContextEngine._recency_score`` consults. End-
+        to-end: set env, reload, score an entry, verify the shape changed.
+
+        This is the production swap pattern the T4 sweep harness will use
+        (set RKA_CTX_RECENCY_SHAPE_N=30 / 90 / 365 between configs).
+        """
+        import rka.services.context as ctx
+
+        # Baseline: no env var → default N=1.
+        monkeypatch.delenv("RKA_CTX_RECENCY_SHAPE_N", raising=False)
+        ctx._reload_coefficients_from_env()
+        assert ctx._RECENCY_SHAPE_N == 1.0, "default must be N=1.0"
+
+        # Set N=30, reload, verify the constant changes.
+        monkeypatch.setenv("RKA_CTX_RECENCY_SHAPE_N", "30")
+        ctx._reload_coefficients_from_env()
+        assert ctx._RECENCY_SHAPE_N == 30.0
+
+        # A 30-day-old entry now scores 0.5 (not 0.0323 from N=1).
+        from datetime import datetime, timedelta, timezone
+
+        thirty_days_ago = (
+            datetime.now(timezone.utc) - timedelta(days=30)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        entry = {"created_at": thirty_days_ago}
+        score = ctx.ContextEngine._recency_score(entry)
+        # Allow a small tolerance for the sub-second clock between
+        # the fixture timestamp and `now` inside _recency_score.
+        assert score == pytest.approx(0.5, abs=0.005), (
+            f"At N=30, a 30-day-old entry should score ~0.5; got {score!r}."
+        )
+
+        # Cleanup: restore default for subsequent tests in the suite.
+        monkeypatch.delenv("RKA_CTX_RECENCY_SHAPE_N", raising=False)
+        ctx._reload_coefficients_from_env()
+
+    def test_invalid_shape_n_falls_back_to_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Operator typo (non-numeric or non-positive value) must not
+        crash the engine. Non-numeric → ``_read_coeff`` logs a warning
+        and returns the default. Zero/negative → ``_compute_recency_score``
+        defensively reproduces the backward-compat N=1 shape."""
+        import rka.services.context as ctx
+        from rka.services.context import _compute_recency_score
+
+        # Non-numeric env value → default preserved.
+        monkeypatch.setenv("RKA_CTX_RECENCY_SHAPE_N", "not-a-float")
+        ctx._reload_coefficients_from_env()
+        assert ctx._RECENCY_SHAPE_N == 1.0
+
+        # Zero / negative N → defensive fallback to N=1 inside the pure helper.
+        assert _compute_recency_score(30.0, 0.0) == pytest.approx(1.0 / 31.0)
+        assert _compute_recency_score(30.0, -1.0) == pytest.approx(1.0 / 31.0)
+
+        # Cleanup.
+        monkeypatch.delenv("RKA_CTX_RECENCY_SHAPE_N", raising=False)
+        ctx._reload_coefficients_from_env()
+
+
+# ---------------------------------------------------------------------------
+# Phase-3.1 T2 — post-rank-merge bundle_K truncation (always-on)
+# (mis_01KS3EB2671CDD4V9RZCMYCEH1 T2; per dec_01KS3E6ZJXXV7542QPWZ9W8BQS)
+#
+# Replaces the v2.5.4-D4 conditional truncation (gated by
+# anchor_aware_present). Brain ratification of chk_01KS3FZDX78FD89CVR4K6VYJFK
+# moved the policy to unconditional post-rank-merge cap with anchor-aware
+# UNION protection. Default K=30 → 50.
+# ---------------------------------------------------------------------------
+
+
+class TestPhase3_1T2BundleTruncation:
+    """Bundle-truncation policy. Always-on post-rank-merge cap at top-K
+    (default 50, `RKA_CTX_BUNDLE_K` env override). The v2.5.4-D4
+    `anchor_aware_present` gating has been removed — the policy is
+    unconditional because the un-anchored backward-compat path left the
+    efficiency floor structurally unreachable (corpus-refresh diagnosis
+    + chk_01KS3FZDX78FD89CVR4K6VYJFK Brain ratification).
+
+    Anchor-aware UNION is preserved: when `anchor_aware_ids` is provided,
+    those entities pass through the cap regardless of weighted-sum
+    rank."""
+
+    @pytest_asyncio.fixture
+    async def engine_with_many_entries(
+        self, db_with_project: Database
+    ) -> ContextEngine:
+        """Database fixture with 70 journal entries — enough to exceed the
+        new default K=50 cap by a margin large enough to test UNION
+        protection of entities ranked >50."""
+        db = db_with_project
+        NOW = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"
+        # 70 normal-importance journal entries — exceeds default K=50.
+        for i in range(70):
+            await db.execute(
+                f"""INSERT INTO journal (id, type, content, source, confidence,
+                    importance, phase, project_id, created_at, updated_at)
+                   VALUES (?, 'note', ?, 'executor', 'verified', 'normal',
+                           'phase_1', 'proj_default', {NOW}, {NOW})""",
+                [f"jrn_d4_{i:03d}", f"Truncation test entry {i}"],
+            )
+        await db.commit()
+        search = SearchService(db=db, embeddings=None)
+        return ContextEngine(db=db, search=search, llm=None)
+
+    async def test_default_bundle_k_is_80_cfg11_winner(self):
+        """Phase-3.1 evolution of the bundle_K default:
+        - v2.5.4 D4: K=30 (conditional on anchor_aware_present)
+        - Phase-3.1 T2: K=50 (always-on truncation)
+        - Phase-3.1 T5 cfg11 winner: K=80 (Pareto-best on recall ×
+          efficiency frontier per chk_01KS3K40N6JRHV118969RMBNF0
+          Brain ratification)
+
+        K=80 hits the structural recall ceiling 0.822 (vs K=30/K=50
+        which produce 0.713/0.783); ordering ranks well above floor
+        (0.403 vs 0.363 floor); efficiency at 0.034 (still below 0.13
+        floor — structural; deferred to Phase-3.2)."""
+        from rka.services.context import _DEFAULT_BUNDLE_K, _read_bundle_k
+
+        assert _DEFAULT_BUNDLE_K == 80, (
+            "Phase-3.1 T5 default bundle_K is 80 (cfg11 sweep winner)."
+        )
+        # No env var set → read returns the default.
+        import os
+
+        os.environ.pop("RKA_CTX_BUNDLE_K", None)
+        assert _read_bundle_k() == 80
+
+    async def test_truncation_always_applied_after_phase_3_1_t2(
+        self, engine_with_many_entries: ContextEngine
+    ):
+        """Phase-3.1 T2: truncation is unconditional. Both the un-anchored
+        path (anchor_aware_present omitted/False, the v2.5.4-D4
+        backward-compat case) and the anchor-aware-present path MUST cap
+        at K=50. The fixture has 70 entries → bundle size 50 in both
+        cases."""
+        # Un-anchored path (v2.5.4-D4 used to skip truncation here):
+        pkg_unanchored = await engine_with_many_entries.get_context()
+        assert len(pkg_unanchored.sources) == 50, (
+            f"Phase-3.1 T2: un-anchored path MUST also cap at K=50 (was "
+            f"un-truncated under v2.5.4 D4); got "
+            f"{len(pkg_unanchored.sources)} entries."
+        )
+
+        # Anchor-aware-present=True (same K=50 since the gating was removed):
+        pkg_anchored = await engine_with_many_entries.get_context(
+            anchor_aware_present=True
+        )
+        assert len(pkg_anchored.sources) == 50, (
+            f"Phase-3.1 T2: anchor_aware_present=True path also caps at "
+            f"K=50; got {len(pkg_anchored.sources)} entries."
+        )
+
+    async def test_env_var_overrides_default_k(
+        self,
+        engine_with_many_entries: ContextEngine,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """`RKA_CTX_BUNDLE_K` env override drives the cap. Sweep harness
+        uses this for the bundle_K dimension of the 64-config matrix
+        (K ∈ {30, 50, 80, 150} per Brain ratification)."""
+        monkeypatch.setenv("RKA_CTX_BUNDLE_K", "30")
+        pkg = await engine_with_many_entries.get_context()
+        assert len(pkg.sources) == 30, (
+            f"Phase-3.1 T2 RKA_CTX_BUNDLE_K=30 override: expected 30 "
+            f"entries; got {len(pkg.sources)}. Fixture has 70 entries so "
+            "K=30 truncates."
+        )
+
+    async def test_anchor_aware_outputs_pass_through_above_k(
+        self,
+        engine_with_many_entries: ContextEngine,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Anchor-aware-tool outputs UNION through the top-K cap regardless
+        of weighted-sum rank. With K=30 and the SQL-LIMITed 50 candidates,
+        IDs at rank [30..49] are normally truncated; passing them via
+        anchor_aware_ids restores them.
+
+        (Note: the journal SQL has LIMIT 50, so candidates max out at 50
+        even when the fixture has 70 entries. Testing UNION with K=30
+        keeps the candidate count above K while leaving room for protected
+        entries that would otherwise be truncated.)"""
+        monkeypatch.setenv("RKA_CTX_BUNDLE_K", "30")
+
+        # The fixture inserts i=0..69; SQL LIMIT 50 + ORDER BY created_at
+        # DESC + ROWID-tiebreak → candidates ≈ jrn_d4_000..049 (the first
+        # 50 inserted, sharing the same created_at). jrn_d4_049 is at
+        # rank ~49, well outside K=30.
+        outside_top_k_id = "jrn_d4_049"
+
+        pkg = await engine_with_many_entries.get_context(
+            anchor_aware_ids=[outside_top_k_id],
+        )
+        assert outside_top_k_id in pkg.sources, (
+            f"Anchor-aware UNION: id {outside_top_k_id!r} (rank ~49, "
+            f"below K=30) MUST pass through truncation when passed via "
+            f"anchor_aware_ids. Got sources={pkg.sources[:3]}..."
+            f"{pkg.sources[-3:]}"
+        )
+        # Bundle size = K (30) + 1 extra anchor-aware UNION = 31.
+        assert len(pkg.sources) == 31, (
+            f"Bundle size: top-K=30 + 1 UNION extra = 31; got "
+            f"{len(pkg.sources)}."
+        )
+
+    async def test_anchor_aware_present_no_longer_gates_truncation(
+        self, engine_with_many_entries: ContextEngine
+    ):
+        """The v2.5.4-D4 `anchor_aware_present` parameter is retained for
+        API backward-compat (Pydantic models, REST callers, the eval-v2
+        runner's `_call_get_context`) but is now a no-op for the truncation
+        decision. Truncation behavior MUST be identical whether the param
+        is True, False, or omitted."""
+        pkg_omitted = await engine_with_many_entries.get_context()
+        pkg_false = await engine_with_many_entries.get_context(
+            anchor_aware_present=False
+        )
+        pkg_true = await engine_with_many_entries.get_context(
+            anchor_aware_present=True
+        )
+        # All three produce identical bundle sizes — anchor_aware_present
+        # no longer changes the truncation path.
+        assert (
+            len(pkg_omitted.sources)
+            == len(pkg_false.sources)
+            == len(pkg_true.sources)
+            == 50
+        ), (
+            "Phase-3.1 T2: anchor_aware_present is no-op for truncation; "
+            f"omitted={len(pkg_omitted.sources)}, "
+            f"False={len(pkg_false.sources)}, "
+            f"True={len(pkg_true.sources)} — all must equal 50."
+        )

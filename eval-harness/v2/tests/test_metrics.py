@@ -394,6 +394,162 @@ def test_compute_corpus_metrics_round_trip(tmp_path: Path):
     assert persisted["provenance"]["timestamp"].endswith("Z")
 
 
+# ---------------------------------------------------------------------------
+# v2.5.4 D4 — per-tool attribution annotation
+# (mis_01KS0C8BKTHCA8GB38BGDR1PTQ T2; per dec_01KS0C4PG88F29YBR91VQ3RRXY)
+# ---------------------------------------------------------------------------
+
+
+def test_annotation_records_first_discoverer():
+    """The metrics layer derives first-discovery from invocation order: each
+    entity is credited to the tool that introduced it first in the bundle,
+    NOT to any subsequent tool that also returns it. Verify the per-tool
+    split distinguishes first_discovery from total coverage."""
+    scenario = {
+        "scenario_id": "annotation-test",
+        "actor": "brain",
+        "expected_entities": [
+            {"entity_id": "dec_01CRIT0000000000000000", "entity_type": "decision", "importance": "critical"},
+            {"entity_id": "jrn_01CRIT0000000000000000", "entity_type": "journal", "importance": "critical"},
+        ],
+    }
+    # Two tools both return dec_01CRIT...; ego_graph (first invocation) gets
+    # first_discovery credit; rka_get_context also returns it and gets total
+    # credit too. jrn_01CRIT... only appears in get_context — credited there
+    # both ways.
+    bundle = {
+        "scenario_id": "annotation-test",
+        "actor": "brain",
+        "invocations": [
+            {
+                "tool": "rka_get_ego_graph",
+                "path": "/api/graph/ego/dec_01CRIT0000000000000000",
+                "status_code": 200,
+                "entity_ids": ["dec_01CRIT0000000000000000"],
+                "divergence": None,
+                "notes": "",
+            },
+            {
+                "tool": "rka_get_context",
+                "path": "/api/context",
+                "status_code": 200,
+                "entity_ids": [
+                    "dec_01CRIT0000000000000000",  # already seen by ego_graph
+                    "jrn_01CRIT0000000000000000",  # first time
+                ],
+                "divergence": None,
+                "notes": "",
+            },
+        ],
+        "combined_ranking": [
+            "dec_01CRIT0000000000000000",
+            "jrn_01CRIT0000000000000000",
+        ],
+    }
+    metrics = score_scenario(scenario, bundle)
+
+    # first_discovery: ego_graph first-discovered dec (1/2 critical);
+    # get_context first-discovered jrn (1/2 critical).
+    assert metrics.per_tool_first_discovery_coverage == {
+        "rka_get_ego_graph": pytest.approx(0.5),
+        "rka_get_context": pytest.approx(0.5),
+    }
+    # total: ego_graph returned dec (1/2 critical); get_context returned BOTH (2/2).
+    assert metrics.per_tool_total_coverage == {
+        "rka_get_ego_graph": pytest.approx(0.5),
+        "rka_get_context": pytest.approx(1.0),
+    }
+    # Pre-v2.5.4 alias preserved and equals total (NOT first_discovery).
+    assert metrics.per_tool_critical_coverage == metrics.per_tool_total_coverage
+
+
+def test_per_tool_attribution_metric_distinguishes_first_vs_total():
+    """The canonical D4 use case: rka_get_journal's v2.5.5 drop from 1.000 to
+    0.000 was 'attribution shift, not coverage loss' — the entities moved
+    from being first-discovered by get_journal to being first-discovered
+    by anchor-aware tools. The dual metric makes this distinguishable:
+    first_discovery_coverage drops while total_coverage stays the same."""
+
+    expected = [
+        {"entity_id": "jrn_01CRIT_A0000000000000", "entity_type": "journal", "importance": "critical"},
+        {"entity_id": "jrn_01CRIT_B0000000000000", "entity_type": "journal", "importance": "critical"},
+    ]
+
+    # SCENARIO 1 (pre-v2.5.5): get_journal fires first → it first-discovers
+    # both critical journals. Anchor-aware tools either don't fire or return
+    # empty (the v2.5.5 reorder hadn't lifted them yet).
+    pre_bundle = {
+        "scenario_id": "pre",
+        "actor": "brain",
+        "invocations": [
+            {
+                "tool": "rka_get_journal",
+                "path": "/api/notes",
+                "status_code": 200,
+                "entity_ids": ["jrn_01CRIT_A0000000000000", "jrn_01CRIT_B0000000000000"],
+                "divergence": None,
+                "notes": "",
+            },
+            {
+                "tool": "rka_get_ego_graph",
+                "path": "/api/graph/ego/jrn_01CRIT_A0000000000000",
+                "status_code": 200,
+                "entity_ids": [],
+                "divergence": None,
+                "notes": "",
+            },
+        ],
+        "combined_ranking": ["jrn_01CRIT_A0000000000000", "jrn_01CRIT_B0000000000000"],
+    }
+    pre = score_scenario(
+        {"scenario_id": "x", "actor": "brain", "expected_entities": expected},
+        pre_bundle,
+    )
+    assert pre.per_tool_first_discovery_coverage["rka_get_journal"] == pytest.approx(1.0)
+    assert pre.per_tool_total_coverage["rka_get_journal"] == pytest.approx(1.0)
+
+    # SCENARIO 2 (post-v2.5.5 runner reorder): anchor-aware ego_graph fires
+    # FIRST and first-discovers both critical journals. get_journal still
+    # returns them (total unchanged) but no longer first-discovers any
+    # (first_discovery drops to 0.000 — PURE attribution shift).
+    post_bundle = {
+        "scenario_id": "post",
+        "actor": "brain",
+        "invocations": [
+            {
+                "tool": "rka_get_ego_graph",
+                "path": "/api/graph/ego/jrn_01CRIT_A0000000000000",
+                "status_code": 200,
+                "entity_ids": ["jrn_01CRIT_A0000000000000", "jrn_01CRIT_B0000000000000"],
+                "divergence": None,
+                "notes": "",
+            },
+            {
+                "tool": "rka_get_journal",
+                "path": "/api/notes",
+                "status_code": 200,
+                "entity_ids": ["jrn_01CRIT_A0000000000000", "jrn_01CRIT_B0000000000000"],
+                "divergence": None,
+                "notes": "",
+            },
+        ],
+        "combined_ranking": ["jrn_01CRIT_A0000000000000", "jrn_01CRIT_B0000000000000"],
+    }
+    post = score_scenario(
+        {"scenario_id": "x", "actor": "brain", "expected_entities": expected},
+        post_bundle,
+    )
+    # First-discovery shifted to ego_graph (1.000); get_journal dropped to 0.000.
+    assert post.per_tool_first_discovery_coverage["rka_get_ego_graph"] == pytest.approx(1.0)
+    assert post.per_tool_first_discovery_coverage["rka_get_journal"] == pytest.approx(0.0)
+    # CRITICAL: get_journal's TOTAL coverage stayed at 1.000 — the entities
+    # are still in the bundle, just credited to a different tool.
+    # The D4 metric makes this distinguishable so a per-tool drop can be
+    # flagged as "attribution shift, not coverage loss" WITHOUT triggering
+    # false-alarm investigation.
+    assert post.per_tool_total_coverage["rka_get_journal"] == pytest.approx(1.0)
+
+
 def test_compute_corpus_metrics_reports_missing_bundles(tmp_path: Path):
     """If a scenario's bundle file is absent, it's reported in missing_bundles
     and not scored."""

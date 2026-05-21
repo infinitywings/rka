@@ -3,6 +3,894 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [2.5.11] — 2026-05-21 (Phase-3 chapter close — Phase-3.2 + 3.3 + 3.4 bundled; TRUE measurement surfaced; PARTIAL on recall + efficiency)
+
+Bundled patch release shipping the full Phase-3 chapter close across three sequential missions. PI directive held the version at v2.5.11 (no inflation across the bundle).
+
+**Chapter trajectory**: D1 (v2.5.1) + D2 (v2.5.3) + D3 (v2.5.2) + D4 ordering (v2.5.4 + v2.5.9 + this release) EMPIRICALLY VALIDATED. D4 recall + D4 efficiency PARTIAL on TRUE measurement (post-γ structural-only walker eliminated walker-extraction contamination that was inflating prior eval-v2 metrics by ~0.24 absolute on recall).
+
+**Chapter-close decision**: `dec_01KS5TJPVKKD8SQCFSTNNS92C4`
+**Chapter-close synthesis journal**: `jrn_01KS5TGWB2HWBYFW8X4J8BR4XK`
+
+**Floor scoreboard (TRUE measurement, post-γ)**:
+- `mean_recall_critical` = 0.774 (< 0.85 floor; Phase-3.5 spec'd: `mis_01KS5TTYSME88BQR5EC7BCXAGE`)
+- `mean_ordering_score` = 0.464 (≥ 0.363 floor; +0.101 above floor)
+- `mean_efficiency` = 0.042 (< 0.13 floor; structurally unreachable in v2; eval-v3 framework deferred as project-level)
+
+**Process discipline**: 4 falsification catches across the bundle (Phase-3.2 T3 seed_limit, Phase-3.2 T4 per-tool K, Phase-3.3 T2 R1 recall contamination, Phase-3.4 T1 γ-closes-efficiency) with near-zero code waste (~9 lines reverted). Bookkeeper invariant held: zero `rka/services/*`, `rka/api/*`, `rka/mcp/*`, `web/*` touches across the three missions.
+
+---
+
+### Phase-3.4 — γ structural-only walker (TRUE measurement surfaced; recall + efficiency PARTIAL; ordering MAINTAINED)
+
+**Mission**: `mis_01KS5KNXBBVYWTD5JH408K2X9R`
+**Motivating decision**: `dec_01KS5KJ774WN7WEEETXBK2J3KG` (Option A — walker structural redesign, diagnostic-first across α/β/γ/δ)
+**T1 evaluation checkpoint**: `chk_01KS5S8BJBYW0PQ309CPCJ5PMC` (Brain-ratified Option (I): ship γ + honest PARTIAL)
+**Contamination meta-finding**: `chk_01KS5PF3832RYCRPKEY090CV65` (Phase-3.3 T2)
+
+### Phase-3 chapter close — TRUE measurement (post-γ)
+
+| Metric | v2.5.9 cfg11 (contaminated) | v2.5.11 (contaminated) | post-Phase-3.3 (contaminated) | post-Phase-3.4 γ (TRUE) | Floor | Status |
+|---|---|---|---|---|---|---|
+| mean_recall (critical) | 0.822 | 0.933 | 0.969 | **0.774** | ≥ 0.85 | ⚠️ **PARTIAL** (TRUE measurement surfaced) |
+| mean_ordering_score | 0.403 | 0.471 | 0.513 | **0.464** | ≥ 0.363 | ✅ **MAINTAINED + IMPROVED** (+0.101 above floor) |
+| mean_efficiency | 0.034 | 0.035 | 0.036 | 0.042 | ≥ 0.13 | ⚠️ **PARTIAL** (structurally unreachable; eval-v3 forward-pointed) |
+| mean_expanded_recall | 0.760 | 0.817 | 0.855 | 0.633 | (informational) | TRUE measurement |
+
+**Critical context**: prior eval-v2 metrics (v2.5.7–v2.5.11) were **systematically contamination-inflated** by ~0.24 absolute on recall. The pre-γ walker regex-extracted entity IDs from ALL string values in API responses, including embedded `@entity_id` references in journal/decision/checkpoint content body. Phase-3.4 γ replaces that with structural-only extraction; the post-γ numbers are the **TRUE measurement** of retrieval quality.
+
+### γ walker change
+
+The walker now extracts entity IDs only from values at known structural id-typed JSON keys:
+- Single-id: `id`, `entity_id`, `source_id`, `target_id`, `mission_id`, `decision_id`, `claim_id`, `cluster_id`, `research_question_id`, `parent_id`, `parent_mission_id`, `linked_decision_id`, `motivated_by_decision`, `depends_on`, `supersedes`, `superseded_by`, `source_claim_id`, `target_claim_id`
+- List-valued: `sources`, `entity_ids`, `ids`, `seeds`, `related_journal`, `related_decisions`, `related_literature`, `related_missions`
+
+Embedded `@entity_id` references in body text are no longer extracted — they're incidental mentions, not retrieval candidates. This matches the API contract: structural id fields are what tools explicitly RETURNED; body text is content.
+
+### T1 evaluation summary (chk_01KS5S8BJBYW0PQ309CPCJ5PMC)
+
+4 candidate approaches evaluated empirically across all 16 scenarios:
+
+| Variant | mean_recall | mean_efficiency | reaches 0.13? |
+|---|---|---|---|
+| full (contaminated baseline) | 0.969 | 0.036 | NO |
+| α (cap walker to top-N=10 entries) | 0.837 | 0.039 | NO |
+| β (cap walker output to M=30) | 0.522 | 0.088 | NO (closest) |
+| **γ (structural-only walker)** | **0.732** | 0.040 | NO |
+| δ (efficiency uses structural denominator) | 0.969 | 0.055 | NO |
+
+**No variant closed the 0.13 efficiency floor.** γ ships on semantic faithfulness grounds — it surfaces TRUE recall and eliminates the contamination mechanism, even though TRUE values are PARTIAL on recall + efficiency.
+
+### Phase-3 chapter trajectory (deliverable status)
+
+| Deliverable | Mission | Release | Floor | Final status |
+|---|---|---|---|---|
+| D1 — multi-hop schema relaxation | mis_01KRQQRWA1HHHEKHB1TFHK2A4S | v2.5.1 | n/a | ✅ EMPIRICALLY VALIDATED |
+| D2 — context-engine weighted-sum ordering | mis_01KRSP44W7BDZH11PZRGXH1WM4 | v2.5.3 | n/a | ✅ EMPIRICALLY VALIDATED |
+| D3 — cluster→parent-RQ traversal | mis_01KRSQ4GCRWPSXCWZHGZ2ZR830 | v2.5.2 | n/a | ✅ EMPIRICALLY VALIDATED |
+| D4 ordering | mis_01KS0C8BKTHCA8GB38BGDR1PTQ + Phase-3.1 | v2.5.4 + v2.5.9 | ≥ 0.363 | ✅ EMPIRICALLY VALIDATED (0.464 ≥ 0.363; +0.101 above floor) |
+| D4 recall | Phase-3.2 + Phase-3.3 + Phase-3.4 | v2.5.11 + γ | ≥ 0.85 | ⚠️ PARTIAL — TRUE 0.774; Phase-3.5 spec'd |
+| D4 efficiency | Phase-3.4 | γ | ≥ 0.13 | ⚠️ PARTIAL — TRUE 0.042; eval-v3 forward-pointed |
+
+### Process discipline summary (4 falsification catches across Phase-3.2-3.4)
+
+| Catch | Mission | Triggering checkpoint |
+|---|---|---|
+| T3 `seed_limit` hypothesis falsified | Phase-3.2 | chk_01KS5H6RES1C2YVV6BR14888MT (reverted) |
+| T4 per-tool K hypothesis falsified | Phase-3.2 | chk_01KS5HZTE753XR1F0MFVFWG6MB (PARTIAL) |
+| T2 R1 recall contamination | Phase-3.3 | chk_01KS5PF3832RYCRPKEY090CV65 (R1 shipped; SR3 deferred) |
+| T1 efficiency floor structurally unreachable | Phase-3.4 | chk_01KS5S8BJBYW0PQ309CPCJ5PMC (γ shipped; PARTIAL) |
+
+Near-zero code waste across all 4 catches. Multiple Brain calibration locks (LOCK 4 spec-drafting reads code first; LOCK 6 contamination methodology) added to project discipline.
+
+### Phase-3.5 spec forthcoming (Brain commitment)
+
+10 scenarios surface honest retrieval gaps under γ. Phase-3.5 addresses these via either corpus refresh, search-relevance tuning, or hybrid approach. Spec filed within 24h of Phase-3.4 batch-merge.
+
+### Eval-v3 forward pointer
+
+The structural efficiency limitation (combined_ranking dominated by BUNDLE_K=80 + 5 endpoint contributions ≈ 116 entities; floor 0.13 requires ≤ 46) is beyond Phase-3.x scope. A future eval-v3 framework redesign would address this at the framework level.
+
+### Bookkeeper invariant — final state
+
+`git diff` since `feat/phase-3-3-search-relevance` base:
+- `eval-harness/v2/runner.py` (γ structural-only walker)
+- `eval-harness/v2/tests/test_runner.py` (6 new γ tests + updated fixtures matching production API contract)
+- `CHANGELOG.md` (this entry)
+
+**Zero `rka/services/*`, `rka/api/*`, `rka/mcp/*`, `web/*` changes.**
+
+### Per-scenario stability
+
+Under contaminated baseline (post-Phase-3.3): mean recall 0.969 across 16 scenarios. Under TRUE measurement (post-γ): 10 of 16 scenarios surface honest recall < 1.0. The remaining 6 scenarios retain recall=1.0 — these are scenarios where structural retrieval genuinely surfaces all critical entities.
+
+### Phase-3.3 — R1 runner-anchor multi-seed fix (SR3 deferred; DB contamination meta-finding)
+
+> Version number pending PI authorization. PI directive: batch Phase-3.3 + Phase-3.4 merges; version bump deferred until both PRs are ready. When shipping, replace this heading with the chosen version (e.g. `## [2.5.12]`).
+
+**Mission**: `mis_01KS5KEPXK77MAG54GW5M6DA79`
+**Motivating decision**: `dec_01KS5KAYRBC717G5J4X01F8FR4` (Option A — search-relevance work, diagnostic-first)
+**Related checkpoints**: `chk_01KS5NJN1652XHAKZ5DYZ4RZX9` (T1 diagnostic ratification) + `chk_01KS5PF3832RYCRPKEY090CV65` (T2 ship R1 + skip SR3 + document contamination)
+
+### Floor status
+
+| Metric | v2.5.9 cfg11 | v2.5.11 (Phase-3.2) | post-Phase-3.3 | Δ vs v2.5.11 | Floor | Status |
+|---|---|---|---|---|---|---|
+| mean_recall (critical) | 0.822 | 0.933 | **0.969** | +0.036 | ≥ 0.85 | ✅ CLOSED (contamination-inflated; see below) |
+| mean_ordering_score | 0.403 | 0.471 | **0.513** | **+0.042** | ≥ 0.363 | ✅ MAINTAINED & IMPROVED (REAL) |
+| mean_efficiency | 0.034 | 0.035 | 0.036 | +0.001 | ≥ 0.13 | ⚠️ PARTIAL (Phase-3.4) |
+| mean_expanded_recall | 0.760 | 0.817 | 0.855 | +0.038 | (informational) | improved |
+
+### Track A1 (R1 fix) — SHIPPED
+
+Per T1 diagnostic (chk_01KS5NJN1652XHAKZ5DYZ4RZX9, Brain-ratified): T1 surfaced a NEW sub-class beyond the spec's SR1/SR2/SR3/SR4 taxonomy:
+
+- **R1 (Runner-anchor BFS gap)**: 3 of 5 missing-critical instances are entities reachable via `/api/search` top-10 OR via first_mission anchor BFS — but blocked by the runner's `anchor_id = critical[0]["entity_id"]` heuristic when critical[0] is a decision.
+
+**Fix** (`eval-harness/v2/runner.py` `_invoke_one` + `_call_multi_hop`, preference 3 per Brain ratification): when critical[0] is a decision AND first_mission is present, seed multi_hop BFS with **both**. Multi-seed BFS catches both neighborhoods; preference 1 (anchor swap) produced a SWAP not a NET LIFT (surfacing one entity but losing another reachable only from the decision anchor).
+
+3 new R1 unit tests (`eval-harness/v2/tests/test_runner.py`):
+- positive: critical[0]=decision + first_mission set → BOTH in seeds
+- no-op: critical[0]=mission → single-seed preserved
+- no-op: critical[0]=decision but no mission critical → single-seed preserved
+
+**Verified empirical effect**:
+- Recall: +0.000 in current DB (DB contamination masks the recall benefit — see meta-finding)
+- Ordering: **+0.032 aggregate** (REAL; contamination-resistant — ordering measures placement, not presence)
+- Architectural correctness verified via direct `/api/graph/multi-hop` call with multi-seed: 27 nodes including `mis_01KRPF3` (which v2.5.11 single-anchor BFS didn't reach)
+
+### Track A2 (SR3 fix) — DEFERRED per chk_01KS5PF3832RYCRPKEY090CV65
+
+`/api/search` direct probes confirm SR3 entities still NOT in top-200:
+- scenario 4 trigger → `mis_01KRPF3`: NOT in top-200
+- scenario 6 trigger → `jrn_01KRP5Q0F`: NOT in top-200
+
+The eval-runner recall=1.0 for these scenarios is a **contamination artifact** (see below). Attempting SR3 fixes in contaminated DB is falsification-prone; deferred to a future mission with clean-DB methodology (Phase-3.4 territory, scope-extended for walker-vs-contamination work).
+
+### Meta-finding: eval-v2 metric contamination via diagnostic artifacts
+
+**Mechanism**: when a mission's T0/T1 diagnostic journals or checkpoints mention target entity IDs by ID in their content, the eval-runner's `walk_for_entity_ids` extracts those references from `rka_get_context`'s high-importance recent-content bundle. The walker's recursive entity-ID extraction inflates `combined_ranking` with entities that aren't actually retrieved by any tool's primary candidate set.
+
+**Empirical evidence**: with R1-stash (pure v2.5.11 code on current DB), scenarios 3, 4, 6 ALL show recall=1.0 (the same as post-R1). The "closures" are entirely from DB drift — `/api/search` confirms the SR3 entities are still genuinely below top-200.
+
+**True recall estimate (clean DB)**: approximately **0.92** (vs reported 0.969). R1's recall benefit (mis_01KRPF3 reach via multi-seed) materializes in clean DB; SR3 gaps remain. Ordering lift (+0.032) is unaffected by contamination.
+
+**Discipline locked** (added to feedback memory):
+- Future Phase-3.x diagnostic artifacts should either use placeholders (`<target_mission_id>` instead of actual IDs) OR verify recall changes via clean-DB methodology (direct REST probes, controlled stash-comparison, or snapshot-restore).
+- Eval-runner aggregate recall is NOT reliable for measuring fixes applied in missions where the diagnostic mentioned target entities by ID.
+
+### Bookkeeper invariant — final state
+
+`git diff` (since v2.5.11 / Phase-3.2 base):
+- `eval-harness/v2/runner.py` (R1 fix; multi-anchor `_call_multi_hop` signature)
+- `eval-harness/v2/tests/test_runner.py` (3 new R1 tests; 1 pre-existing signature update)
+- `CHANGELOG.md` (this entry)
+
+**Zero `rka/services/*`, `rka/api/*`, `rka/mcp/*`, `web/*` changes**. The R1 fix is purely runner-side — no service-layer or API changes shipped.
+
+### Per-scenario stability
+
+| Scenario | v2.5.11 | post-Phase-3.3 | Δ | Notes |
+|---|---|---|---|---|
+| brain-mission-creation-eval-extension | 0.833 | 1.000 | +0.167 | DB contamination closure (NOT R1) |
+| brain-session-start-checkpoint-review | 1.000 | 0.667 | **-0.333** | DB contamination regression (NOT R1; confirmed via db-drift baseline) |
+| brain-session-start-fresh-resume | 0.833 | 0.833 | +0.000 | R1 SWAP: mis_01KRPF3 found via multi-anchor; chk_01KS0Q38 lost via DB contamination |
+| brain-session-start-post-release | 0.600 | 1.000 | +0.400 | DB contamination closure (NOT R1) |
+| executor-mission-pickup-orchestrator | 0.667 | 1.000 | +0.333 | DB contamination closure (NOT R1) |
+| 11 other scenarios | 1.000 | 1.000 | +0.000 | Stable |
+
+Net real change (clean-DB methodology): scenarios 1, 3 close via R1 multi-anchor BFS. Scenario 4 / scenario 6 SR3 gaps remain. Phase-3.4 absorbs both walker-vs-cap-efficiency AND walker-vs-contamination scope.
+
+### Phase-3 chapter roadmap update
+
+- **Phase-3.4 (walker-vs-cap structural + contamination methodology)**: scope EXTENDED by this finding. Pre-framed options α/β/γ/δ from chk_01KS5HZTE753XR1F0MFVFWG6MB now must establish TWO baselines per option (contaminated + clean) and report against both. γ (disable walker) becomes the contamination-elimination option as a side-effect.
+- **Phase-3.5 (SR3 search-relevance for scenarios 4, 6)**: future mission. Awaits Phase-3.4 close to use clean-DB methodology.
+
+### Phase-3.2 — Track A1 candidate-generation (recall CLOSED via tools_invoked expansion; A2 falsified → Phase-3.3; B falsified → Phase-3.4)
+
+**Mission**: `mis_01KS5CRMZ0AGN0M5B694Q3M8B1`
+**Motivating decision**: `dec_01KS5CN0CF8N60T88E2HC8K1SD` (Option A — candidate-generation track, diagnostic-first, two coupled sub-tracks)
+**Closes**: `chk_01KS3K40N6JRHV118969RMBNF0` (v2.5.9's no-winner checkpoint that opened this mission)
+**Strategic context**: `jrn_01KS5CKHNJ4K35EF8TFA084FT3`
+
+### Floor status (canonical eval-v2 metrics)
+
+| Metric | v2.5.9 cfg11 | v2.5.11 | Δ | Floor | Status |
+|---|---|---|---|---|---|
+| mean_recall (critical) | 0.822 | **0.933** | +0.111 | ≥ 0.85 | ✅ **CLOSED** |
+| mean_ordering_score | 0.403 | **0.471** | +0.068 | ≥ 0.363 | ✅ **MAINTAINED & IMPROVED** |
+| mean_efficiency | 0.034 | 0.035 | +0.001 | ≥ 0.13 | ⚠️ **PARTIAL** (deferred to Phase-3.4) |
+| mean_expanded_recall | 0.760 | 0.817 | +0.057 | (informational) | improved |
+
+**Stability check**: 0 regressions. All 8 v2.5.9 recall=1.0 scenarios remain at 1.0.
+
+### Track A1 — 7-scenario `tools_invoked` expansion (delivers recall floor)
+
+Per T1 diagnostic (chk_01KS5EZ6Z2D51Q1AW628DNA17Y, Brain-ratified): 7 of 8 failing scenarios were classified A1 (incomplete tools_invoked). Their expected critical entities are present in the DB but not in any currently-invoked tool's returned entity_ids. Adding the appropriate candidate-gen tool(s) to each scenario's `tools_invoked` surfaced those entities with **zero service-layer code changes**.
+
+| Scenario | Recall pre | Recall post | Tools added |
+|---|---|---|---|
+| brain-session-start-fresh-resume | 0.500 | 0.833 | +multi_hop +journal |
+| brain-session-start-multi-mission-state | 0.750 | 1.000 | +multi_hop +journal |
+| brain-session-start-post-release | 0.400 | 0.600 | +multi_hop +journal +research_map |
+| brain-contradiction-llm-removed-vs-enrichment-preserved | 0.667 | 1.000 | +research_map |
+| executor-mission-pickup-orchestrator | 0.667 | 0.667 | +multi_hop (residual: search-relevance, Phase-3.3) |
+| executor-backbrief-eval-v2-t2 | 0.667 | 1.000 | +multi_hop |
+| executor-backbrief-bookkeeper-invariant-check | 0.667 | 1.000 | +research_map |
+
+8 new regression tests in `eval-harness/v2/tests/test_scenarios_tools_invoked.py` lock the tools_invoked invariants.
+
+### Track A2 — FALSIFIED & REVERTED
+
+Per chk_01KS5H6RES1C2YVV6BR14888MT (Brain-ratified revert): scenario 4 (brain-mission-creation-eval-extension) was originally classified A2 (over-restrictive `search(query, limit=10)` seed step in `rka_multi_hop_retrieval`). T3 implemented `seed_limit` plumbing (service + API + runner + 3 unit tests) with default backward-compat. Unit tests passed (11/11). **Aggregate recall delta from T3: +0.0000.** Empirical falsification:
+
+- Runner's `seeds=[anchor]` path bypasses the search step entirely on scenarios with a critical mission anchor; `seed_limit` never executes.
+- Direct REST experiment: even query-only `multi_hop` with `seed_limit=20` doesn't surface `mis_01KRPF3` (the eval-v2 mission itself).
+- `/api/search` cross-check: `mis_01KRPF3` is not in the top-30 search hits for the scenario trigger. Search-relevance-bound, not seed-count-bound.
+
+**Disposition**: T3 reverted in full (no commit). Scenario 4 reclassified as "search-relevance gap" (not A2). Phase-3.3 spec'd to address the structural search-relevance issue.
+
+### Track B — FALSIFIED ANALYTICALLY; NOT IMPLEMENTED
+
+Per chk_01KS5HZTE753XR1F0MFVFWG6MB (Brain-ratified PARTIAL close): the per-tool K caps premise for closing the 0.13 efficiency floor was falsified analytically over the post-T2 bundles before any code was written:
+
+| K | mean_combined | mean_efficiency | reaches 0.13? | mean_recall_crit |
+|---|---|---|---|---|
+| 5 | 169.9 | 0.0237 | NO | 0.7875 (regression) |
+| 10 | 174.6 | 0.0402 | NO | 0.8604 (regression) |
+| 30 | 199.6 | 0.0351 | NO | 0.9333 (T2 baseline) |
+| 80 | 201.9 | 0.0350 | NO | 0.9333 |
+
+**Structural root cause**: `rka_get_context` returns 80 rank-list candidates (BUNDLE_K=80 applied) but the eval-runner's entity-ID walker extracts ~172 entity_ids from those candidates' **rendered content** (embedded `@entity_id` references in journal/decision text). Per-tool K on the 5 Track B endpoints cannot move combined_ranking below the get_context-walker floor of ~172. The 0.13 efficiency floor requires combined ≤ 46.
+
+**Disposition**: Phase-3.2 ships PARTIAL on efficiency (0.035 vs 0.13). Phase-3.4 spec'd by Brain for the walker-vs-cap structural redesign (α: cap walker to top-N candidates; β: post-walk truncation to M unique IDs; γ: disable walker; δ: redesign efficiency metric to exclude walker output).
+
+### Process discipline successes
+
+Two consecutive falsifications + zero code waste:
+- T3 falsification caught at empirical contact (not T5 firewall); 9-line scope-extension reverted.
+- T4 falsification caught analytically (pre-implementation); 0 lines drafted.
+
+Both events reinforced the trust-but-verify discipline established at chk_01KS5EZ6Z2D51Q1AW628DNA17Y. Memory entries added: `feedback_scope_extensions_conditional_on_claim.md` (scope-extensions are conditional on the empirical claim holding).
+
+### Bookkeeper invariant — final state
+
+`git diff main` touches:
+- `eval-harness/v2/corpus/scenarios.jsonl` (7 scenarios' tools_invoked expanded)
+- `eval-harness/v2/tests/test_scenarios_tools_invoked.py` (NEW, +8 regression tests)
+- `pyproject.toml`, `rka/__init__.py`, `CHANGELOG.md` (this release-prep commit)
+
+Zero `rka/services/*`, `rka/api/*`, `rka/mcp/*`, `web/*` changes. Track B's pre-authorized API-edit scope was never exercised (T4 analytical falsification prevented code from being written).
+
+### Scenario classification (final)
+
+- **A1 CLOSED**: 7 scenarios via T2
+- **search-relevance gap** (Phase-3.3): 4 scenarios — `brain-session-start-fresh-resume`, `brain-session-start-post-release`, `brain-mission-creation-eval-extension`, `executor-mission-pickup-orchestrator`
+- **walker-extraction structural** (Phase-3.4): mission-wide efficiency ceiling
+- **A3 (entity absent from DB)**: 0 scenarios (confirmed)
+
+### Open question — resolved
+
+scenario 1's `chk_01KS0NX38` (non-critical "useful" importance, status=resolved): NOT surfaced by the A1 fix; gap accepted per Brain ratification at chk_01KS5EZ6Z2D51Q1AW628DNA17Y open-question disposition (i). Doesn't affect the 0.85 critical-recall floor (already passed).
+
+## [2.5.10] — 2026-05-20 (docs-only patch; INSTALL.md + README.md staleness cleanup)
+
+**Surfaced by**: PI audit immediately following v2.5.9 GitHub release — checked whether the installation guide was fully consistent and correct with current state.
+
+Docs-only patch. No code changes. No test changes (suite stays at 799 passing). Ships to address documentation drift between INSTALL.md / README.md and the actual v2.4.0+ feature surface.
+
+### INSTALL.md — fixes
+
+- **5 stale `v2.3.x` / `v2.3.2` version references** replaced with `v2.5.x` (`/api/health` example output, SessionStart hook example line) or `v2.5.10` (integration.json `version` field example).
+- **2 stale "~110 tools" claims** corrected to "~90 tools" (actual count: 89 `rka_*` tools in `rka/mcp/server.py`).
+- **§10 "What this guide intentionally doesn't cover"** rewritten:
+  - Old text claimed `rka_ask` / `rka_generate_summary` are "optional tools" that require an LLM key. These tools were **removed in v2.4.0** per `jrn_01KRNZBS50K250HHHHEC58E4GC`; server-side code preserved for future re-wiring through the orchestrator's Claude Code SDK.
+  - New text correctly states the tool removal, then notes that v2.4.0+ does support **pluggable embedding backends** (FastEmbed default; OpenAI-compatible HTTP like LM Studio / vLLM; Ollama), configurable via **Settings → Embeddings** in the web dashboard. Links to [`docs/embedding_backends.md`](docs/embedding_backends.md).
+
+### README.md — fixes
+
+- **Infrastructure Layer description** (line 242) updated:
+  - Was: "embeddings (FastEmbed). An optional LiteLLM gateway powers `rka_ask` / `rka_generate_summary` only when the user wires up a cloud-LLM API key."
+  - Now: "pluggable embedding backends (FastEmbed default; OpenAI-compatible HTTP; Ollama — configurable via Settings → Embeddings)" + accurate note that the LLM-gated tools were removed in v2.4.0.
+- **Tool table** (line 852) removed the `rka_ask` row — tool no longer exposed.
+
+### Scope discipline
+
+Bookkeeper-strict observed. Touched files:
+- `INSTALL.md` (8 in-place edits, all surgical)
+- `README.md` (2 in-place edits)
+- `pyproject.toml` + `rka/__init__.py` + `CHANGELOG.md` — version bump 2.5.9 → 2.5.10 + this entry
+
+NOT touched: `rka/services/`, `rka/api/`, `rka/mcp/`, `web/`, tests, schema migrations.
+
+### Operator impact
+
+None at runtime. No rebuild required (`docker compose ps` will continue showing v2.5.9 containers as healthy; v2.5.10 brings nothing new at the API/MCP surface). Operators who fetch the v2.5.10 tag will see the corrected docs. A container rebuild is optional and only useful if the operator wants the `/api/health` `version` field to report `2.5.10`.
+
+## [2.5.9] — 2026-05-20 (patch release; Phase-3.1 metric tuning — cfg11 sweep winner pinned; Phase-3 chapter closes PARTIAL)
+
+**Mission**: `mis_01KS3EB2671CDD4V9RZCMYCEH1`
+**Motivating decision**: `dec_01KS3E6ZJXXV7542QPWZ9W8BQS` (Option A: two-part bundled Phase-3.1 — recency-weight + bundle efficiency; Brain rec)
+**Depends on**: `mis_01KS0QEW21N2NG4EJTKJ3JTWTE` (Eval-v2 corpus refresh; landed on main at `33b9381` via PR #17 merge 2026-05-20T19:40:51Z)
+**Backbrief**: `jrn_01KS3EYZ30VCWZ34MQT1A897TW`
+**Mid-mission checkpoints**: `chk_01KS3FZDX78FD89CVR4K6VYJFK` (baseline-drift; resolved → scope refined to Option B) and `chk_01KS3K40N6JRHV118969RMBNF0` (no-winner; verified + resolved → cfg11 ship per ratified disposition)
+**Sequencing note**: v2.5.8 = `mis_01KS3E4S33B13EGR2NWRQM2QG4` (embedding subsystem bug-pair fix; Mission α), landed on main at `1189db6` via PR #18. Phase-3.1 slots cleanly to v2.5.9.
+
+### (a) Ships strict improvement over v2.5.7 on TWO of three Eval-v2 axes
+
+cfg11 sweep winner (`N=1` / `w_recency=0.15` / `bundle_K=80`) pinned as the default coefficients in `rka/services/context.py`. Independently verified for `chk_01KS3K40N6JRHV118969RMBNF0`:
+
+| Metric | v2.5.7 baseline (current DB, current main) | v2.5.9 cfg11 | Δ |
+|---|---|---|---|
+| mean_recall | 0.801 | **0.822** | **+0.021** (improvement) |
+| mean_ordering_score | 0.383 | **0.403** | **+0.020** (improvement; +0.040 above floor 0.363) |
+| mean_efficiency | 0.037 | 0.034 | -0.003 (within DB-drift noise) |
+
+The 0.022 recall improvement is exactly the gap between v2.5.7's K=30 anchor-aware truncation (which drops some expected entities from the bundle for anchor-aware scenarios) and Phase-3.1's K=80 always-on truncation (which captures the full structural retrieval ceiling). **cfg11 is NOT a regression** — it ships better recall AND better ordering vs v2.5.7.
+
+### (b) Recall floor 0.85 NOT met — STRUCTURAL ceiling at 0.822
+
+The 64-config sweep (`eval-harness/v2/sweep_v2_5_9.py`; DB drift Δ=0 across all entity tables in 14-minute sweep window) discovered:
+
+- **All 24 configs at bundle_K ∈ {80, 150}** yield `mean_recall = 0.8219` regardless of `shape_N` or `w_recency`.
+- **The same 8 scenarios** (all orchestrator workflow shapes: brain-session-start-fresh-resume, brain-session-start-multi-mission-state, brain-session-start-post-release, brain-mission-creation-eval-extension, brain-contradiction-llm-removed-vs-enrichment-preserved, executor-mission-pickup-orchestrator, executor-backbrief-eval-v2-t2, executor-backbrief-bookkeeper-invariant-check) are below recall=1.0 across cfg11 / cfg14 / cfg23 — **symmetric difference of below-1.0 sets is the empty set**, 7-of-8 with byte-identical per-scenario scores.
+
+Diagnosis: expected_entities for these 8 scenarios are **NOT in the candidate set** returned by their `tools_invoked`. No ranking-level lever (recency_score / weighted-sum coefficients / bundle_K truncation) can promote entities that aren't candidates. The corpus's 0.85 recall floor was set against a different DB state or candidate-generation surface; the **current achievable maximum is 0.822**.
+
+### (c) Efficiency floor 0.13 NOT met — STRUCTURAL: bundle_K caps only `get_context`
+
+Phase-3.1 T2 introduced always-on post-rank-merge `bundle_K` truncation (replacing the v2.5.4-D4 `anchor_aware_present` gating). Empirically, bundle_K is the **only** lever among the swept dimensions with meaningful sensitivity (`K=30`: r=0.71, e=0.043 / `K=150`: r=0.82, e=0.031 — clear Pareto trade-off). But:
+
+- Eval-v2's `combined_ranking` is the **UNION** of per-tool contributions from ~6 tools per scenario (`get_context`, `multi_hop_retrieval`, `ego_graph`, `get_journal`, `get_decisions`, `get_research_map`, etc.).
+- `bundle_K` caps **only `get_context`'s contribution**. Other endpoints have their own SQL `LIMIT` clauses but no Phase-3.1 cap.
+- Even at K=30, average bundle size remains ~135 entities (T2 smoke). To hit 0.13 efficiency with ~6 critical entities per scenario, combined_ranking must be ≤46 entities — requires capping **every** tool, not just `get_context`.
+
+The efficiency floor is architecturally beyond the coefficient-tuning scope of Phase-3.1.
+
+### (d) Phase-3 chapter closes PARTIAL — Phase-3.2 deferred for candidate-generation work
+
+Phase-3 chain status:
+
+- **D1** (`v2.5.1`, `mis_01KRQQRWA1HHHEKHB1TFHK2A4S`): multi-hop schema relaxation → EMPIRICALLY VALIDATED
+- **D2** (`v2.5.3`, `mis_01KRSP44W7BDZH11PZRGXH1WM4`): context-engine weighted-sum ordering → EMPIRICALLY VALIDATED
+- **D3** (`v2.5.2`, `mis_01KRSQ4GCRWPSXCWZHGZ2ZR830`): cluster → parent-RQ traversal → EMPIRICALLY VALIDATED
+- **D4** ordering portion (`v2.5.4` + `v2.5.9`, `mis_01KS0C8BKTHCA8GB38BGDR1PTQ` + this mission): anchor-aware UNION + post-rank-merge bundle_K truncation → EMPIRICALLY VALIDATED for ordering (0.403 > 0.363 floor)
+- **D4 recall ceiling** + **efficiency floor**: structural; coefficient tuning cannot close → **DEFERRED to Phase-3.2** (candidate-generation track, NOT coefficient tuning)
+
+Brain commits to filing the Phase-3.2 spec within 24 hours of v2.5.9 ship. Scope per Brain ratification: candidate-set expansion + per-tool K + `tools_invoked` surface enrichment for the 8 failing orchestrator workflow scenarios.
+
+### (e) Provenance — checkpoint chain
+
+Three RKA checkpoints frame the mission:
+
+- `chk_01KS3FZDX78FD89CVR4K6VYJFK` (T0 baseline-drift): surfaced +0.046 ordering swing from corpus-refresh T2 measurement vs Phase-3.1 baseline (44 minutes, same code, DB-state drift only). Brain ratified Option B + K-placement refinement (post-rank-merge instead of per-tool) + sweep matrix expansion to 64 configs.
+- `chk_01KS3K40N6JRHV118969RMBNF0` (T4 no-winner): surfaced the structural recall + efficiency ceilings. Brain demanded trust-but-verify on the load-bearing "ceiling is structural" claim BEFORE ratifying cfg11 ship. Verification (1) re-ran v2.5.7 baseline on current DB → 0.801 (BELOW the K=150 ceiling 0.822, confirming the ceiling is real). Verification (2) per-scenario recall vectors at cfg11/cfg14/cfg23 → symmetric difference ∅. Claim CONFIRMED with stronger evidence than asked. Disposition: ship cfg11 as PARTIAL close.
+- `chk_01KS0Q38YRR4S55ZT911W2QMEQ` (D4 K-escalation FAIL, from v2.5.4): pre-Phase-3.1 superseded — Phase-3.1 T4 sweep widens this finding from "K-escalation can't help" to "no coefficient combination can help" for the same scenario set.
+
+### (f) Implementation chain (commits T1 → T6)
+
+| Task | Commit | Surface |
+|---|---|---|
+| T1 — `recency_score = 1/(1+days/N)` env-var-configurable shape | `50103dc` | `_compute_recency_score()` pure helper; `RKA_CTX_RECENCY_SHAPE_N` env var; 5 new tests; backward-compat at N=1 bit-for-bit |
+| T2 — post-rank-merge `bundle_K` always-on truncation | `3dfee5a` | Removed v2.5.4-D4 `anchor_aware_present` gating; default K bumped 30→50; anchor_aware_ids UNION preserved; 5 new tests (replacing 4 v2.5.4-D4 tests) |
+| T3 — 64-config sweep harness | `ad9f55a` | `eval-harness/v2/sweep_v2_5_9.py` (shape_N × w_recency × bundle_K = 64); container-restart-per-config (Brain path-2 fallback after T3 analysis found hot-reconfig would need new API endpoint); winner-selection per Option B + tie-breaks |
+| T4 — sweep execution + winner selection (background; 837 sec wall-clock; DB drift Δ=0) | (no commit; artifacts only) | `sweep_v2_5_9/{summary.json, winner.md, raw_cfg01..64, metrics_cfg01..64}` |
+| T5 — pin cfg11 defaults | `32bd9b8` | `_DEFAULT_W_RECENCY = 0.15` (was 0.20); `_DEFAULT_BUNDLE_K = 80` (T2 was 50; v2.5.4-D4 was 30); `_DEFAULT_RECENCY_SHAPE_N = 1.0` unchanged (sweep tie-break wins); docker-compose.yml + tests updated |
+| T6 — version bump + CHANGELOG | (this commit) | `pyproject.toml` + `rka/__init__.py` → 2.5.9; this entry |
+
+### Bookkeeper invariant — strict, observed
+
+Touches limited to scoped files per `dec_01KS3E6ZJXXV7542QPWZ9W8BQS`:
+- `rka/services/context.py` — recency_score + bundle_K refactors
+- `eval-harness/v2/sweep_v2_5_9.py` (new) + `eval-harness/v2/results/sweep_v2_5_9/` (new artifacts)
+- `tests/test_services/test_context.py` — 11 new tests, 4 v2.5.4-D4 tests replaced
+- `docker-compose.yml` — env var passthroughs + defaults
+- `pyproject.toml` + `rka/__init__.py` + `CHANGELOG.md` — version + release prep
+
+NOT touched: `rka/mcp/`, `rka/api/routes/`, `web/`, other `rka/services/*` files, schema migrations.
+
+### Side-finding: cross-session HEAD contamination (process discipline)
+
+Mid-mission, two concurrent Executor sessions (this mission β + Mission α embedding-fix) operating on the same git working directory + shared `.git/HEAD` produced **TWO near-violation incidents** of the bookkeeper invariant. In both cases, the cross-session checkout landed the phase-3-1 branch on top of Mission α's commits; defensive HEAD verification before each `git commit` caught both before push. Recovery: `git reset --hard 33b9381` + `git push --force-with-lease` (the first incident, where the new branch was inadvertently created from `6caa947` instead of `33b9381`); stash-then-switch for the second. Documented at `jrn_01KS3GH21FPSJ0EKCZKX1EQZ4X`. **Process learning for future parallel-mission setups**: isolate per-mission working trees via `git worktree add` so each mission has its own HEAD.
+
+### Out of scope (deferred to Phase-3.2)
+
+Brain has committed to filing Phase-3.2 spec within 24h. Scope per ratification:
+- **Candidate-set expansion** for the 8 orchestrator workflow scenarios whose `expected_entities` aren't currently in any tool's candidate set.
+- **Per-tool K caps** for non-`get_context` endpoints (multi_hop, ego_graph, get_journal, get_decisions, get_research_map, assemble_evidence) — the efficiency floor lever.
+- **`tools_invoked` surface enrichment** if some scenarios are missing tool invocations that would surface their expected entities.
+- **NOT** another coefficient sweep — the Phase-3.1 sweep locked in the learning that recency-shape and w_recency have noise-magnitude effects on the floor gaps.
+
+## [2.5.8] — 2026-05-20 (patch release; embedding subsystem bug-pair fix: BackfillService metadata guard + worker startup loads persisted config)
+
+**Mission**: `mis_01KS3E4S33B13EGR2NWRQM2QG4`
+**Motivating decision**: `dec_01KS3E1FGSK530N8HM04BNMCEW` (Option A: single bundled bug-pair fix with scope-limited bookkeeper exemption for `rka/cli.py`)
+**Surfaced by**: `mis_01KS0QEW21N2NG4EJTKJ3JTWTE` (Eval-v2 corpus refresh) — both bugs are pre-existing; corpus refresh exposed the silent-under-embedding failure mode.
+
+### Bug 1 — `BackfillService` writes `embedding_metadata` when `vec_available=False`
+
+`rka/services/embedding_backfill.py:run_backfill` unconditionally wrote rows into `embedding_metadata` for every batch element, including when `Database.vec_available` was `False` (sqlite-vec extension not loaded — vec_* INSERT was skipped). The v2.5.5 3-tuple `needs_reembed` then returned `False` permanently for these rows because metadata-by-content-hash matched, even though no vec_* row existed. Net effect: rows claimed to be "embedded at <model>/<dim>" with no underlying vector — silent under-embedding.
+
+**Fix**: moved the `embedding_metadata` INSERT inside the `if vec_available:` block. Metadata write is now **coupled** to the vec_* write — both gate on `vec_available`. Documented as an invariant in the source.
+
+**Tests added** (`tests/test_services/test_embedding_backfill.py`, +2 tests; suite 18 → 20):
+- `test_metadata_not_written_when_vec_available_false`: patches `Database.vec_available=False` at the class level (property has no setter) and asserts no metadata row is written.
+- `test_metadata_written_when_vec_available_true`: backward-compatibility positive case.
+
+### Bug 2 — `rka-worker` startup ignores `/data/embedding_config.json`
+
+`rka/cli.py:worker_main` constructed `EmbeddingService` directly from env vars (`RKA_EMBEDDING_MODEL` etc.) and passed it to `EnrichmentWorker(embeddings=...)`. The api-server boot path (`rka/api/app.py` v2.4.0+) had been updated to read the persisted config from `<data_dir>/embedding_config.json` via `EmbeddingConfigService.load_config()`, but the worker boot path was left on the legacy env-only constructor. Net effect: PI changing the embedding backend via webui (`PUT /api/config/embedding`) took effect for the api-server's hot path but **not** for the worker — every worker restart re-loaded the env-defaulted backend, silently serving stale embeddings until container rebuild.
+
+**Fix**: added `EnrichmentWorker.boot()` classmethod + `_resolve_embeddings()` staticmethod in `rka/services/worker.py`. Resolution order matches the api-server boot path:
+
+1. `embeddings_enabled=False` → worker has `embeddings=None`.
+2. Otherwise, attempt to read `<data_dir>/embedding_config.json` via `EmbeddingConfigService.load_config()` and construct `EmbeddingService.from_config(...)`.
+3. On any failure (file missing, corrupt, construction error), fall back to the legacy env-driven constructor (`EmbeddingService(model_name=env_fallback_model)`) and log WARNING.
+
+`rka/cli.py:worker_main` swapped to a 1-line `EnrichmentWorker.boot(...)` invocation (Brain-ratified `cli.py` exemption-extension; see below).
+
+**Tests added** (`tests/test_services/test_worker.py`, NEW file, +4 tests):
+- `test_resolve_embeddings_uses_persisted_config`: writes a fastembed config to tmp_path, mocks `EmbeddingService.from_config`, asserts the persisted config (not env) was passed.
+- `test_boot_classmethod_threads_data_dir_through`: smoke test for `EnrichmentWorker.boot()`.
+- `test_resolve_embeddings_falls_back_to_env_when_config_missing`: empty tmp_path; asserts env_fallback_model was used and the log line confirms the fallback path.
+- `test_resolve_embeddings_disabled_returns_none`: `embeddings_enabled=False` short-circuit.
+
+### Scope-limited bookkeeper exemption (binding for THIS mission only)
+
+This release is **bookkeeper-strict** for everything except a single 1-line glue change in `rka/cli.py` (Brain-ratified mid-mission per `dec_01KS3E1FGSK530N8HM04BNMCEW`).
+
+**ALLOWED for this mission:**
+
+- `rka/services/embedding_backfill.py`: Bug 1 fix (metadata-write guard).
+- `rka/services/worker.py`: Bug 2 fix (`boot()` + `_resolve_embeddings()`).
+- `rka/cli.py`: 1-line glue swap to `EnrichmentWorker.boot(...)` (Brain-ratified exemption-extension; Bug 2's env-only path lived in `cli.py:worker_main`, not `worker.py`).
+- `tests/test_services/test_embedding_backfill.py`: extended (+2 tests).
+- `tests/test_services/test_worker.py`: NEW (+4 tests).
+- `pyproject.toml`, `rka/__init__.py`, `CHANGELOG.md`: version bump.
+
+**NOT ALLOWED (remained strict):**
+
+- Other `rka/services/*` files: 0 modified.
+- `rka/api/`: 0 modified.
+- `rka/mcp/`: 0 modified.
+- `web/`: 0 modified.
+- Schema migrations: none.
+
+**Post-mission invariant**: future patch missions return to fully-strict bookkeeper (the `cli.py` exemption is for THIS mission's scope only; documented in `dec_01KS3E1FGSK530N8HM04BNMCEW`).
+
+### Ops note
+
+After deploying v2.5.8, **rebuild the container** (`docker compose up -d --build --force-recreate`) and **restart the worker** explicitly. The worker boot log will now indicate which config-resolution path was taken:
+
+- `worker boot: reading config from /data/embedding_config.json (backend=<backend>, dim=<dim>)` — persisted config loaded.
+- `worker boot: falling back to env defaults; persisted config not found at <path>` — file absent.
+- `worker boot: failed to load persisted config (<exc>); falling back to env defaults (model=<env_model>)` — load attempt errored.
+
+Operators can correlate these lines with webui config-changed events when troubleshooting embedding-drift symptoms.
+
+### Test count
+
+787 passing (including +6 new tests from this mission). No regressions.
+
+## [2.5.7] — 2026-05-20 (patch release; Writer skill Phase 3: revision-loop handler + Brain mission integration + 3 optional MCP tools; BOOKKEEPER-EXEMPT)
+
+**Mission**: `mis_01KS2WW6MRN6AXP11EMCSCDFAR`
+**Motivating decision**: `dec_01KS2WPKMRVSJ2R0PP74722PEH` (Option A: single bundled Phase 3 mission with scope-limited bookkeeper exemption)
+**Depends on**: `mis_01KS2S871YPQ3D5RVY5K3PSQY6` (Writer Phase 2; landed on main at `31fd574` via PR #15 merge 2026-05-20T14:25:46Z)
+**Backbrief**: `jrn_01KS2X4MB80ERTPQ8M55NPZT5V` plus Brain ratification `jrn_01KS2XDDPSCRH2DF7X1MM4TDPQ`
+**Sequencing note**: `mis_01KS0QEW21N2NG4EJTKJ3JTWTE` (Eval-v2 corpus refresh) was planned for v2.5.7 per the v2.5.6 changelog. Writer Phase 3 closed first; corpus refresh now slots to v2.5.8 when it ships. Phase 3 is the final Writer-track deliverable per design Section 16.
+
+### Scope-limited bookkeeper exemption (binding for THIS mission only)
+
+Phase 1+2's strict bookkeeper invariant (`git diff main -- rka/services/ rka/api/ rka/mcp/ web/` empty) was RELAXED for Phase 3 per `dec_01KS2WPKMRVSJ2R0PP74722PEH`:
+
+**ALLOWED for Phase 3:**
+
+- `rka/mcp/server.py`: 3 new `@mcp.tool()` functions (plus necessary supporting imports per Brain ratification 2026-05-20).
+- `rka/api/routes/manuscripts.py`: NEW file with the 3 REST endpoints.
+- `rka/services/manuscript.py`: NEW file with `ManuscriptService` class.
+- `rka/api/app.py`: minimal 2-line glue (1 import + 1 `include_router`) to wire the new route. Brain extended the exemption mid-mission for this minimal touch (analogous to the imports-in-server.py allowance from T0 ratification).
+- `rka/skills/writer/`: extended (revision_handler.py + SKILL.md + workflows.md).
+- `tests/skills/writer/`: extended (4 new test files).
+- `pyproject.toml`, `rka/__init__.py`, `CHANGELOG.md`: version bump.
+
+**NOT ALLOWED (remained strict):**
+
+- Other `rka/services/*` files: 0 modified (manuscript.py only).
+- Other `rka/api/routes/*` files: 0 modified (manuscripts.py only).
+- `web/`: 0 modified.
+- Schema migrations: none.
+
+**Post-Phase-3 invariant**: future Writer phases return to strict bookkeeper (the exemption is for THIS mission's scope only; documented in `dec_01KS2WPKMRVSJ2R0PP74722PEH`).
+
+### Honest framing: branch-state vigilance side-finding
+
+Mid-mission, the T3 commit landed on the wrong branch (`feat/eval-v2-corpus-refresh-v2.5.6` instead of `feat/writer-role-phase-3`) due to an unexplained external branch switch during file edits. Recovered via cherry-pick to phase-3 (the orphan commit on corpus-refresh remained local-only; never pushed). T4+ work added explicit HEAD verification before every commit. Surfaced for executor discipline awareness.
+
+### Shipped (this release)
+
+- **Revision-loop handler** (`rka/skills/writer/scripts/revision_handler.py`, 657 lines): 4 comment_class shapes (factual_r1 / style_r2 / inconsistency_r3 / logical_r4) per design doc Section 14. Heuristic classifier (`classify_comment`) with regex/keyword/structural patterns; returns `ClassificationResult(cls, confidence, ambiguous, rationale, matched_patterns)`; ambiguous defaults to ESCALATE per Brain ratification (the Writer's Claude Code runtime IS the LLM-assisted reasoning layer). Per-class handler functions (`handle_factual_r1` invokes validate_references Stage B-G; `handle_style_r2` re-runs ai_tic_lint strict; `handle_inconsistency_r3` runs bridge_repetition_check; `handle_logical_r4` prepares writer_evidence_gap mission payload). REVIEW_STATE.md helpers (`read_review_state`, `advance_review_state`) implement the 3-iteration cap.
+
+- **Brain mission integration** (Writer SKILL.md Section 4 + references/workflows.md section 7): Writer now supports TWO invocation paths. (a) Direct PI invocation (Phase 1 default). (b) Mission-spawned invocation: Brain creates `writer-revision` mission with `tags=["writer-revision", "comment-class:<r1|r2|r3|r4>", "manuscript:<jrn_id>"]` plus the structured review comment in `context`. Writer reads via `rka_get_mission(id)`, extracts tags, classifies, dispatches. Uses existing MissionService tag surface (no schema migration). On `ambiguous=True` from classify_comment, Writer escalates via `rka_submit_checkpoint` before invoking any handler.
+
+- **3 optional MCP tools** (BOOKKEEPER EXEMPT):
+  - `rka_register_manuscript(venue, title, abstract, sections)`: POST /api/manuscripts; creates a jrn_ manifest with tags=['manuscript', f'venue:{venue}', 'phase:draft'].
+  - `rka_get_manuscript(manuscript_id)`: GET /api/manuscripts/{id}; returns 404 if not tagged 'manuscript' (regular jrn_ entries are not Writer manifests).
+  - `rka_validate_reference(manuscript_id, doi|title, author)`: POST /api/manuscripts/{id}/validate-reference; proxies to Phase 2's validate_references.py Stage B-G full pipeline; returns one of 7 status verdicts.
+  - All 3 use the existing thin-HTTP-proxy pattern (httpx via `_client()` to the REST API).
+
+- **REST endpoints** (`rka/api/routes/manuscripts.py`, NEW 147 lines): POST /api/manuscripts, GET /api/manuscripts/{id}, POST /api/manuscripts/{id}/validate-reference. Inline Pydantic models with `ConfigDict(extra='forbid')` per project's existing 422-on-unknown-field guard.
+
+- **Service layer** (`rka/services/manuscript.py`, NEW 223 lines): `ManuscriptService` class extending `BaseService`. Wraps `NoteService` for journal-entry CRUD with the manuscript-specific tagging convention (Option 2 representation per `dec_01KS0BKJ5ZJKJ4R19GYAK3QN9D` Q1). `validate_reference` shells out to `scripts/validate_references.py` via subprocess.
+
+- **37 new tests** under `tests/skills/writer/` (suite progression: 104 to 141): test_revision_handler.py (18 tests), test_manuscript_service.py (8 tests), test_manuscript_mcp_tools.py (6 tests), test_phase3_integration.py (5 tests). All 141 pass in 2.97s.
+
+### Em-dash absolute ban dogfooded
+
+Across all new Writer-managed files (revision_handler.py + 4 test files + manuscript.py + manuscripts.py): 0 U+2014 and 0 U+2013. CHANGELOG.md, rka/mcp/server.py, and rka/api/app.py are pre-existing project infrastructure; their em-dashes in section headings follow project style.
+
+### Out of scope (Phase 4+ deferred indefinitely)
+
+Per `dec_01KS2WPKMRVSJ2R0PP74722PEH` scope_boundaries:
+
+- Manuscript search/discovery UI in `web/` dashboard.
+- Manuscript versioning system (vs current single jrn_ manifest model).
+- Multi-author collaboration features.
+- OpenAlex/arXiv submission system integration.
+- Manuscript export to publisher submission portals.
+
+Design Section 16 ENDS at Phase 3. The Writer skill design is complete at Phase 3 close.
+
+## [2.5.6] — 2026-05-20 (patch release; Writer skill Phase 2: rka-writer-tools MCP server + validation pipeline B-G + 5 venues + fetch_template lifecycle)
+
+**Mission**: `mis_01KS2S871YPQ3D5RVY5K3PSQY6`
+**Motivating decision**: `dec_01KS2S22VV5P5SWWXNBXQDHMGX` (Option A: single bundled Phase 2 mission)
+**Depends on**: `mis_01KS0C3RP04XANCZAB3HTNAG0P` (Writer Phase 1; landed on main at `0d3886f` via PR #13 merge 2026-05-20T13:18:30Z)
+**Backbrief**: `jrn_01KS2SK48P78ERN55MC3GRSQ4E` plus Brain ratification `jrn_01KS2T0C2EFRDSYHDJ8J9HBWYW`
+**Sequencing note**: `mis_01KS0QEW21N2NG4EJTKJ3JTWTE` (Eval-v2 corpus refresh) was planned for v2.5.6 per the v2.5.5 changelog. Writer Phase 2 closed first; corpus refresh now slots to v2.5.7 when it ships. The two missions are parallel and touch disjoint paths (Writer touches `rka/skills/writer/` plus `tests/skills/writer/`; corpus refresh touches `eval-harness/v2/`).
+
+### Honest framing: Brain T0 Backbrief discovery
+
+The Phase 2 spec assumed (a) the PyPI package was named `serpapi-python`, (b) `acl-org/acl-style-files` used a year-branch convention, (c) all six PyPI dependencies were stable. T0 mandatory Backbrief verification corrected three spec errors:
+
+- `serpapi` is the correct PyPI package name (1.0.2, MIT; not `serpapi-python`).
+- `acl-org/acl-style-files` uses `master` branch plus frozen old year tags (`2020-12`, `2021-12`); year-branch convention does not exist. Pin strategy changed to `master_head_sha` at commit `2353f3ea58` (commit date 2025-11-13).
+- `arxiv` shipped 4.0.0 on 2026-05-17 (3 days before mission filing). Two majors in 5 weeks signals unstable change velocity. Pin to `>=3.0,<4.0` for safety; Phase 3 audits 4.x release notes and re-evaluates.
+
+Plus two version-drift advisories: `habanero` 11 months silent (last release 2025-06-06; functional, narrow Stage B/D surface) and `manubot` 22 months silent (last release 2024-07-20; functional, Stage F subprocess only). Both pinned at current latest per Brain ratification of T0 Backbrief; will surface to Brain if any Stage encounters API incompatibility during use.
+
+### Shipped (this release)
+
+- **`rka-writer-tools` combined MCP server** (`rka/skills/writer/mcp_tools/`). FastMCP-based stdio server exposing 4 high-level tools (validate_reference, disambiguate_author, find_citation, check_retraction) plus a diagnostic (report_backend_availability). Five backend wrappers under `mcp_tools/backends/`: crossref (habanero), openalex (pyalex), semantic_scholar (semanticscholar), arxiv_backend (arxiv 3.x), and serpapi_backend (serpapi 1.0.2) with CreditBudget plus SerpAPIBudgetExceededError. Each backend gracefully degrades when its PyPI package is absent or (for SerpAPI) when SERPAPI_API_KEY is unset.
+- **Validation pipeline Stages B through G** (`rka/skills/writer/scripts/validate_references.py`). Upgrades the Phase 1 stub (Stage A only; B-G raised NotImplementedError) to a full implementation. Stage B: Crossref to OpenAlex to Semantic Scholar to arXiv waterfall. Stage C: 2+ sources to VERIFIED; 1 to LOW_CONFIDENCE; 0 to UNVERIFIED. Stage D: Crossref update-to retraction check (RWDB feeds main API since Sept 2023 acquisition). Stage E: OpenAlex author disambiguation with optional SerpAPI tertiary on mismatch. Stage F: manubot then bibtex-tidy then betterbib subprocess (GPL never vendored). Stage G: SerpAPI niche-rescue before HALLUCINATED verdict. Status enum: VERIFIED / FIELD_ERROR / UNVERIFIED / RETRACTED / HALLUCINATED / AUTHOR_MISMATCH / LOW_CONFIDENCE. AuditReport.has_any_blocking helper for compile-gate.
+- **SerpAPI credit budget** (`rka/skills/writer/mcp_tools/backends/serpapi_backend.py`). Default 200/manuscript via SERPAPI_BUDGET env; per-project overlay via `ai_tic_config.yaml [serpapi.budget]` (T3 enhancement); graceful key-absence (Stage G falls back to HALLUCINATED with `note='no-serpapi-budget'`).
+- **5 additional venue files** (`rka/skills/writer/references/venue/`). USENIX (Security + ATC + NSDI), IEEE-SP (plus IEEE-CS broader), NeurIPS, OSDI (plus SOSP umbrella), Nature (plus Nature family). Each follows the Phase 1 seven-field schema (Section names + Page-limit + Tone + Forbidden + Citation + Required sections + Sample corpus). Documents per-venue threat-model requirements (USENIX/IEEE-SP), Paper Checklist (NeurIPS), Methods-at-end convention (Nature), engineering-first quantitative emphasis (OSDI).
+- **`template_registry.md` expanded** from 2 active entries (Phase 1) to 9 active (Phase 2). New entries for IEEE-SP / NeurIPS / OSDI / Nature; refreshed ieeetran / llncs / usenix / neurips / arxiv to remove Phase-1-only markers. ACL pin strategy updated to `master_head_sha`. SHA-256 placeholders remain `TBD` until first fetch per workstation; the fetch script captures plus prompts for ratification.
+- **`fetch_template.py` full lifecycle** (`rka/skills/writer/scripts/fetch_template.py`). Upgrades the Phase 1 lookup-only stub to download + SHA-256 verify + cache (with `.sha256` sidecar) + refuse-on-mismatch + TBD-pin PI ratification path. Error hierarchy: TemplateRegistryError base; TemplateChecksumMismatchError, TemplatePinMissingError, TemplateDownloadError. Archive format support: .zip, .tar / .tar.gz / .tgz, single-file .cls / .sty / .bst.
+- **61 new tests** under `tests/skills/writer/` (suite progression: 43 to 104). test_mcp_wrappers.py (12 tests): backend availability + graceful degradation + mocked-client paths. test_pipeline_stages.py (16 tests): per-stage isolation with module-attribute substitution; all 7 statuses round-trip. test_serpapi_budget.py (8 tests): CreditBudget basics + over-budget refusal + env/YAML overlay resolution order. test_fetch_template.py (15 tests): pin detection + SHA computation + lookup + error hierarchy + mismatch refusal + cache hit skips download. test_venue_files.py (extended +10): 5 new venues schema + USENIX threat model + NeurIPS Paper Checklist + Nature Methods-at-end + em-dash dogfood.
+
+### Dependencies
+
+New `[project.optional-dependencies] writer-tools` group:
+
+```
+habanero>=2.3.0          # Crossref; 11mo silent, narrow Stage B/D
+pyalex>=0.21             # OpenAlex; active
+semanticscholar>=0.12.0  # S2; active
+arxiv>=3.0,<4.0          # PIN AWAY FROM 4.0; two majors in 5 weeks
+serpapi>=1.0.2           # SerpAPI; not "serpapi-python"
+manubot>=0.6.1           # Stage F subprocess; 22mo silent, narrow surface
+```
+
+Existing rka installs unaffected. Install via:
+
+```
+UV_CACHE_DIR=/tmp/uv-cache uv tool install --force --reinstall '.[writer-tools]'
+```
+
+### Entry points
+
+Adds `rka-writer-tools = "rka.skills.writer.mcp_tools.server:main"` to `[project.scripts]`. Available after install as `~/.local/bin/rka-writer-tools`.
+
+### Bookkeeper invariant preserved
+
+`git diff main -- rka/services/ rka/api/ rka/mcp/ web/` was verified empty at every commit boundary across all 6 atomic Phase 2 commits. Writer Phase 2 adds code only under `rka/skills/writer/` plus `tests/skills/writer/`. The new MCP server lives at `rka/skills/writer/mcp_tools/`, NOT `rka/mcp/` (which remains the RKA core MCP per T0 Backbrief verification item 6).
+
+### Out of scope (deferred to Phase 3)
+
+- Revision-loop handler with 4 comment_class shapes (R1/R2/R3/R4).
+- Brain mission integration for Writer revisions.
+- Optional MCP tools `rka_get_manuscript`, `rka_validate_reference`, `rka_register_manuscript` (would be added to existing `rka` MCP server).
+
+## [2.5.5] — 2026-05-20 (patch release; embedding-dim-flex generalization across all 6 entity types — coupled 3-bug fix)
+
+**Mission**: `mis_01KS1RFNM2T1HTB077G507T1FR`
+**Motivating decision**: `dec_01KS1RAAN8RNAAEYP2TEQPPAA9` (Option A bundled fix)
+**Surfaced by**: PI on a peer machine 2026-05-19; another Brain session worked
+around the bug via direct DB operations + a manually-triggered PUT.
+**Sequencing note**: `mis_01KS0QEW21N2NG4EJTKJ3JTWTE` (Eval-v2 corpus refresh)
+**slides from v2.5.5 to v2.5.6** because corpus refresh needs corrected
+embeddings to compute against. v2.5.5 takes the corpus refresh's
+originally-planned tag; corpus refresh ships next.
+
+### Honest framing — three coupled bugs
+
+After PI switched the embedding backend from `nomic-embed-text-v1.5` (768-dim)
+to `text-embedding-qwen3-embedding-8b` (4096-dim) on 2026-05-15, semantic
+search across journals — which dominates user retrieval — kept returning
+vectors from the retired nomic model, permanently. Triage surfaced three
+defects that compound:
+
+- **Bug 1** — Only `vec_claims` had dim-flex reshape (migration 022 + v2.4
+  `rka/services/embedding_reshape.py`). The other five vec_* tables
+  (`vec_journal`, `vec_decisions`, `vec_literature`, `vec_missions`,
+  `vec_artifacts`) were defined with hardcoded `float[768]` in
+  `rka/db/schema_phase2.sql` and migration 002; no reshape mechanism
+  existed. PUT `/api/config/embedding` propagated the new dim to
+  `vec_claims` only.
+- **Bug 2** — `rka/infra/embeddings.py:needs_reembed` compared only
+  `content_hash`; never `model_name` or `dimensions`. So a model swap left
+  every unchanged entity flagged "not stale" even though its stored vector
+  belonged to a retired backend. The metadata row's `model_name` field said
+  "nomic" forever.
+- **Bug 3** — `rka/services/embedding_backfill.py:BackfillService.run_backfill`
+  iterated `claims WHERE embedding_pending = 1` only; never touched
+  journal/decisions/literature/missions/artifacts. Even if Bug 1 were
+  patched, those five tables would stay empty after reshape.
+
+### Fixed (this release)
+
+- **`reshape_vec_table` generalization** (`rka/services/embedding_reshape.py`).
+  Added `current_vec_table_dim(db, table_name)`, `reshape_vec_table(db,
+  table_name, *, dim)`, and `reshape_all_vec_tables_if_needed(db, *, dim)`.
+  A `_TABLE_TO_ENTITY` map covers all six vec_* tables. The v2.4 surface
+  (`reshape_vec_claims`, `reshape_vec_claims_if_needed`,
+  `current_vec_claims_dim`) is preserved as thin wrappers; existing 11-test
+  reshape suite stays green.
+- **Per-entity-type pending signal**. `vec_claims` keeps the v2.4
+  `claims.embedding_pending` flag (the BackfillService cursor + existing
+  tests depend on it). The other five entity types use
+  `embedding_metadata`-absence: reshape DELETEs metadata rows for the
+  affected `entity_type`, and v2.5.5's 3-tuple `needs_reembed` (below)
+  returns True until backfill repopulates them.
+- **Startup hook + PUT handler now reshape every vec_* table**
+  (`rka/api/app.py`, `rka/api/routes/config.py`). The PUT handler's 202
+  response body now carries a `reshape` key with per-table outcome
+  alongside `job_id` + `status_url`.
+- **3-tuple `needs_reembed`** (`rka/infra/embeddings.py`). The query widens
+  to `SELECT content_hash, model_name, dimensions`. Returns True on ANY
+  mismatch OR metadata absence. Defensive `dim == 0` early-return forces
+  re-embed when the backend hasn't reported a dim yet.
+- **`BackfillService` iterates all six entity types**
+  (`rka/services/embedding_backfill.py`). New signature parameter
+  `entity_types: Sequence[str] | None = None` defaults to the full set
+  (claim, journal, decision, literature, mission, artifact). Per-entity-type
+  cursor + write loop is parameterized by `_ENTITY_BACKFILL_CONFIGS` keyed on
+  entity_type. Content composition matches the v2.4 entity write-path
+  callers (e.g. journal = `content + " " + summary`; decision = `question +
+  " " + rationale`; literature = `title + " " + abstract`; mission =
+  `objective + " " + context`; artifact = `build_artifact_text(filename,
+  filetype, mime, metadata)`). Per-type embed-batch failures are isolated:
+  one type's failure does not stop the others; the final state is "failed"
+  iff any type errored. v2.4 single-type-failure error format preserved
+  when only one type fails.
+- **Atomic metadata write in backfill loop**. The v2.4 backfill wrote only
+  to `vec_claims` and skipped the metadata update; v2.5.5 always writes the
+  matching `embedding_metadata` row with the active `content_hash +
+  model_name + dimensions` so the 3-tuple gate's invariant holds.
+- **Migration 024** (`024_dim_flex_all_vec_tables.sql`). Documentation-only
+  no-op SQL file mirroring the migration 022 pattern; reshape itself is a
+  runtime operation because the dim is config-driven (lives in
+  `/data/embedding_config.json`).
+- **Version-string drift fix**: `rka/__init__.py:__version__` had drifted
+  to "2.5.3" while `pyproject.toml` was at "2.5.4". Both bumped to "2.5.5"
+  together in this release.
+
+### Tests (+21 across 3 files; suite 732 → 753 passing)
+
+- `tests/test_services/test_embedding_reshape.py` (+9): 5 parametrized
+  cases for each new vec_* table; metadata-DELETE behavior on non-claims
+  reshape; claim metadata survives (uses flag); `reshape_all_vec_tables_if_needed`
+  iterates every table; idempotent second-call no-op; rejects unknown
+  table name.
+- `tests/test_services/test_embedding_backfill.py` (+6): default
+  iterates all six types; restricts to named entity_types; per-entity-type
+  failure isolation; rejects unknown entity_type; end-to-end reshape →
+  invalidate → backfill repopulates; idle (nothing pending) completes
+  immediately.
+- `tests/test_infra/test_embeddings_needs_reembed.py` (NEW, +6): full
+  3-tuple match → False; content_hash mismatch → True; model_name
+  mismatch → True (the Bug-2 trigger); dimensions mismatch → True;
+  metadata absent → True; defensive `dim == 0` → True.
+
+Existing v2.4 backfill tests preserved by passing `entity_types=("claim",)`
+explicitly so they continue to test the claims-specific path under the
+new all-types default.
+
+### Live verification (2026-05-20 against the production container)
+
+Before `docker compose up -d --build`:
+```
+vec_claims:     dim=4096  (already reshaped via prior manual op)
+vec_journal:    dim=768   ← Bug 1
+vec_decisions:  dim=768   ← Bug 1
+vec_literature: dim=768   ← Bug 1
+vec_missions:   dim=768   ← Bug 1
+vec_artifacts:  dim=768   ← Bug 1
+embedding_metadata: claim/decision/journal/mission all at dim=768
+                    model=nomic-ai/nomic-embed-text-v1.5 (Bug 2)
+```
+
+After rebuild + restart (T2 startup hook fires automatically):
+```
+vec_claims:     dim=4096
+vec_journal:    dim=4096  ✓
+vec_decisions:  dim=4096  ✓
+vec_literature: dim=4096  ✓
+vec_missions:   dim=4096  ✓
+vec_artifacts:  dim=4096  ✓
+embedding_metadata: journal/decision/mission rows DELETEd by startup hook
+                    (entries will be re-embedded via 3-tuple
+                    needs_reembed on next embed_and_store call OR via a
+                    PUT-triggered backfill)
+```
+
+Backfill kick-off requires an explicit PUT (background task fires only
+on PUT, not on startup). The operational note below describes the path.
+
+### Operational user note
+
+Users who switched the embedding backend before upgrading to v2.5.5 and
+whose `embedding_metadata` rows still carry an outdated `model_name` or
+`dimensions` tuple should re-PUT `/api/config/embedding` after upgrade to
+trigger the full all-entity reshape + backfill. The PUT body must have a
+different `(backend, model, dim)` signature than the current saved config
+for the handler to fire backfill — if your goal is just to refresh stale
+metadata under the same backend, the alternative is to let the 3-tuple
+`needs_reembed` gate refresh each entity individually as it is touched
+(read/write paths trigger embed-on-stale).
+
+The startup hook brings vec_* table dims into parity automatically on
+container restart without invoking the backfill loop.
+
+### Surfaced-by-empirical-state evidence
+
+PI's peer machine ran a manual reshape via direct DB SQL + PUT trigger as
+a workaround; this established the bug class, the empirical state we
+verify against, and the operational path for users on existing
+deployments.
+
+### Brain post-mortem reference
+
+- `jrn_01KS1S2QMVQPMXS8KHK1JS6HS1`: Executor Backbrief filed pre-implementation
+  with full empirical baseline of the 6 vec_* tables + embedding_metadata
+  aggregate + per-entity content-composition audit.
+
+## [2.5.4] — 2026-05-19 (patch release; D4 bundle-narrowing + attribution metric — Phase-3 PARTIAL close)
+
+**Mission**: `mis_01KS0C8BKTHCA8GB38BGDR1PTQ`
+**Motivating decision**: `dec_01KS0C4PG88F29YBR91VQ3RRXY` (D4 re-scoped narrow per v2.5.3 addendum)
+**Brain post-mortem**: `jrn_01KS0NNMM7NJAASDK0CHMFAPQK` (Eval-v2 baseline drift finding)
+**T0 checkpoint**: `chk_01KS0NX382JYBRSRBECZ56JBKE` (drift surfaced) → `chk_01KS0Q38YRR4S55ZT911W2QMEQ` (T3 stop condition b)
+
+### Honest framing — Phase-3 status: NEEDS DEEPER INVESTIGATION
+
+D4's two-part scope shipped technically correct (67 tests pass; +6 new), but
+the canonical Eval-v2 metric gates did NOT clear: re-running the v2.5.3 baseline
+against the current RKA database produced `mean_recall = 0.755` (vs the stored
+v2.5.3 reference 0.958) BEFORE D4 changes — the floor (≥ 0.85) was already
+breached.
+
+Root cause (per Brain post-mortem `jrn_01KS0NNMM7NJAASDK0CHMFAPQK`): the
+v2.5.3 weighted-sum scorer's `w_recency=0.2` with `1/(1+days)` decay shape
+amplifies the contribution of very-recent entries non-linearly. Phase 2's
+6-retry chain (`mis_01KRKG9K1SSDZNDH90K2Z7ZM92` and successors) added ~30+
+new journal entries between 2026-05-17 and 2026-05-19, all with very recent
+`updated_at` timestamps; these displaced the v2.5.3-frozen `expected_entities`
+from the top of the weighted-sum ranking in 7 session-start / mission-start
+scenarios.
+
+D4's anchor-aware truncation policy cannot recover the floor because 6 of 7
+regressed scenarios have **no anchor-aware tools** in their `tools_invoked`
+(verified via K-escalation K=30 / K=50 / K=75 — identical results). The
+truncation gate only activates when at least one of `rka_get_ego_graph`,
+`rka_multi_hop_retrieval`, or `rka_assemble_evidence` fires; for un-anchored
+session-start patterns it's dormant.
+
+D4's implementation is correct; the floor failure is **corpus-stale**:
+`expected_entities` are pre-Phase-2-retry-artifacts and need re-annotation.
+Follow-up mission `mis_01KS0QEW21N2NG4EJTKJ3JTWTE` (Eval-v2 corpus refresh +
+D4 efficacy validation) is the Phase-3 closure attempt; ships as v2.5.5 if
+floors clear.
+
+### Fixed (this release)
+
+- **Bundle-truncation policy with anchor-aware-tool priority**
+  ([rka/services/context.py](rka/services/context.py)). When the caller signals
+  `anchor_aware_present=True`, the overview-path bundle is capped at top-K
+  (default 30; env-var-configurable via `RKA_CTX_BUNDLE_K`). Anchor-aware-tool
+  outputs UNION through the cap regardless of weighted-sum rank, so the
+  anchor-aware path's targeted retrieval is preserved. Backward compat:
+  `anchor_aware_present=False` (default) leaves the full ranked list intact
+  (v2.5.3 behavior).
+- **Per-tool attribution annotation** (`eval-harness/v2/runner.py` +
+  `metrics.py`). Each entity in the runner's `combined_ranking` is now
+  attributed to the tool that first-discovered it (`first_discovery_map`).
+  The metrics layer surfaces two numbers per tool: `first_discovery_coverage`
+  (entities first-introduced by this tool) and `total_coverage` (entities
+  present in this tool's response regardless of first-discoverer). A per-tool
+  drop in `first_discovery_coverage` while `total_coverage` stays high is
+  "attribution shift, not coverage loss" — distinguishable in the report
+  without triggering false-alarm investigation.
+- **`ContextRequest` model + `/api/context` route**: pass-through for the new
+  parameters (`anchor_aware_present`, `anchor_aware_ids`).
+- **`docker-compose.yml`**: `RKA_CTX_BUNDLE_K` env interpolation pattern
+  (defaults to 30; sweep harness overrides for K-tuning).
+
+### Tests
+
+- **4 new context-truncation tests** at
+  `tests/test_services/test_context.py::TestV2_5_4D4BundleTruncation`:
+  truncation applied when anchor_aware_present=True (K=30 cap);
+  truncation skipped on backward-compat path; `RKA_CTX_BUNDLE_K=50`
+  override propagates; anchor-aware outputs UNION through the cap.
+- **2 new attribution-metric tests** at
+  `eval-harness/v2/tests/test_metrics.py`:
+  `test_annotation_records_first_discoverer` (per-tool split distinguishes
+  first-discovery from total);
+  `test_per_tool_attribution_metric_distinguishes_first_vs_total` (the
+  canonical "attribution shift, not coverage loss" use case — `rka_get_journal`
+  drops on first-discovery while total stays constant).
+- Test count: pre-D4 17 context tests → post-D4 21; pre-D4 44 metrics tests
+  → post-D4 46. Net +6 tests.
+
+### Eval-v2 impact — D4 K-escalation under drifted baseline
+
+| Metric | v2.5.3 stored (2026-05-17) | Current drift (2026-05-19, pre-D4) | D4 K=30 | D4 K=50 | D4 K=75 |
+|---|---|---|---|---|---|
+| mean_recall (critical) | 0.958 | 0.776 | 0.755 | 0.755 | 0.755 |
+| mean_expanded_recall | 0.875 | 0.685 | 0.673 | 0.673 | 0.673 |
+| mean_ordering_score | 0.400 | 0.331 | 0.328 | 0.329 | 0.329 |
+| mean_efficiency | 0.0351 | 0.026 | 0.032 | 0.028 | 0.028 |
+
+D4 K-escalation cannot move the floor — 6 of 7 regressed scenarios have no
+anchor-aware tools (truncation gate dormant); the 7th regressed FURTHER
+under D4 (`brain-paper-scaffold-session-start-section` 1.000 → 0.667).
+
+### Per-tool attribution shift example (D4 metric working as designed)
+
+| Tool | first_discovery_coverage | total_coverage | Reading |
+|---|---|---|---|
+| `rka_get_ego_graph` | 0.778 | 0.778 | Anchor-aware; always fires first |
+| `rka_multi_hop_retrieval` | 0.683 | 0.817 | Mild shift; mostly first-discovers |
+| `rka_get_mission` | 0.267 | 0.800 | **BIG attribution shift; total stays at 0.8** |
+| `rka_get_context` | 0.267 | 0.372 | Mild shift |
+| `rka_get_journal` | 0.000 | 0.000 | True coverage loss (corpus-stale issue) |
+
+The `rka_get_mission` row is the canonical D4 success: under v2.5.5 runner
+reorder, anchor-aware tools fire first and first-discover mission entities;
+`rka_get_mission` still returns them (total 0.800) but no longer
+first-discovers them. Pre-D4 metric flagged this as a per-tool drop
+0.800 → 0.267, triggering investigation; D4 metric surfaces it as the
+attribution shift it actually is.
+
+### Release-line scope
+
+Main only — `release/desktop` is independent per the hub-and-spoke
+architecture (`dec_01KRPAVSTJ4H80VXJVN6DQ82WQ`). No cherry-pick attempted.
+
+### Phase-3 closure status
+
+D1 (v2.5.1) + D2 (v2.5.3) + D3 (v2.5.2) **closed**. D4 (this release)
+ships the technical implementation but **NEEDS DEEPER INVESTIGATION** before
+the eval-v2 metric gates clear. Follow-up mission
+`mis_01KS0QEW21N2NG4EJTKJ3JTWTE` (Eval-v2 corpus refresh + D4 efficacy
+validation; per `dec_01KS0QBCGG9FWFT2R0MSP3HHY9` Option A) is the Phase-3
+chapter-close attempt; ships as v2.5.5 if floors clear post-refresh.
+
+If only `mean_efficiency` fails post-refresh, ship v2.5.5 as partial
+Phase-3 close + Phase-3.1 K-tuning. Brain confidence going into corpus
+refresh: moderate-to-high.
 ## [2.5.3+agentic] — 2026-05-17 (final; agentic-branch sibling track)
 
 **Branch**: `agentic` (sibling of `main` per `dec_01KRPAVSTJ4H80VXJVN6DQ82WQ`). Main's v2.5.3 (commit `c063673`) is unchanged. **Supersedes `v2.5.3+agentic-rc1`** — that tag is deleted from origin as part of this release.

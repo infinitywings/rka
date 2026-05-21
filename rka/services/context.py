@@ -63,19 +63,40 @@ END"""
 # env vars must call `_reload_coefficients_from_env()` after the patch.
 # ---------------------------------------------------------------------------
 
-# Sweep coefficient defaults. Spec-listed env var names per
-# mis_01KRSP44W7BDZH11PZRGXH1WM4 T1: RKA_CTX_W_IMP / W_CENT / W_RECENCY /
-# PI_LIFT. The v2.5.3-hypothesis defaults below are the Config 1 sweep
-# reference; T4 of the v2.5.4 mission updates them to the sweep winner.
+# Sweep coefficient defaults.
+#
+# History:
+# - v2.5.3 hypothesis Config 1 (dec_01KRSMMCS8MD7KQDBS0E2DVKBQ): w_imp=0.5,
+#   w_cent=0.3, w_recency=0.2.
+# - v2.5.4 D2 5-config sweep (mis_01KRSP44W7BDZH11PZRGXH1WM4): same as
+#   Config 1 retained (no winner improvement found).
+# - Phase-3.1 T4 64-config sweep (mis_01KS3EB2671CDD4V9RZCMYCEH1; Brain
+#   ratification of chk_01KS3K40N6JRHV118969RMBNF0): cfg11 winner =
+#   N=1 / w_recency=0.15 / bundle_K=80. Recall improved +0.021 over v2.5.7
+#   (0.801 → 0.822); ordering improved +0.040 above floor (0.363 → 0.403).
+#   The 0.85 recall floor + 0.13 efficiency floor were NOT achievable via
+#   parameter tuning — both have STRUCTURAL ceilings (recall 0.822,
+#   efficiency 0.044) in the post-PR-#17 corpus + current candidate-
+#   generation surface. Phase-3 chapter closes PARTIAL; recall + efficiency
+#   deferred to Phase-3.2 (candidate-generation track, NOT coefficient
+#   tuning).
 _DEFAULT_W_IMPORTANCE = 0.5
 _DEFAULT_W_CENTRALITY = 0.3
-_DEFAULT_W_RECENCY = 0.2
+_DEFAULT_W_RECENCY = 0.15  # Phase-3.1 cfg11 winner (was 0.20 in v2.5.3 baseline)
 # PI-source lift. Spec text references "0.05" but the v2.5.3 implementation
 # preserves the pre-v2.5.3 +5/40 = +0.125 normalized magnitude. Keeping
 # 0.125 here (matches existing test test_pi_source_lift_applied_within_band).
 # Per mission assumption 7, PI lift is NOT part of the A/B sweep; the env
 # var exists for operator flexibility only.
 _DEFAULT_PI_SOURCE_LIFT_NORMALIZED = 0.125
+# Phase-3.1 T4: recency decay shape parameter. score = 1 / (1 + days/N).
+# Sweep across {1, 30, 90, 365} showed shape_N effect was within noise
+# (<0.005 recall variance) — the recency-amplification mechanism is real
+# but its magnitude is too small to bridge the structural floor gaps.
+# cfg11 winner pins N=1 (the simplest shape; reproduces the pre-Phase-3.1
+# 1/(1+days) shape exactly). Operator override via RKA_CTX_RECENCY_SHAPE_N
+# preserved for Phase-3.2 candidate-set experimentation.
+_DEFAULT_RECENCY_SHAPE_N = 1.0
 
 
 def _read_coeff(env_var: str, default: float) -> float:
@@ -101,11 +122,15 @@ def _reload_coefficients_from_env() -> None:
     process → fresh module import → fresh constants (no need to call this).
     """
     global _W_IMPORTANCE, _W_CENTRALITY, _W_RECENCY, _PI_SOURCE_LIFT_NORMALIZED
+    global _RECENCY_SHAPE_N
     _W_IMPORTANCE = _read_coeff("RKA_CTX_W_IMP", _DEFAULT_W_IMPORTANCE)
     _W_CENTRALITY = _read_coeff("RKA_CTX_W_CENT", _DEFAULT_W_CENTRALITY)
     _W_RECENCY = _read_coeff("RKA_CTX_W_RECENCY", _DEFAULT_W_RECENCY)
     _PI_SOURCE_LIFT_NORMALIZED = _read_coeff(
         "RKA_CTX_PI_LIFT", _DEFAULT_PI_SOURCE_LIFT_NORMALIZED
+    )
+    _RECENCY_SHAPE_N = _read_coeff(
+        "RKA_CTX_RECENCY_SHAPE_N", _DEFAULT_RECENCY_SHAPE_N
     )
 
 
@@ -115,6 +140,83 @@ _W_RECENCY: float = _read_coeff("RKA_CTX_W_RECENCY", _DEFAULT_W_RECENCY)
 _PI_SOURCE_LIFT_NORMALIZED: float = _read_coeff(
     "RKA_CTX_PI_LIFT", _DEFAULT_PI_SOURCE_LIFT_NORMALIZED
 )
+_RECENCY_SHAPE_N: float = _read_coeff(
+    "RKA_CTX_RECENCY_SHAPE_N", _DEFAULT_RECENCY_SHAPE_N
+)
+
+def _compute_recency_score(days: float, shape_n: float) -> float:
+    """Pure ``1 / (1 + days / shape_n)`` clamped to [0, 1].
+
+    Phase-3.1 (mis_01KS3EB2671CDD4V9RZCMYCEH1 T1): generalizes the
+    pre-Phase-3.1 ``1/(1+days)`` to ``1/(1+days/N)``. N=1 is the
+    backward-compat default (bit-identical to the pre-refactor formula).
+    Larger N produces slower decay (a 30-day-old entry scores 0.5 at N=30
+    vs 0.032 at N=1; a 365-day-old entry scores 0.5 at N=365 vs 0.003 at
+    N=1). Negative or zero ``shape_n`` raises ZeroDivisionError-equivalent
+    behavior via a defensive fallback to N=1 — operators should set
+    positive values; tests should pin the shape they're exercising.
+    """
+    if shape_n <= 0:
+        # Defensive: a non-positive N would either divide-by-zero or invert
+        # the decay direction. Treat as misconfiguration and reproduce the
+        # backward-compat shape rather than crashing the engine.
+        shape_n = 1.0
+    days = max(0.0, days)
+    score = 1.0 / (1.0 + days / shape_n)
+    return max(0.0, min(1.0, score))
+
+
+# ---------------------------------------------------------------------------
+# Bundle-truncation policy.
+#
+# v2.5.4 (D4 — mis_01KS0C8BKTHCA8GB38BGDR1PTQ): introduced post-rank-merge
+# top-K truncation with anchor-aware-tool UNION protection, gated by an
+# `anchor_aware_present` flag. Default K=30. Backward-compat path preserved
+# v2.5.3 behavior (no truncation) when the flag was False.
+#
+# Phase-3.1 T2 (mis_01KS3EB2671CDD4V9RZCMYCEH1; per Brain ratification of
+# chk_01KS3FZDX78FD89CVR4K6VYJFK Option B + K-placement refinement):
+# truncation is now **always-on**. The post-rank-merge cap is the bundle's
+# load-bearing efficiency lever — the v2.5.4-D4 conditional gating left
+# un-anchored bundles at ~200 entities, structurally unable to clear the
+# 0.13 efficiency floor. Empirical avg bundle size 173 (T0 baseline,
+# jrn_01KS3GH21FPSJ0EKCZKX1EQZ4X). Default K bumped 30 → 50 (the corpus-
+# refresh diagnosis estimated bundle ≈ 50 is needed to clear 0.13).
+#
+# The anchor-aware UNION protection is preserved: when `anchor_aware_ids`
+# is provided by the caller (composed call sequence that exercised
+# rka_get_ego_graph / rka_multi_hop_retrieval / rka_assemble_evidence),
+# those entity IDs pass through the cap regardless of weighted-sum
+# position. Critical-entity recall preserved.
+#
+# The `anchor_aware_present` parameter is retained for API/Pydantic
+# backward-compat (so v2.5.4-D4 callers don't break), but it no longer
+# gates truncation — the policy is post-rank-merge, unconditional.
+# ---------------------------------------------------------------------------
+
+_DEFAULT_BUNDLE_K: int = 80  # Phase-3.1 cfg11 winner (T2 was 50; v2.5.4-D4 was 30)
+
+
+def _read_bundle_k() -> int:
+    """Top-K cap for the anchor-aware-present truncation path.
+
+    Sweep-friendly: `RKA_CTX_BUNDLE_K` env var overrides the default. Test
+    discipline mirrors `_reload_coefficients_from_env`: monkeypatch the env
+    var, then call this helper at the assertion site (no global state to
+    reload because K is read per-call, not at module import).
+    """
+    raw = os.getenv("RKA_CTX_BUNDLE_K")
+    if raw is None or raw == "":
+        return _DEFAULT_BUNDLE_K
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid int in RKA_CTX_BUNDLE_K=%r; falling back to default %d",
+            raw,
+            _DEFAULT_BUNDLE_K,
+        )
+        return _DEFAULT_BUNDLE_K
 
 # Importance band normalized to [0, 1]. Mirrors _sort_key's importance map
 # divided by the critical=4 ceiling.
@@ -154,6 +256,8 @@ class ContextEngine:
         phase: str | None = None,
         depth: Literal["summary", "detailed"] = "summary",
         project_id: str = "proj_default",
+        anchor_aware_present: bool = False,
+        anchor_aware_ids: list[str] | None = None,
     ) -> ContextPackage:
         """Build a ranked context package.
 
@@ -167,6 +271,19 @@ class ContextEngine:
                 LLM-generated narrative if an LLM is configured.
             project_id: Project scope. Defaults to 'proj_default'; callers
                 normally inject from the API request.
+            anchor_aware_present: v2.5.4 (D4) signal that anchor-aware
+                tools fired in the composed call sequence. **No longer gates
+                truncation as of Phase-3.1 T2** — the post-rank-merge
+                bundle_K cap is now unconditional. Parameter retained for
+                API backward-compat; v2.5.4-D4 callers continue to pass it
+                without effect.
+            anchor_aware_ids: When provided, entities with matching ``id``
+                pass through the top-K cap regardless of weighted-sum
+                position (UNION protection). Typically populated by the
+                caller from the composed call sequence's anchor-aware-tool
+                outputs (rka_get_ego_graph / rka_multi_hop_retrieval /
+                rka_assemble_evidence). Independent of
+                ``anchor_aware_present`` after Phase-3.1 T2.
 
         Returns a ContextPackage with `entries` populated (legacy bucket fields
         left empty).
@@ -197,6 +314,28 @@ class ContextEngine:
             candidates.sort(key=self._topic_sort_key)
         else:
             candidates.sort(key=self._overview_score, reverse=True)
+
+        # Phase-3.1 T2 (post-rank-merge, always-on): cap the bundle to
+        # top-K by weighted-sum / search-relevance score. Entities surfaced
+        # by anchor-aware tools (passed via ``anchor_aware_ids``) UNION
+        # through the cap so the anchor-aware path's targeted retrieval is
+        # preserved regardless of K. The v2.5.4-D4 ``anchor_aware_present``
+        # gating has been removed — the policy is unconditional because
+        # the un-anchored backward-compat path left the efficiency floor
+        # structurally unreachable (corpus-refresh diagnosis).
+        k = _read_bundle_k()
+        head = candidates[:k]
+        head_ids = {e["id"] for e in head}
+        extras: list[dict] = []
+        if anchor_aware_ids:
+            anchor_set = set(anchor_aware_ids)
+            for entry in candidates[k:]:
+                if entry["id"] in anchor_set and entry["id"] not in head_ids:
+                    extras.append(entry)
+                    head_ids.add(entry["id"])
+        candidates = head + extras
+        truncated_to_k = k
+
         rendered = [self._render_entry(entry) for entry in candidates]
         package.entries = rendered
         package.sources = [e["id"] for e in candidates]
@@ -220,12 +359,20 @@ class ContextEngine:
                 "v2.5.3 / dec_01KRSMMCS8MD7KQDBS0E2DVKBQ)."
             )
         else:
+            anchor_note = (
+                f" + UNION with {len(extras)} anchor-aware-tool extras"
+                if extras
+                else ""
+            )
             package.note = (
-                "Importance-ranked context: weighted-sum of journal.importance, "
-                "entity_links centrality, and recency (recency as multiplicative "
-                "term, not tie-break). No token-budget truncation "
-                "(v2.4 / dec_01KQQPD6Y6B362T3K08368BDMP; "
-                "v2.5.3 / dec_01KRSMMCS8MD7KQDBS0E2DVKBQ)."
+                f"Importance-ranked context: weighted-sum of "
+                f"journal.importance, entity_links centrality, and recency "
+                f"(N={_RECENCY_SHAPE_N:g} decay shape). Bundle capped at top-"
+                f"{truncated_to_k} entities (Phase-3.1 T2 post-rank-merge "
+                f"truncation per dec_01KS3E6ZJXXV7542QPWZ9W8BQS){anchor_note}; "
+                f"anchor_aware_ids preserved via UNION regardless of K. "
+                "No token-budget truncation "
+                "(v2.4 / dec_01KQQPD6Y6B362T3K08368BDMP)."
             )
         # Informational; no longer drives truncation.
         package.token_estimate = sum(self._estimate_tokens(t) for t in rendered)
@@ -247,10 +394,11 @@ class ContextEngine:
 
     @staticmethod
     def _recency_score(entry: dict) -> float:
-        """1.0 / (1 + days_since_created), clamped to [0, 1].
+        """``_compute_recency_score(days_since_created, _RECENCY_SHAPE_N)``.
 
-        Naturally in (0, 1]; the clamp is defensive against future-dated rows
-        (would compute to >1) and parse failures (default 0.0 = ancient).
+        Parses the entry's ``created_at`` timestamp, derives days-since,
+        and delegates to the pure helper. Backward-compat at N=1 reproduces
+        the pre-Phase-3.1 ``1/(1+days)`` shape bit-for-bit.
         """
         raw = entry.get("created_at") or ""
         if not raw:
@@ -265,8 +413,7 @@ class ContextEngine:
         delta = (datetime.now(timezone.utc) - ts).total_seconds() / 86400.0
         # Future-dated rows (clock skew, fixtures) clamp to "today".
         days = max(0.0, delta)
-        score = 1.0 / (1.0 + days)
-        return max(0.0, min(1.0, score))
+        return _compute_recency_score(days, _RECENCY_SHAPE_N)
 
     @classmethod
     def _overview_score(cls, entry: dict) -> float:
