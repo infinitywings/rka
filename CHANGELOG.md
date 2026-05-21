@@ -3,6 +3,93 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [2.5.11] — 2026-05-21 (patch release; Phase-3.2 candidate-generation track — recall floor CLOSED via Track A1; efficiency PARTIAL deferred to Phase-3.4)
+
+**Mission**: `mis_01KS5CRMZ0AGN0M5B694Q3M8B1`
+**Motivating decision**: `dec_01KS5CN0CF8N60T88E2HC8K1SD` (Option A — candidate-generation track, diagnostic-first, two coupled sub-tracks)
+**Closes**: `chk_01KS3K40N6JRHV118969RMBNF0` (v2.5.9's no-winner checkpoint that opened this mission)
+**Strategic context**: `jrn_01KS5CKHNJ4K35EF8TFA084FT3`
+
+### Floor status (canonical eval-v2 metrics)
+
+| Metric | v2.5.9 cfg11 | v2.5.11 | Δ | Floor | Status |
+|---|---|---|---|---|---|
+| mean_recall (critical) | 0.822 | **0.933** | +0.111 | ≥ 0.85 | ✅ **CLOSED** |
+| mean_ordering_score | 0.403 | **0.471** | +0.068 | ≥ 0.363 | ✅ **MAINTAINED & IMPROVED** |
+| mean_efficiency | 0.034 | 0.035 | +0.001 | ≥ 0.13 | ⚠️ **PARTIAL** (deferred to Phase-3.4) |
+| mean_expanded_recall | 0.760 | 0.817 | +0.057 | (informational) | improved |
+
+**Stability check**: 0 regressions. All 8 v2.5.9 recall=1.0 scenarios remain at 1.0.
+
+### Track A1 — 7-scenario `tools_invoked` expansion (delivers recall floor)
+
+Per T1 diagnostic (chk_01KS5EZ6Z2D51Q1AW628DNA17Y, Brain-ratified): 7 of 8 failing scenarios were classified A1 (incomplete tools_invoked). Their expected critical entities are present in the DB but not in any currently-invoked tool's returned entity_ids. Adding the appropriate candidate-gen tool(s) to each scenario's `tools_invoked` surfaced those entities with **zero service-layer code changes**.
+
+| Scenario | Recall pre | Recall post | Tools added |
+|---|---|---|---|
+| brain-session-start-fresh-resume | 0.500 | 0.833 | +multi_hop +journal |
+| brain-session-start-multi-mission-state | 0.750 | 1.000 | +multi_hop +journal |
+| brain-session-start-post-release | 0.400 | 0.600 | +multi_hop +journal +research_map |
+| brain-contradiction-llm-removed-vs-enrichment-preserved | 0.667 | 1.000 | +research_map |
+| executor-mission-pickup-orchestrator | 0.667 | 0.667 | +multi_hop (residual: search-relevance, Phase-3.3) |
+| executor-backbrief-eval-v2-t2 | 0.667 | 1.000 | +multi_hop |
+| executor-backbrief-bookkeeper-invariant-check | 0.667 | 1.000 | +research_map |
+
+8 new regression tests in `eval-harness/v2/tests/test_scenarios_tools_invoked.py` lock the tools_invoked invariants.
+
+### Track A2 — FALSIFIED & REVERTED
+
+Per chk_01KS5H6RES1C2YVV6BR14888MT (Brain-ratified revert): scenario 4 (brain-mission-creation-eval-extension) was originally classified A2 (over-restrictive `search(query, limit=10)` seed step in `rka_multi_hop_retrieval`). T3 implemented `seed_limit` plumbing (service + API + runner + 3 unit tests) with default backward-compat. Unit tests passed (11/11). **Aggregate recall delta from T3: +0.0000.** Empirical falsification:
+
+- Runner's `seeds=[anchor]` path bypasses the search step entirely on scenarios with a critical mission anchor; `seed_limit` never executes.
+- Direct REST experiment: even query-only `multi_hop` with `seed_limit=20` doesn't surface `mis_01KRPF3` (the eval-v2 mission itself).
+- `/api/search` cross-check: `mis_01KRPF3` is not in the top-30 search hits for the scenario trigger. Search-relevance-bound, not seed-count-bound.
+
+**Disposition**: T3 reverted in full (no commit). Scenario 4 reclassified as "search-relevance gap" (not A2). Phase-3.3 spec'd to address the structural search-relevance issue.
+
+### Track B — FALSIFIED ANALYTICALLY; NOT IMPLEMENTED
+
+Per chk_01KS5HZTE753XR1F0MFVFWG6MB (Brain-ratified PARTIAL close): the per-tool K caps premise for closing the 0.13 efficiency floor was falsified analytically over the post-T2 bundles before any code was written:
+
+| K | mean_combined | mean_efficiency | reaches 0.13? | mean_recall_crit |
+|---|---|---|---|---|
+| 5 | 169.9 | 0.0237 | NO | 0.7875 (regression) |
+| 10 | 174.6 | 0.0402 | NO | 0.8604 (regression) |
+| 30 | 199.6 | 0.0351 | NO | 0.9333 (T2 baseline) |
+| 80 | 201.9 | 0.0350 | NO | 0.9333 |
+
+**Structural root cause**: `rka_get_context` returns 80 rank-list candidates (BUNDLE_K=80 applied) but the eval-runner's entity-ID walker extracts ~172 entity_ids from those candidates' **rendered content** (embedded `@entity_id` references in journal/decision text). Per-tool K on the 5 Track B endpoints cannot move combined_ranking below the get_context-walker floor of ~172. The 0.13 efficiency floor requires combined ≤ 46.
+
+**Disposition**: Phase-3.2 ships PARTIAL on efficiency (0.035 vs 0.13). Phase-3.4 spec'd by Brain for the walker-vs-cap structural redesign (α: cap walker to top-N candidates; β: post-walk truncation to M unique IDs; γ: disable walker; δ: redesign efficiency metric to exclude walker output).
+
+### Process discipline successes
+
+Two consecutive falsifications + zero code waste:
+- T3 falsification caught at empirical contact (not T5 firewall); 9-line scope-extension reverted.
+- T4 falsification caught analytically (pre-implementation); 0 lines drafted.
+
+Both events reinforced the trust-but-verify discipline established at chk_01KS5EZ6Z2D51Q1AW628DNA17Y. Memory entries added: `feedback_scope_extensions_conditional_on_claim.md` (scope-extensions are conditional on the empirical claim holding).
+
+### Bookkeeper invariant — final state
+
+`git diff main` touches:
+- `eval-harness/v2/corpus/scenarios.jsonl` (7 scenarios' tools_invoked expanded)
+- `eval-harness/v2/tests/test_scenarios_tools_invoked.py` (NEW, +8 regression tests)
+- `pyproject.toml`, `rka/__init__.py`, `CHANGELOG.md` (this release-prep commit)
+
+Zero `rka/services/*`, `rka/api/*`, `rka/mcp/*`, `web/*` changes. Track B's pre-authorized API-edit scope was never exercised (T4 analytical falsification prevented code from being written).
+
+### Scenario classification (final)
+
+- **A1 CLOSED**: 7 scenarios via T2
+- **search-relevance gap** (Phase-3.3): 4 scenarios — `brain-session-start-fresh-resume`, `brain-session-start-post-release`, `brain-mission-creation-eval-extension`, `executor-mission-pickup-orchestrator`
+- **walker-extraction structural** (Phase-3.4): mission-wide efficiency ceiling
+- **A3 (entity absent from DB)**: 0 scenarios (confirmed)
+
+### Open question — resolved
+
+scenario 1's `chk_01KS0NX38` (non-critical "useful" importance, status=resolved): NOT surfaced by the A1 fix; gap accepted per Brain ratification at chk_01KS5EZ6Z2D51Q1AW628DNA17Y open-question disposition (i). Doesn't affect the 0.85 critical-recall floor (already passed).
+
 ## [2.5.10] — 2026-05-20 (docs-only patch; INSTALL.md + README.md staleness cleanup)
 
 **Surfaced by**: PI audit immediately following v2.5.9 GitHub release — checked whether the installation guide was fully consistent and correct with current state.
