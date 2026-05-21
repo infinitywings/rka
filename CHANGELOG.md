@@ -3,6 +3,91 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [unreleased — Phase-3.4] — 2026-05-21 (Phase-3 chapter-close; γ structural-only walker — TRUE measurement surfaced; recall + efficiency PARTIAL on TRUE values; ordering MAINTAINED)
+
+> Version pending PI authorization. PI directive: batch-merge of Phase-3.2 + Phase-3.3 + Phase-3.4 with a single version bump. When shipping, replace this heading with the chosen version.
+
+**Mission**: `mis_01KS5KNXBBVYWTD5JH408K2X9R`
+**Motivating decision**: `dec_01KS5KJ774WN7WEEETXBK2J3KG` (Option A — walker structural redesign, diagnostic-first across α/β/γ/δ)
+**T1 evaluation checkpoint**: `chk_01KS5S8BJBYW0PQ309CPCJ5PMC` (Brain-ratified Option (I): ship γ + honest PARTIAL)
+**Contamination meta-finding**: `chk_01KS5PF3832RYCRPKEY090CV65` (Phase-3.3 T2)
+
+### Phase-3 chapter close — TRUE measurement (post-γ)
+
+| Metric | v2.5.9 cfg11 (contaminated) | v2.5.11 (contaminated) | post-Phase-3.3 (contaminated) | post-Phase-3.4 γ (TRUE) | Floor | Status |
+|---|---|---|---|---|---|---|
+| mean_recall (critical) | 0.822 | 0.933 | 0.969 | **0.774** | ≥ 0.85 | ⚠️ **PARTIAL** (TRUE measurement surfaced) |
+| mean_ordering_score | 0.403 | 0.471 | 0.513 | **0.464** | ≥ 0.363 | ✅ **MAINTAINED + IMPROVED** (+0.101 above floor) |
+| mean_efficiency | 0.034 | 0.035 | 0.036 | 0.042 | ≥ 0.13 | ⚠️ **PARTIAL** (structurally unreachable; eval-v3 forward-pointed) |
+| mean_expanded_recall | 0.760 | 0.817 | 0.855 | 0.633 | (informational) | TRUE measurement |
+
+**Critical context**: prior eval-v2 metrics (v2.5.7–v2.5.11) were **systematically contamination-inflated** by ~0.24 absolute on recall. The pre-γ walker regex-extracted entity IDs from ALL string values in API responses, including embedded `@entity_id` references in journal/decision/checkpoint content body. Phase-3.4 γ replaces that with structural-only extraction; the post-γ numbers are the **TRUE measurement** of retrieval quality.
+
+### γ walker change
+
+The walker now extracts entity IDs only from values at known structural id-typed JSON keys:
+- Single-id: `id`, `entity_id`, `source_id`, `target_id`, `mission_id`, `decision_id`, `claim_id`, `cluster_id`, `research_question_id`, `parent_id`, `parent_mission_id`, `linked_decision_id`, `motivated_by_decision`, `depends_on`, `supersedes`, `superseded_by`, `source_claim_id`, `target_claim_id`
+- List-valued: `sources`, `entity_ids`, `ids`, `seeds`, `related_journal`, `related_decisions`, `related_literature`, `related_missions`
+
+Embedded `@entity_id` references in body text are no longer extracted — they're incidental mentions, not retrieval candidates. This matches the API contract: structural id fields are what tools explicitly RETURNED; body text is content.
+
+### T1 evaluation summary (chk_01KS5S8BJBYW0PQ309CPCJ5PMC)
+
+4 candidate approaches evaluated empirically across all 16 scenarios:
+
+| Variant | mean_recall | mean_efficiency | reaches 0.13? |
+|---|---|---|---|
+| full (contaminated baseline) | 0.969 | 0.036 | NO |
+| α (cap walker to top-N=10 entries) | 0.837 | 0.039 | NO |
+| β (cap walker output to M=30) | 0.522 | 0.088 | NO (closest) |
+| **γ (structural-only walker)** | **0.732** | 0.040 | NO |
+| δ (efficiency uses structural denominator) | 0.969 | 0.055 | NO |
+
+**No variant closed the 0.13 efficiency floor.** γ ships on semantic faithfulness grounds — it surfaces TRUE recall and eliminates the contamination mechanism, even though TRUE values are PARTIAL on recall + efficiency.
+
+### Phase-3 chapter trajectory (deliverable status)
+
+| Deliverable | Mission | Release | Floor | Final status |
+|---|---|---|---|---|
+| D1 — multi-hop schema relaxation | mis_01KRQQRWA1HHHEKHB1TFHK2A4S | v2.5.1 | n/a | ✅ EMPIRICALLY VALIDATED |
+| D2 — context-engine weighted-sum ordering | mis_01KRSP44W7BDZH11PZRGXH1WM4 | v2.5.3 | n/a | ✅ EMPIRICALLY VALIDATED |
+| D3 — cluster→parent-RQ traversal | mis_01KRSQ4GCRWPSXCWZHGZ2ZR830 | v2.5.2 | n/a | ✅ EMPIRICALLY VALIDATED |
+| D4 ordering | mis_01KS0C8BKTHCA8GB38BGDR1PTQ + Phase-3.1 | v2.5.4 + v2.5.9 | ≥ 0.363 | ✅ EMPIRICALLY VALIDATED (0.464 ≥ 0.363; +0.101 above floor) |
+| D4 recall | Phase-3.2 + Phase-3.3 + Phase-3.4 | v2.5.11 + γ | ≥ 0.85 | ⚠️ PARTIAL — TRUE 0.774; Phase-3.5 spec'd |
+| D4 efficiency | Phase-3.4 | γ | ≥ 0.13 | ⚠️ PARTIAL — TRUE 0.042; eval-v3 forward-pointed |
+
+### Process discipline summary (4 falsification catches across Phase-3.2-3.4)
+
+| Catch | Mission | Triggering checkpoint |
+|---|---|---|
+| T3 `seed_limit` hypothesis falsified | Phase-3.2 | chk_01KS5H6RES1C2YVV6BR14888MT (reverted) |
+| T4 per-tool K hypothesis falsified | Phase-3.2 | chk_01KS5HZTE753XR1F0MFVFWG6MB (PARTIAL) |
+| T2 R1 recall contamination | Phase-3.3 | chk_01KS5PF3832RYCRPKEY090CV65 (R1 shipped; SR3 deferred) |
+| T1 efficiency floor structurally unreachable | Phase-3.4 | chk_01KS5S8BJBYW0PQ309CPCJ5PMC (γ shipped; PARTIAL) |
+
+Near-zero code waste across all 4 catches. Multiple Brain calibration locks (LOCK 4 spec-drafting reads code first; LOCK 6 contamination methodology) added to project discipline.
+
+### Phase-3.5 spec forthcoming (Brain commitment)
+
+10 scenarios surface honest retrieval gaps under γ. Phase-3.5 addresses these via either corpus refresh, search-relevance tuning, or hybrid approach. Spec filed within 24h of Phase-3.4 batch-merge.
+
+### Eval-v3 forward pointer
+
+The structural efficiency limitation (combined_ranking dominated by BUNDLE_K=80 + 5 endpoint contributions ≈ 116 entities; floor 0.13 requires ≤ 46) is beyond Phase-3.x scope. A future eval-v3 framework redesign would address this at the framework level.
+
+### Bookkeeper invariant — final state
+
+`git diff` since `feat/phase-3-3-search-relevance` base:
+- `eval-harness/v2/runner.py` (γ structural-only walker)
+- `eval-harness/v2/tests/test_runner.py` (6 new γ tests + updated fixtures matching production API contract)
+- `CHANGELOG.md` (this entry)
+
+**Zero `rka/services/*`, `rka/api/*`, `rka/mcp/*`, `web/*` changes.**
+
+### Per-scenario stability
+
+Under contaminated baseline (post-Phase-3.3): mean recall 0.969 across 16 scenarios. Under TRUE measurement (post-γ): 10 of 16 scenarios surface honest recall < 1.0. The remaining 6 scenarios retain recall=1.0 — these are scenarios where structural retrieval genuinely surfaces all critical entities.
+
 ## [unreleased — Phase-3.3] — 2026-05-21 (patch; Phase-3.3 search-relevance — R1 runner-anchor multi-seed fix; SR3 deferred; DB contamination meta-finding)
 
 > Version number pending PI authorization. PI directive: batch Phase-3.3 + Phase-3.4 merges; version bump deferred until both PRs are ready. When shipping, replace this heading with the chosen version (e.g. `## [2.5.12]`).
