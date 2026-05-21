@@ -59,27 +59,90 @@ _ENTITY_ID_RX = re.compile(
     r"\b(jrn_|dec_|mis_|clm_|ecl_|lit_|chk_)[A-Za-z0-9_-]{16,32}\b"
 )
 
+# Phase-3.4 γ structural-only walker (mis_01KS5KNXBBVYWTD5JH408K2X9R;
+# chk_01KS5S8BJBYW0PQ309CPCJ5PMC Brain ratification: Option (I) ship γ).
+#
+# Known structural-id JSON keys whose VALUES are entity IDs. The walker
+# extracts IDs only when the JSON key matches one of these names — never
+# from arbitrary string content. This eliminates the eval-v2 contamination
+# mechanism where diagnostic-journal content body @entity_id mentions
+# would inflate combined_ranking with non-retrieved entities.
+#
+# Pre-γ (v2.5.7 – v2.5.11): the walker regex-extracted entity IDs from
+# ALL string values, including embedded text references. Phase-3.4 T1
+# evaluation surfaced that this contamination mechanism inflated
+# mean_recall_critical by ~0.24 absolute (0.732 TRUE → 0.969 reported)
+# across 10 of 16 scenarios.
+_STRUCTURAL_ID_KEYS = frozenset({
+    "id",
+    "entity_id",
+    "source_id",
+    "target_id",
+    "mission_id",
+    "decision_id",
+    "claim_id",
+    "cluster_id",
+    "research_question_id",
+    "parent_id",
+    "parent_mission_id",
+    "linked_decision_id",
+    "motivated_by_decision",
+    "depends_on",
+    "supersedes",
+    "superseded_by",
+    "source_claim_id",
+    "target_claim_id",
+})
+
+# List-valued keys whose elements are entity IDs (e.g., context's `sources`).
+_STRUCTURAL_LIST_KEYS = frozenset({
+    "sources",
+    "entity_ids",
+    "ids",
+    "seeds",
+    "related_journal",
+    "related_decisions",
+    "related_literature",
+    "related_missions",
+})
+
 
 def walk_for_entity_ids(payload: Any) -> list[str]:
-    """Recursively walk a JSON payload and yield every entity id found,
-    preserving discovery order (depth-first, dict-key-order preserving).
+    """Recursively walk a JSON payload and yield entity IDs from STRUCTURAL
+    id-typed fields only, preserving discovery order (depth-first,
+    dict-key-order preserving). Returns the de-duplicated list, where the
+    first occurrence wins.
 
-    Returns the de-duplicated list, where the first occurrence wins.
+    Phase-3.4 γ structural-only behavior: extracts entity IDs ONLY when
+    they appear as values at one of the known structural id-typed JSON
+    keys (see ``_STRUCTURAL_ID_KEYS`` and ``_STRUCTURAL_LIST_KEYS``).
+    Embedded ``@entity_id`` references in journal/decision/checkpoint
+    BODY content are NOT extracted — they're textual mentions, not
+    retrieval candidates.
+
+    The pre-γ implementation regex-walked every string value (including
+    rendered markdown content body). That behavior systematically
+    inflated combined_ranking with text-mentioned entities that no tool
+    actually retrieved — a contamination mechanism quantified at
+    chk_01KS5S8BJBYW0PQ309CPCJ5PMC.
     """
     seen: dict[str, None] = {}
 
-    def _walk(node: Any) -> None:
+    def _walk(node: Any, key_hint: str | None = None) -> None:
         if isinstance(node, dict):
-            for v in node.values():
-                _walk(v)
+            for k, v in node.items():
+                _walk(v, key_hint=k)
         elif isinstance(node, list):
-            for v in node:
-                _walk(v)
+            for item in node:
+                _walk(item, key_hint=key_hint)
         elif isinstance(node, str):
-            for match in _ENTITY_ID_RX.finditer(node):
-                eid = match.group(0)
-                if eid not in seen:
-                    seen[eid] = None
+            # Only extract when the parent JSON key is a structural id-typed
+            # field (e.g., {"id": "X"} or {"sources": ["X", "Y"]}).
+            if key_hint in _STRUCTURAL_ID_KEYS or key_hint in _STRUCTURAL_LIST_KEYS:
+                for match in _ENTITY_ID_RX.finditer(node):
+                    eid = match.group(0)
+                    if eid not in seen:
+                        seen[eid] = None
 
     _walk(payload)
     return list(seen.keys())

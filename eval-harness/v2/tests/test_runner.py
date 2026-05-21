@@ -53,6 +53,9 @@ def _fixture_transport() -> httpx.MockTransport:
         if path == "/api/health":
             return httpx.Response(200, json={"status": "ok", "version": "2.4.1+test"})
         if path == "/api/context":
+            # Post-γ (Phase-3.4): structural ids surface via `sources`
+            # field, not via regex-walking entry text. Fixture updated to
+            # match production /api/context response shape.
             return httpx.Response(
                 200,
                 json={
@@ -62,16 +65,22 @@ def _fixture_transport() -> httpx.MockTransport:
                         "[mis_01DEF0000000000000000000] Active mission",
                         "[chk_01GHI0000000000000000000] Open checkpoint",
                     ],
-                    "sources": [],
+                    "sources": [
+                        "dec_01ABC0000000000000000000",
+                        "mis_01DEF0000000000000000000",
+                        "chk_01GHI0000000000000000000",
+                    ],
                 },
             )
         if path == "/api/status":
+            # Post-γ: status surfaces ids via `mission_id` key + the list
+            # key `recent_decisions` is mapped to structural-list extraction.
             return httpx.Response(
                 200,
                 json={
                     "phase": "design",
-                    "active_mission_id": "mis_01DEF0000000000000000000",
-                    "recent_decisions": ["dec_01ABC0000000000000000000"],
+                    "mission_id": "mis_01DEF0000000000000000000",
+                    "related_decisions": ["dec_01ABC0000000000000000000"],
                 },
             )
         if path == "/api/maintenance/summary":
@@ -90,13 +99,14 @@ def _fixture_transport() -> httpx.MockTransport:
         if path == "/api/review-queue":
             return httpx.Response(200, json=[])
         if path == "/api/research-map":
+            # Post-γ: structural id keys (research_question_id, cluster_id).
             return httpx.Response(
                 200,
                 json={
                     "rqs": [
                         {
-                            "rq_id": "dec_01MNO0000000000000000000",
-                            "clusters": ["ecl_01PQR0000000000000000000"],
+                            "research_question_id": "dec_01MNO0000000000000000000",
+                            "clusters": [{"cluster_id": "ecl_01PQR0000000000000000000"}],
                         }
                     ]
                 },
@@ -119,33 +129,38 @@ def _fixture_transport() -> httpx.MockTransport:
                 },
             )
         if path == "/api/graph/multi-hop":
+            # Post-γ + matches production shape: nodes are dicts with `id`.
             return httpx.Response(
                 200,
                 json={
-                    "anchor": "dec_01ABC0000000000000000000",
-                    "entities": [
-                        "dec_01ABC0000000000000000000",
-                        "mis_01DEF0000000000000000000",
-                        "jrn_01STU0000000000000000000",
+                    "nodes": [
+                        {"id": "dec_01ABC0000000000000000000"},
+                        {"id": "mis_01DEF0000000000000000000"},
+                        {"id": "jrn_01STU0000000000000000000"},
                     ],
+                    "edges": [],
                 },
             )
         if path.startswith("/api/graph/ego/"):
+            # Post-γ: nodes-with-id shape matching production response.
             return httpx.Response(
                 200,
                 json={
-                    "center": path.split("/")[-1],
-                    "neighbors": [
-                        "ecl_01PQR0000000000000000000",
-                        "clm_01VWX0000000000000000000",
+                    "nodes": [
+                        {"id": "ecl_01PQR0000000000000000000"},
+                        {"id": "clm_01VWX0000000000000000000"},
                     ],
+                    "edges": [],
                 },
             )
         if path == "/api/assemble-evidence":
+            # Post-γ: structural id list. Production returns markdown which
+            # γ won't extract from (text content); fixture uses `entity_ids`
+            # for the test's purposes.
             return httpx.Response(
                 200,
                 json={
-                    "assembled": [
+                    "entity_ids": [
                         "clm_01VWX0000000000000000000",
                         "ecl_01PQR0000000000000000000",
                     ]
@@ -335,27 +350,81 @@ async def test_bundle_serialization_writes_canonical_shape(runner: EvalV2Runner,
 # ---------------------------------------------------------------------------
 
 
-def test_walker_extracts_entity_ids_in_discovery_order():
+def test_walker_extracts_only_from_structural_id_keys():
+    """Phase-3.4 γ: walker extracts entity IDs only from JSON keys named
+    `id`, `entity_id`, `source_id`, `target_id`, etc. — NOT from arbitrary
+    string content."""
     payload = {
-        "first": "see dec_01ABC0000000000000000000 here",
-        "deep": {
-            "nested": ["and mis_01DEF0000000000000000000", "plus dec_01ABC0000000000000000000 again"],
-        },
-        "third": "lit_01ZZZ0000000000000000000",
+        "nodes": [
+            {"id": "dec_01ABC0000000000000000000", "label": "first"},
+            {"id": "mis_01DEF0000000000000000000", "label": "second"},
+        ],
+        "edges": [
+            {"source_id": "dec_01ABC0000000000000000000", "target_id": "mis_01DEF0000000000000000000"},
+        ],
+        "third": "lit_01ZZZ0000000000000000000",  # bare string at non-id key
     }
     out = walk_for_entity_ids(payload)
-    # dec_ first (top-level string), then mis_ (nested list), then lit_;
-    # duplicate dec_ collapsed (first-discovery wins).
+    # dec_ first (nodes[0].id), then mis_ (nodes[1].id);
+    # source_id+target_id are duplicates (first-discovery wins; dedup);
+    # lit_ at "third" key is NOT extracted (key not in _STRUCTURAL_ID_KEYS).
     assert out == [
         "dec_01ABC0000000000000000000",
         "mis_01DEF0000000000000000000",
-        "lit_01ZZZ0000000000000000000",
     ]
 
 
-def test_walker_ignores_strings_without_entity_prefix():
-    out = walk_for_entity_ids({"a": "no entities here", "b": ["nor here"]})
+def test_walker_ignores_textual_entity_id_references():
+    """Phase-3.4 γ: embedded `@entity_id` mentions inside journal/decision
+    content body are NOT extracted (eliminates the eval-v2 contamination
+    mechanism quantified at chk_01KS5S8BJBYW0PQ309CPCJ5PMC).
+
+    Pre-γ: this payload would extract dec_01ABC + mis_01DEF + lit_01ZZZ via
+    regex on the string content. Post-γ: walker only extracts when the JSON
+    key is a structural id field.
+    """
+    payload = {
+        "content": "see dec_01ABC0000000000000000000 and mis_01DEF0000000000000000000 in context",
+        "body": "also references lit_01ZZZ0000000000000000000",
+        "description": "more text mentioning chk_01WWW0000000000000000000",
+    }
+    out = walk_for_entity_ids(payload)
     assert out == []
+
+
+def test_walker_extracts_from_structural_list_keys():
+    """Phase-3.4 γ: walker extracts IDs from list-valued structural keys
+    like `sources`, `seeds`, `entity_ids`."""
+    payload = {
+        "sources": [
+            "jrn_01A000000000000000000000A1",
+            "dec_01B000000000000000000000B2",
+        ],
+        "seeds": ["mis_01C000000000000000000000C3"],
+        "related_decisions": ["dec_01D000000000000000000000D4"],
+    }
+    out = walk_for_entity_ids(payload)
+    assert set(out) == {
+        "jrn_01A000000000000000000000A1",
+        "dec_01B000000000000000000000B2",
+        "mis_01C000000000000000000000C3",
+        "dec_01D000000000000000000000D4",
+    }
+
+
+def test_walker_ignores_text_in_id_field_does_not_re_enable_contamination():
+    """Phase-3.4 γ: even when the structural-id field VALUE contains
+    surrounding text alongside an entity ID, only one ID is extracted
+    via the regex anchored at word boundaries (no over-extraction)."""
+    payload = {"id": "dec_01ABC0000000000000000000"}
+    assert walk_for_entity_ids(payload) == ["dec_01ABC0000000000000000000"]
+
+
+def test_walker_handles_empty_payload():
+    """Walker on empty dict / list / string returns empty list."""
+    assert walk_for_entity_ids({}) == []
+    assert walk_for_entity_ids([]) == []
+    assert walk_for_entity_ids("plain string with no ids") == []
 
 
 # ---------------------------------------------------------------------------
