@@ -209,7 +209,6 @@ class EvalV2Runner:
             e for e in scenario["expected_entities"]
             if e["importance"] == "critical"
         ]
-        anchor_id = critical[0]["entity_id"] if critical else None
         # Filter critical entities by type to pick the right kind of anchor
         # for tools that need a specific entity_type (e.g., rka_get_mission
         # needs a mis_ id, ego_graph anchors at any entity id).
@@ -217,6 +216,21 @@ class EvalV2Runner:
             (e["entity_id"] for e in critical if e["entity_type"] == "mission"),
             None,
         )
+        # Phase-3.3 R1 fix (mis_01KS5KEPXK77MAG54GW5M6DA79; chk_01KS5NJN1652XHAKZ5DYZ4RZX9
+        # Brain ratification preference 3): seed multi_hop BFS with BOTH critical[0]
+        # AND first_mission when both are present and differ. Preference 1 (anchor
+        # swap) produced a SWAP not a NET LIFT — surfacing mis_01KRPF3 but losing
+        # entities reachable only from the decision anchor's neighborhood. Multi-
+        # seed BFS expands from both, catching both neighborhoods.
+        # Single-anchor scalar `anchor_id` retained for ego_graph + assemble_evidence
+        # (they take one anchor each); multi_hop receives the list via `anchor_seeds`.
+        anchor_id = critical[0]["entity_id"] if critical else None
+        if critical and critical[0]["entity_type"] == "decision" and first_mission:
+            anchor_seeds = [anchor_id, first_mission]
+        elif anchor_id:
+            anchor_seeds = [anchor_id]
+        else:
+            anchor_seeds = []
 
         try:
             if tool == "rka_get_context":
@@ -236,7 +250,7 @@ class EvalV2Runner:
             if tool == "rka_get_journal":
                 return await self._call_get_journal()
             if tool == "rka_multi_hop_retrieval":
-                return await self._call_multi_hop(anchor_id, scenario)
+                return await self._call_multi_hop(anchor_seeds, scenario)
             if tool == "rka_get_ego_graph":
                 return await self._call_ego_graph(anchor_id)
             if tool == "rka_assemble_evidence":
@@ -392,23 +406,26 @@ class EvalV2Runner:
         )
 
     async def _call_multi_hop(
-        self, anchor: str | None, scenario: dict
+        self, anchors: list[str], scenario: dict
     ) -> ToolInvocation:
         path = "/api/graph/multi-hop"
         # v2.5.1: route schema is `{query: Optional[str], seeds: Optional[list[str]]}`
         # (rka/api/routes/graph.py:MultiHopRequest). Always populate `query`
         # from the scenario trigger so the search-based seeding path is
-        # exercised when no anchor is present; ALSO pass `seeds=[anchor]`
-        # (note: list, not the v2.4-era singular `start_entity`) when the
-        # scenario provides one. Both-populated is accepted — the service
-        # layer's seeds-set branch bypasses the search step entirely
-        # (rka/services/graph.py:multi_hop_retrieval).
+        # exercised when no anchor is present; ALSO pass `seeds=anchors`
+        # when the scenario provides any. Both-populated is accepted —
+        # the service layer's seeds-set branch bypasses the search step
+        # entirely (rka/services/graph.py:multi_hop_retrieval).
+        # Phase-3.3 R1 fix (chk_01KS5NJN1652XHAKZ5DYZ4RZX9 preference 3):
+        # accept a LIST of anchors so the runner can seed BFS with both
+        # critical[0] and first_mission when both are present in the
+        # scenario's critical entities. See _invoke_one.
         body: dict[str, Any] = {
             "max_depth": 2,
             "query": scenario.get("trigger", "")[:200],
         }
-        if anchor:
-            body["seeds"] = [anchor]
+        if anchors:
+            body["seeds"] = list(anchors)
         r = await self._client().post(path, json=body, params=self._params())
         # Sister-uncertainty probe: any non-2xx is a divergence per T2 gate.
         divergence = None
@@ -424,7 +441,7 @@ class EvalV2Runner:
             status_code=r.status_code,
             entity_ids=ids,
             divergence=divergence or div,
-            notes=f"anchor={anchor or '(query-fallback)'}",
+            notes=f"seeds={anchors or '(query-fallback)'}",
         )
 
     async def _call_ego_graph(self, anchor: str | None) -> ToolInvocation:

@@ -288,7 +288,7 @@ async def test_cluster_anchored_scenario_probes_sister_uncertainties(runner: Eva
     # multi_hop anchored at the same critical
     mh = next(i for i in bundle.invocations if i.tool == "rka_multi_hop_retrieval")
     assert mh.divergence is None
-    assert "anchor=ecl_01PQR0000000000000000000" in mh.notes
+    assert "ecl_01PQR0000000000000000000" in mh.notes
 
     # assemble_evidence — sister-uncertainty probe
     assemble = next(i for i in bundle.invocations if i.tool == "rka_assemble_evidence")
@@ -390,7 +390,7 @@ async def test_call_multi_hop_body_matches_v2_5_1_schema():
     r = EvalV2Runner(rka_url="http://test", project_id="prj_test", http_client=client)
 
     scenario = {"trigger": "investigate the v2.5.1 schema fix for multi-hop"}
-    await r._call_multi_hop("dec_01ABC0000000000000000000", scenario)
+    await r._call_multi_hop(["dec_01ABC0000000000000000000"], scenario)
 
     body = captured["body"]
     # `seeds` is a LIST of strings — not the v2.4-era `start_entity` singular.
@@ -404,3 +404,121 @@ async def test_call_multi_hop_body_matches_v2_5_1_schema():
     # schema's neither-set 422 branch never fires.
     assert body.get("query"), f"query must always be populated; got {body!r}"
     assert "v2.5.1" in body["query"]  # populated from scenario.trigger
+
+
+# ---------------------------------------------------------------------------
+# Phase-3.3 R1 — multi-anchor seeding when critical[0] is a decision but a
+# first_mission is also present (mis_01KS5KEPXK77MAG54GW5M6DA79,
+# chk_01KS5NJN1652XHAKZ5DYZ4RZX9 Brain ratification preference 3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_multi_hop_seeds_decision_and_first_mission_when_both_critical():
+    """When the scenario's critical[0] is a decision AND a mission-type
+    critical entity is also present, the runner must send BOTH as seeds
+    to multi_hop so the BFS expands from both neighborhoods. Pre-fix
+    (Phase-3.2 v2.5.11): only critical[0]'s neighborhood was reached;
+    mis_-class critical entities were stranded outside the BFS reach
+    even when they ranked well in /api/search.
+    """
+    captured: dict[str, dict] = {}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/graph/multi-hop":
+            captured["body"] = json.loads(request.content.decode("utf-8"))
+            return httpx.Response(200, json={"nodes": [], "edges": []})
+        return httpx.Response(404, json={"detail": "no fixture"})
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(_handler), base_url="http://test"
+    )
+    r = EvalV2Runner(rka_url="http://test", project_id="prj_test", http_client=client)
+
+    scenario = {
+        "scenario_id": "test-decision-then-mission",
+        "actor": "brain",
+        "trigger": "test scenario where decision precedes mission",
+        "tools_invoked": ["rka_multi_hop_retrieval"],
+        "expected_entities": [
+            {"entity_id": "dec_01ABC0000000000000000000", "entity_type": "decision", "importance": "critical"},
+            {"entity_id": "mis_01DEF0000000000000000000", "entity_type": "mission", "importance": "critical"},
+        ],
+    }
+    await r.run_scenario(scenario)
+    seeds = captured["body"].get("seeds")
+    assert seeds == ["dec_01ABC0000000000000000000", "mis_01DEF0000000000000000000"], (
+        f"R1 fix: when critical[0] is decision + first_mission present, seeds must "
+        f"include BOTH (preserving decision-anchor BFS coverage while adding mission-"
+        f"anchor BFS reach). Got: {seeds!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_multi_hop_seeds_only_critical_when_critical_zero_is_mission():
+    """When critical[0] IS already a mission (the v2.5.11 baseline anchor
+    behavior), the R1 fix is a no-op — single-seed BFS preserved."""
+    captured: dict[str, dict] = {}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/graph/multi-hop":
+            captured["body"] = json.loads(request.content.decode("utf-8"))
+            return httpx.Response(200, json={"nodes": [], "edges": []})
+        return httpx.Response(404, json={"detail": "no fixture"})
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(_handler), base_url="http://test"
+    )
+    r = EvalV2Runner(rka_url="http://test", project_id="prj_test", http_client=client)
+
+    scenario = {
+        "scenario_id": "test-mission-first",
+        "actor": "brain",
+        "trigger": "test scenario where mission is critical[0]",
+        "tools_invoked": ["rka_multi_hop_retrieval"],
+        "expected_entities": [
+            {"entity_id": "mis_01ABC0000000000000000000", "entity_type": "mission", "importance": "critical"},
+            {"entity_id": "dec_01DEF0000000000000000000", "entity_type": "decision", "importance": "critical"},
+        ],
+    }
+    await r.run_scenario(scenario)
+    seeds = captured["body"].get("seeds")
+    assert seeds == ["mis_01ABC0000000000000000000"], (
+        f"R1 no-op: when critical[0] is already a mission, seeds stays as "
+        f"single-element [critical[0]]. Got: {seeds!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_multi_hop_seeds_only_critical_when_no_first_mission():
+    """When critical[0] is a decision but NO mission-type critical entity
+    is present, the R1 fix doesn't trigger — single-seed BFS preserved."""
+    captured: dict[str, dict] = {}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/graph/multi-hop":
+            captured["body"] = json.loads(request.content.decode("utf-8"))
+            return httpx.Response(200, json={"nodes": [], "edges": []})
+        return httpx.Response(404, json={"detail": "no fixture"})
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(_handler), base_url="http://test"
+    )
+    r = EvalV2Runner(rka_url="http://test", project_id="prj_test", http_client=client)
+
+    scenario = {
+        "scenario_id": "test-decision-no-mission",
+        "actor": "brain",
+        "trigger": "test scenario with decision but no mission",
+        "tools_invoked": ["rka_multi_hop_retrieval"],
+        "expected_entities": [
+            {"entity_id": "dec_01ABC0000000000000000000", "entity_type": "decision", "importance": "critical"},
+            {"entity_id": "jrn_01DEF0000000000000000000", "entity_type": "journal", "importance": "critical"},
+        ],
+    }
+    await r.run_scenario(scenario)
+    seeds = captured["body"].get("seeds")
+    assert seeds == ["dec_01ABC0000000000000000000"], (
+        f"R1 no-op: when critical[0] is decision but no mission in criticals, "
+        f"seeds stays as single-element. Got: {seeds!r}"
+    )
