@@ -1,0 +1,54 @@
+% main.tex : manuscript entry point.
+%
+% This is the Writer workspace template's skeleton. Per the Iron Law (see
+% SKILL.md "Outline Brief"), this file stays skeleton-only until the Outline
+% checkpoint passes. The PI ratifies the Outline; then the Section Drafter
+% sub-procedure populates sections/*.tex.
+%
+% Replace the documentclass invocation with the appropriate venue class
+% after the Venue checkpoint resolves. Examples:
+%
+%   \documentclass[sigconf]{acmart}                  % CHI / CSCW / UIST
+%   \documentclass[11pt]{article}\usepackage[review]{acl}  % EMNLP / ACL
+%
+% Templates are fetched and verified by scripts/fetch_template.py (Phase 2).
+% In Phase 1 the PI installs templates manually per references/template_registry.md.
+
+\documentclass{article}
+
+% Common preamble bits (replace per venue).
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+
+% Bibliography entries.
+\bibliographystyle{plain}
+
+\begin{document}
+
+\title{<<replace with PI-authored title from .planning/PRECIS.md>>}
+\author{<<replace with author block>>}
+\date{\today}
+\maketitle
+
+\begin{abstract}
+% Provenance: jrn_REPLACE_WITH_MANIFEST_ID verbatim_input carries the abstract.
+<<replace with PI-authored abstract from .planning/PRECIS.md>>
+\end{abstract}
+
+% Sections are populated by the Section Drafter sub-procedure post outline
+% ratification. Each section .tex has hidden provenance comments before
+% every evidence-bearing claim per the Source Attribution section in SKILL.md.
+
+\input{sections/01-introduction}
+\input{sections/02-related-work}
+\input{sections/03-method}
+\input{sections/04-results}
+\input{sections/05-discussion}
+% \input{sections/06-limitations}  % CHI 2024+ recommends top-level; EMNLP requires
+% \input{sections/07-conclusion}
+
+\bibliography{refs}
+
+\end{document}
