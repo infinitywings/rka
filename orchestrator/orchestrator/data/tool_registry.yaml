@@ -1,0 +1,190 @@
+# =============================================================
+# Orchestrator tool registry — Phase D Q3 ratification.
+#
+# Curated shortlist of trusted defaults the Brain consults FIRST during
+# `research_toolkit_node`, before augmenting with SerpAPI web search.
+#
+# Two sections:
+#   - `always_on`: tools every project gets offered (the baseline
+#     subprocess MCP surface). PI can still opt-out individual entries
+#     at pi_toolkit_ratify.
+#   - `by_domain`: domain-specific add-ons. The Brain selects relevant
+#     domains based on PI's topic/field/venue from pi_onboarding_topic,
+#     then surfaces those tools as candidates.
+#
+# Each entry is shaped like a ToolDecl from manifest.py (subset). Brain
+# converts these to ToolDecl instances after PI ratifies. Auth metadata
+# (probe_url + probe_header) lives here too so the credential-validation
+# step doesn't need extra lookups.
+#
+# Maintenance: small intentionally. Quarterly review at the start of
+# each agentic-branch release cycle. New domains added as PI's projects
+# surface them.
+# =============================================================
+
+schema_version: v1
+
+always_on:
+  - name: rka
+    type: mcp_stdio
+    rationale: |
+      RKA knowledge base — provenance-tracked journal entries, decisions,
+      missions, literature. Required for the orchestrator workflow itself.
+    install_hint: built-in
+    secrets: []
+    always_on: true
+
+  - name: context7
+    type: mcp_stdio
+    rationale: |
+      Live documentation lookup for libraries / SDKs / APIs. Useful when
+      Brain reasons about specific library APIs (LangGraph, FastAPI,
+      Claude SDK, framework specifics) — avoids training-data staleness.
+    command: npx
+    args: ["-y", "@upstash/context7-mcp@latest"]
+    install_hint: bundled via npx (Node required)
+    secrets: []
+
+  - name: filesystem
+    type: mcp_stdio
+    rationale: |
+      Local filesystem read/write under a configured root. Useful for
+      writing-phase missions that produce manuscript drafts, code
+      artifacts, or data files.
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem"]
+    install_hint: bundled via npx
+    secrets: []
+
+  - name: git
+    type: mcp_stdio
+    rationale: |
+      Git operations (status, diff, log, branch) for projects with code
+      artifacts. Pairs with `filesystem` for the implementation/writing
+      phases.
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-git"]
+    install_hint: bundled via npx
+    secrets: []
+
+by_domain:
+  # ---- Computer science / ML systems ----
+  ml_systems:
+    description: |
+      Machine learning systems research — training infrastructure,
+      inference benchmarks, hardware characterization, MLSys/MLPerf/etc.
+    tools:
+      - name: huggingface
+        type: mcp_stdio
+        rationale: HuggingFace model + dataset lookup. Useful for SOTA baselines.
+        command: npx
+        args: ["-y", "@huggingface/mcp-server@latest"]
+        secrets:
+          - name: HUGGINGFACE_API_KEY
+            auth_type: api_key
+            criticality: recommended
+            probe_url: https://huggingface.co/api/whoami
+            probe_header: "Authorization: Bearer {value}"
+            description: HuggingFace API key — recommended for higher rate limits.
+      - name: wandb
+        type: mcp_stdio
+        rationale: Weights & Biases experiment tracking + benchmark plots.
+        command: npx
+        args: ["-y", "@wandb/mcp-server@latest"]
+        secrets:
+          - name: WANDB_API_KEY
+            auth_type: api_key
+            criticality: optional
+            description: W&B API key. Optional — only needed if pulling private runs.
+
+  # ---- Finance / economics ----
+  finance:
+    description: |
+      Finance research — SEC filings, market data, sentiment analysis on
+      filings, fundamentals.
+    tools:
+      - name: sec-edgar
+        type: mcp_stdio
+        rationale: SEC EDGAR API — public filings, 10-K/Q/8-K, fundamentals.
+        command: npx
+        args: ["-y", "@sec-edgar/mcp-server@latest"]
+        secrets:
+          - name: SEC_EDGAR_USER_AGENT
+            auth_type: api_key
+            criticality: required
+            description: |
+              SEC EDGAR requires a User-Agent string identifying the
+              researcher (your email + institution per their fair-use policy).
+      - name: alpha-vantage
+        type: mcp_stdio
+        rationale: Real-time + historical market data; free tier for academic use.
+        command: npx
+        args: ["-y", "@alpha-vantage/mcp@latest"]
+        secrets:
+          - name: ALPHA_VANTAGE_API_KEY
+            auth_type: api_key
+            criticality: required
+            probe_url: https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=IBM
+            description: Free Alpha Vantage API key from alphavantage.co/support/#api-key
+
+  # ---- Bioinformatics / life sciences ----
+  bioinformatics:
+    description: |
+      Biological + life-science research — genomic databases, protein
+      structures, drug discovery, clinical literature.
+    tools:
+      - name: ncbi
+        type: mcp_stdio
+        rationale: NCBI E-utilities (PubMed, Gene, Protein, Nucleotide databases).
+        command: npx
+        args: ["-y", "@ncbi/mcp-server@latest"]
+        secrets:
+          - name: NCBI_API_KEY
+            auth_type: api_key
+            criticality: recommended
+            description: |
+              NCBI API key raises rate limit from 3 → 10 req/s. Get one
+              free at ncbi.nlm.nih.gov/account/.
+      - name: uniprot
+        type: mcp_stdio
+        rationale: UniProt protein sequence + functional annotation.
+        command: npx
+        args: ["-y", "@uniprot/mcp-server@latest"]
+        secrets: []  # UniProt public API needs no auth
+
+  # ---- Legal research ----
+  legal:
+    description: |
+      Legal research — case law, statutes, regulations, court records.
+    tools:
+      - name: courtlistener
+        type: mcp_stdio
+        rationale: Free case law + court records via Free Law Project's API.
+        command: npx
+        args: ["-y", "@courtlistener/mcp-server@latest"]
+        secrets:
+          - name: COURTLISTENER_API_KEY
+            auth_type: api_key
+            criticality: recommended
+            probe_url: https://www.courtlistener.com/api/rest/v3/
+            probe_header: "Authorization: Token {value}"
+            description: Free API key from courtlistener.com (higher rate limits).
+
+  # ---- Natural sciences (general) ----
+  natural_sciences:
+    description: |
+      General natural-sciences research — physics, chemistry, materials,
+      earth/climate. Augments the always-on arxiv search.
+    tools:
+      - name: nasa-ads
+        type: mcp_stdio
+        rationale: NASA ADS — astronomy + physics literature search.
+        command: npx
+        args: ["-y", "@nasa-ads/mcp-server@latest"]
+        secrets:
+          - name: NASA_ADS_API_KEY
+            auth_type: api_key
+            criticality: required
+            probe_url: https://api.adsabs.harvard.edu/v1/search/query?q=*&rows=1
+            probe_header: "Authorization: Bearer {value}"
+            description: Free ADS API token from ui.adsabs.harvard.edu (User → Settings → API Token).

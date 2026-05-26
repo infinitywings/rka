@@ -33,7 +33,17 @@ from typing import Any, Iterator, Literal, Optional
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "db" / "schema.sql"
 
-InterruptType = Literal["pi_greenlight", "pi_decision_select", "pi_acceptance"]
+InterruptType = Literal[
+    # Mission-level interrupts (Phase A)
+    "pi_greenlight",
+    "pi_decision_select",
+    "pi_acceptance",
+    # Onboarding subgraph interrupts (Phase D)
+    "pi_onboarding_topic",
+    "pi_toolkit_ratify",
+    "pi_credentials_ready",
+    "pi_extend_toolkit",
+]
 ResponseAction = Literal["accept", "reject", "correct"]
 RunStatus = Literal[
     "running", "awaiting_pi", "complete", "escalated", "failed", "cancelled"
@@ -76,6 +86,61 @@ class ParkedStore:
         sql = SCHEMA_PATH.read_text(encoding="utf-8")
         with self._conn:
             self._conn.executescript(sql)
+        # Phase-D: forward-migrate any DB still on the Phase-A 3-type CHECK
+        # constraint. The migration preserves rows (rebuild + copy).
+        self._migrate_phase_a_to_d_if_needed()
+
+    def _migrate_phase_a_to_d_if_needed(self) -> None:
+        """Detect legacy parked_interrupts CHECK constraint and rebuild
+        with the Phase-D expanded interrupt-type set.
+
+        Phase-A schema accepted only 3 interrupt_type values
+        (pi_greenlight, pi_decision_select, pi_acceptance). Phase-D
+        adds 4 more for the onboarding subgraph. SQLite doesn't support
+        ALTER TABLE for CHECK constraints, so we detect the legacy
+        constraint by inspecting sqlite_master and rebuild the table if
+        needed.
+
+        Idempotent: safe to call on every startup. Only does work when
+        the legacy constraint is detected (sentinel: absence of
+        `'pi_onboarding_topic'` in the CREATE statement).
+
+        Rows are preserved across the rebuild via INSERT...SELECT — any
+        in-flight workflows survive the migration unless the DB has
+        rows with interrupt_type values that the new CHECK rejects
+        (which can't happen — Phase-D's set is a strict superset).
+        """
+        row = self._conn.execute(
+            "SELECT sql FROM sqlite_master "
+            "WHERE type='table' AND name='parked_interrupts'"
+        ).fetchone()
+        if row is None:
+            return  # Table doesn't exist yet — schema.sql will create it next pass.
+        create_sql = row[0] or ""
+        if "pi_onboarding_topic" in create_sql:
+            return  # Already Phase-D shape.
+
+        # Legacy shape detected: rebuild with the new CHECK.
+        with self._conn:
+            self._conn.execute(
+                "ALTER TABLE parked_interrupts RENAME TO _parked_interrupts_phase_a"
+            )
+            # Re-run schema.sql; the CREATE IF NOT EXISTS picks up the new shape.
+            sql = SCHEMA_PATH.read_text(encoding="utf-8")
+            self._conn.executescript(sql)
+            # Copy rows back. The Phase-D CHECK is a superset, so every legacy
+            # row satisfies the new constraint.
+            self._conn.execute(
+                "INSERT INTO parked_interrupts "
+                "(interrupt_id, workflow_thread_id, mission_id, interrupt_type, "
+                " payload_json, status, response_action, response_text, "
+                " parked_at, responded_at) "
+                "SELECT interrupt_id, workflow_thread_id, mission_id, interrupt_type, "
+                "       payload_json, status, response_action, response_text, "
+                "       parked_at, responded_at "
+                "FROM _parked_interrupts_phase_a"
+            )
+            self._conn.execute("DROP TABLE _parked_interrupts_phase_a")
 
     def close(self) -> None:
         self._conn.close()

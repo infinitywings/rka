@@ -35,6 +35,12 @@ CREATE INDEX IF NOT EXISTS idx_workflow_runs_status
 
 -- ============================================================
 -- parked_interrupts — one row per PI interrupt awaiting response
+--
+-- Phase-D added 4 new interrupt types for the onboarding subgraph
+-- (pi_onboarding_topic, pi_toolkit_ratify, pi_credentials_ready,
+-- pi_extend_toolkit). The first three drive baseline onboarding; the
+-- fourth surfaces when a mission mid-stream requests a tool not in
+-- the project's baseline manifest (Q1 hybrid lifecycle).
 -- ============================================================
 CREATE TABLE IF NOT EXISTS parked_interrupts (
     interrupt_id TEXT PRIMARY KEY,
@@ -42,7 +48,17 @@ CREATE TABLE IF NOT EXISTS parked_interrupts (
         REFERENCES workflow_runs(workflow_thread_id) ON DELETE CASCADE,
     mission_id TEXT NOT NULL,
     interrupt_type TEXT NOT NULL
-        CHECK (interrupt_type IN ('pi_greenlight', 'pi_decision_select', 'pi_acceptance')),
+        CHECK (interrupt_type IN (
+            -- Mission-level interrupts (Phase A)
+            'pi_greenlight',
+            'pi_decision_select',
+            'pi_acceptance',
+            -- Onboarding subgraph interrupts (Phase D)
+            'pi_onboarding_topic',
+            'pi_toolkit_ratify',
+            'pi_credentials_ready',
+            'pi_extend_toolkit'
+        )),
     payload_json TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'answered', 'cancelled')),
