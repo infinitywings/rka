@@ -312,4 +312,6 @@ ONBOARDING_NODE_NAMES: tuple[str, ...] = (
     "idea_polish",
     # O1.3 (TWO-TAP ratification of the polished idea):
     "pi_scope_ratify",
+    # O2.1 (mkdir + .rka scaffold on disk):
+    "workspace_setup",
 )

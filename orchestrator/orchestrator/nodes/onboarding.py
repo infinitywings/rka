@@ -34,6 +34,7 @@ from typing import Any, Optional
 from orchestrator import manifest as M
 from orchestrator import onboarding_schemas as OS
 from orchestrator import tool_registry as TR
+from orchestrator import workspace as W
 from orchestrator.llm_client import SDKClient
 from orchestrator.mcp_client import MCPClient
 from orchestrator.nodes.brain import BRAIN_SYSTEM
@@ -364,6 +365,198 @@ def idea_polish_node(
                 "timestamp": _now_iso(),
             }
         ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# O2.1 — workspace_setup_node (mkdir + .rka scaffold; refuse-if-exists path)
+# ---------------------------------------------------------------------------
+
+
+def _project_name_for_slug(
+    mcp: MCPClient, *, project_id: str, polished: dict | None
+) -> str:
+    """Best-effort source for slug derivation.
+
+    Preference order:
+      1. The RKA project's name (rka_get_status / rka_get_context),
+         since that's the canonical handle PI's already chosen.
+      2. The polished idea's research_question (truncated to a
+         keyword-rich slug).
+      3. The bare project_id (always present; produces 'prj-…').
+    """
+    if not project_id:
+        return ""
+
+    # Try the RKA project metadata first.
+    try:
+        status = mcp.rka_get_status()
+        if isinstance(status, dict):
+            for key in ("project_name", "name", "title"):
+                v = status.get(key)
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+    except Exception:  # noqa: BLE001
+        pass
+
+    if polished:
+        rq = polished.get("research_question") if isinstance(polished, dict) else None
+        if isinstance(rq, str) and rq.strip():
+            return rq.strip()
+
+    return project_id  # last-resort fallback
+
+
+def workspace_setup_node(
+    state: ResearchWorkflowState, sdk: SDKClient, mcp: MCPClient
+) -> dict:
+    """O2.1 — Materialize the project workspace on disk.
+
+    Inputs (state):
+      - project_id            — RKA project ID (required).
+      - project_slug          — explicit slug, if PI provided one
+                                during O1; otherwise derived.
+      - polished_idea         — used as a fallback source for slug
+                                derivation when RKA project name is
+                                unavailable.
+
+    Side effects:
+      - Creates ``$RKA_WORKSPACE_ROOT/{slug}/`` (default ``$HOME/Research/{slug}/``)
+        with subdirs (data/, code/, notebooks/, manuscripts/, results/, .rka/).
+      - Writes ``.rka/project_id``, ``.rka/workspace.json``, ``README.md``,
+        ``.gitignore`` at mode 0700 (directory) / 0600 (.env file inside .rka/,
+        when later written by O5).
+      - Advances workspace.json's phase tracker to ``o2`` (current sub-phase).
+
+    State writes:
+      - current_node      = "workspace_setup"
+      - current_phase     = "init"
+      - project_slug      — the slug used (locks for downstream nodes).
+      - workspace_path    — absolute path of the workspace root.
+
+    Failure modes:
+      - Missing project_id            → ErrorRecord; no side effect.
+      - Slug derivation produces a value that fails ProjectSlug
+        validation → ErrorRecord (callers can re-run after extending
+        the polished idea or fixing the RKA project name).
+      - Workspace already exists      → checkpoint surfaced to PI with
+        the conflicting path so PI can rename / remove and re-run.
+      - Other IO failures             → ErrorRecord with the OSError detail.
+    """
+    project_id = state.get("project_id", "")
+    if not project_id:
+        return {
+            "current_phase": "init",
+            "current_node": "workspace_setup",
+            "errors": [
+                {
+                    "node_name": "workspace_setup",
+                    "error_type": "workspace_setup_no_project_id",
+                    "detail": (
+                        "workspace_setup_node requires state['project_id'] to "
+                        "be set; cannot derive a slug or place the workspace."
+                    ),
+                    "timestamp": _now_iso(),
+                }
+            ],
+        }
+
+    explicit_slug = state.get("project_slug", "")
+    polished = state.get("polished_idea") or None
+
+    if explicit_slug:
+        slug_candidate = explicit_slug
+    else:
+        source_name = _project_name_for_slug(
+            mcp, project_id=project_id, polished=polished
+        )
+        try:
+            slug_candidate = W.derive_slug_from_name(source_name)
+        except ValueError as ve:
+            return {
+                "current_phase": "init",
+                "current_node": "workspace_setup",
+                "errors": [
+                    {
+                        "node_name": "workspace_setup",
+                        "error_type": "workspace_setup_slug_derivation_failed",
+                        "detail": (
+                            f"Could not derive a valid slug from "
+                            f"{source_name!r}: {ve}"
+                        ),
+                        "timestamp": _now_iso(),
+                    }
+                ],
+            }
+
+    try:
+        binding = W.create_workspace(
+            slug_candidate, project_id, refuse_if_exists=True
+        )
+    except W.InvalidSlugError as ve:
+        return {
+            "current_phase": "init",
+            "current_node": "workspace_setup",
+            "errors": [
+                {
+                    "node_name": "workspace_setup",
+                    "error_type": "workspace_setup_invalid_slug",
+                    "detail": str(ve),
+                    "timestamp": _now_iso(),
+                }
+            ],
+        }
+    except W.WorkspaceAlreadyExistsError as wae:
+        # Conflict: workspace dir exists. Emit a checkpoint so the PI
+        # can rename the slug or remove the conflicting directory.
+        existing_path = W.project_workspace(slug_candidate)
+        chk_id = f"chk_workspace_conflict_{int(datetime.now(tz=timezone.utc).timestamp())}"
+        return {
+            "current_phase": "init",
+            "current_node": "workspace_setup",
+            "project_slug": slug_candidate,
+            "workspace_path": str(existing_path),
+            "checkpoints": [
+                {
+                    "chk_id": chk_id,
+                    "type": "decision",
+                    "reason": (
+                        f"workspace conflict: '{existing_path}' already exists. "
+                        f"PI must rename the slug (set state['project_slug']) "
+                        f"or remove the directory and re-run workspace_setup. "
+                        f"Detail: {wae}"
+                    ),
+                    "resolved": False,
+                }
+            ],
+        }
+    except OSError as oe:
+        return {
+            "current_phase": "init",
+            "current_node": "workspace_setup",
+            "errors": [
+                {
+                    "node_name": "workspace_setup",
+                    "error_type": "workspace_setup_io_failed",
+                    "detail": f"{type(oe).__name__}: {oe}",
+                    "timestamp": _now_iso(),
+                }
+            ],
+        }
+
+    # Advance the workspace phase to 'o2' (entering deep research).
+    try:
+        W.advance_phase(slug_candidate, "o2", note="workspace created")
+    except W.WorkspaceError:
+        # Non-fatal: workspace exists, just couldn't bump phase. The
+        # next sub-phase can update phase tracking itself.
+        pass
+
+    return {
+        "current_phase": "init",
+        "current_node": "workspace_setup",
+        "project_slug": slug_candidate,
+        "workspace_path": str(binding.workspace_path),
     }
 
 
