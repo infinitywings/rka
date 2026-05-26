@@ -112,6 +112,14 @@ WRITE_TOOLS: tuple[str, ...] = (
     "rka_create_mission",
     "rka_update_note",
     "rka_bulk_update",
+    # Phase-A2 (agentic, PI-ratified scope expansion) — added after
+    # Phase-1 IoT-edge-LLM mission's first pi_decision_select surfaced
+    # the gap. Brain proposed these tools (real, exposed by the rka MCP
+    # server) but execute_ratified_actions correctly rejected them
+    # because they were not in WRITE_TOOLS. Now allowlisted with
+    # matching MCPClient Protocol methods + RestMCPClient impls.
+    "rka_update_mission_status",
+    "rka_ingest_document",
 )
 
 

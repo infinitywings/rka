@@ -134,6 +134,37 @@ class MCPClient(Protocol):
     ) -> str: ...
     def rka_bulk_update(self, updates: list[dict]) -> str: ...
 
+    # Phase-A2 (agentic) — additions matching the new WRITE_TOOLS entries.
+    # Both methods auto-tag the workflow_thread_id into the `tags` list
+    # (or set up a tags list if the caller didn't pass one).
+    def rka_update_mission_status(
+        self,
+        id: str,
+        *,
+        status: str | None = None,
+        tasks: list[dict] | None = None,
+        report: dict | None = None,
+        context: str | None = None,
+        acceptance_criteria: str | None = None,
+        scope_boundaries: str | None = None,
+        checkpoint_triggers: str | None = None,
+        depends_on: str | None = None,
+        tags: list[str] | None = None,
+    ) -> str: ...
+    def rka_ingest_document(
+        self,
+        content: str,
+        *,
+        source: str = "brain",
+        default_type: str = "finding",
+        phase: str | None = None,
+        tags: list[str] | None = None,
+        related_literature: list[str] | None = None,
+        related_decisions: list[str] | None = None,
+        related_mission: str | None = None,
+        split_by_headings: bool = True,
+    ) -> str: ...
+
 
 # ---------------------------------------------------------------------------
 # Concrete REST-backed implementation
@@ -563,6 +594,98 @@ class RestMCPClient:
             lines.append("Errors:")
             lines.extend(errors)
         return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Phase-A2 (agentic) — WRITE_TOOLS expansion: mission lifecycle +
+    # structured single-call document ingestion. Both surfaced empirically
+    # during the IoT-edge-LLM Phase-1 test mission, where the Brain
+    # proposed these tools (real, exposed by the rka MCP server) but
+    # execute_ratified_actions correctly rejected them because they were
+    # not in WRITE_TOOLS. PI-ratified expansion lands them here.
+    # ------------------------------------------------------------------
+
+    def rka_update_mission_status(self, id: str, **kw: Any) -> str:
+        """PUT /api/missions/{mis_id} — mission lifecycle update.
+
+        Used by the Brain to mark a mission active/complete and to record
+        task progress as the workflow advances. Status-only writes have
+        no content-risk; full-field writes (objective change, scope
+        boundary updates) inherit the PI ratification gate just like any
+        WRITE_TOOL.
+
+        Workflow_thread_id auto-tagging: when `tags` is provided, the
+        thread id is appended; when omitted, tags are left untouched.
+        """
+        if not id:
+            raise ValueError("rka_update_mission_status requires a non-empty mission id")
+        body = _drop_none(
+            {
+                "status": kw.get("status"),
+                "tasks": kw.get("tasks"),
+                "report": kw.get("report"),
+                "context": kw.get("context"),
+                "acceptance_criteria": kw.get("acceptance_criteria"),
+                "scope_boundaries": kw.get("scope_boundaries"),
+                "checkpoint_triggers": kw.get("checkpoint_triggers"),
+                "depends_on": kw.get("depends_on"),
+                "tags": (
+                    _merge_workflow_tag(kw["tags"], self.workflow_thread_id)
+                    if kw.get("tags") is not None
+                    else None
+                ),
+            }
+        )
+        result = self._request("PUT", f"/api/missions/{id}", json=body) or {}
+        return result.get("id") or id
+
+    def rka_ingest_document(self, content: str, **kw: Any) -> str:
+        """POST /api/ingest/document — single-call structured document ingest.
+
+        Brain alternative to rka_add_note when the content is a single
+        cohesive document (synthesis, gap map, lit review) that should
+        land as a journal entry without manual splitting. The rka side
+        of this endpoint can optionally split by heading boundaries
+        (`split_by_headings=True`, default) — when used through the
+        orchestrator we typically want a single unified entry, so the
+        Protocol default flips to False at the caller site if needed.
+
+        Returns the created journal id. If split_by_headings produces
+        multiple entries, only the primary id is returned (callers
+        wanting per-section ids should pre-split and use rka_add_note).
+
+        Workflow_thread_id auto-tagging: applies unconditionally — if
+        the caller passes `tags`, the thread id is appended; if not,
+        a fresh tag list is created with just the thread id. (Differs
+        from rka_update_note's "leave-alone" semantics because this is
+        a CREATE operation, not an update.)
+        """
+        if not content or not content.strip():
+            raise ValueError("rka_ingest_document requires non-empty content")
+        body = _drop_none(
+            {
+                "content": content,
+                "source": kw.get("source") or "brain",
+                "default_type": kw.get("default_type") or "finding",
+                "phase": kw.get("phase"),
+                "tags": _merge_workflow_tag(
+                    kw.get("tags") or [], self.workflow_thread_id
+                ),
+                "related_literature": kw.get("related_literature"),
+                "related_decisions": kw.get("related_decisions"),
+                "related_mission": kw.get("related_mission"),
+                "split_by_headings": kw.get("split_by_headings", True),
+            }
+        )
+        result = self._request("POST", "/api/ingest/document", json=body) or {}
+        # Endpoint returns either {"id": "..."} for single or
+        # {"ids": [...]} for split-by-headings. Take the first as the
+        # canonical artifact id for the dispatcher's ArtifactRef.
+        if "id" in result:
+            return result["id"]
+        if "ids" in result and result["ids"]:
+            return result["ids"][0]
+        # Fall back to a synthetic marker the dispatcher can store.
+        return "ingest_document_no_id_returned"
 
 
 def make_client(

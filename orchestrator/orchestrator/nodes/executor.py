@@ -426,6 +426,10 @@ _WRITE_TOOL_ENTITY_TYPES: dict[str, str] = {
     # cleanly. Per-entity provenance is recoverable from the bulk
     # summary string stored in ArtifactRef.rka_id.
     "rka_bulk_update": "bulk",
+    # Phase-A2 (agentic): WRITE_TOOLS expansion to unblock Brain proposals
+    # that landed in pi_decision_select for the IoT-edge-LLM mission.
+    "rka_update_mission_status": "mission",
+    "rka_ingest_document": "journal",
 }
 
 

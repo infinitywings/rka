@@ -523,14 +523,46 @@ def test_write_tools_contains_rka_bulk_update():
     )
 
 
-def test_write_tools_length_7():
-    """Phase 2.13 T2: WRITE_TOOLS expanded from 6 (Phase 2.7) to 7
-    (Phase 2.13 adds rka_bulk_update). Catches accidental deletion or
-    silent drift of the registry shape."""
-    assert len(WRITE_TOOLS) == 7, (
-        f"Phase 2.13 T2: WRITE_TOOLS should have exactly 7 entries "
-        f"(Phase 2.7's 6 + Phase 2.13's rka_bulk_update); got {len(WRITE_TOOLS)}"
+def test_write_tools_length_9():
+    """WRITE_TOOLS lineage:
+       Phase 2.7   — initial 6 (add_note, add_decision, submit_checkpoint,
+                     submit_report, create_mission, update_note)
+       Phase 2.13  — +1 (rka_bulk_update) → 7
+       Phase-A2    — +2 (rka_update_mission_status, rka_ingest_document) → 9
+
+    Catches accidental deletion or silent drift of the registry shape.
+    """
+    assert len(WRITE_TOOLS) == 9, (
+        f"WRITE_TOOLS should have exactly 9 entries (Phase 2.7's 6 + "
+        f"Phase 2.13's rka_bulk_update + Phase-A2's mission_status + "
+        f"ingest_document); got {len(WRITE_TOOLS)}"
     )
+
+
+def test_phase_a2_write_tools_includes_mission_status_and_ingest_document():
+    """Phase-A2 expansion (agentic): empirical PI-driven on the
+    IoT-edge-LLM Phase-1 test mission. Brain proposed `rka_update_mission_status`
+    + `rka_ingest_document` for the synthesis-note delivery; the
+    execute_ratified_actions dispatcher correctly rejected them as
+    not-in-WRITE_TOOLS. Real RKA endpoints exist (PUT /api/missions/{id},
+    POST /api/ingest/document); MCPClient Protocol methods + RestMCPClient
+    impls added alongside this allowlist entry."""
+    assert "rka_update_mission_status" in WRITE_TOOLS
+    assert "rka_ingest_document" in WRITE_TOOLS
+
+
+def test_phase_a2_write_tools_not_in_read_tools():
+    """Both Phase-A2 additions are write-side: they create new entities
+    (ingest_document → journal) or mutate existing ones
+    (update_mission_status → mission). They must NOT appear in READ_TOOLS,
+    or the subprocess SDK's allowed_tools would let the brain LLM call
+    them directly, bypassing pi_decision_select ratification."""
+    for tool in ("rka_update_mission_status", "rka_ingest_document"):
+        assert tool not in READ_TOOLS, (
+            f"Phase-A2: {tool!r} mutates state, must be PI-gated; "
+            f"keeping it out of READ_TOOLS keeps the subprocess "
+            f"strictly read-only."
+        )
 
 
 def test_rka_bulk_update_not_in_read_tools():

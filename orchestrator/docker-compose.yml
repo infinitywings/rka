@@ -52,6 +52,14 @@ services:
       # install), this mount is harmless and the OAuth token from
       # .env wins via the auth-chain priority.
       - ${HOME}/.claude:/root/.claude:ro
+      # The host's ~/.claude.json (single file, separate from the
+      # .claude/ directory) holds the CLI's global config — user
+      # email, last-active-project, etc. The claude CLI 2.x looks for
+      # this file and prints a warning + suggests restoring from
+      # ./claude/backups/ when missing. Mount it read-only so the
+      # container's claude subprocess can read settings without
+      # writing back to the host file.
+      - ${HOME}/.claude.json:/root/.claude.json:ro
     environment:
       RKA_API_URL: "http://rka:9712"
       ORCHESTRATOR_DB_PATH: "/data/orchestrator.db"
