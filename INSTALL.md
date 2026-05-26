@@ -11,7 +11,8 @@
 | Surface | What you'll have |
 |---|---|
 | **RKA backend** | FastAPI + worker + SQLite + FTS5 + sqlite-vec running in Docker on `localhost:9712`. Web dashboard at the same URL. |
-| **Claude Code (Executor)** | Full plugin: 3 role skills (`rka:rka-brain`, `rka:rka-executor`, `rka:rka-pi`), 5 slash commands (`/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`, `/rka-setup-claude-desktop`), a SessionStart hook that pings the backend on every new session, and the full `mcp__plugin_rka_rka__*` tool surface (~90 tools). |
+| **Claude Code (Executor)** | Full plugin: 4 role skills (`rka:rka-brain`, `rka:rka-executor`, `rka:rka-pi`, `rka:rka-writer`), 6 slash commands (`/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`, `/rka-setup-claude-desktop`, `/rka-start-manuscript`), a SessionStart hook that pings the backend on every new session, and the full `mcp__plugin_rka_rka__*` tool surface (~89 tools). |
+| **Writer (manuscript drafting)** | The `rka:rka-writer` skill drafts venue-targeted manuscripts (CHI, EMNLP, NeurIPS, USENIX, IEEE-SP, OSDI, Nature seed venues). Bootstrap a per-manuscript workspace via `/rka-start-manuscript` (creates `.mcp.json`, `main.tex`, `refs.bib`, `.planning/` directory). Reference-validation MCP server (`rka-writer-tools`) wraps Crossref + OpenAlex + Semantic Scholar + arXiv + SerpAPI; install separately via `uv tool install '.[writer-tools]'` (see §3.6). |
 | **Claude Desktop (Brain)** | `mcp__rka__*` tool surface via the `mcpServers.rka` entry in `claude_desktop_config.json`. Wrapper-based config gives you version-checking + auto-pin to your active project. Skills and slash commands are Claude Code only (Claude Desktop's plugin format is separate). |
 
 ---
@@ -96,6 +97,17 @@ The plugin's `rka-pi` skill teaches Claude Code how to:
 
 If anything fails at any step, the original config is restored from the backup automatically. No silent overwrites.
 
+### Step 4.5 (optional) — Install Writer reference-validation tooling
+
+The `rka:rka-writer` skill drafts manuscripts; the reference-validation pipeline (Crossref + OpenAlex + Semantic Scholar + arXiv + SerpAPI lookups) runs in a separate MCP server called `rka-writer-tools`, registered per-manuscript-workspace by the `/rka-start-manuscript` slash command. To make the `rka-writer-tools` binary available on `PATH` (required before `cd <manuscript-dir> && claude`):
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache uv tool install --force --reinstall '.[writer-tools]'
+# from the rka repo root
+```
+
+This installs the `writer-tools` optional dependency group (habanero + pyalex + semanticscholar + arxiv + serpapi + manubot). Skip this step if you don't plan to use the Writer skill. The Writer SKILL.md itself activates without this binary — only the reference-validation MCP tools require it.
+
 ### Step 5 — Fully quit and reopen Claude Desktop
 
 The Claude Desktop MCP loader reads its config at startup, so the config change won't apply until you do a full quit + reopen.
@@ -140,8 +152,8 @@ After Step 5, run these checks:
 
 ### In Claude Code
 
-1. `/help` should list five `rka:rka` slash commands: `/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`, `/rka-setup-claude-desktop`.
-2. `/context` should show three `rka:rka-*` skills available.
+1. `/help` should list six `rka:rka` slash commands: `/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`, `/rka-setup-claude-desktop`, `/rka-start-manuscript`.
+2. `/context` should show four `rka:rka-*` skills available (`rka-brain`, `rka-executor`, `rka-pi`, `rka-writer`).
 3. Run `/rka-status`. Expected output: project name, phase, focus, open checkpoints (or "none").
 4. New chat sessions should start with an automatic line: `✅ RKA reachable at http://localhost:9712 (version 2.5.x, default project ...)`.
 

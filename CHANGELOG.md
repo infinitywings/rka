@@ -3,6 +3,52 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [2.5.12] — 2026-05-23 (patch release; Writer plugin-bundle integration)
+
+**Mission**: `mis_01KSARG7HJR0QMB9004ESZPM2K`
+**Motivating decision**: `dec_01KSARC7RDJEV8BNK2QD79J5H7` (Option A — full plugin integration)
+**Motivation journal**: `jrn_01KSARARTMH2CHT3SG0FZ8C93D`
+**PI surfacing**: 2026-05-21 — *"the writer is not integrated into the plugin bundle, so I do not know how can I use the writer."*
+
+### Distribution-only mission — Writer is now reachable through `/plugin install rka@rka`
+
+Phase 1/2/3 of the Writer skill (`mis_01KS0C3RP04XANCZAB3HTNAG0P` + `mis_01KS2S22VV5P5SWWXNBXQDHMGX` + `mis_01KS2WW6MRN6AXP11EMCSCDFAR`) built the skill server-side (SKILL.md, references, scripts, `rka-writer-tools` MCP server, workspace-template). Plugin-distribution wiring was never in scope for those phases. This release closes the gap. **No Writer behavior changes.**
+
+### Shipped
+
+- **Writer skill mirrored into plugin distribution** (`plugin/skills/writer/`): hard copy of `rka/skills/writer/` (49 files; `diff -r` byte-identical excluding `__pycache__`). Matches `plugin/skills/brain/` + `executor/` + `pi/` precedent.
+- **`/rka-start-manuscript` slash command** (`plugin/commands/rka-start-manuscript.md` + `plugin/scripts/start-manuscript.py`): bootstraps a per-manuscript workspace from `workspace-template/`. Substitutes `<your-username>` → `$USER` and `prj_REPLACE_WITH_PROJECT_ID` → user-supplied project ID in `.mcp.json`. Supports `--project-id`, `--venue`, `--path`, `--force` flags. Non-destructive (refuses non-empty target without `--force`). Lists 7 supported venues (CHI, EMNLP, IEEE-SP, Nature, NeurIPS, OSDI, USENIX) on no-args invocation. Inline `--self-test` smoke test of the substitution logic.
+- **Plugin metadata updated**: `plugin/.claude-plugin/plugin.json` description (four role skills); `.claude-plugin/marketplace.json` plugin description ("~89 MCP tools, four role skills, six slash commands"); keywords add `writer`, `manuscript`, `latex`.
+- **INSTALL.md §1 table** lists 4 skills + 6 commands + corrected tool count (~89, was "~90" stale); new §3 Step 4.5 documents `uv tool install '.[writer-tools]'` for the `rka-writer-tools` binary; §5.1 verification updates to "six `rka:rka` slash commands" and "four `rka:rka-*` skills".
+
+### Empirical integration test (T5; mandatory firewall before this release)
+
+All 5 checks pass:
+1. Marketplace + plugin manifests JSON-valid; source resolves to `./plugin`.
+2. Skill enumeration: 4 SKILL.md files in `plugin/skills/` with version 2.3.2 each.
+3. Command enumeration: 6 `.md` files in `plugin/commands/` (5 existing + `rka-start-manuscript`).
+4. `/rka-start-manuscript` bootstrap: creates 14 files; placeholder substitution verified end-to-end (`<your-username>` → `$USER`; `prj_REPLACE_WITH_PROJECT_ID` → user-supplied ID); `.mcp.json` valid post-substitution; non-destructive re-run refuses without `--force`; `rka-writer-tools` PATH-absence warning graceful.
+5. `rka_get_manuscript` smoke test: `/api/manuscripts/jrn_FAKE_FOR_PROBE` returns HTTP 404 with proper error body — route registered, MCP tool present (`rka/mcp/server.py:4011`).
+
+### Bookkeeper invariant
+
+`git diff main` touches (since `a27e0f4` base):
+- `plugin/skills/writer/` (49 files; hard-copy mirror)
+- `plugin/commands/rka-start-manuscript.md` (new)
+- `plugin/scripts/start-manuscript.py` (new)
+- `plugin/.claude-plugin/plugin.json` (description + keywords)
+- `.claude-plugin/marketplace.json` (description)
+- `INSTALL.md` (§1 + §4.5 + §5.1)
+- `pyproject.toml` + `rka/__init__.py` + `CHANGELOG.md` (release prep)
+
+**Zero `rka/services/*`, `rka/api/*`, `rka/mcp/*`, `web/*`, `rka/skills/writer/*`, `rka/cli.py` touches.** Server-side Writer code unchanged. Phase-3.5 + embedding-UI backlog items not touched.
+
+### Provenance
+
+- Writer Phase 1: `mis_01KS0C3RP04XANCZAB3HTNAG0P`, `dec_01KS0AWYDV752AWQRF40CQBRFZ` (Option B: Claude Code skill)
+- Writer Phase 2: `mis_01KS2S22VV5P5SWWXNBXQDHMGX`, `dec_01KS2S22VV5P5SWWXNBXQDHMGX` (rka-writer-tools MCP)
+- Writer Phase 3: `mis_01KS2WW6MRN6AXP11EMCSCDFAR`, `dec_01KS2WPKMRVSJ2R0PP74722PEH` (revision-loop + 3 manuscript MCP tools)
+
 ## [2.5.11] — 2026-05-21 (Phase-3 chapter close — Phase-3.2 + 3.3 + 3.4 bundled; TRUE measurement surfaced; PARTIAL on recall + efficiency)
 
 Bundled patch release shipping the full Phase-3 chapter close across three sequential missions. PI directive held the version at v2.5.11 (no inflation across the bundle).
