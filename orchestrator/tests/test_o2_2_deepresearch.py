@@ -226,7 +226,7 @@ def test_runner_accept_token_for_deepresearch_is_accept():
 
 
 def test_runner_recognizes_pi_deepresearch_as_onboarding():
-    assert "pi_deepresearch_prompt" in OrchestratorRunner._ONBOARDING_INTERRUPT_TYPES
+    assert "pi_deepresearch_prompt" in OrchestratorRunner._PHASE_O_INTERRUPT_TYPES
 
 
 def test_graph_onboarding_node_names_include_pi_deepresearch_prompt():

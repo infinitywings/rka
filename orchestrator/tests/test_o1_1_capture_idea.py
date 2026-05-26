@@ -203,7 +203,7 @@ def test_runner_accept_token_for_idea_capture_is_approve():
 def test_runner_recognizes_pi_idea_capture_as_onboarding():
     """The runner routes pi_idea_capture responses via the onboarding
     compile factory, not the mission compile factory."""
-    assert "pi_idea_capture" in OrchestratorRunner._ONBOARDING_INTERRUPT_TYPES
+    assert "pi_idea_capture" in OrchestratorRunner._PHASE_O_INTERRUPT_TYPES
 
 
 def test_graph_onboarding_node_names_include_capture_idea():
@@ -233,7 +233,7 @@ def test_all_phase_o_interrupt_types_registered(interrupt_type):
     """Every Phase O interrupt is in the runner's accept-token map AND
     the onboarding-routing set AND the parked store accepts it."""
     assert interrupt_type in _ACCEPT_TOKEN_BY_TYPE
-    assert interrupt_type in OrchestratorRunner._ONBOARDING_INTERRUPT_TYPES
+    assert interrupt_type in OrchestratorRunner._PHASE_O_INTERRUPT_TYPES
     store = ParkedStore(":memory:")
     thread_id = store.create_run(mission_id="prj_x", project_id="prj_x")
     # Schema CHECK is the real test — if the constraint rejects, the

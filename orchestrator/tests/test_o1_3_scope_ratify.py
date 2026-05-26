@@ -231,7 +231,7 @@ def test_runner_accept_token_for_scope_ratify_is_accept():
 
 
 def test_runner_recognizes_pi_scope_ratify_as_onboarding():
-    assert "pi_scope_ratify" in OrchestratorRunner._ONBOARDING_INTERRUPT_TYPES
+    assert "pi_scope_ratify" in OrchestratorRunner._PHASE_O_INTERRUPT_TYPES
 
 
 def test_graph_onboarding_node_names_include_pi_scope_ratify():

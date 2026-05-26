@@ -369,7 +369,7 @@ def test_runner_accept_token_for_claims_review_is_accept():
 
 
 def test_runner_recognizes_pi_claims_review_as_onboarding():
-    assert "pi_claims_review" in OrchestratorRunner._ONBOARDING_INTERRUPT_TYPES
+    assert "pi_claims_review" in OrchestratorRunner._PHASE_O_INTERRUPT_TYPES
 
 
 def test_graph_onboarding_node_names_include_claim_extraction_and_review():

@@ -176,7 +176,7 @@ def test_runner_accept_token_for_phase_entry_ack_is_approve():
 
 
 def test_runner_recognizes_pi_phase_entry_ack_as_onboarding():
-    assert "pi_phase_entry_ack" in OrchestratorRunner._ONBOARDING_INTERRUPT_TYPES
+    assert "pi_phase_entry_ack" in OrchestratorRunner._PHASE_O_INTERRUPT_TYPES
 
 
 def test_graph_onboarding_node_names_include_pi_phase_entry_ack():

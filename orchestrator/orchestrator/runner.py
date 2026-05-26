@@ -154,20 +154,28 @@ class OrchestratorRunner:
         saver_factory: Callable[[str], Any],
         compile_factory: Optional[Callable[..., Any]] = None,
         onboarding_compile_factory: Optional[Callable[..., Any]] = None,
+        phase_o_compile_factory: Optional[Callable[..., Any]] = None,
     ):
         self.store = store
         self._sdk_factory = sdk_factory
         self._mcp_factory = mcp_factory
         self._saver_factory = saver_factory
         self._compile_factory = compile_factory or graph_module.build_graph
-        # Phase D5c: separate compile factory for the onboarding subgraph.
-        # Lazy import to keep the runner module light when only mission
-        # graphs are used.
+        # Phase D5c: separate compile factory for the (tool-setup)
+        # onboarding subgraph. Lazy import to keep the runner module
+        # light when only mission graphs are used.
         if onboarding_compile_factory is None:
             from orchestrator import onboarding_graph as _og
             self._onboarding_compile_factory = _og.build_onboarding_graph
         else:
             self._onboarding_compile_factory = onboarding_compile_factory
+        # Phase O: separate compile factory for the full
+        # project-onboarding workflow (idea → plan → mission queue).
+        if phase_o_compile_factory is None:
+            from orchestrator import phase_o_graph as _pog
+            self._phase_o_compile_factory = _pog.build_phase_o_graph
+        else:
+            self._phase_o_compile_factory = phase_o_compile_factory
 
     # ---- public API ----
 
@@ -236,12 +244,18 @@ class OrchestratorRunner:
     # literal — keep in sync if new onboarding types are added.
     _ONBOARDING_INTERRUPT_TYPES: frozenset[str] = frozenset(
         {
-            # Phase D — tool-setup subgraph (now nested under Phase O as O5).
+            # Phase D — tool-setup subgraph (also runnable standalone).
             "pi_onboarding_topic",
             "pi_toolkit_ratify",
             "pi_credentials_ready",
             "pi_extend_toolkit",
-            # Phase O — project-onboarding workflow.
+        }
+    )
+    """Interrupt types whose response resumes via the Phase D tool-setup
+    compile factory (onboarding_graph.build_onboarding_graph)."""
+
+    _PHASE_O_INTERRUPT_TYPES: frozenset[str] = frozenset(
+        {
             "pi_idea_capture",
             "pi_scope_ratify",
             "pi_deepresearch_prompt",
@@ -250,6 +264,10 @@ class OrchestratorRunner:
             "pi_phase_entry_ack",
         }
     )
+    """Interrupt types whose response resumes via the Phase O
+    project-onboarding compile factory (phase_o_graph.build_phase_o_graph).
+    These represent the full idea → plan → mission-queue workflow,
+    distinct from Phase D's tool-setup subgraph."""
 
     def respond(
         self,
@@ -298,10 +316,13 @@ class OrchestratorRunner:
         mcp = self._mcp_factory(run["workflow_thread_id"], run["project_id"])
         sdk = self._sdk_factory(run["project_id"])
         saver = self._saver_factory(run["workflow_thread_id"])
-        # Phase D5c: route to the onboarding compile factory when the
-        # interrupt belongs to the onboarding subgraph. Otherwise use the
-        # mission compile factory.
-        if parked["interrupt_type"] in self._ONBOARDING_INTERRUPT_TYPES:
+        # Phase D5c / Phase O: pick the compile factory by interrupt
+        # type.  Phase D tool-setup interrupts → onboarding subgraph;
+        # Phase O workflow interrupts → phase_o subgraph; everything
+        # else → mission graph (Phase A).
+        if parked["interrupt_type"] in self._PHASE_O_INTERRUPT_TYPES:
+            factory = self._phase_o_compile_factory
+        elif parked["interrupt_type"] in self._ONBOARDING_INTERRUPT_TYPES:
             factory = self._onboarding_compile_factory
         else:
             factory = self._compile_factory
@@ -377,6 +398,47 @@ class OrchestratorRunner:
             "proposed_toolkit": [],
             "ratified_toolkit": [],
         }
+        return self._execute_segment(thread_id, compiled, initial)
+
+    # ---- Phase O: full project-onboarding workflow entrypoint ----
+
+    def start_phase_o(
+        self,
+        *,
+        project_id: str,
+        workflow_thread_id: Optional[str] = None,
+    ) -> SegmentOutcome:
+        """Kick off the Phase O full project-onboarding workflow.
+
+        Project-scoped (no mission_id) like start_onboarding, but uses
+        the Phase O compile factory which threads idea → polish →
+        scope ratify → workspace → deep research → hygiene → claim
+        extraction → plan synthesis → plan ratify → Phase H entry.
+
+        The workflow parks at the first PI interrupt
+        (pi_idea_capture); PI's response resumes via respond() with
+        the parked-interrupt classification routing back to this
+        compile factory.
+        """
+        thread_id = self.store.create_run(
+            mission_id=project_id,  # placeholder; Phase O isn't mission-scoped
+            project_id=project_id,
+            workflow_thread_id=workflow_thread_id,
+        )
+
+        mcp = self._mcp_factory(thread_id, project_id)
+        sdk = self._sdk_factory(project_id)
+        saver = self._saver_factory(thread_id)
+        compiled = self._phase_o_compile_factory(
+            sdk=sdk, mcp=mcp, checkpointer=saver
+        )
+
+        initial = make_initial_state(
+            workflow_thread_id=thread_id,
+            mission_id=project_id,  # placeholder
+            motivated_by_decision_id="",
+            project_id=project_id,
+        )
         return self._execute_segment(thread_id, compiled, initial)
 
     def cancel(self, workflow_thread_id: str) -> int:
