@@ -280,3 +280,16 @@ NODE_NAMES: tuple[str, ...] = (
     "consensus_check",
     "escalation_router",
 )
+
+# Phase D — onboarding subgraph nodes. Distinct from NODE_NAMES (the
+# mission graph) so the mission-graph audit-symmetry tests stay
+# locked at 16 entries. The audit-symmetry sweep over all
+# `current_node="..."` string literals checks the union of both
+# tuples. Eventually D5 wires these into a separate onboarding subgraph
+# (onboarding_graph.build_onboarding_graph(...)).
+ONBOARDING_NODE_NAMES: tuple[str, ...] = (
+    "research_toolkit",
+    # Future additions as D4-D8 lands: intro, draft_manifest,
+    # finalize, plus the 4 onboarding PI interrupt nodes (which sit
+    # under pi.py and share the pi_* naming convention).
+)

@@ -90,17 +90,22 @@ def _current_node_string_literals(tree: ast.AST) -> set[str]:
 
 
 def test_audit_symmetry_current_node_writes_match_node_names():
-    declared = set(graph.NODE_NAMES)
+    # Phase D: onboarding subgraph nodes live in a separate tuple
+    # (ONBOARDING_NODE_NAMES). The audit-symmetry sweep checks the
+    # UNION of both tuples — any string literal a node file assigns to
+    # current_node must appear in one of the canonical tuples.
+    declared = set(graph.NODE_NAMES) | set(graph.ONBOARDING_NODE_NAMES)
     found = set()
     for path in NODE_DIR.glob("*.py"):
         tree = ast.parse(path.read_text())
         found |= _current_node_string_literals(tree)
 
-    # Every string written into current_node should be one of the canonical 15.
+    # Every string written into current_node should be in the union.
     extra = found - declared
     assert not extra, (
         "audit-symmetry violation: node files write current_node values "
-        "that are not in graph.NODE_NAMES:\n  " + ", ".join(sorted(extra))
+        "that are not in graph.NODE_NAMES or graph.ONBOARDING_NODE_NAMES:\n  "
+        + ", ".join(sorted(extra))
     )
 
     # And every canonical name should have at least one node that writes it.
