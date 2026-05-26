@@ -17,6 +17,8 @@ dependencies = [
     "mcp>=1.27,<2.0",
     "httpx>=0.27",
     "pydantic>=2.7",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
 ]
 
 [project.optional-dependencies]
@@ -28,10 +30,14 @@ dev = [
 
 [project.scripts]
 rka-orchestrator = "orchestrator.main:cli"
+rka-orchestrator-mcp = "orchestrator.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["orchestrator*"]
+
+[tool.setuptools.package-data]
+"orchestrator.db" = ["*.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

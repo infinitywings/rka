@@ -1,0 +1,47 @@
+# =============================================================
+# Compose overlay — adds the rka-orchestrator daemon
+#
+# Usage:
+#   docker compose -f docker-compose.yml \
+#                  -f orchestrator/docker-compose.yml up -d --build
+#
+# This file is loaded ONLY when explicitly named via -f, so the
+# baseline `docker compose up -d` workflow at the repo root is
+# unchanged. Preserves the "CLAUDE.md is the only root file this
+# branch modifies" agentic-branch constraint.
+#
+# Auth: the daemon needs Claude Max credentials. The volume mount
+# ~/.claude:/root/.claude:ro exposes the host's credentials.json
+# (the file-based Claude Max path, priority 3 in
+# orchestrator/llm_client.py:_verify_claude_max_routing). Run
+# `claude login` on the host once if you don't have one.
+# =============================================================
+
+services:
+  rka-orchestrator:
+    build:
+      context: ..
+      dockerfile: orchestrator/Dockerfile
+    container_name: rka-orchestrator
+    ports:
+      - "9713:9713"
+    volumes:
+      - orchestrator-data:/data
+      # Mount the host's Claude credentials read-only. The orchestrator's
+      # claude-agent-sdk subprocess scrubs ANTHROPIC_API_KEY and falls
+      # through to credentials.json. macOS Keychain isn't accessible
+      # from inside the container — credentials.json is the production
+      # path. Run `claude login` on the host once to seed it.
+      - ${HOME}/.claude:/root/.claude:ro
+    environment:
+      RKA_API_URL: "http://rka:9712"
+      ORCHESTRATOR_DB_PATH: "/data/orchestrator.db"
+      ORCHESTRATOR_SAVER_PATH: "/data/orchestrator-saver.db"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - rka
+    restart: unless-stopped
+
+volumes:
+  orchestrator-data:

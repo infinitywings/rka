@@ -210,3 +210,80 @@ interpreter and shadowed the repo `.venv`.)
 - Mission: `mis_01KRKG9K1SSDZNDH90K2Z7ZM92`
 - Decision: `dec_01KRKE6ERDPQTFQS6ZGY9A3CK0`
 - Skill-prompt deltas (17 ratified additions): `orchestrator/docs/skill-prompt-deltas.md`
+
+### Phase-A: Claude-Code-native PI surface (orchestrator daemon)
+
+Phase-A added an HTTP + MCP surface so the PI can drive the
+orchestrator entirely from Claude Code / Claude Desktop instead of
+the stdin-based `driver.py`. The driver remains for headless /
+automated runs.
+
+**Components (all under `orchestrator/`):**
+
+- `orchestrator/orchestrator/server.py` — FastAPI daemon on port 9713.
+  Endpoints: `/runs`, `/inbox`, `/inbox/{id}/accept|reject|correct`,
+  `/runs/{id}` (DELETE = cancel), `/health`.
+- `orchestrator/orchestrator/runner.py` — `OrchestratorRunner`. Locks
+  the Phase-2.4 v1 response-token regression at the contract level
+  (callers pick `action: accept|reject|correct`; the server emits the
+  type-correct resume token).
+- `orchestrator/orchestrator/parked_store.py` + `db/schema.sql` —
+  orchestrator-owned SQLite (`workflow_runs`, `parked_interrupts`).
+  Three-storage discipline preserved: never touches `rka.db`.
+- `orchestrator/orchestrator/mcp_server.py` — second MCP stdio binary
+  (`rka-orchestrator-mcp`). Tools: `orchestrator_run_start`,
+  `orchestrator_list_runs`, `orchestrator_inbox`,
+  `orchestrator_accept`, `orchestrator_reject`,
+  `orchestrator_correct`, `orchestrator_cancel`,
+  `orchestrator_get_run`, `orchestrator_get_interrupt`,
+  `orchestrator_health`.
+- `orchestrator/skills/orchestrator-pi.md` — Claude-the-assistant
+  rendering + ratification guide. Enforces TWO-TAP confirm on
+  `pi_decision_select` (the privileged write-authorization gate).
+
+**Run with the Compose overlay** (root `docker-compose.yml` untouched):
+
+```bash
+docker compose -f docker-compose.yml \
+               -f orchestrator/docker-compose.yml up -d --build
+```
+
+The overlay mounts `~/.claude/:/root/.claude:ro` so the daemon's
+`claude-agent-sdk` subprocess can read the host's `credentials.json`
+(the macOS Keychain auth path isn't accessible from a Linux
+container). Run `claude login` on the host once if you don't have a
+credentials file.
+
+**Add to `claude_desktop_config.json`** (alongside the existing `rka`
+entry):
+
+```json
+{
+  "mcpServers": {
+    "rka": { "command": "docker", "args": ["exec", "-i", "rka-server", "rka", "mcp"] },
+    "rka-orchestrator": {
+      "command": "/Users/<user>/.local/bin/rka-orchestrator-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+Install the MCP binary on the host (the daemon itself is in Docker,
+but Claude Desktop needs a local stdio process to launch):
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache uv tool install --force ./orchestrator
+```
+
+**Day-one PI flow:**
+
+1. `docker compose -f docker-compose.yml -f orchestrator/docker-compose.yml up -d`
+2. In any Claude Code session: *"start orchestrator on mis_01XYZ"* →
+   Claude calls `orchestrator_run_start`.
+3. Daemon kicks off the LangGraph; parks at first `pi_*` interrupt.
+4. Claude renders the payload using the `orchestrator-pi` skill, asks
+   you via `AskUserQuestion`.
+5. You pick → Claude calls `orchestrator_accept` / `reject` /
+   `correct`. Daemon resumes the graph until the next interrupt or
+   terminal state.
