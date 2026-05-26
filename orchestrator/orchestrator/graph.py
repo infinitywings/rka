@@ -299,4 +299,13 @@ ONBOARDING_NODE_NAMES: tuple[str, ...] = (
     # Phase D5b — manifest IO + credential validation + audit entry.
     "draft_manifest",
     "finalize",
+    # Phase O — project-onboarding workflow. Names are added
+    # incrementally as the corresponding nodes land — audit-symmetry
+    # enforces bidirectional alignment (every declared name needs a
+    # node assigning current_node=<name>; every current_node write
+    # needs the name declared here).
+    #
+    # O1.1 (idea capture):
+    "capture_idea",
+    "pi_idea_capture",
 )

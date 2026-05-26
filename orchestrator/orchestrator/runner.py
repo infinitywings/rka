@@ -50,6 +50,13 @@ _ACCEPT_TOKEN_BY_TYPE: dict[str, str] = {
     "pi_toolkit_ratify": "accept",          # set-identity ratification (mirrors pi_decision_select)
     "pi_credentials_ready": "accept",       # "I'm done editing .env" signal
     "pi_extend_toolkit": "accept",          # set-identity (mid-mission extension; D6)
+    # Phase O — project-onboarding workflow interrupts.
+    "pi_idea_capture": "approve",           # free-form input gate; greenlight-class
+    "pi_scope_ratify": "accept",            # TWO-TAP set-identity (polished idea)
+    "pi_deepresearch_prompt": "accept",     # async-pause completion signal
+    "pi_claims_review": "accept",           # TWO-TAP set-identity (claims)
+    "pi_plan_ratify": "accept",             # TWO-TAP — THE plan-licensing contract gate
+    "pi_phase_entry_ack": "approve",        # per-milestone go/no-go; greenlight-class
 }
 """The substring the graph's routing function looks for to take the
 'continue' branch at each PI interrupt. Sourced from graph.py:
@@ -229,10 +236,18 @@ class OrchestratorRunner:
     # literal — keep in sync if new onboarding types are added.
     _ONBOARDING_INTERRUPT_TYPES: frozenset[str] = frozenset(
         {
+            # Phase D — tool-setup subgraph (now nested under Phase O as O5).
             "pi_onboarding_topic",
             "pi_toolkit_ratify",
             "pi_credentials_ready",
             "pi_extend_toolkit",
+            # Phase O — project-onboarding workflow.
+            "pi_idea_capture",
+            "pi_scope_ratify",
+            "pi_deepresearch_prompt",
+            "pi_claims_review",
+            "pi_plan_ratify",
+            "pi_phase_entry_ack",
         }
     )
 

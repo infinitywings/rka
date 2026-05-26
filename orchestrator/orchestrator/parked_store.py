@@ -43,6 +43,13 @@ InterruptType = Literal[
     "pi_toolkit_ratify",
     "pi_credentials_ready",
     "pi_extend_toolkit",
+    # Phase O — project-onboarding workflow interrupts
+    "pi_idea_capture",
+    "pi_scope_ratify",
+    "pi_deepresearch_prompt",
+    "pi_claims_review",
+    "pi_plan_ratify",
+    "pi_phase_entry_ack",
 ]
 ResponseAction = Literal["accept", "reject", "correct"]
 RunStatus = Literal[
@@ -86,29 +93,28 @@ class ParkedStore:
         sql = SCHEMA_PATH.read_text(encoding="utf-8")
         with self._conn:
             self._conn.executescript(sql)
-        # Phase-D: forward-migrate any DB still on the Phase-A 3-type CHECK
-        # constraint. The migration preserves rows (rebuild + copy).
-        self._migrate_phase_a_to_d_if_needed()
+        # Forward-migrate any DB still on a pre-Phase-O CHECK constraint
+        # (Phase-A 3-type or Phase-D 7-type). The migration preserves
+        # rows (rebuild + copy).
+        self._migrate_pre_phase_o_if_needed()
 
-    def _migrate_phase_a_to_d_if_needed(self) -> None:
-        """Detect legacy parked_interrupts CHECK constraint and rebuild
-        with the Phase-D expanded interrupt-type set.
+    def _migrate_pre_phase_o_if_needed(self) -> None:
+        """Detect a parked_interrupts CHECK constraint missing Phase-O
+        types and rebuild with the current schema.sql shape.
 
-        Phase-A schema accepted only 3 interrupt_type values
-        (pi_greenlight, pi_decision_select, pi_acceptance). Phase-D
-        adds 4 more for the onboarding subgraph. SQLite doesn't support
-        ALTER TABLE for CHECK constraints, so we detect the legacy
-        constraint by inspecting sqlite_master and rebuild the table if
-        needed.
+        Each schema version is a strict superset of the previous, so a
+        single sentinel check (`pi_idea_capture` present) is enough to
+        cover both the Phase-A → Phase-O and Phase-D → Phase-O paths.
+        SQLite doesn't support ALTER TABLE for CHECK constraints, so we
+        rebuild the table.
 
         Idempotent: safe to call on every startup. Only does work when
-        the legacy constraint is detected (sentinel: absence of
-        `'pi_onboarding_topic'` in the CREATE statement).
+        the legacy constraint is detected.
 
         Rows are preserved across the rebuild via INSERT...SELECT — any
-        in-flight workflows survive the migration unless the DB has
-        rows with interrupt_type values that the new CHECK rejects
-        (which can't happen — Phase-D's set is a strict superset).
+        in-flight workflows survive the migration. The Phase-O CHECK is
+        a strict superset of all earlier shapes, so every legacy row
+        satisfies the new constraint.
         """
         row = self._conn.execute(
             "SELECT sql FROM sqlite_master "
@@ -117,19 +123,17 @@ class ParkedStore:
         if row is None:
             return  # Table doesn't exist yet — schema.sql will create it next pass.
         create_sql = row[0] or ""
-        if "pi_onboarding_topic" in create_sql:
-            return  # Already Phase-D shape.
+        if "pi_idea_capture" in create_sql:
+            return  # Already Phase-O shape (sentinel: first Phase-O interrupt type).
 
         # Legacy shape detected: rebuild with the new CHECK.
         with self._conn:
             self._conn.execute(
-                "ALTER TABLE parked_interrupts RENAME TO _parked_interrupts_phase_a"
+                "ALTER TABLE parked_interrupts RENAME TO _parked_interrupts_pre_o"
             )
             # Re-run schema.sql; the CREATE IF NOT EXISTS picks up the new shape.
             sql = SCHEMA_PATH.read_text(encoding="utf-8")
             self._conn.executescript(sql)
-            # Copy rows back. The Phase-D CHECK is a superset, so every legacy
-            # row satisfies the new constraint.
             self._conn.execute(
                 "INSERT INTO parked_interrupts "
                 "(interrupt_id, workflow_thread_id, mission_id, interrupt_type, "
@@ -138,9 +142,9 @@ class ParkedStore:
                 "SELECT interrupt_id, workflow_thread_id, mission_id, interrupt_type, "
                 "       payload_json, status, response_action, response_text, "
                 "       parked_at, responded_at "
-                "FROM _parked_interrupts_phase_a"
+                "FROM _parked_interrupts_pre_o"
             )
-            self._conn.execute("DROP TABLE _parked_interrupts_phase_a")
+            self._conn.execute("DROP TABLE _parked_interrupts_pre_o")
 
     def close(self) -> None:
         self._conn.close()

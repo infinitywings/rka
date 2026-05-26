@@ -46,6 +46,71 @@ def _now_iso() -> str:
 
 
 # ---------------------------------------------------------------------------
+# O1.1 — capture_idea_node (system pass-through; loads existing ingested sources)
+# ---------------------------------------------------------------------------
+
+
+def _list_journal_ids_by_tag(
+    mcp: MCPClient, *, tags: list[str], limit: int = 200
+) -> list[str]:
+    """Query RKA for journals carrying every tag in `tags`, return their IDs.
+
+    Defensive over the MCP client's exact return shape — `rka_get_journal`
+    returns a list of dicts (REST) or sometimes a dict with `entries`
+    (older proxies). We tolerate both.
+    """
+    try:
+        result = mcp.rka_get_journal(tags=tags, limit=limit)
+    except Exception:  # noqa: BLE001
+        return []
+    if isinstance(result, dict):
+        entries = result.get("entries") or result.get("results") or []
+    elif isinstance(result, list):
+        entries = result
+    else:
+        entries = []
+    ids: list[str] = []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        eid = e.get("id") or e.get("rka_id") or e.get("jrn_id")
+        if eid:
+            ids.append(str(eid))
+    return ids
+
+
+def capture_idea_node(
+    state: ResearchWorkflowState, sdk: SDKClient, mcp: MCPClient
+) -> dict:
+    """O1.1 — pre-load context before the pi_idea_capture interrupt.
+
+    No LLM call. Reads state["project_id"] and queries RKA for any
+    journals already tagged ``[project_id, "ingested-source"]`` (zero
+    for a fresh project; non-zero when PI is onboarding a partially
+    populated project — e.g., re-entering Phase O via
+    `orchestrator_continue_onboarding`).
+
+    State writes:
+      - current_node = "capture_idea"
+      - current_phase = "init"  (still onboarding; mission hasn't started)
+      - ingested_source_ids — list of jrn_… IDs already in the project
+        carrying the 'ingested-source' tag (Phase O design doc).
+    """
+    project_id = state.get("project_id", "")
+    existing_ids: list[str] = []
+    if project_id:
+        existing_ids = _list_journal_ids_by_tag(
+            mcp, tags=[project_id, "ingested-source"]
+        )
+
+    return {
+        "current_phase": "init",
+        "current_node": "capture_idea",
+        "ingested_source_ids": existing_ids,
+    }
+
+
+# ---------------------------------------------------------------------------
 # D3a — research_toolkit_node (registry-based + Brain LLM scoring)
 # ---------------------------------------------------------------------------
 

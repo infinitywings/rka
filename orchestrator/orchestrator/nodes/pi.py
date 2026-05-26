@@ -281,6 +281,115 @@ def pi_acceptance(
 
 
 # ---------------------------------------------------------------------------
+# Phase O O1.1 — pi_idea_capture (free-form project description + ingestion)
+# ---------------------------------------------------------------------------
+
+
+_PI_IDEA_CAPTURE_PROMPT = (
+    "Describe the research project — paste text, summarize attached docs, "
+    "or drop diagrams (you'll summarize them next).\n\n"
+    "For each document / diagram / URL you want to bring in to RKA:\n"
+    "  1. Read or view it (in Claude Desktop's chat).\n"
+    "  2. Summarize in 2-3 sentences.\n"
+    "  3. Extract concrete claims as bullets.\n"
+    "  4. Call rka_add_note(content=<summary+claims>, source='pi', "
+    "type='note', tags=['<project_id>', 'ingested-source']) — substitute "
+    "the project's prj_… ID where shown.\n\n"
+    "When all sources are ingested AND you've described the project, "
+    "accept this interrupt. orchestrator_correct lets you carry the full "
+    "project description in the response_text; orchestrator_accept alone "
+    "means 'I used the chat session to describe + ingest — no extra text "
+    "to forward'. Either path advances."
+)
+
+
+def pi_idea_capture(
+    state: ResearchWorkflowState,
+    sdk: SDKClient,
+    mcp: MCPClient,
+    interrupt_fn: Callable[[dict], Any],
+) -> dict:
+    """First Phase O PI interrupt — free-form project description.
+
+    The PI Claude session renders the prompt as guidance and packages
+    the response as either:
+      - orchestrator_correct(response_text=<idea>) — the description
+        text comes back as the resume token,
+      - orchestrator_accept() — the resume token is "approve"
+        (greenlight-class), meaning "I used the chat in-band; no extra
+        text to forward".
+
+    Either way, after the interrupt the node:
+      1. Records the PI's response_text on brain_position so idea_polish
+         (O1.2) can read it as the polished-idea source material.
+      2. Refreshes state["ingested_source_ids"] by re-querying RKA — the
+         PI may have called rka_add_note one or more times during the
+         pause to ingest sources, and the polished-idea node needs the
+         updated set.
+
+    Low-stakes (no TWO-TAP): ratification happens at pi_scope_ratify
+    in O1.3 after Brain polishes the idea into structured form.
+    """
+    project_id = state.get("project_id", "")
+
+    payload = {
+        "type": "pi_idea_capture",
+        "title": "PI idea capture — describe the project + ingest sources",
+        "prompt": _PI_IDEA_CAPTURE_PROMPT.replace("<project_id>", project_id or "<project_id>"),
+        "project_id": project_id,
+        "items": [],
+        "total_items": 0,
+    }
+    pi_response = interrupt_fn(payload)
+    response_str = str(pi_response or "")
+
+    # Re-query for any 'ingested-source' journals the PI added during
+    # the pause. (capture_idea_node pre-loaded what was there at parking
+    # time; the PI typically adds more between then and now.)
+    refreshed_ids: list[str] = []
+    if project_id:
+        try:
+            result = mcp.rka_get_journal(
+                tags=[project_id, "ingested-source"], limit=200
+            )
+        except Exception:  # noqa: BLE001
+            result = None
+        entries = (
+            result if isinstance(result, list)
+            else (result or {}).get("entries") or (result or {}).get("results") or []
+        )
+        for e in entries:
+            if isinstance(e, dict):
+                eid = e.get("id") or e.get("rka_id") or e.get("jrn_id")
+                if eid:
+                    refreshed_ids.append(str(eid))
+
+    update: dict[str, Any] = {
+        "current_phase": "init",
+        "current_node": "pi_idea_capture",
+        "ingested_source_ids": refreshed_ids,
+        "interrupts": [
+            _record_interrupt(
+                node_name="pi_idea_capture",
+                payload_size=0,
+                response=pi_response,
+                batch_review_used=False,
+            )
+        ],
+    }
+    # Stash the PI's free-form description on brain_position so the
+    # downstream idea_polish node can read it as the polished-idea
+    # source material. When PI just hit accept (response is the
+    # greenlight token "approve"), leave brain_position empty —
+    # idea_polish then falls back entirely on the journal contents
+    # already ingested via rka_add_note.
+    if response_str and response_str.strip().lower() not in {"approve", "accept", "reject"}:
+        update["brain_position"] = response_str[:5000]
+
+    return update
+
+
+# ---------------------------------------------------------------------------
 # 4. pi_onboarding_topic — initial topic elicitation (Phase D)
 # ---------------------------------------------------------------------------
 

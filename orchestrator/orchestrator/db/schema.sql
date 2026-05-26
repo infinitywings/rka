@@ -57,7 +57,14 @@ CREATE TABLE IF NOT EXISTS parked_interrupts (
             'pi_onboarding_topic',
             'pi_toolkit_ratify',
             'pi_credentials_ready',
-            'pi_extend_toolkit'
+            'pi_extend_toolkit',
+            -- Phase O — project-onboarding workflow interrupts
+            'pi_idea_capture',
+            'pi_scope_ratify',
+            'pi_deepresearch_prompt',
+            'pi_claims_review',
+            'pi_plan_ratify',
+            'pi_phase_entry_ack'
         )),
     payload_json TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending'
