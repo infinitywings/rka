@@ -426,3 +426,143 @@ Same JSON shape, in `.claude/mcp.json` (per-project) or `~/.claude/settings.json
 | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows) | Claude Desktop's MCP config with the `rka` entry; backups of any prior version live alongside it as `*.backup-YYYYMMDD-HHMMSS` |
 | `~/.claude/plugins/installed_plugins.json` | Claude Code's registry of installed plugins (includes `rka@rka` entry after install) |
 | `~/.claude/plugins/known_marketplaces.json` | Claude Code's registry of marketplace sources (includes the `infinitywings/rka` GitHub source after `/plugin marketplace add`) |
+
+---
+
+## 7. Agentic distribution — Orchestrator (optional, agentic branch only)
+
+If you're on the `agentic` branch, you also have access to the **RKA Orchestrator** — a LangGraph-driven Brain⇄Executor⇄PI workflow engine with a Claude-Code-native PI surface (no stdin terminal needed). This is **optional** — the core main-branch RKA setup above works without it. If you only need the knowledge base + Brain in Claude Desktop + Executor in Claude Code, skip this section.
+
+### When to install
+
+Install the orchestrator if you want to:
+
+- Drive structured Brain⇄Executor missions through PI-ratified gates from any Claude Code session
+- Use the **onboarding wizard** to set up per-project tool manifests + credential validation (Phase D MVP)
+- Reuse the same MCP entries in Claude Desktop for both ad-hoc work AND structured workflows
+
+### Step 7.1 — Switch to the agentic branch
+
+```bash
+cd <your-clone-dir>/rka
+git checkout agentic
+```
+
+### Step 7.2 — Install the orchestrator package + MCP binary
+
+```bash
+cd orchestrator
+uv tool install --force .   # produces ~/.local/bin/rka-orchestrator-mcp
+                            # (or: pip install -e ".[dev]")
+pytest -q                    # 494 tests; verifies the install
+```
+
+### Step 7.3 — Mint a Claude Max OAuth token
+
+In a **separate terminal** (NOT inside any Claude Code or Desktop session — the token is sensitive):
+
+```bash
+claude setup-token           # opens browser flow; outputs a long-lived token
+```
+
+### Step 7.4 — Drop the token in a gitignored env file
+
+```bash
+nano orchestrator/.env
+```
+
+```dotenv
+# orchestrator/.env (file mode 0600, gitignored)
+CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
+# Optional — richer tool surface for the Brain subprocess:
+SEMANTIC_SCHOLAR_API_KEY=...
+SERPAPI_KEY=...
+```
+
+```bash
+chmod 600 orchestrator/.env
+```
+
+### Step 7.5 — Bring up the orchestrator service
+
+The Compose overlay adds a third container (`rka-orchestrator`) alongside `rka-server` and `rka-worker` without modifying the root `docker-compose.yml`:
+
+```bash
+cd <your-clone-dir>/rka
+docker compose -f docker-compose.yml \
+               -f orchestrator/docker-compose.yml up -d --build
+```
+
+Verify:
+
+```bash
+curl http://localhost:9713/health
+# {"status":"ok","db_path":"/data/orchestrator.db"}
+
+docker compose -f docker-compose.yml -f orchestrator/docker-compose.yml ps
+# Should show 3 services healthy: rka-server, rka-worker, rka-orchestrator
+```
+
+### Step 7.6 — Register the orchestrator MCP in Claude Desktop
+
+Add a second entry to `claude_desktop_config.json` (alongside the existing `rka` entry):
+
+```json
+{
+  "mcpServers": {
+    "rka": {
+      "command": "docker",
+      "args": ["exec", "-i", "rka-server", "rka", "mcp"]
+    },
+    "rka-orchestrator": {
+      "command": "/Users/<your-username>/.local/bin/rka-orchestrator-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+Substitute your actual username. Fully quit and reopen Claude Desktop.
+
+### Step 7.7 — Verify in Claude Desktop / Claude Code
+
+```
+[You:]
+> Use orchestrator_health to check the daemon
+
+[Claude:]
+[calls orchestrator_health]
+{"status":"ok","db_path":"/data/orchestrator.db"}
+```
+
+If you also see `orchestrator_run_start`, `orchestrator_inbox`, `orchestrator_onboard_start`, `orchestrator_get_manifest`, etc. in your tool list, the orchestrator MCP is wired correctly.
+
+### 7.8 — Day-one use
+
+```
+[You:]
+> /orchestrator-onboard prj_01XYZ      # for a new project's tool setup
+or
+> /orchestrator-start mis_01ABC        # to drive an existing mission
+```
+
+See [`USAGE_GUIDE.md`](USAGE_GUIDE.md#agentic-distribution--orchestrator-workflows) for the full agentic-distribution workflow walkthrough including the TWO-TAP discipline at `pi_decision_select` (the privileged write-authorization gate).
+
+### Where orchestrator state lives
+
+| | |
+|---|---|
+| Docker volume `orchestrator-data` | `/data/orchestrator.db` (parked-interrupt queue + workflow_runs) + `/data/orchestrator-saver.db` (LangGraph checkpointer) |
+| `orchestrator/.env` (gitignored) | `CLAUDE_CODE_OAUTH_TOKEN` and optional API keys propagated to the subprocess |
+| `~/.claude/` (mounted read-only) | Host's Claude credentials directory for the SDK subprocess to read |
+| `~/.claude.json` (mounted read-only) | Host's Claude CLI global config |
+| `~/rka-projects/{project_id}/` (Phase D MVP convention) | Per-project `tools.json` + `.env` template after onboarding |
+
+> **Phase O note**: a future implementation phase (~13.5 days, design committed) will consolidate the per-project workspace at `~/Research/{project-slug}/.rka/` — co-located with the Writer skill's `manuscripts/{venue}/` workspace. See `orchestrator/docs/phase-o-project-onboarding-design.md` for details. The Phase D MVP convention above continues to work in the meantime.
+
+### Tearing down
+
+```bash
+docker compose -f docker-compose.yml -f orchestrator/docker-compose.yml down
+# (Leaves the orchestrator-data volume; add -v to delete it.)
+```

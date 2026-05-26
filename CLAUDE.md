@@ -287,3 +287,125 @@ UV_CACHE_DIR=/tmp/uv-cache uv tool install --force ./orchestrator
 5. You pick → Claude calls `orchestrator_accept` / `reject` /
    `correct`. Daemon resumes the graph until the next interrupt or
    terminal state.
+
+### Phase A2 — WRITE_TOOLS expansion + Docker auth fixes
+
+Empirical follow-up from the Phase-A live test (IoT-edge-LLM mission):
+Brain proposed write tools outside the dispatcher's allowlist. Added
+`rka_update_mission_status` + `rka_ingest_document` to `WRITE_TOOLS`
++ matching MCPClient Protocol methods and RestMCPClient impls.
+
+Auth: mount the host's `~/.claude.json` (single file, separate from
+the `.claude/` dir) so the claude CLI subprocess finds its global
+config. Compose overlay reads `CLAUDE_CODE_OAUTH_TOKEN` from
+`orchestrator/.env` (gitignored, mode 0600).
+
+### Phase B + C — prompt + chain support
+
+- **Phase B**: `EXECUTOR_SYSTEM` dynamically enumerates WRITE_TOOLS by
+  name (single source of truth from the constant). Names forbidden
+  tool patterns explicitly: `rka_present_decision` (orchestrator
+  handles presentation via `pi_decision_select`), `rka_resolve_checkpoint`
+  + other lifecycle tools (out of scope for parent-side dispatch).
+- **Phase C**: `execute_ratified_actions` supports `{{PA-N.id}}`
+  chain substitution (1-indexed). Brain can express multi-step
+  writes where later actions consume earlier returns. Forward-refs,
+  self-refs, out-of-range refs, references to failed actions all
+  yield clean `ratified_action_chain_resolution_failed` ErrorRecord
+  and skip the offending action without aborting the chain.
+
+### Phase D MVP — Onboarding subgraph (tool-discovery wizard)
+
+A separate LangGraph subgraph for per-project tool-discovery +
+credential setup. Run once at project creation:
+
+```
+pi_onboarding_topic → research_toolkit → pi_toolkit_ratify (TWO-TAP)
+                                      ↓ accept
+                          draft_manifest → pi_credentials_ready
+                                                ↓ accept
+                                            finalize → END
+```
+
+**New components (all under `orchestrator/`):**
+
+- `orchestrator/orchestrator/manifest.py` — `ToolManifest` dataclass
+  + IO helpers (workspace dir, save_manifest, load_manifest,
+  write_env_template, read_env, manifest_to_mcp_servers). Hybrid
+  lifecycle: baseline manifest + per-mission extensions.
+- `orchestrator/orchestrator/tool_registry.py` +
+  `orchestrator/data/tool_registry.yaml` — curated registry of
+  ~10-15 trusted defaults (always-on: rka, context7, fs, git; by
+  domain: ml_systems, finance, bioinformatics, legal, natural_sciences).
+- `orchestrator/orchestrator/credential_validator.py` — HTTP probe
+  + criticality-aware bucketing. Probe results NEVER contain secret
+  values (enforced by leak-detection assertion in tests).
+- `orchestrator/orchestrator/nodes/onboarding.py` —
+  `research_toolkit_node`, `draft_manifest_node`, `finalize_node`.
+- `orchestrator/orchestrator/onboarding_graph.py` — subgraph composer.
+- `runner.start_onboarding(project_id, ...)` — entry point.
+
+**2 new MCP tools, 2 new slash commands:**
+
+```
+orchestrator_onboard_start(project_id) → kicks off onboarding
+orchestrator_get_manifest(project_id)  → fetches the effective manifest
+
+/orchestrator-onboard <project_id>     → drives the onboarding flow
+/orchestrator-manifest <project_id>    → introspect the manifest
+```
+
+**Per-project workspace**: Phase D MVP writes `tools.json` + `.env`
+under `~/rka-projects/{project_id}/`. Phase O design (next) unifies
+this with the Writer skill's manuscript workspace under
+`~/Research/{slug}/.rka/`.
+
+**Criticality tiers (Q2 design choice)**:
+- `required` missing → escalate via checkpoint
+- `recommended` missing → escalate once at session start
+- `optional` missing → skip with journal note
+
+**Audit (Q5 design choice)**: onboarding emits a summary journal entry
+(`source=system, tags=[orchestrator, onboarding, baseline]`)
+referencing the manifest sha256 hash. Extensions trigger new entries
+with `supersedes` linkage.
+
+### Phase O — Full project-onboarding wizard (design only)
+
+See [`orchestrator/docs/phase-o-project-onboarding-design.md`](orchestrator/docs/phase-o-project-onboarding-design.md)
+for the detailed design. Phase O extends Phase D MVP into the full
+project-bootstrapping workflow:
+
+- **O1** Idea capture & scope confirmation
+- **O2** Workspace + Deep Research (async pause for Claude Desktop's deep-research feature)
+- **O3** Hygiene + claim extraction
+- **O4** Plan synthesis + ratification (THE autonomy-licensing contract)
+- **O5** Tool setup (current Phase D, repositioned to read the ratified plan)
+- **H** Mission queue handoff (per-phase pi_phase_entry_ack)
+
+**Workspace consolidation (Phase O)**:
+`~/Research/{project-slug}/` becomes the canonical per-project home:
+
+```
+~/Research/iot-edge-llm/
+├── .rka/{project_id, tools.json, .env, workspace.json}
+├── data/, code/, notebooks/, results/
+├── manuscripts/{venue}/    ← Writer skill workspace
+└── README.md (auto-generated)
+```
+
+**Critical repo boundary**: project-specific content
+(`~/Research/{slug}/{data,code,notebooks,results,manuscripts}/`)
+lives in the PI's home at runtime, NEVER in the rka repo. The repo
+holds only template + scaffold code.
+
+Build estimate: ~13.5 days; deferred for the next implementation
+session.
+
+### Deferred follow-ups
+
+- **D3b** — SerpAPI augmentation for `research_toolkit_node`
+- **D6** — `pi_extend_toolkit` for mid-mission tool addition
+- **Phase E** — Capability categories replacing static WRITE_TOOLS
+- **Phase F** — Topology variants (light/heavy mission classes)
+- **Phase G** — Actuator subagent (Bash/Edit/Write tools behind ratification)

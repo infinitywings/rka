@@ -27,6 +27,21 @@ RKA gives your research project a brain that doesn't forget between sessions. It
 
 Built for CS/IoT/CPS security research at UNC Charlotte.
 
+> ### 🌿 You're on the `agentic` branch
+>
+> This branch adds the **RKA Orchestrator** on top of the main-branch RKA core — a LangGraph-driven Brain⇄Executor⇄PI workflow engine with a Claude-Code-native PI surface. The PI drives mission and onboarding workflows from any Claude Code or Claude Desktop session via MCP tools, not stdin terminals.
+>
+> | | What it adds |
+> |---|---|
+> | **Mission subgraph** | 16-node Brain⇄Executor⇄PI loop with TWO-TAP ratification at `pi_decision_select` |
+> | **Onboarding subgraph** | Phase D MVP — per-project tool-discovery wizard producing `tools.json` + `.env` |
+> | **Plugin extensions** | `rka-orchestrator-mcp` (12 tools), `orchestrator-pi` skill, 5 slash commands (`/orchestrator-start`, `/orchestrator-inbox`, `/orchestrator-status`, `/orchestrator-onboard`, `/orchestrator-manifest`) |
+> | **Phase O design** | Full project-onboarding wizard (idea capture → Deep Research → plan synthesis → autonomous mission queue) — design committed, ~13.5-day implementation deferred |
+>
+> See [`orchestrator/README.md`](orchestrator/README.md) for the package overview, [`USAGE_GUIDE.md`](USAGE_GUIDE.md#agentic-distribution--orchestrator-workflows) for the user-facing how-to, and the design docs under [`orchestrator/docs/`](orchestrator/docs/).
+>
+> The agentic branch is a permanent sibling of main, not a feature branch — main never absorbs orchestrator code; agentic periodically absorbs main's core updates via deliberate merges. **Bookkeeper invariant**: `git diff origin/main -- rka/` returns empty on agentic.
+
 ## Paper
 
 A working draft describing RKA's architecture, design principles, and evaluation is available as a PDF: **[RKA-paper.pdf](docs/paper/RKA-paper.pdf)** — *Framing Is Human: Researcher–Brain–Executor Architecture for AI-Assisted Research*.

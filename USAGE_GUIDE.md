@@ -766,3 +766,161 @@ If the build fails on macOS with errors about `._*` files (AppleDouble metadata 
 | http://localhost:9712/decisions | Decision tree visualization |
 | http://localhost:9712/missions | Missions with task progress |
 | http://localhost:9712/docs | API documentation (Swagger UI) |
+
+---
+
+## Agentic Distribution — Orchestrator Workflows
+
+> Everything above describes the **main-branch** workflow (Brain in Claude Desktop, Executor in Claude Code, PI ratifies in chat). The **agentic branch** ships an additional orchestrator that runs Brain⇄Executor⇄PI as a **LangGraph workflow**, with the PI driving from any Claude Code or Claude Desktop session via MCP tools. This section covers the agentic-branch additions.
+
+### When to use the orchestrator
+
+The orchestrator is for **structured, multi-phase research workflows** where you want the Brain⇄Executor loop to advance automatically through well-defined gates, surfacing to you only at ratification points. Use it when:
+
+- You have a defined research mission and want autonomous Brain reasoning between explicit PI gates
+- You want the workflow to resume cleanly across sessions (state persists in SqliteSaver)
+- You want a single audit trail per workflow run (every artifact tagged with `workflow_thread_id`)
+
+For open-ended exploratory work, use the main-branch direct Brain⇄Executor pattern above. The two coexist — same RKA project can have both ad-hoc Brain sessions and orchestrator runs.
+
+### Setup (one-time, in addition to main-branch setup)
+
+```bash
+# 1. Switch to the agentic branch (if not already)
+git checkout agentic
+
+# 2. Install the orchestrator MCP binary on the host
+cd orchestrator
+uv tool install --force .   # produces ~/.local/bin/rka-orchestrator-mcp
+
+# 3. Mint a Claude Max OAuth token (in a separate terminal, NOT this Claude session)
+claude setup-token          # browser flow; copies a long-lived token to stdout
+
+# 4. Put the token in orchestrator/.env (gitignored, mode 0600)
+nano orchestrator/.env
+# CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
+# SEMANTIC_SCHOLAR_API_KEY=...   (optional, for richer lit-search)
+# SERPAPI_KEY=...                (optional, for web search)
+chmod 600 orchestrator/.env
+
+# 5. Bring up the orchestrator daemon alongside rka
+cd ..
+docker compose -f docker-compose.yml \
+               -f orchestrator/docker-compose.yml up -d --build
+
+# 6. Verify the daemon
+curl http://localhost:9713/health     # {"status":"ok",...}
+
+# 7. Add the second MCP server to claude_desktop_config.json
+#    (alongside the existing "rka" entry)
+```
+
+```json
+{
+  "mcpServers": {
+    "rka": {
+      "command": "docker",
+      "args": ["exec", "-i", "rka-server", "rka", "mcp"]
+    },
+    "rka-orchestrator": {
+      "command": "/Users/<your-username>/.local/bin/rka-orchestrator-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+Restart Claude Desktop. Your PI session now has **two layers of MCP tools**: `rka_*` for direct knowledge-base work and `orchestrator_*` for workflow driving.
+
+### Driving a mission workflow
+
+In any Claude Code or Claude Desktop session with both MCP entries configured:
+
+```
+[You:]
+> Start orchestrator on mis_01XYZ in project prj_01ABC
+
+[Claude:]
+[invokes orchestrator_run_start(mission_id="mis_01XYZ", project_id="prj_01ABC")]
+[graph runs ~2-5 min; parks at pi_greenlight with a Confirmation Brief]
+[invokes orchestrator_inbox(); renders the Brief as a structured markdown block]
+[uses AskUserQuestion to present: Accept / Reject / Correct]
+```
+
+You pick. On Accept, Claude calls `orchestrator_accept(interrupt_id)`. The daemon resumes the LangGraph (`backbrief_draft` → `gate1_validation` → `mission_execute` → `cluster_review` → `decision_present`), then parks again at `pi_decision_select` — **the privileged ratification gate** where Brain's `proposed_actions` are surfaced.
+
+For `pi_decision_select`, the orchestrator-pi skill enforces a **TWO-TAP confirmation** (the actions about to be dispatched mean real RKA writes via the parent-side `execute_ratified_actions`). After your second confirm, Claude calls `orchestrator_accept`, the writes commit, and the graph proceeds to `pi_acceptance` and terminates.
+
+### Slash commands (agentic distribution)
+
+| Command | Purpose |
+|---|---|
+| `/orchestrator-start <mission_id>` | Start a mission workflow with health-check + mission inspection up-front |
+| `/orchestrator-inbox` | Show pending PI interrupts across all runs; renders each per the orchestrator-pi skill |
+| `/orchestrator-status [filter]` | List active + recent runs with cost + ETA |
+| `/orchestrator-onboard <project_id>` | Run the Phase D MVP onboarding wizard for a new project (tool discovery + credential setup) |
+| `/orchestrator-manifest <project_id>` | Show the project's current tool manifest |
+
+### Onboarding a new project (Phase D MVP)
+
+When you create a new RKA project that needs a per-project tool surface (e.g., a finance research project needing `sec-edgar-mcp`), the onboarding wizard handles tool discovery + credential setup:
+
+```
+[You:]
+> /orchestrator-onboard prj_01NEW
+
+[Claude:]
+[invokes orchestrator_onboard_start(project_id="prj_01NEW")]
+[parks at pi_onboarding_topic]
+> "Tell me about the project — summary, field, target venue, keywords."
+
+[You type a paragraph]
+
+[Claude calls orchestrator_correct(interrupt_id, response_text=<your text>)]
+[graph runs research_toolkit_node; Brain reasons over the curated registry + suggests tools]
+[parks at pi_toolkit_ratify with a scored list]
+[TWO-TAP: pick Accept all, then confirm authorization]
+
+[Claude calls orchestrator_accept; graph runs draft_manifest_node]
+[writes ~/rka-projects/<project_id>/tools.json + .env template (Phase D MVP convention)]
+[parks at pi_credentials_ready with the file path + expected secrets list]
+
+[You open ~/rka-projects/<project_id>/.env in your editor, fill in values, save, return]
+[Claude calls orchestrator_accept]
+[graph runs finalize_node: probes each secret, emits the audit journal entry]
+[returns terminal_state="complete"]
+```
+
+The credential validation **never echoes secret values in chat**. The orchestrator probes each declared API server-side; you only see "valid" / "rejected" / "missing" classifications per secret name. (Phase O design will move the workspace under `~/Research/{slug}/.rka/` and add 4 more onboarding sub-phases for idea capture, deep research integration, hygiene, and plan synthesis — see `orchestrator/docs/phase-o-project-onboarding-design.md`.)
+
+### Combining orchestrator + Deep Research + literature ingestion in Claude Desktop
+
+The PI's Claude Desktop session has **three superimposed capability layers** when both MCP entries are wired up:
+
+| Layer | Tools | Purpose |
+|---|---|---|
+| **Orchestrator (agentic)** | `orchestrator_run_start`, `orchestrator_onboard_start`, `orchestrator_inbox`, `orchestrator_accept`, ... | Drive structured LangGraph workflows |
+| **RKA core (main)** | `rka_search_arxiv`, `rka_search_semantic_scholar`, `rka_enrich_doi`, `rka_add_literature`, `rka_ingest_document`, ... | Ad-hoc literature work, journal entries, claims |
+| **Claude Desktop native** | Web search, Deep Research (Max tier), Projects, Artifacts | Open-ended exploration |
+
+Practical pattern: use Claude Desktop's Deep Research for broad exploration. When you find a paper worth keeping, call `rka_enrich_doi(doi=...)` directly to land it in the RKA project's knowledge base. When the exploration coalesces into a defined mission, `orchestrator_run_start` invokes the structured workflow — the Brain reads everything you ad-hoc-ingested as context.
+
+### Inspecting workflow state
+
+| | |
+|---|---|
+| List runs | `orchestrator_list_runs(status="awaiting_pi")` or `GET http://localhost:9713/runs` |
+| One run's details | `orchestrator_get_run(workflow_thread_id)` |
+| Pending interrupts | `orchestrator_inbox()` |
+| Project's manifest | `orchestrator_get_manifest(project_id)` |
+| Cancel a run | `orchestrator_cancel(workflow_thread_id)` |
+
+Run artifacts in RKA are recoverable via `rka_get_journal(tags=[<workflow_thread_id>])` — every write during the workflow auto-tags the thread ID.
+
+### Cross-references
+
+- `orchestrator/README.md` — orchestrator package reference + phase history
+- `orchestrator/docs/phase-d-onboarding-design.md` — Phase D MVP design
+- `orchestrator/docs/phase-o-project-onboarding-design.md` — Phase O full-workflow design (next implementation phase)
+- `plugin/skills/orchestrator-pi/SKILL.md` — PI cockpit rendering + TWO-TAP rules
+- `CLAUDE.md` (root, agentic-branch section) — agent operating instructions for orchestrator work
