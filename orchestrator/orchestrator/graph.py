@@ -325,4 +325,6 @@ ONBOARDING_NODE_NAMES: tuple[str, ...] = (
     "plan_synthesis",
     # O4.2 (TWO-TAP — auto-create missions):
     "pi_plan_ratify",
+    # Phase H (per-milestone go/no-go before each mission dispatch):
+    "pi_phase_entry_ack",
 )

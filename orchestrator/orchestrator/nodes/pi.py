@@ -1152,6 +1152,92 @@ def pi_plan_ratify(
 
 
 # ---------------------------------------------------------------------------
+# Phase O — Phase H: pi_phase_entry_ack (per-milestone go/no-go)
+# ---------------------------------------------------------------------------
+
+
+def pi_phase_entry_ack(
+    state: ResearchWorkflowState,
+    sdk: SDKClient,
+    mcp: MCPClient,
+    interrupt_fn: Callable[[dict], Any],
+) -> dict:
+    """Phase H — per-milestone acknowledgment before mission dispatch.
+
+    Surfaces the next milestone in ``state["ratified_mission_ids"]``
+    (indexed by ``state["current_milestone_index"]``) with cost + ETA
+    + remaining-queue summary. PI's response routes:
+
+      - accept   → the orchestrator launches the milestone's mission via
+                   ``orchestrator_run_start(mission_id=...)``; the server
+                   coordinates the mission lifecycle and re-parks at the
+                   next pi_phase_entry_ack when the mission terminates.
+      - reject   → queue paused; PI resumes later via
+                   ``orchestrator_continue_plan(project_id)``.
+      - correct  → freeform redirect (re-order / skip ahead); the text
+                   lands on brain_position for the runner to interpret.
+
+    State writes:
+      - current_node                = "pi_phase_entry_ack"
+      - current_phase               = "init"
+      - current_milestone_index     = bumped on accept only
+                                      (orchestrator advances queue)
+      - brain_position              = redirect text on correct
+    """
+    mission_ids = list(state.get("ratified_mission_ids") or [])
+    idx = int(state.get("current_milestone_index") or 0)
+    remaining = mission_ids[idx:] if 0 <= idx < len(mission_ids) else []
+    current_mission_id = remaining[0] if remaining else None
+
+    # Resolve the mission entity for metadata (cost / objective / etc.).
+    current_mission: dict = {}
+    if current_mission_id:
+        try:
+            current_mission = mcp.rka_get_mission(current_mission_id) or {}
+        except Exception:  # noqa: BLE001
+            current_mission = {}
+
+    # Aggregate remaining cost / wall-clock if available on the mission
+    # entity. (For Phase H MVP, we don't refetch every remaining mission
+    # — the orchestrator-pi skill can paginate if needed.)
+    payload: dict[str, Any] = {
+        "type": "pi_phase_entry_ack",
+        "title": "Mission queue — ready for next milestone?",
+        "current_mission_id": current_mission_id,
+        "current_mission": current_mission,
+        "remaining_mission_ids": remaining,
+        "remaining_count": len(remaining),
+        "current_milestone_index": idx,
+        "items": [current_mission] if current_mission else [],
+        "total_items": 1 if current_mission else 0,
+    }
+
+    pi_response = interrupt_fn(payload)
+    response_text = str(pi_response or "").lower()
+    is_accept = "approve" in response_text or "accept" in response_text
+
+    update: dict[str, Any] = {
+        "current_phase": "init",
+        "current_node": "pi_phase_entry_ack",
+        "interrupts": [
+            _record_interrupt(
+                node_name="pi_phase_entry_ack",
+                payload_size=len(remaining),
+                response=pi_response,
+                batch_review_used=False,
+            )
+        ],
+    }
+    if is_accept:
+        update["current_milestone_index"] = idx + 1
+    elif response_text and response_text != "reject":
+        # Freeform correction — stash for the runner / next iteration.
+        update["brain_position"] = str(pi_response)[:5000]
+
+    return update
+
+
+# ---------------------------------------------------------------------------
 # 4. pi_onboarding_topic — initial topic elicitation (Phase D)
 # ---------------------------------------------------------------------------
 
