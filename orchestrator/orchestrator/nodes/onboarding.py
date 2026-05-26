@@ -561,6 +561,187 @@ def workspace_setup_node(
 
 
 # ---------------------------------------------------------------------------
+# O3.1 — hygiene_pass_node (integrity + freshness + pending-maintenance)
+# ---------------------------------------------------------------------------
+
+
+_HYGIENE_FRESHNESS_DAYS_THRESHOLD: int = 30
+"""Default staleness threshold for the freshness check during Phase O
+hygiene (in days). Brain reads the same value as RKA's default."""
+
+
+def _normalize_integrity_findings(raw: dict | None) -> list[dict]:
+    """Pull issue rows from rka_check_integrity's response.
+
+    Response shape (from rka/services/knowledge_pack:check_integrity):
+        {"total_issues": N, "issues": [{"type": ..., "count": N, "entries": [...]}, ...]}
+
+    We flatten to one finding per entry so downstream PI rendering /
+    checkpoint emission can target individual targets.
+    """
+    if not isinstance(raw, dict):
+        return []
+    issues = raw.get("issues") or []
+    out: list[dict] = []
+    for group in issues if isinstance(issues, list) else []:
+        if not isinstance(group, dict):
+            continue
+        kind = group.get("type") or "integrity_issue"
+        entries = group.get("entries") or []
+        if not isinstance(entries, list) or not entries:
+            # Some integrity groups carry just a count + no entries —
+            # surface as a single bucketed finding.
+            out.append(
+                {
+                    "kind": f"integrity:{kind}",
+                    "target_id": None,
+                    "detail": group.get("description") or f"{kind} ({group.get('count', '?')})",
+                    "severity": group.get("severity") or "info",
+                }
+            )
+            continue
+        for e in entries:
+            if not isinstance(e, dict):
+                continue
+            out.append(
+                {
+                    "kind": f"integrity:{kind}",
+                    "target_id": e.get("id") or e.get("entity_id"),
+                    "detail": e.get("detail") or e.get("description") or kind,
+                    "severity": group.get("severity") or e.get("severity") or "info",
+                }
+            )
+    return out
+
+
+def _normalize_freshness_findings(raw: dict | None) -> list[dict]:
+    """Pull stale-entry rows from rka_check_freshness's response.
+
+    Response shape varies by RKA version; tolerate either a top-level
+    list under 'stale_entries' or under 'entries'.
+    """
+    if not isinstance(raw, dict):
+        return []
+    entries = raw.get("stale_entries") or raw.get("entries") or []
+    if not isinstance(entries, list):
+        return []
+    out: list[dict] = []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        out.append(
+            {
+                "kind": "freshness:stale",
+                "target_id": e.get("id") or e.get("entity_id"),
+                "detail": (
+                    e.get("reason")
+                    or e.get("detail")
+                    or f"stale (age: {e.get('days_since_update', '?')}d)"
+                ),
+                "severity": e.get("severity") or "info",
+            }
+        )
+    return out
+
+
+def _normalize_pending_maintenance(raw: dict | None) -> list[dict]:
+    """Pull pending-maintenance items.
+
+    Response shape (from rka/api/routes/maintenance.py):
+        {"items": [{"id": ..., "kind": ..., "detail": ..., "required": bool}, ...]}
+    """
+    if not isinstance(raw, dict):
+        return []
+    items = raw.get("items") or raw.get("pending") or []
+    if not isinstance(items, list):
+        return []
+    out: list[dict] = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        out.append(
+            {
+                "kind": f"maintenance:{it.get('kind', 'pending')}",
+                "target_id": it.get("id") or it.get("target_id"),
+                "detail": it.get("detail") or it.get("description") or it.get("kind", ""),
+                "severity": "required" if it.get("required") else "info",
+            }
+        )
+    return out
+
+
+def hygiene_pass_node(
+    state: ResearchWorkflowState, sdk: SDKClient, mcp: MCPClient
+) -> dict:
+    """Phase O O3.1 — pre-plan hygiene sweep over the project's RKA state.
+
+    No LLM call. Aggregates findings from three RKA tools:
+      - rka_check_integrity()          — orphan refs, broken provenance
+      - rka_check_freshness()          — stale entries
+      - rka_get_pending_maintenance()  — auto-flagged maintenance items
+
+    Each finding is normalized to a 4-field dict (kind, target_id,
+    detail, severity) and accumulated on state["hygiene_findings"].
+
+    If any finding has severity='required', a checkpoint is emitted so
+    PI must resolve before O4 plan synthesis. Otherwise the workflow
+    proceeds straight to claim_extraction.
+
+    State writes:
+      - current_node     = "hygiene_pass"
+      - current_phase    = "init"
+      - hygiene_findings — list of finding dicts
+      - checkpoints      — only when required-severity items exist
+    """
+    findings: list[dict] = []
+    try:
+        integrity = mcp.rka_check_integrity()
+    except Exception:  # noqa: BLE001
+        integrity = None
+    findings.extend(_normalize_integrity_findings(integrity))
+
+    try:
+        freshness = mcp.rka_check_freshness(_HYGIENE_FRESHNESS_DAYS_THRESHOLD)
+    except Exception:  # noqa: BLE001
+        freshness = None
+    findings.extend(_normalize_freshness_findings(freshness))
+
+    try:
+        maintenance = mcp.rka_get_pending_maintenance()
+    except Exception:  # noqa: BLE001
+        maintenance = None
+    findings.extend(_normalize_pending_maintenance(maintenance))
+
+    update: dict[str, Any] = {
+        "current_phase": "init",
+        "current_node": "hygiene_pass",
+        "hygiene_findings": findings,
+    }
+
+    required = [f for f in findings if f.get("severity") == "required"]
+    if required:
+        update["checkpoints"] = [
+            {
+                "chk_id": f"chk_hygiene_required_{int(datetime.now(tz=timezone.utc).timestamp())}",
+                "type": "decision",
+                "reason": (
+                    f"Phase O hygiene pass found {len(required)} required "
+                    f"maintenance item(s) that must be resolved before plan "
+                    f"synthesis. Summary: "
+                    + "; ".join(
+                        f"{f['kind']}={f['target_id'] or '?'}"
+                        for f in required[:10]
+                    )
+                    + (" …" if len(required) > 10 else "")
+                ),
+                "resolved": False,
+            }
+        ]
+
+    return update
+
+
+# ---------------------------------------------------------------------------
 # D3a — research_toolkit_node (registry-based + Brain LLM scoring)
 # ---------------------------------------------------------------------------
 

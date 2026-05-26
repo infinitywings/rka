@@ -72,6 +72,12 @@ class MCPClient(Protocol):
     def rka_get(self, id: str) -> dict[str, Any]: ...
     def rka_trace_provenance(self, id: str) -> dict[str, Any]: ...
 
+    # Phase O O3.1 — hygiene checks. These are READ-side: no
+    # workflow_thread_id auto-tagging needed.
+    def rka_check_integrity(self) -> dict[str, Any]: ...
+    def rka_check_freshness(self, days_threshold: int = 30) -> dict[str, Any]: ...
+    def rka_get_pending_maintenance(self) -> dict[str, Any]: ...
+
     # --- writes (auto-tag workflow_thread_id) ---
     def rka_add_note(
         self,
@@ -314,6 +320,21 @@ class RestMCPClient:
 
     def rka_trace_provenance(self, id: str) -> dict:
         return self._request("GET", f"/api/provenance/{id}") or {}
+
+    # Phase O O3.1 — hygiene checks.
+    def rka_check_integrity(self) -> dict:
+        """GET /api/integrity. Returns {'total_issues': N, 'issues': [...]}."""
+        return self._request("GET", "/api/integrity") or {}
+
+    def rka_check_freshness(self, days_threshold: int = 30) -> dict:
+        """GET /api/freshness/check?days_threshold=N."""
+        return self._request(
+            "GET", "/api/freshness/check", params={"days_threshold": days_threshold}
+        ) or {}
+
+    def rka_get_pending_maintenance(self) -> dict:
+        """GET /api/maintenance — flagged/pending maintenance items."""
+        return self._request("GET", "/api/maintenance") or {}
 
     # ---- writes ----
 

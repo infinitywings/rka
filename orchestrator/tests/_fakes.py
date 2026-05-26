@@ -50,6 +50,14 @@ class FakeMCP:
     journal_response: list = field(default_factory=list)
     mission_response: dict = field(default_factory=lambda: {"id": "mis_test", "status": "active"})
     checkpoints_response: list = field(default_factory=list)
+    # Phase O O3.1 — hygiene-check responses. Default to clean (no issues).
+    integrity_response: dict = field(
+        default_factory=lambda: {"total_issues": 0, "issues": []}
+    )
+    freshness_response: dict = field(default_factory=lambda: {"stale_entries": []})
+    pending_maintenance_response: dict = field(
+        default_factory=lambda: {"items": []}
+    )
 
     def _record(self, op: str, **kw: Any) -> None:
         self.calls.append({"op": op, **kw})
@@ -103,6 +111,19 @@ class FakeMCP:
     def rka_trace_provenance(self, id: str) -> dict:
         self._record("rka_trace_provenance", id=id)
         return {"id": id, "ancestors": []}
+
+    # Phase O O3.1 — hygiene checks.
+    def rka_check_integrity(self) -> dict:
+        self._record("rka_check_integrity")
+        return self.integrity_response
+
+    def rka_check_freshness(self, days_threshold: int = 30) -> dict:
+        self._record("rka_check_freshness", days_threshold=days_threshold)
+        return self.freshness_response
+
+    def rka_get_pending_maintenance(self) -> dict:
+        self._record("rka_get_pending_maintenance")
+        return self.pending_maintenance_response
 
     # --- writes ---
     def rka_add_note(self, content: str, **kwargs: Any) -> str:

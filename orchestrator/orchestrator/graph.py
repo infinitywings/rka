@@ -316,4 +316,6 @@ ONBOARDING_NODE_NAMES: tuple[str, ...] = (
     "workspace_setup",
     # O2.2 (async-pause for Deep Research literature scan):
     "pi_deepresearch_prompt",
+    # O3.1 (hygiene sweep over RKA state):
+    "hygiene_pass",
 )
