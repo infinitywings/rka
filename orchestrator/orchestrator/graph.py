@@ -296,5 +296,7 @@ ONBOARDING_NODE_NAMES: tuple[str, ...] = (
     "pi_onboarding_topic",
     "pi_toolkit_ratify",
     "pi_credentials_ready",
-    # Phase D5b additions land here as draft_manifest, finalize, etc.
+    # Phase D5b — manifest IO + credential validation + audit entry.
+    "draft_manifest",
+    "finalize",
 )

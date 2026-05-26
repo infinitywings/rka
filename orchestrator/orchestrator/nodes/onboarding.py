@@ -345,3 +345,293 @@ def research_toolkit_node(
         # writing to brain_position which pi_toolkit_ratify reads.
         update["brain_position"] = parsed["notes_for_pi"][:1500]
     return update
+
+
+# ---------------------------------------------------------------------------
+# D5b — draft_manifest_node (after pi_toolkit_ratify accept)
+# ---------------------------------------------------------------------------
+
+
+def _ratified_tools_to_decls(ratified: list[dict]) -> list[M.ToolDecl]:
+    """Materialize the ratified_toolkit list back into ToolDecl objects.
+
+    pi_toolkit_ratify stores proposed_toolkit (already dict-shaped) into
+    ratified_toolkit verbatim on accept, so the same conversion that
+    research_toolkit_node did when materializing scored tools doesn't
+    need to happen here. We just rehydrate ToolDecl from the dict.
+    """
+    out: list[M.ToolDecl] = []
+    for d in ratified or []:
+        if not isinstance(d, dict):
+            continue
+        secrets = [
+            M.SecretDecl(**s) for s in (d.get("secrets") or []) if isinstance(s, dict)
+        ]
+        # Strip secrets from the dict so we don't double-pass it.
+        kwargs = {k: v for k, v in d.items() if k != "secrets"}
+        try:
+            out.append(M.ToolDecl(**kwargs, secrets=secrets))
+        except TypeError:
+            # Forward-compatible: unknown extra fields → skip
+            continue
+    return out
+
+
+def draft_manifest_node(
+    state: ResearchWorkflowState, sdk: SDKClient, mcp: MCPClient
+) -> dict:
+    """After pi_toolkit_ratify accept, materialize the project's
+    baseline tools.json + .env template on disk.
+
+    Reads from state:
+      - project_id (RKA project; drives ~/rka-projects/{id}/ path)
+      - topic_metadata (from pi_onboarding_topic)
+      - ratified_toolkit (from pi_toolkit_ratify on accept; empty if
+        rejected/corrected — caller is responsible for not entering this
+        node if ratification failed)
+
+    Writes to disk:
+      - ~/rka-projects/{project_id}/tools.json (baseline manifest)
+      - ~/rka-projects/{project_id}/.env (template; preserves existing
+        contents if file already exists, per write_env_template default)
+
+    Writes to state:
+      - draft_manifest_path (canonical tools.json path as string)
+      - draft_manifest_hash (sha256 of the written manifest)
+
+    Idempotent: re-running on the same project produces the same files
+    with the same hash (assuming inputs are stable). Phase D6 will use
+    this idempotency when extending mid-stream.
+    """
+    project_id = state.get("project_id", "")
+    if not project_id:
+        return {
+            "current_phase": "init",
+            "current_node": "draft_manifest",
+            "errors": [
+                {
+                    "node_name": "draft_manifest",
+                    "error_type": "draft_manifest_no_project_id",
+                    "detail": "draft_manifest_node requires state['project_id'] to be set",
+                    "timestamp": _now_iso(),
+                }
+            ],
+        }
+
+    ratified = state.get("ratified_toolkit") or []
+    if not ratified:
+        return {
+            "current_phase": "init",
+            "current_node": "draft_manifest",
+            "errors": [
+                {
+                    "node_name": "draft_manifest",
+                    "error_type": "draft_manifest_empty_toolkit",
+                    "detail": (
+                        "ratified_toolkit is empty — PI rejected or corrected "
+                        "during pi_toolkit_ratify; no manifest to draft"
+                    ),
+                    "timestamp": _now_iso(),
+                }
+            ],
+        }
+
+    tool_decls = _ratified_tools_to_decls(ratified)
+    topic_dict = state.get("topic_metadata") or {}
+    topic = M.TopicMetadata(
+        summary=topic_dict.get("summary") or "",
+        research_field=topic_dict.get("research_field"),
+        venue=topic_dict.get("venue"),
+        keywords=list(topic_dict.get("keywords") or []),
+    )
+
+    manifest = M.ToolManifest(
+        project_id=project_id,
+        manifest_type="baseline",
+        topic=topic,
+        tools=tool_decls,
+    )
+    path = M.save_manifest(manifest)
+    # Collect every secret declared across all ratified tools.
+    all_secrets = [s for t in tool_decls for s in t.secrets]
+    M.write_env_template(project_id, all_secrets)
+
+    return {
+        "current_phase": "init",
+        "current_node": "draft_manifest",
+        "draft_manifest_path": str(path),
+        "draft_manifest_hash": manifest.compute_hash(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# D5b + D7 — finalize_node (probe + audit + register)
+# ---------------------------------------------------------------------------
+
+
+def _build_audit_summary(
+    manifest: M.ToolManifest, report: "CredentialReport"  # type: ignore[name-defined]
+) -> str:
+    """Compose a one-paragraph audit summary referencing the manifest
+    hash + the credential probe outcome. This text lands in the RKA
+    journal entry (Q5)."""
+    topic = manifest.topic
+    topic_line = (
+        f"Topic: {topic.summary[:200] if topic and topic.summary else '(none)'}"
+    )
+    venue_line = (
+        f"Venue: {topic.venue}" if topic and topic.venue else "Venue: (unspecified)"
+    )
+    tool_lines = []
+    for t in manifest.tools:
+        secrets = ", ".join(
+            f"{s.name}({s.criticality})" for s in t.secrets
+        ) or "no secrets"
+        tool_lines.append(f"  - {t.name} [{t.type}] — {secrets}")
+
+    parts = [
+        f"Orchestrator onboarding completed for {manifest.project_id}.",
+        topic_line,
+        venue_line,
+        f"Tool stack ({len(manifest.tools)} tools):",
+        *tool_lines,
+        "",
+        "Credential validation:",
+        f"  healthy: {len(report.healthy_tools)}; blocked: {len(report.blocked_tools)}; "
+        f"required_failures: {len(report.failed_required)}; "
+        f"recommended_failures: {len(report.failed_recommended)}; "
+        f"optional_failures: {len(report.failed_optional)}",
+        "",
+        f"Manifest path: ~/rka-projects/{manifest.project_id}/tools.json",
+        f"Manifest hash: sha256:{manifest.compute_hash()}",
+    ]
+    return "\n".join(parts)
+
+
+def finalize_node(
+    state: ResearchWorkflowState, sdk: SDKClient, mcp: MCPClient
+) -> dict:
+    """Last node in the onboarding subgraph. Runs after
+    pi_credentials_ready accept.
+
+    Sequence:
+      1. Re-load the manifest from disk (the canonical source).
+      2. Read the .env via manifest.read_env (placeholder values
+         silently skipped).
+      3. Run credential_validator.probe_all_secrets to validate every
+         declared secret.
+      4. If any required-tier failures exist → record a checkpoint
+         (Q2 escalation; the graph routes to escalation downstream).
+      5. Otherwise: emit an RKA journal entry summarizing the
+         onboarding outcome (Q5 audit trail).
+      6. Update the manifest with the audit_journal_id and re-save.
+
+    State updates:
+      - finalize_outcome: "complete" | "escalated_required_missing" | "failed"
+      - audit_journal_id (when complete)
+      - credential_report_summary (always; rendered text for the run log)
+      - artifacts entry for the audit journal
+    """
+    from orchestrator import credential_validator as CV
+
+    project_id = state.get("project_id", "")
+    if not project_id:
+        return {
+            "current_phase": "init",
+            "current_node": "finalize",
+            "errors": [
+                {
+                    "node_name": "finalize",
+                    "error_type": "finalize_no_project_id",
+                    "detail": "finalize_node requires state['project_id']",
+                    "timestamp": _now_iso(),
+                }
+            ],
+        }
+
+    manifest = M.load_manifest(project_id)
+    if manifest is None:
+        return {
+            "current_phase": "init",
+            "current_node": "finalize",
+            "errors": [
+                {
+                    "node_name": "finalize",
+                    "error_type": "finalize_no_manifest",
+                    "detail": (
+                        f"No tools.json found for project {project_id} — "
+                        "draft_manifest_node must run before finalize_node"
+                    ),
+                    "timestamp": _now_iso(),
+                }
+            ],
+        }
+
+    env_values = M.read_env(project_id)
+    report = CV.probe_all_secrets(manifest.tools, env_values)
+    summary_text = CV.render_credential_report(report)
+
+    update: dict[str, Any] = {
+        "current_phase": "init",
+        "current_node": "finalize",
+        "credential_report_summary": summary_text,
+    }
+
+    if report.failed_required:
+        # Q2: required failures escalate via checkpoint.
+        names = [s.name for _, s, _ in report.failed_required]
+        update["finalize_outcome"] = "escalated_required_missing"
+        update["checkpoints"] = [
+            {
+                "chk_id": f"chk_onboarding_creds_{int(datetime.now(tz=timezone.utc).timestamp())}",
+                "type": "decision",
+                "reason": (
+                    f"Onboarding finalize: required credential(s) missing or "
+                    f"rejected — {', '.join(names)}. PI must provide the values "
+                    f"in ~/rka-projects/{project_id}/.env and re-run finalize, "
+                    f"OR downgrade the criticality on the affected secrets."
+                ),
+                "resolved": False,
+            }
+        ]
+        return update
+
+    # Happy path: emit the audit journal entry. tags include the
+    # workflow_thread_id (per mcp_client's _merge_workflow_tag pattern,
+    # the RestMCPClient auto-tags writes — but rka_add_note takes an
+    # explicit tags arg that the auto-tag layer extends).
+    audit_text = _build_audit_summary(manifest, report)
+    try:
+        audit_id = mcp.rka_add_note(
+            content=audit_text,
+            type="note",
+            source="system",
+            tags=["orchestrator", "onboarding", "baseline"],
+        )
+    except Exception as e:  # noqa: BLE001
+        update["finalize_outcome"] = "failed"
+        update["errors"] = [
+            {
+                "node_name": "finalize",
+                "error_type": "finalize_audit_write_failed",
+                "detail": f"rka_add_note raised: {type(e).__name__}: {str(e)[:200]}",
+                "timestamp": _now_iso(),
+            }
+        ]
+        return update
+
+    # Update the on-disk manifest with the audit_journal_id linkage.
+    manifest.audit_journal_id = audit_id
+    M.save_manifest(manifest)
+
+    update["finalize_outcome"] = "complete"
+    update["audit_journal_id"] = audit_id
+    update["artifacts"] = [
+        {
+            "rka_id": audit_id,
+            "entity_type": "journal",
+            "node_name": "finalize",
+            "timestamp": _now_iso(),
+        }
+    ]
+    return update
