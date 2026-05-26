@@ -515,6 +515,132 @@ def pi_scope_ratify(
 
 
 # ---------------------------------------------------------------------------
+# Phase O O2.2 — pi_deepresearch_prompt (async-pause for SOTA literature scan)
+# ---------------------------------------------------------------------------
+
+
+_DEEPRESEARCH_MIN_PAPER_FLOOR: int = 5
+"""Soft floor on # papers PI should ingest before proceeding to hygiene.
+Below this, the workflow proceeds but stashes a soft-warning note on
+state (renderable by the orchestrator-pi skill for the next phase)."""
+
+
+_DEEPRESEARCH_PROMPT_TEMPLATE = (
+    "Time to bring in SOTA literature + related work. The orchestrator "
+    "parks here indefinitely — close Claude Desktop now, come back in "
+    "an hour or a week. Accept when you're done.\n\n"
+    "Workflow (in Claude Desktop):\n"
+    "  1. Use Deep Research / web search / Semantic Scholar / arxiv "
+    "     to scan the literature for this project's RQ.\n"
+    "  2. For each useful paper, call rka_enrich_doi(doi=...) OR "
+    "     rka_add_literature(title=..., source='deep-research', "
+    "     tags=['{project_id}', 'literature']). The orchestrator "
+    "     discovers what you added by querying tags on resume.\n"
+    "  3. For broader insights / framing notes, use rka_add_note "
+    "     (source='pi', tags=['{project_id}', 'deep-research-finding']).\n\n"
+    "Recommended floor: at least {floor} papers. The orchestrator will "
+    "warn but proceed below that. Reject if you want to abandon the "
+    "project here."
+)
+
+
+def pi_deepresearch_prompt(
+    state: ResearchWorkflowState,
+    sdk: SDKClient,
+    mcp: MCPClient,
+    interrupt_fn: Callable[[dict], Any],
+) -> dict:
+    """Phase O O2.2 — async-pause interrupt for Deep Research literature scan.
+
+    The interrupt parks indefinitely (LangGraph SqliteSaver durability).
+    The PI works in Claude Desktop's chat (Deep Research, web search,
+    Semantic Scholar MCP, arxiv MCP) and ingests papers via
+    rka_enrich_doi / rka_add_literature with the project's literature
+    tag. The orchestrator does NOT actively poll — it simply waits for
+    the resume.
+
+    On resume (accept):
+      - Queries RKA for ``[project_id, 'literature']``-tagged journals.
+      - Writes state["deepresearch_complete"] = True.
+      - If the count is below the soft floor, emits a soft-warning
+        notification (not an error; the workflow continues).
+
+    On reject:
+      - Writes state["deepresearch_complete"] = False so the routing
+        function can short-circuit to a terminal abandonment.
+
+    Acceptance token: "accept" (per runner _ACCEPT_TOKEN_BY_TYPE).
+    """
+    project_id = state.get("project_id", "")
+    payload = {
+        "type": "pi_deepresearch_prompt",
+        "title": "PI deep research — async pause for literature scan",
+        "prompt": _DEEPRESEARCH_PROMPT_TEMPLATE.format(
+            project_id=project_id or "<project_id>",
+            floor=_DEEPRESEARCH_MIN_PAPER_FLOOR,
+        ),
+        "project_id": project_id,
+        "minimum_paper_floor": _DEEPRESEARCH_MIN_PAPER_FLOOR,
+        "tag_to_query": [project_id, "literature"] if project_id else ["literature"],
+        "async_pause": True,  # signal to the skill: PI may walk away
+        "items": [],
+        "total_items": 0,
+    }
+    pi_response = interrupt_fn(payload)
+    response_text = str(pi_response or "").lower()
+    is_accept = "accept" in response_text
+
+    update: dict[str, Any] = {
+        "current_phase": "init",
+        "current_node": "pi_deepresearch_prompt",
+        "deepresearch_complete": is_accept,
+        "interrupts": [
+            _record_interrupt(
+                node_name="pi_deepresearch_prompt",
+                payload_size=0,
+                response=pi_response,
+                batch_review_used=False,
+            )
+        ],
+    }
+
+    if not is_accept:
+        return update
+
+    # Count literature on accept; emit soft-warning notification if low.
+    literature_count = 0
+    if project_id:
+        try:
+            result = mcp.rka_get_journal(
+                tags=[project_id, "literature"], limit=500
+            )
+        except Exception:  # noqa: BLE001
+            result = None
+        if isinstance(result, list):
+            literature_count = len(result)
+        elif isinstance(result, dict):
+            entries = result.get("entries") or result.get("results") or []
+            literature_count = len(entries) if isinstance(entries, list) else 0
+
+    if literature_count < _DEEPRESEARCH_MIN_PAPER_FLOOR:
+        update["notifications"] = [
+            {
+                "channel": "bell",
+                "message": (
+                    f"Deep research advanced with {literature_count} literature "
+                    f"entries (soft floor is {_DEEPRESEARCH_MIN_PAPER_FLOOR}). "
+                    f"PI can return to O2 later to ingest more before O4 plan "
+                    f"synthesis if desired."
+                ),
+                "timestamp": _now_iso(),
+                "delivered": False,
+            }
+        ]
+
+    return update
+
+
+# ---------------------------------------------------------------------------
 # 4. pi_onboarding_topic — initial topic elicitation (Phase D)
 # ---------------------------------------------------------------------------
 

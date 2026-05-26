@@ -314,4 +314,6 @@ ONBOARDING_NODE_NAMES: tuple[str, ...] = (
     "pi_scope_ratify",
     # O2.1 (mkdir + .rka scaffold on disk):
     "workspace_setup",
+    # O2.2 (async-pause for Deep Research literature scan):
+    "pi_deepresearch_prompt",
 )
