@@ -32,6 +32,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from orchestrator import manifest as M
+from orchestrator import onboarding_schemas as OS
 from orchestrator import tool_registry as TR
 from orchestrator.llm_client import SDKClient
 from orchestrator.mcp_client import MCPClient
@@ -107,6 +108,262 @@ def capture_idea_node(
         "current_phase": "init",
         "current_node": "capture_idea",
         "ingested_source_ids": existing_ids,
+    }
+
+
+# ---------------------------------------------------------------------------
+# O1.2 — idea_polish_node (Brain composes PolishedIdea from PI's free-form idea)
+# ---------------------------------------------------------------------------
+
+
+_IDEA_POLISH_PROMPT_TEMPLATE = """\
+You are the Brain composing a structured polish of a PI's research-project
+description for an early-onboarding artifact. The PI just finished
+ingesting source material and described the project in chat.
+
+Your job: read everything the PI has surfaced about this project and
+emit a single JSON object conforming to the PolishedIdea schema below.
+Keep each field tight (a sentence to a short paragraph each). Do NOT
+invent claims the PI didn't make — when the PI's description is vague
+on a field, place a candid placeholder ("(PI did not specify)") rather
+than fabricate.
+
+## Project context
+
+PI's free-form description:
+{pi_description}
+
+Ingested source summaries (PI-summarized via rka_add_note, tag
+'ingested-source'; you should reflect these when composing
+novelty_hypothesis and open_assumptions):
+{ingested_summaries}
+
+Ingested source IDs (for the schema field):
+{ingested_ids}
+
+## PolishedIdea schema
+
+```json
+{{
+  "research_question":   "one-sentence research question",
+  "motivation":          "1 short paragraph on why this matters",
+  "scope":               "what's in vs out of scope",
+  "novelty_hypothesis":  "what the project claims is new",
+  "target_venue":        "venue acronym or null if unspecified",
+  "open_assumptions":    ["assumption 1", "assumption 2", ...],
+  "ingested_sources":    ["jrn_...", "jrn_..."]
+}}
+```
+
+## Output
+
+Return a single JSON object inside a ```json fenced block. The block
+should be the LAST JSON object in your reply (you may think out loud
+before it). All four required string fields
+(research_question, motivation, scope, novelty_hypothesis) must be
+present + non-empty; lists may be empty. Re-use the ingested source
+IDs verbatim — do not invent or paraphrase the IDs.
+"""
+
+_IDEA_POLISH_MAX_RETRIES: int = 1
+"""On parse failure, retry once with corrective feedback before
+recording an ErrorRecord. Matches the Phase 2.5 'one-retry-then-record'
+pattern used by mission_execute proposed_actions parsing."""
+
+
+def _build_idea_polish_prompt(
+    *,
+    pi_description: str,
+    ingested_summaries: list[dict],
+    ingested_ids: list[str],
+) -> str:
+    if not pi_description.strip():
+        pi_description = (
+            "(PI did not provide a free-form description; rely on the "
+            "ingested source summaries below.)"
+        )
+    if not ingested_summaries:
+        summaries_block = "(no sources ingested yet)"
+    else:
+        lines = []
+        for s in ingested_summaries[:20]:  # cap to keep prompt bounded
+            sid = s.get("id") or s.get("rka_id") or "<no-id>"
+            content = (s.get("content") or "").strip().splitlines()
+            preview = "\n    ".join(content[:6]) or "(empty)"
+            lines.append(f"  - {sid}:\n    {preview}")
+        summaries_block = "\n".join(lines)
+
+    ids_repr = json.dumps(ingested_ids[:50])
+    return _IDEA_POLISH_PROMPT_TEMPLATE.format(
+        pi_description=pi_description.strip(),
+        ingested_summaries=summaries_block,
+        ingested_ids=ids_repr,
+    )
+
+
+def _fetch_ingested_summaries(
+    mcp: MCPClient, *, project_id: str, ingested_ids: list[str]
+) -> list[dict]:
+    """Pull the full journal entries for the ingested sources so the
+    Brain can read the actual PI-written summaries (not just the IDs).
+
+    Reads via rka_get_journal(tags=[project_id, 'ingested-source']);
+    falls back to an empty list on MCP error so idea_polish can still
+    run against the PI's description text alone.
+    """
+    if not project_id or not ingested_ids:
+        return []
+    try:
+        result = mcp.rka_get_journal(
+            tags=[project_id, "ingested-source"], limit=200
+        )
+    except Exception:  # noqa: BLE001
+        return []
+    if isinstance(result, dict):
+        entries = result.get("entries") or result.get("results") or []
+    elif isinstance(result, list):
+        entries = result
+    else:
+        entries = []
+    # Filter to entries matching the IDs from state (defensive — the
+    # tag-filter should already do this, but be conservative).
+    wanted = set(ingested_ids)
+    out: list[dict] = []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        eid = e.get("id") or e.get("rka_id") or e.get("jrn_id")
+        if eid and str(eid) in wanted:
+            out.append(e)
+    return out or [e for e in entries if isinstance(e, dict)]
+
+
+def idea_polish_node(
+    state: ResearchWorkflowState, sdk: SDKClient, mcp: MCPClient
+) -> dict:
+    """O1.2 — Brain composes a structured PolishedIdea from the PI's idea text.
+
+    Inputs (state):
+      - project_id              — RKA project the polish anchors to.
+      - brain_position          — PI's free-form description text (set by
+                                  pi_idea_capture on the orchestrator_correct
+                                  path; may be empty on the accept-only path).
+      - ingested_source_ids     — list of jrn_… (set by pi_idea_capture).
+
+    Behavior:
+      1. Fetches the actual ingested-source journal contents via MCP.
+      2. Builds the polish prompt + asks Brain for structured JSON.
+      3. Parses + validates via PolishedIdea.from_dict; one retry on
+         parse failure with corrective feedback; ErrorRecord on
+         second failure.
+      4. Writes the polished idea to RKA as a journal entry
+         (tags=[project_id, 'polished-idea']).
+      5. Writes the polished idea + the journal ID back to state.
+
+    State writes:
+      - current_node            = "idea_polish"
+      - current_phase           = "init"
+      - polished_idea           — dict form of PolishedIdea (for downstream
+                                  pi_scope_ratify rendering)
+      - artifacts               — one ArtifactRef for the polished-idea journal
+      - errors                  — populated on terminal parse failure
+    """
+    project_id = state.get("project_id", "")
+    pi_description = state.get("brain_position", "") or ""
+    ingested_ids = list(state.get("ingested_source_ids") or [])
+
+    ingested_summaries = _fetch_ingested_summaries(
+        mcp, project_id=project_id, ingested_ids=ingested_ids
+    )
+
+    base_prompt = _build_idea_polish_prompt(
+        pi_description=pi_description,
+        ingested_summaries=ingested_summaries,
+        ingested_ids=ingested_ids,
+    )
+
+    parsed: Optional[OS.PolishedIdea] = None
+    last_error_detail: str = ""
+    attempt_prompt = base_prompt
+    for attempt in range(_IDEA_POLISH_MAX_RETRIES + 1):
+        reply = sdk.complete(prompt=attempt_prompt, system=BRAIN_SYSTEM)
+        block = OS.extract_json_block(reply)
+        if block is None:
+            last_error_detail = "no parseable JSON block in Brain reply"
+        else:
+            try:
+                parsed = OS.PolishedIdea.from_dict(block)
+                break
+            except ValueError as ve:
+                last_error_detail = str(ve)
+        # Compose corrective feedback for the retry attempt.
+        attempt_prompt = (
+            base_prompt
+            + "\n\n## Parse-retry feedback\n"
+            + f"Your previous reply could not be parsed: {last_error_detail}.\n"
+            + "Re-emit a single ```json fenced block containing every required "
+            + "field as a non-empty string. Required fields: research_question, "
+            + "motivation, scope, novelty_hypothesis."
+        )
+
+    if parsed is None:
+        return {
+            "current_phase": "init",
+            "current_node": "idea_polish",
+            "errors": [
+                {
+                    "node_name": "idea_polish",
+                    "error_type": "idea_polish_parse_failure",
+                    "detail": (
+                        f"Brain failed to emit valid PolishedIdea JSON after "
+                        f"{_IDEA_POLISH_MAX_RETRIES + 1} attempts: {last_error_detail}"
+                    ),
+                    "timestamp": _now_iso(),
+                }
+            ],
+        }
+
+    # If Brain emitted an empty ingested_sources list, splice in the
+    # IDs from state (Brain often forgets to copy them back).
+    if not parsed.ingested_sources and ingested_ids:
+        parsed.ingested_sources = list(ingested_ids)
+
+    # Persist as a polished-idea journal entry.
+    polished_json = json.dumps(parsed.to_dict(), indent=2, ensure_ascii=False)
+    try:
+        journal_id = mcp.rka_add_note(
+            content=polished_json,
+            type="note",
+            source="brain",
+            tags=[project_id, "polished-idea"] if project_id else ["polished-idea"],
+        )
+    except Exception as e:  # noqa: BLE001
+        return {
+            "current_phase": "init",
+            "current_node": "idea_polish",
+            "polished_idea": parsed.to_dict(),
+            "errors": [
+                {
+                    "node_name": "idea_polish",
+                    "error_type": "idea_polish_journal_write_failed",
+                    "detail": f"rka_add_note raised: {type(e).__name__}: {str(e)[:200]}",
+                    "timestamp": _now_iso(),
+                }
+            ],
+        }
+
+    return {
+        "current_phase": "init",
+        "current_node": "idea_polish",
+        "polished_idea": parsed.to_dict(),
+        "artifacts": [
+            {
+                "rka_id": journal_id,
+                "entity_type": "journal",
+                "node_name": "idea_polish",
+                "timestamp": _now_iso(),
+            }
+        ],
     }
 
 

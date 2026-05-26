@@ -308,4 +308,6 @@ ONBOARDING_NODE_NAMES: tuple[str, ...] = (
     # O1.1 (idea capture):
     "capture_idea",
     "pi_idea_capture",
+    # O1.2 (Brain polish of the captured idea):
+    "idea_polish",
 )
