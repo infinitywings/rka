@@ -390,6 +390,131 @@ def pi_idea_capture(
 
 
 # ---------------------------------------------------------------------------
+# Phase O O1.3 — pi_scope_ratify (TWO-TAP ratification of the polished idea)
+# ---------------------------------------------------------------------------
+
+
+def _render_polished_idea_markdown(p: dict) -> str:
+    """Pretty-print the PolishedIdea dict as markdown sections for the
+    PI to read at ratification time. Tolerant of missing/empty fields
+    (renders "(unspecified)" rather than raising)."""
+    if not isinstance(p, dict):
+        return "(no polished idea on state)"
+
+    def _field(key: str, fallback: str = "(unspecified)") -> str:
+        v = p.get(key)
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return fallback
+        return str(v).strip()
+
+    sections = [
+        "## Research question",
+        _field("research_question"),
+        "",
+        "## Motivation",
+        _field("motivation"),
+        "",
+        "## Scope",
+        _field("scope"),
+        "",
+        "## Novelty hypothesis",
+        _field("novelty_hypothesis"),
+        "",
+        f"**Target venue:** {_field('target_venue', '(none specified)')}",
+        "",
+    ]
+    assumptions = p.get("open_assumptions") or []
+    if assumptions:
+        sections.append("## Open assumptions")
+        for a in assumptions:
+            if a:
+                sections.append(f"  - {a}")
+        sections.append("")
+    sources = p.get("ingested_sources") or []
+    if sources:
+        sections.append("## Backed by ingested sources")
+        for s in sources:
+            if s:
+                sections.append(f"  - {s}")
+        sections.append("")
+    return "\n".join(sections).rstrip()
+
+
+def pi_scope_ratify(
+    state: ResearchWorkflowState,
+    sdk: SDKClient,
+    mcp: MCPClient,
+    interrupt_fn: Callable[[dict], Any],
+) -> dict:
+    """Phase O O1.3 — TWO-TAP ratification of the polished idea (O1.2 output).
+
+    Set-identity pattern (mirrors pi_decision_select / pi_toolkit_ratify):
+    on accept, ``state["scope_ratified"] = True``; on reject/correct,
+    cleared to False so the routing fn loops back to capture_idea.
+
+    Payload carries:
+      - The PolishedIdea dict on ``items[0]`` so Claude-the-assistant
+        can render its fields individually + structure the TWO-TAP
+        ask.
+      - A pre-rendered markdown blob (``rendered_markdown``) for
+        skills/UIs that prefer the bake-out.
+      - Type-level TWO-TAP signal (``two_tap_required = true``,
+        ``two_tap_label = "Confirm scope locks the project's framing"``)
+        so the skill's rendering rules can present the second
+        confirmation tap. The orchestrator-pi skill enforces the
+        TWO-TAP at presentation time; the Python node does not.
+
+    PI's resume token:
+      - 'accept'  → scope_ratified = True; advance to O2
+      - 'reject'  → scope_ratified = False; loop back to capture_idea
+      - <freeform text> (correct) → scope_ratified = False; the text
+        is the redirection feedback for the next idea_polish pass.
+    """
+    polished = state.get("polished_idea") or {}
+
+    payload, batched = _build_interrupt_payload(
+        node_name="pi_scope_ratify",
+        items=[polished] if polished else [],
+        title="PI ratification — polished idea (TWO-TAP)",
+    )
+    payload["rendered_markdown"] = _render_polished_idea_markdown(polished)
+    payload["two_tap_required"] = True
+    payload["two_tap_label"] = (
+        "Confirm the polished scope locks the project's framing. You "
+        "can still extend in later phases, but this is the foundation."
+    )
+
+    pi_response = interrupt_fn(payload)
+    response_text = str(pi_response or "").lower()
+    is_accept = "accept" in response_text
+
+    update: dict[str, Any] = {
+        "current_phase": "init",
+        "current_node": "pi_scope_ratify",
+        "scope_ratified": is_accept,
+        "batch_review_active": batched,
+        "batch_review_payload_size": len(payload.get("items") or []),
+        "interrupts": [
+            _record_interrupt(
+                node_name="pi_scope_ratify",
+                payload_size=1 if polished else 0,
+                response=pi_response,
+                batch_review_used=batched,
+            )
+        ],
+    }
+
+    # When PI provides freeform correction (i.e., not accept and not the
+    # bare "reject" token), stash the verbatim redirection on
+    # brain_position so the next idea_polish pass reads it as
+    # corrective feedback. On a bare reject, leave brain_position alone.
+    if not is_accept and response_text and response_text != "reject":
+        update["brain_position"] = str(pi_response)[:5000]
+
+    return update
+
+
+# ---------------------------------------------------------------------------
 # 4. pi_onboarding_topic — initial topic elicitation (Phase D)
 # ---------------------------------------------------------------------------
 
