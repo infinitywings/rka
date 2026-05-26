@@ -996,6 +996,330 @@ def claim_extraction_node(
 
 
 # ---------------------------------------------------------------------------
+# O4.1 — plan_synthesis_node (Brain composes the ResearchPlan)
+# ---------------------------------------------------------------------------
+
+
+_PLAN_SYNTHESIS_MAX_RETRIES: int = 1
+"""One retry on parse failure with corrective feedback before ErrorRecord.
+Same pattern as idea_polish_node + executor.mission_execute."""
+
+_PLAN_SYNTHESIS_PROMPT_TEMPLATE = """\
+You are the Brain synthesizing the project's research plan during Phase O4.
+This plan, once ratified by PI, becomes THE contract licensing autonomous
+mission execution at Phase H. Be specific. Be falsifiable. Don't pad.
+
+## Project context
+
+Polished idea (from O1.2):
+{polished_idea_block}
+
+Polished-idea journal ID: {polished_idea_journal_id}
+
+Literature gaps + finding count summary:
+{literature_summary}
+
+Extracted claims summary ({claim_count} total):
+{claims_summary}
+
+Open hygiene findings ({hygiene_count}):
+{hygiene_summary}
+
+## ResearchPlan schema
+
+```json
+{{
+  "refined_research_question": "one-sentence refined RQ",
+  "hypotheses": [
+    {{
+      "statement":  "atomic hypothesis statement",
+      "falsifier":  "what would refute it (the falsifier MUST be measurable)",
+      "confidence": "high" | "medium" | "low"
+    }}
+  ],
+  "variables": [
+    {{
+      "name":        "variable name",
+      "kind":        "independent" | "dependent" | "confound",
+      "description": "what this variable captures",
+      "measurement": "how it's measured (or null)"
+    }}
+  ],
+  "experimental_matrix": "markdown table OR structured description of the experiment design",
+  "literature_gaps": ["gap 1", "gap 2", ...],
+  "milestones": [
+    {{
+      "milestone_id":              "m_01" (matches ^m_\\d{{2,4}}$),
+      "phase":                     "literature" | "research_design" | "experiment_design"
+                                  | "experiment_execution" | "analysis" | "writeup",
+      "objective":                 "one-sentence objective for this mission",
+      "acceptance_criteria":       "what 'done' looks like — checkable",
+      "scope_boundaries":          "what's out of scope for this mission",
+      "depends_on_milestone":      "m_01" (or null for the first mission),
+      "estimated_llm_cost_usd":    0.50,
+      "estimated_wall_clock_min":  45
+    }}
+  ],
+  "open_risks": ["risk 1", "risk 2", ...],
+  "polished_idea_journal_id": "{polished_idea_journal_id}"
+}}
+```
+
+## Output
+
+Return a single ```json fenced block. Required:
+  - 1+ hypotheses, each with statement + falsifier + confidence
+  - 1+ variables, each with name + kind + description
+  - 1+ milestones with valid milestone_id, phase, and acceptance_criteria
+  - experimental_matrix non-empty
+  - polished_idea_journal_id verbatim from the prompt above
+  - depends_on_milestone (when set) must reference an existing milestone_id
+
+milestone_id values must follow the format ``m_<digits>`` (e.g., m_01).
+Cost + wall-clock estimates may be rough — display them as "estimated";
+the orchestrator will track actual usage downstream. Empty
+literature_gaps / open_risks lists are valid.
+"""
+
+
+def _render_polished_idea_block_for_plan(polished: dict | None) -> str:
+    if not isinstance(polished, dict) or not polished:
+        return "(none — Brain should ask PI to re-run O1 idea capture)"
+    lines = [
+        f"RQ: {polished.get('research_question', '(unspecified)')}",
+        f"Motivation: {polished.get('motivation', '(unspecified)')}",
+        f"Scope: {polished.get('scope', '(unspecified)')}",
+        f"Novelty: {polished.get('novelty_hypothesis', '(unspecified)')}",
+        f"Target venue: {polished.get('target_venue') or '(unspecified)'}",
+    ]
+    assumptions = polished.get("open_assumptions") or []
+    if assumptions:
+        lines.append("Open assumptions: " + "; ".join(assumptions))
+    return "\n".join(lines)
+
+
+def _render_literature_summary(literature: list[dict] | None) -> str:
+    if not literature:
+        return "(no literature ingested at O2 — Brain may need to ask PI to extend)"
+    titles = []
+    for e in literature[:10]:
+        if not isinstance(e, dict):
+            continue
+        title = e.get("title") or e.get("content", "")[:120] or "(untitled)"
+        titles.append(f"  - {title}")
+    out = f"{len(literature)} literature entries; first 10 by title:\n" + "\n".join(titles)
+    if len(literature) > 10:
+        out += f"\n  ... and {len(literature) - 10} more."
+    return out
+
+
+def _render_claims_summary(claims: list[dict] | None) -> str:
+    if not claims:
+        return "(no claims extracted at O3.2)"
+    lines = []
+    for c in claims[:15]:
+        if not isinstance(c, dict):
+            continue
+        ct = c.get("claim_type") or "(type?)"
+        content = (c.get("content") or "").strip()[:200]
+        lines.append(f"  - [{ct}] {content}")
+    suffix = f"\n  ... and {len(claims) - 15} more." if len(claims) > 15 else ""
+    return f"First 15:\n" + "\n".join(lines) + suffix
+
+
+def _render_hygiene_summary(hygiene: list[dict] | None) -> str:
+    if not hygiene:
+        return "(none — RKA hygiene is clean)"
+    by_kind: dict[str, int] = {}
+    for f in hygiene:
+        if not isinstance(f, dict):
+            continue
+        by_kind[f.get("kind") or "?"] = by_kind.get(f.get("kind") or "?", 0) + 1
+    return "; ".join(f"{k}: {v}" for k, v in by_kind.items())
+
+
+def plan_synthesis_node(
+    state: ResearchWorkflowState, sdk: SDKClient, mcp: MCPClient
+) -> dict:
+    """Phase O4.1 — Brain produces the structured ResearchPlan.
+
+    Inputs (state):
+      - project_id            — required.
+      - polished_idea         — from O1.2.
+      - claim_ids             — from O3.2; we fetch the claim entities
+                                via rka_list_claims for context.
+      - hygiene_findings      — from O3.1 (informational; surfaces in
+                                prompt context).
+
+    Behavior:
+      1. Find the polished-idea journal ID (preferred via state's
+         artifacts, fallback to a tag query).
+      2. Fetch:
+           - literature journals (tag query)
+           - claims (rka_list_claims; client-side filter when needed)
+           - hygiene findings (already on state).
+      3. Compose the plan prompt + call Brain.
+      4. Parse + validate via ResearchPlan.from_dict.
+         One retry on failure with corrective feedback; ErrorRecord
+         on second failure.
+      5. Persist the validated plan as a journal entry
+         (tags=[project_id, 'ratified-plan-draft']) for pi_plan_ratify
+         (O4.2) to read.
+      6. Write state[ratified_plan_journal_id, ...] (the journal is a
+         DRAFT — actual ratification dec_… lands in O4.2 on accept).
+    """
+    project_id = state.get("project_id", "")
+    if not project_id:
+        return {
+            "current_phase": "init",
+            "current_node": "plan_synthesis",
+            "errors": [
+                {
+                    "node_name": "plan_synthesis",
+                    "error_type": "plan_synthesis_no_project_id",
+                    "detail": "plan_synthesis_node requires state['project_id']",
+                    "timestamp": _now_iso(),
+                }
+            ],
+        }
+
+    polished = state.get("polished_idea") or {}
+
+    # Find the polished-idea journal ID.
+    polished_journal_id = ""
+    for art in state.get("artifacts") or []:
+        if isinstance(art, dict) and art.get("node_name") == "idea_polish":
+            polished_journal_id = art.get("rka_id") or ""
+            break
+    if not polished_journal_id:
+        # Tag-query fallback.
+        ids = _list_journal_ids_by_tag(mcp, tags=[project_id, "polished-idea"], limit=10)
+        polished_journal_id = ids[-1] if ids else ""
+
+    # Literature for context.
+    try:
+        literature = mcp.rka_get_journal(tags=[project_id, "literature"], limit=200)
+    except Exception:  # noqa: BLE001
+        literature = []
+    if isinstance(literature, dict):
+        literature = literature.get("entries") or literature.get("results") or []
+    if not isinstance(literature, list):
+        literature = []
+
+    # Claims for context.
+    claim_ids = list(state.get("claim_ids") or [])
+    try:
+        all_claims = mcp.rka_list_claims(limit=200)
+    except Exception:  # noqa: BLE001
+        all_claims = []
+    if not isinstance(all_claims, list):
+        all_claims = []
+    if claim_ids:
+        wanted = set(claim_ids)
+        claims = [
+            c for c in all_claims
+            if isinstance(c, dict)
+            and (c.get("id") or c.get("clm_id")) in wanted
+        ]
+    else:
+        claims = all_claims
+
+    hygiene = state.get("hygiene_findings") or []
+
+    base_prompt = _PLAN_SYNTHESIS_PROMPT_TEMPLATE.format(
+        polished_idea_block=_render_polished_idea_block_for_plan(polished),
+        polished_idea_journal_id=polished_journal_id or "(unknown)",
+        literature_summary=_render_literature_summary(literature),
+        claim_count=len(claims),
+        claims_summary=_render_claims_summary(claims),
+        hygiene_count=len(hygiene),
+        hygiene_summary=_render_hygiene_summary(hygiene),
+    )
+
+    parsed: Optional[OS.ResearchPlan] = None
+    last_error_detail: str = ""
+    attempt_prompt = base_prompt
+    for attempt in range(_PLAN_SYNTHESIS_MAX_RETRIES + 1):
+        reply = sdk.complete(prompt=attempt_prompt, system=BRAIN_SYSTEM)
+        block = OS.extract_json_block(reply)
+        if block is None:
+            last_error_detail = "no parseable JSON block in Brain reply"
+        else:
+            try:
+                parsed = OS.ResearchPlan.from_dict(block)
+                break
+            except ValueError as ve:
+                last_error_detail = str(ve)
+        attempt_prompt = (
+            base_prompt
+            + "\n\n## Parse-retry feedback\n"
+            + f"Your previous reply could not be parsed: {last_error_detail}.\n"
+            + "Re-emit a single ```json fenced block strictly conforming to "
+            + "the ResearchPlan schema above. Required: 1+ hypotheses, "
+            + "1+ variables, 1+ milestones, valid milestone_id pattern, "
+            + "and every depends_on_milestone must reference an existing "
+            + "milestone_id."
+        )
+
+    if parsed is None:
+        return {
+            "current_phase": "init",
+            "current_node": "plan_synthesis",
+            "errors": [
+                {
+                    "node_name": "plan_synthesis",
+                    "error_type": "plan_synthesis_parse_failure",
+                    "detail": (
+                        f"Brain failed to emit valid ResearchPlan JSON after "
+                        f"{_PLAN_SYNTHESIS_MAX_RETRIES + 1} attempts: {last_error_detail}"
+                    ),
+                    "timestamp": _now_iso(),
+                }
+            ],
+        }
+
+    # If Brain dropped the polished_idea_journal_id, splice it back.
+    if not parsed.polished_idea_journal_id and polished_journal_id:
+        parsed.polished_idea_journal_id = polished_journal_id
+
+    plan_json = json.dumps(parsed.to_dict(), indent=2, ensure_ascii=False)
+    try:
+        journal_id = mcp.rka_add_note(
+            content=plan_json,
+            type="note",
+            source="brain",
+            tags=[project_id, "ratified-plan-draft"],
+        )
+    except Exception as e:  # noqa: BLE001
+        return {
+            "current_phase": "init",
+            "current_node": "plan_synthesis",
+            "errors": [
+                {
+                    "node_name": "plan_synthesis",
+                    "error_type": "plan_synthesis_journal_write_failed",
+                    "detail": f"rka_add_note raised: {type(e).__name__}: {str(e)[:200]}",
+                    "timestamp": _now_iso(),
+                }
+            ],
+        }
+
+    return {
+        "current_phase": "init",
+        "current_node": "plan_synthesis",
+        "ratified_plan_journal_id": journal_id,
+        "artifacts": [
+            {
+                "rka_id": journal_id,
+                "entity_type": "journal",
+                "node_name": "plan_synthesis",
+                "timestamp": _now_iso(),
+            }
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
 # D3a — research_toolkit_node (registry-based + Brain LLM scoring)
 # ---------------------------------------------------------------------------
 

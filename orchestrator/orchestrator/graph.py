@@ -321,4 +321,6 @@ ONBOARDING_NODE_NAMES: tuple[str, ...] = (
     # O3.2 (Brain extracts atomic claims + TWO-TAP review):
     "claim_extraction",
     "pi_claims_review",
+    # O4.1 (Brain composes ResearchPlan):
+    "plan_synthesis",
 )
