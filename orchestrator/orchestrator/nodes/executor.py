@@ -102,7 +102,51 @@ EXECUTOR_SYSTEM = (
     "planning `proposed_actions`; ground every action item in the target "
     "mission's task list, not the wrapper's planning structure. A wrapper "
     "Backbrief's T1-T7 are framework metadata describing what the PI/Brain did "
-    "to PREPARE this run — they are not your work to re-do."
+    "to PREPARE this run — they are not your work to re-do.\n\n"
+    # ── Phase-B (agentic) — Delta #19: enumerate the dispatcher's allowlist.
+    # Empirical driver: Phase-A2 live test on the IoT-edge-LLM project surfaced
+    # Brain repeatedly proposing tools outside WRITE_TOOLS (rka_present_decision,
+    # rka_resolve_checkpoint, etc.). execute_ratified_actions correctly rejected
+    # them, but the Brain didn't know the allowlist existed. This delta enumerates
+    # it at the prompt layer so the Brain can self-constrain.
+    # ────────────────────────────────────────────────────────────────────────────
+    "Allowed write tools — your `proposed_actions[*].tool` MUST be one of: "
+    + ", ".join(WRITE_TOOLS) + ". "
+    "The parent-side `execute_ratified_actions` dispatcher rejects any tool "
+    "outside this list with `ratified_action_tool_not_allowed` — your "
+    "proposed work will be lost. NEVER propose `rka_present_decision`: "
+    "`pi_decision_select` already presents to PI; use `rka_add_decision` to "
+    "create the underlying record and let the orchestrator render it. "
+    "NEVER propose lifecycle tools (`rka_resolve_checkpoint`, "
+    "`rka_supersede_decision`, `rka_advance_rq`), session-routing tools "
+    "(`rka_set_project`, `rka_list_projects`), hook-management tools, "
+    "eviction sweeps, or any tool not in the allowlist above — they are "
+    "out of scope for parent-side dispatch and the orchestrator rejects "
+    "them. If your work requires a write tool outside the allowlist, "
+    "escalate via `rka_submit_checkpoint` describing the gap; do not "
+    "synthesize the work around an unavailable tool with placeholder "
+    "values like `\"REQUIRES_PRIOR_OUTPUT\"` (the dispatcher cannot "
+    "thread one action's return into another's args).\n\n"
+    # Delta #20 — chain awareness. Phase-C added `{{PA-N.id}}` substitution
+    # in execute_ratified_actions: actions can now reference earlier actions'
+    # return values. Brain must use the canonical syntax, not literal
+    # placeholder strings (which Phase-A2 live test demonstrated would
+    # otherwise leak through unresolved).
+    "Action chaining. `execute_ratified_actions` supports `{{PA-N.id}}` "
+    "substitution: any string in a later action's `args` may reference an "
+    "earlier action's returned id by 1-indexed position. Example: "
+    '`{tool: "rka_add_decision", args: {...}}` followed by '
+    '`{tool: "rka_add_note", args: {content: "...", '
+    'related_decisions: ["{{PA-1.id}}"]}}` — the orchestrator substitutes '
+    "PA-1's returned dec_… id before dispatching PA-2. Constraints: "
+    "(a) only `.id` is supported (no `.timestamp` / `.entity_type` etc.); "
+    "(b) references are 1-indexed; (c) forward references and self-references "
+    "are errors and skip the offending action; (d) references to a prior "
+    "action that failed (no id returned) yield an error. NEVER use literal "
+    "placeholder strings like `\"REQUIRES_PA1_DECISION_ID\"` — they pass "
+    "through unmodified to the dispatcher and the call fails at the RKA "
+    "API boundary. If a chain you need can't be expressed in this syntax, "
+    "escalate via `rka_submit_checkpoint` describing the structure."
 )
 
 
@@ -433,6 +477,106 @@ _WRITE_TOOL_ENTITY_TYPES: dict[str, str] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Phase-C (agentic) — chain substitution in ratified actions
+# ---------------------------------------------------------------------------
+
+# `{{PA-N.id}}` references action N's (1-indexed) return value (the rka_id
+# the dispatched WRITE_TOOL returned). Only `.id` is supported in Phase-C;
+# future versions can add `.entity_type` / `.timestamp` etc. as needed.
+# Empirical driver: the Phase-A2 IoT-edge-LLM live test showed Brain wanting
+# to chain a `rka_resolve_checkpoint` (creating a decision_id) into a
+# subsequent `rka_present_decision(decision_id=<that>)` — and using a
+# literal placeholder string `'REQUIRES_PA1_DECISION_ID'` because there
+# was no way to express the dependency. This closes that.
+_CHAIN_REF_PATTERN = re.compile(r"\{\{PA-(\d+)\.([a-zA-Z_]+)\}\}")
+_SUPPORTED_CHAIN_FIELDS: frozenset[str] = frozenset({"id"})
+
+
+class _ChainResolutionError(Exception):
+    """Raised by _substitute_chain_refs when a reference is invalid.
+
+    The message names the specific failure mode (forward ref, missing
+    prior result, unsupported field) so the ErrorRecord is diagnostic.
+    """
+
+
+def _substitute_chain_refs(
+    value: Any,
+    *,
+    current_index: int,  # 1-indexed
+    previous_results: dict[int, str],
+    total_actions: int,
+) -> Any:
+    """Recursively walk `value` and replace `{{PA-N.field}}` references.
+
+    Returns the substituted value (same shape as input — dict/list/str
+    preserved). Raises _ChainResolutionError if any reference is invalid
+    (forward ref, self ref, out-of-range, unsupported field, or refers
+    to a prior action that failed and produced no id).
+
+    The reference syntax exists only inside string args (and recurses
+    into nested dicts/lists). Non-string scalars (int/float/bool/None)
+    pass through unchanged.
+    """
+    if isinstance(value, str):
+        # Fast path: no `{{` present → unchanged.
+        if "{{" not in value:
+            return value
+
+        def _replace(match: re.Match) -> str:
+            n_str, field = match.group(1), match.group(2)
+            n = int(n_str)
+            if field not in _SUPPORTED_CHAIN_FIELDS:
+                raise _ChainResolutionError(
+                    f"unsupported chain field {field!r} in {{{{PA-{n}.{field}}}}} — "
+                    f"only {sorted(_SUPPORTED_CHAIN_FIELDS)} supported in Phase-C"
+                )
+            if n < 1 or n > total_actions:
+                raise _ChainResolutionError(
+                    f"chain reference PA-{n} out of range "
+                    f"(1..{total_actions} for this proposed_actions list)"
+                )
+            if n >= current_index:
+                raise _ChainResolutionError(
+                    f"chain reference PA-{n} is forward-ref or self-ref "
+                    f"from action PA-{current_index} — only prior actions "
+                    f"may be referenced"
+                )
+            if n not in previous_results:
+                raise _ChainResolutionError(
+                    f"chain reference PA-{n}.{field} cannot resolve: "
+                    f"PA-{n} either failed or produced no id"
+                )
+            return previous_results[n]
+
+        return _CHAIN_REF_PATTERN.sub(_replace, value)
+
+    if isinstance(value, dict):
+        return {
+            k: _substitute_chain_refs(
+                v,
+                current_index=current_index,
+                previous_results=previous_results,
+                total_actions=total_actions,
+            )
+            for k, v in value.items()
+        }
+
+    if isinstance(value, list):
+        return [
+            _substitute_chain_refs(
+                item,
+                current_index=current_index,
+                previous_results=previous_results,
+                total_actions=total_actions,
+            )
+            for item in value
+        ]
+
+    return value
+
+
 def execute_ratified_actions(
     state: ResearchWorkflowState, sdk: SDKClient, mcp: MCPClient
 ) -> dict:
@@ -447,6 +591,14 @@ def execute_ratified_actions(
     `ArtifactRef`s; failures produce `ErrorRecord`s — both append-only
     per the state schema's reducer convention.
 
+    Phase-C (agentic) — chain substitution. Before dispatching each
+    action, walks `args` recursively and substitutes any
+    `{{PA-N.id}}` references (1-indexed) with the rka_id returned by
+    the corresponding prior proposed_action. Forward references,
+    self-references, and references to failed actions yield an
+    ErrorRecord and skip the offending action without aborting the
+    rest of the chain.
+
     A no-op when `state["ratified_actions"]` is empty (rejected, escaped,
     or never populated). This means the node sits unconditionally between
     `pi_decision_select` and `final_synthesis` in the graph without
@@ -455,14 +607,17 @@ def execute_ratified_actions(
     actions = state.get("ratified_actions", []) or []
     new_artifacts: list[ArtifactRef] = []
     new_errors: list[ErrorRecord] = []
+    # 1-indexed map of action-position → returned rka_id; populated as we
+    # dispatch successfully. Phase-C chain substitution consults this.
+    previous_results: dict[int, str] = {}
 
-    for action in actions:
+    for idx, action in enumerate(actions, start=1):
         if not isinstance(action, dict):
             new_errors.append(
                 _make_error(
                     "execute_ratified_actions",
                     "ratified_action_shape_error",
-                    f"action is not a dict (got {type(action).__name__})",
+                    f"PA-{idx}: action is not a dict (got {type(action).__name__})",
                 )
             )
             continue
@@ -477,9 +632,10 @@ def execute_ratified_actions(
                     "execute_ratified_actions",
                     "ratified_action_tool_not_allowed",
                     (
-                        f"tool {tool!r} is not in WRITE_TOOLS registry — "
-                        f"the executor LLM proposed an action the orchestrator "
-                        f"refuses to execute. Phase 2.7 Option C invariant."
+                        f"PA-{idx}: tool {tool!r} is not in WRITE_TOOLS "
+                        f"registry — the executor LLM proposed an action "
+                        f"the orchestrator refuses to execute. "
+                        f"Phase 2.7 Option C invariant."
                     ),
                 )
             )
@@ -492,8 +648,9 @@ def execute_ratified_actions(
                     "execute_ratified_actions",
                     "ratified_action_method_missing",
                     (
-                        f"tool {tool!r} is in WRITE_TOOLS but MCPClient has "
-                        f"no method by that name. Protocol drift; surface."
+                        f"PA-{idx}: tool {tool!r} is in WRITE_TOOLS but "
+                        f"MCPClient has no method by that name. Protocol "
+                        f"drift; surface."
                     ),
                 )
             )
@@ -504,22 +661,44 @@ def execute_ratified_actions(
                 _make_error(
                     "execute_ratified_actions",
                     "ratified_action_args_shape_error",
-                    f"args for {tool!r} is not a dict",
+                    f"PA-{idx}: args for {tool!r} is not a dict",
+                )
+            )
+            continue
+
+        # Phase-C: resolve any `{{PA-N.id}}` placeholders in args.
+        try:
+            resolved_args = _substitute_chain_refs(
+                args,
+                current_index=idx,
+                previous_results=previous_results,
+                total_actions=len(actions),
+            )
+        except _ChainResolutionError as e:
+            new_errors.append(
+                _make_error(
+                    "execute_ratified_actions",
+                    "ratified_action_chain_resolution_failed",
+                    f"PA-{idx}: tool={tool!r} chain-ref error: {e}",
                 )
             )
             continue
 
         try:
-            rka_id = method(**args)
+            rka_id = method(**resolved_args)
         except Exception as e:  # noqa: BLE001 — surface all failures as ErrorRecord
             new_errors.append(
                 _make_error(
                     "execute_ratified_actions",
                     "ratified_action_call_failed",
-                    f"tool={tool!r} args_keys={sorted(args.keys())!r} exc={e!r}",
+                    f"PA-{idx}: tool={tool!r} args_keys={sorted(resolved_args.keys())!r} exc={e!r}",
                 )
             )
             continue
+
+        # Record success for downstream chain references.
+        if rka_id:
+            previous_results[idx] = rka_id
 
         new_artifacts.append(
             {

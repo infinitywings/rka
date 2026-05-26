@@ -580,3 +580,342 @@ def test_execute_ratified_actions_dispatches_rka_bulk_update():
     # No ErrorRecord — the dispatch path that fired the
     # ratified_action_tool_not_allowed error in Phase 2.12 now succeeds.
     assert "errors" not in update
+
+
+# ---------------------------------------------------------------------------
+# Phase-B (agentic) — Delta #19 + #20: WRITE_TOOLS enumeration in
+# EXECUTOR_SYSTEM + action-independence (chain not yet supported)
+# ---------------------------------------------------------------------------
+
+
+def test_EXECUTOR_SYSTEM_enumerates_write_tools_allowlist():
+    """Phase-B Delta #19: empirical driver was the Phase-A2 IoT-edge-LLM
+    live test where Brain repeatedly proposed tools outside WRITE_TOOLS.
+    The prompt now lists every dispatchable tool by name AND names the
+    forbidden patterns. Locks both."""
+    text = executor.EXECUTOR_SYSTEM
+    # Every WRITE_TOOLS entry must appear in the enumeration.
+    from orchestrator.llm_client import WRITE_TOOLS
+    for tool in WRITE_TOOLS:
+        assert tool in text, (
+            f"Phase-B Delta #19: {tool!r} from WRITE_TOOLS must appear "
+            f"in the EXECUTOR_SYSTEM allowlist enumeration"
+        )
+    # Forbidden patterns must be called out by name.
+    for forbidden in (
+        "rka_present_decision",
+        "rka_resolve_checkpoint",
+        "rka_supersede_decision",
+        "rka_set_project",
+    ):
+        assert forbidden in text, (
+            f"Phase-B Delta #19: {forbidden!r} must be explicitly named "
+            f"as out-of-scope in the EXECUTOR_SYSTEM prompt"
+        )
+    # Canonical marker phrase for grep-locking.
+    assert "Allowed write tools" in text
+
+
+def test_EXECUTOR_SYSTEM_documents_chain_substitution_syntax():
+    """Phase-C Delta #20 (revised): execute_ratified_actions now SUPPORTS
+    chain substitution. The prompt teaches the {{PA-N.id}} syntax
+    (1-indexed) so Brain uses it instead of literal placeholder strings
+    like `REQUIRES_PA1_DECISION_ID` (the anti-pattern Phase-A2 live test
+    surfaced)."""
+    text = executor.EXECUTOR_SYSTEM
+    assert "Action chaining" in text, "Phase-C Delta #20 marker phrase missing"
+    assert "{{PA-1.id}}" in text or "{{PA-" in text, (
+        "Phase-C: prompt must teach the {{PA-N.id}} substitution syntax"
+    )
+    # The literal anti-pattern Brain used in Phase-A2 must be called out.
+    assert "REQUIRES_PA1_DECISION_ID" in text or "placeholder" in text.lower(), (
+        "Phase-C: should call out the literal-placeholder anti-pattern "
+        "Brain used in Phase-A2 live test"
+    )
+    assert "1-indexed" in text
+
+
+# ---------------------------------------------------------------------------
+# Phase-C (agentic) — chain substitution in execute_ratified_actions
+# ---------------------------------------------------------------------------
+
+
+class _ChainTrackingMCP:
+    """FakeMCP that returns predictable ids and records the args it was
+    called with (so chain-substitution tests can assert the substituted
+    values actually reached the tool)."""
+
+    def __init__(self, return_ids: list[str] | None = None):
+        self.workflow_thread_id = "thr_test"
+        self._return_ids = list(return_ids or [])
+        self.calls: list[dict] = []
+
+    def _record(self, op: str, **kw) -> str:
+        self.calls.append({"op": op, **kw})
+        if self._return_ids:
+            return self._return_ids.pop(0)
+        return f"{op}_id_{len(self.calls)}"
+
+    def rka_add_note(self, **kw) -> str: return self._record("rka_add_note", **kw)
+    def rka_add_decision(self, **kw) -> str: return self._record("rka_add_decision", **kw)
+    def rka_update_note(self, **kw) -> str: return self._record("rka_update_note", **kw)
+    def rka_create_mission(self, **kw) -> str: return self._record("rka_create_mission", **kw)
+    def rka_submit_report(self, **kw) -> str: return self._record("rka_submit_report", **kw)
+    def rka_submit_checkpoint(self, **kw) -> str: return self._record("rka_submit_checkpoint", **kw)
+    def rka_bulk_update(self, **kw) -> str: return self._record("rka_bulk_update", **kw)
+    def rka_update_mission_status(self, **kw) -> str: return self._record("rka_update_mission_status", **kw)
+    def rka_ingest_document(self, **kw) -> str: return self._record("rka_ingest_document", **kw)
+
+
+class _StubSDK:
+    """No-op SDK used by tests that don't invoke an LLM call (e.g.
+    execute_ratified_actions doesn't talk to the LLM)."""
+
+    def complete(self, **kw) -> str:
+        return ""
+
+
+def _state_with_actions(actions: list[dict]) -> dict:
+    """Shorthand: build a minimal state dict with ratified_actions set."""
+    return {"mission_id": "mis_test", "ratified_actions": actions}
+
+
+def test_chain_substitution_resolves_pa1_id_into_pa2_args():
+    """Phase-C happy path: PA-2 references {{PA-1.id}} and gets PA-1's
+    actual return value substituted before dispatch."""
+    mcp = _ChainTrackingMCP(return_ids=["dec_chain_001", "jrn_chain_002"])
+    state = _state_with_actions(
+        [
+            {
+                "tool": "rka_add_decision",
+                "args": {
+                    "content": "Adopt approach X",
+                    "related_journal": ["jrn_seed"],
+                },
+                "rationale": "PA-1: create decision",
+            },
+            {
+                "tool": "rka_add_note",
+                "args": {
+                    "content": "Implementation note for decision {{PA-1.id}}",
+                    "related_decisions": ["{{PA-1.id}}"],
+                },
+                "rationale": "PA-2: note referencing PA-1",
+            },
+        ]
+    )
+    update = executor.execute_ratified_actions(state, _StubSDK(), mcp)
+
+    # Both dispatched; PA-2's content + related_decisions contain the
+    # substituted PA-1 return id, not the literal placeholder.
+    assert len(mcp.calls) == 2
+    pa2_call = mcp.calls[1]
+    assert pa2_call["op"] == "rka_add_note"
+    assert pa2_call["content"] == "Implementation note for decision dec_chain_001"
+    assert pa2_call["related_decisions"] == ["dec_chain_001"]
+    assert "{{PA-1.id}}" not in str(pa2_call)
+
+    # Both produced artifacts; no errors.
+    assert len(update["artifacts"]) == 2
+    assert "errors" not in update
+
+
+def test_chain_substitution_handles_nested_dict_and_list_args():
+    """Substitution recurses into nested dicts and lists, not just
+    top-level string values."""
+    mcp = _ChainTrackingMCP(return_ids=["dec_root", "jrn_child"])
+    state = _state_with_actions(
+        [
+            {"tool": "rka_add_decision", "args": {"content": "x"}, "rationale": ""},
+            {
+                "tool": "rka_add_note",
+                "args": {
+                    "content": "ok",
+                    "tags": ["plain", "decision={{PA-1.id}}"],
+                    "metadata": {"linked_to": "{{PA-1.id}}", "depth": 1},
+                },
+                "rationale": "",
+            },
+        ]
+    )
+    update = executor.execute_ratified_actions(state, _StubSDK(), mcp)
+    pa2 = mcp.calls[1]
+    assert pa2["tags"] == ["plain", "decision=dec_root"]
+    assert pa2["metadata"] == {"linked_to": "dec_root", "depth": 1}
+    assert "errors" not in update
+
+
+def test_chain_substitution_rejects_forward_reference():
+    """PA-1 referencing PA-2 (or itself) is an error; PA-1 skipped,
+    PA-2 still attempts and succeeds (no chain reference to satisfy)."""
+    mcp = _ChainTrackingMCP(return_ids=["dec_pa2"])
+    state = _state_with_actions(
+        [
+            {
+                "tool": "rka_add_note",
+                "args": {"content": "ref {{PA-2.id}}"},
+                "rationale": "PA-1: forward ref",
+            },
+            {
+                "tool": "rka_add_decision",
+                "args": {"content": "ok"},
+                "rationale": "PA-2: independent",
+            },
+        ]
+    )
+    update = executor.execute_ratified_actions(state, _StubSDK(), mcp)
+    # PA-1 skipped (forward ref); PA-2 dispatched normally.
+    assert len(mcp.calls) == 1
+    assert mcp.calls[0]["op"] == "rka_add_decision"
+    # One error from PA-1.
+    errs = update.get("errors", [])
+    assert len(errs) == 1
+    assert errs[0]["error_type"] == "ratified_action_chain_resolution_failed"
+    assert "PA-1" in errs[0]["detail"] and "forward-ref" in errs[0]["detail"]
+
+
+def test_chain_substitution_rejects_self_reference():
+    """PA-1 referencing PA-1 in its own args is a self-reference error."""
+    mcp = _ChainTrackingMCP()
+    state = _state_with_actions(
+        [
+            {
+                "tool": "rka_add_note",
+                "args": {"content": "self {{PA-1.id}}"},
+                "rationale": "",
+            }
+        ]
+    )
+    update = executor.execute_ratified_actions(state, _StubSDK(), mcp)
+    assert mcp.calls == []
+    errs = update.get("errors", [])
+    assert len(errs) == 1
+    assert "PA-1" in errs[0]["detail"]
+
+
+def test_chain_substitution_rejects_out_of_range():
+    """Reference to PA-99 when only 2 actions exist is out-of-range."""
+    mcp = _ChainTrackingMCP(return_ids=["dec_001"])
+    state = _state_with_actions(
+        [
+            {"tool": "rka_add_decision", "args": {"content": "x"}, "rationale": ""},
+            {
+                "tool": "rka_add_note",
+                "args": {"content": "bogus {{PA-99.id}}"},
+                "rationale": "",
+            },
+        ]
+    )
+    update = executor.execute_ratified_actions(state, _StubSDK(), mcp)
+    # PA-1 dispatched; PA-2 skipped (out of range).
+    assert len(mcp.calls) == 1
+    errs = update.get("errors", [])
+    assert any(
+        "out of range" in e["detail"] and "PA-99" in e["detail"] for e in errs
+    )
+
+
+def test_chain_substitution_rejects_unsupported_field():
+    """Only `.id` is supported in Phase-C; `.timestamp` etc. should error."""
+    mcp = _ChainTrackingMCP(return_ids=["dec_001"])
+    state = _state_with_actions(
+        [
+            {"tool": "rka_add_decision", "args": {"content": "x"}, "rationale": ""},
+            {
+                "tool": "rka_add_note",
+                "args": {"content": "ts: {{PA-1.timestamp}}"},
+                "rationale": "",
+            },
+        ]
+    )
+    update = executor.execute_ratified_actions(state, _StubSDK(), mcp)
+    errs = update.get("errors", [])
+    assert any("unsupported chain field" in e["detail"] for e in errs)
+
+
+def test_chain_substitution_rejects_reference_to_failed_prior_action():
+    """If PA-1 failed (no rka_id), PA-2's reference to {{PA-1.id}} must
+    fail too — never substitute an empty string silently."""
+    # Build an MCP where PA-1 raises an exception, PA-2 references PA-1.
+    class _FailingMCP(_ChainTrackingMCP):
+        def rka_add_decision(self, **kw):
+            raise RuntimeError("simulated PA-1 failure")
+
+    mcp = _FailingMCP()
+    state = _state_with_actions(
+        [
+            {"tool": "rka_add_decision", "args": {"content": "x"}, "rationale": ""},
+            {
+                "tool": "rka_add_note",
+                "args": {"content": "depends on {{PA-1.id}}"},
+                "rationale": "",
+            },
+        ]
+    )
+    update = executor.execute_ratified_actions(state, _StubSDK(), mcp)
+    errs = update.get("errors", [])
+    # Two errors: PA-1 call_failed + PA-2 chain_resolution_failed.
+    error_types = {e["error_type"] for e in errs}
+    assert "ratified_action_call_failed" in error_types
+    assert "ratified_action_chain_resolution_failed" in error_types
+    # PA-2 wasn't dispatched (no second call).
+    assert len(mcp.calls) == 0
+
+
+def test_chain_substitution_no_braces_passthrough():
+    """Args without `{{` markers pass through unchanged (fast path)."""
+    mcp = _ChainTrackingMCP(return_ids=["jrn_001"])
+    state = _state_with_actions(
+        [
+            {
+                "tool": "rka_add_note",
+                "args": {"content": "no chain refs here", "tags": ["x"]},
+                "rationale": "",
+            }
+        ]
+    )
+    update = executor.execute_ratified_actions(state, _StubSDK(), mcp)
+    assert mcp.calls[0]["content"] == "no chain refs here"
+    assert "errors" not in update
+
+
+def test_chain_substitution_works_across_three_step_chain():
+    """3-step chain: PA-1 → PA-2 → PA-3 each referencing the prior."""
+    mcp = _ChainTrackingMCP(return_ids=["mis_x", "dec_y", "jrn_z"])
+    state = _state_with_actions(
+        [
+            {
+                "tool": "rka_create_mission",
+                "args": {
+                    "objective": "test",
+                    "motivated_by_decision": "dec_seed",
+                    "acceptance_criteria": ["a"],
+                },
+                "rationale": "PA-1",
+            },
+            {
+                "tool": "rka_add_decision",
+                "args": {
+                    "content": "ratify {{PA-1.id}}",
+                    "related_journal": ["jrn_seed"],
+                },
+                "rationale": "PA-2 → refs PA-1",
+            },
+            {
+                "tool": "rka_add_note",
+                "args": {
+                    "content": "for mission {{PA-1.id}} per decision {{PA-2.id}}",
+                    "related_mission": "{{PA-1.id}}",
+                    "related_decisions": ["{{PA-2.id}}"],
+                },
+                "rationale": "PA-3 → refs both",
+            },
+        ]
+    )
+    update = executor.execute_ratified_actions(state, _StubSDK(), mcp)
+    pa3 = mcp.calls[2]
+    assert pa3["content"] == "for mission mis_x per decision dec_y"
+    assert pa3["related_mission"] == "mis_x"
+    assert pa3["related_decisions"] == ["dec_y"]
+    assert len(update["artifacts"]) == 3
+    assert "errors" not in update
