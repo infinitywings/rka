@@ -146,12 +146,21 @@ class OrchestratorRunner:
         mcp_factory: Callable[[str, str], MCPClient],
         saver_factory: Callable[[str], Any],
         compile_factory: Optional[Callable[..., Any]] = None,
+        onboarding_compile_factory: Optional[Callable[..., Any]] = None,
     ):
         self.store = store
         self._sdk_factory = sdk_factory
         self._mcp_factory = mcp_factory
         self._saver_factory = saver_factory
         self._compile_factory = compile_factory or graph_module.build_graph
+        # Phase D5c: separate compile factory for the onboarding subgraph.
+        # Lazy import to keep the runner module light when only mission
+        # graphs are used.
+        if onboarding_compile_factory is None:
+            from orchestrator import onboarding_graph as _og
+            self._onboarding_compile_factory = _og.build_onboarding_graph
+        else:
+            self._onboarding_compile_factory = onboarding_compile_factory
 
     # ---- public API ----
 
@@ -264,6 +273,75 @@ class OrchestratorRunner:
         return self._execute_segment(
             run["workflow_thread_id"], compiled, Command(resume=token)
         )
+
+    # ---- Phase D5c: onboarding subgraph entrypoint ----
+
+    def start_onboarding(
+        self,
+        *,
+        project_id: str,
+        workflow_thread_id: Optional[str] = None,
+    ) -> SegmentOutcome:
+        """Kick off the onboarding subgraph for a project.
+
+        Unlike start_run (which requires a mission_id), onboarding is
+        project-scoped — no mission is loaded. The store still gets a
+        workflow_runs row so the parked-interrupt machinery works the
+        same way (parked interrupts reference workflow_thread_id +
+        mission_id, so we use the project_id as the placeholder
+        mission_id for now — the runner-level state.mission_id is
+        unused during onboarding).
+        """
+        # Mint a workflow_runs row. mission_id is the project_id during
+        # onboarding (the parked_interrupts.mission_id NOT NULL constraint
+        # forces us to put SOMETHING; using project_id is the natural
+        # choice and lets `orchestrator_inbox?workflow_thread_id=...`
+        # surface onboarding interrupts uniformly).
+        thread_id = self.store.create_run(
+            mission_id=project_id,  # placeholder; onboarding isn't mission-scoped
+            project_id=project_id,
+            workflow_thread_id=workflow_thread_id,
+        )
+
+        mcp = self._mcp_factory(thread_id, project_id)
+        sdk = self._sdk_factory(project_id)
+        saver = self._saver_factory(thread_id)
+        compiled = self._onboarding_compile_factory(
+            sdk=sdk, mcp=mcp, checkpointer=saver
+        )
+
+        # Initial state: minimal — onboarding nodes read project_id and
+        # build up topic_metadata / proposed_toolkit / etc. as they go.
+        initial = {
+            "workflow_thread_id": thread_id,
+            "mission_id": project_id,
+            "project_id": project_id,
+            "motivated_by_decision_id": "",
+            "current_phase": "init",
+            "current_node": "",
+            "next_node_override": "",
+            "brain_strategy": "",
+            "executor_backbrief": "",
+            "artifacts": [],
+            "interrupts": [],
+            "checkpoints": [],
+            "errors": [],
+            "notifications": [],
+            "usd_spent": 0.0,
+            "loop_iterations": 0,
+            "brain_position": "",
+            "executor_position": "",
+            "consensus_state": "unresolved",
+            "decisions_to_present": [],
+            "batch_review_active": False,
+            "batch_review_payload_size": 0,
+            "proposed_actions": [],
+            "ratified_actions": [],
+            "topic_metadata": {},
+            "proposed_toolkit": [],
+            "ratified_toolkit": [],
+        }
+        return self._execute_segment(thread_id, compiled, initial)
 
     def cancel(self, workflow_thread_id: str) -> int:
         """Cancel a run. Returns count of pending interrupts marked cancelled."""

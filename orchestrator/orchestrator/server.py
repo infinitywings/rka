@@ -63,6 +63,11 @@ class StartRunRequest(BaseModel):
     workflow_thread_id: Optional[str] = None
 
 
+class StartOnboardingRequest(BaseModel):
+    project_id: str
+    workflow_thread_id: Optional[str] = None
+
+
 class CorrectRequest(BaseModel):
     response_text: str = Field(min_length=1)
 
@@ -200,6 +205,39 @@ def create_app(
         except MissionNotFoundError as e:
             raise HTTPException(status_code=404, detail=str(e))
         return _outcome_dict(outcome)
+
+    @app.post("/onboard")
+    async def start_onboarding(
+        req: StartOnboardingRequest, request: Request
+    ) -> dict:
+        """Phase D5c: kick off the onboarding subgraph for a project.
+
+        Returns the same SegmentOutcome shape as /runs (workflow_thread_id +
+        parked_interrupt_id/type or terminal_state). The PI's Claude
+        session then polls /inbox to render the first interrupt
+        (pi_onboarding_topic).
+        """
+        runner_: OrchestratorRunner = request.app.state.runner
+        outcome = await asyncio.to_thread(
+            runner_.start_onboarding,
+            project_id=req.project_id,
+            workflow_thread_id=req.workflow_thread_id,
+        )
+        return _outcome_dict(outcome)
+
+    @app.get("/projects/{project_id}/manifest")
+    async def get_project_manifest(project_id: str, request: Request) -> dict:
+        """Return the project's current effective manifest (baseline +
+        any extensions) as JSON. Useful for the PI session to render
+        the project's tool stack via orchestrator_get_manifest."""
+        from orchestrator import manifest as M
+        manifest = M.compose_effective_manifest(project_id)
+        if manifest is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"no manifest found for project {project_id} — has onboarding completed?",
+            )
+        return manifest.to_dict()
 
     @app.get("/runs")
     async def list_runs(

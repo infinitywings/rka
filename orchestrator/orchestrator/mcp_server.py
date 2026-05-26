@@ -300,6 +300,77 @@ async def orchestrator_health() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Phase D5c — Onboarding subgraph entry points
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def orchestrator_onboard_start(
+    project_id: str,
+    workflow_thread_id: Optional[str] = None,
+) -> dict:
+    """Kick off the onboarding subgraph for a project.
+
+    Different from `orchestrator_run_start` which executes a mission:
+    this drives the project-scoped onboarding wizard that produces the
+    project's `tools.json` baseline manifest.
+
+    Flow once started:
+      1. Daemon parks at `pi_onboarding_topic` — claude renders the
+         topic-elicitation prompt and asks the PI.
+      2. PI responds; daemon resumes, Brain builds proposed_toolkit,
+         parks at `pi_toolkit_ratify`.
+      3. PI ratifies (set-identity); daemon writes
+         `~/rka-projects/{project_id}/tools.json` and a `.env` template,
+         parks at `pi_credentials_ready`.
+      4. PI edits the .env, signals "ready"; daemon probes each secret
+         and either escalates required failures or emits the audit
+         journal entry, completing the workflow.
+
+    Args:
+        project_id: RKA project id (prj_…) to onboard. The project
+            must exist in RKA (orchestrator does NOT create the
+            project itself — that's an upstream `rka_create_project`
+            call).
+        workflow_thread_id: Optional explicit thread id. Auto-
+            generated if omitted.
+
+    Returns the same outcome shape as orchestrator_run_start
+    (`workflow_thread_id`, `parked_interrupt_id`, `parked_interrupt_type`,
+    etc.). The PI session typically calls `orchestrator_inbox` next to
+    render the parked interrupt.
+    """
+    async with _client() as c:
+        r = await c.post(
+            "/onboard",
+            json={
+                "project_id": project_id,
+                "workflow_thread_id": workflow_thread_id,
+            },
+        )
+        _raise_with_detail(r)
+        return r.json()
+
+
+@mcp.tool()
+async def orchestrator_get_manifest(project_id: str) -> dict:
+    """Return the project's current effective tool manifest.
+
+    The effective manifest is the baseline (set by initial onboarding)
+    merged with any per-mission extensions written via
+    `pi_extend_toolkit` (Phase D6). Useful for the PI session to
+    answer "what tools is this project configured to use?"
+
+    Raises 404 if the project hasn't been onboarded yet (no
+    `~/rka-projects/{project_id}/tools.json`).
+    """
+    async with _client() as c:
+        r = await c.get(f"/projects/{project_id}/manifest")
+        _raise_with_detail(r)
+        return r.json()
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
