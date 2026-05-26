@@ -22,3 +22,6 @@ htmlcov/
 *.sqlite
 *.sqlite3
 checkpoints.db
+
+# Local secrets for the orchestrator daemon (CLAUDE_CODE_OAUTH_TOKEN etc.)
+.env

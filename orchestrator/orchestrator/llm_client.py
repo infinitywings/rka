@@ -71,6 +71,26 @@ READ_TOOLS: tuple[str, ...] = (
     # select session context, not mutate entities. Confirmed NOT in WRITE_TOOLS.
     "rka_list_projects",
     "rka_set_project",
+    # Phase-A follow-up: external-API search tools. Read-side, hit external
+    # services (Semantic Scholar, arXiv, CrossRef DOI lookup). Useful for
+    # the Brain to enrich research context during Confirmation Brief drafting
+    # without escalating to the PI. SEMANTIC_SCHOLAR_API_KEY and SERPAPI_KEY
+    # are propagated to the subprocess via _build_mcp_servers_config so the
+    # tools get higher rate-limit / non-anonymous access when configured.
+    "rka_search_semantic_scholar",
+    "rka_search_arxiv",
+    "rka_enrich_doi",
+)
+
+# Context7 MCP server — external documentation lookup. Useful when the
+# Brain needs to verify it's reasoning about a library API correctly
+# (LangGraph, FastAPI, claude-agent-sdk, etc.). Stdio launch via `npx`
+# requires Node + network on first invocation. The server is added
+# conditionally in _build_mcp_servers_config when `npx` is available.
+_CONTEXT7_SERVER_NAME = "context7"
+_CONTEXT7_TOOLS: tuple[str, ...] = (
+    "query-docs",
+    "resolve-library-id",
 )
 
 # Parent-side WRITE_TOOLS registry. Subprocess `disallowed_tools` mirrors this list
@@ -95,10 +115,25 @@ WRITE_TOOLS: tuple[str, ...] = (
 )
 
 
-def _prefixed_tools(names: tuple[str, ...]) -> list[str]:
+def _prefixed_tools(names: tuple[str, ...], server: str = _MCP_SERVER_NAME) -> list[str]:
     """Prefix MCP tool names with `mcp__<server_name>__` per the SDK's
-    allowed_tools / disallowed_tools naming convention."""
-    return [f"mcp__{_MCP_SERVER_NAME}__{n}" for n in names]
+    allowed_tools / disallowed_tools naming convention.
+
+    Default `server=_MCP_SERVER_NAME` ("rka") preserves the pre-Phase-A
+    call sites. Pass an explicit server name to prefix tools from a
+    different MCP server (e.g., "context7").
+    """
+    return [f"mcp__{server}__{n}" for n in names]
+
+
+def _all_allowed_subprocess_tools(include_context7: bool) -> list[str]:
+    """Compose the full `allowed_tools` list across every MCP server the
+    subprocess is configured to talk to. Lives separately from READ_TOOLS
+    so the legacy single-server interface stays back-compat."""
+    tools = _prefixed_tools(READ_TOOLS)  # rka MCP
+    if include_context7:
+        tools.extend(_prefixed_tools(_CONTEXT7_TOOLS, server=_CONTEXT7_SERVER_NAME))
+    return tools
 
 
 def _find_rka_mcp_binary() -> str | None:
@@ -111,32 +146,64 @@ def _find_rka_mcp_binary() -> str | None:
 def _build_mcp_servers_config(
     rka_binary: str | None, project_id: str | None = None
 ) -> dict:
-    """Build the McpStdioServerConfig dict for the subprocess. Returns `{}`
-    if no binary found — subprocess falls back to Phase 1 text-only mode
-    (caller logs a warning).
+    """Build the McpStdioServerConfig dict for the subprocess.
 
-    Phase 2.9 (mis_01KRY2KP0GGZY21BA4Z2R2S718 T1; PI-handed-off scope per
-    dec_01KRY2EXCSTSSCFZJ96VG4MGDW Option A): when `project_id` is non-None,
-    set `McpStdioServerConfig.env = {"RKA_PROJECT": project_id}` so the
-    `rka mcp` stdio binary spawned by claude-agent-sdk inherits the parent's
-    project context. Closes the 8th mandatory-pause trigger surfaced
-    empirically by Phase 2.8 (`mis_01KRXRF6VRFAAV1T8XKZ3RHJXJ`): subprocess
-    MCP session inheriting `Default Project` (proj_default) instead of the
-    parent's configured `project_id`.
+    Phase 2.9 (mis_01KRY2KP0GGZY21BA4Z2R2S718 T1): `project_id` threads
+    into the rka server's env block as `RKA_PROJECT` so the subprocess
+    MCP session inherits the parent's project context (closes the 8th
+    mandatory-pause trigger surfaced empirically by Phase 2.8). When
+    `project_id` is None, the env key is omitted (pre-Phase-2.9
+    back-compat).
 
-    When `project_id` is None (no parent context), the env key is omitted
-    for back-compat — subprocess falls through to its default session
-    (typically proj_default). Pre-Phase-2.9 behavior is preserved."""
+    Phase-A follow-up — external-API key propagation: if
+    `SEMANTIC_SCHOLAR_API_KEY` or `SERPAPI_KEY` is set in the parent
+    process env, they are explicitly propagated into the rka server's
+    env block. Necessary because the McpStdioServerConfig.env field
+    replaces (does NOT merge with) the parent env when the subprocess
+    is spawned. Without explicit propagation the rka MCP child would
+    run anonymously against external APIs.
+
+    Phase-A follow-up — context7 documentation server: if `npx` is
+    available on PATH, a second MCP server entry `context7` is added
+    using `npx -y @upstash/context7-mcp@latest`. The Brain LLM can
+    use it via `mcp__context7__query-docs` / `mcp__context7__resolve-library-id`
+    to verify library API surfaces during Backbrief drafting and gate1
+    validation. Falls back to rka-only when npx isn't installed.
+
+    Returns `{}` if no rka binary found — subprocess falls back to
+    Phase 1 text-only mode (caller logs a warning)."""
     if not rka_binary:
         return {}
-    server_config: dict = {
+
+    # rka server env: project context + external-API keys.
+    rka_env: dict[str, str] = {}
+    if project_id:
+        rka_env["RKA_PROJECT"] = project_id
+    for key in ("SEMANTIC_SCHOLAR_API_KEY", "SERPAPI_KEY"):
+        val = os.environ.get(key)
+        if val:
+            rka_env[key] = val
+
+    rka_server: dict = {
         "type": "stdio",
         "command": rka_binary,
         "args": ["mcp"],
     }
-    if project_id:
-        server_config["env"] = {"RKA_PROJECT": project_id}
-    return {_MCP_SERVER_NAME: server_config}
+    if rka_env:
+        rka_server["env"] = rka_env
+
+    config: dict = {_MCP_SERVER_NAME: rka_server}
+
+    # context7 — additive read-side surface for library/SDK doc lookup.
+    npx = shutil.which("npx")
+    if npx:
+        config[_CONTEXT7_SERVER_NAME] = {
+            "type": "stdio",
+            "command": npx,
+            "args": ["-y", "@upstash/context7-mcp@latest"],
+        }
+
+    return config
 
 
 class SDKClient(Protocol):
@@ -323,12 +390,16 @@ class _RealSDKClient:
         mcp_servers = _build_mcp_servers_config(rka_binary, project_id=self._project_id)
 
         if mcp_servers:
+            include_context7 = _CONTEXT7_SERVER_NAME in mcp_servers
             options = sdk.ClaudeAgentOptions(
                 system_prompt=system,
                 env=self._env,
                 mcp_servers=mcp_servers,
-                strict_mcp_config=True,   # only `rka` server; no host config bleed
-                allowed_tools=_prefixed_tools(READ_TOOLS),
+                # Only servers in our config are loaded; no host MCP config bleed.
+                # With Phase-A expansion, our config can include both `rka` and
+                # `context7` — both are PI-ratified for the Brain subprocess.
+                strict_mcp_config=True,
+                allowed_tools=_all_allowed_subprocess_tools(include_context7),
                 disallowed_tools=_prefixed_tools(WRITE_TOOLS),
                 permission_mode="dontAsk",   # deny anything off-allowlist silently
             )

@@ -11,21 +11,32 @@
 
 FROM python:3.13-slim
 
-# System deps: curl (for installing the claude CLI), ca-certs for HTTPS.
+# System deps: curl + Node.js (for the claude CLI), ca-certs for HTTPS.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
+    gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Install the Claude CLI — the orchestrator's claude-agent-sdk spawns
-# this as a subprocess. Uses the official npm-free installer.
-RUN curl -fsSL https://claude.ai/install.sh | bash && \
-    ln -sf /root/.local/bin/claude /usr/local/bin/claude
+# Install the Claude CLI — claude-agent-sdk spawns it as a subprocess
+# (located via shutil.which("claude")). The canonical install is via npm.
+RUN npm install -g @anthropic-ai/claude-code
 
 WORKDIR /app
 
-# Install orchestrator + deps. The package's pyproject pins langgraph,
-# claude-agent-sdk, etc., per the agentic-branch backbrief.
+# Install the rka package — its CLI `rka mcp` subcommand is the stdio
+# launcher the SDK subprocess invokes for the rka MCP server (see
+# orchestrator/llm_client.py:_find_rka_mcp_binary which uses shutil.which).
+# We only need the core deps + the binary on PATH; the heavy extras
+# (academic/llm/workspace) are NOT needed in the orchestrator container —
+# all rka work happens against the rka-server container via HTTP.
+COPY pyproject.toml ./
+COPY rka/ ./rka/
+RUN pip install --no-cache-dir .
+
+# Install orchestrator + deps. Pins langgraph, claude-agent-sdk, etc.
 COPY orchestrator/ ./orchestrator/
 RUN pip install --no-cache-dir "./orchestrator[dev]"
 

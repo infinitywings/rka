@@ -10,28 +10,47 @@
 # unchanged. Preserves the "CLAUDE.md is the only root file this
 # branch modifies" agentic-branch constraint.
 #
-# Auth: the daemon needs Claude Max credentials. The volume mount
-# ~/.claude:/root/.claude:ro exposes the host's credentials.json
-# (the file-based Claude Max path, priority 3 in
-# orchestrator/llm_client.py:_verify_claude_max_routing). Run
-# `claude login` on the host once if you don't have one.
+# Auth: the daemon's claude-agent-sdk subprocess needs Claude Max
+# credentials. Two paths, in priority order (see
+# orchestrator/llm_client.py:_verify_claude_max_routing):
+#
+#   1. CLAUDE_CODE_OAUTH_TOKEN env (priority 2 in the auth chain) —
+#      preferred for Docker because it avoids the macOS Keychain
+#      gap. Run `claude setup-token` on the host to mint a long-lived
+#      token, then put it in `orchestrator/.env` (gitignored) as
+#      CLAUDE_CODE_OAUTH_TOKEN=...
+#
+#   2. ~/.claude/.credentials.json — priority 3. Mounted read-only.
+#      Works if you have the file on the host (some Claude Code
+#      installs put credentials in Keychain instead — in that case
+#      use path 1).
 # =============================================================
 
 services:
   rka-orchestrator:
     build:
-      context: ..
+      # Paths in overlays are resolved against the PROJECT root (the
+      # dir of the first -f file), not this overlay's dir. So context
+      # = "." means /Volumes/.../rka, and the Dockerfile path is
+      # relative to that.
+      context: .
       dockerfile: orchestrator/Dockerfile
     container_name: rka-orchestrator
     ports:
       - "9713:9713"
+    env_file:
+      # Optional — created locally if you're using the
+      # CLAUDE_CODE_OAUTH_TOKEN auth path. Gitignored.
+      # Path is resolved against the PROJECT root (the dir of the
+      # first -f file), so include the orchestrator/ prefix.
+      - path: orchestrator/.env
+        required: false
     volumes:
       - orchestrator-data:/data
-      # Mount the host's Claude credentials read-only. The orchestrator's
-      # claude-agent-sdk subprocess scrubs ANTHROPIC_API_KEY and falls
-      # through to credentials.json. macOS Keychain isn't accessible
-      # from inside the container — credentials.json is the production
-      # path. Run `claude login` on the host once to seed it.
+      # Mount the host's Claude credentials read-only. If
+      # credentials.json doesn't exist on the host (Keychain-only
+      # install), this mount is harmless and the OAuth token from
+      # .env wins via the auth-chain priority.
       - ${HOME}/.claude:/root/.claude:ro
     environment:
       RKA_API_URL: "http://rka:9712"

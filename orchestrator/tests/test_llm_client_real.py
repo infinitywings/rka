@@ -312,15 +312,27 @@ def _capture_one_options():
 def test_complete_passes_read_tools_allowlist_to_subprocess(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ):
-    """Phase 2.7 T2 (1): the SDK ClaudeAgentOptions must carry the 9
-    READ_TOOLS prefixed with `mcp__rka__` in allowed_tools, the rka stdio
-    mcp_servers config, strict_mcp_config=True, and permission_mode='dontAsk'."""
+    """Phase 2.7 T2 (1): the SDK ClaudeAgentOptions must carry READ_TOOLS
+    prefixed with `mcp__rka__` in allowed_tools, the rka stdio mcp_servers
+    config, strict_mcp_config=True, and permission_mode='dontAsk'.
+
+    Phase-A: when context7 is also configured (npx available), the
+    `mcp__context7__*` tools join the allowlist. Test forces npx
+    unavailable so the comparison locks the rka-only baseline.
+    """
     # Pretend `rka` is on PATH at a known location.
     fake_rka = tmp_path / "rka"
     fake_rka.write_text("#!/bin/sh\nexit 0\n")
     fake_rka.chmod(0o755)
     monkeypatch.setattr(
         "orchestrator.llm_client._find_rka_mcp_binary", lambda: str(fake_rka)
+    )
+    # Force the Phase-A context7 expansion to be skipped: pretend npx
+    # isn't installed. The "context7 present" path has its own test.
+    real_which = __import__("shutil").which
+    monkeypatch.setattr(
+        "orchestrator.llm_client.shutil.which",
+        lambda name: None if name == "npx" else real_which(name),
     )
 
     capturing_query, captured = _capture_one_options()
@@ -430,7 +442,12 @@ def test_phase_2_9_read_tools_includes_project_selectors():
     if Phase 2.9 T1's RKA_PROJECT env propagation ever regresses, the
     brain LLM has no self-recovery path (Phase 2.8 demonstrated this
     exact denial empirically). Both tools are read-side (select session
-    context; cannot mutate entities)."""
+    context; cannot mutate entities).
+
+    Phase-A (agentic) added 3 external-API search tools (semantic
+    scholar, arxiv, doi-enrich) so the Brain can enrich context
+    without escalating to the PI; total is now 14.
+    """
     assert "rka_list_projects" in READ_TOOLS, (
         "Phase 2.9 T2: rka_list_projects must be in READ_TOOLS so brain "
         "LLM can self-recover by enumerating projects if RKA_PROJECT env "
@@ -440,11 +457,36 @@ def test_phase_2_9_read_tools_includes_project_selectors():
         "Phase 2.9 T2: rka_set_project must be in READ_TOOLS so brain "
         "LLM can switch session project as recovery path"
     )
-    # READ_TOOLS expanded from 9 (Phase 2.7) to 11 (Phase 2.9).
-    assert len(READ_TOOLS) == 11, (
-        f"Phase 2.9 T2: READ_TOOLS should have exactly 11 entries "
-        f"(Phase 2.7's 9 + Phase 2.9's 2 project selectors); got {len(READ_TOOLS)}"
+    # READ_TOOLS lineage: 9 (Phase 2.7) → 11 (Phase 2.9) → 14 (Phase-A
+    # external-API tools).
+    assert len(READ_TOOLS) == 14, (
+        f"READ_TOOLS should have exactly 14 entries (Phase 2.7's 9 + "
+        f"Phase 2.9's 2 project selectors + Phase-A's 3 external-API "
+        f"search tools); got {len(READ_TOOLS)}"
     )
+
+
+def test_phase_a_read_tools_includes_external_api_search():
+    """Phase-A (agentic, Option A scope expansion): the Brain subprocess
+    gets read-side access to external-API search tools so it can enrich
+    research context during Confirmation Brief drafting without
+    escalating to the PI for routine literature lookups.
+
+    These are read-side: they hit external services (Semantic Scholar,
+    arXiv, CrossRef) and return search results; they do NOT mutate RKA
+    state. Anything that mutates is in WRITE_TOOLS and stays parent-side
+    behind pi_decision_select ratification."""
+    for tool in ("rka_search_semantic_scholar", "rka_search_arxiv", "rka_enrich_doi"):
+        assert tool in READ_TOOLS, f"Phase-A: {tool} should be in READ_TOOLS"
+
+
+def test_phase_a_external_api_tools_not_in_write_tools():
+    """Safety check: the Phase-A external-API search tools must NOT
+    appear in WRITE_TOOLS. If misclassified, the parent-side ratification
+    pipeline would treat them as state mutations and they'd lose their
+    "free read in the subprocess" property — defeating the expansion."""
+    for tool in ("rka_search_semantic_scholar", "rka_search_arxiv", "rka_enrich_doi"):
+        assert tool not in WRITE_TOOLS, f"Phase-A: {tool} must not be in WRITE_TOOLS"
 
 
 def test_phase_2_9_project_selectors_not_in_write_tools():
@@ -525,3 +567,179 @@ def test_complete_falls_back_to_text_only_when_rka_binary_missing(
     assert opts.allowed_tools == []
     # No mcp_servers passed → SDK default (empty dict).
     assert opts.mcp_servers == {} or opts.mcp_servers is None or not opts.mcp_servers
+
+
+# ---------------------------------------------------------------------------
+# Phase-A (agentic, Option A scope expansion):
+#   - SEMANTIC_SCHOLAR_API_KEY + SERPAPI_KEY propagation to subprocess env
+#   - context7 MCP server registration when npx is available
+# ---------------------------------------------------------------------------
+
+
+def _force_npx_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Helper: pretend `npx` is not on PATH so the context7 expansion
+    path doesn't fire in this test."""
+    real_which = __import__("shutil").which
+    monkeypatch.setattr(
+        "orchestrator.llm_client.shutil.which",
+        lambda name: None if name == "npx" else real_which(name),
+    )
+
+
+def _force_npx_at(monkeypatch: pytest.MonkeyPatch, path: str) -> None:
+    """Helper: pretend `npx` is on PATH at the given path."""
+    real_which = __import__("shutil").which
+    monkeypatch.setattr(
+        "orchestrator.llm_client.shutil.which",
+        lambda name: path if name == "npx" else real_which(name),
+    )
+
+
+def test_phase_a_semantic_scholar_key_propagates_to_subprocess_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    """When SEMANTIC_SCHOLAR_API_KEY is set in the parent process env, it
+    propagates into the rka MCP server's env block. Without explicit
+    propagation, the McpStdioServerConfig.env field REPLACES (not
+    augments) the parent env when the subprocess is spawned, so the rka
+    MCP child would run anonymously against semanticscholar.org despite
+    the parent having a key."""
+    monkeypatch.setenv("SEMANTIC_SCHOLAR_API_KEY", "s2k-phase-a-test")
+    monkeypatch.delenv("SERPAPI_KEY", raising=False)
+    fake_rka = tmp_path / "rka"
+    fake_rka.write_text("#!/bin/sh\nexit 0\n")
+    fake_rka.chmod(0o755)
+    monkeypatch.setattr(
+        "orchestrator.llm_client._find_rka_mcp_binary", lambda: str(fake_rka)
+    )
+    _force_npx_unavailable(monkeypatch)
+
+    capturing_query, captured = _capture_one_options()
+    with patch("claude_agent_sdk.query", side_effect=capturing_query):
+        client = _RealSDKClient(env={})
+        client.complete("smoke", max_tokens=64, system=None)
+
+    rka_cfg = captured[0].mcp_servers[_MCP_SERVER_NAME]
+    assert "env" in rka_cfg, "rka server env block missing"
+    assert rka_cfg["env"].get("SEMANTIC_SCHOLAR_API_KEY") == "s2k-phase-a-test"
+    # SERPAPI not set in parent → should not appear in subprocess env.
+    assert "SERPAPI_KEY" not in rka_cfg["env"]
+
+
+def test_phase_a_serpapi_key_propagates_to_subprocess_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    """SERPAPI_KEY propagates symmetrically with SEMANTIC_SCHOLAR_API_KEY.
+    Used by rka-writer-tools' SerpAPI backend (when the subprocess gains
+    access to writer-tools in a future scope expansion); harmless to
+    propagate eagerly today."""
+    monkeypatch.delenv("SEMANTIC_SCHOLAR_API_KEY", raising=False)
+    monkeypatch.setenv("SERPAPI_KEY", "serpapi-phase-a-test")
+    fake_rka = tmp_path / "rka"
+    fake_rka.write_text("#!/bin/sh\nexit 0\n")
+    fake_rka.chmod(0o755)
+    monkeypatch.setattr(
+        "orchestrator.llm_client._find_rka_mcp_binary", lambda: str(fake_rka)
+    )
+    _force_npx_unavailable(monkeypatch)
+
+    capturing_query, captured = _capture_one_options()
+    with patch("claude_agent_sdk.query", side_effect=capturing_query):
+        client = _RealSDKClient(env={})
+        client.complete("smoke", max_tokens=64, system=None)
+
+    rka_cfg = captured[0].mcp_servers[_MCP_SERVER_NAME]
+    assert rka_cfg["env"].get("SERPAPI_KEY") == "serpapi-phase-a-test"
+    assert "SEMANTIC_SCHOLAR_API_KEY" not in rka_cfg["env"]
+
+
+def test_phase_a_neither_api_key_set_no_env_pollution(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    """When neither API key is in the parent env, neither lands in the
+    subprocess env. Project_id-only env block (Phase 2.9 baseline) is
+    preserved without leaking placeholder values."""
+    monkeypatch.delenv("SEMANTIC_SCHOLAR_API_KEY", raising=False)
+    monkeypatch.delenv("SERPAPI_KEY", raising=False)
+    fake_rka = tmp_path / "rka"
+    fake_rka.write_text("#!/bin/sh\nexit 0\n")
+    fake_rka.chmod(0o755)
+    monkeypatch.setattr(
+        "orchestrator.llm_client._find_rka_mcp_binary", lambda: str(fake_rka)
+    )
+    _force_npx_unavailable(monkeypatch)
+
+    capturing_query, captured = _capture_one_options()
+    with patch("claude_agent_sdk.query", side_effect=capturing_query):
+        client = _RealSDKClient(env={}, project_id="prj_test")
+        client.complete("smoke", max_tokens=64, system=None)
+
+    rka_cfg = captured[0].mcp_servers[_MCP_SERVER_NAME]
+    env_block = rka_cfg.get("env", {})
+    assert env_block == {"RKA_PROJECT": "prj_test"}, (
+        f"only RKA_PROJECT expected in env block; got {env_block}"
+    )
+
+
+def test_phase_a_context7_added_when_npx_present(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    """When `npx` is on PATH, the context7 MCP server is added to
+    mcp_servers and its tools join allowed_tools."""
+    monkeypatch.delenv("SEMANTIC_SCHOLAR_API_KEY", raising=False)
+    monkeypatch.delenv("SERPAPI_KEY", raising=False)
+    fake_rka = tmp_path / "rka"
+    fake_rka.write_text("#!/bin/sh\nexit 0\n")
+    fake_rka.chmod(0o755)
+    monkeypatch.setattr(
+        "orchestrator.llm_client._find_rka_mcp_binary", lambda: str(fake_rka)
+    )
+    _force_npx_at(monkeypatch, "/fake/bin/npx")
+
+    capturing_query, captured = _capture_one_options()
+    with patch("claude_agent_sdk.query", side_effect=capturing_query):
+        client = _RealSDKClient(env={})
+        client.complete("smoke", max_tokens=64, system=None)
+
+    opts = captured[0]
+    # context7 server config landed.
+    assert "context7" in opts.mcp_servers, (
+        f"context7 server missing from mcp_servers; got "
+        f"{list(opts.mcp_servers.keys())}"
+    )
+    ctx_cfg = opts.mcp_servers["context7"]
+    assert ctx_cfg["type"] == "stdio"
+    assert ctx_cfg["command"] == "/fake/bin/npx"
+    assert "@upstash/context7-mcp" in " ".join(ctx_cfg["args"])
+    # Context7 tools join allowed_tools.
+    assert "mcp__context7__query-docs" in opts.allowed_tools
+    assert "mcp__context7__resolve-library-id" in opts.allowed_tools
+
+
+def test_phase_a_context7_skipped_when_npx_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    """When `npx` is NOT on PATH, the context7 server is silently
+    skipped (no crash). The rka server remains; allowed_tools omits
+    mcp__context7__ entries."""
+    monkeypatch.delenv("SEMANTIC_SCHOLAR_API_KEY", raising=False)
+    monkeypatch.delenv("SERPAPI_KEY", raising=False)
+    fake_rka = tmp_path / "rka"
+    fake_rka.write_text("#!/bin/sh\nexit 0\n")
+    fake_rka.chmod(0o755)
+    monkeypatch.setattr(
+        "orchestrator.llm_client._find_rka_mcp_binary", lambda: str(fake_rka)
+    )
+    _force_npx_unavailable(monkeypatch)
+
+    capturing_query, captured = _capture_one_options()
+    with patch("claude_agent_sdk.query", side_effect=capturing_query):
+        client = _RealSDKClient(env={})
+        client.complete("smoke", max_tokens=64, system=None)
+
+    opts = captured[0]
+    assert "context7" not in opts.mcp_servers
+    for t in opts.allowed_tools:
+        assert not t.startswith("mcp__context7__"), (
+            f"context7 tool {t!r} unexpectedly in allowed_tools when npx missing"
+        )

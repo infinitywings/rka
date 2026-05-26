@@ -1,7 +1,7 @@
 {
   "name": "rka",
-  "version": "1.0.0",
-  "description": "Research Knowledge Agent (RKA) integration for Claude Code. Connects Claude to a local RKA backend for provenance-tracked research workflows: journal entries, decisions, literature, missions, claims, evidence clusters, and a research graph shared across the three-actor model (Brain in Claude Desktop, Executor in Claude Code, PI human researcher). Activates on RKA, research notes, knowledge graph, decisions, missions, journal entries, evidence clusters, literature management, citing literature, organizing research, tracking provenance, knowledge base.",
+  "version": "1.1.0",
+  "description": "Research Knowledge Agent (RKA) integration for Claude Code. Connects Claude to a local RKA backend for provenance-tracked research workflows: journal entries, decisions, literature, missions, claims, evidence clusters, and a research graph shared across the three-actor model (Brain in Claude Desktop, Executor in Claude Code, PI human researcher). The agentic-branch distribution ALSO ships the LangGraph orchestrator surface (rka-orchestrator MCP + orchestrator-pi skill + /orchestrator-start, /orchestrator-inbox, /orchestrator-status slash commands) for driving Brain⇄Executor⇄PI workflows directly from Claude Code. Activates on RKA, research notes, knowledge graph, decisions, missions, journal entries, evidence clusters, literature, organizing research, tracking provenance, knowledge base, orchestrator, LangGraph, ratification, PI inbox.",
   "author": {
     "name": "Chenglong Fu",
     "email": "cfu6@charlotte.edu"
@@ -18,7 +18,10 @@
     "literature",
     "decisions",
     "missions",
-    "rka"
+    "rka",
+    "orchestrator",
+    "langgraph",
+    "agentic"
   ],
   "hooks": {
     "SessionStart": [
