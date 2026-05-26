@@ -402,3 +402,56 @@ def test_graph_exception_marks_run_failed(store: ParkedStore):
     run = store.get_run(out.workflow_thread_id)
     assert run["status"] == "failed"
     assert "simulated SDK failure" in (run.get("last_error") or "")
+
+
+# ---------------------------------------------------------------------------
+# Phase-D5a — onboarding interrupt response-token contracts
+# ---------------------------------------------------------------------------
+
+
+def test_resume_token_pi_onboarding_topic_accept_returns_approve():
+    """pi_onboarding_topic is greenlight-class — accept emits 'approve'
+    (caller MUST NOT supply a raw string)."""
+    assert resume_token(
+        interrupt_type="pi_onboarding_topic", action="accept"
+    ) == "approve"
+
+
+def test_resume_token_pi_toolkit_ratify_accept_returns_accept():
+    """pi_toolkit_ratify is set-identity ratification — like
+    pi_decision_select — so accept emits 'accept'."""
+    assert resume_token(
+        interrupt_type="pi_toolkit_ratify", action="accept"
+    ) == "accept"
+
+
+def test_resume_token_pi_credentials_ready_accept_returns_accept():
+    assert resume_token(
+        interrupt_type="pi_credentials_ready", action="accept"
+    ) == "accept"
+
+
+def test_resume_token_pi_extend_toolkit_accept_returns_accept():
+    """pi_extend_toolkit (Phase D6) is set-identity ratification of a
+    mid-stream tool extension. Same token semantics as pi_toolkit_ratify."""
+    assert resume_token(
+        interrupt_type="pi_extend_toolkit", action="accept"
+    ) == "accept"
+
+
+def test_resume_token_onboarding_reject_returns_literal_reject():
+    for t in (
+        "pi_onboarding_topic",
+        "pi_toolkit_ratify",
+        "pi_credentials_ready",
+        "pi_extend_toolkit",
+    ):
+        assert resume_token(interrupt_type=t, action="reject") == "reject"
+
+
+def test_resume_token_onboarding_correct_returns_freeform_text():
+    text = "use these tools instead: rka, context7 only"
+    out = resume_token(
+        interrupt_type="pi_toolkit_ratify", action="correct", response_text=text
+    )
+    assert out == text

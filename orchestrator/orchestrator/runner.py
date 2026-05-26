@@ -41,9 +41,15 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _ACCEPT_TOKEN_BY_TYPE: dict[str, str] = {
+    # Mission-level interrupts (Phase A).
     "pi_greenlight": "approve",
     "pi_decision_select": "accept",
     "pi_acceptance": "accept",
+    # Onboarding-subgraph interrupts (Phase D5a).
+    "pi_onboarding_topic": "approve",       # input gate; greenlight-class
+    "pi_toolkit_ratify": "accept",          # set-identity ratification (mirrors pi_decision_select)
+    "pi_credentials_ready": "accept",       # "I'm done editing .env" signal
+    "pi_extend_toolkit": "accept",          # set-identity (mid-mission extension; D6)
 }
 """The substring the graph's routing function looks for to take the
 'continue' branch at each PI interrupt. Sourced from graph.py:
@@ -51,6 +57,9 @@ _ACCEPT_TOKEN_BY_TYPE: dict[str, str] = {
   - _route_after_pi_greenlight: 'approve' in response → backbrief_draft
   - _route_after_pi_decision:   'accept'  in response → execute_ratified_actions
   - pi_acceptance node:         'accept'  in response → terminal=complete
+  - pi_toolkit_ratify node:     'accept'  → ratified_toolkit = proposed_toolkit
+  - pi_onboarding_topic node:   'approve' → research_toolkit_node fires next
+  - pi_credentials_ready node:  'accept'  → credential_validator probes the .env
 
 Any other content routes to escalation_router (greenlight, decision) or
 terminal=escalated (acceptance). Reject and correct paths both fall here

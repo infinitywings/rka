@@ -278,3 +278,195 @@ def pi_acceptance(
             )
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# 4. pi_onboarding_topic — initial topic elicitation (Phase D)
+# ---------------------------------------------------------------------------
+
+
+def pi_onboarding_topic(
+    state: ResearchWorkflowState,
+    sdk: SDKClient,
+    mcp: MCPClient,
+    interrupt_fn: Callable[[dict], Any],
+) -> dict:
+    """First PI interrupt in the onboarding subgraph.
+
+    Asks the PI for the project's topic, field, and target venue.
+    Brain's research_toolkit_node reads the response from
+    state["topic_metadata"] downstream to suggest a toolkit.
+
+    Response shape (free-form, parsed by the next node):
+      - The PI Claude session renders a structured prompt
+        ("topic? field? venue? keywords?") and packages the response.
+      - The graph routing function expects the response string to
+        contain "accept" so the workflow proceeds; orchestrator_accept
+        emits "approve" for greenlight-class interrupts → we treat
+        this onboarding interrupt similarly to greenlight (i.e.,
+        "approve" advances).
+    """
+    payload = {
+        "type": "pi_onboarding_topic",
+        "title": "PI topic elicitation — onboard a new project",
+        "prompt": (
+            "Tell me about the project: a 1-2 sentence summary, the "
+            "research field, target venue (conference/journal), and "
+            "3-5 keywords. Your response is captured as the project's "
+            "topic_metadata and drives tool-discovery in the next step."
+        ),
+        "items": [],
+        "total_items": 0,
+    }
+    pi_response = interrupt_fn(payload)
+
+    # The PI's response is captured as-is into a brain-readable topic
+    # field — the orchestrator-pi skill instructs Claude-the-assistant
+    # to structure the response into {summary, research_field, venue,
+    # keywords} when calling orchestrator_correct, OR to pass through
+    # verbatim text when calling orchestrator_accept. Brain's
+    # research_toolkit_node tolerates partial data.
+    response_str = str(pi_response)
+    topic = {"summary": response_str, "research_field": None, "venue": None, "keywords": []}
+
+    return {
+        "current_phase": "init",
+        "current_node": "pi_onboarding_topic",
+        "topic_metadata": topic,
+        "interrupts": [
+            _record_interrupt(
+                node_name="pi_onboarding_topic",
+                payload_size=0,
+                response=pi_response,
+                batch_review_used=False,
+            )
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# 5. pi_toolkit_ratify — PI accepts/rejects/corrects the proposed toolkit
+# ---------------------------------------------------------------------------
+
+
+def pi_toolkit_ratify(
+    state: ResearchWorkflowState,
+    sdk: SDKClient,
+    mcp: MCPClient,
+    interrupt_fn: Callable[[dict], Any],
+) -> dict:
+    """Second PI interrupt in the onboarding subgraph.
+
+    Surfaces the Brain's proposed_toolkit for PI multi-select. On
+    accept, every tool in proposed_toolkit is copied to
+    ratified_toolkit; on reject, escalation; on correct, the freeform
+    text is treated as a redirect (Brain re-runs research_toolkit_node
+    with the new direction). Mirrors pi_decision_select's set-identity
+    semantics (Phase 2.7 T3d).
+    """
+    proposed = state.get("proposed_toolkit", []) or []
+
+    payload, batched = _build_interrupt_payload(
+        node_name="pi_toolkit_ratify",
+        items=proposed,
+        title="PI ratification — proposed project toolkit",
+    )
+    # Include Brain's notes-for-PI paragraph if it exists (set by
+    # research_toolkit_node when Brain emits a notes_for_pi field).
+    notes = state.get("brain_position")
+    if notes:
+        payload["brain_notes"] = notes
+    pi_response = interrupt_fn(payload)
+
+    # On accept, the full proposed_toolkit moves to ratified_toolkit.
+    response_text = str(pi_response).lower()
+    is_accept = "accept" in response_text
+    ratified = list(proposed) if is_accept else []
+
+    return {
+        "current_phase": "init",
+        "current_node": "pi_toolkit_ratify",
+        "ratified_toolkit": ratified,
+        "batch_review_active": batched,
+        "batch_review_payload_size": len(proposed),
+        "interrupts": [
+            _record_interrupt(
+                node_name="pi_toolkit_ratify",
+                payload_size=len(proposed),
+                response=pi_response,
+                batch_review_used=batched,
+            )
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# 6. pi_credentials_ready — PI signals they've edited .env
+# ---------------------------------------------------------------------------
+
+
+def pi_credentials_ready(
+    state: ResearchWorkflowState,
+    sdk: SDKClient,
+    mcp: MCPClient,
+    interrupt_fn: Callable[[dict], Any],
+) -> dict:
+    """Third PI interrupt — single-tap "I've filled in the .env" gate.
+
+    The draft_manifest_node has already written the .env template to
+    ~/rka-projects/{project_id}/.env. This interrupt parks with the
+    file path + list of expected secret names so the PI knows what to
+    fill in. On accept, the next node (finalize_node) runs
+    probe_all_secrets to validate the credentials.
+
+    The PI's response carries no semantic content beyond "I'm done
+    editing" — accept proceeds; reject cancels onboarding.
+    """
+    proposed = state.get("proposed_toolkit", []) or []
+
+    # Build a list of expected secret-name + criticality + tool-name
+    # tuples for the PI to scan when they open the .env. We never
+    # surface values here — just names + which tool needs each.
+    expected_secrets = []
+    for tool_dict in proposed:
+        for s in tool_dict.get("secrets") or []:
+            expected_secrets.append(
+                {
+                    "tool": tool_dict.get("name"),
+                    "name": s.get("name"),
+                    "criticality": s.get("criticality"),
+                    "description": s.get("description"),
+                }
+            )
+
+    project_id = state.get("project_id", "")
+    payload = {
+        "type": "pi_credentials_ready",
+        "title": "PI credential entry — edit .env and accept when ready",
+        "prompt": (
+            f"Open ~/rka-projects/{project_id}/.env (file mode 0600). "
+            "Replace each <paste-here> placeholder with the real value, "
+            "save, then accept this interrupt. The orchestrator will "
+            "probe each declared API to validate the credentials before "
+            "registering the manifest. Reject if you want to cancel "
+            "onboarding for this project."
+        ),
+        "env_file_path": f"~/rka-projects/{project_id}/.env",
+        "expected_secrets": expected_secrets,
+        "items": [],
+        "total_items": 0,
+    }
+    pi_response = interrupt_fn(payload)
+
+    return {
+        "current_phase": "init",
+        "current_node": "pi_credentials_ready",
+        "interrupts": [
+            _record_interrupt(
+                node_name="pi_credentials_ready",
+                payload_size=len(expected_secrets),
+                response=pi_response,
+                batch_review_used=False,
+            )
+        ],
+    }

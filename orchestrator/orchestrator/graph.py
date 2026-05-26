@@ -289,7 +289,12 @@ NODE_NAMES: tuple[str, ...] = (
 # (onboarding_graph.build_onboarding_graph(...)).
 ONBOARDING_NODE_NAMES: tuple[str, ...] = (
     "research_toolkit",
-    # Future additions as D4-D8 lands: intro, draft_manifest,
-    # finalize, plus the 4 onboarding PI interrupt nodes (which sit
-    # under pi.py and share the pi_* naming convention).
+    # PI interrupt nodes (Phase D5a — colocated in nodes/pi.py with
+    # the mission-level interrupts; they share the pi_* naming
+    # convention so the orchestrator-pi skill rendering rules apply
+    # uniformly).
+    "pi_onboarding_topic",
+    "pi_toolkit_ratify",
+    "pi_credentials_ready",
+    # Phase D5b additions land here as draft_manifest, finalize, etc.
 )
