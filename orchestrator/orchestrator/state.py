@@ -238,6 +238,25 @@ class ResearchWorkflowState(TypedDict, total=False):
     proposed_toolkit: list[dict]
     ratified_toolkit: list[dict]
 
+    # Phase O (agentic) — full project-onboarding workflow state.
+    # O1-O2 inputs:
+    project_slug: str
+    workspace_path: str
+    ingested_source_ids: list[str]   # journal IDs from pi_idea_capture
+    polished_idea: dict              # PolishedIdea (O1: idea_polish output)
+    scope_ratified: bool             # set by pi_scope_ratify
+    # O2:
+    deepresearch_complete: bool      # set by pi_research_complete resume
+    # O3:
+    hygiene_findings: list[dict]     # set by hygiene_pass
+    claim_ids: list[str]             # set by claim_extraction
+    # O4:
+    ratified_plan_decision_id: str   # dec_… from pi_plan_ratify accept
+    ratified_plan_journal_id: str    # jrn_… containing the plan JSON
+    ratified_mission_ids: list[str]  # mis_… per milestone, auto-created
+    # H:
+    current_milestone_index: int     # 0-indexed position in ratified_mission_ids
+
     # Termination
     terminal_state: TerminalState
     final_report_id: str
@@ -298,6 +317,21 @@ def make_initial_state(
         topic_metadata={},
         proposed_toolkit=[],
         ratified_toolkit=[],
+        # Phase O fields (additive; total=False). All zeroed at start;
+        # the onboarding subgraph populates them as it advances through
+        # O1 → O2 → O3 → O4 → O5 → H.
+        project_slug="",
+        workspace_path="",
+        ingested_source_ids=[],
+        polished_idea={},
+        scope_ratified=False,
+        deepresearch_complete=False,
+        hygiene_findings=[],
+        claim_ids=[],
+        ratified_plan_decision_id="",
+        ratified_plan_journal_id="",
+        ratified_mission_ids=[],
+        current_milestone_index=0,
     )
 
 
