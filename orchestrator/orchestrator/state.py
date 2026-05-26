@@ -226,6 +226,18 @@ class ResearchWorkflowState(TypedDict, total=False):
     proposed_actions: list[dict]
     ratified_actions: list[dict]
 
+    # Phase D (agentic) — onboarding subgraph state.
+    # `topic_metadata` is set by pi_onboarding_topic (a TopicMetadata
+    # dict per orchestrator.manifest). `proposed_toolkit` is set by
+    # research_toolkit_node — a list of ToolDecl dicts the Brain
+    # proposes. `ratified_toolkit` is set on pi_toolkit_ratify accept.
+    # All three live on the same TypedDict so the onboarding subgraph
+    # shares state with the mission subgraph (lets a workflow_thread_id
+    # straddle the boundary if onboarding triggers a mission).
+    topic_metadata: dict
+    proposed_toolkit: list[dict]
+    ratified_toolkit: list[dict]
+
     # Termination
     terminal_state: TerminalState
     final_report_id: str
@@ -279,6 +291,13 @@ def make_initial_state(
         batch_review_payload_size=0,
         proposed_actions=[],
         ratified_actions=[],
+        # Phase D onboarding fields (additive; total=False on the
+        # TypedDict means pre-Phase-D callers still construct valid
+        # states without them, but the defaults are listed here for
+        # clarity + audit-symmetry test passes).
+        topic_metadata={},
+        proposed_toolkit=[],
+        ratified_toolkit=[],
     )
 
 
