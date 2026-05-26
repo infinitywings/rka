@@ -318,4 +318,7 @@ ONBOARDING_NODE_NAMES: tuple[str, ...] = (
     "pi_deepresearch_prompt",
     # O3.1 (hygiene sweep over RKA state):
     "hygiene_pass",
+    # O3.2 (Brain extracts atomic claims + TWO-TAP review):
+    "claim_extraction",
+    "pi_claims_review",
 )

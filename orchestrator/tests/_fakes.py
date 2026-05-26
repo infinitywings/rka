@@ -58,6 +58,9 @@ class FakeMCP:
     pending_maintenance_response: dict = field(
         default_factory=lambda: {"items": []}
     )
+    # Phase O O3.2 — claims surface.
+    claim_counter: int = 0
+    claims_response: list = field(default_factory=list)
 
     def _record(self, op: str, **kw: Any) -> None:
         self.calls.append({"op": op, **kw})
@@ -124,6 +127,42 @@ class FakeMCP:
     def rka_get_pending_maintenance(self) -> dict:
         self._record("rka_get_pending_maintenance")
         return self.pending_maintenance_response
+
+    # Phase O O3.2 — claims surface.
+    def rka_create_claim(
+        self,
+        *,
+        source_entry_id: str,
+        claim_type: str,
+        content: str,
+        confidence: float = 0.5,
+    ) -> str:
+        self.claim_counter += 1
+        rid = f"clm_fake_{self.claim_counter:03d}"
+        self._record(
+            "rka_create_claim",
+            source_entry_id=source_entry_id,
+            claim_type=claim_type,
+            content=content,
+            confidence=confidence,
+            claim_id=rid,
+        )
+        return rid
+
+    def rka_list_claims(
+        self,
+        *,
+        source_entry_id: str | None = None,
+        claim_type: str | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        self._record(
+            "rka_list_claims",
+            source_entry_id=source_entry_id,
+            claim_type=claim_type,
+            limit=limit,
+        )
+        return self.claims_response
 
     # --- writes ---
     def rka_add_note(self, content: str, **kwargs: Any) -> str:

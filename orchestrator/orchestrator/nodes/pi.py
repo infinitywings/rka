@@ -641,6 +641,125 @@ def pi_deepresearch_prompt(
 
 
 # ---------------------------------------------------------------------------
+# Phase O O3.2 — pi_claims_review (TWO-TAP ratification of extracted claims)
+# ---------------------------------------------------------------------------
+
+
+_CLAIMS_REVIEW_PREVIEW_FLOOR: int = 10
+"""Soft floor for inline claim rendering. Above this the payload
+relies on batch_review for paging — same convention as pi_greenlight /
+pi_decision_select payloads."""
+
+
+def _fetch_claims_for_review(
+    mcp: MCPClient, *, claim_ids: list[str]
+) -> list[dict]:
+    """Best-effort fetch of claim entities so the interrupt payload
+    can render content + provenance per claim rather than just IDs.
+
+    Tries rka_list_claims with no filters (returns all claims; we
+    filter to the IDs) and falls back to one rka_get per ID if the
+    list path is unavailable.
+    """
+    if not claim_ids:
+        return []
+    wanted = set(claim_ids)
+    fetched: list[dict] = []
+    try:
+        result = mcp.rka_list_claims(limit=200)
+        if isinstance(result, list):
+            for c in result:
+                if isinstance(c, dict):
+                    cid = c.get("id") or c.get("clm_id")
+                    if cid and str(cid) in wanted:
+                        fetched.append(c)
+    except Exception:  # noqa: BLE001
+        pass
+    if fetched:
+        return fetched
+    # Fallback: per-ID rka_get.
+    for cid in claim_ids:
+        try:
+            entity = mcp.rka_get(cid)
+        except Exception:  # noqa: BLE001
+            continue
+        if isinstance(entity, dict):
+            fetched.append(entity)
+    return fetched
+
+
+def pi_claims_review(
+    state: ResearchWorkflowState,
+    sdk: SDKClient,
+    mcp: MCPClient,
+    interrupt_fn: Callable[[dict], Any],
+) -> dict:
+    """Phase O O3.2 — TWO-TAP ratification of the extracted claims.
+
+    Claims are the provenance backbone of the plan that follows at O4,
+    so PI must explicitly ratify them before plan synthesis runs.
+    Mirrors the set-identity ratification pattern of pi_scope_ratify /
+    pi_toolkit_ratify: on accept the workflow proceeds; on reject /
+    correct the workflow loops back to claim_extraction.
+
+    Payload carries:
+      - items[]              — full claim dicts (when fetchable) so
+                               Claude-the-assistant can render each
+                               with claim_type + content + confidence
+                               + provenance (source_entry_id).
+      - claim_ids            — the raw ID list for skills that just
+                               surface counts.
+      - two_tap_required     — True; second tap label warns this
+                               claim set becomes plan provenance.
+    """
+    claim_ids = list(state.get("claim_ids") or [])
+    claims = _fetch_claims_for_review(mcp, claim_ids=claim_ids)
+
+    payload, batched = _build_interrupt_payload(
+        node_name="pi_claims_review",
+        items=claims or [{"id": cid} for cid in claim_ids],
+        title="PI ratification — extracted claims (TWO-TAP)",
+    )
+    payload["claim_ids"] = claim_ids
+    payload["two_tap_required"] = True
+    payload["two_tap_label"] = (
+        f"Confirm the {len(claim_ids)} extracted claim(s) become the "
+        "provenance for plan synthesis. Reject or correct to re-run "
+        "claim extraction (e.g., to drop or refine specific claims "
+        "first via rka_review_claims)."
+    )
+
+    pi_response = interrupt_fn(payload)
+    response_text = str(pi_response or "").lower()
+    is_accept = "accept" in response_text
+
+    update: dict[str, Any] = {
+        "current_phase": "init",
+        "current_node": "pi_claims_review",
+        "batch_review_active": batched,
+        "batch_review_payload_size": len(payload.get("items") or []),
+        "interrupts": [
+            _record_interrupt(
+                node_name="pi_claims_review",
+                payload_size=len(claim_ids),
+                response=pi_response,
+                batch_review_used=batched,
+            )
+        ],
+    }
+    # On reject/correct, clear claim_ids so the next claim_extraction
+    # pass re-populates from scratch. (Set-identity convention.)
+    if not is_accept:
+        update["claim_ids"] = []
+        if response_text and response_text != "reject":
+            # Freeform correction → stash on brain_position so
+            # claim_extraction sees the redirection guidance.
+            update["brain_position"] = str(pi_response)[:5000]
+
+    return update
+
+
+# ---------------------------------------------------------------------------
 # 4. pi_onboarding_topic — initial topic elicitation (Phase D)
 # ---------------------------------------------------------------------------
 

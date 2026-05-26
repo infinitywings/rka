@@ -78,6 +78,24 @@ class MCPClient(Protocol):
     def rka_check_freshness(self, days_threshold: int = 30) -> dict[str, Any]: ...
     def rka_get_pending_maintenance(self) -> dict[str, Any]: ...
 
+    # Phase O O3.2 — claims surface (POST /api/claims). WRITE-side
+    # (each claim is provenance for the plan that follows at O4).
+    def rka_create_claim(
+        self,
+        *,
+        source_entry_id: str,
+        claim_type: str,
+        content: str,
+        confidence: float = 0.5,
+    ) -> str: ...
+    def rka_list_claims(
+        self,
+        *,
+        source_entry_id: str | None = None,
+        claim_type: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]: ...
+
     # --- writes (auto-tag workflow_thread_id) ---
     def rka_add_note(
         self,
@@ -335,6 +353,41 @@ class RestMCPClient:
     def rka_get_pending_maintenance(self) -> dict:
         """GET /api/maintenance — flagged/pending maintenance items."""
         return self._request("GET", "/api/maintenance") or {}
+
+    # Phase O O3.2 — claims surface.
+    def rka_create_claim(
+        self,
+        *,
+        source_entry_id: str,
+        claim_type: str,
+        content: str,
+        confidence: float = 0.5,
+    ) -> str:
+        """POST /api/claims — create one claim derived from a journal entry."""
+        body = {
+            "source_entry_id": source_entry_id,
+            "claim_type": claim_type,
+            "content": content,
+            "confidence": confidence,
+        }
+        result = self._request("POST", "/api/claims", json=body) or {}
+        return result.get("id") or result.get("clm_id") or ""
+
+    def rka_list_claims(
+        self,
+        *,
+        source_entry_id: str | None = None,
+        claim_type: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """GET /api/claims with optional filters."""
+        params: dict[str, Any] = {"limit": limit}
+        if source_entry_id:
+            params["source_entry_id"] = source_entry_id
+        if claim_type:
+            params["claim_type"] = claim_type
+        result = self._request("GET", "/api/claims", params=params)
+        return result if isinstance(result, list) else []
 
     # ---- writes ----
 

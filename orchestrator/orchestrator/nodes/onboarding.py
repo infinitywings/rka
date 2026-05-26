@@ -742,6 +742,260 @@ def hygiene_pass_node(
 
 
 # ---------------------------------------------------------------------------
+# O3.2 — claim_extraction_node (Brain → atomic claims per project journal)
+# ---------------------------------------------------------------------------
+
+
+_CLAIM_EXTRACTION_TAGS: tuple[str, ...] = (
+    "polished-idea",
+    "ingested-source",
+    "literature",
+    "deep-research-finding",
+)
+"""Phase O tag categories whose journals seed claim extraction at O3.2.
+Order is the rendering order in the prompt (polish first, then sources,
+then literature, then framing notes)."""
+
+_CLAIM_TYPES = ("hypothesis", "evidence", "method", "result", "observation", "assumption")
+
+_CLAIM_EXTRACTION_PROMPT_TEMPLATE = """\
+You are the Brain extracting atomic claims from one of a project's
+journal entries during Phase O hygiene + extraction. Each claim
+becomes provenance for the research plan that will be synthesized at
+O4 and ratified by PI.
+
+## Journal entry
+
+Entry ID: {entry_id}
+Tags:     {tags}
+Source:   {source}
+
+Content:
+{content}
+
+## Task
+
+Identify atomic claims supported by the entry. An "atomic" claim is
+one assertion that could be verified or falsified independently — not
+a paragraph, not a list of related observations bundled together.
+
+For each claim emit:
+
+  - "claim_type": one of {claim_types}
+  - "content":    the atomic claim text (a single sentence preferred)
+  - "confidence": 0.0–1.0 — your prior on how supported this claim is
+
+Aim for 1–5 claims per entry. Empty list is valid if the entry has no
+extractable claims (e.g., pure metadata, low-information notes).
+
+## Output
+
+Emit a single JSON object inside a ```json fenced block:
+
+```json
+{{
+  "claims": [
+    {{"claim_type": "...", "content": "...", "confidence": 0.0}},
+    ...
+  ]
+}}
+```
+
+The block should be the LAST JSON object in your reply.
+"""
+
+
+def _journals_for_claim_extraction(
+    mcp: MCPClient, *, project_id: str
+) -> list[dict]:
+    """Pull every journal tagged ``[project_id, X]`` for each
+    X in _CLAIM_EXTRACTION_TAGS. Deduplicates by entry ID.
+
+    The MCPClient's rka_get_journal returns notes carrying all
+    requested tags; we call it once per category and union the
+    results.
+    """
+    if not project_id:
+        return []
+    seen: set[str] = set()
+    out: list[dict] = []
+    for category in _CLAIM_EXTRACTION_TAGS:
+        try:
+            result = mcp.rka_get_journal(
+                tags=[project_id, category], limit=200
+            )
+        except Exception:  # noqa: BLE001
+            continue
+        if isinstance(result, dict):
+            entries = result.get("entries") or result.get("results") or []
+        elif isinstance(result, list):
+            entries = result
+        else:
+            entries = []
+        for e in entries:
+            if not isinstance(e, dict):
+                continue
+            eid = e.get("id") or e.get("rka_id") or e.get("jrn_id")
+            if not eid or str(eid) in seen:
+                continue
+            seen.add(str(eid))
+            # Stash the category tag we pulled it under so the prompt
+            # can show provenance order.
+            e.setdefault("_phase_o_tag", category)
+            out.append(e)
+    return out
+
+
+def _build_claim_extraction_prompt(entry: dict) -> str:
+    return _CLAIM_EXTRACTION_PROMPT_TEMPLATE.format(
+        entry_id=entry.get("id") or entry.get("rka_id") or "(unknown)",
+        tags=", ".join(entry.get("tags") or []) or "(none)",
+        source=entry.get("source") or "(unknown)",
+        content=(entry.get("content") or "").strip()[:4000],
+        claim_types=", ".join(f'"{t}"' for t in _CLAIM_TYPES),
+    )
+
+
+def _parse_claims_reply(reply: str) -> list[dict]:
+    """Pull the claims array from a Brain reply. Each item must have
+    claim_type + content; confidence defaults to 0.5 if missing or
+    out of [0,1]. Filters out malformed entries silently."""
+    block = OS.extract_json_block(reply or "")
+    if not isinstance(block, dict):
+        return []
+    raw = block.get("claims")
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    for c in raw:
+        if not isinstance(c, dict):
+            continue
+        ct = c.get("claim_type")
+        content = c.get("content")
+        if not ct or not isinstance(content, str) or not content.strip():
+            continue
+        if ct not in _CLAIM_TYPES:
+            # Forgive lowercase / case variants by lowering and re-checking.
+            ct_norm = ct.lower() if isinstance(ct, str) else ""
+            if ct_norm in _CLAIM_TYPES:
+                ct = ct_norm
+            else:
+                continue
+        try:
+            conf = float(c.get("confidence", 0.5))
+        except (TypeError, ValueError):
+            conf = 0.5
+        if not (0.0 <= conf <= 1.0):
+            conf = 0.5
+        out.append({"claim_type": ct, "content": content.strip(), "confidence": conf})
+    return out
+
+
+def claim_extraction_node(
+    state: ResearchWorkflowState, sdk: SDKClient, mcp: MCPClient
+) -> dict:
+    """Phase O O3.2 — Brain extracts atomic claims from every project journal.
+
+    Algorithm:
+      1. Pull every journal carrying ``[project_id, X]`` for X in
+         (polished-idea, ingested-source, literature, deep-research-finding).
+         Dedup by entry ID.
+      2. For each journal, ask the Brain to identify atomic claims as
+         structured JSON (1–5 per entry; empty list is valid).
+      3. Submit each parsed claim via mcp.rka_create_claim and
+         accumulate the resulting clm_… IDs on state["claim_ids"].
+      4. Surface per-journal failures as ErrorRecord entries — the
+         pipeline keeps going so a flaky LLM call on one journal
+         doesn't lose the others.
+
+    State writes:
+      - current_node  = "claim_extraction"
+      - current_phase = "init"
+      - claim_ids     — list of clm_… IDs (in journal-iteration order)
+      - errors        — populated only when at least one journal failed
+    """
+    project_id = state.get("project_id", "")
+    if not project_id:
+        return {
+            "current_phase": "init",
+            "current_node": "claim_extraction",
+            "claim_ids": [],
+            "errors": [
+                {
+                    "node_name": "claim_extraction",
+                    "error_type": "claim_extraction_no_project_id",
+                    "detail": "claim_extraction_node requires state['project_id']",
+                    "timestamp": _now_iso(),
+                }
+            ],
+        }
+
+    journals = _journals_for_claim_extraction(mcp, project_id=project_id)
+    claim_ids: list[str] = []
+    errors: list[dict] = []
+
+    for entry in journals:
+        eid = entry.get("id") or entry.get("rka_id") or ""
+        if not eid:
+            continue
+        prompt = _build_claim_extraction_prompt(entry)
+        try:
+            reply = sdk.complete(prompt=prompt, system=BRAIN_SYSTEM)
+        except Exception as e:  # noqa: BLE001
+            errors.append(
+                {
+                    "node_name": "claim_extraction",
+                    "error_type": "claim_extraction_llm_failed",
+                    "detail": (
+                        f"Brain.complete raised on entry {eid}: "
+                        f"{type(e).__name__}: {str(e)[:200]}"
+                    ),
+                    "timestamp": _now_iso(),
+                }
+            )
+            continue
+
+        parsed = _parse_claims_reply(reply)
+        if not parsed:
+            # Empty list is a valid Brain output (entry has no extractable
+            # claims). Don't surface as error.
+            continue
+
+        for c in parsed:
+            try:
+                clm_id = mcp.rka_create_claim(
+                    source_entry_id=eid,
+                    claim_type=c["claim_type"],
+                    content=c["content"],
+                    confidence=c["confidence"],
+                )
+            except Exception as e:  # noqa: BLE001
+                errors.append(
+                    {
+                        "node_name": "claim_extraction",
+                        "error_type": "claim_extraction_write_failed",
+                        "detail": (
+                            f"rka_create_claim raised on entry {eid}: "
+                            f"{type(e).__name__}: {str(e)[:200]}"
+                        ),
+                        "timestamp": _now_iso(),
+                    }
+                )
+                continue
+            if clm_id:
+                claim_ids.append(clm_id)
+
+    update: dict[str, Any] = {
+        "current_phase": "init",
+        "current_node": "claim_extraction",
+        "claim_ids": claim_ids,
+    }
+    if errors:
+        update["errors"] = errors
+    return update
+
+
+# ---------------------------------------------------------------------------
 # D3a — research_toolkit_node (registry-based + Brain LLM scoring)
 # ---------------------------------------------------------------------------
 
