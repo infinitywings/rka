@@ -196,6 +196,9 @@ class FakeMCP:
         return mission_id
 
     def rka_create_mission(self, objective: str, **kwargs: Any) -> str:
+        """Phase O4.2: accepts phase/scope_boundaries/depends_on/tags
+        keyword args added to the Protocol. Records the full call so
+        tests can assert milestone DAG construction."""
         self.mission_counter += 1
         rid = f"mis_fake_{self.mission_counter:03d}"
         self._record("rka_create_mission", objective=objective, mission_id=rid, **kwargs)

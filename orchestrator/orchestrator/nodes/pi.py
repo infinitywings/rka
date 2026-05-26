@@ -16,6 +16,7 @@ on the resulting `InterruptRecord`. T11 audit asserts this contract.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -756,6 +757,397 @@ def pi_claims_review(
             # claim_extraction sees the redirection guidance.
             update["brain_position"] = str(pi_response)[:5000]
 
+    return update
+
+
+# ---------------------------------------------------------------------------
+# Phase O O4.2 — pi_plan_ratify (TWO-TAP — THE contract gate for autonomy)
+# ---------------------------------------------------------------------------
+
+
+def _render_research_plan_markdown(plan: dict | None) -> str:
+    """Render the ratified-plan-draft as PI-facing markdown for the
+    TWO-TAP ratification interrupt.
+
+    Tolerant of missing/empty sections — surfaces '(none)' rather than
+    raising so the renderer is safe to invoke on a malformed plan
+    (lets the PI see what Brain emitted even when fields are off).
+    """
+    if not isinstance(plan, dict):
+        return "(no plan on state)"
+
+    def _field(key: str, fallback: str = "(unspecified)") -> str:
+        v = plan.get(key)
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return fallback
+        return str(v).strip()
+
+    sections: list[str] = []
+
+    sections.append("## Refined research question")
+    sections.append(_field("refined_research_question"))
+    sections.append("")
+
+    hypotheses = plan.get("hypotheses") or []
+    sections.append(f"## Hypotheses ({len(hypotheses)})")
+    if not hypotheses:
+        sections.append("(none)")
+    else:
+        for i, h in enumerate(hypotheses, 1):
+            if not isinstance(h, dict):
+                continue
+            sections.append(
+                f"{i}. **{h.get('statement', '(missing)')}** "
+                f"— falsifier: {h.get('falsifier', '(missing)')} "
+                f"[confidence: {h.get('confidence', '?')}]"
+            )
+    sections.append("")
+
+    variables = plan.get("variables") or []
+    sections.append(f"## Variables ({len(variables)})")
+    if not variables:
+        sections.append("(none)")
+    else:
+        sections.append("| name | kind | description | measurement |")
+        sections.append("|---|---|---|---|")
+        for v in variables:
+            if not isinstance(v, dict):
+                continue
+            sections.append(
+                f"| {v.get('name', '?')} | {v.get('kind', '?')} | "
+                f"{v.get('description', '')[:80]} | {v.get('measurement') or '—'} |"
+            )
+    sections.append("")
+
+    sections.append("## Experimental matrix")
+    sections.append(_field("experimental_matrix"))
+    sections.append("")
+
+    gaps = plan.get("literature_gaps") or []
+    if gaps:
+        sections.append("## Literature gaps")
+        for g in gaps:
+            sections.append(f"  - {g}")
+        sections.append("")
+
+    milestones = plan.get("milestones") or []
+    total_cost = sum(
+        float(m.get("estimated_llm_cost_usd") or 0)
+        for m in milestones if isinstance(m, dict)
+    )
+    total_wall = sum(
+        int(m.get("estimated_wall_clock_min") or 0)
+        for m in milestones if isinstance(m, dict)
+    )
+    sections.append(
+        f"## Mission queue ({len(milestones)} milestones — "
+        f"total estimated cost ${total_cost:.2f}, "
+        f"total ETA {total_wall} min)"
+    )
+    if milestones:
+        sections.append("| milestone_id | phase | objective | depends_on | cost | wall-clock |")
+        sections.append("|---|---|---|---|---|---|")
+        for m in milestones:
+            if not isinstance(m, dict):
+                continue
+            sections.append(
+                f"| {m.get('milestone_id', '?')} | {m.get('phase', '?')} | "
+                f"{(m.get('objective') or '')[:60]} | "
+                f"{m.get('depends_on_milestone') or '—'} | "
+                f"${float(m.get('estimated_llm_cost_usd') or 0):.2f} | "
+                f"{int(m.get('estimated_wall_clock_min') or 0)}m |"
+            )
+    else:
+        sections.append("(none)")
+    sections.append("")
+
+    risks = plan.get("open_risks") or []
+    if risks:
+        sections.append("## Open risks")
+        for r in risks:
+            sections.append(f"  - {r}")
+        sections.append("")
+
+    return "\n".join(sections).rstrip()
+
+
+def _topo_sort_milestones(milestones: list[dict]) -> list[dict]:
+    """Topological order so a milestone's dependency is created before
+    it. Stable: respects the original order for milestones with no
+    inter-dependencies. Cycles fall through with the cycle members
+    appended at the end (validated upstream — should never happen for
+    a ratified plan, but we don't crash either way)."""
+    by_id = {m.get("milestone_id"): m for m in milestones if isinstance(m, dict)}
+    out: list[dict] = []
+    visited: set[str] = set()
+
+    def visit(mid: str, on_stack: set[str]):
+        if mid in visited or mid not in by_id or mid in on_stack:
+            return
+        m = by_id[mid]
+        dep = m.get("depends_on_milestone")
+        if dep:
+            visit(dep, on_stack | {mid})
+        visited.add(mid)
+        out.append(m)
+
+    for m in milestones:
+        if isinstance(m, dict) and m.get("milestone_id"):
+            visit(m["milestone_id"], set())
+    # Append any milestones not reached (cycles / dangling refs).
+    for m in milestones:
+        if isinstance(m, dict) and m.get("milestone_id") not in visited:
+            out.append(m)
+    return out
+
+
+def _materialize_milestone_chain(
+    *,
+    mcp: MCPClient,
+    decision_id: str,
+    plan: dict,
+    project_id: str,
+) -> tuple[list[str], list[dict]]:
+    """For each milestone in the plan, call rka_create_mission in topo
+    order and remember the (m_NN → mis_…) mapping so dependencies
+    resolve to real mission IDs.
+
+    Returns (mission_ids, errors).
+    """
+    milestones = plan.get("milestones") or []
+    ordered = _topo_sort_milestones(milestones)
+    plan_to_mission: dict[str, str] = {}
+    created_ids: list[str] = []
+    errors: list[dict] = []
+
+    for m in ordered:
+        mid = m.get("milestone_id") or ""
+        depends_plan = m.get("depends_on_milestone")
+        depends_mission = plan_to_mission.get(depends_plan) if depends_plan else None
+        try:
+            mission_id = mcp.rka_create_mission(
+                objective=m.get("objective") or f"Milestone {mid}",
+                motivated_by_decision=decision_id,
+                acceptance_criteria=[m.get("acceptance_criteria") or ""],
+                phase=m.get("phase"),
+                scope_boundaries=m.get("scope_boundaries"),
+                depends_on=depends_mission,
+                tags=[project_id, "phase-o-milestone", mid] if project_id else [],
+            )
+        except Exception as e:  # noqa: BLE001
+            errors.append(
+                {
+                    "node_name": "pi_plan_ratify",
+                    "error_type": "pi_plan_ratify_mission_create_failed",
+                    "detail": (
+                        f"rka_create_mission failed for milestone {mid}: "
+                        f"{type(e).__name__}: {str(e)[:200]}"
+                    ),
+                    "timestamp": _now_iso(),
+                }
+            )
+            continue
+        if mission_id:
+            plan_to_mission[mid] = mission_id
+            created_ids.append(mission_id)
+    return created_ids, errors
+
+
+def pi_plan_ratify(
+    state: ResearchWorkflowState,
+    sdk: SDKClient,
+    mcp: MCPClient,
+    interrupt_fn: Callable[[dict], Any],
+) -> dict:
+    """Phase O O4.2 — TWO-TAP ratification of the ResearchPlan + auto-create missions.
+
+    THE contract gate of Phase O. On accept:
+      1. Write a decision (rka_add_decision) recording PI ratified the
+         plan, related_journal = [plan_journal_id].
+      2. For each milestone (in topo order), call rka_create_mission
+         with the milestone's objective + acceptance_criteria +
+         scope_boundaries + phase, plus depends_on (mis_…) resolved
+         from the m_NN → mis_… mapping built as we go.
+      3. Re-tag the plan journal from 'ratified-plan-draft' →
+         'ratified-plan' so downstream queries find the ratified
+         version, not the draft.
+      4. State writes:
+           ratified_plan_decision_id = dec_…
+           ratified_mission_ids      = [mis_…, mis_…, ...]
+           current_milestone_index   = 0 (Phase H reads this)
+
+    On reject/correct:
+      - No decision written, no missions created, no retag.
+      - ratified_plan_decision_id stays empty (signals abandonment).
+      - On correct, brain_position carries the verbatim redirection
+        so a re-synthesis loop has the feedback.
+
+    Payload includes the full plan dict (items[0]) AND a pre-rendered
+    markdown blob (rendered_markdown) so the orchestrator-pi skill can
+    decide how to present.
+
+    TWO-TAP enforcement is the skill's responsibility (Python only
+    declares the requirement via two_tap_required=True + two_tap_label).
+    """
+    project_id = state.get("project_id", "")
+    plan_journal_id = state.get("ratified_plan_journal_id", "")
+
+    # Fetch the plan JSON from the journal (preferred) — falls back to
+    # state.polished_idea only if the journal is missing.
+    plan: dict = {}
+    if plan_journal_id:
+        try:
+            entry = mcp.rka_get(plan_journal_id)
+            if isinstance(entry, dict):
+                content = entry.get("content") or ""
+                if content.strip():
+                    try:
+                        plan = json.loads(content)
+                    except (json.JSONDecodeError, TypeError):
+                        plan = {}
+        except Exception:  # noqa: BLE001
+            plan = {}
+
+    payload, batched = _build_interrupt_payload(
+        node_name="pi_plan_ratify",
+        items=[plan] if plan else [],
+        title="PI ratification — research plan (TWO-TAP — licenses autonomy)",
+    )
+    payload["rendered_markdown"] = _render_research_plan_markdown(plan)
+    payload["two_tap_required"] = True
+    milestones = plan.get("milestones") or []
+    total_cost = sum(
+        float(m.get("estimated_llm_cost_usd") or 0)
+        for m in milestones if isinstance(m, dict)
+    )
+    total_wall = sum(
+        int(m.get("estimated_wall_clock_min") or 0)
+        for m in milestones if isinstance(m, dict)
+    )
+    payload["two_tap_label"] = (
+        f"**Authorize the orchestrator to dispatch this {len(milestones)}-milestone "
+        f"mission queue with estimated total cost ${total_cost:.2f} and "
+        f"ETA {total_wall} min? Per-phase acknowledgment will still apply "
+        f"for each milestone.**"
+    )
+    payload["total_estimated_cost_usd"] = total_cost
+    payload["total_estimated_wall_clock_min"] = total_wall
+    payload["plan_journal_id"] = plan_journal_id
+
+    pi_response = interrupt_fn(payload)
+    response_text = str(pi_response or "").lower()
+    is_accept = "accept" in response_text
+
+    update: dict[str, Any] = {
+        "current_phase": "init",
+        "current_node": "pi_plan_ratify",
+        "batch_review_active": batched,
+        "batch_review_payload_size": len(payload.get("items") or []),
+        "interrupts": [
+            _record_interrupt(
+                node_name="pi_plan_ratify",
+                payload_size=len(milestones),
+                response=pi_response,
+                batch_review_used=batched,
+            )
+        ],
+    }
+
+    if not is_accept:
+        # Reject / correct path.
+        if response_text and response_text != "reject":
+            update["brain_position"] = str(pi_response)[:5000]
+        return update
+
+    # Accept path: write the ratification decision + materialize missions.
+    if not plan:
+        # PI accepted but the plan is missing/unparsable. Defensive
+        # error path (should never happen if O4.1 succeeded).
+        update["errors"] = [
+            {
+                "node_name": "pi_plan_ratify",
+                "error_type": "pi_plan_ratify_no_plan",
+                "detail": (
+                    "PI accepted ratification but no plan content could "
+                    "be loaded from the journal — aborting auto-mission "
+                    "creation to avoid corrupting RKA state."
+                ),
+                "timestamp": _now_iso(),
+            }
+        ]
+        return update
+
+    errors: list[dict] = []
+    try:
+        decision_id = mcp.rka_add_decision(
+            content=f"Ratified Phase O research plan for project {project_id}.",
+            related_journal=[plan_journal_id] if plan_journal_id else [],
+            tags=[project_id, "ratified-plan"] if project_id else ["ratified-plan"],
+        )
+    except Exception as e:  # noqa: BLE001
+        decision_id = ""
+        errors.append(
+            {
+                "node_name": "pi_plan_ratify",
+                "error_type": "pi_plan_ratify_decision_write_failed",
+                "detail": f"rka_add_decision raised: {type(e).__name__}: {str(e)[:200]}",
+                "timestamp": _now_iso(),
+            }
+        )
+
+    mission_ids: list[str] = []
+    if decision_id:
+        mission_ids, mission_errors = _materialize_milestone_chain(
+            mcp=mcp,
+            decision_id=decision_id,
+            plan=plan,
+            project_id=project_id,
+        )
+        errors.extend(mission_errors)
+
+    # Re-tag the plan journal: 'ratified-plan-draft' → 'ratified-plan'.
+    if plan_journal_id:
+        try:
+            mcp.rka_update_note(
+                plan_journal_id,
+                tags=[project_id, "ratified-plan"] if project_id else ["ratified-plan"],
+            )
+        except Exception as e:  # noqa: BLE001
+            errors.append(
+                {
+                    "node_name": "pi_plan_ratify",
+                    "error_type": "pi_plan_ratify_journal_retag_failed",
+                    "detail": f"rka_update_note raised: {type(e).__name__}: {str(e)[:200]}",
+                    "timestamp": _now_iso(),
+                }
+            )
+
+    update["ratified_plan_decision_id"] = decision_id
+    update["ratified_mission_ids"] = mission_ids
+    update["current_milestone_index"] = 0
+    artifacts = []
+    if decision_id:
+        artifacts.append(
+            {
+                "rka_id": decision_id,
+                "entity_type": "decision",
+                "node_name": "pi_plan_ratify",
+                "timestamp": _now_iso(),
+            }
+        )
+    for mid in mission_ids:
+        artifacts.append(
+            {
+                "rka_id": mid,
+                "entity_type": "mission",
+                "node_name": "pi_plan_ratify",
+                "timestamp": _now_iso(),
+            }
+        )
+    if artifacts:
+        update["artifacts"] = artifacts
+    if errors:
+        update["errors"] = errors
     return update
 
 

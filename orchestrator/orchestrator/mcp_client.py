@@ -139,6 +139,10 @@ class MCPClient(Protocol):
         *,
         motivated_by_decision: str,
         acceptance_criteria: list[str],
+        phase: str | None = None,
+        scope_boundaries: str | None = None,
+        depends_on: str | None = None,
+        tags: list[str] | None = None,
     ) -> str: ...
     def rka_update_note(
         self,
@@ -530,13 +534,40 @@ class RestMCPClient:
         *,
         motivated_by_decision: str,
         acceptance_criteria: list[str],
+        phase: str | None = None,
+        scope_boundaries: str | None = None,
+        depends_on: str | None = None,
+        tags: list[str] | None = None,
     ) -> str:
-        body = {
-            "objective": objective,
-            "motivated_by_decision": motivated_by_decision,
-            "acceptance_criteria": list(acceptance_criteria),
-            "tags": [self.workflow_thread_id] if self.workflow_thread_id else [],
-        }
+        """POST /api/missions.
+
+        Phase O4.2 (mis_…onboard-plan): grew optional kwargs to expose
+        the full MissionCreate surface (phase, scope_boundaries,
+        depends_on) so the auto-materialized milestone chain at
+        pi_plan_ratify can express its DAG. Pre-Phase-O callers using
+        the original 2-kwarg form (motivated_by_decision +
+        acceptance_criteria) continue to work — the new kwargs default
+        to None and are dropped from the JSON body via _drop_none.
+
+        acceptance_criteria is passed as a list per the historical
+        Phase 2.7 convention; the server's MissionCreate model accepts
+        str | None so the list is currently rendered as a one-element
+        JSON array. (Not breaking anything that already shipped.)
+        """
+        merged_tags = list(tags or [])
+        if self.workflow_thread_id and self.workflow_thread_id not in merged_tags:
+            merged_tags.append(self.workflow_thread_id)
+        body = _drop_none(
+            {
+                "objective": objective,
+                "motivated_by_decision": motivated_by_decision,
+                "acceptance_criteria": list(acceptance_criteria),
+                "phase": phase,
+                "scope_boundaries": scope_boundaries,
+                "depends_on": depends_on,
+                "tags": merged_tags,
+            }
+        )
         result = self._request("POST", "/api/missions", json=body) or {}
         return result.get("id") or ""
 

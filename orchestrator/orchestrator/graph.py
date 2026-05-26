@@ -323,4 +323,6 @@ ONBOARDING_NODE_NAMES: tuple[str, ...] = (
     "pi_claims_review",
     # O4.1 (Brain composes ResearchPlan):
     "plan_synthesis",
+    # O4.2 (TWO-TAP — auto-create missions):
+    "pi_plan_ratify",
 )
