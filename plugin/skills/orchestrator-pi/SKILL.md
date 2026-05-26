@@ -1,7 +1,7 @@
 ---
 name: rka-orchestrator-pi
-description: PI cockpit for the agentic RKA distribution's LangGraph orchestrator. Renders parked PI interrupts across mission + onboarding subgraphs, guides the human through them via AskUserQuestion, and dispatches the PI's response back to the workflow. Load when supervising a running orchestrator workflow OR when onboarding a new project, or when the user says "start orchestrator" / "what's waiting" / "check orchestrator inbox" / "onboard a project".
-version: 0.2.0
+description: PI cockpit for the agentic RKA distribution's LangGraph orchestrator. Renders parked PI interrupts across mission, tool-setup, and Phase O project-onboarding subgraphs; guides the human through them via AskUserQuestion; dispatches responses back to the workflow. Load when supervising a running orchestrator workflow, onboarding a new project, or when the user says "start orchestrator" / "what's waiting" / "check orchestrator inbox" / "onboard a project" / "start phase O".
+version: 0.3.0
 ---
 
 # Orchestrator PI Skill (agentic-branch only)
@@ -294,6 +294,131 @@ Interrupt response (shared across mission + onboarding):
 Onboarding (Phase D):
 - `orchestrator_onboard_start(project_id, workflow_thread_id?)` — kick off onboarding
 - `orchestrator_get_manifest(project_id)` — fetch the effective manifest (baseline + extensions)
+
+## Phase O — full project-onboarding workflow
+
+Phase O is the orchestrator's "I have a research idea" → "the orchestrator
+can run autonomously against a ratified plan" pipeline. It's a third
+subgraph distinct from the mission graph (Phase A) and the tool-setup
+subgraph (Phase D). Six sub-phases:
+
+| Sub-phase | What it does | Interrupts |
+|---|---|---|
+| O1 — Idea capture & scope | PI describes project; Brain polishes; PI ratifies | pi_idea_capture, pi_scope_ratify |
+| O2 — Workspace + Deep Research | Workspace created; PI does literature scan (async pause) | pi_deepresearch_prompt |
+| O3 — Hygiene + claim extraction | Brain sweeps integrity + extracts atomic claims | pi_claims_review |
+| O4 — Plan synthesis + ratification | Brain composes ResearchPlan; PI ratifies (auto-creates missions) | pi_plan_ratify |
+| O5 — Tool setup | Same as standalone Phase D onboarding | pi_onboarding_topic, pi_toolkit_ratify, pi_credentials_ready |
+| H — Mission queue handoff | Per-milestone PI go/no-go before each mission | pi_phase_entry_ack |
+
+### Detect + kick off
+
+If the PI says "start a new project" / "onboard from scratch" / "Phase O":
+1. Check workspace via `orchestrator_health()`.
+2. Call `orchestrator_phase_o_start(project_id)` (or `start_phase_o` via
+   the runner — the daemon MCP tool will be added when ready). Returns
+   immediately with the first parked interrupt: `pi_idea_capture`.
+
+### Per-interrupt rendering (Phase O)
+
+**pi_idea_capture** — free-form input gate. Render the prompt
+verbatim (it explains the rka_add_note pattern the PI uses to ingest
+documents during the pause). Two response paths:
+
+- PI just chats + ingests, then says "done" → `orchestrator_accept(interrupt_id)`
+  (accept token is "approve" — greenlight-class).
+- PI typed an idea description in chat alongside the ingestion →
+  `orchestrator_correct(interrupt_id, response_text=<their description>)`
+  so the idea_polish step gets it as source material.
+
+**pi_scope_ratify** (TWO-TAP) — the polished idea (PolishedIdea
+dataclass) rendered as markdown. Show every section
+(research_question / motivation / scope / novelty_hypothesis /
+target_venue / open_assumptions / ingested_sources). Use
+`payload.rendered_markdown` if you want a pre-baked version.
+
+- First tap: `AskUserQuestion("Ratify the polished scope?", [Accept,
+  Reject, Correct])`
+- Second tap (only on Accept): `AskUserQuestion("Confirm the polished
+  scope locks the project's framing? You can still extend in later
+  phases but this is the foundation.", [Yes lock it in, No reconsider])`
+- Only on second-tap Yes → `orchestrator_accept(interrupt_id)`
+- Reject → `orchestrator_reject(...)` (loops back to capture_idea)
+- Correct → `orchestrator_correct(..., response_text=<redirect>)`
+
+**pi_deepresearch_prompt** — **async-pause**. Tell the PI explicitly:
+*"The orchestrator will park here indefinitely. Close Claude Desktop,
+do your literature scan over hours or days, then come back and ask me
+to check the orchestrator inbox."* The payload's
+`minimum_paper_floor` defaults to 5; below that, the workflow proceeds
+but surfaces a soft warning notification on next render.
+
+When PI returns:
+- "Done with deep research" → `AskUserQuestion("Done ingesting
+  literature?", [Yes accept and proceed, Reject to abandon project])`
+  → `orchestrator_accept(...)` on Yes.
+
+**pi_claims_review** (TWO-TAP) — atomic claims extracted from the
+ingested sources + literature. `payload.items` carries hydrated claim
+entities (when fetchable) with `claim_type` + `content` + `confidence`.
+The set is the provenance for the plan that follows at O4.
+
+- First tap: `AskUserQuestion("Ratify the extracted claim set?", [Accept,
+  Reject, Correct])`
+- Second tap (Accept): `AskUserQuestion("Confirm the {N} claims become
+  the provenance for plan synthesis?", [Yes, No])`
+- Only on second-tap Yes → `orchestrator_accept(interrupt_id)`
+- Reject/correct loops back to claim_extraction (cleared claim_ids).
+
+**pi_plan_ratify** (TWO-TAP — **the contract gate**) — full
+ResearchPlan rendered as markdown (RQ + hypotheses table + variables
+table + experimental matrix + literature gaps + mission queue table
+with cost + ETA per milestone + open risks). Use
+`payload.rendered_markdown`.
+
+- First tap: `AskUserQuestion("Ratify this research plan?", [Accept,
+  Reject, Correct])`
+- Second tap (Accept): `AskUserQuestion("Authorize the orchestrator
+  to dispatch this {N}-milestone mission queue with estimated total
+  cost ${X.XX} and ETA {Y} min? Per-phase acknowledgment will still
+  apply for each milestone.", [Yes authorize autonomy, No reconsider])`
+- Only on second-tap Yes → `orchestrator_accept(interrupt_id)`. The
+  daemon will write the ratification decision, materialize one
+  mis_… per milestone in topo order, and re-tag the plan journal.
+
+**pi_phase_entry_ack** — per-milestone go/no-go. Greenlight-class:
+the accept token is "approve". `payload.current_mission` carries the
+mission entity to be launched; `payload.remaining_count` shows how
+many milestones remain.
+
+- `AskUserQuestion("Launch milestone {milestone_id} — {objective} —
+  estimated ${cost}, {wall_clock_min} min?", [Approve and launch,
+  Reject to pause queue, Correct to redirect])`
+- Approve → `orchestrator_accept(interrupt_id)`. The daemon launches
+  the mission via the Phase A graph; the next pi_phase_entry_ack will
+  park when this mission terminates.
+- Reject → queue paused; PI resumes later via
+  `orchestrator_continue_plan(project_id)` (added as a daemon endpoint).
+- Correct → `orchestrator_correct(..., response_text="skip mis_bb,
+  jump to mis_cc")` — orchestrator interprets the redirect.
+
+### Phase O TWO-TAP summary
+
+Five interrupts need explicit double-confirmation before
+`orchestrator_accept`: **pi_scope_ratify**, **pi_claims_review**,
+**pi_plan_ratify**, plus pi_decision_select (Phase A) and
+pi_toolkit_ratify (Phase D / O5). Always ask the second tap with
+language that makes the consequence concrete (locks scope / commits
+N claims to plan / authorizes N-milestone queue / etc.).
+
+### Phase O entry vs Phase D-only entry
+
+- `orchestrator_phase_o_start(project_id)` — full Phase O (idea →
+  plan → tool setup → mission queue). Use when the project is brand
+  new and the PI is starting from scratch.
+- `orchestrator_onboard_start(project_id)` — Phase D only (tool
+  setup). Use when the PI already has a plan + just wants to wire
+  the tooling.
 
 ## Notes for the PI's RKA writes (separate surface)
 

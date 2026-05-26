@@ -3,6 +3,91 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [agentic — Phase O] — 2026-05-26 (project-onboarding workflow)
+
+Branch-scoped release notes for the `agentic` branch. `main` is unaffected.
+
+### Shipped: Phase O — full project-onboarding workflow (orchestrator)
+
+End-to-end pipeline that takes a PI from "I have a research idea" to "the
+orchestrator is autonomously executing a ratified mission queue":
+
+- **O0** — workspace.py module + state schema additions (12 new TypedDict
+  fields on ResearchWorkflowState). Workspaces live in
+  `$RKA_WORKSPACE_ROOT/{slug}/` (default `$HOME/Research/{slug}/`),
+  NEVER inside the rka repo (PI directive; `.gitignore` boundary).
+- **O1** — Idea capture & scope. Free-form pi_idea_capture; Brain
+  composes a PolishedIdea structured dataclass; pi_scope_ratify
+  TWO-TAP locks the project's framing.
+- **O2** — Workspace creation + async-pause Deep Research. PI can close
+  Claude Desktop, do literature scans over hours/days, come back;
+  SqliteSaver durability tested end-to-end via a process-restart
+  regression test.
+- **O3** — Hygiene sweep (rka_check_integrity, rka_check_freshness,
+  rka_get_pending_maintenance) + atomic claim extraction with
+  pi_claims_review TWO-TAP ratification.
+- **O4** — plan_synthesis Brain node emits the full ResearchPlan
+  dataclass (HypothesisSpec + VariableSpec + MissionMilestone +
+  experimental_matrix + DAG-checked milestone graph); pi_plan_ratify
+  TWO-TAP is the contract gate — accept writes the ratification
+  decision, auto-materializes one mis_… per milestone in topo order,
+  and re-tags the plan journal.
+- **H** — pi_phase_entry_ack gates each milestone dispatch with
+  cost + ETA before the runner launches the mission via Phase A.
+
+### Components
+
+- **12 new node names** added to `orchestrator/graph.py::ONBOARDING_NODE_NAMES`
+  (capture_idea, idea_polish, workspace_setup, hygiene_pass,
+  claim_extraction, plan_synthesis + the 6 pi_* interrupts).
+- **`orchestrator/onboarding_schemas.py`** — PolishedIdea +
+  HypothesisSpec + VariableSpec + MissionMilestone + ResearchPlan
+  dataclasses with strict from_dict validation (each field-level
+  error carries a precise corrective-feedback message for one-retry
+  parse-pattern in nodes).
+- **`orchestrator/workspace.py`** — ProjectSlug dataclass + slug
+  validation/derivation + workspace mkdir/IO + phase advancement +
+  reverse-lookup helpers.
+- **`orchestrator/phase_o_graph.py`** — LangGraph subgraph composer
+  with 5 conditional edges (set-identity routing on state flags) +
+  Phase H terminal handling.
+- **`orchestrator/runner.py`** — `start_phase_o(project_id)` entry
+  point; respond() routes Phase O interrupt types to the Phase O
+  compile factory (separate from Phase D tool-setup factory).
+- **6 new interrupt types** added to parked_store + schema CHECK
+  constraint + idempotent migration helper handling pre-Phase-O DBs
+  (`_migrate_pre_phase_o_if_needed`).
+- **5 new MCPClient methods**: rka_check_integrity, rka_check_freshness,
+  rka_get_pending_maintenance, rka_create_claim, rka_list_claims;
+  rka_create_mission expanded with phase/scope_boundaries/depends_on/
+  tags kwargs (backward-compatible).
+- **orchestrator-pi skill** updated to v0.3.0 with Phase O section
+  covering all 6 new interrupt types + TWO-TAP discipline for the
+  three privileged ratification gates (pi_scope_ratify,
+  pi_claims_review, pi_plan_ratify).
+
+### Tests
+
+- **+212 unit tests** across 9 new test files (test_o0_workspace.py
+  through test_phase_o_graph.py) — full suite 722 passed, 2 skipped
+  (was 494 → +228 over the Phase A + Phase D baseline).
+- **Async-pause regression test** for pi_deepresearch_prompt:
+  ParkedStore close/reopen against a real DB file preserves the
+  parked-interrupt row + run status — the durability contract Phase O
+  depends on.
+- **Bookkeeper invariant** (`git diff main -- rka/` empty), grep-gate
+  (no `from rka` imports in orchestrator/), and audit-symmetry
+  (bidirectional NODE_NAMES match) all clean.
+
+### Repo-boundary discipline
+
+Per PI directive, Phase O project content (data, code, notebooks,
+manuscripts, results, per-project tools.json, per-project .env) lives
+under the PI's `$HOME/Research/{slug}/`, NEVER in the rka repo. The
+rka repo holds only templates + orchestrator code that knows how to
+create the workspace. See `orchestrator/docs/phase-o-project-onboarding-design.md`
+§"Repo boundary".
+
 ## [2.5.12] — 2026-05-23 (patch release; Writer plugin-bundle integration)
 
 **Mission**: `mis_01KSARG7HJR0QMB9004ESZPM2K`
