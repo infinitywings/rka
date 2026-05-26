@@ -23,6 +23,11 @@ Empirical driver: the IoT-edge-LLM live test surfaced that the orchestrator's to
 | Tool discovery method | Web search via SerpAPI + Brain's training knowledge |
 | Credentials UX | Server writes template; PI edits the file; server probes each API to validate |
 | Actuator (#6) in scope? | No — separate later |
+| Q1 — Onboarding lifecycle | **Hybrid**: baseline manifest is frozen after initial onboarding; missions may request extension tools mid-stream via `pi_extend_toolkit` interrupt. Each ratified write records the active tool-set version (baseline hash + extensions) so reproduction can recreate the exact tool surface. |
+| Q2 — Missing-credential handling | **Criticality-aware**. Each secret declares `criticality: required \| recommended \| optional`. `required` missing → escalate via checkpoint (PI must provide or downgrade); `recommended` → escalate once at session start; `optional` → skip with journal note. Brain proposes tier during `research_toolkit_node`; PI ratifies. |
+| Q3 — Curated registry | **Yes, small (~10-15 entries)**. Ship `orchestrator/data/tool_registry.yaml` with canonical always-on (rka, context7, fs-mcp, git-mcp) + domain shortlists (finance: sec-edgar; bio: ncbi; legal: westlaw; ml-systems: hf, wandb). Brain consults registry FIRST (high-confidence priors), then web-searches for gaps. |
+| Q4 — Auth patterns supported | **API key only in Phase D MVP** (~80% of MCP servers). Manifest schema designed extensibly (`auth_type: "api_key"` initially; `oauth_token`, `oauth_browser`, `keychain`, `service_account` added in Phase D2). |
+| Q5 — Onboarding audit in RKA | **Yes — summary journal entry with manifest hash**. One-paragraph summary entry (`source=system`, `tags=[orchestrator, onboarding, baseline]`) referencing the manifest file path + sha256. Extensions trigger new entries with `supersedes` linkage. File remains the source of truth for execution; journal entry is the audit snapshot. |
 
 ## Subgraph topology
 
@@ -172,24 +177,97 @@ After PI ratifies the toolkit, the daemon:
 - The `.env` file is `chmod 600` on creation.
 - The `~/rka-projects/{project_id}/` directory has perms `0700`.
 
-## Build order (recommended)
+## Build order (recommended) — updated for ratified answers
 
-1. **D1** — schema + parked_store extension for new interrupt types (~0.5 day)
+1. **D1** — schema work (~0.75 day)
+   - parked_store extension for new interrupt types: `pi_onboarding_topic`, `pi_toolkit_ratify`, `pi_credentials_ready`, `pi_extend_toolkit`
+   - Manifest schema (`tools.json`) with `manifest_version`, `supersedes`, criticality, auth_type
+   - Initial seed of `orchestrator/data/tool_registry.yaml` (~10-15 entries)
 2. **D2** — per-project workspace dir creation + manifest read/write (~1 day)
-3. **D3** — research_toolkit_node + SerpAPI integration (~1 day)
-4. **D4** — pi_credentials interrupt + probe validation (~1 day)
-5. **D5** — onboarding subgraph wiring + new MCP tools (`orchestrator_onboard_start`, etc.) (~1 day)
-6. **D6** — skill update + integration tests + live test with one fake-credentialed tool (~1 day)
+   - `~/rka-projects/{project_id}/` with mode 0700; `.env` with mode 0600
+   - Manifest hash computation + supersedes chain logic for Q1's hybrid lifecycle
+3. **D3** — `research_toolkit_node` (~1.5 days)
+   - Registry consultation first
+   - SerpAPI augmentation for gaps
+   - Confidence scoring + Brain proposes criticality tier per Q2
+4. **D4** — credential UX (~1.25 days)
+   - `pi_credentials_ready` interrupt
+   - Probe validation per secret (HTTP HEAD/GET with `probe_url` + `probe_header`)
+   - Criticality-aware behavior on missing/failed probes (Q2)
+5. **D5** — onboarding subgraph wiring + new MCP tools (~1 day)
+   - New tools: `orchestrator_onboard_start`, `orchestrator_get_manifest`, `orchestrator_extend_toolkit`
+   - Manifest-driven `_build_mcp_servers_config` refactor
+6. **D6** — `pi_extend_toolkit` mid-stream extensions (Q1 hybrid) (~0.5 day)
+   - Mini-onboarding for a single added tool
+   - Per-mission extension manifest layered on the baseline
+7. **D7** — audit-entry integration (~0.25 day)
+   - `rka_add_note` call at onboarding completion with manifest hash (Q5)
+   - `supersedes` linkage for extensions
+8. **D8** — skill update + integration tests + live test with one credentialed tool (~1 day)
+   - Update `plugin/skills/orchestrator-pi/SKILL.md` with onboarding rendering rules
+   - Synthesized integration tests for the 4 new interrupt types
 
-Total: ~5-6 days of implementation work.
+Total: ~7.25 days of implementation work (was ~5-6 before ratification expanded scope on Q1+Q2+Q3+Q5).
 
-## Open design questions for next session
+## ~~Open design questions for next session~~ → All resolved (this session)
 
-1. **Where does onboarding fit in the lifecycle?** Once per project (then config is frozen)? Or iterative (re-onboard adds tools mid-stream)?
-2. **What happens when a tool needs a credential the PI doesn't have?** Skip the tool, escalate, or hold the workflow until provided?
-3. **Curated registry — yes or no?** PI picked "web search only" but should we maintain a `orchestrator/data/tool_registry.yaml` as the *first* source the Brain consults (then augment with web search)?
-4. **MCP tool authentication patterns.** Some tools use OAuth (like Claude itself), some use API keys, some use Bearer tokens. The credential collection UX should categorize by auth type.
-5. **Onboarding output as RKA journal entry?** Per the three-storage discipline, the manifest is workflow-config, not domain-truth. Keep it as a file. But should there ALSO be a journal entry summarizing "this project uses tools X, Y, Z" for auditability?
+All five questions were tackled and PI-ratified — see the choices table at the top of this document for the bound decisions. The implementation can proceed without further design review.
+
+### Concrete impact of the ratified answers on the build
+
+**Q1 (hybrid lifecycle)** changes the manifest schema:
+
+```jsonc
+{
+  "project_id": "prj_01...",
+  "manifest_version": "baseline_v1",       // baseline | extension_v2 | ...
+  "supersedes": null,                      // or a previous manifest hash for extensions
+  "tools": [ ... ],
+  // ...
+}
+```
+
+And adds a new interrupt type `pi_extend_toolkit` (used by missions that discover they need a new tool mid-stream).
+
+**Q2 (criticality)** changes the per-secret schema:
+
+```jsonc
+"secrets": [
+  {
+    "name": "SEC_EDGAR_API_KEY",
+    "auth_type": "api_key",
+    "criticality": "required",           // required | recommended | optional
+    "probe_url": "https://...",
+    "probe_header": "X-API-Key"
+  }
+]
+```
+
+And adds dispatcher logic: at session start, check all required+recommended secrets are present and probed; escalate accordingly.
+
+**Q3 (small registry)** adds a new data file:
+
+```
+orchestrator/data/tool_registry.yaml
+```
+
+Seeded with ~10-15 entries. Loaded at `research_toolkit_node` startup; results combine with SerpAPI results before being scored and presented to PI.
+
+**Q4 (api_key only MVP)** simplifies the credential UX to a single flow (paste-into-`.env` + probe). The `auth_type` field is in the schema from day one so future patterns can land without breaking changes.
+
+**Q5 (audit entry)** adds one call at onboarding completion:
+
+```python
+mcp.rka_add_note(
+    content=summary_text,
+    source="system",
+    type="note",
+    tags=["orchestrator", "onboarding", "baseline"],
+    related_decisions=[onboarding_decision_id],
+)
+```
+
+And for extensions, the new entry's `supersedes` field points to the previous baseline's journal id.
 
 ## Cross-cutting impact
 
