@@ -222,6 +222,20 @@ class OrchestratorRunner:
         compiled = self._compile_factory(sdk=sdk, mcp=mcp, checkpointer=saver)
         return self._execute_segment(thread_id, compiled, initial)
 
+    # Interrupt types that belong to the onboarding subgraph. When the
+    # runner is responding to one of these, it must use
+    # `_onboarding_compile_factory` rather than the mission
+    # `_compile_factory`. Sourced from parked_store.py InterruptType
+    # literal — keep in sync if new onboarding types are added.
+    _ONBOARDING_INTERRUPT_TYPES: frozenset[str] = frozenset(
+        {
+            "pi_onboarding_topic",
+            "pi_toolkit_ratify",
+            "pi_credentials_ready",
+            "pi_extend_toolkit",
+        }
+    )
+
     def respond(
         self,
         *,
@@ -269,7 +283,14 @@ class OrchestratorRunner:
         mcp = self._mcp_factory(run["workflow_thread_id"], run["project_id"])
         sdk = self._sdk_factory(run["project_id"])
         saver = self._saver_factory(run["workflow_thread_id"])
-        compiled = self._compile_factory(sdk=sdk, mcp=mcp, checkpointer=saver)
+        # Phase D5c: route to the onboarding compile factory when the
+        # interrupt belongs to the onboarding subgraph. Otherwise use the
+        # mission compile factory.
+        if parked["interrupt_type"] in self._ONBOARDING_INTERRUPT_TYPES:
+            factory = self._onboarding_compile_factory
+        else:
+            factory = self._compile_factory
+        compiled = factory(sdk=sdk, mcp=mcp, checkpointer=saver)
         return self._execute_segment(
             run["workflow_thread_id"], compiled, Command(resume=token)
         )

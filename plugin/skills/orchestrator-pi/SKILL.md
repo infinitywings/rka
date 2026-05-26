@@ -1,18 +1,31 @@
 ---
 name: rka-orchestrator-pi
-description: PI cockpit for the agentic RKA distribution's LangGraph orchestrator. Renders parked PI interrupts (greenlight / decision_select / acceptance), guides the human through them via AskUserQuestion, and dispatches the PI's response back to the workflow. Load when supervising a running orchestrator workflow, or when the user says "start orchestrator" / "what's waiting" / "check orchestrator inbox".
-version: 0.1.0
+description: PI cockpit for the agentic RKA distribution's LangGraph orchestrator. Renders parked PI interrupts across mission + onboarding subgraphs, guides the human through them via AskUserQuestion, and dispatches the PI's response back to the workflow. Load when supervising a running orchestrator workflow OR when onboarding a new project, or when the user says "start orchestrator" / "what's waiting" / "check orchestrator inbox" / "onboard a project".
+version: 0.2.0
 ---
 
 # Orchestrator PI Skill (agentic-branch only)
 
 You are the PI's cockpit for the RKA orchestrator. The orchestrator
-runs Brain ⇄ Executor ⇄ PI workflows against RKA missions as a
-LangGraph. At three points the graph parks for PI input:
+drives two distinct kinds of workflows, each with its own subgraph:
+
+### Mission subgraph (Phase A)
+Brain ⇄ Executor ⇄ PI loops against an RKA mission. Three PI
+interrupts:
 
 1. **pi_greenlight** — approve the Confirmation Brief before execution starts
 2. **pi_decision_select** — ratify a set of Brain-drafted actions (**this gate authorizes RKA writes**)
 3. **pi_acceptance** — final mission review
+
+### Onboarding subgraph (Phase D)
+Once per project, before any missions run. Builds the project's tool
+manifest (`~/rka-projects/{project_id}/tools.json`) + a credentials
+template. Three PI interrupts:
+
+4. **pi_onboarding_topic** — PI provides topic, field, venue
+5. **pi_toolkit_ratify** — PI ratifies the Brain-proposed tool set (**set-identity gate**)
+6. **pi_credentials_ready** — PI signals they've edited the `.env`; server probes each API
+7. **pi_extend_toolkit** — mid-mission: PI ratifies an added tool (Phase D6; defer if not in registry yet)
 
 Your job is to render parked interrupts clearly, guide the PI through
 the response, and dispatch via the `orchestrator_*` MCP tools.
@@ -165,18 +178,122 @@ there are pending interrupts — cancellation marks them as cancelled
 without dispatching, but the partially-completed graph state remains
 in the SqliteSaver (for forensics).
 
+## Onboarding flow (Phase D)
+
+When the PI says "onboard a project", "set up a new project's tools",
+or you notice they're starting a fresh project that hasn't completed
+onboarding:
+
+### Detect
+
+Call `orchestrator_get_manifest(project_id)`. If it returns 404
+("no manifest"), onboarding hasn't run yet — offer it.
+
+### Kick off
+
+`orchestrator_onboard_start(project_id, workflow_thread_id?)`. Returns
+immediately with the first parked interrupt (`pi_onboarding_topic`).
+
+### Render the 3 (or 4) onboarding interrupts
+
+**pi_onboarding_topic** — free-form input. Render the prompt; use a
+chat dialog (NOT AskUserQuestion) since the PI types a paragraph, not
+picks from a list:
+
+> "Tell me about the project — a 1-2 sentence summary, the research
+> field, target venue, and 3-5 keywords."
+
+Then call `orchestrator_correct(interrupt_id, response_text=<their text>)`
+because the response carries content the Brain reads. (Even though
+this is a "topic input" not a "redirect", the orchestrator's
+correct-channel is the right fit — accept would discard the text.)
+
+**pi_toolkit_ratify** — set-identity ratification (just like
+`pi_decision_select`). **TWO-TAP REQUIRED**: the manifest grants tools
+permanent access to the project's subprocess MCP scope, so ratification
+is a real authorization gate.
+
+Render the proposed_toolkit as a numbered list with the Brain's
+`brain_notes` paragraph (if present in the payload) shown first.
+Each tool's `rationale`, `criticality_suggested` on each secret, and
+`source` (registry vs user_added) should be visible.
+
+  - First tap: `AskUserQuestion("Ratify this toolkit?", [Accept all,
+    Reject, Correct])`
+  - Second tap (only if Accept all): `AskUserQuestion("Authorize all N
+    tools — including any required credentials they need? The manifest
+    will be written to ~/rka-projects/{id}/tools.json.", [Yes, No])`
+  - Only on second-tap Yes → `orchestrator_accept(interrupt_id)`
+
+For reject → `orchestrator_reject(interrupt_id, reason=...)` (onboarding
+ends without a manifest). For correct → ask the PI for the redirection
+text (e.g., "drop sec-edgar, add wandb"), then
+`orchestrator_correct(interrupt_id, response_text=...)`.
+
+**pi_credentials_ready** — single-tap "ready" gate. The payload's
+`expected_secrets` list shows which env-var names need values. Render:
+
+```
+The orchestrator wrote a credentials template at:
+  ~/rka-projects/{project_id}/.env
+
+Open it in your editor, replace each <paste-here> placeholder with
+the real credential value, save (file mode is 0600), then come back.
+
+Expected secrets:
+  - SEC_EDGAR_API_KEY (required) — SEC EDGAR API key
+  - SEMANTIC_SCHOLAR_API_KEY (recommended) — higher rate limit
+  ...
+```
+
+Then `AskUserQuestion("Done editing the .env?", [Yes accept and probe,
+No reject onboarding])`. Only after explicit Yes → `orchestrator_accept(interrupt_id)`.
+
+**NEVER ask the PI to paste credential values into Claude Code.** The
+file-edit + server-side probe is the canonical UX precisely so values
+don't enter the transcript.
+
+**pi_extend_toolkit** (Phase D6, mid-mission) — similar to
+`pi_toolkit_ratify` but scoped to a single new tool the Brain
+discovered it needs partway through a mission. Apply the same TWO-TAP
+discipline. The extension lands as
+`~/rka-projects/{id}/extension_{mission_id}.json`.
+
+### After onboarding completes
+
+The daemon emits an RKA journal entry summarizing the toolkit (the
+audit trail) and updates the manifest with `audit_journal_id`. Surface
+this to the PI:
+
+> "Onboarding complete. Tools registered:
+>  - rka (always-on)
+>  - sec-edgar (api-key validated ✓)
+>  - context7 (no creds needed)
+> Manifest: ~/rka-projects/{id}/tools.json
+> Audit entry: jrn_..."
+
+If `orchestrator_get_manifest(project_id)` now returns the baseline,
+onboarding succeeded and the project is ready for missions.
+
 ## Tool reference (this skill's surface)
 
+Mission lifecycle:
 - `orchestrator_health()` — daemon smoke test
-- `orchestrator_run_start(mission_id, project_id, budget_usd?)` — start
+- `orchestrator_run_start(mission_id, project_id, budget_usd?)` — start mission
 - `orchestrator_list_runs(status?, limit?)` — runs list
 - `orchestrator_get_run(workflow_thread_id)` — run detail
 - `orchestrator_cancel(workflow_thread_id)` — abort
+
+Interrupt response (shared across mission + onboarding):
 - `orchestrator_inbox(workflow_thread_id?)` — pending interrupts
 - `orchestrator_get_interrupt(interrupt_id)` — one interrupt detail
 - `orchestrator_accept(interrupt_id)` — accept (server emits type-correct token)
 - `orchestrator_reject(interrupt_id, reason?)` — reject → escalation
 - `orchestrator_correct(interrupt_id, response_text)` — freeform redirect
+
+Onboarding (Phase D):
+- `orchestrator_onboard_start(project_id, workflow_thread_id?)` — kick off onboarding
+- `orchestrator_get_manifest(project_id)` — fetch the effective manifest (baseline + extensions)
 
 ## Notes for the PI's RKA writes (separate surface)
 
