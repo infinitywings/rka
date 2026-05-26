@@ -480,3 +480,153 @@ def missing_recommended_secrets(
             if s.criticality == "recommended" and not env_values.get(s.name):
                 out.append((tool.name, s))
     return out
+
+
+# ---------------------------------------------------------------------------
+# D2 — Supersedes chain + extension composition (Q1 hybrid lifecycle)
+# ---------------------------------------------------------------------------
+
+
+def extension_filename(mission_id: str) -> str:
+    """Canonical filename for a per-mission extension manifest."""
+    return f"extension_{mission_id}.json"
+
+
+def extension_path(
+    project_id: str, mission_id: str, *, root: Optional[Path] = None
+) -> Path:
+    return workspace_dir(project_id, root=root) / extension_filename(mission_id)
+
+
+def save_extension_manifest(
+    extension: ToolManifest,
+    mission_id: str,
+    *,
+    root: Optional[Path] = None,
+) -> Path:
+    """Write a per-mission extension manifest.
+
+    Each extension declares `supersedes_baseline_hash` so reproduction
+    can recover the exact baseline that was in effect when the
+    extension was ratified.
+
+    Raises ValueError if `extension.manifest_type != "extension"` —
+    extensions and baselines are distinct artifacts and the IO helpers
+    enforce that at write time.
+    """
+    if extension.manifest_type != "extension":
+        raise ValueError(
+            f"save_extension_manifest: manifest_type must be 'extension', "
+            f"got {extension.manifest_type!r}"
+        )
+    if not extension.supersedes_baseline_hash:
+        raise ValueError(
+            "save_extension_manifest: supersedes_baseline_hash is required "
+            "so reproduction can recover the baseline the extension layers on"
+        )
+    if not extension.created_at:
+        extension.created_at = _now_iso()
+    ensure_workspace_dir(extension.project_id, root=root)
+    path = extension_path(extension.project_id, mission_id, root=root)
+    path.write_text(extension.to_json(), encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+    return path
+
+
+def load_extension_manifest(
+    project_id: str, mission_id: str, *, root: Optional[Path] = None
+) -> Optional[ToolManifest]:
+    """Load a per-mission extension manifest, returning None if absent."""
+    path = extension_path(project_id, mission_id, root=root)
+    if not path.is_file():
+        return None
+    return ToolManifest.from_json(path.read_text(encoding="utf-8"))
+
+
+def list_extensions(
+    project_id: str, *, root: Optional[Path] = None
+) -> dict[str, ToolManifest]:
+    """Discover every per-mission extension manifest in the workspace.
+
+    Returns `{mission_id: ToolManifest}`. Useful for audit views like
+    "what tools were added mid-project, and for which missions?".
+    """
+    out: dict[str, ToolManifest] = {}
+    d = workspace_dir(project_id, root=root)
+    if not d.is_dir():
+        return out
+    prefix = "extension_"
+    suffix = ".json"
+    for f in d.iterdir():
+        name = f.name
+        if not (name.startswith(prefix) and name.endswith(suffix)):
+            continue
+        mission_id = name[len(prefix) : -len(suffix)]
+        try:
+            ext = ToolManifest.from_json(f.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, KeyError):
+            continue  # malformed extension — skip silently
+        out[mission_id] = ext
+    return out
+
+
+def compose_effective_manifest(
+    project_id: str,
+    *,
+    mission_id: Optional[str] = None,
+    root: Optional[Path] = None,
+) -> Optional[ToolManifest]:
+    """Compose the effective tool set for a mission (or project baseline).
+
+    Algorithm:
+      1. Load the baseline manifest. If missing → return None (caller
+         decides whether to escalate or kick off onboarding).
+      2. If `mission_id` is given, load that mission's extension
+         manifest if present.
+      3. Merge: extension tools are *additive* — any tool name in the
+         extension that ALSO exists in the baseline overrides the
+         baseline entry; any tool name unique to the extension is
+         appended. Baseline-only tools pass through.
+      4. Return a synthesized ToolManifest with `manifest_type="extension"`
+         when mission-scoped, else the bare baseline.
+
+    The returned manifest is NOT written to disk — it's a runtime
+    composition used by the runner's MCP-config builder. The on-disk
+    baseline + extension files remain the canonical sources.
+
+    `supersedes_baseline_hash` is copied through so audit/reproduction
+    tooling can trace back to the exact baseline.
+    """
+    baseline = load_manifest(project_id, root=root)
+    if baseline is None:
+        return None
+    if mission_id is None:
+        return baseline
+    extension = load_extension_manifest(project_id, mission_id, root=root)
+    if extension is None:
+        return baseline
+
+    # Merge: extension tools override or extend the baseline list.
+    by_name: dict[str, ToolDecl] = {t.name: t for t in baseline.tools}
+    for t in extension.tools:
+        by_name[t.name] = t
+    merged_tools = list(by_name.values())
+
+    # Synthesize the effective manifest. The composition is workflow
+    # config, not on-disk truth, so we deliberately don't compute a
+    # hash here (the audit chain references baseline + extension hashes
+    # separately).
+    return ToolManifest(
+        project_id=project_id,
+        schema_version=baseline.schema_version,
+        manifest_type="extension",
+        supersedes_baseline_hash=baseline.compute_hash(),
+        supersedes_extension_hash=extension.compute_hash(),
+        topic=baseline.topic,
+        tools=merged_tools,
+        created_at=extension.created_at or baseline.created_at,
+        audit_journal_id=extension.audit_journal_id or baseline.audit_journal_id,
+    )

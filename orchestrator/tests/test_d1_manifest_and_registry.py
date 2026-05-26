@@ -513,3 +513,185 @@ def test_phase_a_to_d_migration_is_idempotent(tmp_path: Path):
     s2 = ParkedStore(db_path)
     assert s2.get_interrupt(iid) is not None
     s2.close()
+
+
+# ---------------------------------------------------------------------------
+# D2 — Supersedes chain + extension composition
+# ---------------------------------------------------------------------------
+
+
+def _baseline_manifest(project_id: str = "prj_test") -> M.ToolManifest:
+    return M.ToolManifest(
+        project_id=project_id,
+        topic=M.TopicMetadata(summary="baseline topic"),
+        tools=[
+            M.ToolDecl(name="rka", type="mcp_stdio", always_on=True),
+            M.ToolDecl(name="context7", type="mcp_stdio", command="npx"),
+        ],
+    )
+
+
+def _extension_manifest(
+    project_id: str,
+    baseline_hash: str,
+    *,
+    additional_tool_name: str = "huggingface",
+) -> M.ToolManifest:
+    return M.ToolManifest(
+        project_id=project_id,
+        manifest_type="extension",
+        supersedes_baseline_hash=baseline_hash,
+        tools=[
+            M.ToolDecl(
+                name=additional_tool_name,
+                type="mcp_stdio",
+                command="npx",
+                args=["-y", "@huggingface/mcp-server@latest"],
+                source="user_added",
+            )
+        ],
+    )
+
+
+def test_save_extension_manifest_requires_extension_type(tmp_root: Path):
+    # A baseline manifest can't be saved as an extension.
+    bad = _baseline_manifest()
+    bad.manifest_type = "baseline"
+    with pytest.raises(ValueError, match="manifest_type must be 'extension'"):
+        M.save_extension_manifest(bad, "mis_x")
+
+
+def test_save_extension_manifest_requires_baseline_hash(tmp_root: Path):
+    ext = _extension_manifest("prj_test", baseline_hash="abc")
+    ext.supersedes_baseline_hash = None
+    with pytest.raises(ValueError, match="supersedes_baseline_hash"):
+        M.save_extension_manifest(ext, "mis_x")
+
+
+def test_extension_round_trip(tmp_root: Path):
+    baseline = _baseline_manifest()
+    M.save_manifest(baseline)
+    bh = baseline.compute_hash()
+    ext = _extension_manifest("prj_test", baseline_hash=bh)
+    path = M.save_extension_manifest(ext, "mis_phase4")
+    assert path.exists()
+    assert path.name == "extension_mis_phase4.json"
+    loaded = M.load_extension_manifest("prj_test", "mis_phase4")
+    assert loaded is not None
+    assert loaded.manifest_type == "extension"
+    assert loaded.supersedes_baseline_hash == bh
+    assert loaded.tools[0].name == "huggingface"
+
+
+def test_load_extension_manifest_returns_none_when_missing(tmp_root: Path):
+    assert M.load_extension_manifest("prj_test", "mis_nonexistent") is None
+
+
+def test_list_extensions_discovers_every_extension(tmp_root: Path):
+    baseline = _baseline_manifest()
+    M.save_manifest(baseline)
+    bh = baseline.compute_hash()
+    M.save_extension_manifest(_extension_manifest("prj_test", bh), "mis_a")
+    M.save_extension_manifest(
+        _extension_manifest("prj_test", bh, additional_tool_name="wandb"),
+        "mis_b",
+    )
+    exts = M.list_extensions("prj_test")
+    assert set(exts.keys()) == {"mis_a", "mis_b"}
+    assert exts["mis_b"].tools[0].name == "wandb"
+
+
+def test_list_extensions_skips_unrelated_files(tmp_root: Path):
+    baseline = _baseline_manifest()
+    M.save_manifest(baseline)
+    # Drop a random non-extension JSON in the workspace dir.
+    d = M.workspace_dir("prj_test")
+    (d / "random.json").write_text('{"foo": "bar"}', encoding="utf-8")
+    (d / "extension_should_be_picked.json").write_text(
+        _extension_manifest("prj_test", baseline.compute_hash()).to_json(),
+        encoding="utf-8",
+    )
+    exts = M.list_extensions("prj_test")
+    assert "random" not in exts
+    assert "should_be_picked" in exts
+
+
+def test_compose_effective_manifest_returns_baseline_when_no_extension(tmp_root: Path):
+    baseline = _baseline_manifest()
+    M.save_manifest(baseline)
+    eff = M.compose_effective_manifest("prj_test", mission_id="mis_a")
+    assert eff is not None
+    # No extension for mis_a → effective = baseline.
+    assert [t.name for t in eff.tools] == ["rka", "context7"]
+
+
+def test_compose_effective_manifest_merges_extension_tools(tmp_root: Path):
+    baseline = _baseline_manifest()
+    M.save_manifest(baseline)
+    bh = baseline.compute_hash()
+    ext = _extension_manifest("prj_test", bh, additional_tool_name="huggingface")
+    M.save_extension_manifest(ext, "mis_a")
+    eff = M.compose_effective_manifest("prj_test", mission_id="mis_a")
+    assert eff is not None
+    # Effective merges baseline + extension's additions.
+    names = [t.name for t in eff.tools]
+    assert "rka" in names
+    assert "context7" in names
+    assert "huggingface" in names
+    # supersedes hashes are populated (audit trail).
+    assert eff.supersedes_baseline_hash == bh
+    assert eff.supersedes_extension_hash == ext.compute_hash()
+
+
+def test_compose_effective_manifest_extension_overrides_baseline_entry(tmp_root: Path):
+    """If the extension declares a tool with the same name as a baseline
+    entry, the extension's entry wins (lets PI override the baseline
+    config for a specific mission)."""
+    baseline = _baseline_manifest()
+    M.save_manifest(baseline)
+    bh = baseline.compute_hash()
+    # Extension overrides context7 with a custom command.
+    override = M.ToolManifest(
+        project_id="prj_test",
+        manifest_type="extension",
+        supersedes_baseline_hash=bh,
+        tools=[
+            M.ToolDecl(
+                name="context7",
+                type="mcp_stdio",
+                command="/custom/path/to/context7",
+                args=["--mode", "overridden"],
+                source="user_added",
+            )
+        ],
+    )
+    M.save_extension_manifest(override, "mis_a")
+    eff = M.compose_effective_manifest("prj_test", mission_id="mis_a")
+    assert eff is not None
+    # context7 entry comes from extension, not baseline.
+    c7 = next(t for t in eff.tools if t.name == "context7")
+    assert c7.command == "/custom/path/to/context7"
+    # rka still from baseline.
+    rka = next(t for t in eff.tools if t.name == "rka")
+    assert rka.always_on is True
+
+
+def test_compose_effective_manifest_returns_none_when_no_baseline(tmp_root: Path):
+    """A project without a baseline manifest (i.e., never onboarded)
+    yields None — callers decide whether to escalate or kick off onboarding."""
+    eff = M.compose_effective_manifest("prj_never_onboarded")
+    assert eff is None
+
+
+def test_compose_effective_manifest_returns_baseline_when_mission_id_omitted(tmp_root: Path):
+    baseline = _baseline_manifest()
+    M.save_manifest(baseline)
+    M.save_extension_manifest(
+        _extension_manifest("prj_test", baseline.compute_hash()),
+        "mis_a",
+    )
+    eff = M.compose_effective_manifest("prj_test", mission_id=None)
+    assert eff is not None
+    # mission_id=None → bare baseline; mission-specific extensions don't apply.
+    names = [t.name for t in eff.tools]
+    assert names == ["rka", "context7"]
