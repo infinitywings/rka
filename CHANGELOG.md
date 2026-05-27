@@ -77,8 +77,67 @@ NSF proposals).
 W3 + W4 close the originally-scoped expansion. Future enrichment is
 contributor-driven (each YAML is short enough that adding venues is a
 small PR; W2's `cfp_overrides.yaml` handles year-specific deviations).
+Full Writer suite after W1 + W2 + W3 + W4 lands: **196 passed**
+(W1: 160, W2: +26, W3 + W4: +10).
 
-## [Unreleased] - Writer Phase W1 (venue.yaml foundation + CFP plumbing)
+---
+
+### W2 (merged in PR #27): cfp_loader - fetch + heuristic overlay
+
+Branch: `feat/writer-cfp-loader`. Second slice of the multi-phase Writer
+expansion. Builds on W1's `venue.yaml` foundation by letting the Writer
+adapt a curated venue spec to a specific year's Call-for-Papers without
+hand-editing the registry.
+
+#### Shipped (W2)
+
+- **`cfp_loader.py`** at `rka/skills/writer/scripts/`. Fetches a CFP
+  URL (stdlib `urllib` only - no new dependencies), strips HTML, and
+  runs deterministic heuristic extractors over the plain text for:
+  page limit (main / body), references-counted vs. excluded,
+  anonymization mode (double-blind / single-blind / not anonymous),
+  abstract word cap, citation-style hint (numeric vs. name-year), and
+  the first submission-deadline date. Emits a draft `cfp_overrides.yaml`
+  with every detected field listed under `review_required:` so a
+  reviewer (human or Claude Code at the manuscript prompt) must
+  inspect each before it can be trusted. The fetched plain text is
+  persisted alongside the YAML as `cfp_raw.txt` for offline
+  re-extraction. No server-side LLM is invoked (the rka core does
+  not ship LLM access per the v2.4.0 architecture decision).
+
+- **`apply_overrides(base, overrides)`** + **`load_workspace_venue(dir)`**
+  in `cfp_loader.py`. Overlay engine for partial overrides on top of a
+  curated Venue, plus a one-call workspace resolver that returns the
+  effective Venue after applying both `cfp_overrides.yaml` (year-wide
+  CFP deltas) and `manuscript.yaml -> overrides:` (per-manuscript
+  deltas). Precedence: baseline -> cfp -> manuscript (most-specific
+  always wins).
+
+- **`layout_audit._resolve_from_manuscript_yaml` extended** to read
+  `cfp_overrides.yaml` automatically. Per-manuscript page-limit
+  override still beats CFP; CFP still beats venue baseline. Existing
+  `--manuscript-yaml PATH` CLI flag is the entry point.
+
+- **CLI**: `cfp_loader.py fetch <url> --base-venue NeurIPS --out cfp_overrides.yaml`
+  + `cfp_loader.py inspect <workspace-dir>` (dumps the resolved Venue
+  as JSON for debugging).
+
+- **Plugin mirror updated** - `diff -r rka/skills/writer plugin/skills/writer`
+  byte-identical.
+
+#### Tests (W2)
+
+- **26 new tests** in `tests/skills/writer/test_cfp_loader.py`
+  covering HTML extraction (script/style stripping, paragraph breaks),
+  `_http_get` mocking + content-type rejection, every heuristic
+  extractor (positive + sanity-floor + blank-input cases), YAML
+  envelope validation, `apply_overrides` overlay semantics,
+  `load_workspace_venue` precedence rules, the `layout_audit`
+  integration path, and render-idempotency.
+
+---
+
+### W1 (merged in PR #26): venue.yaml foundation + CFP plumbing
 
 Branch: `feat/writer-venue-expansion`. First slice of a multi-phase
 Writer expansion (W1-W4) that ships a structured per-venue
@@ -87,7 +146,7 @@ Writer can enforce venue-specific format, page-limit, tone, and
 content-organization rules - including for venues PI specifies via
 their CFP URL.
 
-### Shipped
+#### Shipped (W1)
 
 - **`venue.yaml` schema (v1)** at `rka/skills/writer/references/venue/`.
   Single source of truth for every venue: submission constraints
@@ -139,7 +198,7 @@ their CFP URL.
   per the v2.5.12 plugin-bundle precedent. `diff -r` byte-identical
   between source + plugin.
 
-### Tests
+#### Tests (W1)
 
 - **30 new tests**: `tests/skills/writer/test_venue_loader.py` (16)
   + `tests/skills/writer/test_venue_md_generator.py` (7) + the 7
@@ -148,10 +207,9 @@ their CFP URL.
 - Full repo suite: **818 passed** (was 788 - all pre-existing tests
   preserved; +30 new).
 
-### Phase W1 boundary
+#### Phase W1 boundary (superseded by W2 above)
 
-- W2 lands `cfp_loader.py` (fetch + Brain-LLM-parse the CFP URL into
-  `cfp_overrides.yaml` overlays for `manuscript.yaml`).
+- W2 (this PR) lands `cfp_loader.py`.
 - W3 expands the registry to ~50 venues (CS conferences, CS journals,
   FT50 accounting/finance/management).
 - W4 lands `proposals/NSF-PAPPG.yaml` baseline + solicitation
