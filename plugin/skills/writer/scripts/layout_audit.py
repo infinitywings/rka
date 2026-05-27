@@ -76,9 +76,15 @@ def _resolve_page_limit(venue: str) -> int:
 def _resolve_from_manuscript_yaml(manuscript_yaml_path: Path) -> tuple[str, int]:
     """Read venue_id + resolved page limit from a workspace's manuscript.yaml.
 
-    Returns (venue_id, page_limit). Per-manuscript overrides
-    (`overrides.page_limit_main`) win over the venue baseline.
-    Raises FileNotFoundError or ValueError on parse failure.
+    Resolution order (most-specific wins):
+      1. `manuscript.yaml -> overrides.page_limit_main`
+      2. sibling `cfp_overrides.yaml` -> `overrides.submission.page_limit_main`
+         (Phase W2: year-specific CFP deltas)
+      3. venue.yaml baseline via venue_loader
+      4. legacy short-track table
+
+    Returns (venue_id, page_limit). Raises FileNotFoundError or
+    ValueError on parse failure.
     """
     import yaml  # local import; only needed when called
 
@@ -91,6 +97,18 @@ def _resolve_from_manuscript_yaml(manuscript_yaml_path: Path) -> tuple[str, int]
     override = (data.get("overrides") or {}).get("page_limit_main")
     if isinstance(override, int) and override > 0:
         return venue_id, override
+
+    cfp_path = manuscript_yaml_path.parent / "cfp_overrides.yaml"
+    if cfp_path.is_file():
+        cfp_data = yaml.safe_load(cfp_path.read_text(encoding="utf-8")) or {}
+        if cfp_data.get("base_venue_id") == venue_id:
+            cfp_page = (
+                ((cfp_data.get("overrides") or {}).get("submission") or {})
+                .get("page_limit_main")
+            )
+            if isinstance(cfp_page, int) and cfp_page > 0:
+                return venue_id, cfp_page
+
     return venue_id, _resolve_page_limit(venue_id)
 
 # Compiled regex patterns per field.
