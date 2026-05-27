@@ -67,6 +67,37 @@ always_on:
     install_hint: bundled via npx
     secrets: []
 
+<<<<<<< Updated upstream
+=======
+  - name: paper-search
+    type: mcp_stdio
+    rationale: |
+      Multi-source academic paper search + PDF download with fallback.
+      Searches 20+ sources concurrently (arXiv, PubMed, bioRxiv, Google
+      Scholar, Unpaywall, CORE, DOAJ, Zenodo, etc.) with deduplication.
+      Useful for any research project that needs literature discovery.
+    command: uvx
+    args: ["paper-search-mcp"]
+    install_hint: requires uv (uvx auto-installs on first call)
+    secrets:
+      - name: PAPER_SEARCH_MCP_UNPAYWALL_EMAIL
+        auth_type: api_key
+        criticality: required
+        description: |
+          Any valid email address. Unpaywall uses it for rate-limit
+          identification (not authentication). Use your institutional email.
+      - name: PAPER_SEARCH_MCP_SEMANTIC_SCHOLAR_API_KEY
+        auth_type: api_key
+        criticality: recommended
+        probe_url: https://api.semanticscholar.org/graph/v1/paper/search?query=test&limit=1
+        probe_header: "x-api-key: {value}"
+        description: Semantic Scholar API key for higher rate limits.
+      - name: PAPER_SEARCH_MCP_CORE_API_KEY
+        auth_type: api_key
+        criticality: optional
+        description: CORE API key (core.ac.uk) for full-text open access search.
+
+>>>>>>> Stashed changes
 by_domain:
   # ---- Computer science / ML systems ----
   ml_systems:
