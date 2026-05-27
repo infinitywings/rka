@@ -50,6 +50,10 @@ InterruptType = Literal[
     "pi_claims_review",
     "pi_plan_ratify",
     "pi_phase_entry_ack",
+    # Phase B — orchestrator-level bootstrap (orchestrator/.env)
+    "pi_bootstrap_intent",
+    "pi_bootstrap_ratify",
+    "pi_bootstrap_fill_ack",
 ]
 ResponseAction = Literal["accept", "reject", "correct"]
 RunStatus = Literal[
@@ -123,8 +127,8 @@ class ParkedStore:
         if row is None:
             return  # Table doesn't exist yet — schema.sql will create it next pass.
         create_sql = row[0] or ""
-        if "pi_idea_capture" in create_sql:
-            return  # Already Phase-O shape (sentinel: first Phase-O interrupt type).
+        if "pi_bootstrap_intent" in create_sql:
+            return  # Already Phase-B shape (sentinel: first Phase-B interrupt type).
 
         # Legacy shape detected: rebuild with the new CHECK.
         with self._conn:

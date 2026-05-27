@@ -1,0 +1,135 @@
+# =============================================================
+# Orchestrator bootstrap catalog (Phase B)
+#
+# Orchestrator-LEVEL credentials -- the ones the orchestrator daemon
+# itself needs to run before any project exists. Lives in
+# `orchestrator/.env` (file-mode 0600).
+#
+# This is distinct from the project-LEVEL tool registry in
+# `tool_registry.yaml`, which Phase D consumes to wire per-project
+# MCP toolkits at `~/rka-projects/<id>/.env`. Phase B handles the
+# bootstrap problem: a fresh install can't run Phase D until the
+# orchestrator can call Claude at all.
+#
+# Each entry:
+#   - id:           short slug used in state + PI surface
+#   - label:        human display name
+#   - purpose:      one-line "what it does"
+#   - env_var:      single shell env variable name
+#   - target_file:  where to paste it (always orchestrator/.env in v1)
+#   - criticality:  required | recommended | optional
+#                   (matches credential_validator's tiering)
+#   - group:        optional; entries sharing a group are mutually-
+#                   exclusive alternatives (e.g., claude-oauth +
+#                   anthropic-api-key both authenticate Claude --
+#                   pick ONE).
+#   - signup_url:   where to mint the key
+#   - format_hint:  human-readable shape ("starts with sk-ant-...")
+#   - probe:        validation metadata for credential_validator
+#       method:       GET | HEAD
+#       url:          endpoint to probe
+#       auth_header:  template with {value} placeholder
+#                     (or omitted if the key isn't header-auth'd)
+#
+# Maintenance: small intentionally. Reviewed at every agentic release.
+# =============================================================
+
+schema_version: v1
+
+entries:
+  - id: claude-oauth
+    label: Claude Code OAuth token
+    purpose: |
+      Authenticates the orchestrator's claude-agent-sdk subprocess
+      against Anthropic without API billing (preferred path on Mac).
+    env_var: CLAUDE_CODE_OAUTH_TOKEN
+    target_file: orchestrator/.env
+    criticality: required
+    group: claude-auth
+    signup_url: ""  # produced locally via `claude setup-token`
+    format_hint: |
+      Run `claude setup-token` on the host (one-time). Prints a long-lived
+      token starting with `sk-ant-oat01-`. Paste that whole line as the value.
+    probe:
+      # The Claude SDK validates internally on first subprocess launch;
+      # there is no cheap HTTP probe for an OAuth token at the v1 layer.
+      method: skip
+      reason: |
+        OAuth tokens are validated by the claude-agent-sdk subprocess at
+        its first call. A degenerate HTTP probe would either hit the
+        token-introspection endpoint (not exposed) or burn a real Claude
+        call. Bootstrap verify reports "deferred" for this entry; if the
+        token is wrong, the orchestrator's first Claude call will surface
+        a 401 in the run log within ~5 seconds of phase A start.
+
+  - id: anthropic-api-key
+    label: Anthropic API key
+    purpose: |
+      Alternative to claude-oauth -- authenticates against the public
+      Anthropic API directly (incurs per-token billing on the API
+      account, NOT a Claude Max subscription).
+    env_var: ANTHROPIC_API_KEY
+    target_file: orchestrator/.env
+    criticality: required
+    group: claude-auth
+    signup_url: https://console.anthropic.com/settings/keys
+    format_hint: "Starts with `sk-ant-api03-`. ~108 characters."
+    probe:
+      method: GET
+      url: https://api.anthropic.com/v1/models
+      auth_header: "x-api-key: {value}"
+      extra_headers:
+        anthropic-version: "2023-06-01"
+
+  - id: semantic-scholar
+    label: Semantic Scholar API key
+    purpose: |
+      Boosts rate limit on the orchestrator's literature-search calls
+      (research_toolkit_node, Phase O hygiene_pass, etc.) from
+      100 requests / 5 minutes (anonymous) to 1 request / second.
+    env_var: SEMANTIC_SCHOLAR_API_KEY
+    target_file: orchestrator/.env
+    criticality: recommended
+    signup_url: https://www.semanticscholar.org/product/api#api-key-form
+    format_hint: |
+      Alphanumeric token, ~40 chars. Free; approval takes a few business
+      days. The orchestrator works without it but throttles aggressively.
+    probe:
+      method: GET
+      url: https://api.semanticscholar.org/graph/v1/paper/search?query=test&limit=1
+      auth_header: "x-api-key: {value}"
+
+  - id: serpapi
+    label: SerpAPI key (Google Scholar / web fallback)
+    purpose: |
+      Web-search fallback when curated tool_registry domains miss a
+      tool. Also used by the writer skill's serpapi backend.
+    env_var: SERPAPI_KEY
+    target_file: orchestrator/.env
+    criticality: optional
+    signup_url: https://serpapi.com/manage-api-key
+    format_hint: "64-char hex string. Free tier: 100 searches/month."
+    probe:
+      method: GET
+      # The /account endpoint accepts the key as a query param and
+      # returns 200 + a JSON body with credits remaining. Body is not
+      # logged by credential_validator (security invariant); only the
+      # status is read.
+      url: https://serpapi.com/account?api_key={value}
+      auth_header: ""  # query-param auth, no header
+
+  - id: openalex-mailto
+    label: OpenAlex polite-pool email
+    purpose: |
+      Identifies the orchestrator to OpenAlex's "polite pool" -- higher
+      rate limits + priority routing. Not a secret; just an email
+      string OpenAlex echoes back in User-Agent.
+    env_var: OPENALEX_MAILTO
+    target_file: orchestrator/.env
+    criticality: optional
+    signup_url: https://docs.openalex.org/how-to-use-the-api/rate-limits-and-authentication#the-polite-pool
+    format_hint: "Plain email address. Not authenticated; just identifies you."
+    probe:
+      method: GET
+      url: https://api.openalex.org/works?per-page=1&mailto={value}
+      auth_header: ""  # query-param identification, no header

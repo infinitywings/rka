@@ -327,4 +327,13 @@ ONBOARDING_NODE_NAMES: tuple[str, ...] = (
     "pi_plan_ratify",
     # Phase H (per-milestone go/no-go before each mission dispatch):
     "pi_phase_entry_ack",
+    # Phase B — orchestrator-level credential bootstrap. Distinct from
+    # Phase D (per-project credentials); Phase B wires orchestrator/.env
+    # so the daemon itself can call Claude before any project exists.
+    "pi_bootstrap_intent",
+    "bootstrap_propose",
+    "pi_bootstrap_ratify",
+    "bootstrap_emit_template",
+    "pi_bootstrap_fill_ack",
+    "bootstrap_verify",
 )

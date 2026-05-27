@@ -1,13 +1,13 @@
 ---
 name: rka-orchestrator-pi
 description: PI cockpit for the agentic RKA distribution's LangGraph orchestrator. Renders parked PI interrupts across mission, tool-setup, and Phase O project-onboarding subgraphs; guides the human through them via AskUserQuestion; dispatches responses back to the workflow. Load when supervising a running orchestrator workflow, onboarding a new project, or when the user says "start orchestrator" / "what's waiting" / "check orchestrator inbox" / "onboard a project" / "start phase O".
-version: 0.3.0
+version: 0.4.0
 ---
 
 # Orchestrator PI Skill (agentic-branch only)
 
 You are the PI's cockpit for the RKA orchestrator. The orchestrator
-drives two distinct kinds of workflows, each with its own subgraph:
+drives FOUR distinct kinds of workflows, each with its own subgraph:
 
 ### Mission subgraph (Phase A)
 Brain ⇄ Executor ⇄ PI loops against an RKA mission. Three PI
@@ -26,6 +26,22 @@ template. Three PI interrupts:
 5. **pi_toolkit_ratify** — PI ratifies the Brain-proposed tool set (**set-identity gate**)
 6. **pi_credentials_ready** — PI signals they've edited the `.env`; server probes each API
 7. **pi_extend_toolkit** — mid-mission: PI ratifies an added tool (Phase D6; defer if not in registry yet)
+
+### Bootstrap subgraph (Phase B — v0.4.0)
+Runs ONCE per machine, before any project. Configures the orchestrator
+daemon's own credentials (Claude OAuth, optional Semantic Scholar /
+SerpAPI / OpenAlex polite-pool email) — writes `orchestrator/.env` so
+the daemon can call Claude at all. Three PI interrupts:
+
+8. **pi_bootstrap_intent** — PI describes install state in plain text
+9. **pi_bootstrap_ratify** — TWO-TAP: PI accepts/rejects the candidate shortlist (set-identity)
+10. **pi_bootstrap_fill_ack** — replayable: parks while PI edits `orchestrator/.env`, accepts on done
+
+Use this when the PI says "set up orchestrator keys" / "bootstrap" /
+"set up Claude OAuth" / "configure my .env" / `/orchestrator-bootstrap`.
+
+### Phase O — full project-onboarding (v0.3.0)
+See full section below.
 
 Your job is to render parked interrupts clearly, guide the PI through
 the response, and dispatch via the `orchestrator_*` MCP tools.
@@ -294,6 +310,87 @@ Interrupt response (shared across mission + onboarding):
 Onboarding (Phase D):
 - `orchestrator_onboard_start(project_id, workflow_thread_id?)` — kick off onboarding
 - `orchestrator_get_manifest(project_id)` — fetch the effective manifest (baseline + extensions)
+
+## Phase B — orchestrator-level credential bootstrap
+
+**One-time, machine-level setup.** Phase B writes `orchestrator/.env`
+(the daemon's own credentials) so the orchestrator can call Claude at
+all. Distinct from Phase D which writes per-project credentials.
+
+Entry: `orchestrator_bootstrap_start()` (no project_id; bootstrap is
+daemon-level). Slash command alias: `/orchestrator-bootstrap`.
+
+### Topology
+
+```
+START
+  → pi_bootstrap_intent       [interrupt — free-form intent]
+  → bootstrap_propose         [match catalog vs intent]
+  → pi_bootstrap_ratify       [TWO-TAP — accept the shortlist]
+     ┌─ accept → bootstrap_emit_template
+     │            → pi_bootstrap_fill_ack [replayable — PI edits .env]
+     │                ┌─ accept → bootstrap_verify
+     │                │             → END (terminal_state from verify)
+     │                └─ else  → END (template stays on disk)
+     └─ else   → END
+```
+
+### Interrupt-by-interrupt PI rendering
+
+**pi_bootstrap_intent**: Ask the PI to describe their install state in
+1-2 sentences. Examples to seed the conversation: "fresh install",
+"switching from API key to OAuth", "I want everything including SerpAPI",
+"minimal — just Claude OAuth". Pass the response back via
+`orchestrator_correct(interrupt_id, response_text=<PI's text>)`.
+
+**pi_bootstrap_ratify** (TWO-TAP): the daemon has run
+`propose_for_intent` against `orchestrator/data/bootstrap_catalog.yaml`
+and returned a candidate shortlist. Render it as a table:
+
+```
+| label | env_var | criticality | group | sign-up |
+```
+
+Note any GROUP membership (e.g., `claude-oauth` + `anthropic-api-key`
+are mutually exclusive — PI must pick one). Then ask the PI to confirm
+the shortlist as-is. **Do NOT auto-accept**; this is a privileged gate.
+On the PI's explicit confirmation, call `orchestrator_accept(id)`. On
+"no — change X", treat as correct: `orchestrator_correct(id, response_text=<delta>)`.
+
+**pi_bootstrap_fill_ack** (replayable): the daemon has written
+`<workspace>/orchestrator/.env.example`. Surface to the PI:
+- The exact file path
+- The list of env_vars they need to fill (from the interrupt payload's `expected_entries`)
+- A reminder: **never paste API keys into the chat**; only into the file
+- A reminder: file mode 0600 (auto-set when OS permits)
+- Where to mint each missing key (each entry has a `signup_url`)
+
+The PI does the file edit OUT OF BAND, then says "done" / "ready" /
+"go". Call `orchestrator_accept(id)`. **This interrupt can park for
+days** — durability is intentional; the workflow resumes from the
+SqliteSaver checkpoint when the PI returns.
+
+After accept, the daemon runs `bootstrap_verify`: probes each key
+without logging values, reports pass/fail. Render the verify results
+to the PI as glyphs:
+
+- ✓ valid — endpoint accepted the key
+- · deferred — probe skipped (e.g. Claude OAuth: validated on first SDK call)
+- ✗ missing — env_var not in .env (PI didn't fill it)
+- ✗ rejected — endpoint returned 401/403 (key wrong)
+- ? unreachable — network error / timeout
+
+If any `required` entry is missing or rejected: instruct the PI to fix
+and re-run `/orchestrator-bootstrap`. If all required are valid or
+deferred: remind the PI to `docker compose -f docker-compose.yml -f
+orchestrator/docker-compose.yml up -d --force-recreate rka-orchestrator`
+so the new credentials get loaded.
+
+### Security invariants (enforced by the orchestrator; reinforce them in chat)
+
+- Key VALUES are never echoed in interrupt payloads, logs, or verify reports.
+- Probe details contain only `env_var` + classification + a non-secret reason string.
+- `.env` and `.env.example` files are written with file-mode 0600.
 
 ## Phase O — full project-onboarding workflow
 

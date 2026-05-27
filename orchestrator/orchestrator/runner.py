@@ -57,6 +57,10 @@ _ACCEPT_TOKEN_BY_TYPE: dict[str, str] = {
     "pi_claims_review": "accept",           # TWO-TAP set-identity (claims)
     "pi_plan_ratify": "accept",             # TWO-TAP — THE plan-licensing contract gate
     "pi_phase_entry_ack": "approve",        # per-milestone go/no-go; greenlight-class
+    # Phase B — orchestrator-level credential bootstrap interrupts.
+    "pi_bootstrap_intent": "approve",       # free-form intent gate; greenlight-class
+    "pi_bootstrap_ratify": "accept",        # set-identity (ratified_ids non-empty iff accept)
+    "pi_bootstrap_fill_ack": "accept",      # "I'm done editing orchestrator/.env" signal
 }
 """The substring the graph's routing function looks for to take the
 'continue' branch at each PI interrupt. Sourced from graph.py:
@@ -155,6 +159,7 @@ class OrchestratorRunner:
         compile_factory: Optional[Callable[..., Any]] = None,
         onboarding_compile_factory: Optional[Callable[..., Any]] = None,
         phase_o_compile_factory: Optional[Callable[..., Any]] = None,
+        phase_b_compile_factory: Optional[Callable[..., Any]] = None,
     ):
         self.store = store
         self._sdk_factory = sdk_factory
@@ -176,6 +181,14 @@ class OrchestratorRunner:
             self._phase_o_compile_factory = _pog.build_phase_o_graph
         else:
             self._phase_o_compile_factory = phase_o_compile_factory
+        # Phase B: separate compile factory for the orchestrator-level
+        # credential bootstrap. Lazy import (only loaded when bootstrap
+        # is invoked or a Phase B interrupt is resumed).
+        if phase_b_compile_factory is None:
+            from orchestrator import phase_b_graph as _pbg
+            self._phase_b_compile_factory = _pbg.build_phase_b_graph
+        else:
+            self._phase_b_compile_factory = phase_b_compile_factory
 
     # ---- public API ----
 
@@ -269,6 +282,18 @@ class OrchestratorRunner:
     These represent the full idea → plan → mission-queue workflow,
     distinct from Phase D's tool-setup subgraph."""
 
+    _PHASE_B_INTERRUPT_TYPES: frozenset[str] = frozenset(
+        {
+            "pi_bootstrap_intent",
+            "pi_bootstrap_ratify",
+            "pi_bootstrap_fill_ack",
+        }
+    )
+    """Interrupt types whose response resumes via the Phase B bootstrap
+    compile factory (phase_b_graph.build_phase_b_graph). Orchestrator-
+    level credential setup (orchestrator/.env), distinct from Phase D's
+    per-project credential setup."""
+
     def respond(
         self,
         *,
@@ -322,6 +347,8 @@ class OrchestratorRunner:
         # else → mission graph (Phase A).
         if parked["interrupt_type"] in self._PHASE_O_INTERRUPT_TYPES:
             factory = self._phase_o_compile_factory
+        elif parked["interrupt_type"] in self._PHASE_B_INTERRUPT_TYPES:
+            factory = self._phase_b_compile_factory
         elif parked["interrupt_type"] in self._ONBOARDING_INTERRUPT_TYPES:
             factory = self._onboarding_compile_factory
         else:
@@ -438,6 +465,43 @@ class OrchestratorRunner:
             mission_id=project_id,  # placeholder
             motivated_by_decision_id="",
             project_id=project_id,
+        )
+        return self._execute_segment(thread_id, compiled, initial)
+
+    # ---- Phase B: orchestrator-level credential bootstrap entrypoint ----
+
+    def start_phase_b(
+        self,
+        *,
+        workflow_thread_id: Optional[str] = None,
+    ) -> SegmentOutcome:
+        """Kick off the Phase B bootstrap subgraph.
+
+        Unlike start_phase_o, Phase B is *not* project-scoped — it
+        configures the orchestrator daemon's own credentials. We still
+        need a workflow_runs row (so the parked-interrupt machinery
+        works) so we use the sentinel string "_bootstrap_" as both
+        the placeholder mission_id and project_id. The runner-level
+        state.project_id stays empty during bootstrap.
+        """
+        thread_id = self.store.create_run(
+            mission_id="_bootstrap_",  # sentinel; bootstrap isn't mission-scoped
+            project_id="_bootstrap_",  # sentinel; bootstrap isn't project-scoped
+            workflow_thread_id=workflow_thread_id,
+        )
+
+        mcp = self._mcp_factory(thread_id, "")
+        sdk = self._sdk_factory("")
+        saver = self._saver_factory(thread_id)
+        compiled = self._phase_b_compile_factory(
+            sdk=sdk, mcp=mcp, checkpointer=saver
+        )
+
+        initial = make_initial_state(
+            workflow_thread_id=thread_id,
+            mission_id="_bootstrap_",
+            motivated_by_decision_id="",
+            project_id="",
         )
         return self._execute_segment(thread_id, compiled, initial)
 
