@@ -79,6 +79,12 @@ def venue_md_generator():
     return _load_module("venue_md_generator")
 
 
+@pytest.fixture
+def cfp_loader():
+    """Phase W2: CFP URL fetcher + override overlay."""
+    return _load_module("cfp_loader")
+
+
 # Phase 2 mcp_tools backends (proper Python subpackage; import via rka.* path).
 @pytest.fixture
 def crossref_backend():
