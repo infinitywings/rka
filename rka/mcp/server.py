@@ -2487,45 +2487,68 @@ async def rka_scan_workspace_tree(
     def _tree() -> list[dict]:
         entries: list[dict] = []
 
+        FAST_COUNT_THRESHOLD = 100
+
         def _scan_dir(dirpath: Path, depth: int) -> dict:
             name = dirpath.name or str(dirpath)
             result: dict = {"name": name, "path": str(dirpath), "depth": depth}
             file_count = 0
             total_bytes = 0
             subdirs: list[dict] = []
+            dir_entries: list = []
+            file_entries: list = []
             try:
                 with _os.scandir(dirpath) as it:
-                    for entry in sorted(it, key=lambda e: e.name):
+                    for entry in it:
                         if entry.name.startswith(".") or entry.name in ignores:
                             continue
-                        if entry.is_dir(follow_symlinks=False):
-                            if depth < max_depth:
-                                subdirs.append(_scan_dir(Path(entry.path), depth + 1))
-                            else:
-                                subdirs.append({
-                                    "name": entry.name,
-                                    "path": entry.path,
-                                    "depth": depth + 1,
-                                    "file_count": "?",
-                                    "size_mb": "?",
-                                    "subdirs": [],
-                                })
-                        elif entry.is_file(follow_symlinks=False):
-                            file_count += 1
-                            try:
-                                total_bytes += entry.stat().st_size
-                            except OSError:
-                                pass
+                        try:
+                            is_dir = entry.is_dir(follow_symlinks=False)
+                        except OSError:
+                            continue
+                        if is_dir:
+                            dir_entries.append(entry)
+                        else:
+                            file_entries.append(entry)
             except PermissionError:
                 result["error"] = "permission denied"
+                result["file_count"] = 0
+                result["size_mb"] = 0
+                result["subdirs"] = []
+                result["total_files_recursive"] = 0
+                return result
+
+            file_count = len(file_entries)
+            if file_count <= FAST_COUNT_THRESHOLD:
+                for entry in file_entries:
+                    try:
+                        total_bytes += entry.stat().st_size
+                    except OSError:
+                        pass
+
+            dir_entries.sort(key=lambda e: e.name)
+            for entry in dir_entries:
+                if depth < max_depth:
+                    subdirs.append(_scan_dir(Path(entry.path), depth + 1))
+                else:
+                    subdirs.append({
+                        "name": entry.name,
+                        "path": entry.path,
+                        "depth": depth + 1,
+                        "file_count": "?",
+                        "size_mb": "?",
+                        "subdirs": [],
+                    })
+
             result["file_count"] = file_count
-            result["size_mb"] = round(total_bytes / 1024 / 1024, 1)
+            result["size_mb"] = round(total_bytes / 1024 / 1024, 1) if file_count <= FAST_COUNT_THRESHOLD else "?"
             result["subdirs"] = subdirs
-            # Roll up counts from children
+            total = file_count
             for sd in subdirs:
-                if isinstance(sd.get("file_count"), int):
-                    file_count += sd["file_count"]
-            result["total_files_recursive"] = file_count
+                fc = sd.get("file_count", 0)
+                if isinstance(fc, int):
+                    total += fc
+            result["total_files_recursive"] = total
             return result
 
         return [_scan_dir(root, 0)]
