@@ -54,10 +54,20 @@ def workspace_template_dir() -> Path:
 
 
 def supported_venues() -> list[str]:
+    """Phase W1: venues are now identified by `<id>.yaml` files (the
+    machine-readable spec); their `<id>.md` and optional `<id>.notes.md`
+    siblings are auto-generated / freeform-tail narratives. Fall back to
+    `.md` enumeration only when no YAMLs exist (e.g., a stale plugin
+    install)."""
     venue_dir = writer_skill_dir() / "references" / "venue"
     if not venue_dir.is_dir():
         return []
-    return sorted(p.stem for p in venue_dir.glob("*.md"))
+    yaml_ids = sorted(p.stem for p in venue_dir.glob("*.yaml"))
+    if yaml_ids:
+        return yaml_ids
+    return sorted(
+        p.stem for p in venue_dir.glob("*.md") if not p.stem.endswith(".notes")
+    )
 
 
 def current_username() -> str:
@@ -88,6 +98,23 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Overwrite existing files in the target directory.",
     )
+    parser.add_argument(
+        "--cfp-url",
+        default=None,
+        help=(
+            "Optional CFP / call-for-papers URL. Stored in manuscript.yaml "
+            "for the Phase W2 cfp_loader.py to fetch + parse on demand. "
+            "Phase W1 just records the URL; no automatic fetching."
+        ),
+    )
+    parser.add_argument(
+        "--title",
+        default=None,
+        help=(
+            "Manuscript title (substituted into manuscript.yaml). Defaults "
+            "to a placeholder if omitted."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -117,11 +144,51 @@ def substitute_mcp_json(src: Path, dst: Path, username: str, project_id: str) ->
     dst.write_text(text, encoding="utf-8")
 
 
-def copy_workspace(template: Path, target: Path, username: str, project_id: str) -> None:
+def substitute_manuscript_yaml(
+    src: Path,
+    dst: Path,
+    *,
+    venue_id: str,
+    project_id: str,
+    title: str,
+    cfp_url: str | None,
+) -> None:
+    """Copy manuscript.yaml with placeholder substitution.
+
+    Phase W1: replaces REPLACE_WITH_VENUE_ID / REPLACE_WITH_PROJECT_ID /
+    REPLACE_WITH_MANUSCRIPT_TITLE / REPLACE_WITH_ISO_DATE, and rewrites
+    the `cfp_url: null` line if --cfp-url was supplied.
+    """
+    import datetime as _dt
+
+    text = src.read_text(encoding="utf-8")
+    text = text.replace("REPLACE_WITH_VENUE_ID", venue_id)
+    text = text.replace("REPLACE_WITH_PROJECT_ID", project_id)
+    text = text.replace("REPLACE_WITH_MANUSCRIPT_TITLE", title)
+    iso = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    text = text.replace("REPLACE_WITH_ISO_DATE", iso)
+    if cfp_url:
+        # Simple line-level rewrite — the template's cfp_url line is the
+        # only `cfp_url:` occurrence in the file.
+        text = text.replace("cfp_url: null", f"cfp_url: {cfp_url}")
+    dst.write_text(text, encoding="utf-8")
+
+
+def copy_workspace(
+    template: Path,
+    target: Path,
+    *,
+    username: str,
+    project_id: str,
+    venue_id: str,
+    title: str,
+    cfp_url: str | None,
+) -> None:
     """Copy workspace-template/* into target with placeholder substitution.
 
     Preserves hidden files (.latexmkrc, .mcp.json, .planning/, .gitkeep markers).
-    `.mcp.json` is substituted; everything else is byte-copied.
+    `.mcp.json` and `manuscript.yaml` are substituted; everything else is
+    byte-copied.
     """
     target.mkdir(parents=True, exist_ok=True)
     for src in template.rglob("*"):
@@ -136,6 +203,14 @@ def copy_workspace(template: Path, target: Path, username: str, project_id: str)
         dst.parent.mkdir(parents=True, exist_ok=True)
         if src.name == ".mcp.json":
             substitute_mcp_json(src, dst, username, project_id)
+        elif src.name == "manuscript.yaml":
+            substitute_manuscript_yaml(
+                src, dst,
+                venue_id=venue_id,
+                project_id=project_id,
+                title=title,
+                cfp_url=cfp_url,
+            )
         else:
             shutil.copy2(src, dst)
 
@@ -199,7 +274,15 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     username = current_username()
-    copy_workspace(template, target, username, args.project_id)
+    copy_workspace(
+        template,
+        target,
+        username=username,
+        project_id=args.project_id,
+        venue_id=args.venue,
+        title=args.title or "Untitled manuscript",
+        cfp_url=args.cfp_url,
+    )
 
     # Probe rka-writer-tools binary; warn (don't fail) if absent.
     writer_tools = shutil.which("rka-writer-tools")

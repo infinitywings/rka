@@ -1,0 +1,108 @@
+schema_version: v1
+id: NeurIPS
+name: Conference on Neural Information Processing Systems
+kind: conference
+domain: cs-ml
+status: active
+pin_year: 2025
+
+submission:
+  page_limit_main: 9
+  page_limit_camera_ready: 10
+  references_counted: false
+  appendix_counted: false
+  appendix_limit: null
+  has_required_checklist: true
+  anonymization: required_pre_camera_ready
+
+format:
+  template_id: neurips_official
+  engine_default: pdflatex
+  engines_supported: [pdflatex, lualatex, xelatex]
+  citation_style: numeric-author-year-mixed
+  bibliography_style: alphabetical
+
+structure:
+  required_sections:
+    - Abstract
+    - Introduction
+    - Method
+    - Experiments
+    - References
+  optional_sections:
+    - Related Work
+    - Theory
+    - Discussion
+    - Limitations
+    - Broader Impact
+    - Conclusion
+  appendix_sections:
+    - NeurIPS Paper Checklist
+    - Extended proofs
+    - Additional experimental results
+    - Dataset documentation
+  section_order:
+    - Introduction
+    - Related Work
+    - Method
+    - Theory
+    - Experiments
+    - Results and Analysis
+    - Discussion
+    - Conclusion
+    - References
+    - Appendices
+  abstract_word_min: 150
+  abstract_word_target: 200
+  abstract_word_max: 300
+
+tone:
+  voice: first-person-plural
+  hedging: moderate
+  marketing_language: discouraged
+  math_density: high
+  numerical_claims_dominate: true
+  ablation_studies_expected: true
+  multi_seed_required: true
+  reproducibility_floor: high
+
+review_dimensions:
+  - {name: technical_quality, weight: high}
+  - {name: novelty, weight: high}
+  - {name: clarity, weight: medium}
+  - {name: significance, weight: high}
+  - {name: reproducibility, weight: high}
+
+forbidden_constructions:
+  - pattern: "we propose a novel"
+    reason: "extremely overused at NeurIPS; reviewers flag"
+    severity: warn
+  - pattern: "state-of-the-art"
+    reason: "requires head-to-head comparison + dataset + metric specification"
+    severity: warn
+  - pattern: "robust"
+    reason: "requires operational definition (e.g., 'robust under L_inf <= 0.03')"
+    severity: warn
+
+sample_corpus:
+  query_method: openalex
+  filter_template: "primary_location.source.id:S<TBD>,publication_year:{year}"
+  recommended_year_range: [2024, 2025]
+  diversity_topics:
+    - deep_learning_theory
+    - large_language_models
+    - diffusion_generative
+    - reinforcement_learning
+    - datasets
+    - evaluation
+  rka_tag: "venue-sample:NeurIPS"
+
+cfp:
+  primary_url: https://neurips.cc/Conferences/2025/CallForPapers
+  author_guide_url: https://neurips.cc/Conferences/2025/AuthorInformation
+  checklist_url: https://neurips.cc/public/guides/PaperChecklist
+  last_verified: 2026-05-26
+
+provenance:
+  schema_origin: dec_01KS2S22VV5P5SWWXNBXQDHMGX
+  last_updated: 2026-05-26

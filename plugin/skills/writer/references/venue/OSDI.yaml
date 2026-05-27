@@ -1,0 +1,108 @@
+schema_version: v1
+id: OSDI
+name: USENIX Symposium on Operating Systems Design and Implementation
+kind: conference
+domain: cs-systems
+status: active
+pin_year: 2025
+
+submission:
+  page_limit_main: 12
+  page_limit_camera_ready: null
+  references_counted: false
+  appendix_counted: false
+  appendix_limit: null
+  has_required_checklist: false
+  anonymization: required_pre_camera_ready
+
+format:
+  template_id: usenix2019
+  engine_default: pdflatex
+  engines_supported: [pdflatex]
+  citation_style: numeric-cite-order
+  bibliography_style: numeric-cite-order
+
+structure:
+  required_sections:
+    - Abstract
+    - Introduction
+    - Background and Motivation
+    - Design
+    - Implementation
+    - Evaluation
+    - Related Work
+    - Conclusion
+    - References
+  optional_sections:
+    - Discussion
+    - Limitations
+  appendix_sections:
+    - Artifact Evaluation appendix
+    - Additional benchmark traces
+    - Hardware configuration tables
+  section_order:
+    - Introduction
+    - Background and Motivation
+    - Design
+    - Implementation
+    - Evaluation
+    - Related Work
+    - Discussion
+    - Conclusion
+    - References
+  abstract_word_min: 200
+  abstract_word_target: 250
+  abstract_word_max: 300
+
+tone:
+  voice: first-person-plural
+  hedging: low
+  marketing_language: discouraged
+  math_density: low
+  numerical_claims_dominate: true
+  ablation_studies_expected: false
+  multi_seed_required: true
+  reproducibility_floor: high
+
+review_dimensions:
+  - {name: technical_soundness, weight: high}
+  - {name: novelty, weight: high}
+  - {name: engineering_depth, weight: high}
+  - {name: evaluation_rigor, weight: high}
+  - {name: reproducibility, weight: high}
+  - {name: practical_impact, weight: medium}
+
+forbidden_constructions:
+  - pattern: "we propose a novel"
+    reason: "overused; OSDI reviewers flag"
+    severity: warn
+  - pattern: "faster"
+    reason: "requires specific units (latency-ms / throughput-RPS) and baseline"
+    severity: warn
+  - pattern: "more efficient"
+    reason: "requires specific metric + baseline; OSDI quantitative norm"
+    severity: warn
+
+sample_corpus:
+  query_method: openalex
+  filter_template: "primary_location.source.id:S<TBD>,publication_year:{year}"
+  recommended_year_range: [2024, 2025]
+  diversity_topics:
+    - distributed_systems
+    - storage
+    - networking
+    - kernels
+    - ml_systems
+    - hardware_codesign
+    - formal_verification
+  rka_tag: "venue-sample:OSDI"
+
+cfp:
+  primary_url: https://www.usenix.org/conference/osdi25
+  author_guide_url: https://www.usenix.org/conferences/author-resources/paper-templates
+  checklist_url: null
+  last_verified: 2026-05-26
+
+provenance:
+  schema_origin: dec_01KS2S22VV5P5SWWXNBXQDHMGX
+  last_updated: 2026-05-26
