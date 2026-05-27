@@ -1370,20 +1370,18 @@ def pi_credentials_ready(
 ) -> dict:
     """Third PI interrupt — single-tap "I've filled in the .env" gate.
 
-    The draft_manifest_node has already written the .env template to
-    ~/rka-projects/{project_id}/.env. This interrupt parks with the
-    file path + list of expected secret names so the PI knows what to
-    fill in. On accept, the next node (finalize_node) runs
-    probe_all_secrets to validate the credentials.
+    The draft_manifest_node emits the manifest + env template as
+    structured content on decisions_to_present (it does NOT write
+    files to disk). This interrupt surfaces the expected secrets so
+    the PI's Claude session can render them. The PI saves the .env
+    file to their workspace manually.
 
-    The PI's response carries no semantic content beyond "I'm done
-    editing" — accept proceeds; reject cancels onboarding.
+    On accept, the next node (finalize_node) attempts credential
+    probes. The PI's response carries no semantic content beyond
+    "I'm done editing".
     """
     proposed = state.get("proposed_toolkit", []) or []
 
-    # Build a list of expected secret-name + criticality + tool-name
-    # tuples for the PI to scan when they open the .env. We never
-    # surface values here — just names + which tool needs each.
     expected_secrets = []
     for tool_dict in proposed:
         for s in tool_dict.get("secrets") or []:
@@ -1397,18 +1395,34 @@ def pi_credentials_ready(
             )
 
     project_id = state.get("project_id", "")
+    workspace_path = state.get("workspace_path", "")
+
+    # Use PI-provided workspace path if available; otherwise suggest
+    # a default the PI can override.
+    if workspace_path:
+        env_path = f"{workspace_path}/.rka/.env"
+    else:
+        env_path = f"<your-workspace>/.rka/.env"
+
+    # Also surface the manifest + env template content from
+    # decisions_to_present so the PI's Claude session can render them.
+    pending = state.get("decisions_to_present") or []
+    manifest_items = [d for d in pending if d.get("source_node") == "draft_manifest"]
+
     payload = {
         "type": "pi_credentials_ready",
-        "title": "PI credential entry — edit .env and accept when ready",
+        "title": "PI credential entry — save .env to your workspace and accept when ready",
         "prompt": (
-            f"Open ~/rka-projects/{project_id}/.env (file mode 0600). "
-            "Replace each <paste-here> placeholder with the real value, "
-            "save, then accept this interrupt. The orchestrator will "
-            "probe each declared API to validate the credentials before "
-            "registering the manifest. Reject if you want to cancel "
-            "onboarding for this project."
+            f"The orchestrator has prepared a tools.json manifest and "
+            f"an .env template for this project. Save the .env to your "
+            f"workspace (suggested: {env_path}), fill in each "
+            f"<paste-here> placeholder with the real value, then accept "
+            f"this interrupt. Never paste keys into the chat. "
+            f"Reject to cancel onboarding."
         ),
-        "env_file_path": f"~/rka-projects/{project_id}/.env",
+        "suggested_env_path": env_path,
+        "workspace_path": workspace_path,
+        "manifest_content": manifest_items,
         "expected_secrets": expected_secrets,
         "items": [],
         "total_items": 0,
