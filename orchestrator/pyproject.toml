@@ -38,6 +38,7 @@ include = ["orchestrator*"]
 
 [tool.setuptools.package-data]
 "orchestrator.db" = ["*.sql"]
+"orchestrator.data" = ["*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
