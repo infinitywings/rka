@@ -2448,6 +2448,114 @@ def _xml_text(xml: str, tag: str) -> str:
 # Workspace Bootstrap
 # ============================================================
 
+
+@tool()
+async def rka_scan_workspace_tree(
+    folder_path: str,
+    max_depth: int = 2,
+) -> str:
+    """Show the directory tree of a workspace folder with file counts and sizes.
+
+    This is the FIRST tool to call when exploring a new workspace. It
+    returns a fast, shallow overview without reading file contents or
+    computing hashes. Use the output to decide which subdirectories to
+    scan in detail with rka_scan_workspace.
+
+    Works on any filesystem including slow external drives (exFAT,
+    network mounts) because it uses os.scandir (one syscall per
+    directory entry, no recursion into ignored dirs).
+
+    Typical workflow:
+      1. rka_scan_workspace_tree(folder_path)     → see the shape
+      2. rka_scan_workspace(folder_path + "/docs") → deep-scan a subdir
+      3. rka_bootstrap_workspace(folder_path + "/docs") → ingest it
+
+    Args:
+        folder_path: Absolute path to the workspace folder
+        max_depth: How many levels deep to show (default 2; 0 = top-level only)
+    """
+    import asyncio
+    import os as _os
+
+    root = Path(folder_path).resolve()
+    if not root.is_dir():
+        return f"Error: {folder_path} is not a directory or does not exist."
+
+    from rka.services.classify import DEFAULT_IGNORES
+    ignores = set(DEFAULT_IGNORES)
+
+    def _tree() -> list[dict]:
+        entries: list[dict] = []
+
+        def _scan_dir(dirpath: Path, depth: int) -> dict:
+            name = dirpath.name or str(dirpath)
+            result: dict = {"name": name, "path": str(dirpath), "depth": depth}
+            file_count = 0
+            total_bytes = 0
+            subdirs: list[dict] = []
+            try:
+                with _os.scandir(dirpath) as it:
+                    for entry in sorted(it, key=lambda e: e.name):
+                        if entry.name.startswith(".") or entry.name in ignores:
+                            continue
+                        if entry.is_dir(follow_symlinks=False):
+                            if depth < max_depth:
+                                subdirs.append(_scan_dir(Path(entry.path), depth + 1))
+                            else:
+                                subdirs.append({
+                                    "name": entry.name,
+                                    "path": entry.path,
+                                    "depth": depth + 1,
+                                    "file_count": "?",
+                                    "size_mb": "?",
+                                    "subdirs": [],
+                                })
+                        elif entry.is_file(follow_symlinks=False):
+                            file_count += 1
+                            try:
+                                total_bytes += entry.stat().st_size
+                            except OSError:
+                                pass
+            except PermissionError:
+                result["error"] = "permission denied"
+            result["file_count"] = file_count
+            result["size_mb"] = round(total_bytes / 1024 / 1024, 1)
+            result["subdirs"] = subdirs
+            # Roll up counts from children
+            for sd in subdirs:
+                if isinstance(sd.get("file_count"), int):
+                    file_count += sd["file_count"]
+            result["total_files_recursive"] = file_count
+            return result
+
+        return [_scan_dir(root, 0)]
+
+    tree = await asyncio.to_thread(_tree)
+    node = tree[0] if tree else {}
+
+    def _render(n: dict, indent: int = 0) -> list[str]:
+        prefix = "  " * indent
+        fc = n.get("file_count", 0)
+        sz = n.get("size_mb", 0)
+        total = n.get("total_files_recursive", fc)
+        if indent == 0:
+            lines = [f"{n['path']}/  ({total} files total)"]
+        else:
+            detail = f"{fc} files, {sz} MB" if fc != "?" else "not scanned yet"
+            lines = [f"{prefix}{n['name']}/  ({detail})"]
+        for sd in n.get("subdirs", []):
+            lines.extend(_render(sd, indent + 1))
+        return lines
+
+    output_lines = _render(node)
+    output_lines.append("")
+    output_lines.append(
+        "Tip: pick a subdirectory and run rka_scan_workspace(folder_path='<subdir>') "
+        "to classify its files for ingestion."
+    )
+    return "\n".join(output_lines)
+
+
 @tool()
 async def rka_scan_workspace(
     folder_path: str,
@@ -2455,17 +2563,24 @@ async def rka_scan_workspace(
     max_file_size_mb: float = 50.0,
     use_llm: bool = True,
 ) -> str:
-    """Scan a workspace folder and preview what would be ingested.
+    """Deep-scan a workspace folder and classify files for ingestion.
 
-    File reading happens on the HOST (this MCP binary runs outside
-    Docker) so the daemon doesn't need bind-mount access. Classification
-    uses the shared classify.py module (no DB, no LLM, no network).
+    Call rka_scan_workspace_tree FIRST to see the directory structure,
+    then call this tool on specific subdirectories. Do NOT call this on
+    a large root folder (10K+ files) — it will be slow on external drives.
+
+    File reading happens on the HOST (no Docker bind mount needed).
+
+    Typical workflow:
+      1. rka_scan_workspace_tree(root_path)        → overview
+      2. rka_scan_workspace(root_path + "/docs")   → classify one subdir
+      3. rka_bootstrap_workspace(root_path + "/docs") → ingest
 
     Args:
-        folder_path: Absolute path to the workspace folder
-        ignore_patterns: Additional patterns to ignore (e.g. ["*.log", "drafts"])
+        folder_path: Absolute path to the folder to scan (prefer a subdirectory, not the root)
+        ignore_patterns: Additional patterns to ignore (e.g. ["*.log", "*.json"])
         max_file_size_mb: Skip files larger than this (default: 50MB)
-        use_llm: Ignored in the host-side path (LLM classification deferred to ingest)
+        use_llm: Ignored (LLM classification not available in host-side path)
     """
     import asyncio
     from rka.services.classify import (
@@ -2670,12 +2785,14 @@ async def rka_bootstrap_workspace(
 ) -> str:
     """One-shot workspace bootstrap: scan + ingest all files in a folder.
 
-    File reading happens on the HOST (this MCP binary runs outside
-    Docker). Each file's content is sent individually to the REST API
-    for DB storage, so the daemon never needs bind-mount access.
+    Call rka_scan_workspace_tree FIRST to pick the right subdirectory.
+    Then call this on that subdirectory — not on a large root folder.
+
+    File reading happens on the HOST (no Docker bind mount needed).
+    Each file's content is sent individually to the REST API for storage.
 
     Args:
-        folder_path: Absolute path to the workspace folder
+        folder_path: Absolute path to the folder to ingest (prefer a subdirectory)
         phase: Research phase to assign to all entries
         override_tags: Tags to add to all ingested entries
         skip_files: Relative paths of files to skip
