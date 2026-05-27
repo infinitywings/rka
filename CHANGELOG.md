@@ -3,6 +3,106 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [agentic — Phase B] — 2026-05-27 (orchestrator-level credential bootstrap)
+
+Branch-scoped release notes for the `agentic` branch. `main` is unaffected.
+
+### Shipped: Phase B — orchestrator-level credential bootstrap
+
+Phase B is the **prerequisite** workflow: it configures the orchestrator
+daemon's own credentials (in `orchestrator/.env`) so the daemon can call
+Claude at all. Distinct from Phase D, which writes per-project
+credentials at `~/rka-projects/<id>/.env`. A fresh install runs Phase B
+exactly once; Phase D once per project.
+
+The user surfaced this gap during the post-install audit on 2026-05-27:
+the `/orchestrator-onboard` flow assumes the orchestrator can already
+call Claude, but a fresh install can't until `CLAUDE_CODE_OAUTH_TOKEN`
+(or `ANTHROPIC_API_KEY`) lands in `orchestrator/.env`. Phase B closes
+that loop with the same PI-guided ratification pattern Phase D and
+Phase O use.
+
+### New surface
+
+- **`orchestrator_bootstrap_start()`** MCP tool — kicks off the
+  subgraph. No `project_id` (bootstrap is daemon-level). Proxies to
+  `POST /bootstrap` on the orchestrator REST API.
+- **`/orchestrator-bootstrap`** slash command — PI-facing entry point;
+  walks Claude through the four-gate interaction.
+- **`orchestrator/data/bootstrap_catalog.yaml`** — curated catalog of
+  5 orchestrator-level credentials:
+  - `claude-oauth` (CLAUDE_CODE_OAUTH_TOKEN; required; group `claude-auth`)
+  - `anthropic-api-key` (ANTHROPIC_API_KEY; required; group `claude-auth`,
+    alternative to OAuth)
+  - `semantic-scholar` (SEMANTIC_SCHOLAR_API_KEY; recommended)
+  - `serpapi` (SERPAPI_KEY; optional)
+  - `openalex-mailto` (OPENALEX_MAILTO; optional polite-pool email)
+- **`orchestrator/bootstrap.py`** — pure-Python catalog loader +
+  env-template renderer + env-file reader + verify probe wrapper.
+  Reuses the existing `credential_validator` HTTP-client signature so
+  tests can inject the same fake.
+- **`orchestrator/phase_b_graph.py`** — 6-node LangGraph subgraph
+  composer (3 background + 3 PI interrupts). Mirrors `phase_o_graph`
+  conventions: SqliteSaver checkpointer, set-identity ratification,
+  conditional routing.
+
+### New PI interrupts
+
+- **`pi_bootstrap_intent`** — free-form install-state description
+  (greenlight-class; "approve" advances).
+- **`pi_bootstrap_ratify`** — TWO-TAP set-identity ratification of the
+  proposed catalog subset. `bootstrap_ratified_ids` non-empty iff PI
+  accepts.
+- **`pi_bootstrap_fill_ack`** — replayable wait for the PI to edit
+  `orchestrator/.env`. Parks durably across restarts via the
+  SqliteSaver checkpointer. PI accepts when done; `bootstrap_verify`
+  then probes each filled key.
+
+### Security invariants
+
+- **Key values never appear** in interrupt payloads, logs, or verify
+  reports. Probe details contain only `env_var` + classification + a
+  non-secret reason string ("HTTP 401 (endpoint reachable; key rejected)").
+- `.env` and `.env.example` files are written with file-mode 0600
+  when the OS permits.
+- The render_env_template function never echoes existing values — it
+  marks "already set in existing .env" without surfacing the value.
+
+### Tests
+
+- **23 new tests** in `orchestrator/tests/test_phase_b_bootstrap.py`:
+  catalog load + 5-entry sanity, propose_for_intent semantics
+  (empty / full-install / substring match), env-template render with
+  group markers + existing-value masking, read_env_file parsing
+  (comments / placeholders / quotes / trailing comments),
+  verify_filled per-classification matrix (valid / rejected /
+  unreachable / missing / deferred), 3 Phase B background nodes
+  (propose / emit_template / verify), graph-compile smoke test +
+  routing helpers, runner accept-token + interrupt-type frozenset,
+  parked-store schema migration for Phase B types.
+- Full orchestrator suite: **745 passed** (was 722; +23 net).
+- Audit-symmetry: 6 new `current_node` names added to
+  `ONBOARDING_NODE_NAMES` so every Phase B node write satisfies the
+  union check.
+
+### Database migration
+
+- `schema.sql` CHECK constraint extended with the 3 new interrupt
+  types. `parked_store._migrate_pre_phase_o_if_needed` was renamed
+  conceptually to "_migrate_pre_phase_b_if_needed" semantics (the
+  same forward-migration routine; the sentinel flipped from
+  `pi_idea_capture` to `pi_bootstrap_intent`). Existing rows
+  preserved across the rebuild — Phase B is a strict superset of
+  the Phase O CHECK shape.
+
+### Skill update
+
+- `plugin/skills/orchestrator-pi/SKILL.md` bumped 0.3.0 → 0.4.0 with
+  a new `Bootstrap subgraph (Phase B)` block describing the 3
+  interrupts, plus a dedicated "Phase B — orchestrator-level
+  credential bootstrap" section covering rendering rules + security
+  invariants + the post-completion docker-recreate reminder.
+
 ## [agentic — Phase O] — 2026-05-26 (project-onboarding workflow)
 
 Branch-scoped release notes for the `agentic` branch. `main` is unaffected.

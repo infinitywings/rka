@@ -371,6 +371,52 @@ async def orchestrator_get_manifest(project_id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Phase B — orchestrator-level credential bootstrap
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def orchestrator_bootstrap_start(
+    workflow_thread_id: Optional[str] = None,
+) -> dict:
+    """Kick off the orchestrator-level credential bootstrap (Phase B).
+
+    Use this on a fresh install BEFORE any project exists. Phase B
+    handles the credentials in `orchestrator/.env` that the daemon
+    itself needs (Claude OAuth or API key, plus optional Semantic
+    Scholar / SerpAPI / OpenAlex polite-pool email).
+
+    Distinct from `orchestrator_onboard_start`, which handles per-
+    project credentials under `~/rka-projects/<id>/.env`.
+
+    Flow once started:
+      1. Daemon parks at `pi_bootstrap_intent` — claude renders the
+         intent-elicitation prompt ("describe your install state").
+      2. PI responds; daemon resumes, runs `propose_for_intent`, parks
+         at `pi_bootstrap_ratify` with the shortlist.
+      3. PI ratifies; daemon writes `orchestrator/.env.example` with
+         annotated slots, parks at `pi_bootstrap_fill_ack`.
+      4. PI edits `orchestrator/.env` and signals "ready"; daemon
+         probes each filled key (without logging values) and reports
+         pass/fail, completing the workflow.
+
+    Args:
+        workflow_thread_id: Optional explicit thread id.
+
+    Returns the same outcome shape as orchestrator_run_start. The PI
+    session typically calls `orchestrator_inbox` next to render the
+    parked interrupt.
+    """
+    async with _client() as c:
+        r = await c.post(
+            "/bootstrap",
+            json={"workflow_thread_id": workflow_thread_id},
+        )
+        _raise_with_detail(r)
+        return r.json()
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

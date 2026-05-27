@@ -64,7 +64,11 @@ CREATE TABLE IF NOT EXISTS parked_interrupts (
             'pi_deepresearch_prompt',
             'pi_claims_review',
             'pi_plan_ratify',
-            'pi_phase_entry_ack'
+            'pi_phase_entry_ack',
+            -- Phase B — orchestrator-level bootstrap (orchestrator/.env)
+            'pi_bootstrap_intent',
+            'pi_bootstrap_ratify',
+            'pi_bootstrap_fill_ack'
         )),
     payload_json TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending'

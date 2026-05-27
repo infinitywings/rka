@@ -68,6 +68,12 @@ class StartOnboardingRequest(BaseModel):
     workflow_thread_id: Optional[str] = None
 
 
+class StartBootstrapRequest(BaseModel):
+    """Phase B: orchestrator-level credential bootstrap. No project_id;
+    Phase B is daemon-level setup."""
+    workflow_thread_id: Optional[str] = None
+
+
 class CorrectRequest(BaseModel):
     response_text: str = Field(min_length=1)
 
@@ -221,6 +227,24 @@ def create_app(
         outcome = await asyncio.to_thread(
             runner_.start_onboarding,
             project_id=req.project_id,
+            workflow_thread_id=req.workflow_thread_id,
+        )
+        return _outcome_dict(outcome)
+
+    @app.post("/bootstrap")
+    async def start_bootstrap(
+        req: StartBootstrapRequest, request: Request
+    ) -> dict:
+        """Phase B: kick off the orchestrator-level credential bootstrap.
+
+        Returns the SegmentOutcome shape (workflow_thread_id +
+        parked_interrupt_id/type) for the first interrupt
+        (`pi_bootstrap_intent`). The PI's Claude session polls
+        /inbox to render the prompt and respond.
+        """
+        runner_: OrchestratorRunner = request.app.state.runner
+        outcome = await asyncio.to_thread(
+            runner_.start_phase_b,
             workflow_thread_id=req.workflow_thread_id,
         )
         return _outcome_dict(outcome)

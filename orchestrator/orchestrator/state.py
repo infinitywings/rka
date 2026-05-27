@@ -257,6 +257,21 @@ class ResearchWorkflowState(TypedDict, total=False):
     # H:
     current_milestone_index: int     # 0-indexed position in ratified_mission_ids
 
+    # Phase B (agentic) — orchestrator-level bootstrap state.
+    # `bootstrap_intent` is set by pi_bootstrap_intent (free-form text
+    # describing install state). `bootstrap_proposed_ids` is the catalog
+    # entry-ids picked by propose_for_intent. `bootstrap_ratified_ids`
+    # is the subset PI accepted at pi_bootstrap_ratify (set-identity:
+    # non-empty iff PI accepted). `bootstrap_template_path` is the
+    # absolute path of the .env.example the runner wrote for the PI to
+    # fill in. `bootstrap_verify_results` is populated by the final
+    # verify node so the runner can render the report.
+    bootstrap_intent: str
+    bootstrap_proposed_ids: list[str]
+    bootstrap_ratified_ids: list[str]
+    bootstrap_template_path: str
+    bootstrap_verify_results: list[dict]
+
     # Termination
     terminal_state: TerminalState
     final_report_id: str
@@ -332,6 +347,14 @@ def make_initial_state(
         ratified_plan_journal_id="",
         ratified_mission_ids=[],
         current_milestone_index=0,
+        # Phase B bootstrap fields (additive; total=False on the
+        # TypedDict means pre-Phase-B callers still construct valid
+        # states without them).
+        bootstrap_intent="",
+        bootstrap_proposed_ids=[],
+        bootstrap_ratified_ids=[],
+        bootstrap_template_path="",
+        bootstrap_verify_results=[],
     )
 
 

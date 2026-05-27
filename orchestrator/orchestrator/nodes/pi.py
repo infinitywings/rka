@@ -1427,3 +1427,175 @@ def pi_credentials_ready(
             )
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase B (Bootstrap) PI interrupts — orchestrator-level credential setup
+# ---------------------------------------------------------------------------
+#
+# Phase B is distinct from Phase D: Phase D handles per-project
+# credentials (writes ~/rka-projects/<id>/.env); Phase B handles the
+# orchestrator daemon's own credentials (writes orchestrator/.env)
+# so the daemon can call Claude at all. Three interrupts gate the
+# flow: intent capture → ratification → fill ack.
+
+
+_PI_BOOTSTRAP_INTENT_PROMPT = """\
+Welcome to orchestrator bootstrap. Describe your install state in a
+short sentence and I'll propose the credentials to set up. Examples:
+
+  - "fresh install on my laptop"
+  - "switching from API key to Claude Max OAuth"
+  - "I want everything including SerpAPI for web search"
+  - "minimal setup, just Claude OAuth"
+
+The orchestrator catalog covers: Claude OAuth (or API key as alternative),
+Semantic Scholar (rate-limit boost), SerpAPI (paid web search),
+OpenAlex polite-pool email. I'll skip any you don't mention unless they're
+required for the orchestrator to run at all.
+"""
+
+
+def pi_bootstrap_intent(
+    state: ResearchWorkflowState,
+    sdk: SDKClient,
+    mcp: MCPClient,
+    interrupt_fn: Callable[[dict], Any],
+) -> dict:
+    """First Phase B PI interrupt — free-form install-state description.
+
+    The PI session captures the response into state["bootstrap_intent"]
+    so the downstream bootstrap_propose node can match it against the
+    catalog. Low-stakes (no TWO-TAP) — the ratification happens at
+    pi_bootstrap_ratify after the proposal is rendered.
+    """
+    payload = {
+        "type": "pi_bootstrap_intent",
+        "title": "PI bootstrap intent — describe your install state",
+        "prompt": _PI_BOOTSTRAP_INTENT_PROMPT,
+        "items": [],
+        "total_items": 0,
+    }
+    pi_response = interrupt_fn(payload)
+    response_str = str(pi_response or "").strip()
+    # When PI hits accept with the greenlight token, leave the intent
+    # empty -- propose_for_intent then returns the required-and-recommended
+    # default set.
+    if response_str.lower() in {"approve", "accept", "reject"}:
+        intent = ""
+    else:
+        intent = response_str[:2000]
+    return {
+        "current_phase": "init",
+        "current_node": "pi_bootstrap_intent",
+        "bootstrap_intent": intent,
+        "interrupts": [
+            _record_interrupt(
+                node_name="pi_bootstrap_intent",
+                payload_size=0,
+                response=pi_response,
+                batch_review_used=False,
+            )
+        ],
+    }
+
+
+def pi_bootstrap_ratify(
+    state: ResearchWorkflowState,
+    sdk: SDKClient,
+    mcp: MCPClient,
+    interrupt_fn: Callable[[dict], Any],
+) -> dict:
+    """Second Phase B PI interrupt — ratify the proposed catalog subset.
+
+    Set-identity: ratified_ids is populated iff PI accepts (mirrors
+    pi_toolkit_ratify's Phase 2.7 T3d pattern). On accept, every
+    proposed id moves into bootstrap_ratified_ids; on reject/correct,
+    the list stays empty and the graph routes to END.
+    """
+    proposed_ids = state.get("bootstrap_proposed_ids", []) or []
+    # The propose node also writes a serializable view of the chosen
+    # entries onto decisions_to_present so we can surface it here without
+    # re-loading the catalog. Tolerant of missing data.
+    pending = state.get("decisions_to_present", []) or []
+    items = [d for d in pending if d.get("source_node") == "bootstrap_propose"]
+
+    payload, batched = _build_interrupt_payload(
+        node_name="pi_bootstrap_ratify",
+        items=items,
+        title="PI ratification — bootstrap credential shortlist",
+    )
+    pi_response = interrupt_fn(payload)
+    response_text = str(pi_response).lower()
+    is_accept = "accept" in response_text or "approve" in response_text
+    ratified = list(proposed_ids) if is_accept else []
+
+    remaining = [d for d in pending if d.get("source_node") != "bootstrap_propose"]
+    return {
+        "current_phase": "init",
+        "current_node": "pi_bootstrap_ratify",
+        "decisions_to_present": remaining,
+        "bootstrap_ratified_ids": ratified,
+        "batch_review_active": batched,
+        "batch_review_payload_size": len(items),
+        "interrupts": [
+            _record_interrupt(
+                node_name="pi_bootstrap_ratify",
+                payload_size=len(items),
+                response=pi_response,
+                batch_review_used=batched,
+            )
+        ],
+    }
+
+
+def pi_bootstrap_fill_ack(
+    state: ResearchWorkflowState,
+    sdk: SDKClient,
+    mcp: MCPClient,
+    interrupt_fn: Callable[[dict], Any],
+) -> dict:
+    """Third Phase B PI interrupt — replayable wait for the PI to fill .env.
+
+    Parks with the file path + list of expected env_vars + criticality
+    + sign-up URLs. Never surfaces values. On accept, the next node
+    (bootstrap_verify) probes each filled key and emits a report.
+    On reject, the bootstrap aborts cleanly (the .env.example file
+    stays on disk so the PI can resume manually with --continue).
+    """
+    template_path = state.get("bootstrap_template_path", "") or "orchestrator/.env"
+    pending = state.get("decisions_to_present", []) or []
+    items = [d for d in pending if d.get("source_node") == "bootstrap_emit_template"]
+
+    payload = {
+        "type": "pi_bootstrap_fill_ack",
+        "title": "PI fill ack — edit orchestrator/.env then accept",
+        "prompt": (
+            f"Open {template_path} (file-mode 0600). Replace each "
+            f"`<paste-here>` placeholder with the real value, save, "
+            "then accept this interrupt. The orchestrator will probe "
+            "each filled key without logging the value and report "
+            "pass/fail. Reject to abort -- the template file stays "
+            "on disk so you can resume later."
+        ),
+        "template_path": template_path,
+        "expected_entries": items,
+        "items": [],
+        "total_items": 0,
+    }
+    pi_response = interrupt_fn(payload)
+
+    remaining = [d for d in pending if d.get("source_node") != "bootstrap_emit_template"]
+    return {
+        "current_phase": "init",
+        "current_node": "pi_bootstrap_fill_ack",
+        "decisions_to_present": remaining,
+        "interrupts": [
+            _record_interrupt(
+                node_name="pi_bootstrap_fill_ack",
+                payload_size=len(items),
+                response=pi_response,
+                batch_review_used=False,
+            )
+        ],
+    }
