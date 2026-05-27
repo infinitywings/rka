@@ -2530,53 +2530,67 @@ async def rka_scan_workspace(
             })
         return files
 
-    host_files = await asyncio.to_thread(_walk_and_classify)
+    all_host_files = await asyncio.to_thread(_walk_and_classify)
+
+    # Cap files sent to the API to avoid >1MB payloads. The summary
+    # always reports the total count; only the first max_scan_files
+    # are sent for classification + dedup. The user can narrow with
+    # ignore_patterns to reach specific files.
+    MAX_SCAN_FILES = 500
+    truncated = len(all_host_files) > MAX_SCAN_FILES
+    host_files = all_host_files[:MAX_SCAN_FILES]
 
     async with _client() as c:
         body = {
             "root_path": str(root),
             "files": host_files,
-            "total_files_found": len(host_files),
+            "total_files_found": len(all_host_files),
             "ignore_patterns": list(ignores),
         }
         r = await c.post("/api/workspace/scan/from-host", json=body, timeout=120.0)
         _raise_with_detail(r)
         data = r.json()
 
-    # Format summary for the Brain
+    # Build a summary from ALL files (not just the sent subset)
+    from collections import Counter
+    cat_counts = Counter(f["category"] for f in all_host_files)
+    target_counts = Counter(f["ingestion_target"] for f in all_host_files)
+    total_size = sum(f["size_bytes"] for f in all_host_files)
+
     files = data.get("files", [])
-    summary = data.get("summary", {})
-    caps = data.get("capabilities", {})
-    warnings = data.get("warnings", [])
+    caps_resp = data.get("capabilities", {})
 
     lines = [
-        f"📂 Scanned: {data['root_path']}",
-        f"   Scan ID: {data['scan_id']}",
-        f"   Files found: {data['total_files_found']}, scanned: {data['total_files_scanned']}",
-        f"   Capabilities: pymupdf={'✓' if caps.get('pymupdf_available') else '✗'}, "
-        f"docx={'✓' if caps.get('python_docx_available') else '✗'}, "
-        f"llm={'✓' if caps.get('llm_available') else '✗'}",
+        f"Scanned: {folder_path}",
+        f"   Scan ID: {data.get('scan_id', 'n/a')}",
+        f"   Total files found: {len(all_host_files)}, sent to API: {len(host_files)}"
+        + (f" (capped at {MAX_SCAN_FILES})" if truncated else ""),
+        f"   Total size: {total_size / 1024 / 1024:.1f} MB",
     ]
 
-    if summary.get("by_category"):
-        lines.append(f"\n📊 By category: {summary['by_category']}")
-    if summary.get("by_target"):
-        lines.append(f"📊 By target: {summary['by_target']}")
-    if summary.get("duplicate_count"):
-        lines.append(f"⚠️  Duplicates (already ingested): {summary['duplicate_count']}")
-    if summary.get("llm_classified_count"):
-        lines.append(f"🤖 LLM-classified: {summary['llm_classified_count']}")
+    if truncated:
+        lines.append(
+            f"\n   NOTE: {len(all_host_files) - MAX_SCAN_FILES} files not shown. "
+            f"Use ignore_patterns to narrow (e.g., ignore_patterns=['*.json'] "
+            f"to skip data files)."
+        )
 
-    # Group files by ingestion target
+    lines.append(f"\nBy category: {dict(cat_counts.most_common())}")
+    lines.append(f"By ingestion target: {dict(target_counts.most_common())}")
+
+    # Show per-file detail only for the manageable subset
     by_target: dict[str, list] = {}
     for f in files:
         target = f.get("ingestion_target", "skip")
         by_target.setdefault(target, []).append(f)
 
+    MAX_FILES_PER_TARGET = 20
     for target, target_files in sorted(by_target.items()):
+        count = target_counts.get(target, len(target_files))
         lines.append(f"\n{'─' * 40}")
-        lines.append(f"Target: {target} ({len(target_files)} files)")
-        for f in target_files:
+        lines.append(f"Target: {target} ({count} files)")
+        shown = target_files[:MAX_FILES_PER_TARGET]
+        for f in shown:
             dup = " [DUP]" if f.get("is_duplicate") else ""
             llm = " [LLM]" if f.get("llm_classified") else ""
             tags = f", tags={f['proposed_tags']}" if f.get("proposed_tags") else ""
@@ -2584,13 +2598,17 @@ async def rka_scan_workspace(
             lines.append(
                 f"  • {f['relative_path']} [{f['category']}→{f['proposed_type']}]{tags}{title}{dup}{llm}"
             )
+        if len(target_files) > MAX_FILES_PER_TARGET:
+            lines.append(f"  ... and {len(target_files) - MAX_FILES_PER_TARGET} more")
 
+    warnings = data.get("warnings", [])
     if warnings:
-        lines.append(f"\n⚠️  Warnings ({len(warnings)}):")
+        lines.append(f"\nWarnings ({len(warnings)}):")
         for w in warnings[:10]:
             lines.append(f"  - {w}")
 
-    lines.append(f"\n💡 Run rka_bootstrap_workspace(folder_path='{folder_path}') to ingest.")
+    lines.append(f"\nTo ingest, run rka_bootstrap_workspace(folder_path='{folder_path}').")
+    lines.append("Tip: use ignore_patterns=['*.json','*.csv','*.parquet'] to skip data files.")
     return "\n".join(lines)
 
 
