@@ -67,6 +67,18 @@ def chart_render():
     return _load_module("chart_render")
 
 
+@pytest.fixture
+def venue_loader():
+    """Phase W1: venue.yaml loader (rka/skills/writer/scripts/venue_loader.py)."""
+    return _load_module("venue_loader")
+
+
+@pytest.fixture
+def venue_md_generator():
+    """Phase W1: venue.md generator (yaml → narrative MD)."""
+    return _load_module("venue_md_generator")
+
+
 # Phase 2 mcp_tools backends (proper Python subpackage; import via rka.* path).
 @pytest.fixture
 def crossref_backend():

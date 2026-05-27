@@ -3,6 +3,85 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [Unreleased] - Writer Phase W1 (venue.yaml foundation + CFP plumbing)
+
+Branch: `feat/writer-venue-expansion`. First slice of a multi-phase
+Writer expansion (W1-W4) that ships a structured per-venue
+specification, a per-manuscript YAML, and CFP-link plumbing so the
+Writer can enforce venue-specific format, page-limit, tone, and
+content-organization rules - including for venues PI specifies via
+their CFP URL.
+
+### Shipped
+
+- **`venue.yaml` schema (v1)** at `rka/skills/writer/references/venue/`.
+  Single source of truth for every venue: submission constraints
+  (page limit, references-counted, anonymization), format (template,
+  engine, citation style), structure (required + optional + appendix
+  sections, abstract word range), tone descriptors (voice, hedging,
+  marketing tolerance, math density, multi-seed expectations,
+  reproducibility floor), review-dimension weights, forbidden
+  constructions, sample-corpus pointers, CFP URLs, and provenance.
+  Schema reference: `rka/skills/writer/references/venue_schema.md`.
+
+- **`venue_loader.py`** - parses, validates, and merges venue specs.
+  Enum-checked at load time; raises `VenueValidationError` with a
+  precise field path on mismatch. Supports proposal inheritance for
+  NSF solicitations via `inherits_from` (W4 baseline; child overrides
+  base sub-objects, lists replace rather than append). CLI:
+  `list` / `show <id>` / `validate [<id>]`.
+
+- **`venue_md_generator.py`** - renders the canonical
+  seven-section narrative `<id>.md` from `<id>.yaml`. Auto-region
+  delimited by `BEGIN auto-generated` / `END auto-generated` markers;
+  re-running only replaces that region (preserves prelude + tail).
+  Sibling `<id>.notes.md` appended below the auto-region so rich
+  hand-written content survives regeneration. Idempotent.
+
+- **7 existing venues migrated** to YAML + auto-generated MD:
+  CHI, EMNLP, IEEE-SP, Nature, NeurIPS, OSDI, USENIX. Each
+  Phase-2 hand-written narrative preserved verbatim as `<id>.notes.md`
+  (renamed; auto-appended back into the regenerated `<id>.md`).
+
+- **`manuscript.yaml` in workspace-template** - per-manuscript glue
+  carrying `venue_id`, `cfp_url`, `project_id`, `title`,
+  `target_track`, `target_deadline`, and `overrides`. Read by the
+  linter / layout-audit / MCP tool surface and by W2's `cfp_loader.py`.
+
+- **`/rka-start-manuscript` extended** with `--cfp-url` and `--title`
+  flags. Bootstrap substitutes the placeholders in `manuscript.yaml`
+  alongside the existing `.mcp.json` substitution.
+
+- **`layout_audit.py` reads YAML**: page limit now resolved via
+  `venue_loader` (fallback to a small legacy table for short-track
+  variants the YAML registry doesn't yet model). New CLI flag
+  `--manuscript-yaml PATH` reads `venue_id` + `overrides.page_limit_main`
+  from the workspace's manuscript.yaml (per-manuscript override wins
+  over venue baseline). New `page_limit_override` kwarg on
+  `audit()` for programmatic callers.
+
+- **Plugin mirror updated** - identical copy in `plugin/skills/writer/`
+  per the v2.5.12 plugin-bundle precedent. `diff -r` byte-identical
+  between source + plugin.
+
+### Tests
+
+- **30 new tests**: `tests/skills/writer/test_venue_loader.py` (16)
+  + `tests/skills/writer/test_venue_md_generator.py` (7) + the 7
+  Phase-1/Phase-2 venue files still pass their pre-existing
+  em-dash / required-section checks against the regenerated MDs.
+- Full repo suite: **818 passed** (was 788 - all pre-existing tests
+  preserved; +30 new).
+
+### Phase W1 boundary
+
+- W2 lands `cfp_loader.py` (fetch + Brain-LLM-parse the CFP URL into
+  `cfp_overrides.yaml` overlays for `manuscript.yaml`).
+- W3 expands the registry to ~50 venues (CS conferences, CS journals,
+  FT50 accounting/finance/management).
+- W4 lands `proposals/NSF-PAPPG.yaml` baseline + solicitation
+  inheritance demo.
+
 ## [2.5.12] — 2026-05-23 (patch release; Writer plugin-bundle integration)
 
 **Mission**: `mis_01KSARG7HJR0QMB9004ESZPM2K`
