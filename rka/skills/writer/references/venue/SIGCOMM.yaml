@@ -1,0 +1,33 @@
+schema_version: v1
+id: SIGCOMM
+name: ACM SIGCOMM Conference
+kind: conference
+domain: cs-net
+status: active
+
+submission:
+  page_limit_main: 14
+  references_counted: false
+  anonymization: required
+
+format:
+  engine_default: pdflatex
+  engines_supported: [pdflatex, lualatex, xelatex]
+  citation_style: numeric-cite-order
+
+tone:
+  voice: first-person-plural
+  hedging: moderate
+  marketing_language: discouraged
+  math_density: moderate
+  numerical_claims_dominate: true
+  ablation_studies_expected: false
+  multi_seed_required: false
+  reproducibility_floor: high
+
+cfp:
+  primary_url: https://www.sigcomm.org/
+
+provenance:
+  schema_origin: phase-W3-bulk-import
+  last_updated: 2026-05-27

@@ -1,0 +1,34 @@
+schema_version: v1
+id: EMNLP-Short
+name: EMNLP (Short paper track)
+kind: conference
+domain: cs-nlp
+status: active
+
+submission:
+  page_limit_main: 4
+  references_counted: false
+  anonymization: required
+
+format:
+  engine_default: pdflatex
+  engines_supported: [pdflatex, lualatex, xelatex]
+  citation_style: name-year
+  bibliography_style: name-year
+
+tone:
+  voice: first-person-plural
+  hedging: moderate
+  marketing_language: discouraged
+  math_density: moderate
+  numerical_claims_dominate: true
+  ablation_studies_expected: true
+  multi_seed_required: false
+  reproducibility_floor: moderate
+
+cfp:
+  primary_url: https://2025.emnlp.org/
+
+provenance:
+  schema_origin: phase-W3-bulk-import
+  last_updated: 2026-05-27

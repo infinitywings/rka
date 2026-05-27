@@ -32,15 +32,84 @@ from pathlib import Path
 from typing import Optional
 
 
-VENUE_PAGE_LIMITS = {
-    "CHI": 14,
+# Phase W1: page limits are now sourced from venue.yaml via venue_loader.
+# The dict below is the legacy fallback — kept for back-compat with the
+# `--venue NAME` flag for venues not yet migrated to YAML (and short-track
+# variants like EMNLP_SHORT / ACL_SHORT, which the YAML registry doesn't
+# yet model — Phase W3 adds dedicated short-paper variants).
+VENUE_PAGE_LIMITS_LEGACY = {
     "CSCW": 25,
     "UIST": 12,
-    "EMNLP": 8,
     "EMNLP_SHORT": 4,
     "ACL": 9,
     "ACL_SHORT": 5,
 }
+
+
+def _resolve_page_limit(venue: str) -> int:
+    """Resolve page_limit_main for `venue` from (in priority order):
+      1. venue.yaml via venue_loader (preferred — the Phase W1 path)
+      2. VENUE_PAGE_LIMITS_LEGACY (fallback for short-track variants)
+      3. 0 (unknown venue; pages_over_limit check becomes a no-op)
+    """
+    try:
+        # Phase W1: ensure the sibling venue_loader.py is importable
+        # under both standalone CLI invocation and importlib loading
+        # (where this script's dir isn't on sys.path).
+        _scripts_dir = Path(__file__).resolve().parent
+        if str(_scripts_dir) not in sys.path:
+            sys.path.insert(0, str(_scripts_dir))
+        # Lazy import — venue_loader pulls PyYAML which is otherwise
+        # only required when actually using the YAML path.
+        from venue_loader import load_venue, VenueValidationError
+    except Exception:  # noqa: BLE001
+        return VENUE_PAGE_LIMITS_LEGACY.get(venue, 0)
+    try:
+        v = load_venue(venue)
+    except (VenueValidationError, FileNotFoundError, Exception):  # noqa: BLE001
+        return VENUE_PAGE_LIMITS_LEGACY.get(venue, 0)
+    if v.submission.page_limit_main is not None:
+        return v.submission.page_limit_main
+    return VENUE_PAGE_LIMITS_LEGACY.get(venue, 0)
+
+
+def _resolve_from_manuscript_yaml(manuscript_yaml_path: Path) -> tuple[str, int]:
+    """Read venue_id + resolved page limit from a workspace's manuscript.yaml.
+
+    Resolution order (most-specific wins):
+      1. `manuscript.yaml -> overrides.page_limit_main`
+      2. sibling `cfp_overrides.yaml` -> `overrides.submission.page_limit_main`
+         (Phase W2: year-specific CFP deltas)
+      3. venue.yaml baseline via venue_loader
+      4. legacy short-track table
+
+    Returns (venue_id, page_limit). Raises FileNotFoundError or
+    ValueError on parse failure.
+    """
+    import yaml  # local import; only needed when called
+
+    data = yaml.safe_load(manuscript_yaml_path.read_text(encoding="utf-8")) or {}
+    venue_id = str(data.get("venue_id") or "").strip()
+    if not venue_id or venue_id.startswith("REPLACE_WITH_"):
+        raise ValueError(
+            f"{manuscript_yaml_path}: venue_id is missing or unfilled placeholder"
+        )
+    override = (data.get("overrides") or {}).get("page_limit_main")
+    if isinstance(override, int) and override > 0:
+        return venue_id, override
+
+    cfp_path = manuscript_yaml_path.parent / "cfp_overrides.yaml"
+    if cfp_path.is_file():
+        cfp_data = yaml.safe_load(cfp_path.read_text(encoding="utf-8")) or {}
+        if cfp_data.get("base_venue_id") == venue_id:
+            cfp_page = (
+                ((cfp_data.get("overrides") or {}).get("submission") or {})
+                .get("page_limit_main")
+            )
+            if isinstance(cfp_page, int) and cfp_page > 0:
+                return venue_id, cfp_page
+
+    return venue_id, _resolve_page_limit(venue_id)
 
 # Compiled regex patterns per field.
 RE_UNDEFINED_CITATION = re.compile(
@@ -234,11 +303,21 @@ def audit(
     aux_path: Optional[Path],
     tex_path: Optional[Path],
     venue: str,
+    page_limit_override: Optional[int] = None,
 ) -> AuditReport:
-    """Run all 12 field checks and return an AuditReport."""
+    """Run all 12 field checks and return an AuditReport.
+
+    Phase W1: page_limit_override lets the caller (or
+    --manuscript-yaml CLI path) supply a per-manuscript override that
+    wins over the venue baseline.
+    """
     import datetime
 
-    page_limit = VENUE_PAGE_LIMITS.get(venue, 0)
+    page_limit = (
+        page_limit_override
+        if page_limit_override is not None
+        else _resolve_page_limit(venue)
+    )
     log_text = _read_or_empty(log_path)
     blg_text = _read_or_empty(blg_path)
     aux_text = _read_or_empty(aux_path)
@@ -289,8 +368,25 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="LaTeX layout audit: 12-field PASS/WARN/BLOCK report."
     )
-    parser.add_argument("--venue", required=True,
-                        help=f"Venue name (one of: {', '.join(VENUE_PAGE_LIMITS.keys())})")
+    parser.add_argument(
+        "--venue",
+        default=None,
+        help=(
+            "Venue id (e.g., NeurIPS, CHI). Resolves page limit via "
+            "venue.yaml; falls back to legacy short-track table for "
+            "names not yet migrated. Mutually exclusive with "
+            "--manuscript-yaml."
+        ),
+    )
+    parser.add_argument(
+        "--manuscript-yaml",
+        type=Path,
+        default=None,
+        help=(
+            "Path to a workspace's manuscript.yaml. Reads venue_id + "
+            "overrides.page_limit_main; preferred over --venue."
+        ),
+    )
     parser.add_argument("--pdf", type=Path, default=Path("main.pdf"))
     parser.add_argument("--log", type=Path, default=Path("main.log"))
     parser.add_argument("--blg", type=Path, default=Path("main.blg"))
@@ -299,10 +395,32 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args(argv)
 
-    if args.venue not in VENUE_PAGE_LIMITS:
-        print(f"layout_audit: unknown venue {args.venue}", file=sys.stderr)
-        print(f"  Known: {', '.join(VENUE_PAGE_LIMITS.keys())}", file=sys.stderr)
+    if args.venue and args.manuscript_yaml:
+        print(
+            "layout_audit: --venue and --manuscript-yaml are mutually exclusive",
+            file=sys.stderr,
+        )
         return 4
+    if not args.venue and not args.manuscript_yaml:
+        print(
+            "layout_audit: provide either --venue NAME or --manuscript-yaml PATH",
+            file=sys.stderr,
+        )
+        return 4
+
+    page_limit_override: Optional[int] = None
+    if args.manuscript_yaml:
+        try:
+            args.venue, page_limit_override = _resolve_from_manuscript_yaml(
+                args.manuscript_yaml
+            )
+        except (FileNotFoundError, ValueError) as e:
+            print(f"layout_audit: {e}", file=sys.stderr)
+            return 4
+
+    # Page-limit resolution is lenient — an unknown venue yields
+    # page_limit=0 (the pages_over_limit check becomes a no-op) rather
+    # than blocking the audit at the CLI surface.
 
     report = audit(
         pdf_path=args.pdf if args.pdf.exists() else None,
@@ -311,6 +429,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         aux_path=args.aux if args.aux.exists() else None,
         tex_path=args.tex if args.tex.exists() else None,
         venue=args.venue,
+        page_limit_override=page_limit_override,
     )
 
     text = json.dumps(asdict(report), indent=2, default=str)

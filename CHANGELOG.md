@@ -88,6 +88,218 @@ rka repo holds only templates + orchestrator code that knows how to
 create the workspace. See `orchestrator/docs/phase-o-project-onboarding-design.md`
 §"Repo boundary".
 
+## [Unreleased] - Writer Phase W3 + W4 (registry expansion + NSF proposals)
+
+Branch: `feat/writer-venue-registry-w3w4`. Third and fourth slices of
+the multi-phase Writer expansion. W3 grows the curated registry from
+seven venues to fifty-eight and W4 introduces the `kind: proposal`
+surface with NSF PAPPG as the inheritable baseline. Together these
+make the Writer cover the venue families the PI explicitly named
+(CS conferences + CS journals + FT50 accounting/finance/management +
+NSF proposals).
+
+### W3 - Venue registry expansion (51 new venues)
+
+- **CS conferences (29)**: ICML, ICLR, AAAI, IJCAI, KDD (cs-ml);
+  CVPR, ICCV, ECCV (cs-cv); ACL, ACL-Short, NAACL, EMNLP-Short
+  (cs-nlp); SOSP, ASPLOS (cs-systems); ISCA, MICRO (cs-arch);
+  PLDI, POPL, OOPSLA (cs-pl); SIGCOMM, NSDI (cs-net); CCS, NDSS
+  (cs-security); UIST, CSCW, IUI (cs-hci); SIGIR (cs-ir); WWW
+  (cs-web).
+- **CS journals (6)**: TPAMI, TOPLAS, TOCS, TON, JACM, CACM.
+- **FT50 narrowed scope (16)**: JAR, JAE, TAR, RAST, CAR (acct);
+  JF, JFE, RFS, JFQA (fin); AMJ, AMR, ASQ, JOM, MS, OS, SMJ (mgmt).
+- Each YAML is a **minimal-baseline** spec: stable per-family
+  defaults for tone (voice / hedging / marketing / math-density /
+  reproducibility), citation style (numeric for STEM, name-year for
+  NLP family, author-year for FT50), and submission posture (page
+  limit + anonymization + references-counted). Year-specific
+  deviations are expected to flow through W2's `cfp_overrides.yaml`
+  rather than mutating the YAML directly.
+- **`DOMAIN_VALUES` expanded** with `cs-nlp`, `cs-cv`, `cs-ir`,
+  `cs-ai`, `cs-web` to model the additional CS sub-fields. FT50
+  enums (`acct`, `fin`, `mgmt`) were already provisioned in W1.
+
+### W4 - NSF proposals with solicitation inheritance
+
+- **`NSF-PAPPG.yaml`** at `references/venue/proposals/` is the
+  cross-solicitation baseline: PAPPG Chapter II.D.2 page limits
+  (15-page Project Description), required sections (Cover Sheet,
+  Project Summary, Project Description with explicit Intellectual
+  Merit + Broader Impacts headings, References Cited, Biographical
+  Sketches, Budget Justification, Current/Pending Support,
+  Facilities, Data Management and Sharing Plan), and the standard
+  Merit Review Criteria (`intellectual_merit` + `broader_impacts` +
+  `clarity`).
+- **`solicitations/NSF-CAREER.yaml`** uses `inherits_from:
+  NSF-PAPPG` so it picks up PAPPG's format/tone defaults
+  automatically; it overrides only `required_sections` (adds the
+  Integrated Research and Education Plan + Department Letter) and
+  `review_dimensions` (adds `integration_of_research_and_education`
+  and `career_development_trajectory`). Demonstrates the W1
+  `merge_inheritance` semantics on a real solicitation: scalar
+  fields win when set, list fields replace rather than extend.
+- **`kind: proposal` wired through `venue_md_generator`** -- no
+  branching needed; the existing seven-section narrative renders
+  proposals the same way it renders conferences and journals.
+
+### Tests (W3 + W4)
+
+- **10 new tests** in `tests/skills/writer/test_venue_registry_w3w4.py`:
+  full-registry load, per-family kind+domain expectations, FT50
+  shared-conventions check (double-blind + author-year +
+  third-person), CS-NLP name-year citation, short-track page limit
+  cap, CS-journal no-fixed-page-limit, NSF PAPPG required-sections
+  + review-criteria framing, CAREER inheritance overlay (format +
+  tone borrowed; required_sections + review_dimensions replaced),
+  and `kind=proposal` MD rendering.
+- Full Writer suite: **170 passed** (was 160, +10).
+- `venue_loader.py validate` now passes on all 59 specs (57 venues
+  + NSF-PAPPG + NSF-CAREER).
+
+### Phase boundary
+
+W3 + W4 close the originally-scoped expansion. Future enrichment is
+contributor-driven (each YAML is short enough that adding venues is a
+small PR; W2's `cfp_overrides.yaml` handles year-specific deviations).
+Full Writer suite after W1 + W2 + W3 + W4 lands: **196 passed**
+(W1: 160, W2: +26, W3 + W4: +10).
+
+---
+
+### W2 (merged in PR #27): cfp_loader - fetch + heuristic overlay
+
+Branch: `feat/writer-cfp-loader`. Second slice of the multi-phase Writer
+expansion. Builds on W1's `venue.yaml` foundation by letting the Writer
+adapt a curated venue spec to a specific year's Call-for-Papers without
+hand-editing the registry.
+
+#### Shipped (W2)
+
+- **`cfp_loader.py`** at `rka/skills/writer/scripts/`. Fetches a CFP
+  URL (stdlib `urllib` only - no new dependencies), strips HTML, and
+  runs deterministic heuristic extractors over the plain text for:
+  page limit (main / body), references-counted vs. excluded,
+  anonymization mode (double-blind / single-blind / not anonymous),
+  abstract word cap, citation-style hint (numeric vs. name-year), and
+  the first submission-deadline date. Emits a draft `cfp_overrides.yaml`
+  with every detected field listed under `review_required:` so a
+  reviewer (human or Claude Code at the manuscript prompt) must
+  inspect each before it can be trusted. The fetched plain text is
+  persisted alongside the YAML as `cfp_raw.txt` for offline
+  re-extraction. No server-side LLM is invoked (the rka core does
+  not ship LLM access per the v2.4.0 architecture decision).
+
+- **`apply_overrides(base, overrides)`** + **`load_workspace_venue(dir)`**
+  in `cfp_loader.py`. Overlay engine for partial overrides on top of a
+  curated Venue, plus a one-call workspace resolver that returns the
+  effective Venue after applying both `cfp_overrides.yaml` (year-wide
+  CFP deltas) and `manuscript.yaml -> overrides:` (per-manuscript
+  deltas). Precedence: baseline -> cfp -> manuscript (most-specific
+  always wins).
+
+- **`layout_audit._resolve_from_manuscript_yaml` extended** to read
+  `cfp_overrides.yaml` automatically. Per-manuscript page-limit
+  override still beats CFP; CFP still beats venue baseline. Existing
+  `--manuscript-yaml PATH` CLI flag is the entry point.
+
+- **CLI**: `cfp_loader.py fetch <url> --base-venue NeurIPS --out cfp_overrides.yaml`
+  + `cfp_loader.py inspect <workspace-dir>` (dumps the resolved Venue
+  as JSON for debugging).
+
+- **Plugin mirror updated** - `diff -r rka/skills/writer plugin/skills/writer`
+  byte-identical.
+
+#### Tests (W2)
+
+- **26 new tests** in `tests/skills/writer/test_cfp_loader.py`
+  covering HTML extraction (script/style stripping, paragraph breaks),
+  `_http_get` mocking + content-type rejection, every heuristic
+  extractor (positive + sanity-floor + blank-input cases), YAML
+  envelope validation, `apply_overrides` overlay semantics,
+  `load_workspace_venue` precedence rules, the `layout_audit`
+  integration path, and render-idempotency.
+
+---
+
+### W1 (merged in PR #26): venue.yaml foundation + CFP plumbing
+
+Branch: `feat/writer-venue-expansion`. First slice of a multi-phase
+Writer expansion (W1-W4) that ships a structured per-venue
+specification, a per-manuscript YAML, and CFP-link plumbing so the
+Writer can enforce venue-specific format, page-limit, tone, and
+content-organization rules - including for venues PI specifies via
+their CFP URL.
+
+#### Shipped (W1)
+
+- **`venue.yaml` schema (v1)** at `rka/skills/writer/references/venue/`.
+  Single source of truth for every venue: submission constraints
+  (page limit, references-counted, anonymization), format (template,
+  engine, citation style), structure (required + optional + appendix
+  sections, abstract word range), tone descriptors (voice, hedging,
+  marketing tolerance, math density, multi-seed expectations,
+  reproducibility floor), review-dimension weights, forbidden
+  constructions, sample-corpus pointers, CFP URLs, and provenance.
+  Schema reference: `rka/skills/writer/references/venue_schema.md`.
+
+- **`venue_loader.py`** - parses, validates, and merges venue specs.
+  Enum-checked at load time; raises `VenueValidationError` with a
+  precise field path on mismatch. Supports proposal inheritance for
+  NSF solicitations via `inherits_from` (W4 baseline; child overrides
+  base sub-objects, lists replace rather than append). CLI:
+  `list` / `show <id>` / `validate [<id>]`.
+
+- **`venue_md_generator.py`** - renders the canonical
+  seven-section narrative `<id>.md` from `<id>.yaml`. Auto-region
+  delimited by `BEGIN auto-generated` / `END auto-generated` markers;
+  re-running only replaces that region (preserves prelude + tail).
+  Sibling `<id>.notes.md` appended below the auto-region so rich
+  hand-written content survives regeneration. Idempotent.
+
+- **7 existing venues migrated** to YAML + auto-generated MD:
+  CHI, EMNLP, IEEE-SP, Nature, NeurIPS, OSDI, USENIX. Each
+  Phase-2 hand-written narrative preserved verbatim as `<id>.notes.md`
+  (renamed; auto-appended back into the regenerated `<id>.md`).
+
+- **`manuscript.yaml` in workspace-template** - per-manuscript glue
+  carrying `venue_id`, `cfp_url`, `project_id`, `title`,
+  `target_track`, `target_deadline`, and `overrides`. Read by the
+  linter / layout-audit / MCP tool surface and by W2's `cfp_loader.py`.
+
+- **`/rka-start-manuscript` extended** with `--cfp-url` and `--title`
+  flags. Bootstrap substitutes the placeholders in `manuscript.yaml`
+  alongside the existing `.mcp.json` substitution.
+
+- **`layout_audit.py` reads YAML**: page limit now resolved via
+  `venue_loader` (fallback to a small legacy table for short-track
+  variants the YAML registry doesn't yet model). New CLI flag
+  `--manuscript-yaml PATH` reads `venue_id` + `overrides.page_limit_main`
+  from the workspace's manuscript.yaml (per-manuscript override wins
+  over venue baseline). New `page_limit_override` kwarg on
+  `audit()` for programmatic callers.
+
+- **Plugin mirror updated** - identical copy in `plugin/skills/writer/`
+  per the v2.5.12 plugin-bundle precedent. `diff -r` byte-identical
+  between source + plugin.
+
+#### Tests (W1)
+
+- **30 new tests**: `tests/skills/writer/test_venue_loader.py` (16)
+  + `tests/skills/writer/test_venue_md_generator.py` (7) + the 7
+  Phase-1/Phase-2 venue files still pass their pre-existing
+  em-dash / required-section checks against the regenerated MDs.
+- Full repo suite: **818 passed** (was 788 - all pre-existing tests
+  preserved; +30 new).
+
+#### Phase W1 boundary (superseded by W2 above)
+
+- W2 (this PR) lands `cfp_loader.py`.
+- W3 expands the registry to ~50 venues (CS conferences, CS journals,
+  FT50 accounting/finance/management).
+- W4 lands `proposals/NSF-PAPPG.yaml` baseline + solicitation
+  inheritance demo.
+
 ## [2.5.12] — 2026-05-23 (patch release; Writer plugin-bundle integration)
 
 **Mission**: `mis_01KSARG7HJR0QMB9004ESZPM2K`

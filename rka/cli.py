@@ -276,6 +276,140 @@ def migrate():
     click.echo(f"Applied {count} migration(s).")
 
 
+@main.command("start-all")
+@click.option("--host", default="127.0.0.1", help="API server host")
+@click.option("--port", default=9712, type=int, help="API server port")
+@click.option("--foreground", is_flag=True, help="Run in foreground (don't daemonize)")
+def start_all(host: str, port: int, foreground: bool):
+    """Start RKA server + worker as background processes (Dockerless mode).
+
+    Data is stored at ~/.rka/ (override via RKA_DATA_DIR). This is the
+    Dockerless alternative to `docker compose up -d`.
+
+    Use `rka stop-all` to shut down. PID files are written to the data
+    directory so stop-all can find the processes.
+    """
+    import os
+    import signal
+    import subprocess
+    import sys
+    import time
+    from rka.config import RKAConfig
+
+    config = RKAConfig()
+    data_dir = config.data_dir
+    data_dir.mkdir(parents=True, exist_ok=True)
+    pid_dir = data_dir / "pids"
+    pid_dir.mkdir(exist_ok=True)
+
+    db_path = data_dir / "rka.db"
+    env = {
+        **os.environ,
+        "RKA_DATA_DIR": str(data_dir),
+        "RKA_DB_PATH": str(db_path),
+        "RKA_HOST": host,
+        "RKA_PORT": str(port),
+    }
+
+    rka_bin = sys.executable
+    rka_module = [rka_bin, "-m", "rka.cli"]
+
+    # Check if already running
+    for name in ("serve", "worker"):
+        pf = pid_dir / f"{name}.pid"
+        if pf.exists():
+            pid = int(pf.read_text().strip())
+            try:
+                os.kill(pid, 0)
+                click.echo(f"⚠️  {name} already running (pid {pid}). Use `rka stop-all` first.")
+                return
+            except OSError:
+                pf.unlink()  # stale pid file
+
+    if foreground:
+        click.echo(f"Starting RKA in foreground (data: {data_dir}, db: {db_path})")
+        click.echo(f"Server: http://{host}:{port}")
+        click.echo("Press Ctrl+C to stop.\n")
+        # Run serve in foreground; worker is not started in foreground mode
+        # (use a separate terminal or `rka worker` in another shell).
+        os.environ.update(env)
+        import uvicorn
+        uvicorn.run(
+            "rka.api.app:create_app",
+            factory=True,
+            host=host,
+            port=port,
+            log_level="info",
+        )
+        return
+
+    # Background mode: start serve + worker as subprocesses
+    click.echo(f"Starting RKA (data: {data_dir})")
+
+    serve_proc = subprocess.Popen(
+        [*rka_module, "serve", "--host", host, "--port", str(port)],
+        env=env,
+        stdout=open(data_dir / "serve.log", "a"),
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    (pid_dir / "serve.pid").write_text(str(serve_proc.pid))
+
+    worker_proc = subprocess.Popen(
+        [*rka_module, "worker"],
+        env=env,
+        stdout=open(data_dir / "worker.log", "a"),
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    (pid_dir / "worker.pid").write_text(str(worker_proc.pid))
+
+    # Wait briefly and check both processes started
+    time.sleep(1.0)
+    for name, proc in [("serve", serve_proc), ("worker", worker_proc)]:
+        if proc.poll() is not None:
+            click.echo(f"❌ {name} exited immediately (code {proc.returncode}). Check {data_dir}/{name}.log")
+            return
+
+    click.echo(f"   Server: http://{host}:{port} (pid {serve_proc.pid})")
+    click.echo(f"   Worker: pid {worker_proc.pid}")
+    click.echo(f"   Logs: {data_dir}/serve.log, {data_dir}/worker.log")
+    click.echo(f"   Stop: rka stop-all")
+
+
+@main.command("stop-all")
+def stop_all():
+    """Stop RKA background processes started by start-all."""
+    import os
+    import signal
+    from rka.config import RKAConfig
+
+    config = RKAConfig()
+    pid_dir = config.data_dir / "pids"
+    if not pid_dir.is_dir():
+        click.echo("No PID files found. Nothing to stop.")
+        return
+
+    stopped = 0
+    for name in ("serve", "worker"):
+        pf = pid_dir / f"{name}.pid"
+        if not pf.exists():
+            continue
+        pid = int(pf.read_text().strip())
+        try:
+            os.kill(pid, signal.SIGTERM)
+            click.echo(f"   Stopped {name} (pid {pid})")
+            stopped += 1
+        except OSError:
+            click.echo(f"   {name} (pid {pid}) already gone")
+        pf.unlink(missing_ok=True)
+
+    if stopped:
+        click.echo(f"Stopped {stopped} process(es).")
+    else:
+        click.echo("No running processes found.")
+
+
 @main.group()
 def bootstrap():
     """Workspace bootstrap — scan and ingest research files."""

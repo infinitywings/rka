@@ -1,0 +1,110 @@
+schema_version: v1
+id: IEEE-SP
+name: IEEE Symposium on Security & Privacy
+kind: conference
+domain: cs-security
+status: active
+pin_year: 2025
+
+submission:
+  page_limit_main: 13
+  page_limit_camera_ready: null
+  references_counted: false
+  appendix_counted: false
+  appendix_limit: null
+  has_required_checklist: false
+  anonymization: required_pre_camera_ready
+
+format:
+  template_id: ieeetran
+  engine_default: pdflatex
+  engines_supported: [pdflatex, lualatex, xelatex]
+  citation_style: numeric-cite-order
+  bibliography_style: numeric-cite-order
+
+structure:
+  required_sections:
+    - Abstract
+    - Introduction
+    - Background and Related Work
+    - Threat Model
+    - Method
+    - Evaluation
+    - Conclusion
+    - References
+  optional_sections:
+    - Implementation
+    - Discussion
+    - Limitations
+    - Coordinated disclosure timeline
+  appendix_sections:
+    - Formal proofs
+    - Additional evaluation results
+    - Source-code snippets
+  section_order:
+    - Introduction
+    - Background and Related Work
+    - Threat Model
+    - Method
+    - Implementation
+    - Evaluation
+    - Discussion
+    - Limitations
+    - Conclusion
+    - References
+  abstract_word_min: 150
+  abstract_word_target: 200
+  abstract_word_max: 250
+
+tone:
+  voice: first-person-plural
+  hedging: moderate
+  marketing_language: discouraged
+  math_density: high
+  numerical_claims_dominate: true
+  ablation_studies_expected: false
+  multi_seed_required: false
+  reproducibility_floor: high
+
+review_dimensions:
+  - {name: technical_soundness, weight: high}
+  - {name: novelty, weight: high}
+  - {name: threat_model_clarity, weight: high}
+  - {name: evaluation_rigor, weight: high}
+  - {name: practical_impact, weight: medium}
+
+forbidden_constructions:
+  - pattern: "we propose a novel"
+    reason: "overused since ~2020; IEEE-SP reviewers flag"
+    severity: warn
+  - pattern: "groundbreaking"
+    reason: "marketing language; IEEE-CS culture rejects"
+    severity: warn
+  - pattern: "secure"
+    reason: "requires formal definition or specific attack-class bounds"
+    severity: warn
+  - pattern: "robust"
+    reason: "requires operational definition (specific threat / bound)"
+    severity: warn
+
+sample_corpus:
+  query_method: openalex
+  filter_template: "primary_location.source.id:S<TBD>,publication_year:{year}"
+  recommended_year_range: [2024, 2025]
+  diversity_topics:
+    - applied_cryptography
+    - web_security
+    - ml_security
+    - formal_verification
+    - side_channel_analysis
+  rka_tag: "venue-sample:IEEE-SP"
+
+cfp:
+  primary_url: https://www.ieee-security.org/TC/SP2025/
+  author_guide_url: https://www.computer.org/publications/author-resources
+  checklist_url: null
+  last_verified: 2026-05-26
+
+provenance:
+  schema_origin: dec_01KS2S22VV5P5SWWXNBXQDHMGX
+  last_updated: 2026-05-26

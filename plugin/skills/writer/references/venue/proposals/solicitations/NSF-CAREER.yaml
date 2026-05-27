@@ -1,0 +1,66 @@
+schema_version: v1
+id: NSF-CAREER
+name: NSF Faculty Early Career Development Program (CAREER)
+kind: proposal
+domain: proposal
+status: active
+
+# CAREER inherits the full NSF PAPPG baseline (cover sheet, biosketches,
+# budget, DMP, mentoring plan, IM + BI required, etc.) and overrides
+# only the slots where CAREER deviates from a generic PAPPG submission.
+# Loader applies merge_inheritance: scalar fields here win; lists here
+# replace the base entirely (delta semantics, not extension).
+#
+# Reference: NSF 25-XXX CAREER solicitation (current solicitation:
+# https://www.nsf.gov/funding/opportunities/career-faculty-early-career-development-program).
+inherits_from: NSF-PAPPG
+
+submission:
+  # CAREER caps the Project Description at 15 pages -- same as PAPPG
+  # baseline, but the CAREER solicitation requires that the
+  # "Description of the proposed research and education activities"
+  # AND "an integrated plan that describes how research and education
+  # activities are integrated with one another" both fit inside that
+  # cap.
+  page_limit_main: 15
+  references_counted: false
+  has_required_checklist: true
+  anonymization: none
+
+structure:
+  # CAREER adds the Department Letter requirement and explicitly calls
+  # out the integrated research-and-education plan as a required
+  # component inside the Project Description.
+  required_sections:
+    - Cover Sheet
+    - Project Summary
+    - Project Description
+    - Intellectual Merit
+    - Broader Impacts
+    - Integrated Research and Education Plan
+    - References Cited
+    - Biographical Sketches
+    - Budget and Budget Justification
+    - Current and Pending Support
+    - Facilities, Equipment, and Other Resources
+    - Data Management and Sharing Plan
+    - Department Letter
+
+review_dimensions:
+  # CAREER panels evaluate intellectual merit and broader impacts via
+  # the integrated research-and-education plan. Heavier weight on
+  # education activities + early-career trajectory than a generic
+  # PAPPG submission.
+  - {name: intellectual_merit, weight: high}
+  - {name: broader_impacts, weight: high}
+  - {name: integration_of_research_and_education, weight: high}
+  - {name: career_development_trajectory, weight: high}
+  - {name: clarity, weight: medium}
+
+cfp:
+  primary_url: https://www.nsf.gov/funding/opportunities/career-faculty-early-career-development-program
+  last_verified: 2026-05-27
+
+provenance:
+  schema_origin: phase-W4-NSF-CAREER-solicitation-demo
+  last_updated: 2026-05-27
