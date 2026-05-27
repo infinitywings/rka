@@ -1,0 +1,33 @@
+schema_version: v1
+id: PLDI
+name: ACM SIGPLAN Conference on Programming Language Design and Implementation
+kind: conference
+domain: cs-pl
+status: active
+
+submission:
+  page_limit_main: 25
+  references_counted: true
+  anonymization: required
+
+format:
+  engine_default: pdflatex
+  engines_supported: [pdflatex, lualatex, xelatex]
+  citation_style: numeric-cite-order
+
+tone:
+  voice: first-person-plural
+  hedging: moderate
+  marketing_language: discouraged
+  math_density: high
+  numerical_claims_dominate: false
+  ablation_studies_expected: false
+  multi_seed_required: false
+  reproducibility_floor: moderate
+
+cfp:
+  primary_url: https://pldi.sigplan.org/
+
+provenance:
+  schema_origin: phase-W3-bulk-import
+  last_updated: 2026-05-27
