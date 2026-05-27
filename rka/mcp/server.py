@@ -2286,8 +2286,14 @@ async def rka_search_semantic_scholar(
     if year_min:
         params["year"] = f"{year_min}-"
 
+    import os
+    headers: dict[str, str] = {}
+    s2_key = os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
+    if s2_key:
+        headers["x-api-key"] = s2_key
+
     try:
-        async with hx.AsyncClient(timeout=15.0) as client:
+        async with hx.AsyncClient(timeout=15.0, headers=headers) as client:
             r = await client.get(
                 "https://api.semanticscholar.org/graph/v1/paper/search",
                 params=params,
