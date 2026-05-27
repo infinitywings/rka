@@ -1,0 +1,34 @@
+schema_version: v1
+id: CSCW
+name: ACM Conference on Computer-Supported Cooperative Work and Social Computing
+kind: conference
+domain: cs-hci
+status: active
+
+submission:
+  page_limit_main: 25
+  references_counted: false
+  anonymization: required
+
+format:
+  engine_default: pdflatex
+  engines_supported: [pdflatex, lualatex, xelatex]
+  citation_style: name-year
+  bibliography_style: name-year
+
+tone:
+  voice: first-person-plural
+  hedging: moderate
+  marketing_language: neutral
+  math_density: low
+  numerical_claims_dominate: true
+  ablation_studies_expected: false
+  multi_seed_required: false
+  reproducibility_floor: moderate
+
+cfp:
+  primary_url: https://cscw.acm.org/
+
+provenance:
+  schema_origin: phase-W3-bulk-import
+  last_updated: 2026-05-27

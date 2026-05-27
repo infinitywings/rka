@@ -44,10 +44,15 @@ SCHEMA_VERSION = "v1"
 
 KIND_VALUES = ("conference", "journal", "proposal")
 DOMAIN_VALUES = (
+    # Computer science families (Phase W1 + W3 expansion)
     "cs-ml", "cs-systems", "cs-security", "cs-hci", "cs-pl",
     "cs-db", "cs-net", "cs-arch", "cs-se",
+    "cs-nlp", "cs-cv", "cs-ir", "cs-ai", "cs-web",
+    # General-science journals
     "sci-general",
+    # FT50 business journals (narrowed scope: accounting, finance, management)
     "acct", "fin", "mgmt",
+    # Funding proposals (Phase W4)
     "proposal",
 )
 STATUS_VALUES = ("active", "deprecated", "year-specific")
