@@ -2483,54 +2483,99 @@ async def rka_scan_workspace(
     max_bytes = int(max_file_size_mb * 1024 * 1024)
     caps = detect_capabilities()
 
-    def _walk_and_classify() -> list[dict]:
-        files: list[dict] = []
-        for p in sorted(root.rglob("*")):
-            if not p.is_file():
-                continue
-            if is_ignored(p, root, ignores):
-                continue
-            try:
-                size = p.stat().st_size
-            except OSError:
-                continue
-            if size > max_bytes:
-                continue
-            ext = p.suffix.lower()
-            category = classify_extension(ext)
-            target = extension_to_target(ext)
-            rel = str(p.relative_to(root))
-            preview = None
-            content_hint = "general"
-            proposed_type = "finding"
-            if category.value not in ("pdf", "data", "unknown"):
-                preview = safe_read_text(p, capabilities=caps, max_chars=500)
-                if preview:
-                    hint = detect_content_hint(preview)
-                    content_hint = hint.value
-                    proposed_type = hint_to_type(hint)
-            elif category.value == "pdf":
-                preview = extract_pdf_preview(p, caps)
-            try:
-                fhash = hash_file(p)
-            except OSError:
-                fhash = ""
-            files.append({
-                "relative_path": rel,
-                "filename": p.name,
-                "extension": ext,
-                "size_bytes": size,
-                "file_hash": fhash,
-                "content_preview": (preview or "")[:500] if preview else None,
-                "category": category.value,
-                "content_hint": content_hint,
-                "ingestion_target": target.value,
-                "proposed_type": proposed_type,
-                "proposed_tags": [],
-            })
-        return files
+    import os as _os
+    import time as _time
 
-    all_host_files = await asyncio.to_thread(_walk_and_classify)
+    WALK_TIMEOUT_SECONDS = 30
+    MAX_WALK_FILES = 2000
+
+    def _walk_and_classify() -> tuple[list[dict], bool, str]:
+        """Walk + classify with a timeout and file cap.
+
+        Uses os.walk with in-place directory pruning (skips ignored
+        dirs before descending) for better performance on slow
+        filesystems (exFAT, network mounts).
+
+        Returns (files, timed_out, timeout_reason).
+        """
+        files: list[dict] = []
+        timed_out = False
+        timeout_reason = ""
+        t0 = _time.monotonic()
+        ext_ignores = {pat[1:] for pat in ignores if pat.startswith("*.")}
+
+        for dirpath, dirnames, filenames in _os.walk(root):
+            # Prune ignored directories before descending.
+            dirnames[:] = sorted(
+                d for d in dirnames
+                if d not in ignores and not d.startswith(".")
+            )
+            if _time.monotonic() - t0 > WALK_TIMEOUT_SECONDS:
+                timed_out = True
+                timeout_reason = (
+                    f"Walk timed out after {WALK_TIMEOUT_SECONDS}s "
+                    f"({len(files)} files found so far). The filesystem "
+                    f"may be slow (exFAT/network). Try scanning a specific "
+                    f"subdirectory instead of the root."
+                )
+                break
+            dp = Path(dirpath)
+            for fname in sorted(filenames):
+                if len(files) >= MAX_WALK_FILES:
+                    timed_out = True
+                    timeout_reason = (
+                        f"Stopped after {MAX_WALK_FILES} files. Use "
+                        f"ignore_patterns or scan a subdirectory."
+                    )
+                    break
+                ext = Path(fname).suffix.lower()
+                if ext and ext[1:] in ext_ignores:
+                    continue
+                if fname in ignores or fname.startswith("."):
+                    continue
+                p = dp / fname
+                try:
+                    size = p.stat().st_size
+                except OSError:
+                    continue
+                if size > max_bytes:
+                    continue
+                category = classify_extension(ext)
+                target = extension_to_target(ext)
+                rel = str(p.relative_to(root))
+                preview = None
+                content_hint = "general"
+                proposed_type = "finding"
+                if category.value not in ("pdf", "data", "unknown"):
+                    preview = safe_read_text(p, capabilities=caps, max_chars=500)
+                    if preview:
+                        hint = detect_content_hint(preview)
+                        content_hint = hint.value
+                        proposed_type = hint_to_type(hint)
+                elif category.value == "pdf":
+                    preview = extract_pdf_preview(p, caps)
+                try:
+                    fhash = hash_file(p)
+                except OSError:
+                    fhash = ""
+                files.append({
+                    "relative_path": rel,
+                    "filename": fname,
+                    "extension": ext,
+                    "size_bytes": size,
+                    "file_hash": fhash,
+                    "content_preview": (preview or "")[:500] if preview else None,
+                    "category": category.value,
+                    "content_hint": content_hint,
+                    "ingestion_target": target.value,
+                    "proposed_type": proposed_type,
+                    "proposed_tags": [],
+                })
+            if timed_out:
+                break
+        return files, timed_out, timeout_reason
+
+    all_host_files, walk_timed_out, walk_timeout_reason = await asyncio.to_thread(_walk_and_classify)
 
     # Cap files sent to the API to avoid >1MB payloads. The summary
     # always reports the total count; only the first max_scan_files
@@ -2568,6 +2613,8 @@ async def rka_scan_workspace(
         f"   Total size: {total_size / 1024 / 1024:.1f} MB",
     ]
 
+    if walk_timed_out:
+        lines.append(f"\n   WARNING: {walk_timeout_reason}")
     if truncated:
         lines.append(
             f"\n   NOTE: {len(all_host_files) - MAX_SCAN_FILES} files not shown. "
@@ -2647,54 +2694,73 @@ async def rka_bootstrap_workspace(
     if not root.is_dir():
         return f"Error: {folder_path} is not a directory or does not exist."
 
+    import os as _os
+    import time as _time
+
     ignores = set(DEFAULT_IGNORES)
     max_bytes = int(50.0 * 1024 * 1024)
     caps = detect_capabilities()
     skip_set = set(skip_files or [])
 
+    WALK_TIMEOUT_SECONDS = 30
+    MAX_WALK_FILES = 2000
+
     def _walk_and_classify() -> list[dict]:
         files: list[dict] = []
-        for p in sorted(root.rglob("*")):
-            if not p.is_file():
-                continue
-            if is_ignored(p, root, ignores):
-                continue
-            rel = str(p.relative_to(root))
-            if rel in skip_set:
-                continue
-            try:
-                size = p.stat().st_size
-            except OSError:
-                continue
-            if size > max_bytes:
-                continue
-            ext = p.suffix.lower()
-            category = classify_extension(ext)
-            target = extension_to_target(ext)
-            preview = None
-            content_hint = "general"
-            proposed_type = "finding"
-            if category.value not in ("pdf", "data", "unknown"):
-                preview = safe_read_text(p, capabilities=caps, max_chars=500)
-                if preview:
-                    hint = detect_content_hint(preview)
-                    content_hint = hint.value
-                    proposed_type = hint_to_type(hint)
-            try:
-                fhash = hash_file(p)
-            except OSError:
-                fhash = ""
-            files.append({
-                "relative_path": rel,
-                "filename": p.name,
-                "extension": ext,
-                "size_bytes": size,
-                "file_hash": fhash,
-                "content_preview": (preview or "")[:500] if preview else None,
-                "category": category.value,
-                "content_hint": content_hint,
-                "ingestion_target": target.value,
-                "proposed_type": proposed_type,
+        t0 = _time.monotonic()
+        ext_ignores = {pat[1:] for pat in ignores if pat.startswith("*.")}
+        for dirpath, dirnames, filenames in _os.walk(root):
+            dirnames[:] = sorted(
+                d for d in dirnames
+                if d not in ignores and not d.startswith(".")
+            )
+            if _time.monotonic() - t0 > WALK_TIMEOUT_SECONDS or len(files) >= MAX_WALK_FILES:
+                break
+            dp = Path(dirpath)
+            for fname in sorted(filenames):
+                if len(files) >= MAX_WALK_FILES:
+                    break
+                ext = Path(fname).suffix.lower()
+                if ext and ext[1:] in ext_ignores:
+                    continue
+                if fname in ignores or fname.startswith("."):
+                    continue
+                p = dp / fname
+                rel = str(p.relative_to(root))
+                if rel in skip_set:
+                    continue
+                try:
+                    size = p.stat().st_size
+                except OSError:
+                    continue
+                if size > max_bytes:
+                    continue
+                category = classify_extension(ext)
+                target = extension_to_target(ext)
+                preview = None
+                content_hint = "general"
+                proposed_type = "finding"
+                if category.value not in ("pdf", "data", "unknown"):
+                    preview = safe_read_text(p, capabilities=caps, max_chars=500)
+                    if preview:
+                        hint = detect_content_hint(preview)
+                        content_hint = hint.value
+                        proposed_type = hint_to_type(hint)
+                try:
+                    fhash = hash_file(p)
+                except OSError:
+                    fhash = ""
+                files.append({
+                    "relative_path": rel,
+                    "filename": fname,
+                    "extension": ext,
+                    "size_bytes": size,
+                    "file_hash": fhash,
+                    "content_preview": (preview or "")[:500] if preview else None,
+                    "category": category.value,
+                    "content_hint": content_hint,
+                    "ingestion_target": target.value,
+                    "proposed_type": proposed_type,
                 "proposed_tags": [],
             })
         return files
