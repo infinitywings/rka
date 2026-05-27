@@ -22,7 +22,7 @@ Once per project, before any missions run. Builds the project's tool
 manifest (`~/rka-projects/{project_id}/tools.json`) + a credentials
 template. Three PI interrupts:
 
-4. **pi_onboarding_topic** — PI provides topic, field, venue
+4. **pi_onboarding_topic** — PI provides topic, field, venue, keywords, **workspace path**
 5. **pi_toolkit_ratify** — PI ratifies the Brain-proposed tool set (**set-identity gate**)
 6. **pi_credentials_ready** — PI signals they've edited the `.env`; server probes each API
 7. **pi_extend_toolkit** — mid-mission: PI ratifies an added tool (Phase D6; defer if not in registry yet)
@@ -216,8 +216,20 @@ immediately with the first parked interrupt (`pi_onboarding_topic`).
 chat dialog (NOT AskUserQuestion) since the PI types a paragraph, not
 picks from a list:
 
-> "Tell me about the project — a 1-2 sentence summary, the research
-> field, target venue, and 3-5 keywords."
+> "Tell me about the project:
+> 1. A 1-2 sentence summary
+> 2. The research field
+> 3. Target venue (conference/journal)
+> 4. 3-5 keywords
+> 5. **Workspace path** — where is your project folder on disk?
+>    (e.g., `/Volumes/FuSpace/Projects/my-project` or `~/Research/my-project`).
+>    If you don't have one yet, create it first and give me the path."
+
+**IMPORTANT**: always ask for the workspace path. The orchestrator
+does NOT create directories or write files to the host filesystem.
+The PI manages their own workspace. Downstream steps
+(`pi_credentials_ready`) will reference this path when telling the PI
+where to save the tools.json and .env files.
 
 Then call `orchestrator_correct(interrupt_id, response_text=<their text>)`
 because the response carries content the Brain reads. (Even though

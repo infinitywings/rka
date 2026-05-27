@@ -1267,26 +1267,46 @@ def pi_onboarding_topic(
         "type": "pi_onboarding_topic",
         "title": "PI topic elicitation — onboard a new project",
         "prompt": (
-            "Tell me about the project: a 1-2 sentence summary, the "
-            "research field, target venue (conference/journal), and "
-            "3-5 keywords. Your response is captured as the project's "
-            "topic_metadata and drives tool-discovery in the next step."
+            "Tell me about the project:\n"
+            "  1. A 1-2 sentence summary\n"
+            "  2. The research field\n"
+            "  3. Target venue (conference/journal)\n"
+            "  4. 3-5 keywords\n"
+            "  5. **Workspace path** — the absolute path to your existing "
+            "project folder on disk (e.g., /Volumes/FuSpace/Projects/my-project "
+            "or ~/Research/my-project). If you don't have one yet, tell me "
+            "where you'd like it and create the directory yourself.\n\n"
+            "Your response drives tool-discovery in the next step."
         ),
         "items": [],
         "total_items": 0,
     }
     pi_response = interrupt_fn(payload)
 
-    # The PI's response is captured as-is into a brain-readable topic
-    # field — the orchestrator-pi skill instructs Claude-the-assistant
-    # to structure the response into {summary, research_field, venue,
-    # keywords} when calling orchestrator_correct, OR to pass through
-    # verbatim text when calling orchestrator_accept. Brain's
-    # research_toolkit_node tolerates partial data.
     response_str = str(pi_response)
+
+    # Extract workspace_path if the PI included one in their response.
+    # Look for an absolute path (starts with / or ~/) on a line that
+    # mentions "workspace" or "path" or "folder", or just any line
+    # that looks like an absolute path.
+    import re
+    workspace_path = ""
+    for line in response_str.splitlines():
+        # Match lines with absolute paths
+        m = re.search(r'(?:^|[\s:])(/[A-Za-z][^\s,;]*|~/[^\s,;]*)', line)
+        if m:
+            candidate = m.group(1).strip().rstrip(".")
+            # Prefer lines that mention workspace/path/folder/directory
+            if any(kw in line.lower() for kw in ("workspace", "path", "folder", "directory", "located")):
+                workspace_path = candidate
+                break
+            # Fall back to first absolute path found
+            if not workspace_path:
+                workspace_path = candidate
+
     topic = {"summary": response_str, "research_field": None, "venue": None, "keywords": []}
 
-    return {
+    update: dict[str, Any] = {
         "current_phase": "init",
         "current_node": "pi_onboarding_topic",
         "topic_metadata": topic,
@@ -1299,6 +1319,9 @@ def pi_onboarding_topic(
             )
         ],
     }
+    if workspace_path:
+        update["workspace_path"] = workspace_path
+    return update
 
 
 # ---------------------------------------------------------------------------
