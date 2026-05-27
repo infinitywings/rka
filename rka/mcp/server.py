@@ -2457,25 +2457,89 @@ async def rka_scan_workspace(
 ) -> str:
     """Scan a workspace folder and preview what would be ingested.
 
-    Classifies files by extension + content heuristics (+ optional LLM).
-    Returns a manifest showing each file's category, proposed type, and tags.
-    Use this to review before running rka_bootstrap_workspace.
+    File reading happens on the HOST (this MCP binary runs outside
+    Docker) so the daemon doesn't need bind-mount access. Classification
+    uses the shared classify.py module (no DB, no LLM, no network).
 
     Args:
         folder_path: Absolute path to the workspace folder
         ignore_patterns: Additional patterns to ignore (e.g. ["*.log", "drafts"])
         max_file_size_mb: Skip files larger than this (default: 50MB)
-        use_llm: Use local LLM for smarter classification when available (default: true)
+        use_llm: Ignored in the host-side path (LLM classification deferred to ingest)
     """
+    import asyncio
+    from rka.services.classify import (
+        classify_extension, detect_capabilities, detect_content_hint,
+        extension_to_target, hash_file, hint_to_type, is_ignored,
+        safe_read_text, extract_pdf_preview, DEFAULT_IGNORES,
+    )
+
+    root = Path(folder_path).resolve()
+    if not root.is_dir():
+        return f"Error: {folder_path} is not a directory or does not exist."
+
+    ignores = set(DEFAULT_IGNORES)
+    ignores.update(ignore_patterns or [])
+    max_bytes = int(max_file_size_mb * 1024 * 1024)
+    caps = detect_capabilities()
+
+    def _walk_and_classify() -> list[dict]:
+        files: list[dict] = []
+        for p in sorted(root.rglob("*")):
+            if not p.is_file():
+                continue
+            if is_ignored(p, root, ignores):
+                continue
+            try:
+                size = p.stat().st_size
+            except OSError:
+                continue
+            if size > max_bytes:
+                continue
+            ext = p.suffix.lower()
+            category = classify_extension(ext)
+            target = extension_to_target(ext)
+            rel = str(p.relative_to(root))
+            preview = None
+            content_hint = "general"
+            proposed_type = "finding"
+            if category.value not in ("pdf", "data", "unknown"):
+                preview = safe_read_text(p, capabilities=caps, max_chars=500)
+                if preview:
+                    hint = detect_content_hint(preview)
+                    content_hint = hint.value
+                    proposed_type = hint_to_type(hint)
+            elif category.value == "pdf":
+                preview = extract_pdf_preview(p, caps)
+            try:
+                fhash = hash_file(p)
+            except OSError:
+                fhash = ""
+            files.append({
+                "relative_path": rel,
+                "filename": p.name,
+                "extension": ext,
+                "size_bytes": size,
+                "file_hash": fhash,
+                "content_preview": (preview or "")[:500] if preview else None,
+                "category": category.value,
+                "content_hint": content_hint,
+                "ingestion_target": target.value,
+                "proposed_type": proposed_type,
+                "proposed_tags": [],
+            })
+        return files
+
+    host_files = await asyncio.to_thread(_walk_and_classify)
+
     async with _client() as c:
         body = {
-            "folder_path": folder_path,
-            "ignore_patterns": ignore_patterns or [],
-            "include_preview": True,
-            "max_file_size_mb": max_file_size_mb,
-            "use_llm": use_llm,
+            "root_path": str(root),
+            "files": host_files,
+            "total_files_found": len(host_files),
+            "ignore_patterns": list(ignores),
         }
-        r = await c.post("/api/workspace/scan", json=body, timeout=120.0)
+        r = await c.post("/api/workspace/scan/from-host", json=body, timeout=120.0)
         _raise_with_detail(r)
         data = r.json()
 
@@ -2541,44 +2605,199 @@ async def rka_bootstrap_workspace(
 ) -> str:
     """One-shot workspace bootstrap: scan + ingest all files in a folder.
 
-    This is the primary tool for quickly bootstrapping a knowledge base.
-    Scans the folder, classifies files, and ingests them into RKA.
-    After completion, use rka_review_bootstrap to get a summary for reorganization.
+    File reading happens on the HOST (this MCP binary runs outside
+    Docker). Each file's content is sent individually to the REST API
+    for DB storage, so the daemon never needs bind-mount access.
 
     Args:
         folder_path: Absolute path to the workspace folder
         phase: Research phase to assign to all entries
         override_tags: Tags to add to all ingested entries
         skip_files: Relative paths of files to skip
-        use_llm: Use local LLM for classification (default: true)
+        use_llm: Ignored in the host-side path (LLM classification deferred)
         dry_run: Preview what would be created without actually ingesting
     """
-    # Step 1: Scan
+    import asyncio
+    from rka.services.classify import (
+        classify_extension, detect_capabilities, detect_content_hint,
+        extension_to_target, hash_file, hint_to_type, is_ignored,
+        safe_read_text, extract_pdf_metadata_raw, DEFAULT_IGNORES,
+    )
+
+    # Step 1: Host-side scan (same logic as rka_scan_workspace)
+    root = Path(folder_path).resolve()
+    if not root.is_dir():
+        return f"Error: {folder_path} is not a directory or does not exist."
+
+    ignores = set(DEFAULT_IGNORES)
+    max_bytes = int(50.0 * 1024 * 1024)
+    caps = detect_capabilities()
+    skip_set = set(skip_files or [])
+
+    def _walk_and_classify() -> list[dict]:
+        files: list[dict] = []
+        for p in sorted(root.rglob("*")):
+            if not p.is_file():
+                continue
+            if is_ignored(p, root, ignores):
+                continue
+            rel = str(p.relative_to(root))
+            if rel in skip_set:
+                continue
+            try:
+                size = p.stat().st_size
+            except OSError:
+                continue
+            if size > max_bytes:
+                continue
+            ext = p.suffix.lower()
+            category = classify_extension(ext)
+            target = extension_to_target(ext)
+            preview = None
+            content_hint = "general"
+            proposed_type = "finding"
+            if category.value not in ("pdf", "data", "unknown"):
+                preview = safe_read_text(p, capabilities=caps, max_chars=500)
+                if preview:
+                    hint = detect_content_hint(preview)
+                    content_hint = hint.value
+                    proposed_type = hint_to_type(hint)
+            try:
+                fhash = hash_file(p)
+            except OSError:
+                fhash = ""
+            files.append({
+                "relative_path": rel,
+                "filename": p.name,
+                "extension": ext,
+                "size_bytes": size,
+                "file_hash": fhash,
+                "content_preview": (preview or "")[:500] if preview else None,
+                "category": category.value,
+                "content_hint": content_hint,
+                "ingestion_target": target.value,
+                "proposed_type": proposed_type,
+                "proposed_tags": [],
+            })
+        return files
+
+    host_files = await asyncio.to_thread(_walk_and_classify)
+
+    # Get a scan manifest from the server (dedup + scan_id)
     async with _client() as c:
-        scan_body = {
-            "folder_path": folder_path,
-            "ignore_patterns": [],
-            "include_preview": True,
-            "max_file_size_mb": 50.0,
-            "use_llm": use_llm,
+        body = {
+            "root_path": str(root),
+            "files": host_files,
+            "total_files_found": len(host_files),
         }
-        r = await c.post("/api/workspace/scan", json=scan_body, timeout=120.0)
+        r = await c.post("/api/workspace/scan/from-host", json=body, timeout=120.0)
         _raise_with_detail(r)
         manifest = r.json()
 
-    # Step 2: Ingest
-    async with _client() as c:
-        ingest_body = {
-            "manifest": manifest,
-            "skip_files": skip_files or [],
-            "override_tags": override_tags or [],
-            "phase": phase,
-            "source": "pi",
-            "dry_run": dry_run,
-        }
-        r = await c.post("/api/workspace/ingest", json=ingest_body, timeout=300.0)
-        _raise_with_detail(r)
-        result = r.json()
+    # Step 2: Host-side file reading + per-file ingest via content API
+    scan_id = manifest.get("scan_id", "")
+    tags = list(override_tags or [])
+    total_processed = 0
+    total_created = 0
+    total_skipped = 0
+    total_errors = 0
+    result_items: list[dict] = []
+
+    for sf in manifest.get("files", []):
+        rel = sf.get("relative_path", "")
+        if sf.get("is_duplicate"):
+            total_skipped += 1
+            continue
+        if sf.get("ingestion_target") == "skip":
+            total_skipped += 1
+            continue
+        total_processed += 1
+        full_path = root / rel
+
+        # Read content on HOST
+        content = ""
+        content_type = "text"
+        metadata: dict = {}
+
+        cat = sf.get("category", "unknown")
+        target = sf.get("ingestion_target", "skip")
+
+        if cat == "pdf":
+            content_type = "pdf_metadata"
+            pdf_meta = await asyncio.to_thread(extract_pdf_metadata_raw, full_path)
+            metadata = pdf_meta or {"title": full_path.stem}
+        elif cat == "bibtex" or target == "import_bibtex":
+            content_type = "bibtex"
+            content = await asyncio.to_thread(
+                lambda: safe_read_text(full_path, capabilities=caps) or ""
+            )
+        elif cat == "code":
+            content_type = "code"
+            content = await asyncio.to_thread(
+                lambda: safe_read_text(full_path, capabilities=caps) or ""
+            )
+        else:
+            content = await asyncio.to_thread(
+                lambda: safe_read_text(full_path, capabilities=caps) or ""
+            )
+
+        if dry_run:
+            result_items.append({
+                "relative_path": rel,
+                "category": cat,
+                "ingestion_target": target,
+                "success": True,
+                "entity_ids": [],
+                "entity_count": 0,
+            })
+            total_created += 1
+            continue
+
+        async with _client() as c:
+            ingest_body = {
+                "scan_id": scan_id,
+                "relative_path": rel,
+                "filename": sf.get("filename", full_path.name),
+                "content": content,
+                "content_type": content_type,
+                "metadata": metadata,
+                "tags": tags,
+                "source": "pi",
+                "phase": phase,
+                "proposed_type": sf.get("proposed_type", "finding"),
+            }
+            try:
+                r = await c.post(
+                    "/api/workspace/ingest/with-content",
+                    json=ingest_body, timeout=60.0,
+                )
+                _raise_with_detail(r)
+                ingest_result = r.json()
+                result_items.append(ingest_result)
+                if ingest_result.get("success"):
+                    total_created += ingest_result.get("entity_count", 1)
+                else:
+                    total_errors += 1
+            except Exception as exc:
+                total_errors += 1
+                result_items.append({
+                    "relative_path": rel,
+                    "category": cat,
+                    "ingestion_target": target,
+                    "success": False,
+                    "error": str(exc)[:200],
+                    "entity_ids": [],
+                    "entity_count": 0,
+                })
+
+    result = {
+        "scan_id": scan_id,
+        "total_processed": total_processed,
+        "total_created": total_created,
+        "total_skipped": total_skipped,
+        "total_errors": total_errors,
+        "results": result_items,
+    }
 
     # Format response
     prefix = "🔍 DRY RUN — " if dry_run else "✅ "

@@ -8,6 +8,20 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _resolve_data_dir() -> Path:
+    """Pick the data directory: env var > Docker /data > ~/.rka."""
+    import os
+    explicit = os.environ.get("RKA_DATA_DIR")
+    if explicit:
+        return Path(explicit)
+    docker_data = Path("/data")
+    if docker_data.is_dir():
+        return docker_data
+    home_data = Path.home() / ".rka"
+    home_data.mkdir(parents=True, exist_ok=True)
+    return home_data
+
+
 class RKAConfig(BaseSettings):
     """Configuration loaded from .env / environment variables."""
 
@@ -21,10 +35,16 @@ class RKAConfig(BaseSettings):
     # Project
     project_dir: Path = Field(default=Path("."), description="Project root directory")
     db_path: Path = Field(default=Path("rka.db"), description="SQLite database path")
-    # Volume mount that survives `docker compose up -d --build`. Houses
-    # `rka.db`, `embedding_config.json`, and other persistent state.
-    # Tests override via `RKAConfig(data_dir=tmp_path)`.
-    data_dir: Path = Field(default=Path("/data"), description="Persistent data directory")
+    # Persistent data directory. Houses `rka.db`, `embedding_config.json`,
+    # and other persistent state. Tests override via `RKAConfig(data_dir=tmp_path)`.
+    # Resolution:
+    #   1. RKA_DATA_DIR env var (explicit override)
+    #   2. /data (if it exists — Docker volume mount)
+    #   3. ~/.rka (Dockerless fallback — created on first use)
+    data_dir: Path = Field(
+        default_factory=lambda: _resolve_data_dir(),
+        description="Persistent data directory",
+    )
 
     # Server
     host: str = Field(default="127.0.0.1", description="API server host")

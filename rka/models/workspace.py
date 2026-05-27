@@ -166,3 +166,42 @@ class BootstrapReview(BaseModel):
     )
     suggestions: list[ReviewSuggestion] = Field(default_factory=list)
     narrative: str | None = None  # LLM-generated overview if available
+
+
+# ---------- Host-side scan models ----------
+
+class HostScannedFile(BaseModel):
+    """A file pre-scanned on the host MCP side."""
+    relative_path: str
+    filename: str
+    extension: str
+    size_bytes: int
+    file_hash: str
+    content_preview: str | None = None
+    category: str  # FileCategory value
+    content_hint: str = "general"  # ContentHint value
+    ingestion_target: str  # IngestionTarget value
+    proposed_type: str = "finding"
+    proposed_tags: list[str] = Field(default_factory=list)
+
+
+class HostScanRequest(BaseModel):
+    """Request body for POST /workspace/scan/from-host."""
+    root_path: str
+    files: list[HostScannedFile]
+    total_files_found: int
+    ignore_patterns: list[str] = Field(default_factory=list)
+
+
+class IngestFileRequest(BaseModel):
+    """Request body for POST /workspace/ingest/with-content -- one file."""
+    scan_id: str
+    relative_path: str
+    filename: str
+    content: str
+    content_type: str  # "text" | "bibtex" | "code" | "pdf_metadata"
+    metadata: dict = Field(default_factory=dict)
+    tags: list[str] = Field(default_factory=list)
+    source: str = "pi"
+    phase: str | None = None
+    proposed_type: str = "finding"
