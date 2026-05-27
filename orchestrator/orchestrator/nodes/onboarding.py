@@ -410,38 +410,31 @@ def _project_name_for_slug(
 def workspace_setup_node(
     state: ResearchWorkflowState, sdk: SDKClient, mcp: MCPClient
 ) -> dict:
-    """O2.1 — Materialize the project workspace on disk.
+    """O2.1 — Validate the PI's workspace path (ask-not-create pattern).
+
+    The orchestrator does NOT create directories on the host filesystem.
+    Instead, this node validates that a workspace path exists and records
+    it in state. The PI provides the path in one of two ways:
+
+      1. Set `workspace_path` in state before this node runs (e.g., via
+         the pi_scope_ratify response: "my workspace is at /path/to/...").
+      2. If workspace_path is empty, the node derives a suggested path
+         from the project slug and emits a checkpoint asking the PI to
+         either create that directory or provide an alternative.
+
+    This eliminates the Docker bind-mount requirement: the orchestrator
+    container never writes to the host filesystem.
 
     Inputs (state):
       - project_id            — RKA project ID (required).
-      - project_slug          — explicit slug, if PI provided one
-                                during O1; otherwise derived.
-      - polished_idea         — used as a fallback source for slug
-                                derivation when RKA project name is
-                                unavailable.
-
-    Side effects:
-      - Creates ``$RKA_WORKSPACE_ROOT/{slug}/`` (default ``$HOME/Research/{slug}/``)
-        with subdirs (data/, code/, notebooks/, manuscripts/, results/, .rka/).
-      - Writes ``.rka/project_id``, ``.rka/workspace.json``, ``README.md``,
-        ``.gitignore`` at mode 0700 (directory) / 0600 (.env file inside .rka/,
-        when later written by O5).
-      - Advances workspace.json's phase tracker to ``o2`` (current sub-phase).
+      - workspace_path        — PI-provided path (if set, validated).
+      - project_slug          — explicit slug, if PI provided one.
+      - polished_idea         — fallback for slug derivation.
 
     State writes:
       - current_node      = "workspace_setup"
-      - current_phase     = "init"
-      - project_slug      — the slug used (locks for downstream nodes).
-      - workspace_path    — absolute path of the workspace root.
-
-    Failure modes:
-      - Missing project_id            → ErrorRecord; no side effect.
-      - Slug derivation produces a value that fails ProjectSlug
-        validation → ErrorRecord (callers can re-run after extending
-        the polished idea or fixing the RKA project name).
-      - Workspace already exists      → checkpoint surfaced to PI with
-        the conflicting path so PI can rename / remove and re-run.
-      - Other IO failures             → ErrorRecord with the OSError detail.
+      - project_slug      — the slug used.
+      - workspace_path    — validated absolute path.
     """
     project_id = state.get("project_id", "")
     if not project_id:
@@ -461,6 +454,42 @@ def workspace_setup_node(
             ],
         }
 
+    # If PI already provided a workspace_path, validate it exists.
+    explicit_path = state.get("workspace_path", "").strip()
+    if explicit_path:
+        from pathlib import Path
+        p = Path(explicit_path)
+        if p.is_dir():
+            # Derive slug from the directory name for downstream use.
+            slug = p.name
+            return {
+                "current_phase": "init",
+                "current_node": "workspace_setup",
+                "project_slug": slug,
+                "workspace_path": str(p.resolve()),
+            }
+        else:
+            chk_id = f"chk_workspace_missing_{int(datetime.now(tz=timezone.utc).timestamp())}"
+            return {
+                "current_phase": "init",
+                "current_node": "workspace_setup",
+                "workspace_path": explicit_path,
+                "checkpoints": [
+                    {
+                        "chk_id": chk_id,
+                        "type": "decision",
+                        "reason": (
+                            f"workspace path '{explicit_path}' does not exist. "
+                            f"Create the directory, then re-run workspace_setup "
+                            f"(the orchestrator does not create directories on "
+                            f"the host filesystem)."
+                        ),
+                        "resolved": False,
+                    }
+                ],
+            }
+
+    # No explicit path: derive a suggestion from the project name/slug.
     explicit_slug = state.get("project_slug", "")
     polished = state.get("polished_idea") or None
 
@@ -489,74 +518,27 @@ def workspace_setup_node(
                 ],
             }
 
-    try:
-        binding = W.create_workspace(
-            slug_candidate, project_id, refuse_if_exists=True
-        )
-    except W.InvalidSlugError as ve:
-        return {
-            "current_phase": "init",
-            "current_node": "workspace_setup",
-            "errors": [
-                {
-                    "node_name": "workspace_setup",
-                    "error_type": "workspace_setup_invalid_slug",
-                    "detail": str(ve),
-                    "timestamp": _now_iso(),
-                }
-            ],
-        }
-    except W.WorkspaceAlreadyExistsError as wae:
-        # Conflict: workspace dir exists. Emit a checkpoint so the PI
-        # can rename the slug or remove the conflicting directory.
-        existing_path = W.project_workspace(slug_candidate)
-        chk_id = f"chk_workspace_conflict_{int(datetime.now(tz=timezone.utc).timestamp())}"
-        return {
-            "current_phase": "init",
-            "current_node": "workspace_setup",
-            "project_slug": slug_candidate,
-            "workspace_path": str(existing_path),
-            "checkpoints": [
-                {
-                    "chk_id": chk_id,
-                    "type": "decision",
-                    "reason": (
-                        f"workspace conflict: '{existing_path}' already exists. "
-                        f"PI must rename the slug (set state['project_slug']) "
-                        f"or remove the directory and re-run workspace_setup. "
-                        f"Detail: {wae}"
-                    ),
-                    "resolved": False,
-                }
-            ],
-        }
-    except OSError as oe:
-        return {
-            "current_phase": "init",
-            "current_node": "workspace_setup",
-            "errors": [
-                {
-                    "node_name": "workspace_setup",
-                    "error_type": "workspace_setup_io_failed",
-                    "detail": f"{type(oe).__name__}: {oe}",
-                    "timestamp": _now_iso(),
-                }
-            ],
-        }
-
-    # Advance the workspace phase to 'o2' (entering deep research).
-    try:
-        W.advance_phase(slug_candidate, "o2", note="workspace created")
-    except W.WorkspaceError:
-        # Non-fatal: workspace exists, just couldn't bump phase. The
-        # next sub-phase can update phase tracking itself.
-        pass
-
+    # Suggest a path and emit a checkpoint so the PI creates it.
+    suggested_path = W.project_workspace(slug_candidate)
+    chk_id = f"chk_workspace_needed_{int(datetime.now(tz=timezone.utc).timestamp())}"
     return {
         "current_phase": "init",
         "current_node": "workspace_setup",
         "project_slug": slug_candidate,
-        "workspace_path": str(binding.workspace_path),
+        "workspace_path": str(suggested_path),
+        "checkpoints": [
+            {
+                "chk_id": chk_id,
+                "type": "decision",
+                "reason": (
+                    f"Create your project workspace directory, then provide "
+                    f"the path. Suggested: '{suggested_path}'. You can also "
+                    f"use any existing folder. Set workspace_path in state "
+                    f"and re-run workspace_setup."
+                ),
+                "resolved": False,
+            }
+        ],
     }
 
 
@@ -1725,16 +1707,56 @@ def draft_manifest_node(
         topic=topic,
         tools=tool_decls,
     )
-    path = M.save_manifest(manifest)
+    manifest_hash = manifest.compute_hash()
     # Collect every secret declared across all ratified tools.
     all_secrets = [s for t in tool_decls for s in t.secrets]
-    M.write_env_template(project_id, all_secrets)
+
+    # Emit the manifest + env template as structured data on
+    # decisions_to_present. The PI (or their Claude session) writes the
+    # files locally — the orchestrator does NOT write to the host
+    # filesystem. This eliminates the Docker bind-mount requirement.
+    manifest_json = manifest.to_dict()
+    env_template_lines = []
+    for s in all_secrets:
+        env_template_lines.append(f"# {s.name} ({s.criticality})")
+        if s.description:
+            for line in s.description.strip().splitlines():
+                env_template_lines.append(f"#   {line}")
+        env_template_lines.append(f"{s.name}=<paste-here>")
+        env_template_lines.append("")
+    env_template = "\n".join(env_template_lines)
+
+    workspace_path = state.get("workspace_path", "")
+    suggested_manifest_path = (
+        f"{workspace_path}/.rka/tools.json" if workspace_path
+        else f"~/rka-projects/{project_id}/tools.json"
+    )
+    suggested_env_path = (
+        f"{workspace_path}/.rka/.env" if workspace_path
+        else f"~/rka-projects/{project_id}/.env"
+    )
+
+    items = [
+        {
+            "source_node": "draft_manifest",
+            "type": "manifest",
+            "suggested_path": suggested_manifest_path,
+            "content": manifest_json,
+        },
+        {
+            "source_node": "draft_manifest",
+            "type": "env_template",
+            "suggested_path": suggested_env_path,
+            "content": env_template,
+        },
+    ]
 
     return {
         "current_phase": "init",
         "current_node": "draft_manifest",
-        "draft_manifest_path": str(path),
-        "draft_manifest_hash": manifest.compute_hash(),
+        "draft_manifest_path": suggested_manifest_path,
+        "draft_manifest_hash": manifest_hash,
+        "decisions_to_present": items,
     }
 
 
@@ -1823,7 +1845,22 @@ def finalize_node(
             ],
         }
 
-    manifest = M.load_manifest(project_id)
+    # Reconstruct the manifest from state (draft_manifest_node emits
+    # the manifest dict on decisions_to_present instead of writing to
+    # disk). This eliminates the Docker bind-mount requirement.
+    pending = state.get("decisions_to_present") or []
+    manifest_items = [d for d in pending if d.get("source_node") == "draft_manifest" and d.get("type") == "manifest"]
+    if manifest_items:
+        manifest_dict = manifest_items[0].get("content", {})
+        try:
+            manifest = M.ToolManifest.from_dict(manifest_dict)
+        except Exception:
+            manifest = None
+    else:
+        # Fallback: try loading from disk (backward compat for
+        # pre-refactoring runs where draft_manifest wrote the file).
+        manifest = M.load_manifest(project_id)
+
     if manifest is None:
         return {
             "current_phase": "init",
@@ -1833,7 +1870,7 @@ def finalize_node(
                     "node_name": "finalize",
                     "error_type": "finalize_no_manifest",
                     "detail": (
-                        f"No tools.json found for project {project_id} — "
+                        f"No manifest found for project {project_id} — "
                         "draft_manifest_node must run before finalize_node"
                     ),
                     "timestamp": _now_iso(),
@@ -1841,7 +1878,15 @@ def finalize_node(
             ],
         }
 
-    env_values = M.read_env(project_id)
+    # Credential validation: the .env file lives on the PI's host
+    # filesystem, which the Docker container may not be able to read.
+    # Try reading it (works if bind-mounted); fall back to an empty
+    # dict (credential probe reports "missing" for all keys — the PI
+    # can re-validate locally via their Claude session).
+    try:
+        env_values = M.read_env(project_id)
+    except Exception:
+        env_values = {}
     report = CV.probe_all_secrets(manifest.tools, env_values)
     summary_text = CV.render_credential_report(report)
 
@@ -1894,9 +1939,10 @@ def finalize_node(
         ]
         return update
 
-    # Update the on-disk manifest with the audit_journal_id linkage.
+    # Record the audit linkage. Previously this wrote to disk via
+    # M.save_manifest; now it's captured in state so the PI can
+    # persist locally if needed.
     manifest.audit_journal_id = audit_id
-    M.save_manifest(manifest)
 
     update["finalize_outcome"] = "complete"
     update["audit_journal_id"] = audit_id
