@@ -6,6 +6,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+ZoteroMatchMethod = Literal[
+    "doi", "arxiv_id", "url", "isbn", "title_author_year", "manual"
+]
+
 
 class LiteratureCreate(BaseModel):
     """Create a new literature entry.
@@ -34,6 +38,8 @@ class LiteratureCreate(BaseModel):
     added_by: Literal["brain", "executor", "pi", "import", "web_ui"] = "pi"
     notes: str | None = None
     tags: list[str] = Field(default_factory=list)
+    zotero_item_key: str | None = None
+    zotero_match_method: ZoteroMatchMethod | None = None
 
 
 class LiteratureUpdate(BaseModel):
@@ -62,6 +68,8 @@ class LiteratureUpdate(BaseModel):
     related_decisions: list[str] | None = None
     notes: str | None = None
     tags: list[str] | None = None
+    zotero_item_key: str | None = None
+    zotero_match_method: ZoteroMatchMethod | None = None
 
 
 class Literature(BaseModel):
@@ -87,5 +95,7 @@ class Literature(BaseModel):
     notes: str | None = None
     tags: list[str] = Field(default_factory=list)
     enrichment_status: Literal["pending", "ready", "failed"] = "ready"
+    zotero_item_key: str | None = None
+    zotero_match_method: ZoteroMatchMethod | None = None
     created_at: str | None = None
     updated_at: str | None = None
