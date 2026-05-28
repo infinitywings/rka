@@ -259,9 +259,24 @@ def create_app(
 
     @app.get("/projects/{project_id}/manifest")
     async def get_project_manifest(project_id: str, request: Request) -> dict:
-        """Return the project's current effective manifest (baseline +
-        any extensions) as JSON. Useful for the PI session to render
-        the project's tool stack via orchestrator_get_manifest."""
+        """Return the project's current effective manifest as JSON.
+
+        Resolution order:
+          1. project_workspaces.manifest_json in the orchestrator store
+             (set by draft_manifest_node; doesn't depend on host FS)
+          2. Fallback to compose_effective_manifest which reads from
+             {workspace_path}/.rka/tools.json (requires bind mount or
+             host-equivalent path access)
+        """
+        import json
+        store_: ParkedStore = request.app.state.store
+        row = store_.get_project_manifest(project_id)
+        if row and row.get("manifest_json"):
+            try:
+                return json.loads(row["manifest_json"])
+            except json.JSONDecodeError:
+                pass  # corrupted; fall through to disk-based load
+
         from orchestrator import manifest as M
         manifest = M.compose_effective_manifest(project_id)
         if manifest is None:

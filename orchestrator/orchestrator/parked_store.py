@@ -376,19 +376,14 @@ class ParkedStore:
     # -----------------------------------------------------------------
 
     def set_project_workspace(self, project_id: str, workspace_path: str) -> None:
-        """Record the workspace path the PI provided for this project.
-
-        Upsert: if the project already has a workspace_path, it's
-        overwritten. Called by pi_onboarding_topic after the PI provides
-        the path.
-        """
+        """Record the workspace path the PI provided for this project."""
         with self._tx() as c:
             c.execute(
                 """INSERT INTO project_workspaces (project_id, workspace_path)
                    VALUES (?, ?)
                    ON CONFLICT(project_id) DO UPDATE
                      SET workspace_path = excluded.workspace_path,
-                         registered_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')""",
+                         updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')""",
                 (project_id, workspace_path),
             )
 
@@ -399,3 +394,60 @@ class ParkedStore:
             (project_id,),
         ).fetchone()
         return row["workspace_path"] if row else None
+
+    def set_project_manifest(
+        self,
+        project_id: str,
+        manifest_json: str,
+        manifest_hash: str,
+        *,
+        workspace_path: Optional[str] = None,
+    ) -> None:
+        """Persist the project's tool manifest content in the orchestrator
+        store. Called by draft_manifest_node so get_manifest can return
+        the content without depending on host-filesystem access."""
+        with self._tx() as c:
+            if workspace_path:
+                c.execute(
+                    """INSERT INTO project_workspaces
+                         (project_id, workspace_path, manifest_json, manifest_hash)
+                       VALUES (?, ?, ?, ?)
+                       ON CONFLICT(project_id) DO UPDATE
+                         SET workspace_path = excluded.workspace_path,
+                             manifest_json = excluded.manifest_json,
+                             manifest_hash = excluded.manifest_hash,
+                             updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')""",
+                    (project_id, workspace_path, manifest_json, manifest_hash),
+                )
+            else:
+                # Update manifest fields only; workspace_path must already exist.
+                c.execute(
+                    """UPDATE project_workspaces
+                       SET manifest_json = ?, manifest_hash = ?,
+                           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                       WHERE project_id = ?""",
+                    (manifest_json, manifest_hash, project_id),
+                )
+
+    def get_project_manifest(self, project_id: str) -> Optional[dict]:
+        """Return the stored manifest (project_id, workspace_path,
+        manifest_json, manifest_hash, audit_journal_id) for the project,
+        or None if no manifest is registered yet."""
+        row = self._conn.execute(
+            """SELECT project_id, workspace_path, manifest_json, manifest_hash,
+                      audit_journal_id, registered_at, updated_at
+               FROM project_workspaces WHERE project_id = ?""",
+            (project_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def set_project_audit_id(self, project_id: str, audit_journal_id: str) -> None:
+        """Stamp the finalize-time audit journal id onto the manifest record."""
+        with self._tx() as c:
+            c.execute(
+                """UPDATE project_workspaces
+                   SET audit_journal_id = ?,
+                       updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                   WHERE project_id = ?""",
+                (audit_journal_id, project_id),
+            )

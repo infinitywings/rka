@@ -1751,6 +1751,24 @@ def draft_manifest_node(
         },
     ]
 
+    # Persist the manifest to the orchestrator store so get_manifest
+    # can return it without depending on host-filesystem access.
+    try:
+        import json as _json
+        from orchestrator.parked_store import ParkedStore
+        import os as _os
+        db_path = _os.environ.get("ORCHESTRATOR_DB_PATH", "/data/orchestrator.db")
+        store = ParkedStore(db_path)
+        store.set_project_manifest(
+            project_id=project_id,
+            manifest_json=_json.dumps(manifest_json),
+            manifest_hash=manifest_hash,
+            workspace_path=workspace_path or None,
+        )
+        store.close()
+    except Exception:
+        pass  # Non-fatal: state still carries the data
+
     return {
         "current_phase": "init",
         "current_node": "draft_manifest",
