@@ -468,12 +468,11 @@ class ParkedStore:
                 )
 
     def get_project_manifest(self, project_id: str) -> Optional[dict]:
-        """Return the stored manifest (project_id, workspace_path,
-        manifest_json, manifest_hash, audit_journal_id) for the project,
-        or None if no manifest is registered yet."""
+        """Return the stored manifest row for the project, or None."""
         row = self._conn.execute(
             """SELECT project_id, workspace_path, manifest_json, manifest_hash,
-                      audit_journal_id, registered_at, updated_at
+                      audit_journal_id, zotero_collection_key,
+                      zotero_collection_name, registered_at, updated_at
                FROM project_workspaces WHERE project_id = ?""",
             (project_id,),
         ).fetchone()
