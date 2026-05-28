@@ -236,6 +236,12 @@ because the response carries content the Brain reads. (Even though
 this is a "topic input" not a "redirect", the orchestrator's
 correct-channel is the right fit — accept would discard the text.)
 
+After this interrupt resumes, the orchestrator silently does two things with the workspace_path the PI provided:
+1. Persists it to `project_workspaces` so downstream nodes can find the PI's files
+2. Calls Zotero (if `ZOTERO_API_KEY` is configured) to find-or-create a collection named after the workspace folder basename — the project's literature home. The collection key is returned via `orchestrator_get_zotero_collection(project_id)`.
+
+Tell the PI explicitly: "I've created a Zotero collection named `<basename>` in your library. As you find papers for this project via your browser, click the Zotero Connector and save them into that collection — the Brain and Executor will read from there for full-text claim extraction."
+
 **pi_toolkit_ratify** — set-identity ratification (just like
 `pi_decision_select`). **TWO-TAP REQUIRED**: the manifest grants tools
 permanent access to the project's subprocess MCP scope, so ratification

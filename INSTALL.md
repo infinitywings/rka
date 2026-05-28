@@ -27,8 +27,26 @@
 | 4 | **Claude Code extension for VSCode** | Hosts the Executor | VSCode → Extensions → search `Claude Code` → install. Or: `code --install-extension anthropic.claude-code` from a terminal. |
 | 5 | **Python 3** | Required for the cross-platform wrapper script that proxies between Claude and the Docker backend | macOS: ships by default. Windows: [python.org/downloads](https://www.python.org/downloads/) — **check the "Add Python to PATH" box during install**. Linux: `apt install python3` / `dnf install python3`. Verify with `python3 --version` (or `python --version` on Windows). |
 | 6 | **git** | Clones the RKA repo for the Docker compose file | macOS/Linux: built in or via package manager. Windows: [git-scm.com/downloads](https://git-scm.com/downloads). |
+| 7 | **Zotero desktop + Connector** *(recommended)* | Persistent literature library — the AI reads paper full text from here. Zotero Connector captures papers via your institution's authenticated browser session, so the AI inherits your access without you sharing credentials. | Desktop: [zotero.org/download](https://www.zotero.org/download/) (or `brew install --cask zotero`). Connector: [zotero.org/download/connectors](https://www.zotero.org/download/connectors) (Chrome / Safari / Firefox / Edge). |
 
 > **Why two Claude apps?** Brain and Executor are different roles. Brain (in Claude Desktop) reasons about research direction, makes decisions, processes maintenance. Executor (in Claude Code) writes code, runs experiments, picks up missions. They share the same RKA knowledge base, so context survives across roles and sessions.
+
+### Required API keys (one-time, used by every project)
+
+Set these once in `claude_desktop_config.json` env blocks and (if you use the agentic orchestrator) `orchestrator/.env`:
+
+| Key | Source | Why |
+|---|---|---|
+| `SEMANTIC_SCHOLAR_API_KEY` | [semanticscholar.org/product/api](https://www.semanticscholar.org/product/api#api-key-form) | Free; lifts S2 rate limit from 100/5min to 1/sec. Used by the rka MCP, paper-search MCP, and the Writer's reference validator. |
+| `ZOTERO_API_KEY` + `ZOTERO_LIBRARY_ID` | [zotero.org/settings/keys](https://www.zotero.org/settings/keys) | Generate a "Save to Server" + "Full library access" key. Library ID is the 7-digit userID on the same page. Used by zotero-mcp + the orchestrator (to auto-create per-project collections). |
+| `PAPER_SEARCH_MCP_UNPAYWALL_EMAIL` | Your institutional email | Used for rate-limit identification (not authentication). |
+| `CLAUDE_CODE_OAUTH_TOKEN` *(agentic only)* | Run `claude setup-token` on the host | Required for the orchestrator daemon's Claude SDK subprocesses. |
+
+Optional:
+| Key | Use |
+|---|---|
+| `SERPAPI_KEY` | Web search fallback when curated catalogs miss something |
+| `PAPER_SEARCH_MCP_CORE_API_KEY` | Open-access full-text search via CORE |
 
 ---
 

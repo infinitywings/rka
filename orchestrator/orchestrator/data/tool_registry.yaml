@@ -67,8 +67,6 @@ always_on:
     install_hint: bundled via npx
     secrets: []
 
-<<<<<<< Updated upstream
-=======
   - name: paper-search
     type: mcp_stdio
     rationale: |
@@ -97,7 +95,6 @@ always_on:
         criticality: optional
         description: CORE API key (core.ac.uk) for full-text open access search.
 
->>>>>>> Stashed changes
 by_domain:
   # ---- Computer science / ML systems ----
   ml_systems:

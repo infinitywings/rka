@@ -121,11 +121,30 @@ Journal entries get distilled into structured claims during maintenance. Good cl
 
 Confidence ranges:
 - `0.0–0.3` — speculative, needs investigation.
-- `0.3–0.6` — preliminary, first analysis.
+- `0.3–0.6` — preliminary, first analysis (abstract-level, paper-search snippets).
 - `0.6–0.8` — solid evidence, multiple sources.
-- `0.8–1.0` — verified, replicated.
+- `0.8–1.0` — verified, replicated (full-text grounded with quoted evidence).
+
+**Confidence cap without full text**: claims extracted from abstracts or search snippets cap at **0.65**. To exceed that, you need full-text grounding with a direct quote from the paper.
 
 Full procedure with worked examples and cluster-assignment heuristic: `workflows.md` § "Claim Extraction".
+
+## Literature ingestion via Zotero
+
+The PI maintains a Zotero library that holds full-text PDFs captured via the Zotero Connector browser extension (using their institutional SSO/EZproxy access). Each RKA project has its own Zotero **collection** (auto-created during onboarding); the collection key is recorded in `project_workspaces.zotero_collection_key`.
+
+When you need full text of a paper to upgrade a claim past 0.65 confidence:
+
+1. **Check the project's Zotero collection first**:
+   - `orchestrator_get_zotero_collection(project_id)` → returns `{zotero_collection_key, zotero_collection_name}`
+   - `zotero_search(query="<title or author>")` from zotero-mcp, then filter by collection_key
+2. **If found and has full text**: read via `zotero_get_fulltext(item_key=...)`. Extract claims grounded in quoted evidence.
+3. **If found but no PDF attached**: emit a checkpoint asking the PI to use Zotero Connector to attach the PDF.
+4. **If not found in Zotero**: emit a checkpoint asking the PI to capture it. Use this exact prompt template:
+
+   > "I need full text of **[Author, Year, Title]** to extract grounded claims for **[research question / cluster]**. Please find the paper via your browser (UNC SSO/EZproxy), click the Zotero Connector to save it into the collection `**<zotero_collection_name>**`, and tell me when done. Until then, I'll cap the claim confidence at 0.65."
+
+Never skip this step and silently leave claims at 0.5. The "ask PI for full text" pattern is the contract.
 
 ---
 
