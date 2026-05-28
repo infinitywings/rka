@@ -41,7 +41,7 @@ import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Callable, Literal, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -239,17 +239,46 @@ def _now_iso() -> str:
     return datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# Optional resolver — when set, takes precedence over the hardcoded
+# convention. Used to look up the PI-provided workspace_path from the
+# orchestrator's SQLite. Server startup configures this; tests + standalone
+# users get the default $HOME/rka-projects behavior.
+_workspace_path_resolver: Optional[Callable[[str], Optional[str]]] = None
+
+
+def set_workspace_path_resolver(fn: Optional[Callable[[str], Optional[str]]]) -> None:
+    """Install a project_id → workspace_path resolver. Called once at server
+    startup with ParkedStore.get_project_workspace bound."""
+    global _workspace_path_resolver
+    _workspace_path_resolver = fn
+
+
 def workspace_dir(project_id: str, *, root: Optional[Path] = None) -> Path:
     """Resolve the project's workspace directory.
 
-    Default root: `$HOME/rka-projects`. Override via `RKA_PROJECTS_ROOT`
-    env var (useful for tests + container mounts that don't follow the
-    default convention).
+    Resolution order:
+      1. Explicit `root` parameter (highest)
+      2. PI-provided workspace_path via `_workspace_path_resolver`
+         (returns `{workspace_path}/.rka/`)
+      3. `RKA_PROJECTS_ROOT` env var
+      4. `$HOME/rka-projects` (default convention)
+
+    The PI's workspace path takes precedence so manifests + .env files
+    live alongside the PI's research files, not in a separate tree.
     """
-    base = root
-    if base is None:
-        env_root = os.environ.get("RKA_PROJECTS_ROOT")
-        base = Path(env_root) if env_root else (Path.home() / "rka-projects")
+    if root is not None:
+        return Path(root) / project_id
+
+    if _workspace_path_resolver is not None:
+        try:
+            ws = _workspace_path_resolver(project_id)
+            if ws:
+                return Path(ws) / ".rka"
+        except Exception:
+            pass
+
+    env_root = os.environ.get("RKA_PROJECTS_ROOT")
+    base = Path(env_root) if env_root else (Path.home() / "rka-projects")
     return Path(base) / project_id
 
 

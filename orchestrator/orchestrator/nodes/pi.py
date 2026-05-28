@@ -1321,6 +1321,28 @@ def pi_onboarding_topic(
     }
     if workspace_path:
         update["workspace_path"] = workspace_path
+        # Persist to project_workspaces so downstream operations
+        # (load_manifest, env_path, finalize) can locate the PI's files.
+        project_id = state.get("project_id", "")
+        if project_id:
+            try:
+                from orchestrator.parked_store import ParkedStore
+                # Resolve the store via env; same default the server uses.
+                import os
+                db_path = os.environ.get("ORCHESTRATOR_DB_PATH", "/data/orchestrator.db")
+                store = ParkedStore(db_path)
+                store.set_project_workspace(project_id, workspace_path)
+                store.close()
+            except Exception as exc:
+                # Non-fatal: the workspace_path is also in state for the
+                # current run; only future runs that read from the DB are
+                # affected.
+                update.setdefault("errors", []).append({
+                    "node_name": "pi_onboarding_topic",
+                    "error_type": "workspace_persist_failed",
+                    "detail": str(exc)[:200],
+                    "timestamp": _now_iso(),
+                })
     return update
 
 

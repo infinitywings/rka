@@ -370,3 +370,32 @@ class ParkedStore:
                 (_now_iso(), workflow_thread_id),
             )
         return count
+
+    # -----------------------------------------------------------------
+    # project_workspaces — PI-provided workspace path per project
+    # -----------------------------------------------------------------
+
+    def set_project_workspace(self, project_id: str, workspace_path: str) -> None:
+        """Record the workspace path the PI provided for this project.
+
+        Upsert: if the project already has a workspace_path, it's
+        overwritten. Called by pi_onboarding_topic after the PI provides
+        the path.
+        """
+        with self._tx() as c:
+            c.execute(
+                """INSERT INTO project_workspaces (project_id, workspace_path)
+                   VALUES (?, ?)
+                   ON CONFLICT(project_id) DO UPDATE
+                     SET workspace_path = excluded.workspace_path,
+                         registered_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')""",
+                (project_id, workspace_path),
+            )
+
+    def get_project_workspace(self, project_id: str) -> Optional[str]:
+        """Return the PI-provided workspace path for this project, or None."""
+        row = self._conn.execute(
+            "SELECT workspace_path FROM project_workspaces WHERE project_id = ?",
+            (project_id,),
+        ).fetchone()
+        return row["workspace_path"] if row else None

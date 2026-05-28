@@ -85,3 +85,20 @@ CREATE INDEX IF NOT EXISTS idx_parked_inbox
 
 CREATE INDEX IF NOT EXISTS idx_parked_by_run
     ON parked_interrupts(workflow_thread_id, status);
+
+-- ============================================================
+-- project_workspaces — PI-provided workspace path per project
+--
+-- The orchestrator does NOT create directories or write files to
+-- the host filesystem. Instead, the PI provides an absolute path
+-- to their existing project workspace during pi_onboarding_topic.
+-- This table records that mapping so downstream operations
+-- (manifest read, .env probe, audit journal entry) can locate
+-- the PI's files. Each project's tools.json + .env live under
+-- {workspace_path}/.rka/.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS project_workspaces (
+    project_id TEXT PRIMARY KEY,
+    workspace_path TEXT NOT NULL,
+    registered_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);

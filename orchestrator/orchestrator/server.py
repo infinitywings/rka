@@ -177,6 +177,14 @@ def create_app(
                 mcp_factory=_default_mcp_factory(resolved_rka_url),
                 saver_factory=_default_saver_factory(resolved_saver_path),
             )
+
+        # Wire the workspace path resolver so manifest.workspace_dir()
+        # consults project_workspaces (PI-provided paths) before falling
+        # back to the hardcoded $HOME/rka-projects convention.
+        from orchestrator import manifest as _M
+        _M.set_workspace_path_resolver(
+            lambda pid: app.state.store.get_project_workspace(pid)
+        )
         logger.info(
             "orchestrator-server ready: db=%s saver=%s rka_url=%s",
             resolved_db_path, resolved_saver_path, resolved_rka_url,
