@@ -100,9 +100,11 @@ CREATE INDEX IF NOT EXISTS idx_parked_by_run
 CREATE TABLE IF NOT EXISTS project_workspaces (
     project_id TEXT PRIMARY KEY,
     workspace_path TEXT NOT NULL,
-    manifest_json TEXT,         -- ToolManifest JSON (set when draft_manifest emits it)
-    manifest_hash TEXT,         -- sha256 of the manifest JSON
-    audit_journal_id TEXT,      -- rka_add_note id set by finalize_node
+    manifest_json TEXT,             -- ToolManifest JSON (set when draft_manifest emits it)
+    manifest_hash TEXT,             -- sha256 of the manifest JSON
+    audit_journal_id TEXT,          -- rka_add_note id set by finalize_node
+    zotero_collection_key TEXT,     -- Zotero Collection key (8-char alnum) where this project's papers live
+    zotero_collection_name TEXT,    -- human-readable name of the collection (project slug)
     registered_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );

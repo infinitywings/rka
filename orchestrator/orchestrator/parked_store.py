@@ -123,8 +123,6 @@ class ParkedStore:
                     "ALTER TABLE project_workspaces ADD COLUMN audit_journal_id TEXT"
                 )
             if "updated_at" not in create_sql:
-                # SQLite rejects ALTER TABLE ADD COLUMN with non-constant
-                # defaults. Add the column nullable, then backfill.
                 self._conn.execute(
                     "ALTER TABLE project_workspaces ADD COLUMN updated_at TEXT"
                 )
@@ -132,6 +130,14 @@ class ParkedStore:
                     "UPDATE project_workspaces SET updated_at = "
                     "strftime('%Y-%m-%dT%H:%M:%SZ', 'now') "
                     "WHERE updated_at IS NULL"
+                )
+            if "zotero_collection_key" not in create_sql:
+                self._conn.execute(
+                    "ALTER TABLE project_workspaces ADD COLUMN zotero_collection_key TEXT"
+                )
+            if "zotero_collection_name" not in create_sql:
+                self._conn.execute(
+                    "ALTER TABLE project_workspaces ADD COLUMN zotero_collection_name TEXT"
                 )
 
     def _migrate_pre_phase_o_if_needed(self) -> None:
@@ -472,6 +478,23 @@ class ParkedStore:
             (project_id,),
         ).fetchone()
         return dict(row) if row else None
+
+    def set_project_zotero_collection(
+        self,
+        project_id: str,
+        collection_key: str,
+        collection_name: str,
+    ) -> None:
+        """Record the Zotero collection where this project's papers live."""
+        with self._tx() as c:
+            c.execute(
+                """UPDATE project_workspaces
+                   SET zotero_collection_key = ?,
+                       zotero_collection_name = ?,
+                       updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                   WHERE project_id = ?""",
+                (collection_key, collection_name, project_id),
+            )
 
     def set_project_audit_id(self, project_id: str, audit_journal_id: str) -> None:
         """Stamp the finalize-time audit journal id onto the manifest record."""

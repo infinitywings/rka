@@ -257,6 +257,37 @@ def create_app(
         )
         return _outcome_dict(outcome)
 
+    @app.get("/projects/{project_id}/zotero_collection")
+    async def get_project_zotero_collection(
+        project_id: str, request: Request
+    ) -> dict:
+        """Return the Zotero collection mapping for this project.
+
+        The PI uses the Zotero Connector to save papers into this
+        collection. Brain + Executor query zotero-mcp with the
+        collection_key to retrieve only this project's papers.
+
+        404 if the project hasn't been onboarded or Zotero wasn't
+        configured at onboarding time.
+        """
+        store_: ParkedStore = request.app.state.store
+        row = store_.get_project_manifest(project_id)
+        if not row or not row.get("zotero_collection_key"):
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"no Zotero collection registered for {project_id}. "
+                    "Either onboarding hasn't run or Zotero env vars were "
+                    "missing when it did."
+                ),
+            )
+        return {
+            "project_id": project_id,
+            "zotero_collection_key": row["zotero_collection_key"],
+            "zotero_collection_name": row.get("zotero_collection_name"),
+            "workspace_path": row.get("workspace_path"),
+        }
+
     @app.get("/projects/{project_id}/manifest")
     async def get_project_manifest(project_id: str, request: Request) -> dict:
         """Return the project's current effective manifest as JSON.

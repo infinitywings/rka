@@ -361,11 +361,31 @@ async def orchestrator_get_manifest(project_id: str) -> dict:
     `pi_extend_toolkit` (Phase D6). Useful for the PI session to
     answer "what tools is this project configured to use?"
 
-    Raises 404 if the project hasn't been onboarded yet (no
-    `~/rka-projects/{project_id}/tools.json`).
+    Raises 404 if the project hasn't been onboarded yet.
     """
     async with _client() as c:
         r = await c.get(f"/projects/{project_id}/manifest")
+        _raise_with_detail(r)
+        return r.json()
+
+
+@mcp.tool()
+async def orchestrator_get_zotero_collection(project_id: str) -> dict:
+    """Return the Zotero collection key + name for this project's literature.
+
+    Brain + Executor pass the returned `zotero_collection_key` to
+    `zotero_search` / `zotero_get_items_in_collection` (from zotero-mcp)
+    to retrieve only this project's papers — not the whole library.
+
+    The PI uses the Zotero Connector browser extension to save papers
+    into this collection while authenticated to publisher sites via
+    their institutional SSO.
+
+    Raises 404 if the project hasn't been onboarded or Zotero env vars
+    weren't configured when it ran.
+    """
+    async with _client() as c:
+        r = await c.get(f"/projects/{project_id}/zotero_collection")
         _raise_with_detail(r)
         return r.json()
 

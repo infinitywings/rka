@@ -1327,16 +1327,32 @@ def pi_onboarding_topic(
         if project_id:
             try:
                 from orchestrator.parked_store import ParkedStore
-                # Resolve the store via env; same default the server uses.
                 import os
                 db_path = os.environ.get("ORCHESTRATOR_DB_PATH", "/data/orchestrator.db")
                 store = ParkedStore(db_path)
                 store.set_project_workspace(project_id, workspace_path)
+
+                # Find-or-create the project's Zotero collection. The
+                # collection name uses the workspace basename as a
+                # human-readable slug. Non-fatal: PI can still onboard
+                # without Zotero configured.
+                try:
+                    from orchestrator import zotero_client as ZC
+                    from pathlib import Path
+                    collection_name = Path(workspace_path).name or project_id
+                    result = ZC.find_or_create_collection(collection_name)
+                    if result:
+                        col_key, col_name = result
+                        store.set_project_zotero_collection(
+                            project_id, col_key, col_name,
+                        )
+                        update["zotero_collection_key"] = col_key
+                        update["zotero_collection_name"] = col_name
+                except Exception:  # noqa: BLE001
+                    pass  # Zotero is optional; absence handled by skills
+
                 store.close()
             except Exception as exc:
-                # Non-fatal: the workspace_path is also in state for the
-                # current run; only future runs that read from the DB are
-                # affected.
                 update.setdefault("errors", []).append({
                     "node_name": "pi_onboarding_topic",
                     "error_type": "workspace_persist_failed",
