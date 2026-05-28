@@ -123,9 +123,15 @@ class ParkedStore:
                     "ALTER TABLE project_workspaces ADD COLUMN audit_journal_id TEXT"
                 )
             if "updated_at" not in create_sql:
+                # SQLite rejects ALTER TABLE ADD COLUMN with non-constant
+                # defaults. Add the column nullable, then backfill.
                 self._conn.execute(
-                    "ALTER TABLE project_workspaces ADD COLUMN updated_at TEXT "
-                    "NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))"
+                    "ALTER TABLE project_workspaces ADD COLUMN updated_at TEXT"
+                )
+                self._conn.execute(
+                    "UPDATE project_workspaces SET updated_at = "
+                    "strftime('%Y-%m-%dT%H:%M:%SZ', 'now') "
+                    "WHERE updated_at IS NULL"
                 )
 
     def _migrate_pre_phase_o_if_needed(self) -> None:
