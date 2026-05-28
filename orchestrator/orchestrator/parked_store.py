@@ -97,10 +97,36 @@ class ParkedStore:
         sql = SCHEMA_PATH.read_text(encoding="utf-8")
         with self._conn:
             self._conn.executescript(sql)
-        # Forward-migrate any DB still on a pre-Phase-O CHECK constraint
-        # (Phase-A 3-type or Phase-D 7-type). The migration preserves
-        # rows (rebuild + copy).
         self._migrate_pre_phase_o_if_needed()
+        self._migrate_project_workspaces_columns_if_needed()
+
+    def _migrate_project_workspaces_columns_if_needed(self) -> None:
+        """Add manifest_json, manifest_hash, audit_journal_id, updated_at
+        columns to project_workspaces if missing. Idempotent."""
+        row = self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='project_workspaces'"
+        ).fetchone()
+        if row is None:
+            return
+        create_sql = row[0] or ""
+        with self._conn:
+            if "manifest_json" not in create_sql:
+                self._conn.execute(
+                    "ALTER TABLE project_workspaces ADD COLUMN manifest_json TEXT"
+                )
+            if "manifest_hash" not in create_sql:
+                self._conn.execute(
+                    "ALTER TABLE project_workspaces ADD COLUMN manifest_hash TEXT"
+                )
+            if "audit_journal_id" not in create_sql:
+                self._conn.execute(
+                    "ALTER TABLE project_workspaces ADD COLUMN audit_journal_id TEXT"
+                )
+            if "updated_at" not in create_sql:
+                self._conn.execute(
+                    "ALTER TABLE project_workspaces ADD COLUMN updated_at TEXT "
+                    "NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))"
+                )
 
     def _migrate_pre_phase_o_if_needed(self) -> None:
         """Detect a parked_interrupts CHECK constraint missing Phase-O
