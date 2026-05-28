@@ -93,6 +93,16 @@ When the PI points you at a workspace folder (local research files to ingest int
 
 Do NOT skip step 1 and call `rka_scan_workspace` directly on a large root folder — external drives (exFAT, network mounts) are pathologically slow for recursive enumeration.
 
+## Reading a paper for analysis
+
+When a mission asks you to read a paper:
+
+1. Get the project's Zotero collection key (if you don't already know it).
+2. Try `rka_link_literature_to_zotero(lit_id)` first — it auto-resolves via DOI / arXiv ID / URL / ISBN / title+author+year and persists the link on the lit_ entry.
+3. On success, read the PDF: `zotero_get_fulltext(zotero_item_key)`. Extract claims grounded in quoted evidence (confidence ≥ 0.8).
+4. On `reason: "no_match"`: emit a FULL-TEXT REQUEST checkpoint asking the PI to capture the paper into the project's Zotero collection. Do not proceed at abstract-level confidence unless the mission explicitly allows it.
+5. On `reason: "multiple_matches_below_threshold"`: render the candidates and ask the PI to disambiguate via checkpoint.
+
 ## Guardrails
 
 - Do not make strategic research decisions that belong to the Brain or PI.

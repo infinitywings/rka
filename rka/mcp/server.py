@@ -377,6 +377,36 @@ async def rka_update_literature(
 
 
 @tool()
+async def rka_link_literature_to_zotero(id: str) -> dict:
+    """Resolve a literature entry to its Zotero item key for full-text access.
+
+    Tries five strategies in order: DOI -> arXiv ID -> URL -> ISBN ->
+    title+author+year fuzzy match. On a confident match, the link is
+    persisted on the literature entry (zotero_item_key + zotero_match_method).
+    On weak / multiple matches, returns candidates for PI confirmation.
+
+    Returns:
+      {"zotero_item_key": "ABC12345", "matched_by": "doi"}           — strong match, persisted
+      {"zotero_item_key": "ABC12345", "matched_by": "title_author_year",
+       "confidence": 0.96}                                            — fuzzy but ratified
+      {"zotero_item_key": null, "reason": "no_match"}                 — paper not in library; emit FULL-TEXT REQUEST
+      {"zotero_item_key": null, "reason": "multiple_matches_below_threshold",
+       "candidates": [...]}                                           — ask PI to pick
+      {"zotero_item_key": null, "reason": "zotero_not_configured"}    — ZOTERO_API_KEY missing
+
+    Once linked, use the zotero MCP server's `zotero_get_fulltext(item_key=...)`
+    tool to read the paper's full text for grounded claim extraction.
+
+    Args:
+        id: Literature ID (lit_...)
+    """
+    async with _client() as c:
+        r = await c.post(f"/api/literature/{id}/link_zotero")
+        _raise_with_detail(r)
+        return r.json()
+
+
+@tool()
 async def rka_add_decision(
     question: str,
     phase: str,
