@@ -40,24 +40,43 @@ RUN pip install --no-cache-dir .
 COPY orchestrator/ ./orchestrator/
 RUN pip install --no-cache-dir "./orchestrator[dev]"
 
+# Gap 5 hardening — non-root user (UID 1000 by default; overridable at
+# build via --build-arg ORCH_UID=$(id -u) for Linux-host UID matching).
+# The bind-mounted workspace must be writable by this UID; on macOS
+# Docker Desktop auto-translates UIDs so the default works; on Linux
+# match your host UID at build time.
+ARG ORCH_UID=1000
+ARG ORCH_GID=1000
+RUN groupadd -g ${ORCH_GID} orchestrator \
+    && useradd -m -u ${ORCH_UID} -g ${ORCH_GID} -s /bin/bash orchestrator
+
 # Data volume — the orchestrator's two SQLite files (parked-interrupt
 # store + LangGraph SqliteSaver) live here. Three-storage discipline:
 # this is orchestrator-owned only; RKA's rka.db lives in the separate
 # rka-data volume on the rka-server container.
-RUN mkdir -p /data
+RUN mkdir -p /data && chown orchestrator:orchestrator /data /app
 VOLUME /data
 
 ENV ORCHESTRATOR_DB_PATH=/data/orchestrator.db \
     ORCHESTRATOR_SAVER_PATH=/data/orchestrator-saver.db \
     ORCHESTRATOR_HOST=0.0.0.0 \
     ORCHESTRATOR_PORT=9713 \
-    RKA_API_URL=http://rka:9712
+    RKA_API_URL=http://rka:9712 \
+    HOME=/home/orchestrator
 
 EXPOSE 9713
 
 # Health check — same shape as the rka image.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import httpx; r=httpx.get('http://localhost:9713/health'); r.raise_for_status()" || exit 1
+
+# Drop root before runtime — Gap 5 hardening. The daemon and every
+# claude-agent-sdk subprocess it spawns now runs as UID 1000 ("orchestrator").
+# An LLM that escapes the SDK sandbox can only mutate paths the
+# orchestrator user has write access to (the bind-mounted workspace,
+# /data, /home/orchestrator, /tmp) — not /etc, /usr, /root, or the
+# rest of the container image.
+USER orchestrator
 
 # Run via uvicorn factory — same pattern as `rka serve`.
 CMD ["python", "-m", "uvicorn", \

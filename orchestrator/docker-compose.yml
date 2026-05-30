@@ -65,7 +65,11 @@ services:
       # container's claude subprocess can read settings without
       # writing back to the host file. Single-file mounts are never
       # written to by the SDK (only read), so no EROFS risk here.
-      - ${HOME}/.claude.json:/root/.claude.json:ro
+      # Gap 5 — daemon now runs as a non-root user `orchestrator` (UID
+      # 1000). HOME is /home/orchestrator, so the CLI config bind mount
+      # moves to that user's home dir. Read-only mount; the SDK never
+      # writes to this file.
+      - ${HOME}/.claude.json:/home/orchestrator/.claude.json:ro
       # Phase B bootstrap writes orchestrator/.env at /app/orchestrator/.env
       # inside the container. Bind-mount the host file (using HOST_ORCH_ENV
       # path, default $PWD/orchestrator/.env relative to Compose project
@@ -98,11 +102,36 @@ services:
       RKA_API_URL: "http://rka:9712"
       ORCHESTRATOR_DB_PATH: "/data/orchestrator.db"
       ORCHESTRATOR_SAVER_PATH: "/data/orchestrator-saver.db"
+      # Gap 5 — when an OAuth-secret file is mounted at this path
+      # (typically via the optional docker-compose.secrets.yml overlay
+      # described in orchestrator/docs/secrets-setup.md), server.py
+      # reads it on startup and exports CLAUDE_CODE_OAUTH_TOKEN. When
+      # the file is absent, the env_file fallback (orchestrator/.env)
+      # remains the auth source. Both paths are supported; the secret
+      # path is preferred for multi-operator setups where .env file
+      # rotation is operationally noisy.
+      ORCHESTRATOR_OAUTH_SECRET_PATH: "/run/secrets/claude_oauth_token"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
       - rka
     restart: unless-stopped
+
+# Gap 5 follow-up — to switch from env_file to Docker secrets, create a
+# host file containing only the OAuth token, then create a sibling
+# overlay (e.g. orchestrator/docker-compose.secrets.yml) with:
+#
+#   services:
+#     rka-orchestrator:
+#       secrets: [claude_oauth_token]
+#   secrets:
+#     claude_oauth_token:
+#       file: ${HOME}/.claude_oauth_token
+#
+# Apply with `docker compose -f docker-compose.yml -f
+# orchestrator/docker-compose.yml -f orchestrator/docker-compose.secrets.yml up`.
+# The daemon's startup code reads ORCHESTRATOR_OAUTH_SECRET_PATH (set
+# above) — when present, it overrides any env_file CLAUDE_CODE_OAUTH_TOKEN.
 
 volumes:
   orchestrator-data:
