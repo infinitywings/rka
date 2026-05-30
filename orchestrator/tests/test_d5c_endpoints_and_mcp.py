@@ -220,6 +220,9 @@ async def test_mcp_orchestrator_onboard_start_posts_to_onboard(recorder):
     req = recorder.requests[0]
     assert req.method == "POST"
     assert req.url.path == "/onboard"
+    # Phase D2.1: onboard_start MUST send wait_segment=false so the first
+    # segment runs as a background task and the HTTP call doesn't time out.
+    assert req.url.params["wait_segment"] == "false"
     body = json.loads(req.content)
     assert body == {"project_id": "prj_x", "workflow_thread_id": None}
 
