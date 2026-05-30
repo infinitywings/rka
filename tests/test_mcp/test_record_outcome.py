@@ -54,7 +54,7 @@ async def env(tmp_path: Path, monkeypatch):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             mcp_mod._session.project_id = "proj_default"
 
-            def fake_client() -> httpx.AsyncClient:
+            def fake_client(project_id: str | None = None) -> httpx.AsyncClient:
                 return httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=app),
                     base_url="http://testserver",
@@ -63,6 +63,8 @@ async def env(tmp_path: Path, monkeypatch):
                 )
 
             monkeypatch.setattr(mcp_mod, "_client", fake_client)
+            async def _noop_fire(_pid): pass
+            monkeypatch.setattr(mcp_mod, "_maybe_fire_session_start", _noop_fire)
             yield client
     finally:
         await lifespan.__aexit__(None, None, None)
@@ -98,7 +100,7 @@ async def test_tool_happy_path(env):
     import rka.mcp.server as mcp_mod
     record = _tool_body(mcp_mod.rka_record_outcome)
     dec_id = await _resolved_decision(env)
-    out = _json.loads(await record(decision_id=dec_id, outcome="succeeded"))
+    out = _json.loads(await record(decision_id=dec_id, outcome="succeeded", project_id="proj_default"))
     assert "error" not in out
     assert out["id"].startswith("cao_")
     assert out["outcome"] == "succeeded"
@@ -114,7 +116,7 @@ async def test_tool_refuses_decision_without_pi_selection(env):
         headers=HEADERS,
     )
     open_dec = r.json()["id"]
-    out = _json.loads(await record(decision_id=open_dec, outcome="succeeded"))
+    out = _json.loads(await record(decision_id=open_dec, outcome="succeeded", project_id="proj_default"))
     assert out.get("error") == "decision_not_resolved"
 
 
@@ -141,6 +143,7 @@ async def test_tool_accepts_override_rationale_as_resolution(env):
         decision_id=dec_id,
         outcome="unresolved",
         outcome_details="PI deferred — no concrete outcome yet",
-    ))
+        project_id="proj_default",
+        ))
     assert "error" not in out
     assert out["outcome"] == "unresolved"

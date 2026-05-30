@@ -63,7 +63,7 @@ async def present_env(tmp_path: Path, monkeypatch):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             mcp_mod._session.project_id = "proj_default"
 
-            def fake_client() -> httpx.AsyncClient:
+            def fake_client(project_id: str | None = None) -> httpx.AsyncClient:
                 return httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=app),
                     base_url="http://testserver",
@@ -72,6 +72,8 @@ async def present_env(tmp_path: Path, monkeypatch):
                 )
 
             monkeypatch.setattr(mcp_mod, "_client", fake_client)
+            async def _noop_fire(_pid): pass
+            monkeypatch.setattr(mcp_mod, "_maybe_fire_session_start", _noop_fire)
 
             r = await client.post(
                 "/api/decisions",
@@ -116,7 +118,8 @@ async def test_happy_path_five_options_three_survive(present_env):
         confirmation_brief="PI wants a scalable option.",
         options=options,
         pi_preference=None,
-    )
+        project_id="proj_default",
+        )
     result = _json.loads(result_json)
 
     assert "error" not in result
@@ -152,7 +155,8 @@ async def test_pi_preference_leak_triggers_error(present_env):
         confirmation_brief="PI wants speed.",
         options=options,
         pi_preference="Python",
-    )
+        project_id="proj_default",
+        )
     result = _json.loads(result_json)
     assert result.get("error") == "pi_preference_leaked_into_generation"
     assert result.get("offending_option_index") == 1
@@ -177,7 +181,8 @@ async def test_guard_refuses_if_options_already_exist(present_env):
         confirmation_brief="second attempt",
         options=[_option(chr(ord("A") + i), 0.5 + i * 0.1, seed=i) for i in range(5)],
         pi_preference=None,
-    )
+        project_id="proj_default",
+        )
     result = _json.loads(result_json)
     assert result.get("error") == "decision_already_presented"
 
@@ -193,7 +198,8 @@ async def test_guard_refuses_nonexistent_decision(present_env):
         confirmation_brief="x",
         options=[_option(chr(ord("A") + i), 0.5, seed=i) for i in range(5)],
         pi_preference=None,
-    )
+        project_id="proj_default",
+        )
     result = _json.loads(result_json)
     assert result.get("error") == "decision_not_found"
 
@@ -218,7 +224,8 @@ async def test_record_pi_selection_both_paths(present_env):
         confirmation_brief="brief",
         options=options,
         pi_preference=None,
-    ))
+        project_id="proj_default",
+        ))
     presented = result["presented_option_ids"]
     assert presented
 
@@ -227,7 +234,8 @@ async def test_record_pi_selection_both_paths(present_env):
         decision_id=decision_id,
         selected_option_id=presented[0],
         override_rationale=None,
-    ))
+        project_id="proj_default",
+        ))
     assert rec1["selected_option_id"] == presented[0]
 
     # Seed a fresh decision for the override path.
@@ -243,12 +251,14 @@ async def test_record_pi_selection_both_paths(present_env):
         confirmation_brief="brief",
         options=options,
         pi_preference=None,
-    )
+        project_id="proj_default",
+        )
 
     # Path 2 — override_rationale (escape hatch).
     rec2 = _json.loads(await record(
         decision_id=dec2,
         selected_option_id=None,
         override_rationale="defer",
-    ))
+        project_id="proj_default",
+        ))
     assert rec2["override_rationale"] == "defer"

@@ -3,6 +3,102 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [Unreleased] - v2.6.0 — `project_id` required on every MCP tool (BREAKING)
+
+Branch: `feat/project-id-required`. Eliminates a long-standing
+silent-failure mode where the MCP server's per-process
+`_session.project_id` would reset to `proj_default` on every restart
+(Claude Desktop relaunch, Docker rebuild, `uv tool install --force`),
+silently routing subsequent writes from any project's conversation
+into the wrong project's knowledge base. Empirically observed
+multiple times across the hyperscaler-auditing and IoT-edge-LLM
+projects this session: notes/decisions/checkpoints from one project
+landed in another because no one noticed the session reset.
+
+### Breaking changes
+
+- **Every project-scoped MCP tool now requires `project_id` as a
+  keyword-only argument.** All 85 write + project-scoped-read tools
+  carry `*, project_id: str` in their signatures. The caller (LLM or
+  script) must pass it explicitly on every call. Omitting it raises
+  `TypeError: rka_X() missing 1 required keyword-only argument:
+  'project_id'` — by design.
+- **`RKA_PROJECT` env var removed.** Pre-v2.6 the MCP server read
+  this on startup to seed `_session.project_id`. Removed because it
+  re-introduces the same silent-default failure mode at process
+  startup. No replacement — pass `project_id` explicitly on every
+  call.
+- **`_session.project_id` field removed from `MCPSessionState`.**
+  There is no server-side notion of an "active project" anymore.
+  Session state still tracks tool-call counters, entities-created
+  log, and session_start fired markers (keyed per `project_id` from
+  each call); the project itself is per-call.
+- **`rka_set_project` demoted to a deprecated no-op.** Still
+  validates that the requested project exists (helpful pre-flight)
+  and returns a deprecation notice; does NOT change subsequent tool
+  behavior. Existing scripts that call `rka_set_project` will see
+  the notice; updating to pass `project_id` everywhere is the
+  migration.
+- **`rka_create_project` no longer auto-switches.** Returns the new
+  project_id; caller threads it into subsequent calls.
+
+### Unscoped tools (no `project_id` required)
+
+- `rka_list_projects` — discovery
+- `rka_create_project` — creates a NEW project (no project_id yet)
+- `rka_set_project` — deprecated no-op
+- `rka_reset_session` — clears MCP session counters
+- `rka_session_digest` — session-level summary
+
+### What still works the same
+
+- The REST API's `?project_id=…` query param + `X-RKA-Project`
+  header (the MCP layer now threads this from the call's
+  `project_id` kwarg instead of from session state — same wire-level
+  contract, more reliable threading).
+- Tool return shapes — no field added or removed.
+- All other tool argument names and types — `project_id` is purely
+  additive on each signature.
+- Database schema — `proj_default` row preserved; existing entries
+  scoped to it are untouched.
+
+### Migration
+
+For every existing rka_* tool call, add `project_id="prj_…"` (or
+`project_id="proj_default"` if you want the legacy default project
+explicitly).
+
+```python
+# Pre-v2.6
+await rka_add_note(content="…", type="note")
+# Post-v2.6
+await rka_add_note(content="…", type="note", project_id="prj_01KS…")
+```
+
+For LLM-driven Claude Desktop / Claude Code sessions, the new
+discipline is: ask the PI which project at the start of every
+conversation, retain the project_id in working memory, pass it on
+every tool call. See `rka/skills/{brain,executor,pi}/SKILL.md`
+"Session Start" sections for the full discipline.
+
+### Tests
+
+`tests/` — 882/882 passing. 14 test sites were migrated mechanically
+(positional `project_id="proj_default"` injection). Two test fixture
+patterns required updates: (a) `fake_client()` signatures gained an
+optional `project_id` param to absorb the new positional arg from
+`_client()`; (b) `_maybe_fire_session_start` mocked as a no-op in
+tests that asserted exact POST-call counts, since the session_start
+hook now fires from any call that carries `project_id` (which is now
+every call).
+
+### Files
+
+- `rka/mcp/server.py` — 85 tool signatures + `_client()` + helpers
+- `rka/skills/{brain,executor,pi}/SKILL.md` — session-start discipline
+- `tests/test_mcp/`, `tests/skills/writer/` — 14 migrated test sites
+- `CHANGELOG.md`, `README.md`, `INSTALL.md`
+
 ## [Unreleased] - Writer Phase W3 + W4 (registry expansion + NSF proposals)
 
 Branch: `feat/writer-venue-registry-w3w4`. Third and fourth slices of

@@ -21,13 +21,14 @@ Your counterparts: the **Executor** (`skills/executor/SKILL.md`) handles impleme
 
 ## Session Start — Do This Every Time
 
-1. **`rka_get_status()` first** — confirms the active project. If it returns `proj_default` (or any project other than the one you intend to work in), call `rka_list_projects()` then `rka_set_project(project_id)` to switch. Do NOT skip — the MCP `_session.project_id` is per-process and ephemeral; previous sessions' state is gone. Set `RKA_PROJECT=<project_id>` in `claude_desktop_config.json` → `mcpServers.rka.env` to make this default automatic.
-2. `rka_get_changelog(since="<last session date>")` — what changed since last time.
-3. `rka_get_pending_maintenance()` — provenance gaps, untagged entries.
-4. Process up to 10 maintenance items silently. Priority:
+1. **Pin the project for the whole conversation.** v2.6+: every project-scoped rka_* tool takes `project_id` as a required kwarg-only parameter — there is NO "active project" session state on the MCP server. Ask the PI (or recall from their first message) which project this conversation is about, call `rka_list_projects()` once if you need to discover the canonical ID, and pass `project_id="prj_…"` on every subsequent rka_* call. Omitting `project_id` raises `TypeError: rka_X() missing 1 required keyword-only argument: 'project_id'` — by design; this replaces the pre-v2.6 silent-fallback-to-`proj_default` failure mode. **Discipline: keep the project_id in working memory; thread it on every call.** `rka_set_project` still exists as a deprecated no-op (validates the ID exists, emits a deprecation notice — does NOT change subsequent tool behavior). The `RKA_PROJECT` env var was removed in v2.6.
+2. `rka_get_status(project_id=<pinned>)` — current state of the pinned project.
+3. `rka_get_changelog(project_id=<pinned>, since="<last session date>")` — what changed.
+4. `rka_get_pending_maintenance(project_id=<pinned>)` — provenance gaps.
+5. Process up to 10 maintenance items silently. Priority:
    `decisions_without_justified_by` > `missions_without_motivated_by` > `unassigned_clusters` > `entries_missing_cross_refs` > `entries_without_tags`.
-5. `rka_get_research_map()` — structural overview.
-6. Greet the user — now begin the actual conversation.
+6. `rka_get_research_map(project_id=<pinned>)` — structural overview.
+7. Greet the user — now begin the actual conversation.
 
 Full worked walkthrough: `workflows.md` § "Session Start".
 
