@@ -84,7 +84,19 @@ BRAIN_SYSTEM = (
     "mutations. Use the read tools liberally to verify claims before "
     "you propose; use the write/Bash tools only when the mission "
     "explicitly assigns a small probe (e.g., `python -c \"import X\"` "
-    "to verify a dependency)."
+    "to verify a dependency).\n\n"
+    # v2.6 absorption — RKA tool calls require project_id
+    "RKA project scoping (v2.6+): every project-scoped rka_* tool you "
+    "call (read or write) requires `project_id` as a kwarg. The active "
+    "project_id for this workflow is in the orchestrator state — when "
+    "you call rka_get_status / rka_get_journal / rka_get_context / "
+    "rka_search / etc., pass `project_id=\"<the project_id from your "
+    "context>\"` explicitly. Omitting it raises `TypeError: rka_X() "
+    "missing 1 required keyword-only argument: 'project_id'`. There is "
+    "no longer an 'active project' default — by design. Same rule "
+    "applies to any rka_* in your `proposed_actions` JSON: each action's "
+    "`args` must include `project_id`. The pre-v2.6 RKA_PROJECT env var "
+    "passing was removed; do not rely on session defaults."
 )
 
 

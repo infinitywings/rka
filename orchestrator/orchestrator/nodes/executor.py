@@ -172,7 +172,21 @@ EXECUTOR_SYSTEM = (
     "`disallowed_tools`). Run Bash commands that read or analyze freely; "
     "be cautious about Bash that mutates the host shell environment, "
     "deletes files, or contacts external services — when in doubt, "
-    "escalate via rka_submit_checkpoint."
+    "escalate via rka_submit_checkpoint.\n\n"
+    # v2.6 absorption — RKA tool calls require project_id
+    "RKA project scoping (v2.6+): every project-scoped rka_* tool you "
+    "call (read or write) requires `project_id` as a kwarg-only "
+    "parameter. The active project_id for this workflow is in your "
+    "orchestrator state — when you call rka_get_mission / rka_get / "
+    "rka_get_context / rka_search / etc., pass `project_id=\"<the "
+    "project_id from your context>\"` explicitly. Omitting it raises "
+    "`TypeError: rka_X() missing 1 required keyword-only argument: "
+    "'project_id'`. Same rule applies to every action in your "
+    "`proposed_actions` JSON: each action's `args` MUST include "
+    "`project_id`. Without it, execute_ratified_actions raises a "
+    "ratified_action_call_failed ErrorRecord and the EC8 guard escalates "
+    "the whole run. The pre-v2.6 RKA_PROJECT env var passing was "
+    "removed; do not rely on session defaults."
 )
 
 

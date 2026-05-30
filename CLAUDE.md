@@ -652,6 +652,48 @@ invariant, so this is documentation-only here. A proper fix
 (memory limit + `restart: on-failure:N` + lazy embedding load)
 belongs upstream on `main`.
 
+
+
+### Phase D2.5 — v2.6 (project_id required) absorption
+
+`main` merged the v2.6 contract change (PR #32,
+`feat(mcp)!: require project_id on every project-scoped tool`) that
+removes the silent-default-to-`proj_default` failure mode at the RKA
+MCP layer. Every project-scoped rka_* tool now requires `project_id`
+as a kwarg-only parameter; `rka_set_project` is a deprecated no-op;
+the `RKA_PROJECT` env var was removed at both the MCP layer
+(`rka/mcp/server.py`) and the REST layer (`rka/constants.py`).
+
+`agentic` absorbed this via `git merge origin/main`. Two surface
+areas needed updating to keep the orchestrator's Brain ⇄ Executor ⇄
+PI loop working against the new contract:
+
+- **Brain + Executor system prompts** (`nodes/brain.py`,
+  `nodes/executor.py`) — both now explicitly instruct the LLM that
+  every rka_* tool call (read or write) requires `project_id`.
+  Without this, the Brain LLM's first `rka_get_status()` would
+  raise `TypeError` because the v2.6 server rejects calls without
+  `project_id`. The Brain's `proposed_actions` JSON also has to
+  carry `project_id` in each action's `args` dict — otherwise
+  `execute_ratified_actions` raises `ratified_action_call_failed`
+  and the Phase D2.4 EC8 routing guard escalates the run.
+
+- **`llm_client._build_mcp_servers_config`** still passes
+  `RKA_PROJECT=<project_id>` to the SDK subprocess's `rka mcp`
+  child env. v2.6 RKA no longer reads this env var, so the
+  threading is functionally dead — but the kwarg is preserved
+  for now as a hint the LLM could read (via `Bash echo
+  $RKA_PROJECT`) if it loses track of project context. Future
+  cleanup: remove the kwarg threading, or wire a per-call
+  project_id injection via a tool decorator.
+
+The orchestrator's parent-side `RestMCPClient` already threads
+project_id via the `X-RKA-Project` header on every REST call —
+unchanged by v2.6. WRITE_TOOLS dispatched from
+`execute_ratified_actions` therefore continue to land correctly,
+provided the LLM included `project_id` in each action's `args`.
+
+
 ### Deferred follow-ups
 
 Deferred from the Phase D2.1 review — non-blocking but should
@@ -683,3 +725,9 @@ land before the next major orchestrator pass:
 - **Phase E** — Capability categories replacing static WRITE_TOOLS
 - **Phase F** — Topology variants (light/heavy mission classes)
 - **Phase G** — Actuator subagent (Bash/Edit/Write tools behind ratification)
+- **v2.6 dead env-var threading** — `llm_client._build_mcp_servers_config`
+  still sets `RKA_PROJECT` on the rka MCP child env, which v2.6
+  doesn't read. Remove or repurpose as an LLM hint.
+- **Per-call project_id injection** — explicit pass-through on every
+  rka_* call is verbose; consider a tool-call decorator that auto-injects
+  project_id from workflow state.
