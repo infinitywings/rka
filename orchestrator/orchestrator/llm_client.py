@@ -508,9 +508,17 @@ def _build_fs_actuator_hook(workspace_path: str):
         if tool_name not in fs_actuator.FS_ACTUATOR_MUTATING_TOOLS:
             return sdk.PermissionResultAllow()
 
+        # Gap 4b — read bash allowlist mode from env so a workflow can
+        # opt in for its segment. (state-level threading would require
+        # changes to the SDK options builder; env is the minimum-viable
+        # surface for the hook layer.) Default off — pre-4b behavior.
+        bash_allowlist_mode = (
+            os.environ.get("FS_ACTUATOR_BASH_ALLOWLIST_MODE", "").strip() == "1"
+        )
         cls, rationale = fs_actuator.classify_fs_action(
             {"tool": tool_name, "args": tool_input or {}},
             workspace_path=workspace_path,
+            bash_allowlist_mode=bash_allowlist_mode,
         )
         if cls in ("read", "scoped_write"):
             return sdk.PermissionResultAllow()

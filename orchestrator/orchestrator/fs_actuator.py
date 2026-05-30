@@ -112,24 +112,409 @@ _RATIFY_BASH_PATTERNS: tuple[re.Pattern[str], ...] = (
 def is_destructive_bash(cmd: str) -> tuple[bool, str | None]:
     """Return `(matched, pattern_str)` if `cmd` contains a destructive
     pattern that requires PI ratification. The second element is the
-    pattern string (for error messages); `None` when no match."""
+    pattern string (for error messages); `None` when no match.
+
+    Gap 4a — runs the AST-aware classifier first. If the AST detects a
+    bypass (variable-resolved `$RM` → `rm -rf …`), reconstructs a
+    normalized command string and applies the regex patterns against
+    THAT. Falls back to direct regex on parse failure.
+    """
     if not isinstance(cmd, str):
         return (False, None)
-    for pat in _RATIFY_BASH_PATTERNS:
-        if pat.search(cmd):
-            return (True, pat.pattern)
+    # Try AST first; on success, also run regex against the
+    # variable-resolved reconstruction so $RM-style indirection is caught.
+    ast_normalized = _ast_normalize_command(cmd)
+    for candidate in (cmd, ast_normalized):
+        if candidate is None:
+            continue
+        for pat in _RATIFY_BASH_PATTERNS:
+            if pat.search(candidate):
+                return (True, pat.pattern)
     return (False, None)
 
 
 def is_denied_bash(cmd: str) -> tuple[bool, str | None]:
     """Return `(matched, pattern_str)` if `cmd` matches a DENY pattern
-    (no PI override available — these are outright refused)."""
+    (no PI override available — these are outright refused).
+
+    Gap 4a — AST-aware: variable-resolved forms are matched too.
+    """
     if not isinstance(cmd, str):
         return (False, None)
-    for pat in _DENY_PATTERNS:
-        if pat.search(cmd):
-            return (True, pat.pattern)
+    ast_normalized = _ast_normalize_command(cmd)
+    for candidate in (cmd, ast_normalized):
+        if candidate is None:
+            continue
+        for pat in _DENY_PATTERNS:
+            if pat.search(candidate):
+                return (True, pat.pattern)
     return (False, None)
+
+
+# Gap 4a — AST normalization.
+# Walks bashlex's parse tree, builds a `{var: value}` map from
+# AssignmentNode entries, and emits a "normalized" command string where
+# `$VAR` / `${VAR}` references inside word tokens are replaced with
+# their assigned values. The replacement is intentionally simple: we
+# don't model dynamic scope, function definitions, or command
+# substitution semantics — just the common assign-then-use pattern
+# that regex misses.
+
+
+def _ast_normalize_command(cmd: str) -> str | None:
+    """Return a regex-checkable normalization of `cmd` that resolves
+    `$VAR` references using same-script assignments. Returns None when
+    parsing fails entirely (callers should treat as "no AST signal"
+    and rely on the raw regex pass).
+
+    Adversarial-review #4: bashlex fails on `arr=(a b)` and other
+    array/bash-only syntax. When the AST parse fails, fall back to a
+    regex-based assignment extractor that catches the simple
+    `VAR=value` shape and substitutes `$VAR` references. Catches the
+    `arr[0]=rm; ${arr[0]} -rf` bypass and the `RM=rm; eval $RM -rf`
+    pattern in the AST-parse-failure path.
+    """
+    try:
+        import bashlex  # local import — only loaded when needed
+    except ImportError:
+        return _regex_assignment_normalize(cmd)
+    try:
+        trees = bashlex.parse(cmd)
+    except Exception:  # noqa: BLE001 — bashlex raises a custom exception hierarchy
+        return _regex_assignment_normalize(cmd)
+
+    var_map: dict[str, str] = {}
+    parts: list[str] = []
+    for tree in trees:
+        _ast_walk_collect(tree, var_map, parts)
+    if not parts:
+        return _regex_assignment_normalize(cmd)
+    return " ; ".join(parts)
+
+
+_ASSIGNMENT_RE = re.compile(
+    r"\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:'([^']*)'|\"([^\"]*)\"|([^\s;|&]+))"
+)
+_VAR_REF_RE = re.compile(
+    r"\$\{?([A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]]*\])?\}?"
+)
+
+
+def _regex_assignment_normalize(cmd: str) -> str | None:
+    """Adversarial-review #4 fallback: when bashlex can't parse, extract
+    `VAR=value` assignments via regex and substitute `$VAR` /
+    `${VAR}` / `${VAR[0]}` references. Best-effort — won't catch every
+    indirection form but does catch the simple assign-then-use case
+    that the AST would otherwise have handled."""
+    if not cmd or not isinstance(cmd, str):
+        return None
+    var_map: dict[str, str] = {}
+    for m in _ASSIGNMENT_RE.finditer(cmd):
+        name = m.group(1)
+        value = m.group(2) or m.group(3) or m.group(4) or ""
+        var_map[name] = value
+    if not var_map:
+        # No assignments found — nothing meaningful to normalize beyond
+        # the raw cmd. Return None so the caller's regex pass handles it.
+        return None
+
+    def _sub(m: re.Match[str]) -> str:
+        name = m.group(1)
+        return var_map.get(name, m.group(0))
+
+    return _VAR_REF_RE.sub(_sub, cmd)
+
+
+def _ast_walk_collect(
+    node, var_map: dict[str, str], out_parts: list[str]
+) -> None:
+    """Recursive walk: capture assignments, resolve references, emit
+    each top-level command as a space-joined word string into
+    out_parts."""
+    kind = getattr(node, "kind", "")
+    if kind == "command":
+        _ast_emit_command(node, var_map, out_parts)
+        return
+    if kind == "list":
+        for child in getattr(node, "parts", []) or []:
+            _ast_walk_collect(child, var_map, out_parts)
+        return
+    if kind == "compound":
+        for child in getattr(node, "list", []) or []:
+            _ast_walk_collect(child, var_map, out_parts)
+        return
+    if kind == "pipeline":
+        for child in getattr(node, "parts", []) or []:
+            _ast_walk_collect(child, var_map, out_parts)
+        return
+    # operator / function / other — recurse into parts if present
+    for child in getattr(node, "parts", []) or []:
+        _ast_walk_collect(child, var_map, out_parts)
+
+
+def _ast_emit_command(
+    cmd_node, var_map: dict[str, str], out_parts: list[str]
+) -> None:
+    """Process one CommandNode: capture any AssignmentNode prefix into
+    var_map; resolve $VAR references in WordNodes; emit a
+    space-joined string of the resolved words to out_parts.
+
+    Adversarial-review #3: recurse into HeredocNode bodies and
+    CommandsubstitutionNode children so payloads smuggled via
+    `cat <<EOF ... EOF` and `$(...)` are also normalized.
+    """
+    words: list[str] = []
+    for child in getattr(cmd_node, "parts", []) or []:
+        kind = getattr(child, "kind", "")
+        if kind == "assignment":
+            word = getattr(child, "word", "") or ""
+            if "=" in word:
+                k, _, v = word.partition("=")
+                # Strip simple shell quoting.
+                v = v.strip()
+                if (v.startswith("'") and v.endswith("'")) or (
+                    v.startswith('"') and v.endswith('"')
+                ):
+                    v = v[1:-1]
+                var_map[k.strip()] = v
+            continue
+        if kind in ("word", "parameter", "commandsubstitution", "processsubstitution"):
+            words.append(_ast_resolve_word(child, var_map))
+            # Adversarial-review #3: recurse into command-substitution
+            # children so `$(RM=rm; $RM -rf /home)` is normalized too.
+            # CommandsubstitutionNodes can be at the child level OR
+            # nested inside a WordNode's `parts` (bashlex puts them
+            # there when the word contains a $() expression).
+            _recurse_into_command_subs(child, var_map, out_parts)
+            continue
+        # Adversarial-review #3: heredoc body — preserve its text so
+        # `cat <<EOF ... rm -rf / ... EOF` still trips destructive
+        # patterns on the body.
+        if kind == "redirect":
+            heredoc_body = getattr(child, "heredoc", None)
+            if heredoc_body is not None:
+                body_word = getattr(heredoc_body, "value", None)
+                if isinstance(body_word, str) and body_word.strip():
+                    out_parts.append(body_word)
+            # Continue with raw form below so `>/etc/` still matches
+        # operator/redirect/etc — preserve raw form so patterns like
+        # ">/etc/" still match.
+        raw_word = getattr(child, "word", None)
+        if isinstance(raw_word, str):
+            words.append(raw_word)
+    if words:
+        out_parts.append(" ".join(words))
+
+
+def _recurse_into_command_subs(node, var_map: dict[str, str], out_parts: list[str]) -> None:
+    """Adversarial-review #3: walk into CommandsubstitutionNode found
+    anywhere in a WordNode subtree and process its embedded `command`
+    (the inner ListNode/CommandNode) via _ast_walk_collect — so a
+    payload like `$(RM=rm; $RM -rf /home)` lands in out_parts as a
+    normalized command string."""
+    kind = getattr(node, "kind", "")
+    if kind == "commandsubstitution":
+        inner = getattr(node, "command", None)
+        if inner is not None:
+            _ast_walk_collect(inner, var_map, out_parts)
+        return
+    for child in getattr(node, "parts", None) or []:
+        _recurse_into_command_subs(child, var_map, out_parts)
+
+
+def _ast_resolve_word(node, var_map: dict[str, str]) -> str:
+    """Replace any ParameterNode references inside `node` with their
+    assigned values. For unknown vars, leaves the literal form ($VAR)
+    so downstream regex doesn't false-match on accidental substitution
+    of an empty string."""
+    word = getattr(node, "word", "") or ""
+    # Inline parameter expansion: $VAR or ${VAR}
+    if not word.startswith("$"):
+        # Walk subparts to find embedded parameter refs
+        parts = getattr(node, "parts", []) or []
+        if not parts:
+            return word
+        # Reconstruct: for each part, if it's a ParameterNode with
+        # known value, substitute.
+        result = []
+        last_end = 0
+        for p in parts:
+            p_kind = getattr(p, "kind", "")
+            if p_kind == "parameter":
+                value_name = getattr(p, "value", "")
+                p_pos = getattr(p, "pos", None)
+                if p_pos and isinstance(p_pos, tuple) and len(p_pos) == 2:
+                    start, end = p_pos
+                    # Translate absolute positions to word-relative.
+                    word_start = getattr(node, "pos", (0, 0))[0]
+                    rel_start = start - word_start
+                    rel_end = end - word_start
+                    result.append(word[last_end:rel_start])
+                    result.append(var_map.get(value_name, f"${value_name}"))
+                    last_end = rel_end
+        result.append(word[last_end:])
+        return "".join(result) or word
+    # Bare $VAR / ${VAR}
+    stripped = word.lstrip("$").strip("{}")
+    return var_map.get(stripped, word)
+
+
+# Gap 4b — Bash allowlist mode.
+#
+# Optional strict mode: only commands whose root binary appears in
+# `BASH_COMMAND_ALLOWLIST` are scoped_write; everything else is
+# ratify_required. Enabled per-workflow by setting
+# `state["bash_allowlist_mode"] = True` (or globally via
+# FS_ACTUATOR_BASH_ALLOWLIST_MODE=1 env). The allowlist is intentionally
+# minimal — common analysis/probe commands that missions actually need.
+
+BASH_COMMAND_ALLOWLIST: frozenset[str] = frozenset({
+    # Read-side / observational
+    "ls", "cat", "head", "tail", "less", "more", "wc", "stat", "file",
+    "find", "grep", "rg", "ag", "fd", "tree", "du", "df",
+    # Process / environment introspection
+    "ps", "env", "pwd", "whoami", "id", "uname", "hostname", "uptime",
+    # Python / Node / R analysis (mission probes)
+    "python", "python3", "node", "deno", "Rscript", "ruby", "perl",
+    # Git read ops
+    "git",  # NB: git push/etc still caught by destructive-pattern; allowlist permits the binary
+    # Common compute / text tools
+    "echo", "printf", "true", "false", "test", "expr", "seq",
+    "awk", "sed", "cut", "sort", "uniq", "tr", "tee", "diff", "patch",
+    # Archive / format
+    "tar", "gzip", "gunzip", "zip", "unzip", "jq", "yq",
+    # Network probes (read-only)
+    "curl", "wget",
+    # Build / Python tooling (mostly read-side but useful)
+    "pip", "uv", "poetry", "make",
+})
+
+
+def is_bash_in_allowlist(cmd: str, *, allowlist: frozenset[str] | None = None) -> tuple[bool, str | None]:
+    """Return (True, root_cmd) if the first word of `cmd` (after AST
+    parsing strips assignments) is in the allowlist. Returns
+    (False, root_cmd_or_None) otherwise.
+
+    Used by classify_fs_action when state["bash_allowlist_mode"] is
+    True: bash invocations whose root binary isn't in the allowlist
+    are forced to ratify_required even if they don't match any
+    destructive pattern. This is the "missions only run these
+    commands" strict mode.
+
+    Adversarial-review #5: any root command whose token contains '/'
+    is rejected outright (force-fail to ratify_required). Otherwise an
+    LLM could drop a shim at /tmp/python and bypass the allowlist via
+    `/tmp/python -c 'import shutil; shutil.rmtree(...)'`. Allowlist
+    mode requires PATH-resolved binaries by name only.
+    """
+    al = allowlist if allowlist is not None else BASH_COMMAND_ALLOWLIST
+    if not isinstance(cmd, str) or not cmd.strip():
+        return (False, None)
+    root_raw = _bash_root_command_raw(cmd)
+    if root_raw is None:
+        return (False, None)
+    if "/" in root_raw:
+        # Path-prefixed roots refused in strict mode — return the FULL
+        # path-bearing string as `root` so the rationale reflects what
+        # the LLM tried to invoke.
+        return (False, root_raw)
+    return (root_raw in al, root_raw)
+
+
+def _bash_root_command_raw(cmd: str) -> str | None:
+    """Like `_bash_root_command` but returns the raw first non-assignment
+    token without path-stripping. Used by `is_bash_in_allowlist` so
+    callers can detect (and refuse) path-prefixed invocations."""
+    try:
+        import bashlex
+        trees = bashlex.parse(cmd)
+    except Exception:  # noqa: BLE001
+        for tok in cmd.strip().split():
+            if "=" not in tok or tok.startswith(("-", "/")):
+                return tok  # raw — keep path if present
+        return None
+    for tree in trees:
+        root = _extract_root_command_raw(tree)
+        if root:
+            return root
+    return None
+
+
+def _extract_root_command_raw(node) -> str | None:
+    """Like `_extract_root_command` but does NOT strip leading path."""
+    kind = getattr(node, "kind", "")
+    if kind == "command":
+        for child in getattr(node, "parts", []) or []:
+            ck = getattr(child, "kind", "")
+            if ck == "assignment":
+                continue
+            if ck == "word":
+                return getattr(child, "word", "") or ""
+        return None
+    for child in (
+        getattr(node, "parts", None)
+        or getattr(node, "list", None)
+        or []
+    ):
+        root = _extract_root_command_raw(child)
+        if root:
+            return root
+    return None
+
+
+def _bash_root_command(cmd: str) -> str | None:
+    """Extract the first command name from `cmd`, ignoring leading
+    assignments. Uses AST when available; falls back to simple
+    word-split."""
+    try:
+        import bashlex
+        trees = bashlex.parse(cmd)
+    except Exception:  # noqa: BLE001
+        # Fallback — drop leading VAR=value tokens, take first word
+        for tok in cmd.strip().split():
+            if "=" not in tok or tok.startswith(("-", "/")):
+                # First non-assignment token is the command.
+                # Strip path: /usr/bin/ls → ls.
+                return tok.rsplit("/", 1)[-1]
+            # else it's an assignment; keep scanning
+        return None
+
+    for tree in trees:
+        root = _extract_root_command(tree)
+        if root:
+            return root
+    return None
+
+
+def _extract_root_command(node) -> str | None:
+    """Find the first CommandNode and return the root command name
+    (skipping AssignmentNode prefixes)."""
+    kind = getattr(node, "kind", "")
+    if kind == "command":
+        for child in getattr(node, "parts", []) or []:
+            ck = getattr(child, "kind", "")
+            if ck == "assignment":
+                continue
+            if ck == "word":
+                word = getattr(child, "word", "") or ""
+                # Strip a leading $VAR resolution: if word is just $VAR,
+                # we can't statically resolve here without var_map; the
+                # AST normalization already handles destructive-pattern
+                # matching for that case. For allowlist purposes, an
+                # unresolved $VAR root is treated as "unknown" → not
+                # in allowlist → ratify_required. Conservative is correct.
+                return word.rsplit("/", 1)[-1]
+        return None
+    # Recurse into containers
+    for child in (
+        getattr(node, "parts", None)
+        or getattr(node, "list", None)
+        or []
+    ):
+        root = _extract_root_command(child)
+        if root:
+            return root
+    return None
 
 
 def is_workspace_escape(path: str, workspace_path: str) -> bool:
@@ -162,6 +547,7 @@ def classify_fs_action(
     action: dict,
     *,
     workspace_path: str = "",
+    bash_allowlist_mode: bool = False,
 ) -> tuple[FSClassification, str]:
     """Classify an FS tool invocation.
 
@@ -172,6 +558,12 @@ def classify_fs_action(
       workspace_path: the PI's mounted workspace root for this run.
                       If empty, escape-detection is skipped (treat
                       every write as scoped — used in tests).
+      bash_allowlist_mode: Gap 4b — when True, only Bash commands
+                      whose root binary is in BASH_COMMAND_ALLOWLIST
+                      pass as scoped_write; everything else is
+                      ratify_required even if it doesn't match a
+                      destructive pattern. Strict mode for missions
+                      that don't need shell exotica.
 
     Returns `(classification, rationale)`. Rationale is a one-line
     human-readable reason callers can surface on the proposed_fs_actions
@@ -197,6 +589,17 @@ def classify_fs_action(
         destructive, rpat = is_destructive_bash(cmd)
         if destructive:
             return ("ratify_required", f"bash matches ratify pattern: {rpat}")
+        # Gap 4b — strict allowlist mode. Only mission-approved root
+        # commands pass as scoped_write; everything else needs PI
+        # ratification regardless of destructive-pattern hits.
+        if bash_allowlist_mode:
+            in_allowlist, root = is_bash_in_allowlist(cmd)
+            if not in_allowlist:
+                return (
+                    "ratify_required",
+                    f"bash allowlist mode: root command {root!r} not in "
+                    f"BASH_COMMAND_ALLOWLIST",
+                )
         # No destructive pattern. Treat as scoped — the subprocess can
         # only mutate paths the OS lets it touch, and writes outside
         # workspace_path would only matter for explicit Write/Edit.

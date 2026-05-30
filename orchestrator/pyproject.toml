@@ -19,6 +19,12 @@ dependencies = [
     "pydantic>=2.7",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
+    # Gap 4a — bash AST parsing in fs_actuator's destructive-command
+    # classifier. Catches regex bypasses like `RM=rm; $RM -rf /` by
+    # tracking variable assignments and resolving references before
+    # pattern-matching. Optional in spirit — if absent, classifier
+    # falls back to pure-regex (the Phase G MVP behavior).
+    "bashlex>=0.18",
 ]
 
 [project.optional-dependencies]
