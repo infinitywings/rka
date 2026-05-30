@@ -89,15 +89,32 @@ def pi_greenlight(
     pending = state.get("decisions_to_present", [])
     items = [d for d in pending if d.get("source_node") == "confirmation_brief"]
 
+    # Gap 3B — Brain may have proposed a capability scope for this mission
+    # (via strategy_node parsing proposed_capabilities from its reply).
+    # Surface it on the payload so the PI's Claude session can render it
+    # as part of the Confirmation Brief ratification.
+    proposed_caps = list(state.get("proposed_capabilities", []) or [])
+
     payload, batched = _build_interrupt_payload(
         node_name="pi_greenlight",
         items=items,
         title="PI approval — Confirmation Brief",
     )
+    if proposed_caps:
+        payload["proposed_capabilities"] = proposed_caps
     pi_response = interrupt_fn(payload)
 
+    # Gap 3B — on accept, copy Brain's proposed_capabilities into the
+    # workflow's allowed_capabilities. This overrides Gap-3A's mission-
+    # set value if both are present (Brain has fresher reasoning about
+    # what THIS run needs). On reject/correct the existing
+    # allowed_capabilities (from mission spec, possibly empty) is
+    # preserved. Empty proposed_capabilities = no override (we don't
+    # null out the mission-set allowlist by accident).
+    response_text = str(pi_response or "").lower()
+    is_accept = (not is_redirect_token(response_text)) and "accept" in response_text
     remaining = [d for d in pending if d.get("source_node") != "confirmation_brief"]
-    return {
+    update: dict = {
         "current_phase": "pi_greenlight",
         "current_node": "pi_greenlight",
         "decisions_to_present": remaining,
@@ -112,6 +129,9 @@ def pi_greenlight(
             )
         ],
     }
+    if is_accept and proposed_caps:
+        update["allowed_capabilities"] = proposed_caps
+    return update
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +181,11 @@ def pi_decision_select(
     # from the parent process. On reject/escape, explicitly clear so a
     # prior workflow's proposed_actions can't leak through.
     ratified = list(state.get("proposed_actions", []) or []) if is_accept else []
+    # Gap 2 — same pattern for FS actions. proposed_fs_actions →
+    # ratified_fs_actions on accept; cleared on reject/escape.
+    # execute_ratified_fs_actions dispatches them with a DOUBLE-CLASSIFY
+    # invariant (PI cannot override DENY-tier even via accept).
+    ratified_fs = list(state.get("proposed_fs_actions", []) or []) if is_accept else []
 
     remaining = [d for d in pending if d.get("source_node") != "decision_present"]
     update = {
@@ -170,6 +195,7 @@ def pi_decision_select(
         "batch_review_active": batched,
         "batch_review_payload_size": len(items),
         "ratified_actions": ratified,
+        "ratified_fs_actions": ratified_fs,
         "interrupts": [
             _record_interrupt(
                 node_name="pi_decision_select",

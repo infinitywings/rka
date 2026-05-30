@@ -225,6 +225,26 @@ class ResearchWorkflowState(TypedDict, total=False):
     # each in a single workflow pass.
     proposed_actions: list[dict]
     ratified_actions: list[dict]
+    # Gap 2 — FS-action ratification surface (Phase G follow-through).
+    # Mirror of proposed_actions / ratified_actions but for Bash/Write/Edit
+    # operations the Brain or Executor wants to perform on the workspace
+    # AFTER PI ratification (vs. unratified scoped_write operations that
+    # the LLM may call directly via the Phase G2 hook). The Executor LLM
+    # emits proposed_fs_actions when classify_fs_action returns
+    # ratify_required; pi_decision_select packages them alongside
+    # proposed_actions in the same payload; on accept,
+    # execute_ratified_fs_actions dispatches via subprocess.run / Python
+    # file IO from the parent process. PI cannot override DENY-tier
+    # classifications — those are refused at dispatch time even if
+    # somehow ratified.
+    proposed_fs_actions: list[dict]
+    ratified_fs_actions: list[dict]
+    # Gap 3B — Brain's capability proposal. strategy_node parses
+    # proposed_capabilities from its JSON reply; pi_greenlight on accept
+    # copies them to allowed_capabilities (overriding any mission-set
+    # value from Gap 3A). Empty list = no Brain proposal, allowlist
+    # comes from mission spec.
+    proposed_capabilities: list[str]
     # Phase 2.14 (agentic) — capability-scoped dispatch. When set to a
     # non-empty list of capability strings (e.g. ["record_knowledge",
     # "execution_gates"]), `execute_ratified_actions` rejects any tool
@@ -297,6 +317,7 @@ def make_initial_state(
     mission_id: str,
     motivated_by_decision_id: str,
     project_id: str = "",
+    allowed_capabilities: list[str] | None = None,
 ) -> ResearchWorkflowState:
     """Construct the canonical initial state at workflow start.
 
@@ -307,6 +328,12 @@ def make_initial_state(
     Phase 2.9 T1: `project_id` is additive; defaults to empty string so
     pre-Phase-2.9 callers continue to work without modification. When set,
     it carries the RKA project context that scopes this workflow run.
+
+    Gap 3A: `allowed_capabilities` lets the runner seed the workflow's
+    capability allowlist from mission metadata (e.g., a mission whose
+    spec carries `capabilities=["record_knowledge", "execution_gates"]`
+    narrows the dispatcher accordingly). None / empty list = no
+    restriction (pre-2.14 behavior).
     """
 
     return ResearchWorkflowState(
@@ -334,6 +361,10 @@ def make_initial_state(
         batch_review_payload_size=0,
         proposed_actions=[],
         ratified_actions=[],
+        proposed_fs_actions=[],
+        ratified_fs_actions=[],
+        proposed_capabilities=[],
+        allowed_capabilities=list(allowed_capabilities or []),
         # Phase D onboarding fields (additive; total=False on the
         # TypedDict means pre-Phase-D callers still construct valid
         # states without them, but the defaults are listed here for

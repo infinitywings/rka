@@ -147,7 +147,21 @@ _GATE1_FORMAT = (
 _POSITION_FORMAT = (
     "\n\nFORMAT REQUIREMENT: begin your reply with a one-line position "
     "summary (≤200 chars) on line 1. Detail on subsequent lines. The first "
-    "line is captured verbatim into the workflow state as your position."
+    "line is captured verbatim into the workflow state as your position.\n\n"
+    # Gap 3B — Brain may propose a capability scope for this run.
+    "CAPABILITY PROPOSAL (optional but recommended). You may include a "
+    "fenced ```json block of the form `{\"capabilities\": [\"...\", ...]}` "
+    "listing the SMALLEST set of write-capability buckets this run "
+    "actually needs. Valid bucket names: record_knowledge, "
+    "update_knowledge, mission_lifecycle, execution_gates, ingestion. "
+    "Omit the block (or leave the list empty) to keep the full "
+    "WRITE_TOOLS surface available. A hygiene/cleanup run might propose "
+    "[\"record_knowledge\", \"update_knowledge\"]; a planning run might "
+    "propose [\"record_knowledge\", \"mission_lifecycle\"]. The PI "
+    "ratifies your proposal at pi_greenlight; on accept it becomes the "
+    "workflow's allowed_capabilities and the dispatcher refuses any "
+    "ratified action whose tool is outside the listed buckets. This is "
+    "least-privilege scoping — narrow when you can."
 )
 
 
@@ -288,7 +302,14 @@ def strategy_node(
         importance="high",
     )
 
-    return {
+    # Gap 3B — parse Brain's optional `proposed_capabilities` block from
+    # the strategy reply. Brain may include a ```json fenced block of
+    # the form {"capabilities": ["record_knowledge", ...]} to declare
+    # the narrowest set of capability buckets this mission needs.
+    # pi_greenlight uses this to populate allowed_capabilities on accept.
+    proposed_caps = _parse_proposed_capabilities(strategy_text)
+
+    update: dict = {
         "current_phase": "brain_strategy",
         "current_node": "strategy_node",
         "brain_strategy": strategy_text,
@@ -296,6 +317,91 @@ def strategy_node(
         "artifacts": [_artifact(note_id, "journal", "strategy_node")],
         "usd_spent": _accrue_cost(state, sdk),
     }
+    if proposed_caps:
+        update["proposed_capabilities"] = proposed_caps
+    return update
+
+
+_KNOWN_CAPABILITIES: frozenset[str] = frozenset({
+    "record_knowledge",
+    "update_knowledge",
+    "mission_lifecycle",
+    "execution_gates",
+    "ingestion",
+})
+
+
+def _parse_proposed_capabilities(reply: str) -> list[str]:
+    """Gap 3B — extract a ```json {"capabilities": [...]} block from
+    Brain's strategy reply if present. Returns [] when:
+      - no fenced block present
+      - block isn't JSON
+      - top-level isn't an object
+      - "capabilities" key missing or non-list
+      - all entries are unknown capability names
+    The filter to _KNOWN_CAPABILITIES drops typos rather than passing
+    them through; dispatcher's malformed-allowlist guard would catch
+    them anyway, but Brain-side filtering keeps state cleaner.
+
+    Adversarial-review #7: the legacy contract conflates "no block"
+    with "block had only unknown names". Use
+    `_parse_proposed_capabilities_with_provenance` to distinguish
+    them when the caller needs to log a Brain-prompt regression
+    explicitly. This helper preserves the legacy []-on-anything-bad
+    shape for backward compat.
+    """
+    parsed, _provenance = _parse_proposed_capabilities_with_provenance(reply)
+    return parsed
+
+
+def _parse_proposed_capabilities_with_provenance(
+    reply: str,
+) -> tuple[list[str], str]:
+    """Gap 3B + adversarial-review #7: returns `(valid_capabilities,
+    provenance)` where provenance is one of:
+      - "absent"      — no fenced JSON block was present at all
+      - "non_json"    — block present but didn't parse as JSON
+      - "non_object"  — JSON wasn't an object
+      - "no_key"      — object lacked the "capabilities" key
+      - "non_list"    — "capabilities" key wasn't a list
+      - "all_filtered" — list non-empty but all entries unknown/non-str
+      - "valid"       — at least one valid capability extracted
+
+    Callers can surface the provenance on a journal/log entry so a
+    Brain prompt regression (proposing valid-sounding but unknown
+    capability names) is visible instead of silently identical to a
+    no-proposal case.
+    """
+    import json
+    import re
+
+    match = re.search(r"```json\s*\n(.+?)\n```", reply or "", re.DOTALL | re.IGNORECASE)
+    if not match:
+        return ([], "absent")
+    try:
+        parsed = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return ([], "non_json")
+    if not isinstance(parsed, dict):
+        return ([], "non_object")
+    if "capabilities" not in parsed:
+        return ([], "no_key")
+    raw = parsed.get("capabilities")
+    if not isinstance(raw, list):
+        return ([], "non_list")
+    valid = [c for c in raw if isinstance(c, str) and c in _KNOWN_CAPABILITIES]
+    # De-dupe preserving order.
+    seen: set[str] = set()
+    out: list[str] = []
+    for c in valid:
+        if c not in seen:
+            seen.add(c)
+            out.append(c)
+    if raw and not out:
+        # Brain proposed entries but none survived filtering — a
+        # contract-shape regression worth flagging.
+        return ([], "all_filtered")
+    return (out, "valid" if out else "no_key")
 
 
 # ---------------------------------------------------------------------------
