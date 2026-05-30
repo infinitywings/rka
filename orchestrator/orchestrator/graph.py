@@ -190,6 +190,15 @@ def build_graph(
         "execute_ratified_actions",
         _bind(executor.execute_ratified_actions, sdk, mcp),
     )
+    # Gap 2 — sibling dispatcher for PI-ratified FS actions
+    # (Bash/Write/Edit). Wired into the graph alongside
+    # execute_ratified_actions: pi_decision_select on accept populates
+    # BOTH ratified lists; both nodes fire sequentially before
+    # final_synthesis. Both are no-ops on empty lists.
+    sg.add_node(
+        "execute_ratified_fs_actions",
+        _bind(executor.execute_ratified_fs_actions, sdk, mcp),
+    )
 
     # ---- 3 PI interrupt nodes ----
     sg.add_node(
@@ -278,10 +287,16 @@ def build_graph(
         "execute_ratified_actions",
         _route_after_execute_ratified_actions,
         {
-            "final_synthesis": "final_synthesis",
+            # Gap 2: success path now flows through execute_ratified_fs_actions
+            # FIRST so PI-ratified FS work runs before final_synthesis.
+            "final_synthesis": "execute_ratified_fs_actions",
             "escalation_router": "escalation_router",
         },
     )
+    # Gap 2: FS dispatcher → final_synthesis (no error-route distinction at
+    # this layer; the dispatcher embeds its own ErrorRecords which
+    # final_synthesis and downstream pi_acceptance handle uniformly).
+    sg.add_edge("execute_ratified_fs_actions", "final_synthesis")
     sg.add_edge("final_synthesis", "pi_acceptance")
     sg.add_edge("escalation_router", "pi_acceptance")
     sg.add_edge("pi_acceptance", END)
@@ -321,11 +336,13 @@ NODE_NAMES: tuple[str, ...] = (
     "cluster_review",
     "gate1_validation",
     "final_synthesis",
-    # Executor (4) — Phase 2.7 T3e added execute_ratified_actions
+    # Executor (5) — Phase 2.7 T3e added execute_ratified_actions;
+    # Gap 2 added execute_ratified_fs_actions (parallel FS dispatcher).
     "backbrief_draft",
     "mission_execute",
     "submit_report",
     "execute_ratified_actions",
+    "execute_ratified_fs_actions",
     # PI (3)
     "pi_greenlight",
     "pi_decision_select",

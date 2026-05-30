@@ -934,6 +934,469 @@ def execute_ratified_actions(
 
 
 # ---------------------------------------------------------------------------
+# Gap 2 — execute_ratified_fs_actions: parent-process FS dispatch
+# ---------------------------------------------------------------------------
+#
+# Mirror of execute_ratified_actions but for Bash/Write/Edit operations.
+# Brain/Executor emits `proposed_fs_actions` when classify_fs_action
+# returns ratify_required (the SDK hook denied the direct call);
+# pi_decision_select packages them alongside proposed_actions in the
+# same payload; PI accept copies them to `ratified_fs_actions`; this
+# dispatcher runs them from the parent process.
+#
+# DOUBLE-CLASSIFY invariant: classify_fs_action runs AGAIN on each
+# action at dispatch time. PI cannot override DENY-tier even if they
+# somehow accepted one — those are refused and surface a
+# `ratified_fs_action_denied_at_dispatch` ErrorRecord. This is the
+# "PI shouldn't override deny" insurance policy.
+
+
+def _resolve_workspace_path_from_state(state: ResearchWorkflowState) -> str:
+    """Pick the workspace root for FS dispatch + double-classify.
+
+    Priority: state["workspace_path"] (set by Phase O onboarding) →
+    HOST_WORKSPACE_ROOT env var → empty string. Empty workspace_path
+    is acceptable but skips escape detection in classify_fs_action,
+    which is why the double-classify is critical at dispatch time
+    (DENY-tier bash patterns still enforce).
+    """
+    explicit = (state.get("workspace_path") or "").strip()
+    if explicit:
+        return explicit
+    import os as _os
+
+    return _os.environ.get("HOST_WORKSPACE_ROOT", "").strip()
+
+
+def execute_ratified_fs_actions(
+    state: ResearchWorkflowState, sdk: SDKClient, mcp: MCPClient
+) -> dict:
+    """Gap 2 — parent-process dispatch of PI-ratified FS actions.
+
+    Iterates `state["ratified_fs_actions"]` and runs each via Python's
+    subprocess.run() (for Bash) or direct file IO (for Write/Edit).
+    A no-op when the list is empty — the topology can wire this node
+    unconditionally between pi_decision_select and final_synthesis,
+    parallel to execute_ratified_actions.
+
+    Defense layers per action:
+      1. Action shape validation (must be dict with tool + args)
+      2. Tool must be in FS_ACTUATOR_MUTATING_TOOLS
+      3. classify_fs_action() runs AGAIN at dispatch — PI cannot
+         override DENY-tier; ratify_required actions are allowed at
+         this point (PI ratified them, that's the whole point); only
+         deny/unknown produces a refusal.
+      4. Bash runs with timeout=300s, cwd=workspace_path, captures
+         stdout/stderr to an ArtifactRef. Exit code != 0 → ErrorRecord.
+      5. Write/Edit go through pathlib with size cap (10 MB) to
+         prevent runaway writes.
+    """
+    import subprocess  # noqa: PLC0415 — local import to avoid top-level overhead
+    from pathlib import Path
+
+    from orchestrator import fs_actuator
+
+    actions = state.get("ratified_fs_actions", []) or []
+    new_artifacts: list[ArtifactRef] = []
+    new_errors: list[ErrorRecord] = []
+
+    workspace_path = _resolve_workspace_path_from_state(state)
+
+    for idx, action in enumerate(actions, start=1):
+        if not isinstance(action, dict):
+            new_errors.append(
+                _make_error(
+                    "execute_ratified_fs_actions",
+                    "ratified_fs_action_shape_error",
+                    f"FA-{idx}: action is not a dict (got {type(action).__name__})",
+                )
+            )
+            continue
+
+        tool = action.get("tool", "")
+        args = action.get("args", {}) or {}
+
+        if tool not in fs_actuator.FS_ACTUATOR_MUTATING_TOOLS:
+            new_errors.append(
+                _make_error(
+                    "execute_ratified_fs_actions",
+                    "ratified_fs_action_tool_not_allowed",
+                    (
+                        f"FA-{idx}: tool {tool!r} is not Bash/Write/Edit. "
+                        f"Read-side tools don't need ratification and "
+                        f"should never appear in proposed_fs_actions."
+                    ),
+                )
+            )
+            continue
+
+        if not isinstance(args, dict):
+            new_errors.append(
+                _make_error(
+                    "execute_ratified_fs_actions",
+                    "ratified_fs_action_args_shape_error",
+                    f"FA-{idx}: args for {tool!r} is not a dict",
+                )
+            )
+            continue
+
+        # CRITICAL: re-classify at dispatch. PI cannot override DENY.
+        cls, rationale = fs_actuator.classify_fs_action(
+            {"tool": tool, "args": args},
+            workspace_path=workspace_path,
+        )
+        if cls == "deny":
+            new_errors.append(
+                _make_error(
+                    "execute_ratified_fs_actions",
+                    "ratified_fs_action_denied_at_dispatch",
+                    (
+                        f"FA-{idx}: tool={tool!r} classified as DENY at "
+                        f"dispatch ({rationale}). PI ratification does not "
+                        f"override the DENY tier. This operation has no "
+                        f"safe execution path; the mission must be rewritten."
+                    ),
+                )
+            )
+            continue
+        # cls in {read, scoped_write, ratify_required} — all proceed:
+        # read shouldn't happen (validated above) but is safe;
+        # scoped_write is fine; ratify_required is precisely the case
+        # PI authorized us to dispatch.
+
+        try:
+            rka_id = _dispatch_fs_action(tool, args, workspace_path, subprocess, Path)
+        except _FSDispatchError as e:
+            new_errors.append(
+                _make_error(
+                    "execute_ratified_fs_actions",
+                    e.error_type,
+                    f"FA-{idx}: tool={tool!r} {e.message}",
+                )
+            )
+            continue
+        except Exception as e:  # noqa: BLE001 — surface unexpected as ErrorRecord
+            new_errors.append(
+                _make_error(
+                    "execute_ratified_fs_actions",
+                    "ratified_fs_action_call_failed",
+                    f"FA-{idx}: tool={tool!r} unexpected error: {e!r}",
+                )
+            )
+            continue
+
+        new_artifacts.append(
+            {
+                "rka_id": rka_id or "",
+                "entity_type": "fs_action",
+                "node_name": "execute_ratified_fs_actions",
+                "timestamp": _now_iso(),
+            }
+        )
+
+    update: dict = {
+        "current_phase": "executor_mission",
+        "current_node": "execute_ratified_fs_actions",
+    }
+    if new_artifacts:
+        update["artifacts"] = new_artifacts
+    if new_errors:
+        update["errors"] = new_errors
+    return update
+
+
+class _FSDispatchError(Exception):
+    """Internal: bubble a typed failure up to execute_ratified_fs_actions."""
+
+    def __init__(self, error_type: str, message: str):
+        super().__init__(message)
+        self.error_type = error_type
+        self.message = message
+
+
+_BASH_TIMEOUT_SECONDS = 300
+_MAX_WRITE_BYTES = 10 * 1024 * 1024  # 10 MB cap
+
+
+def _bash_has_backgrounding(cmd: str) -> bool:
+    """Detect a backgrounding operator (`&`) in the bash command.
+
+    Adversarial-review #1: a backgrounded child detaches from the
+    parent shell, surviving subprocess.run timeout and clean exit.
+    Quick AST check; fall back to a careful regex that ignores `&&`
+    and `&` inside single/double-quoted strings.
+    """
+    try:
+        import bashlex
+        trees = bashlex.parse(cmd)
+        return any(_ast_node_contains_backgrounding(t) for t in trees)
+    except Exception:  # noqa: BLE001
+        pass
+    # Regex fallback: strip quoted regions, then look for a lone `&`.
+    import re as _re
+    stripped = _re.sub(r"'[^']*'", "", cmd)
+    stripped = _re.sub(r'"[^"]*"', "", stripped)
+    # `&&` is logical AND, not backgrounding. Look for unaccompanied `&`.
+    return bool(_re.search(r"(?<![&|])&(?![&])", stripped))
+
+
+def _ast_node_contains_backgrounding(node) -> bool:
+    """Recursively check for an OperatorNode with op '&'."""
+    kind = getattr(node, "kind", "")
+    if kind == "operator" and getattr(node, "op", None) == "&":
+        return True
+    for attr in ("parts", "list"):
+        children = getattr(node, attr, None) or []
+        for c in children:
+            if _ast_node_contains_backgrounding(c):
+                return True
+    return False
+
+
+def _resolve_safe_target(
+    target: str, workspace_path: str, path_cls, *, allow_missing: bool
+):
+    """Adversarial-review #2: resolve the path (collapsing `..` AND
+    symlinks) and confirm it lies inside workspace_path. Refuses
+    silent-escape via symlinks like `/ws/proj/link → /etc/passwd`.
+
+    `allow_missing=True` for Write (target may not exist yet); we
+    resolve the PARENT and append the basename, then verify the
+    resolved path is still inside workspace_path. `allow_missing=False`
+    for Edit (target must exist; resolve via `.resolve(strict=True)`).
+    """
+    from orchestrator import fs_actuator
+    p = path_cls(target)
+
+    if allow_missing and not p.exists():
+        parent = p.parent
+        # Walk up until we find an existing ancestor; resolve that,
+        # then re-append the missing tail.
+        existing = parent
+        tail: list[str] = [p.name]
+        while not existing.exists() and str(existing) != str(existing.parent):
+            tail.insert(0, existing.name)
+            existing = existing.parent
+        if not existing.exists():
+            raise _FSDispatchError(
+                "ratified_fs_action_bad_path",
+                f"Write target {target!r} resolves to a non-existent ancestor",
+            )
+        resolved = existing.resolve(strict=True)
+        for t in tail:
+            resolved = resolved / t
+    else:
+        if not p.exists():
+            raise _FSDispatchError(
+                "ratified_fs_action_target_missing",
+                f"Edit target {target!r} does not exist",
+            )
+        try:
+            resolved = p.resolve(strict=True)
+        except OSError as e:
+            raise _FSDispatchError(
+                "ratified_fs_action_bad_path",
+                f"target {target!r} cannot be resolved: {e}",
+            )
+
+    # workspace_path must be non-empty in production — Gap 2 dispatcher
+    # already guards. Defensive double-check.
+    if not workspace_path:
+        raise _FSDispatchError(
+            "ratified_fs_action_missing_workspace",
+            "Write/Edit dispatch requires state['workspace_path']",
+        )
+
+    if fs_actuator.is_workspace_escape(str(resolved), workspace_path):
+        raise _FSDispatchError(
+            "ratified_fs_action_symlink_escape",
+            f"resolved path {str(resolved)!r} escapes workspace "
+            f"{workspace_path!r} after symlink resolution",
+        )
+    return resolved
+
+
+def _safe_read_text(p):
+    """Read a file with O_NOFOLLOW so a symlink swap between resolution
+    and read is refused at the kernel level."""
+    import os as _os
+    fd = _os.open(str(p), _os.O_RDONLY | _os.O_NOFOLLOW)
+    try:
+        # Use fdopen to leverage UnicodeDecodeError as a real text-check
+        with _os.fdopen(fd, "r", encoding="utf-8") as f:
+            return f.read()
+    except OSError as e:
+        raise _FSDispatchError(
+            "ratified_fs_action_bad_path",
+            f"O_NOFOLLOW read failed (path may have become a symlink): {e}",
+        )
+
+
+def _safe_write_text(p, content: str) -> None:
+    """Write a file with O_NOFOLLOW + O_TRUNC. If the path became a
+    symlink after resolution (TOCTOU), the kernel refuses with ELOOP."""
+    import os as _os
+    flags = _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC | _os.O_NOFOLLOW
+    try:
+        fd = _os.open(str(p), flags, 0o644)
+    except OSError as e:
+        raise _FSDispatchError(
+            "ratified_fs_action_bad_path",
+            f"O_NOFOLLOW write open failed: {e}",
+        )
+    try:
+        with _os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+    except OSError as e:
+        raise _FSDispatchError(
+            "ratified_fs_action_write_failed",
+            f"write failed: {e}",
+        )
+
+
+def _dispatch_fs_action(
+    tool: str, args: dict, workspace_path: str, subprocess_mod, path_cls
+) -> str:
+    """Execute a single Gap 2 FS action. Returns a synthetic ID (a
+    deterministic-ish short string identifying the action; mostly
+    cosmetic in the artifact record). Raises `_FSDispatchError` on
+    typed failures.
+    """
+    if tool == "Bash":
+        cmd = args.get("command", "")
+        if not isinstance(cmd, str) or not cmd.strip():
+            raise _FSDispatchError(
+                "ratified_fs_action_bad_command", "Bash command empty/non-string"
+            )
+        # Adversarial-review #6: refuse Bash dispatch when no workspace
+        # is set. Empty workspace_path would make cwd default to the
+        # daemon's /app — which holds the orchestrator's source tree
+        # under Gap 5's non-root user setup. We never want PI-ratified
+        # shell commands running against /app.
+        if not workspace_path:
+            raise _FSDispatchError(
+                "ratified_fs_action_missing_workspace",
+                "Bash dispatch requires state['workspace_path']; refusing to "
+                "default to daemon cwd. Project must be onboarded first.",
+            )
+        # Adversarial-review #1: reject backgrounding operators in the
+        # bash command. `cmd &` would fork a child that survives the
+        # subprocess.run timeout and clean exit, and the dispatcher
+        # would record success even though the LLM smuggled a
+        # long-running process. No legitimate ratified mission step
+        # needs fire-and-forget — escalate via rka_submit_checkpoint
+        # if the mission genuinely needs background work.
+        if _bash_has_backgrounding(cmd):
+            raise _FSDispatchError(
+                "ratified_fs_action_backgrounded",
+                "Bash command contains a backgrounding operator (&). "
+                "Ratified mission steps must complete synchronously.",
+            )
+        try:
+            # Adversarial-review #1: start_new_session=True puts the
+            # bash child in its own process group. On timeout/exit
+            # we can kill the entire group (`os.killpg`) so any
+            # grandchildren the LLM spawned are reaped too.
+            result = subprocess_mod.run(
+                cmd,
+                shell=True,
+                cwd=workspace_path,
+                timeout=_BASH_TIMEOUT_SECONDS,
+                capture_output=True,
+                text=True,
+                start_new_session=True,
+            )
+        except subprocess_mod.TimeoutExpired as e:
+            # Kill the whole process group; the TimeoutExpired's pid
+            # field gives us the immediate child, and start_new_session
+            # made it the group leader.
+            import os as _os
+            import signal as _signal
+            try:
+                if e.cmd and hasattr(e, "pid"):
+                    _os.killpg(e.pid, _signal.SIGKILL)
+            except (ProcessLookupError, AttributeError, OSError):
+                pass
+            raise _FSDispatchError(
+                "ratified_fs_action_timeout",
+                f"Bash exceeded {_BASH_TIMEOUT_SECONDS}s timeout",
+            )
+        if result.returncode != 0:
+            raise _FSDispatchError(
+                "ratified_fs_action_bash_nonzero_exit",
+                (
+                    f"Bash exit={result.returncode} stderr="
+                    f"{result.stderr[:500]!r}"
+                ),
+            )
+        return f"bash:{hash(cmd) & 0xFFFFFF:06x}"
+
+    if tool == "Write":
+        target = args.get("file_path") or args.get("path")
+        content = args.get("content", "")
+        if not isinstance(target, str) or not target:
+            raise _FSDispatchError(
+                "ratified_fs_action_bad_path", "Write file_path empty/non-string"
+            )
+        if not isinstance(content, str):
+            raise _FSDispatchError(
+                "ratified_fs_action_bad_content", "Write content must be string"
+            )
+        if len(content.encode("utf-8")) > _MAX_WRITE_BYTES:
+            raise _FSDispatchError(
+                "ratified_fs_action_too_large",
+                f"Write exceeds {_MAX_WRITE_BYTES} bytes",
+            )
+        p = _resolve_safe_target(target, workspace_path, path_cls, allow_missing=True)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # Adversarial-review #2: use O_NOFOLLOW to refuse following
+        # symlinks at the open call. Even if the symlink was placed
+        # between classify-time and write-time (TOCTOU), the kernel
+        # rejects it.
+        _safe_write_text(p, content)
+        return f"write:{target}"
+
+    if tool == "Edit":
+        target = args.get("file_path") or args.get("path")
+        old_string = args.get("old_string", "")
+        new_string = args.get("new_string", "")
+        if not isinstance(target, str) or not target:
+            raise _FSDispatchError(
+                "ratified_fs_action_bad_path", "Edit file_path empty/non-string"
+            )
+        p = _resolve_safe_target(target, workspace_path, path_cls, allow_missing=False)
+        try:
+            # O_NOFOLLOW on read also — if target became a symlink after
+            # the workspace-bound resolution, refuse.
+            current = _safe_read_text(p)
+        except UnicodeDecodeError:
+            raise _FSDispatchError(
+                "ratified_fs_action_not_text",
+                f"Edit target {target!r} is not UTF-8 text",
+            )
+        if old_string and old_string not in current:
+            raise _FSDispatchError(
+                "ratified_fs_action_edit_old_string_not_found",
+                f"Edit old_string not found in {target!r}",
+            )
+        updated = (
+            current.replace(old_string, new_string, 1) if old_string else new_string
+        )
+        if len(updated.encode("utf-8")) > _MAX_WRITE_BYTES:
+            raise _FSDispatchError(
+                "ratified_fs_action_too_large",
+                f"Edit result exceeds {_MAX_WRITE_BYTES} bytes",
+            )
+        _safe_write_text(p, updated)
+        return f"edit:{target}"
+
+    # Unreachable per FS_ACTUATOR_MUTATING_TOOLS guard upstream.
+    raise _FSDispatchError(
+        "ratified_fs_action_unknown_tool", f"unhandled tool {tool!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # 5. submit_report — mission acceptance writeup via rka_submit_report
 # ---------------------------------------------------------------------------
 
