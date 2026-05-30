@@ -348,3 +348,205 @@ def test_node_calls_sdk_with_brain_system_prompt():
     O.research_toolkit_node(_state_with_topic(), sdk, _StubMCP())  # type: ignore[arg-type]
     from orchestrator.nodes.brain import BRAIN_SYSTEM
     assert sdk.calls[0]["system"] == BRAIN_SYSTEM
+
+
+# ---------------------------------------------------------------------------
+# Phase D3b — SerpAPI augmentation
+# ---------------------------------------------------------------------------
+
+
+class _FakeSerpResponse:
+    """Lightweight stand-in for httpx.Response."""
+
+    def __init__(self, *, status_code: int = 200, body: dict | None = None):
+        self.status_code = status_code
+        self._body = body or {}
+
+    def json(self) -> dict:
+        return self._body
+
+
+class _FakeSerpClient:
+    """Records GET calls and returns canned responses."""
+
+    def __init__(self, *, body: dict | None = None, status_code: int = 200, raise_exc: Exception | None = None):
+        self.calls: list[dict] = []
+        self._body = body or {}
+        self._status_code = status_code
+        self._raise_exc = raise_exc
+
+    def get(self, url: str, *, params: dict | None = None):
+        self.calls.append({"url": url, "params": params or {}})
+        if self._raise_exc:
+            raise self._raise_exc
+        return _FakeSerpResponse(status_code=self._status_code, body=self._body)
+
+
+def test_serpapi_augment_returns_empty_without_api_key(monkeypatch):
+    """If SERPAPI_KEY is not set, the helper short-circuits to []."""
+    monkeypatch.delenv("SERPAPI_KEY", raising=False)
+    client = _FakeSerpClient()
+    out = O._serpapi_augment_candidates(
+        {"keywords": ["x"], "research_field": "y"}, http_client=client
+    )
+    assert out == []
+    assert client.calls == []  # never invoked
+
+
+def test_serpapi_augment_returns_empty_on_empty_topic(monkeypatch):
+    """Missing topic fields → no query is sensible → []."""
+    monkeypatch.setenv("SERPAPI_KEY", "test-key")
+    client = _FakeSerpClient()
+    out = O._serpapi_augment_candidates(None, http_client=client)
+    assert out == []
+    out = O._serpapi_augment_candidates({}, http_client=client)
+    assert out == []
+
+
+def test_serpapi_augment_parses_organic_results(monkeypatch):
+    """Happy path: SERPAPI_KEY set, hits returned, hits parsed into the
+    {name, url, snippet} shape the prompt-rendering expects."""
+    monkeypatch.setenv("SERPAPI_KEY", "test-key")
+    client = _FakeSerpClient(
+        body={
+            "organic_results": [
+                {
+                    "title": "edge-llm-mcp — MCP server for edge LLM ops",
+                    "link": "https://github.com/example/edge-llm-mcp",
+                    "snippet": "Run edge LLMs via MCP.",
+                },
+                {
+                    "title": "smart-home-tools",
+                    "link": "https://github.com/example/smart-home-tools",
+                    "snippet": "Smart home toolkit for research.",
+                },
+                {"title": "", "link": "https://example.com"},  # skipped (no title)
+            ]
+        }
+    )
+    out = O._serpapi_augment_candidates(
+        {"keywords": ["edge", "llm"], "research_field": "ml systems"},
+        http_client=client,
+    )
+    assert len(out) == 2
+    assert out[0]["name"].startswith("edge-llm-mcp")
+    assert "github.com/example/edge-llm-mcp" in out[0]["url"]
+    assert "Run edge LLMs" in out[0]["snippet"]
+    # Query carries the keywords + MCP-server discovery suffix.
+    assert client.calls[0]["params"]["api_key"] == "test-key"
+    assert "MCP" in client.calls[0]["params"]["q"]
+
+
+def test_serpapi_augment_failsafe_on_http_error(monkeypatch):
+    """Non-200 → [] (no crash; the registry path still works)."""
+    monkeypatch.setenv("SERPAPI_KEY", "test-key")
+    client = _FakeSerpClient(status_code=500)
+    out = O._serpapi_augment_candidates(
+        {"keywords": ["x"]}, http_client=client
+    )
+    assert out == []
+
+
+def test_serpapi_augment_failsafe_on_exception(monkeypatch):
+    """Network error / exception → [] (fail-silent)."""
+    monkeypatch.setenv("SERPAPI_KEY", "test-key")
+    client = _FakeSerpClient(raise_exc=RuntimeError("connection refused"))
+    out = O._serpapi_augment_candidates(
+        {"keywords": ["x"]}, http_client=client
+    )
+    assert out == []
+
+
+def test_serpapi_augment_failsafe_on_unexpected_body_shape(monkeypatch):
+    """Bad JSON shape (organic_results missing/wrong type) → []."""
+    monkeypatch.setenv("SERPAPI_KEY", "test-key")
+    client = _FakeSerpClient(body={"unexpected": True})
+    out = O._serpapi_augment_candidates(
+        {"keywords": ["x"]}, http_client=client
+    )
+    assert out == []
+
+
+def test_render_serpapi_block_empty_lists_disabled_message():
+    assert "(none" in O._render_serpapi_block([])
+
+
+def test_render_serpapi_block_shapes_entries():
+    block = O._render_serpapi_block([
+        {"name": "tool-a", "url": "https://x.example", "snippet": "snip"},
+        {"name": "tool-b", "url": "", "snippet": ""},
+    ])
+    assert "tool-a" in block
+    assert "https://x.example" in block
+    assert "snippet: snip" in block
+    assert "tool-b" in block
+
+
+def test_prompt_includes_serpapi_block_when_hits_present():
+    """When SerpAPI returns hits, the prompt assembly threads them into
+    the {serpapi_block} section so the Brain LLM can score them."""
+    prompt = O._build_research_toolkit_prompt(
+        _state_with_topic(),
+        always_on=[],
+        domain_catalog={},
+        domain_tools={},
+        serpapi_hits=[
+            {"name": "marker-serp-tool", "url": "https://marker.example", "snippet": "hint"},
+        ],
+    )
+    assert "marker-serp-tool" in prompt
+    assert "https://marker.example" in prompt
+
+
+def test_materialize_preserves_serpapi_augmented_source():
+    """Brain-scored entries with source=serpapi_augmented retain that
+    source string (PI ratification UI keys off it for extra scrutiny)."""
+    out = O._materialize_scored_tools(
+        [
+            {
+                "name": "tool-from-serpapi",
+                "source": "serpapi_augmented",
+                "rationale": "found via web search",
+                "criticality_suggested": "optional",
+            },
+        ],
+        domain_tools={},
+    )
+    assert len(out) == 1
+    assert out[0].source == "serpapi_augmented"
+    assert out[0].name == "tool-from-serpapi"
+
+
+def test_research_toolkit_node_threads_serpapi_into_prompt(monkeypatch):
+    """End-to-end: with SERPAPI_KEY set + a stub HTTP client returning a
+    hit, the prompt that lands in sdk.complete contains the SerpAPI
+    hit. This validates the wiring from research_toolkit_node →
+    _serpapi_augment_candidates → _build_research_toolkit_prompt.
+
+    We monkeypatch httpx at the helper's import site so the real
+    network call never happens.
+    """
+    monkeypatch.setenv("SERPAPI_KEY", "test-key")
+
+    class _PatchedHttpx:
+        def Client(self, **_kwargs):  # noqa: N802
+            return _FakeSerpClient(
+                body={
+                    "organic_results": [
+                        {
+                            "title": "MARKER_SERPAPI_TITLE",
+                            "link": "https://marker.example",
+                            "snippet": "MARKER_SNIPPET",
+                        }
+                    ]
+                }
+            )
+
+    import sys as _sys
+    monkeypatch.setitem(_sys.modules, "httpx", _PatchedHttpx())
+
+    sdk = _FakeSDK(reply='```json\n{"selected_domains":[],"scored_tools":[]}\n```')
+    O.research_toolkit_node(_state_with_topic(), sdk, _StubMCP())  # type: ignore[arg-type]
+    prompt = sdk.calls[0]["prompt"]
+    assert "MARKER_SERPAPI_TITLE" in prompt
+    assert "MARKER_SNIPPET" in prompt

@@ -194,6 +194,7 @@ def test_pi_credentials_ready_emits_path_and_secret_list_in_payload():
     captured: list[dict] = []
     state = {
         "project_id": "prj_test_abc",
+        "workspace_path": "/Users/pi/Research/prj_test_abc",
         "proposed_toolkit": [
             {
                 "name": "sec-edgar",
@@ -216,8 +217,10 @@ def test_pi_credentials_ready_emits_path_and_secret_list_in_payload():
     )
     payload = captured[0]
     assert payload["type"] == "pi_credentials_ready"
-    # Project-id-derived path appears so the PI knows where to edit.
-    assert "prj_test_abc" in payload["env_file_path"]
+    # Workspace-derived path appears so the PI knows where to edit.
+    # (Pre-Phase-O the path was derived from project_id; post-Phase-O it's
+    # derived from workspace_path/.rka/.env.)
+    assert "prj_test_abc" in payload["suggested_env_path"]
     # Expected-secrets list has one entry (the sec-edgar key); context7
     # contributes no secrets.
     secrets = payload["expected_secrets"]

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -1329,6 +1330,9 @@ Keywords: {topic_keywords}
 ## Per-domain tool shortlists (for the domains you pick)
 {domain_tools_block}
 
+## Web-discovered candidates (SerpAPI search; may be empty)
+{serpapi_block}
+
 ## Output
 
 Return a single JSON object with three fields:
@@ -1358,8 +1362,111 @@ Return a single JSON object with three fields:
 Wrap the JSON in a fenced ```json block. Always emit valid JSON — if
 unsure, prefer leaving "scored_tools" empty over emitting malformed
 output (the dispatcher's conservative-malformed-input default treats
-parse failures as "no candidates").
+parse failures as "no candidates"). When a candidate originated from the
+SerpAPI web-discovery block, set `"source": "serpapi_augmented"` so the
+PI can apply extra scrutiny at ratification time.
 """
+
+
+# Phase D3b — SerpAPI web-discovery augmentation
+# --------------------------------------------------------------------------
+# When SERPAPI_KEY is present in the parent process env, augment the
+# registry-based candidate pool by querying SerpAPI for MCP servers /
+# research tools matching the project's topic keywords. The hits are
+# rendered into a "Web-discovered candidates" block so Brain can score
+# them alongside registry entries. SerpAPI failures are fail-silent: the
+# registry pipeline always succeeds and is the source of truth; SerpAPI
+# is strictly additive.
+
+_SERPAPI_ENDPOINT = "https://serpapi.com/search.json"
+_SERPAPI_MAX_HITS = 6
+_SERPAPI_TIMEOUT_SECONDS = 6.0
+
+
+def _serpapi_augment_candidates(
+    topic: dict | None,
+    *,
+    http_client: Any = None,
+    api_key_env: str = "SERPAPI_KEY",
+) -> list[dict]:
+    """Query SerpAPI for additional candidate tools/MCP servers.
+
+    Returns a list of hint dicts: `[{"name": ..., "url": ..., "snippet": ...}]`.
+    Returns an empty list on any failure (no API key, network error, bad
+    response, etc.) — the caller treats an empty list as "no augmentation".
+    Tested via `http_client` injection.
+    """
+    api_key = os.environ.get(api_key_env, "").strip()
+    if not api_key:
+        return []
+    if not isinstance(topic, dict):
+        return []
+
+    keywords = topic.get("keywords") or []
+    field = (topic.get("research_field") or "").strip()
+    summary = (topic.get("summary") or "").strip()
+    # Build a focused query — preference for MCP-server discovery since
+    # that's the registry's primary scope.
+    parts: list[str] = []
+    if isinstance(keywords, list) and keywords:
+        parts.extend(str(k) for k in keywords[:3] if k)
+    if field:
+        parts.append(field)
+    if not parts and summary:
+        parts.append(summary[:80])
+    if not parts:
+        return []
+    query = " ".join(parts) + " MCP server OR research tool"
+
+    try:
+        if http_client is None:
+            import httpx  # local import keeps package import cheap
+
+            http_client = httpx.Client(timeout=_SERPAPI_TIMEOUT_SECONDS)
+        resp = http_client.get(
+            _SERPAPI_ENDPOINT,
+            params={
+                "q": query,
+                "api_key": api_key,
+                "engine": "google",
+                "num": _SERPAPI_MAX_HITS,
+            },
+        )
+        if getattr(resp, "status_code", 0) != 200:
+            return []
+        body = resp.json() if callable(getattr(resp, "json", None)) else {}
+    except Exception:  # noqa: BLE001 — fail-silent by design
+        return []
+
+    organic = body.get("organic_results") if isinstance(body, dict) else None
+    if not isinstance(organic, list):
+        return []
+
+    hits: list[dict] = []
+    for h in organic[:_SERPAPI_MAX_HITS]:
+        if not isinstance(h, dict):
+            continue
+        title = (h.get("title") or "").strip()
+        link = (h.get("link") or "").strip()
+        snippet = (h.get("snippet") or "").strip()
+        if not title:
+            continue
+        hits.append({"name": title[:120], "url": link[:240], "snippet": snippet[:240]})
+    return hits
+
+
+def _render_serpapi_block(hits: list[dict]) -> str:
+    if not hits:
+        return "(none — SERPAPI_KEY unset, search returned no results, or augmentation disabled)"
+    lines = []
+    for h in hits:
+        url = h.get("url") or ""
+        url_suffix = f"  [{url}]" if url else ""
+        lines.append(f"  - {h.get('name', '?')}{url_suffix}")
+        snip = (h.get("snippet") or "").strip()
+        if snip:
+            lines.append(f"    snippet: {snip}")
+    return "\n".join(lines)
 
 
 def _build_research_toolkit_prompt(
@@ -1368,6 +1475,7 @@ def _build_research_toolkit_prompt(
     always_on: list[M.ToolDecl],
     domain_catalog: dict[str, str],
     domain_tools: dict[str, list[M.ToolDecl]],
+    serpapi_hits: list[dict] | None = None,
 ) -> str:
     topic = state.get("topic_metadata") or {}
     return _RESEARCH_TOOLKIT_PROMPT_TEMPLATE.format(
@@ -1378,6 +1486,7 @@ def _build_research_toolkit_prompt(
         always_on_block=_render_tools_block(always_on),
         domain_catalog_block=_render_domain_catalog(domain_catalog),
         domain_tools_block=_render_domain_tools(domain_tools),
+        serpapi_block=_render_serpapi_block(serpapi_hits or []),
     )
 
 
@@ -1515,8 +1624,15 @@ def _materialize_scored_tools(
                 source="registry",
             )
         else:
-            # User-added (Brain proposing a tool not in any registry
-            # shortlist). Mark source explicitly; PI must scrutinize.
+            # User-added or SerpAPI-augmented (Brain proposing a tool not
+            # in any registry shortlist). Mark source explicitly; PI must
+            # scrutinize. Phase D3b: preserve "serpapi_augmented" as a
+            # distinct source so the PI ratification UI can apply extra
+            # provenance review (these come from a web search, not from
+            # the curated registry).
+            preserved_source = (
+                "serpapi_augmented" if source == "serpapi_augmented" else "user_added"
+            )
             tool = M.ToolDecl(
                 name=name,
                 type=entry.get("type", "mcp_stdio"),
@@ -1525,7 +1641,7 @@ def _materialize_scored_tools(
                 install_hint=entry.get("install_hint"),
                 secrets=[],  # PI must hand-add via correct/edit later
                 rationale=rationale,
-                source="user_added",
+                source=preserved_source,
             )
         out.append(tool)
     return out
@@ -1560,11 +1676,18 @@ def research_toolkit_node(
     domain_catalog = TR.list_domains()
     domain_tools = {d: TR.tools_for_domain(d) for d in domain_catalog}
 
+    # Phase D3b: optionally augment the candidate pool via SerpAPI web
+    # search. Fail-silent — returns [] if SERPAPI_KEY is unset or the
+    # call fails. The registry-based pipeline above is the source of
+    # truth; SerpAPI hits are strictly additive.
+    serpapi_hits = _serpapi_augment_candidates(state.get("topic_metadata"))
+
     prompt = _build_research_toolkit_prompt(
         state,
         always_on=always_on,
         domain_catalog=domain_catalog,
         domain_tools=domain_tools,
+        serpapi_hits=serpapi_hits,
     )
     reply = sdk.complete(prompt=prompt, system=BRAIN_SYSTEM)
     parsed = _parse_brain_toolkit_reply(reply)
