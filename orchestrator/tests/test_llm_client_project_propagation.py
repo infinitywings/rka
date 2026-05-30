@@ -1,25 +1,24 @@
-"""Phase 2.9 T1 — subprocess MCP project propagation regression tests.
+"""Phase 2.9 T1 — subprocess MCP project propagation (legacy, post-v2.6 dead).
 
 Mission: `mis_01KRY2KP0GGZY21BA4Z2R2S718` (Phase 2.9; PI-handed-off scope
 per `dec_01KRY2EXCSTSSCFZJ96VG4MGDW` Option A).
 
-These tests lock the contract that Phase 2.8 surfaced empirically: the
-claude-agent-sdk subprocess's `rka mcp` stdio child must inherit the
+These tests originally locked the Phase 2.9 T1 contract: the
+claude-agent-sdk subprocess's `rka mcp` stdio child inherited the
 parent's RKA project context via `McpStdioServerConfig.env["RKA_PROJECT"]`.
-Without this, the subprocess MCP session defaults to `Default Project`
-(proj_default) and all entity reads return 404 against missions/journals
-that live in a different project — the exact failure mode Phase 2.8
-documented at `jrn_01KRY18QH8RBK5TF445KWJW1H8`.
 
-Five tests cover:
-  1. `_build_mcp_servers_config(rka_binary, project_id="prj_x")` sets env
-  2. `_build_mcp_servers_config(rka_binary, project_id=None)` omits env (back-compat)
-  3. `make_sdk(project_id="prj_x")` threads to `_RealSDKClient` then to
-     `_build_mcp_servers_config` at runtime (via `complete()` invocation)
-  4. `make_sdk(project_id="prj_x")` still scrubs ANTHROPIC_API_KEY
-     (Phase 2 auth thesis preserved across the new param)
-  5. `state["project_id"]` round-trips through `make_initial_state`
-     (additive TypedDict field; no breaking changes)
+**v2.6 update (post-PR #32):** the rka MCP server no longer reads
+`RKA_PROJECT` from the env — every project-scoped tool now requires
+`project_id` as an explicit kwarg, threaded by the Brain/Executor LLM
+from its workflow state. The orchestrator's
+`_build_mcp_servers_config(project_id=...)` retains the kwarg for
+back-compat but no longer sets `RKA_PROJECT` in the subprocess env.
+
+These tests now lock the negative contract (no RKA_PROJECT in subprocess
+env regardless of project_id), and the v2.6 contract that other env
+keys (SEMANTIC_SCHOLAR_API_KEY, SERPAPI_KEY) still propagate when set.
+The `state["project_id"]` field round-trip is unchanged — it's tracked
+at the orchestrator state layer for the LLM to thread per-call.
 """
 
 from __future__ import annotations
@@ -43,21 +42,31 @@ from orchestrator.state import make_initial_state
 # ---------------------------------------------------------------------------
 
 
-def test_build_mcp_servers_config_with_project_id_sets_env():
-    """When `project_id` is provided, the McpStdioServerConfig dict carries
-    `env={"RKA_PROJECT": project_id}` so the subprocess `rka mcp` child
-    inherits the parent's project context. This is the load-bearing Phase
-    2.9 T1 fix closing the 8th mandatory-pause trigger from Phase 2.8."""
+def test_build_mcp_servers_config_with_project_id_no_longer_sets_rka_project_env(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """v2.6 contract: `project_id` is no longer threaded as `RKA_PROJECT`
+    into the subprocess env block. The rka MCP server (v2.6+) requires
+    every project-scoped tool to take `project_id` as an explicit kwarg;
+    the env-var threading was removed because it reintroduced the
+    silent-default failure mode that v2.6 explicitly eliminates.
+
+    When no external-API keys are set, the env block is absent entirely.
+    """
+    monkeypatch.delenv("SEMANTIC_SCHOLAR_API_KEY", raising=False)
+    monkeypatch.delenv("SERPAPI_KEY", raising=False)
     config = _build_mcp_servers_config("/fake/path/to/rka", project_id="prj_target_01ABC")
     assert _MCP_SERVER_NAME in config
     rka_config = config[_MCP_SERVER_NAME]
     assert rka_config["type"] == "stdio"
     assert rka_config["command"] == "/fake/path/to/rka"
     assert rka_config["args"] == ["mcp"]
-    # The load-bearing assertion:
-    assert rka_config["env"] == {"RKA_PROJECT": "prj_target_01ABC"}, (
-        f"Phase 2.9 T1 contract: subprocess MCP child must inherit "
-        f"RKA_PROJECT={'prj_target_01ABC'!r}; got env={rka_config.get('env')!r}"
+    # The negative assertion: no RKA_PROJECT in env, regardless of
+    # whether project_id was passed.
+    assert "env" not in rka_config or "RKA_PROJECT" not in rka_config.get("env", {}), (
+        f"v2.6: project_id should NOT thread into the subprocess env as "
+        f"RKA_PROJECT (rka MCP server no longer reads it); got "
+        f"env={rka_config.get('env')!r}"
     )
 
 
@@ -107,21 +116,23 @@ def _fake_assistant_message(text: str):
     return sdk.AssistantMessage(content=[block], model="claude-test", parent_tool_use_id=None)
 
 
-def test_make_sdk_threads_project_id_to_subprocess_config(
+def test_make_sdk_project_id_no_longer_propagates_to_subprocess_env(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ):
-    """Phase 2.9 T1: `make_sdk(project_id="prj_x")` constructs a
-    `_RealSDKClient` carrying the project_id; on `complete()`, the
-    SDK options carry `mcp_servers={..., "env": {"RKA_PROJECT": "prj_x"}}`.
-    End-to-end propagation through the orchestrator's SDK layer."""
-    # Stub the rka binary discovery so the test doesn't depend on PATH.
+    """v2.6: `make_sdk(project_id="prj_x")` no longer threads
+    `RKA_PROJECT` into the subprocess MCP env. The kwarg is retained
+    for back-compat but is a no-op at this layer — every project-
+    scoped rka_* tool requires `project_id` as an explicit kwarg,
+    threaded by the Brain/Executor LLM from its workflow state (see
+    BRAIN_SYSTEM / EXECUTOR_SYSTEM prompts)."""
+    monkeypatch.delenv("SEMANTIC_SCHOLAR_API_KEY", raising=False)
+    monkeypatch.delenv("SERPAPI_KEY", raising=False)
     fake_rka = tmp_path / "rka"
     fake_rka.write_text("#!/bin/sh\nexit 0\n")
     fake_rka.chmod(0o755)
     monkeypatch.setattr(
         "orchestrator.llm_client._find_rka_mcp_binary", lambda: str(fake_rka)
     )
-    # Stub the Keychain probe so make_sdk doesn't depend on host state.
     monkeypatch.setattr(
         "orchestrator.llm_client._keychain_has_claude_code_credentials", lambda: True
     )
@@ -139,12 +150,13 @@ def test_make_sdk_threads_project_id_to_subprocess_config(
 
     assert len(captured) == 1
     opts = captured[0]
-    # The project_id must reach the subprocess MCP config.
     assert _MCP_SERVER_NAME in opts.mcp_servers
     rka_cfg = opts.mcp_servers[_MCP_SERVER_NAME]
-    assert rka_cfg["env"] == {"RKA_PROJECT": "prj_target_01ABC"}, (
-        f"Phase 2.9 T1 end-to-end: make_sdk(project_id=...) must propagate "
-        f"to McpStdioServerConfig.env; got env={rka_cfg.get('env')!r}"
+    # The negative assertion: no RKA_PROJECT in env block.
+    env = rka_cfg.get("env", {})
+    assert "RKA_PROJECT" not in env, (
+        f"v2.6: make_sdk(project_id=…) must NOT thread RKA_PROJECT into "
+        f"the subprocess env; got env={env!r}"
     )
 
 
@@ -188,9 +200,13 @@ def test_make_sdk_scrubs_anthropic_api_key_with_project_id_set(
         "into ClaudeAgentOptions.env after Phase 2.9 T1 refactor added "
         "the project_id param. Auth thesis MUST hold across this change."
     )
-    # And the project_id propagation still happens correctly.
+    # v2.6: project_id no longer threads into subprocess env. No env
+    # key set (no API keys + no RKA_PROJECT) → env block absent.
     rka_cfg = opts.mcp_servers[_MCP_SERVER_NAME]
-    assert rka_cfg["env"] == {"RKA_PROJECT": "prj_target_01ABC"}
+    assert "RKA_PROJECT" not in rka_cfg.get("env", {}), (
+        f"v2.6: project_id should NOT thread into subprocess env as "
+        f"RKA_PROJECT; got env={rka_cfg.get('env')!r}"
+    )
 
 
 # ---------------------------------------------------------------------------

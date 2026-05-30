@@ -697,9 +697,15 @@ def test_phase_a_serpapi_key_propagates_to_subprocess_env(
 def test_phase_a_neither_api_key_set_no_env_pollution(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ):
-    """When neither API key is in the parent env, neither lands in the
-    subprocess env. Project_id-only env block (Phase 2.9 baseline) is
-    preserved without leaking placeholder values."""
+    """When neither API key is in the parent env, the subprocess MCP
+    env block is absent (no keys to propagate).
+
+    v2.6 contract update: `project_id` is no longer threaded as
+    `RKA_PROJECT` into the subprocess env — the rka MCP server no
+    longer reads that env var (every project-scoped tool requires
+    `project_id` as a kwarg). The propagation here is now purely for
+    external-API keys (SEMANTIC_SCHOLAR_API_KEY, SERPAPI_KEY).
+    """
     monkeypatch.delenv("SEMANTIC_SCHOLAR_API_KEY", raising=False)
     monkeypatch.delenv("SERPAPI_KEY", raising=False)
     fake_rka = tmp_path / "rka"
@@ -716,9 +722,11 @@ def test_phase_a_neither_api_key_set_no_env_pollution(
         client.complete("smoke", max_tokens=64, system=None)
 
     rka_cfg = captured[0].mcp_servers[_MCP_SERVER_NAME]
-    env_block = rka_cfg.get("env", {})
-    assert env_block == {"RKA_PROJECT": "prj_test"}, (
-        f"only RKA_PROJECT expected in env block; got {env_block}"
+    # v2.6: no API keys set + no RKA_PROJECT threading → no env block.
+    assert "env" not in rka_cfg, (
+        f"v2.6: when no external-API keys are set, the env block should "
+        f"be absent (RKA_PROJECT is no longer threaded); got "
+        f"env={rka_cfg.get('env')!r}"
     )
 
 

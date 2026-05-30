@@ -185,20 +185,22 @@ def _build_mcp_servers_config(
 ) -> dict:
     """Build the McpStdioServerConfig dict for the subprocess.
 
-    Phase 2.9 (mis_01KRY2KP0GGZY21BA4Z2R2S718 T1): `project_id` threads
-    into the rka server's env block as `RKA_PROJECT` so the subprocess
-    MCP session inherits the parent's project context (closes the 8th
-    mandatory-pause trigger surfaced empirically by Phase 2.8). When
-    `project_id` is None, the env key is omitted (pre-Phase-2.9
-    back-compat).
+    The `project_id` parameter is retained for backward compatibility
+    with callers that pass it, but as of RKA v2.6 it is NO-OP at this
+    layer — v2.6 removed the `RKA_PROJECT` env-var reading from rka's
+    MCP server (and from rka.constants.DEFAULT_PROJECT_ID at the REST
+    layer). Every project-scoped rka_* tool now requires `project_id`
+    as a kwarg, threaded by the Brain/Executor LLM from its workflow
+    state (see nodes/brain.py BRAIN_SYSTEM and nodes/executor.py
+    EXECUTOR_SYSTEM prompts for the discipline).
 
-    Phase-A follow-up — external-API key propagation: if
-    `SEMANTIC_SCHOLAR_API_KEY` or `SERPAPI_KEY` is set in the parent
-    process env, they are explicitly propagated into the rka server's
-    env block. Necessary because the McpStdioServerConfig.env field
-    replaces (does NOT merge with) the parent env when the subprocess
-    is spawned. Without explicit propagation the rka MCP child would
-    run anonymously against external APIs.
+    External-API key propagation: if `SEMANTIC_SCHOLAR_API_KEY` or
+    `SERPAPI_KEY` is set in the parent process env, they are explicitly
+    propagated into the rka server's env block. Necessary because the
+    McpStdioServerConfig.env field replaces (does NOT merge with) the
+    parent env when the subprocess is spawned. Without explicit
+    propagation the rka MCP child would run anonymously against
+    external APIs.
 
     Phase-A follow-up — context7 documentation server: if `npx` is
     available on PATH, a second MCP server entry `context7` is added
@@ -208,14 +210,17 @@ def _build_mcp_servers_config(
     validation. Falls back to rka-only when npx isn't installed.
 
     Returns `{}` if no rka binary found — subprocess falls back to
-    Phase 1 text-only mode (caller logs a warning)."""
+    Phase 1 text-only mode (caller logs a warning).
+    """
+    # `project_id` is intentionally unused as of v2.6 — see docstring.
+    del project_id
+
     if not rka_binary:
         return {}
 
-    # rka server env: project context + external-API keys.
+    # rka server env: external-API keys only (project context is now
+    # passed per-call via the project_id kwarg on every tool).
     rka_env: dict[str, str] = {}
-    if project_id:
-        rka_env["RKA_PROJECT"] = project_id
     for key in ("SEMANTIC_SCHOLAR_API_KEY", "SERPAPI_KEY"):
         val = os.environ.get(key)
         if val:
