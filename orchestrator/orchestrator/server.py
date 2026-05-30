@@ -160,6 +160,46 @@ def _enforce_workspace_mount_safety() -> None:
     logger.info("workspace mount safety check passed: %s", effective_norm)
 
 
+def _maybe_load_oauth_secret() -> None:
+    """Gap 5 — read a Docker-secret OAuth token file (if present) and
+    export to env as CLAUDE_CODE_OAUTH_TOKEN so the claude-agent-sdk
+    subprocess picks it up.
+
+    Path comes from ORCHESTRATOR_OAUTH_SECRET_PATH (default
+    /run/secrets/claude_oauth_token). When the file doesn't exist or
+    is empty, we silently fall back — env_file (orchestrator/.env)
+    remains the back-compat auth source. The secret value never lands
+    in logs.
+    """
+    path = os.environ.get(
+        "ORCHESTRATOR_OAUTH_SECRET_PATH", "/run/secrets/claude_oauth_token"
+    )
+    try:
+        with open(path, encoding="utf-8") as f:
+            token = f.read().strip()
+    except (FileNotFoundError, PermissionError, IsADirectoryError):
+        return  # silent fall-through
+    except OSError as e:
+        logger.warning(
+            "oauth secret at %s could not be read: %s; falling back to env_file",
+            path, e,
+        )
+        return
+    if not token:
+        return  # empty file — treat as absent
+    # Don't clobber an explicit env_file override unless the secret
+    # is actually different. (Operator who sets BOTH probably wants
+    # the secret to win — but log the override so it's debuggable.)
+    existing = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+    if existing and existing != token:
+        logger.info(
+            "oauth secret at %s overrides CLAUDE_CODE_OAUTH_TOKEN from env_file",
+            path,
+        )
+    os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = token
+    logger.info("oauth secret loaded from %s (value redacted)", path)
+
+
 # ---------------------------------------------------------------------------
 # Request / response models
 # ---------------------------------------------------------------------------
@@ -488,12 +528,17 @@ def _outcome_dict(o: SegmentOutcome) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _default_sdk_factory(project_id: str):
+def _default_sdk_factory(project_id: str, workspace_path: str = ""):
     """Build the real Claude Agent SDK client. Lazy import so tests that
-    inject a fake factory don't trigger the SDK's import-time auth probe."""
+    inject a fake factory don't trigger the SDK's import-time auth probe.
+
+    Gap 1 fix: forwards workspace_path to make_sdk so the Phase G2
+    can_use_tool hook can scope FS escape detection to the workflow's
+    per-project workspace rather than HOST_WORKSPACE_ROOT.
+    """
     from orchestrator.llm_client import make_sdk
 
-    return make_sdk(project_id=project_id)
+    return make_sdk(project_id=project_id, workspace_path=workspace_path)
 
 
 def _default_mcp_factory(base_url: str):
@@ -576,6 +621,15 @@ def create_app(
             should_check = store is None and runner is None
         if should_check:
             _enforce_workspace_mount_safety()
+
+        # Gap 5 — load OAuth token from Docker secret if present. When
+        # the operator opts into the secrets overlay, the token lives
+        # at /run/secrets/claude_oauth_token (mounted tmpfs, read-only).
+        # We read it once at startup and export to env so the
+        # claude-agent-sdk subprocess picks it up unchanged. Falls back
+        # cleanly to env_file (orchestrator/.env) when the secret isn't
+        # mounted — back-compat path.
+        _maybe_load_oauth_secret()
 
         # If the caller injected store/runner, use those; else build them.
         if store is not None:
@@ -786,6 +840,7 @@ def create_app(
                 project_id=ack["project_id"],
                 mission_id=ack["mission_id"],
                 motivated_by_decision_id=ack["motivated_by_decision_id"],
+                allowed_capabilities=ack.get("allowed_capabilities"),
             ),
             log_tag="start_run",
         )

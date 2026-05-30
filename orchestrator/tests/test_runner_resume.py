@@ -143,7 +143,7 @@ def _make_runner(
 ) -> OrchestratorRunner:
     return OrchestratorRunner(
         store=store,
-        sdk_factory=lambda project_id: object(),
+        sdk_factory=lambda project_id, _ws="": object(),
         mcp_factory=lambda thread_id, project_id: _FakeMCP(mission=mission),
         saver_factory=lambda thread_id: None,
         compile_factory=lambda **kwargs: scripted,
@@ -405,7 +405,7 @@ def test_graph_exception_marks_run_failed(store: ParkedStore):
 
     runner = OrchestratorRunner(
         store=store,
-        sdk_factory=lambda p: object(),
+        sdk_factory=lambda p, _ws="": object(),
         mcp_factory=lambda t, p: _FakeMCP(),
         saver_factory=lambda t: None,
         compile_factory=lambda **kw: _BrokenGraph(),

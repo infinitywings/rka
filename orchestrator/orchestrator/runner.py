@@ -161,7 +161,7 @@ class OrchestratorRunner:
         self,
         *,
         store: ParkedStore,
-        sdk_factory: Callable[[str], SDKClient],
+        sdk_factory: Callable[[str, str], SDKClient],
         mcp_factory: Callable[[str, str], MCPClient],
         saver_factory: Callable[[str], Any],
         compile_factory: Optional[Callable[..., Any]] = None,
@@ -198,6 +198,47 @@ class OrchestratorRunner:
         else:
             self._phase_b_compile_factory = phase_b_compile_factory
 
+    # ---- internal helpers ----
+
+    def _resolve_workspace_path(self, project_id: str) -> str:
+        """Gap 1 fix — look up the per-project workspace_path so the SDK
+        factory can pass it to make_sdk(workspace_path=...) for the
+        Phase G2 can_use_tool hook.
+
+        Returns the workspace_path persisted in `project_workspaces`
+        (written at onboarding via ParkedStore.set_project_workspace).
+        Returns empty string when no per-project workspace is recorded —
+        the hook then falls through to HOST_WORKSPACE_ROOT. Empty
+        project_id (Phase B bootstrap, etc.) also returns empty.
+        """
+        if not project_id:
+            return ""
+        try:
+            return self.store.get_project_workspace(project_id) or ""
+        except Exception:  # noqa: BLE001
+            # Defensive: a missing project_workspaces row shouldn't crash
+            # the runner — degrade to HOST_WORKSPACE_ROOT fallback.
+            return ""
+
+    def _require_workspace_or_raise(self, project_id: str) -> str:
+        """Adversarial-review #8: for mission flows (non-empty
+        project_id), refuse to start the run if the project has not
+        been onboarded — i.e., no `project_workspaces` row. Without
+        that row, the SDK falls back to HOST_WORKSPACE_ROOT (the broad
+        projects-parent), which lets Edit/Write touch sibling projects.
+        """
+        if not project_id:
+            return ""
+        workspace = self._resolve_workspace_path(project_id)
+        if not workspace:
+            raise MissionNotFoundError(
+                f"project {project_id!r} has no registered workspace_path. "
+                f"Run `/orchestrator-onboard {project_id}` first so the "
+                f"per-project workspace is recorded and FS scope can be "
+                f"correctly bounded."
+            )
+        return workspace
+
     # ---- public API ----
 
     def start_run(
@@ -231,6 +272,7 @@ class OrchestratorRunner:
             project_id=ack["project_id"],
             mission_id=ack["mission_id"],
             motivated_by_decision_id=ack["motivated_by_decision_id"],
+            allowed_capabilities=ack.get("allowed_capabilities"),
         )
 
     def start_run_commit(
@@ -283,11 +325,25 @@ class OrchestratorRunner:
             or mission.get("motivated_by_decision_id")
             or ""
         )
+        # Gap 3A — capability allowlist from mission metadata. A mission
+        # spec may carry `capabilities=["record_knowledge", ...]` to scope
+        # its dispatcher surface to a subset of WRITE_TOOLS buckets.
+        # Missing field or empty list → no restriction (pre-2.14 behavior).
+        # Defensive: ignore non-list values; the dispatcher's
+        # ratified_action_capability_allowlist_malformed guard would catch
+        # them downstream but the runner can keep the state cleaner by
+        # filtering here.
+        raw_caps = mission.get("capabilities")
+        if isinstance(raw_caps, list) and all(isinstance(c, str) for c in raw_caps):
+            allowed_caps: list[str] = list(raw_caps)
+        else:
+            allowed_caps = []
         return {
             "workflow_thread_id": thread_id,
             "project_id": project_id,
             "mission_id": mission_id,
             "motivated_by_decision_id": motivated_by,
+            "allowed_capabilities": allowed_caps,
         }
 
     def start_run_drive(
@@ -297,6 +353,7 @@ class OrchestratorRunner:
         project_id: str,
         mission_id: str,
         motivated_by_decision_id: str,
+        allowed_capabilities: list[str] | None = None,
     ) -> SegmentOutcome:
         """Phase 2 of start_run: build SDK + saver + compiled graph and
         drive until the first interrupt or terminal.
@@ -306,15 +363,24 @@ class OrchestratorRunner:
         the workflow_thread_id ack immediately. Brain's strategy_node +
         confirmation_brief LLM calls in this segment can take minutes —
         the same async-resume rationale as `resume_segment`.
+
+        Gap 3A — `allowed_capabilities` seeds the workflow's capability
+        allowlist from the mission spec (populated by `start_run_commit`
+        from `mission.capabilities`). None/empty = no restriction.
         """
         initial = make_initial_state(
             workflow_thread_id=workflow_thread_id,
             mission_id=mission_id,
             motivated_by_decision_id=motivated_by_decision_id,
             project_id=project_id,
+            allowed_capabilities=allowed_capabilities,
         )
+        # Gap 1 fix: per-project workspace_path threads into make_sdk so the
+        # Phase G2 can_use_tool hook can scope FS escape detection to THIS
+        # project's workspace rather than the broader HOST_WORKSPACE_ROOT.
+        workspace_path = self._resolve_workspace_path(project_id)
         mcp = self._mcp_factory(workflow_thread_id, project_id)
-        sdk = self._sdk_factory(project_id)
+        sdk = self._sdk_factory(project_id, workspace_path)
         saver = self._saver_factory(workflow_thread_id)
         compiled = self._compile_factory(sdk=sdk, mcp=mcp, checkpointer=saver)
         return self._execute_segment(workflow_thread_id, compiled, initial)
@@ -469,8 +535,9 @@ class OrchestratorRunner:
         reasonable client timeout and the client sees an empty timeout
         error even though the server completes successfully.
         """
+        workspace_path = self._resolve_workspace_path(project_id)
         mcp = self._mcp_factory(workflow_thread_id, project_id)
-        sdk = self._sdk_factory(project_id)
+        sdk = self._sdk_factory(project_id, workspace_path)
         saver = self._saver_factory(workflow_thread_id)
         # Phase D5c / Phase O: pick the compile factory by interrupt
         # type.  Phase D tool-setup interrupts → onboarding subgraph;
@@ -546,8 +613,9 @@ class OrchestratorRunner:
     ) -> SegmentOutcome:
         """Phase 2 of start_onboarding: build factories + invoke the
         onboarding subgraph until the first interrupt or terminal."""
+        workspace_path = self._resolve_workspace_path(project_id)
         mcp = self._mcp_factory(workflow_thread_id, project_id)
-        sdk = self._sdk_factory(project_id)
+        sdk = self._sdk_factory(project_id, workspace_path)
         saver = self._saver_factory(workflow_thread_id)
         compiled = self._onboarding_compile_factory(
             sdk=sdk, mcp=mcp, checkpointer=saver
@@ -612,8 +680,9 @@ class OrchestratorRunner:
             workflow_thread_id=workflow_thread_id,
         )
 
+        workspace_path = self._resolve_workspace_path(project_id)
         mcp = self._mcp_factory(thread_id, project_id)
-        sdk = self._sdk_factory(project_id)
+        sdk = self._sdk_factory(project_id, workspace_path)
         saver = self._saver_factory(thread_id)
         compiled = self._phase_o_compile_factory(
             sdk=sdk, mcp=mcp, checkpointer=saver
@@ -674,8 +743,11 @@ class OrchestratorRunner:
     ) -> SegmentOutcome:
         """Phase 2 of start_phase_b: build factories + invoke the Phase B
         subgraph until the first interrupt or terminal."""
+        # Phase B is project-independent (orchestrator-level bootstrap),
+        # so workspace_path is empty — the hook will fall through to
+        # HOST_WORKSPACE_ROOT, which is correct for daemon-level work.
         mcp = self._mcp_factory(workflow_thread_id, "")
-        sdk = self._sdk_factory("")
+        sdk = self._sdk_factory("", "")
         saver = self._saver_factory(workflow_thread_id)
         compiled = self._phase_b_compile_factory(
             sdk=sdk, mcp=mcp, checkpointer=saver

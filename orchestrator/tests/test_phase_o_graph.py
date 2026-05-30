@@ -144,7 +144,7 @@ def test_route_after_phase_entry_ack_always_terminates():
 def _make_runner(store, sdk_factory=None, mcp_factory=None, phase_o_factory=None):
     return OrchestratorRunner(
         store=store,
-        sdk_factory=sdk_factory or (lambda _p: FakeSDK()),
+        sdk_factory=sdk_factory or (lambda _p, _ws="": FakeSDK()),
         mcp_factory=mcp_factory or (lambda _t, _p: FakeMCP()),
         saver_factory=lambda _t: None,  # no checkpointer in tests
         phase_o_compile_factory=phase_o_factory,
@@ -193,7 +193,7 @@ def test_respond_to_phase_o_interrupt_routes_via_phase_o_factory():
 
     runner = OrchestratorRunner(
         store=store,
-        sdk_factory=lambda _p: FakeSDK(),
+        sdk_factory=lambda _p, _ws="": FakeSDK(),
         mcp_factory=lambda _t, _p: FakeMCP(),
         saver_factory=lambda _t: None,
         phase_o_compile_factory=phase_o_factory,
@@ -229,7 +229,7 @@ def test_respond_to_phase_d_interrupt_still_routes_via_phase_d_factory():
 
     runner = OrchestratorRunner(
         store=store,
-        sdk_factory=lambda _p: FakeSDK(),
+        sdk_factory=lambda _p, _ws="": FakeSDK(),
         mcp_factory=lambda _t, _p: FakeMCP(),
         saver_factory=lambda _t: None,
         phase_o_compile_factory=phase_o_factory,

@@ -187,7 +187,7 @@ def test_start_onboarding_creates_workflow_row_and_invokes_subgraph(
 
     runner = OrchestratorRunner(
         store=store,
-        sdk_factory=lambda pid: object(),
+        sdk_factory=lambda pid, _ws="": object(),
         mcp_factory=lambda tid, pid: _FakeMCP(),
         saver_factory=lambda tid: None,
         compile_factory=lambda **kw: object(),  # mission factory not used
@@ -222,7 +222,7 @@ def test_start_onboarding_initial_state_includes_onboarding_fields(
 
     runner = OrchestratorRunner(
         store=store,
-        sdk_factory=lambda pid: object(),
+        sdk_factory=lambda pid, _ws="": object(),
         mcp_factory=lambda tid, pid: _FakeMCP(),
         saver_factory=lambda tid: None,
         compile_factory=lambda **kw: object(),
@@ -263,7 +263,7 @@ def test_start_onboarding_does_not_call_rka_get_mission(
 
     runner = OrchestratorRunner(
         store=store,
-        sdk_factory=lambda pid: object(),
+        sdk_factory=lambda pid, _ws="": object(),
         mcp_factory=lambda tid, pid: _FakeMCP(),
         saver_factory=lambda tid: None,
         compile_factory=lambda **kw: object(),

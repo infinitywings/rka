@@ -163,7 +163,7 @@ def stack():
     mcp = _FakeMCP()
     runner = OrchestratorRunner(
         store=store,
-        sdk_factory=lambda project_id: object(),  # graph never calls SDK
+        sdk_factory=lambda project_id, _ws="": object(),  # graph never calls SDK
         mcp_factory=lambda tid, pid: mcp,
         saver_factory=lambda tid: None,
         compile_factory=lambda **kwargs: fake_graph,
@@ -351,7 +351,7 @@ def test_reject_emits_literal_reject_to_graph():
     fake = _RejectShapeFake()
     runner = OrchestratorRunner(
         store=store,
-        sdk_factory=lambda p: object(),
+        sdk_factory=lambda p, _ws="": object(),
         mcp_factory=lambda t, p: _FakeMCP(),
         saver_factory=lambda t: None,
         compile_factory=lambda **kw: fake,
