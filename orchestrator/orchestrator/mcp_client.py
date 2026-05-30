@@ -116,23 +116,8 @@ class MCPClient(Protocol):
         related_journal: list[str],
         tags: list[str] | None = None,
     ) -> str: ...
-    def rka_submit_checkpoint(
-        self,
-        reason: str,
-        *,
-        type: str = "decision",
-        related_mission: str | None = None,
-    ) -> str: ...
-    def rka_submit_report(
-        self,
-        content: str,
-        *,
-        related_mission: str,
-        summary: str | None = None,
-        findings: list[str] | None = None,
-        anomalies: list[str] | None = None,
-        recommended_next: list[str] | None = None,
-    ) -> str: ...
+    def rka_submit_checkpoint(self, *args: Any, **kwargs: Any) -> str: ...
+    def rka_submit_report(self, *args: Any, **kwargs: Any) -> str: ...
     def rka_create_mission(
         self,
         objective: str,
@@ -441,86 +426,189 @@ class RestMCPClient:
         result = self._request("POST", "/api/decisions", json=body) or {}
         return result.get("id") or ""
 
-    def rka_submit_checkpoint(
-        self,
-        reason: str,
-        *,
-        type: str = "decision",
-        related_mission: str | None = None,
-    ) -> str:
+    def rka_submit_checkpoint(self, *args: Any, **kw: Any) -> str:
         """Submit a checkpoint via POST /api/checkpoints.
 
-        Phase 2.1 (mis_01KRSTZVCTFGF91QZXTYK7ZGDD T2): payload aligned with
-        RKA's current `CheckpointCreate` schema (rka/models/checkpoint.py).
-        Mission C (mis_01KR43RX9KY11GAPTPPGK9XSDE, v2.3.4) added
-        `extra="forbid"` as defense-in-depth; the orchestrator's pre-v2.4
-        field names (`reason`, `related_mission`, `tags`) were rejected,
-        causing the v2.5.3+agentic-rc1 422 cascade.
+        Accepts BOTH the canonical RKA-MCP-tool arg shape (what the
+        Brain LLM reads in tool docstrings) AND the legacy adapter shape
+        (kept for backward-compat with pre-Phase-D2.4 callers). Common
+        Brain-isms (`message` instead of `description`, `data` instead
+        of structured context) are tolerated as aliases.
 
-        Schema-correct mapping:
-          - orchestrator `reason`           → RKA `description` (required)
-          - orchestrator `related_mission`  → RKA `mission_id`   (required)
-          - orchestrator `type`             → RKA `type`         (already aligned)
-          - orchestrator `tags`             → RKA has no `tags` on CheckpointCreate;
-            the workflow_thread_id survives via `context` as a structured prefix
-            (checkpoints are indexed by mission_id, not by tag, so Affordance-F
-            retrieval still works through the mission linkage).
+        Canonical RKA shape (rka_submit_checkpoint @ rka/mcp/server.py):
+          mission_id (required)
+          type ("decision" | "clarification" | "inspection" | "gate")
+          description (required — the checkpoint message)
+          task_reference, context, options, recommendation, blocking
+
+        Legacy adapter shape (pre-Phase-D2.4):
+          reason (positional), related_mission, type
+          ^ Still works; `reason`→`description`, `related_mission`→`mission_id`.
+
+        Brain-ism aliases tolerated:
+          message → description    (the Brain LLM frequently emits 'message')
+          data    → context        (Brain often packages structured fields here;
+                                    we JSON-encode it into the `context` field
+                                    so no data is lost)
+
+        Phase-D2.4 fix (empirical follow-up from
+        thr_19e790f90b4f9301179): the prior narrow signature
+        `rka_submit_checkpoint(reason, *, type, related_mission)`
+        rejected the Brain LLM's `{mission_id, message, blocking, data}`
+        emission with TypeError("unexpected keyword argument
+        'mission_id'"). This broadened signature accepts the shape Brain
+        actually emits (matches the user-facing RKA MCP tool) while
+        preserving the legacy entry point for any downstream caller
+        that still uses it.
         """
-        if not related_mission:
-            raise ValueError(
-                "rka_submit_checkpoint requires related_mission (maps to "
-                "CheckpointCreate.mission_id which is required by RKA's schema)."
-            )
-        context = (
-            f"workflow_thread_id: {self.workflow_thread_id}"
-            if self.workflow_thread_id
-            else None
+        import json as _json
+
+        # Pull the "description / reason / message" body from any of the
+        # accepted argument shapes.
+        description = (
+            kw.pop("description", None)
+            or kw.pop("message", None)
+            or kw.pop("reason", None)
+            or (args[0] if args else None)
         )
+        if not description:
+            raise ValueError(
+                "rka_submit_checkpoint requires a description/message/reason"
+            )
+
+        mission_id = kw.pop("mission_id", None) or kw.pop("related_mission", None)
+        if not mission_id:
+            raise ValueError(
+                "rka_submit_checkpoint requires mission_id (canonical) or "
+                "related_mission (legacy) — both map to "
+                "CheckpointCreate.mission_id, which is required by RKA's schema."
+            )
+
+        # Compose context from the workflow_thread_id auto-tag PLUS any
+        # explicit context kwarg PLUS any `data` dict Brain bundles. The
+        # workflow_thread_id is always prefixed so Affordance-F retrieval
+        # works regardless of what shape Brain chose.
+        ctx_parts: list[str] = []
+        if self.workflow_thread_id:
+            ctx_parts.append(f"workflow_thread_id: {self.workflow_thread_id}")
+        explicit_ctx = kw.pop("context", None)
+        if explicit_ctx:
+            ctx_parts.append(str(explicit_ctx))
+        data_payload = kw.pop("data", None)
+        if data_payload is not None:
+            try:
+                ctx_parts.append("data:\n" + _json.dumps(data_payload, indent=2))
+            except Exception:  # noqa: BLE001 — defensive serialization
+                ctx_parts.append(f"data: {data_payload!r}")
+        context = "\n\n".join(ctx_parts) if ctx_parts else None
+
         body = _drop_none(
             {
-                "mission_id": related_mission,
-                "type": type,
-                "description": reason,
+                "mission_id": mission_id,
+                "type": kw.pop("type", None) or "decision",
+                "description": description,
+                "task_reference": kw.pop("task_reference", None),
                 "context": context,
+                "options": kw.pop("options", None),
+                "recommendation": kw.pop("recommendation", None),
+                "blocking": kw.pop("blocking", None),
             }
         )
+        # Unknown kwargs are silently dropped — the WRITE_TOOLS surface is
+        # already gated by `execute_ratified_actions`, so anything that
+        # reached this adapter has been PI-ratified.
         result = self._request("POST", "/api/checkpoints", json=body) or {}
         return result.get("id") or ""
 
-    def rka_submit_report(self, content: str, **kw: Any) -> str:
+    def rka_submit_report(self, *args: Any, **kw: Any) -> str:
         """POST /api/missions/{mission}/report.
 
-        The REST schema (`MissionReportCreate`) accepts only structured
-        fields: tasks_completed, findings, anomalies, questions,
-        codebase_state, recommended_next. We map the free-form `content`
-        argument to `findings=[content]` when no structured findings were
-        passed, so the LLM-shaped output the executor node produces still
-        lands somewhere useful.
+        Accepts BOTH the canonical RKA-MCP-tool arg shape AND the legacy
+        adapter shape. The canonical shape (rka_submit_report @
+        rka/mcp/server.py) is:
+          mission_id (required)
+          summary (required — full report body)
+          findings, anomalies, questions, codebase_state,
+          recommended_next (optional, str — one item per line)
 
-        Return value: the mission_id under which the report was filed.
-        Phase 2.7 T5 triage (`jrn_01KRXQJJXKRAH1GB6FTZEQDAXQ`) confirmed RKA's
-        data model stores reports inline on missions — there is no separate
-        `Report` entity with a `rep_*` prefix. The Phase 2.6 finding
-        "returned mission_id as report_id" was an orchestrator-side
-        contract mismatch (incorrect assumption that a fresh `rep_*` id
-        would be minted), not a REST bug. The returned mission_id is the
-        canonical identity for retrieving the report via
-        `GET /api/missions/{id}/report`.
+        Legacy adapter shape (pre-Phase-D2.4):
+          content (positional), related_mission
+
+        Brain-ism aliases:
+          content → summary  (legacy free-form content goes into summary)
+
+        Each free-form field that arrives as a string is preserved as a
+        single-element list when the REST schema expects a list, so
+        Brain's emission shape lands intact in the report.
+
+        Returns the mission_id under which the report was filed —
+        reports are stored inline on missions; there's no separate
+        report entity. Retrievable via GET /api/missions/{id}/report.
+
+        Phase-D2.4 fix: the prior `(content, **kw)` signature rejected
+        Brain's `{mission_id, summary, findings, anomalies, questions,
+        codebase_state, recommended_next}` emission because no
+        positional `content` arrived and `related_mission` was missing
+        (Brain emitted `mission_id`). The same TypeError class that hit
+        rka_submit_checkpoint.
         """
-        mission = kw.get("related_mission")
+        # Pull the mission_id from canonical or legacy.
+        mission = kw.pop("mission_id", None) or kw.pop("related_mission", None)
         if not mission:
-            raise ValueError("rka_submit_report requires related_mission")
-        findings = kw.get("findings")
-        if not findings and content:
-            findings = [content]
+            raise ValueError(
+                "rka_submit_report requires mission_id (canonical) or "
+                "related_mission (legacy)."
+            )
+
+        # Pull the summary/content (free-form body) from any accepted shape.
+        summary = (
+            kw.pop("summary", None)
+            or kw.pop("content", None)
+            or (args[0] if args else None)
+            or ""
+        )
+
+        # Coerce each list-shaped field: REST schema accepts list[str] |
+        # None for findings/anomalies/questions/recommended_next. The
+        # canonical RKA MCP tool sends str (one item per line); the
+        # legacy orchestrator path sometimes sends list[str]. Accept both.
+        def _coerce_list(v: Any) -> list[str] | None:
+            if v is None:
+                return None
+            if isinstance(v, list):
+                return [str(x).strip() for x in v if str(x).strip()] or None
+            if isinstance(v, str):
+                lines = [ln.strip() for ln in v.strip().splitlines() if ln.strip()]
+                return lines or None
+            return [str(v)]
+
+        # tasks_completed: anchor with the summary line so the report has
+        # at least one task entry even if the caller didn't supply one.
+        tasks_completed = kw.pop("tasks_completed", None)
+        if not tasks_completed and summary:
+            # Use the first line of the summary as a one-task anchor; the
+            # full summary is preserved in findings if no other findings
+            # were passed (legacy behavior).
+            first_line = summary.strip().splitlines()[0] if summary else ""
+            tasks_completed = [first_line] if first_line else [summary]
+        if isinstance(tasks_completed, str):
+            tasks_completed = _coerce_list(tasks_completed)
+
+        findings = _coerce_list(kw.pop("findings", None))
+        if not findings and summary and not kw.get("_summary_only"):
+            # Legacy behavior: if no findings were passed, route the
+            # free-form summary into findings so it lands somewhere
+            # structured.
+            findings = [summary]
+
         body = _drop_none(
             {
-                "tasks_completed": kw.get("tasks_completed"),
+                "tasks_completed": tasks_completed,
                 "findings": findings,
-                "anomalies": kw.get("anomalies"),
-                "questions": kw.get("questions"),
-                "codebase_state": kw.get("codebase_state"),
-                "recommended_next": kw.get("recommended_next"),
+                "anomalies": _coerce_list(kw.pop("anomalies", None)),
+                "questions": _coerce_list(kw.pop("questions", None)),
+                "codebase_state": kw.pop("codebase_state", None),
+                "recommended_next": kw.pop("recommended_next", None),
             }
         )
         result = self._request(

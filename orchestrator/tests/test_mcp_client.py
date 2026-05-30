@@ -520,3 +520,145 @@ def test_rka_submit_report_returns_mission_id_not_rep_prefix():
         "reports. They live inline on missions. The `final_report_id` "
         "field carries the mission_id under which the report was filed."
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase D2.4 — canonical RKA shape support on submit_checkpoint + submit_report
+#
+# Empirical fix from live run thr_19e790f90b4f9301179: Brain emitted args
+# matching the canonical RKA MCP tool signatures, the adapter raised
+# TypeError. Adapter now accepts both shapes.
+# ---------------------------------------------------------------------------
+
+
+def test_rka_submit_checkpoint_accepts_canonical_brain_shape():
+    """Brain emits {mission_id, message, blocking, data} matching the RKA
+    MCP tool. Adapter must accept it and route to /api/checkpoints."""
+    http = FakeHttp(canned=FakeResp(_json={"id": "chk_brain"}))
+    c = _client(http)
+    out = c.rka_submit_checkpoint(
+        mission_id="mis_brain",
+        message="MANDATORY T4 GATE — review the partial-pass state.",
+        blocking=True,
+        data={"task": "T4", "probes_passed": 6, "probes_failed_erofs": 2},
+    )
+    assert out == "chk_brain"
+    body = http.calls[0]["json"]
+    assert body["mission_id"] == "mis_brain"
+    assert body["description"].startswith("MANDATORY T4 GATE")
+    assert body["blocking"] is True
+    # `data` is JSON-encoded into context so no info is lost.
+    assert "data:" in body["context"]
+    assert "probes_passed" in body["context"]
+    # Workflow tag preserved.
+    assert "thr_t9" in body["context"]
+
+
+def test_rka_submit_checkpoint_accepts_canonical_description_kwarg():
+    """Direct canonical shape: {mission_id, type, description}."""
+    http = FakeHttp(canned=FakeResp(_json={"id": "chk_canon"}))
+    c = _client(http)
+    c.rka_submit_checkpoint(
+        mission_id="mis_canon",
+        type="gate",
+        description="Pre-flight gate before T3 extraction.",
+    )
+    body = http.calls[0]["json"]
+    assert body["mission_id"] == "mis_canon"
+    assert body["description"] == "Pre-flight gate before T3 extraction."
+    assert body["type"] == "gate"
+
+
+def test_rka_submit_checkpoint_legacy_positional_reason_still_works():
+    """Backward-compat: pre-Phase-D2.4 callers passing `reason` positional
+    and `related_mission` kwarg must still work."""
+    http = FakeHttp(canned=FakeResp(_json={"id": "chk_legacy"}))
+    c = _client(http)
+    c.rka_submit_checkpoint(
+        "legacy reason text",
+        type="decision",
+        related_mission="mis_legacy",
+    )
+    body = http.calls[0]["json"]
+    assert body["mission_id"] == "mis_legacy"
+    assert body["description"] == "legacy reason text"
+
+
+def test_rka_submit_report_accepts_canonical_brain_shape():
+    """Brain emits {mission_id, summary, findings, anomalies, questions,
+    codebase_state, recommended_next} matching the RKA MCP tool. Adapter
+    must accept it and route to /api/missions/{mission}/report."""
+    http = FakeHttp(canned=FakeResp(_json={"id": "rep_brain"}))
+    c = _client(http)
+    out = c.rka_submit_report(
+        mission_id="mis_brain_report",
+        summary="Mission ended at G1 with 6/8 T1 probes PASS via Read/Write.",
+        findings="T1: 6/8 PASS\nT8 code extension complete\n9032 corpus rows",
+        anomalies="Bash EROFS-blocked 3x\nT6 outputs pre-exist",
+        questions="Q1: Is T6 pre-approved?\nQ2: krippendorff installed?",
+        codebase_state="score_human_audit.py extended",
+        recommended_next="PI confirm T6 pre-approval",
+    )
+    assert out == "rep_brain"
+    # Routed to the singular /report path on the canonical mission_id.
+    assert http.calls[0]["path"] == "/api/missions/mis_brain_report/report"
+    body = http.calls[0]["json"]
+    # str inputs were split into list[str] (one item per line per the
+    # canonical MCP tool's per-line convention).
+    assert body["findings"] == [
+        "T1: 6/8 PASS",
+        "T8 code extension complete",
+        "9032 corpus rows",
+    ]
+    assert body["anomalies"] == [
+        "Bash EROFS-blocked 3x",
+        "T6 outputs pre-exist",
+    ]
+    assert body["questions"] == [
+        "Q1: Is T6 pre-approved?",
+        "Q2: krippendorff installed?",
+    ]
+    assert body["codebase_state"] == "score_human_audit.py extended"
+    assert body["recommended_next"] == "PI confirm T6 pre-approval"
+
+
+def test_rka_submit_report_legacy_positional_content_still_works():
+    """Backward-compat: pre-Phase-D2.4 callers passing `content` positional
+    + `related_mission` kwarg must still work; the content goes into both
+    tasks_completed (as anchor) and findings (legacy fallback behavior)."""
+    http = FakeHttp(canned=FakeResp(_json={"id": "rep_legacy"}))
+    c = _client(http)
+    c.rka_submit_report(
+        "Legacy free-form report content here.",
+        related_mission="mis_legacy_report",
+    )
+    body = http.calls[0]["json"]
+    # findings carries the free-form summary when no structured findings
+    # were passed.
+    assert body["findings"] == ["Legacy free-form report content here."]
+
+
+def test_rka_submit_checkpoint_brain_data_dict_serializes_to_context():
+    """The `data` kwarg Brain often emits is a structured dict that
+    doesn't fit any single CheckpointCreate field — it gets serialized
+    into context as JSON so the audit trail preserves the structure."""
+    http = FakeHttp(canned=FakeResp(_json={"id": "chk_data"}))
+    c = _client(http)
+    c.rka_submit_checkpoint(
+        mission_id="mis_data",
+        message="Decision needed.",
+        data={
+            "task": "T4",
+            "tasks_completed": ["T1", "T2"],
+            "tasks_blocked": ["T3"],
+            "llm_spend_usd": 0.0,
+        },
+    )
+    body = http.calls[0]["json"]
+    ctx = body["context"]
+    # Verify the data dict made it into context as JSON.
+    assert "data:" in ctx
+    assert "T1" in ctx
+    assert "T2" in ctx
+    assert "T3" in ctx
+    assert "llm_spend_usd" in ctx

@@ -187,3 +187,99 @@ def test_happy_path_runs_to_completion(sdk, mcp, fake_interrupt):
     # At minimum the run touched a representative set.
     assert "final_report_id" in final
     assert len(final["interrupts"]) >= 2  # pi_greenlight + pi_acceptance
+
+
+# ---------------------------------------------------------------------------
+# Phase D2.4 — EC8 set-identity guard on execute_ratified_actions routing
+#
+# Empirical follow-up from thr_19e790f90b4f9301179: PI ratified 4 actions,
+# PA-3 + PA-4 dispatched as TypeError on adapter signature mismatch, and
+# the graph silently advanced to final_synthesis (pi_acceptance reported
+# error_count=2 in payload but the run looked "complete-class"). The new
+# conditional edge routes to escalation_router on ANY dispatch error so
+# partial-dispatch failures escalate loud, not silent.
+# ---------------------------------------------------------------------------
+
+
+def test_route_after_execute_ratified_actions_clean_dispatch_to_final_synthesis():
+    """Clean dispatch (zero ErrorRecords from execute_ratified_actions)
+    routes to final_synthesis as before."""
+    state = {"errors": []}
+    assert (
+        graph._route_after_execute_ratified_actions(state)
+        == "final_synthesis"
+    )
+
+
+def test_route_after_execute_ratified_actions_no_op_state_to_final_synthesis():
+    """No errors key at all (or empty state) routes to final_synthesis —
+    the node is a documented no-op when ratified_actions is empty."""
+    assert (
+        graph._route_after_execute_ratified_actions({})
+        == "final_synthesis"
+    )
+
+
+def test_route_after_execute_ratified_actions_partial_dispatch_to_escalation():
+    """EC8 guard: ANY ErrorRecord scoped to execute_ratified_actions
+    routes to escalation_router. Reproduces the thr_19e790f90b4f9301179
+    failure shape: 2 of 4 PAs raised TypeError on adapter mismatch."""
+    state = {
+        "errors": [
+            {
+                "node_name": "execute_ratified_actions",
+                "error_type": "ratified_action_call_failed",
+                "detail": "PA-3: tool='rka_submit_checkpoint' exc=TypeError(...)",
+                "timestamp": "2026-05-30T15:09:55Z",
+            },
+            {
+                "node_name": "execute_ratified_actions",
+                "error_type": "ratified_action_call_failed",
+                "detail": "PA-4: tool='rka_submit_report' exc=TypeError(...)",
+                "timestamp": "2026-05-30T15:09:55Z",
+            },
+        ]
+    }
+    assert (
+        graph._route_after_execute_ratified_actions(state)
+        == "escalation_router"
+    )
+
+
+def test_route_after_execute_ratified_actions_ignores_other_nodes_errors():
+    """An ErrorRecord from a DIFFERENT node (e.g., mission_execute's
+    proposed_actions parser) must NOT trigger the EC8 escalation here —
+    only errors scoped to execute_ratified_actions count."""
+    state = {
+        "errors": [
+            {
+                "node_name": "mission_execute",
+                "error_type": "proposed_actions_parse_failure",
+                "detail": "empty LLM reply",
+                "timestamp": "2026-05-30T15:00:00Z",
+            },
+        ]
+    }
+    assert (
+        graph._route_after_execute_ratified_actions(state)
+        == "final_synthesis"
+    )
+
+
+def test_route_after_execute_ratified_actions_partial_success_still_escalates():
+    """Even if MOST PAs succeeded, a single failed dispatch is enough to
+    violate EC8 set-identity (ratified == proposed) — route to escalation."""
+    state = {
+        "errors": [
+            {
+                "node_name": "execute_ratified_actions",
+                "error_type": "ratified_action_call_failed",
+                "detail": "PA-1: tool='rka_add_note' exc=...",
+                "timestamp": "2026-05-30T15:00:00Z",
+            }
+        ]
+    }
+    assert (
+        graph._route_after_execute_ratified_actions(state)
+        == "escalation_router"
+    )
