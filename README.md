@@ -127,14 +127,16 @@ graph LR
 **Record and organize:**
 
 ```
-Brain:    rka_add_note("12% packet loss above 400 connections", type="note")
-          rka_add_decision("Use horizontal sharding", related_journal=["jrn_..."])
-          rka_create_mission("Test sharding", motivated_by_decision="dec_...")
+Brain:    rka_add_note(content="12% packet loss above 400 connections", type="note", project_id="prj_…")
+          rka_add_decision(question="Use horizontal sharding", related_journal=["jrn_…"], project_id="prj_…")
+          rka_create_mission(objective="Test sharding", motivated_by_decision="dec_…", project_id="prj_…")
 
-Executor: rka_add_note("Ran 500-connection stress test", type="log")
-          rka_submit_report(mission_id, findings="Sharding reduced loss to 2%")
-          rka_submit_checkpoint("Need PI input on replication factor")
+Executor: rka_add_note(content="Ran 500-connection stress test", type="log", project_id="prj_…")
+          rka_submit_report(mission_id="mis_…", summary="…", findings="Sharding reduced loss to 2%", project_id="prj_…")
+          rka_submit_checkpoint(mission_id="mis_…", type="decision", description="Need PI input on replication factor", project_id="prj_…")
 ```
+
+**Note (v2.6+):** every project-scoped tool requires `project_id` as a kwarg. There is no "active project" session state — the LLM keeps the project_id in conversation memory and threads it on every call. See `rka/skills/{brain,executor,pi}/SKILL.md` for the discipline.
 
 **Navigate and search:**
 
@@ -376,7 +378,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv tool install --force .
 
 The binary lands at `~/.local/bin/rka` and ships role skill prompts (`brain_skill`, `executor_skill`, `pi_skill`) that Claude can load for full workflow guidance.
 
-Then register it in each client's MCP config — full step-by-step setup is in [Quick Start § 2](#2-connect-claude-desktop-and-claude-code) below, including the recommended `env.RKA_PROJECT` block (v2.3.2+) that pins your primary project so fresh sessions resolve correctly instead of silently writing to `proj_default`.
+Then register it in each client's MCP config — full step-by-step setup is in [Quick Start § 2](#2-connect-claude-desktop-and-claude-code) below.
 
 **No LLM required.** The Brain (Claude Desktop) handles all knowledge enrichment — claim extraction, cluster synthesis, contradiction resolution — during normal sessions. There is nothing to configure beyond Docker and the MCP binary.
 
@@ -422,7 +424,7 @@ rka serve
 UV_CACHE_DIR=/tmp/uv-cache uv tool install --force .
 ```
 
-Register it in each Claude client per [Quick Start § 2](#2-connect-claude-desktop-and-claude-code) below — the recommended JSON includes an `env.RKA_PROJECT` block that pins your primary project across sessions.
+Register it in each Claude client per [Quick Start § 2](#2-connect-claude-desktop-and-claude-code) below.
 
 ---
 
@@ -464,17 +466,14 @@ This places `rka` at `~/.local/bin/rka`. Verify with `~/.local/bin/rka --version
 | Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
 | Linux   | `~/.config/Claude/claude_desktop_config.json` |
 
-Add (or merge into) — replace `<your-username>` with your actual username; the path must be **absolute**, not `~`. Set `RKA_PROJECT` to your primary project's id so every fresh session starts in that project (see "Pinning your default project" below):
+Add (or merge into) — replace `<your-username>` with your actual username; the path must be **absolute**, not `~`:
 
 ```json
 {
   "mcpServers": {
     "rka": {
       "command": "/Users/<your-username>/.local/bin/rka",
-      "args": ["mcp"],
-      "env": {
-        "RKA_PROJECT": "prj_01ABC..."
-      }
+      "args": ["mcp"]
     }
   }
 }
@@ -489,10 +488,7 @@ Save and **fully quit Claude Desktop** (Cmd+Q on macOS / right-click tray icon �
   "mcpServers": {
     "rka": {
       "command": "/Users/<your-username>/.local/bin/rka",
-      "args": ["mcp"],
-      "env": {
-        "RKA_PROJECT": "prj_01ABC..."
-      }
+      "args": ["mcp"]
     }
   }
 }
@@ -502,7 +498,13 @@ Reload the VS Code window: **Cmd+Shift+P** (macOS) / **Ctrl+Shift+P** (Windows/L
 
 If you use the Claude Code CLI rather than the VS Code extension, the same config goes in `~/.claude/settings.json` under `mcpServers`.
 
-**Pinning your default project (recommended).** Setting `RKA_PROJECT=<project_id>` in the MCP `env` block (or your shell environment for the API process) makes both the MCP `_session.project_id` AND the API-side fallback resolve to that project on every fresh session. Without it, fresh MCP subprocesses default to `proj_default` and writes silently land there if neither the Brain nor the Executor calls `rka_set_project()` first. To find your project id, run `rka_list_projects()` once in any session, or check `http://localhost:9712` in the dashboard URL bar.
+**Pinning the project (v2.6+).** v2.6 removed the `RKA_PROJECT` env-var "default project" mechanism — it reintroduced the silent-default failure mode that v2.6 explicitly eliminates. Every project-scoped rka_* tool now requires `project_id` as a kwarg, and the LLM keeps the project_id in conversation memory and threads it on every call. The discipline:
+
+> At the start of every conversation, state the project: *"I'm working on prj_01KSMW9R…"* (or *"on the hyperscaler-auditing project"* — the LLM resolves the slug via `rka_list_projects()`). The LLM retains it in working memory and passes `project_id="prj_…"` to every rka_* tool call.
+
+If the LLM ever omits `project_id`, the tool raises `TypeError: rka_X() missing 1 required keyword-only argument: 'project_id'` — by design. That replaces the pre-v2.6 silent writes to `proj_default`.
+
+To find a project id, run `rka_list_projects()` once in any session, or check `http://localhost:9712` in the dashboard URL bar.
 
 **Step 2d — Verify.** In each app, ask:
 
@@ -568,11 +570,12 @@ The MCP server instructions tell Claude to load the appropriate skill prompt at 
 
 ### Key Workflows
 
-**Brain session start:**
+**Brain session start (v2.6+):**
 
-1. `rka_set_project()` → `rka_get_changelog(since="yesterday")` → `rka_get_research_map()`
-2. Process up to 10 maintenance items silently
-3. Greet the user
+1. Pin `project_id` from the conversation context (ask the PI if it's not stated)
+2. `rka_get_changelog(project_id="prj_…", since="yesterday")` → `rka_get_research_map(project_id="prj_…")`
+3. Process up to 10 maintenance items silently
+4. Greet the user
 
 **Executor mission pickup:**
 
@@ -593,7 +596,7 @@ The MCP server instructions tell Claude to load the appropriate skill prompt at 
 
 Multi-project management is available through both MCP and REST:
 
-- **MCP tools**: `rka_list_projects` lists all projects. `rka_set_project` switches the active project by name or ID. `rka_create_project` creates a new project without leaving the MCP session.
+- **MCP tools**: `rka_list_projects` lists all projects. `rka_create_project` creates a new project. `rka_set_project` is a deprecated no-op in v2.6+ (kept for backward-compat); pass `project_id` to every project-scoped tool call explicitly instead.
 - **REST API and web dashboard**: Project-aware. The dashboard stores the active project locally and injects `X-RKA-Project` on API requests automatically.
 - **Knowledge packs**: Export the active project with `GET /api/projects/export`. Import a previously exported pack with `POST /api/projects/import`. Import creates a separate project, remaps project-scoped entity IDs, and rewrites internal references.
 - **Workspace bootstrap**: CLI bootstrap commands target the current database/default project. For project-specific bootstrap in a multi-project database, use `POST /api/workspace/scan` and `POST /api/workspace/ingest` with `X-RKA-Project`.
@@ -739,9 +742,9 @@ All tools are prefixed with `rka_` and available through the MCP stdio interface
 
 | Tool                   | Purpose                                                       |
 | ---------------------- | ------------------------------------------------------------- |
-| `rka_list_projects`  | List all projects with name, description, and ID              |
-| `rka_set_project`    | Switch the active project by name or ID                       |
-| `rka_create_project` | Create a new project and optionally switch to it              |
+| `rka_list_projects`  | List all projects with name, description, and ID (unscoped — no project_id needed) |
+| `rka_create_project` | Create a new project (unscoped — returns the new project_id)  |
+| `rka_set_project`    | **Deprecated no-op (v2.6+).** Validates that a project exists; does NOT change subsequent tool behavior. Pass `project_id` on every call instead. |
 | `rka_get_status`     | Get current project state (phase, summary, blockers, metrics) |
 | `rka_update_status`  | Update project state                                          |
 
@@ -905,7 +908,7 @@ Base URL: `http://localhost:9712/api`
 
 Interactive API docs available at `http://localhost:9712/docs` (Swagger UI).
 
-Most entity endpoints are project-scoped. Pass `X-RKA-Project: <project_id>` to target a specific project. If omitted, the server falls back to `DEFAULT_PROJECT_ID`, which reads from the `RKA_PROJECT` environment variable (v2.3.2+) at server startup, falling through to `proj_default` if unset. Pin your primary project by exporting `RKA_PROJECT=<project_id>` in the API process's environment (or in your MCP `env` block — see "Pinning your default project" above).
+Most entity endpoints are project-scoped. Pass `X-RKA-Project: <project_id>` (or `?project_id=…` query param) on every request to target a specific project. If omitted, the server falls back to `DEFAULT_PROJECT_ID` = `proj_default` (the always-present sentinel project). v2.6 removed the pre-v2.6 `RKA_PROJECT` env-var override on this fallback — the explicit-only contract is now consistent across both the MCP layer and the REST layer.
 
 #### Request validation (v2.3.1+)
 

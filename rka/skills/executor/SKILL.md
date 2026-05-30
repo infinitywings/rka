@@ -19,10 +19,11 @@ Your counterparts: the **Brain** (`skills/brain/SKILL.md`) handles strategy. The
 
 ## Session Start
 
-1. **`rka_get_status()` first** — confirms the active project plus phase. If the active project is `proj_default` (or any project other than the one you intend to work in), call `rka_list_projects()` then `rka_set_project(id)` to switch. Do NOT skip — the MCP `_session.project_id` is per-process and ephemeral; previous-session project state is gone. Set `RKA_PROJECT=<project_id>` in your MCP config (`claude_desktop_config.json` → `mcpServers.rka.env` for Claude Desktop, or your shell environment for Claude Code) to make this default automatic.
-2. `rka_get_context()` to load project state.
-3. `rka_get_mission()` to pick up the active or pending mission.
-4. `rka_get_checkpoints(status="open")` to see blockers that may affect execution.
+1. **Pin the project for the whole conversation.** v2.6+: every project-scoped rka_* tool takes `project_id` as a required kwarg-only parameter — there is NO "active project" session state on the MCP server. When you receive a mission, the mission id implies a project; ask the Brain or PI to confirm the `project_id` if it's not in the mission spec, or call `rka_list_projects()` and verify. Then pass `project_id="prj_…"` on every subsequent rka_* call. Omitting `project_id` raises `TypeError: rka_X() missing 1 required keyword-only argument: 'project_id'` — by design; this replaces the pre-v2.6 silent-fallback-to-`proj_default` failure mode. **Discipline: keep the project_id in working memory; thread it on every call.** `rka_set_project` still exists as a deprecated no-op (validates the ID, emits a deprecation notice — does NOT change subsequent tool behavior). The `RKA_PROJECT` env var was removed in v2.6.
+2. `rka_get_status(project_id=<pinned>)` — phase + focus.
+3. `rka_get_context(project_id=<pinned>)` to load project state.
+4. `rka_get_mission(project_id=<pinned>)` to pick up the active or pending mission.
+5. `rka_get_checkpoints(project_id=<pinned>, status="open")` to see blockers that may affect execution.
 
 ## Mission Pickup Protocol
 

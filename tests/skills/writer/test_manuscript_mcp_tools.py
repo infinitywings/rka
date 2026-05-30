@@ -16,6 +16,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+async def _noop_fire_session_start(project_id):
+    """Test helper: neutralize the post-tool session_start hook fire so it doesn't pollute fake-client post_calls counters."""
+    return None
+
+
+
+
+
 @pytest.fixture
 def mcp_server():
     """Import the rka.mcp.server module (the FastMCP module instance)."""
@@ -66,10 +74,11 @@ class TestRkaRegisterManuscript:
                 "id": "jrn_01_test", "title": "Sample", "venue": "CHI", "phase": "draft",
             }),
         )
-        with patch.object(mcp_server, "_client", return_value=fake_client):
+        with patch.object(mcp_server, "_client", return_value=fake_client), patch.object(mcp_server, "_maybe_fire_session_start", new=_noop_fire_session_start):
             result_text = await mcp_server.rka_register_manuscript(
                 venue="CHI", title="Sample",
-            )
+                project_id="proj_default",
+        )
         result = json.loads(result_text)
         assert result["id"] == "jrn_01_test"
         assert len(fake_client.post_calls) == 1
@@ -81,10 +90,11 @@ class TestRkaRegisterManuscript:
         fake_client = _AsyncClientContext(
             post_response=_make_response(201, {"id": "jrn_X"}),
         )
-        with patch.object(mcp_server, "_client", return_value=fake_client):
+        with patch.object(mcp_server, "_client", return_value=fake_client), patch.object(mcp_server, "_maybe_fire_session_start", new=_noop_fire_session_start):
             await mcp_server.rka_register_manuscript(
                 venue="EMNLP", title="T", abstract="abs", sections=["S1", "S2"],
-            )
+                project_id="proj_default",
+        )
         _, payload = fake_client.post_calls[0]
         assert payload["abstract"] == "abs"
         assert payload["sections"] == ["S1", "S2"]
@@ -102,8 +112,8 @@ class TestRkaGetManuscript:
                 "tags": ["manuscript", "venue:CHI", "phase:draft"],
             }),
         )
-        with patch.object(mcp_server, "_client", return_value=fake_client):
-            result_text = await mcp_server.rka_get_manuscript(manuscript_id="jrn_01_test")
+        with patch.object(mcp_server, "_client", return_value=fake_client), patch.object(mcp_server, "_maybe_fire_session_start", new=_noop_fire_session_start):
+            result_text = await mcp_server.rka_get_manuscript(manuscript_id="jrn_01_test", project_id="proj_default")
         result = json.loads(result_text)
         assert result["id"] == "jrn_01_test"
         assert len(fake_client.get_calls) == 1
@@ -122,11 +132,12 @@ class TestRkaValidateReference:
                 "sources_confirmed": ["crossref", "openalex"],
             }),
         )
-        with patch.object(mcp_server, "_client", return_value=fake_client):
+        with patch.object(mcp_server, "_client", return_value=fake_client), patch.object(mcp_server, "_maybe_fire_session_start", new=_noop_fire_session_start):
             result_text = await mcp_server.rka_validate_reference(
                 manuscript_id="jrn_01_test",
                 doi="10.1234/test",
-            )
+                project_id="proj_default",
+        )
         result = json.loads(result_text)
         assert result["status"] == "VERIFIED"
         _, payload = fake_client.post_calls[0]
@@ -135,6 +146,7 @@ class TestRkaValidateReference:
     async def test_validate_reference_requires_doi_or_title(self, mcp_server) -> None:
         result_text = await mcp_server.rka_validate_reference(
             manuscript_id="jrn_01_test",
+            project_id="proj_default",
         )
         result = json.loads(result_text)
         assert result["status"] == "error"
@@ -144,11 +156,12 @@ class TestRkaValidateReference:
         fake_client = _AsyncClientContext(
             post_response=_make_response(200, {"status": "UNVERIFIED"}),
         )
-        with patch.object(mcp_server, "_client", return_value=fake_client):
+        with patch.object(mcp_server, "_client", return_value=fake_client), patch.object(mcp_server, "_maybe_fire_session_start", new=_noop_fire_session_start):
             await mcp_server.rka_validate_reference(
                 manuscript_id="jrn_01_X",
                 title="A Title",
                 author=[{"family": "Smith"}],
-            )
+                project_id="proj_default",
+        )
         _, payload = fake_client.post_calls[0]
         assert payload == {"title": "A Title", "author": [{"family": "Smith"}]}

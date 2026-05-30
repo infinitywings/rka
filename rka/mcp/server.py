@@ -79,14 +79,17 @@ class MCPSessionState:
     session_start: str = field(
         default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     )
-    project_id: str | None = field(
-        default_factory=lambda: os.environ.get("RKA_PROJECT") or None
-    )
     entities_created: list[dict[str, str]] = field(default_factory=list)
     decisions_made: list[str] = field(default_factory=list)
     checkpoints_raised: list[str] = field(default_factory=list)
-    # Mission 2 — track which (mcp_session, project_id) pairs have already
-    # fired session_start. Reset per project when rka_set_project is called.
+    # Track which project_ids have already fired session_start in this
+    # MCP-process lifetime. Keyed by project_id from the most recent tool
+    # call; first time a project is seen, the hook fires; subsequent
+    # calls for the same project skip.
+    #
+    # `project_id` field removed in v2.6 — every tool now takes project_id
+    # explicitly, eliminating the silent-fallback-to-proj_default failure
+    # mode. The RKA_PROJECT env var was removed at the same time.
     session_start_fired_for: set[str] = field(default_factory=set)
 
     @property
@@ -102,25 +105,27 @@ def _tick() -> MCPSessionState:
     return _session
 
 
-async def _maybe_fire_session_start() -> None:
-    """Fire session_start hook once per project per MCP session.
+async def _maybe_fire_session_start(project_id: str | None) -> None:
+    """Fire session_start hook once per (MCP-process, project_id) pair.
 
-    Idempotent within the session; rka_set_project clears the project's
-    entry so a re-set re-fires. All firing failures are silent — hooks
-    cannot block tool execution.
+    Idempotent within the process per project. The first time a project
+    is seen in this MCP-process lifetime, the hook fires; subsequent
+    calls for the same project skip. All firing failures are silent —
+    hooks cannot block tool execution.
+
+    project_id=None (unscoped tools like rka_list_projects) is a no-op.
     """
-    pid = _session.project_id
-    if not pid or pid in _session.session_start_fired_for:
+    if not project_id or project_id in _session.session_start_fired_for:
         return
-    _session.session_start_fired_for.add(pid)
+    _session.session_start_fired_for.add(project_id)
     try:
-        async with _client() as c:
+        async with _client(project_id) as c:
             await c.post(
                 "/api/hooks/fire",
                 json={
                     "event": "session_start",
                     "payload": {
-                        "project_id": pid,
+                        "project_id": project_id,
                         "session_start_iso": _session.session_start,
                         "actor": "brain",
                     },
@@ -129,7 +134,7 @@ async def _maybe_fire_session_start() -> None:
     except Exception:
         # Re-arm so a later tool call retries — failure mid-fire shouldn't
         # leave the session permanently un-fired.
-        _session.session_start_fired_for.discard(pid)
+        _session.session_start_fired_for.discard(project_id)
 
 
 def _record_entity(entity_type: str, entity_id: str, summary: str) -> None:
@@ -139,17 +144,23 @@ def _record_entity(entity_type: str, entity_id: str, summary: str) -> None:
 
 
 def tool():
-    """Register an MCP tool and increment session state on every invocation."""
+    """Register an MCP tool and increment session state on every invocation.
+
+    The wrapper extracts `project_id` from the call's kwargs (every
+    project-scoped tool takes it as a kwarg-only parameter post-v2.6) and
+    threads it into the session_start hook firing. Unscoped tools that
+    don't carry project_id pass None to the hook which is a no-op there.
+    """
 
     def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
             _tick()
             result = await func(*args, **kwargs)
-            # Fire session_start hook AFTER the tool body so rka_set_project
-            # has a chance to set _session.project_id first. Idempotent
-            # within the session per Mission 2 Q3 default.
-            await _maybe_fire_session_start()
+            # Fire session_start hook AFTER the tool body. The hook is
+            # keyed on project_id (kwarg-only on every project-scoped
+            # tool); unscoped tools pass None and the hook no-ops.
+            await _maybe_fire_session_start(kwargs.get("project_id"))
             return result
 
         return mcp.tool()(wrapper)
@@ -157,10 +168,16 @@ def tool():
     return decorator
 
 
-def _client() -> httpx.AsyncClient:
-    headers = {}
-    if _session.project_id:
-        headers["X-RKA-Project"] = _session.project_id
+def _client(project_id: str | None = None) -> httpx.AsyncClient:
+    """Build an httpx client scoped to a project via X-RKA-Project header.
+
+    project_id is REQUIRED for every project-scoped tool (writes + scoped reads);
+    pass None ONLY when calling project-list / project-create / health endpoints.
+    The MCP layer surfaces missing project_id as a clear error to the LLM/caller
+    so the silent-fallback-to-proj_default failure mode is structurally
+    impossible.
+    """
+    headers = {"X-RKA-Project": project_id} if project_id else {}
     return httpx.AsyncClient(base_url=API_URL, timeout=API_TIMEOUT, headers=headers)
 
 
@@ -193,6 +210,8 @@ async def rka_add_note(
     confidence: str = "hypothesis",
     importance: str = "normal",
     tags: list[str] | None = None,
+    *,
+    project_id: str,
 ) -> str:
     """Add a research journal entry.
 
@@ -210,7 +229,7 @@ async def rka_add_note(
         importance: critical | high | normal | low
         tags: Optional tags for categorization (e.g. ["anomaly-detection", "methodology"])
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         body = {
             "content": content, "type": type, "source": source,
             "phase": phase, "verbatim_input": verbatim_input,
@@ -241,6 +260,8 @@ async def rka_update_note(
     tags: list[str] | None = None,
     phase: str | None = None,
     source: str | None = None,
+    *,
+    project_id: str,
 ) -> str:
     """Update an existing journal entry.
 
@@ -258,7 +279,7 @@ async def rka_update_note(
         phase: Research phase (e.g. planning | development | design | experiment)
         source: Who created this — brain | executor | pi | llm | web_ui
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         body = {
             "content": content, "type": type, "confidence": confidence,
             "importance": importance, "verbatim_input": verbatim_input,
@@ -288,6 +309,8 @@ async def rka_add_literature(
     relevance: str | None = None,
     pdf_path: str | None = None,
     added_by: str = "brain",
+    *,
+    project_id: str,
 ) -> str:
     """Add a literature entry (paper, article, etc.).
 
@@ -305,7 +328,7 @@ async def rka_add_literature(
         pdf_path: Local path to PDF
         added_by: Who added this — brain | executor | pi
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         body = {
             "title": title, "authors": authors, "year": year, "venue": venue,
             "doi": doi, "url": url, "bibtex": bibtex, "abstract": abstract,
@@ -339,6 +362,8 @@ async def rka_update_literature(
     related_decisions: list[str] | None = None,
     notes: str | None = None,
     tags: list[str] | None = None,
+    *,
+    project_id: str,
 ) -> str:
     """Update a literature entry. Only provide fields you want to change.
 
@@ -362,7 +387,7 @@ async def rka_update_literature(
         notes: Researcher annotations
         tags: Tags for categorization
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         body = {
             "title": title, "authors": authors, "year": year,
             "venue": venue, "doi": doi, "url": url, "bibtex": bibtex,
@@ -389,6 +414,8 @@ async def rka_add_decision(
     related_journal: list[str] | None = None,
     kind: str = "decision",
     assumptions: list[str] | None = None,
+    *,
+    project_id: str,
 ) -> str:
     """Add a decision node to the research decision tree.
 
@@ -405,7 +432,7 @@ async def rka_add_decision(
         kind: research_question | design_choice | decision | operational
         assumptions: List of assumptions this decision rests on (stored as JSON)
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         body = {
             "question": question, "phase": phase, "decided_by": decided_by,
             "options": options, "chosen": chosen, "rationale": rationale,
@@ -435,6 +462,8 @@ async def rka_update_decision(
     phase: str | None = None,
     tags: list[str] | None = None,
     assumptions: list[str] | None = None,
+    *,
+    project_id: str,
 ) -> str:
     """Update a decision node.
 
@@ -453,7 +482,7 @@ async def rka_update_decision(
         tags: Tags for categorization
         assumptions: List of assumptions this decision rests on (stored as JSON)
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         body = {
             "status": status, "chosen": chosen, "rationale": rationale,
             "abandonment_reason": abandonment_reason, "kind": kind,
@@ -483,6 +512,8 @@ async def rka_present_decision(
     confirmation_brief: str,
     options: list[dict],
     pi_preference: str | None = None,
+    *,
+    project_id: str,
 ) -> str:
     """Present a multi-choice decision to the PI via the v2.2 strip-then-re-inject protocol.
 
@@ -512,7 +543,7 @@ async def rka_present_decision(
         recommended_option_id, presentation_method, and the markdown-rendered
         options block for the Brain to show the PI.
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         # Guard: refuse if decision doesn't exist, has existing options,
         # or already recorded a PI selection.
         r = await c.get(f"/api/decisions/{decision_id}")
@@ -654,6 +685,8 @@ async def rka_record_pi_selection(
     decision_id: str,
     selected_option_id: str | None = None,
     override_rationale: str | None = None,
+    *,
+    project_id: str,
 ) -> str:
     """Record the PI's response to a presented decision.
 
@@ -672,7 +705,7 @@ async def rka_record_pi_selection(
             to record the rationale for choosing that option over the
             recommended one.
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.put(
             f"/api/decisions/{decision_id}/pi_selection",
             json={
@@ -690,6 +723,8 @@ async def rka_record_outcome(
     outcome: str,
     outcome_details: str | None = None,
     recorded_by: str = "pi",
+    *,
+    project_id: str,
 ) -> str:
     """Record what actually happened after a decision played out.
 
@@ -712,7 +747,7 @@ async def rka_record_outcome(
     Returns:
         JSON string with the created calibration_outcomes row.
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.post(
             f"/api/decisions/{decision_id}/outcomes",
             json={
@@ -737,7 +772,7 @@ async def rka_record_outcome(
 
 
 @tool()
-async def rka_get_calibration_metrics() -> str:
+async def rka_get_calibration_metrics(*, project_id: str) -> str:
     """Get calibration metrics for the active project.
 
     Returns both families of metrics side-by-side:
@@ -757,7 +792,7 @@ async def rka_get_calibration_metrics() -> str:
 
     Takes no arguments — operates on the active project from the MCP session.
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.get("/api/calibration/metrics")
         _raise_with_detail(r)
         return json.dumps(r.json(), indent=2)
@@ -781,6 +816,8 @@ async def rka_add_hook(
     name: str,
     enabled: bool = True,
     created_by: str = "pi",
+    *,
+    project_id: str,
 ) -> str:
     """Register a lifecycle hook for the active project.
 
@@ -801,7 +838,7 @@ async def rka_add_hook(
         enabled: defaults to True.
         created_by: pi | brain | executor | system. Defaults to pi.
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.post(
             "/api/hooks",
             json={
@@ -821,6 +858,8 @@ async def rka_add_hook(
 async def rka_list_hooks(
     event: str | None = None,
     enabled_only: bool = False,
+    *,
+    project_id: str,
 ) -> str:
     """List hooks registered for the active project.
 
@@ -828,7 +867,7 @@ async def rka_list_hooks(
         event: Optional event filter.
         enabled_only: If True, only return hooks with enabled=true.
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         params = {}
         if event:
             params["event"] = event
@@ -840,27 +879,27 @@ async def rka_list_hooks(
 
 
 @tool()
-async def rka_enable_hook(hook_id: str) -> str:
+async def rka_enable_hook(hook_id: str, *, project_id: str) -> str:
     """Enable a previously-disabled hook."""
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.put(f"/api/hooks/{hook_id}/enable")
         _raise_with_detail(r)
         return json.dumps(r.json(), indent=2)
 
 
 @tool()
-async def rka_disable_hook(hook_id: str) -> str:
+async def rka_disable_hook(hook_id: str, *, project_id: str) -> str:
     """Disable a hook without deleting it. Re-enable later via rka_enable_hook."""
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.put(f"/api/hooks/{hook_id}/disable")
         _raise_with_detail(r)
         return json.dumps(r.json(), indent=2)
 
 
 @tool()
-async def rka_delete_hook(hook_id: str) -> str:
+async def rka_delete_hook(hook_id: str, *, project_id: str) -> str:
     """Delete a hook permanently. Cascades to hook_executions via FK."""
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.delete(f"/api/hooks/{hook_id}")
         if r.status_code == 404:
             return json.dumps({"error": "hook_not_found", "hook_id": hook_id})
@@ -874,6 +913,8 @@ async def rka_get_hook_executions(
     since: str | None = None,
     status: str | None = None,
     limit: int = 100,
+    *,
+    project_id: str,
 ) -> str:
     """Query the hook_executions audit log.
 
@@ -883,7 +924,7 @@ async def rka_get_hook_executions(
         status: Optional filter — success | error | aborted_depth_limit | skipped_disabled.
         limit: Max rows (cap 500).
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         params: dict[str, str] = {"limit": str(min(limit, 500))}
         if hook_id:
             params["hook_id"] = hook_id
@@ -901,6 +942,8 @@ async def rka_get_brain_notifications(
     since: str | None = None,
     include_cleared: bool = False,
     limit: int = 100,
+    *,
+    project_id: str,
 ) -> str:
     """Read the brain_notifications queue. Default: only uncleared rows.
 
@@ -909,7 +952,7 @@ async def rka_get_brain_notifications(
         include_cleared: Include already-cleared notifications.
         limit: Max rows (cap 500).
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         params: dict[str, str] = {
             "limit": str(min(limit, 500)),
             "include_cleared": "true" if include_cleared else "false",
@@ -922,13 +965,13 @@ async def rka_get_brain_notifications(
 
 
 @tool()
-async def rka_clear_brain_notifications(ids: list[str]) -> str:
+async def rka_clear_brain_notifications(ids: list[str], *, project_id: str) -> str:
     """Mark a list of brain_notifications as cleared (read).
 
     Args:
         ids: List of bnt_... notification IDs.
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.post("/api/notifications/clear", json={"ids": ids})
         _raise_with_detail(r)
         return json.dumps(r.json(), indent=2)
@@ -937,6 +980,8 @@ async def rka_clear_brain_notifications(ids: list[str]) -> str:
 @tool()
 async def rka_bulk_update(
     updates: list[dict],
+    *,
+    project_id: str,
 ) -> str:
     """Bulk update multiple entities in one call.
 
@@ -946,7 +991,7 @@ async def rka_bulk_update(
     Args:
         updates: List of updates, e.g. [{"entity_type": "note", "id": "jrn_01...", "data": {"type": "note", "confidence": "verified", "tags": ["v1.6-audit"]}}]
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         results = []
         errors = []
         for i, upd in enumerate(updates):
@@ -1009,6 +1054,8 @@ async def rka_create_mission(
     depends_on: str | None = None,
     motivated_by_decision: str | None = None,
     tags: list[str] | None = None,
+    *,
+    project_id: str,
 ) -> str:
     """Create a new mission for the Executor.
 
@@ -1028,7 +1075,7 @@ async def rka_create_mission(
         motivated_by_decision: Decision ID that triggered this mission (REQUIRED for provenance — creates motivated link)
         tags: Optional explicit tags for categorization
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         body = {
             "phase": phase,
             "objective": objective,
@@ -1061,13 +1108,13 @@ async def rka_create_mission(
 
 
 @tool()
-async def rka_get_mission(id: str | None = None) -> str:
+async def rka_get_mission(id: str | None = None, *, project_id: str) -> str:
     """Get a mission. Returns the active mission if no ID given.
 
     Args:
         id: Mission ID (optional — defaults to currently active mission)
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         if id:
             r = await c.get(f"/api/missions/{id}")
             _raise_with_detail(r)
@@ -1087,6 +1134,8 @@ async def rka_update_mission_status(
     id: str,
     status: str,
     tasks: list[MissionTask] | None = None,
+    *,
+    project_id: str,
 ) -> str:
     """Update mission status and task progress.
 
@@ -1095,7 +1144,7 @@ async def rka_update_mission_status(
         status: pending | active | complete | partial | blocked | cancelled
         tasks: Updated task list with progress
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         body = {"status": status}
         if tasks:
             body["tasks"] = [task.model_dump() for task in tasks]
@@ -1117,6 +1166,8 @@ async def rka_update_mission(
     parent_mission_id: str | None = None,
     motivated_by_decision: str | None = None,
     tags: list[str] | None = None,
+    *,
+    project_id: str,
 ) -> str:
     """Update mission body fields. Wraps the post-Bug-A MissionService.update.
 
@@ -1147,7 +1198,7 @@ async def rka_update_mission(
             (creates motivated entity_link)
         tags: Replacement tag list
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         body = {
             "phase": phase, "objective": objective, "context": context,
             "acceptance_criteria": acceptance_criteria,
@@ -1176,6 +1227,8 @@ async def rka_submit_report(
     questions: str = "",
     codebase_state: str = "",
     recommended_next: str = "",
+    *,
+    project_id: str,
 ) -> str:
     """Submit an execution report for a completed mission.
 
@@ -1206,7 +1259,7 @@ async def rka_submit_report(
     }
     body = {k: v for k, v in body.items() if v is not None}
 
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.post(
             f"/api/missions/{mission_id}/report",
             json=body,
@@ -1216,13 +1269,13 @@ async def rka_submit_report(
 
 
 @tool()
-async def rka_get_report(mission_id: str | None = None) -> str:
+async def rka_get_report(mission_id: str | None = None, *, project_id: str) -> str:
     """Get mission report. Defaults to latest complete mission.
 
     Args:
         mission_id: Mission ID (optional)
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         if mission_id:
             r = await c.get(f"/api/missions/{mission_id}/report")
         else:
@@ -1254,6 +1307,8 @@ async def rka_submit_checkpoint(
     options: list[dict] | None = None,
     recommendation: str | None = None,
     blocking: bool = True,
+    *,
+    project_id: str,
 ) -> str:
     """Submit a checkpoint — escalate a decision/question to Brain/PI.
 
@@ -1267,7 +1322,7 @@ async def rka_submit_checkpoint(
         recommendation: Executor's non-binding recommendation
         blocking: Whether this blocks further progress
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         body = {
             "mission_id": mission_id, "type": type, "description": description,
             "task_reference": task_reference, "context": context,
@@ -1282,13 +1337,13 @@ async def rka_submit_checkpoint(
 
 
 @tool()
-async def rka_get_checkpoints(status: str = "open") -> str:
+async def rka_get_checkpoints(status: str = "open", *, project_id: str) -> str:
     """Get checkpoints. Defaults to open checkpoints.
 
     Args:
         status: open | resolved | dismissed
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.get("/api/checkpoints", params={"status": status})
         _raise_with_detail(r)
         chks = r.json()
@@ -1327,6 +1382,8 @@ async def rka_resolve_checkpoint(
     resolved_by: str,
     rationale: str | None = None,
     create_decision: bool = False,
+    *,
+    project_id: str,
 ) -> str:
     """Resolve a checkpoint.
 
@@ -1337,7 +1394,7 @@ async def rka_resolve_checkpoint(
         rationale: Why this resolution
         create_decision: Also create a linked decision node
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         body = {
             "resolution": resolution, "resolved_by": resolved_by,
             "rationale": rationale, "create_decision": create_decision,
@@ -1354,6 +1411,8 @@ async def rka_create_gate(
     deliverables: list[str],
     pass_criteria: list[str],
     assumptions_to_verify: list[str] | None = None,
+    *,
+    project_id: str,
 ) -> str:
     """Create a validation gate checkpoint for a mission.
 
@@ -1379,7 +1438,7 @@ async def rka_create_gate(
         "status": "pending",
     })
 
-    async with _client() as c:
+    async with _client(project_id) as c:
         body = {
             "mission_id": mission_id,
             "type": "gate",
@@ -1410,6 +1469,8 @@ async def rka_evaluate_gate(
     verdict: str,
     notes: str,
     assumption_status: dict[str, str] | None = None,
+    *,
+    project_id: str,
 ) -> str:
     """Evaluate a validation gate and record the verdict.
 
@@ -1432,7 +1493,7 @@ async def rka_evaluate_gate(
         "evaluated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     })
 
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.put(f"/api/checkpoints/{gate_id}/resolve", json={
             "resolution": resolution,
             "resolved_by": "brain",
@@ -1488,6 +1549,8 @@ async def rka_search(
     query: str,
     entity_types: list[str] | None = None,
     limit: int = 20,
+    *,
+    project_id: str,
 ) -> str:
     """Search across all research knowledge.
 
@@ -1499,7 +1562,7 @@ async def rka_search(
         limit: Max results
     """
     session = _session
-    async with _client() as c:
+    async with _client(project_id) as c:
         body = {"query": query, "entity_types": entity_types, "limit": limit}
         r = await c.post("/api/search", json=body)
         _raise_with_detail(r)
@@ -1546,6 +1609,8 @@ async def rka_search(
 @tool()
 async def rka_get(
     id: str,
+    *,
+    project_id: str,
 ) -> str:
     """Get the full content of any entity by ID.
 
@@ -1571,7 +1636,7 @@ async def rka_get(
     params = {}
     if prefix == "ecl":
         params["include_claims"] = "true"
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.get(endpoint, params=params)
         _raise_with_detail(r)
         data = r.json()
@@ -1600,6 +1665,8 @@ async def rka_get_decision_tree(
     root_id: str | None = None,
     phase: str | None = None,
     active_only: bool = False,
+    *,
+    project_id: str,
 ) -> str:
     """Get the decision tree with linked entities at each node.
 
@@ -1612,7 +1679,7 @@ async def rka_get_decision_tree(
         phase: Filter by phase
         active_only: Only show active decisions
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         params = {}
         if root_id:
             params["root_id"] = root_id
@@ -1651,6 +1718,8 @@ async def rka_get_literature(
     status: str | None = None,
     query: str | None = None,
     limit: int = 20,
+    *,
+    project_id: str,
 ) -> str:
     """Get literature entries.
 
@@ -1661,7 +1730,7 @@ async def rka_get_literature(
         query: Search in title/abstract
         limit: Max results
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         params = {"limit": limit}
         if status:
             params["status"] = status
@@ -1689,6 +1758,8 @@ async def rka_get_journal(
     status: str | None = None,
     since: str | None = None,
     limit: int = 20,
+    *,
+    project_id: str,
 ) -> str:
     """Get journal entries.
 
@@ -1702,7 +1773,7 @@ async def rka_get_journal(
         since: ISO date to filter from
         limit: Max results
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         params = {"limit": limit, "hide_superseded": True}
         if type:
             params["type"] = type
@@ -1732,39 +1803,62 @@ async def rka_get_journal(
 
 @tool()
 async def rka_list_projects() -> str:
-    """List all available projects. Shows which project is currently active."""
+    """List all available projects.
+
+    Unscoped (no project_id required). Use this to discover available
+    project_ids before passing them to other tools.
+    """
     async with _client() as c:
         r = await c.get("/api/projects")
         _raise_with_detail(r)
         projects = r.json()
 
-    active = _session.project_id or "proj_default"
     lines = ["## Projects", ""]
     for p in projects:
-        marker = " (active)" if p["id"] == active else ""
         desc = f" — {p['description']}" if p.get("description") else ""
-        lines.append(f"- **{p['id']}**: {p['name']}{desc}{marker}")
+        lines.append(f"- **{p['id']}**: {p['name']}{desc}")
     if not projects:
         lines.append("No projects found.")
+    lines.append("")
+    lines.append(
+        "**Note (v2.6+):** there is no longer an 'active project' concept "
+        "at the MCP layer. Every project-scoped tool requires `project_id` "
+        "explicitly. Pass the desired project_id from the list above to "
+        "every subsequent rka_* call."
+    )
     return "\n".join(lines)
 
 
 @tool()
 async def rka_set_project(project_id: str) -> str:
-    """Switch the active project for this MCP session.
+    """**DEPRECATED in v2.6.** This tool no longer sets server-side state.
 
-    All subsequent tool calls will operate on the selected project.
+    Pre-v2.6: this set a per-process `_session.project_id` which was the
+    silent default for every tool call. The default-fallback was the
+    source of a persistent failure mode: when the MCP stdio process
+    restarted (Docker rebuild, `uv tool install --force`, Claude Desktop
+    relaunch), session state was lost and subsequent writes silently
+    landed in `proj_default`.
+
+    v2.6+: every project-scoped tool takes `project_id` as a required
+    kwarg-only parameter. The LLM/caller passes the project explicitly
+    on every call — no shared session state, no silent fallback, no
+    failure mode.
+
+    This tool remains as a deprecated no-op so existing call sites get
+    a clear warning instead of a missing-tool error. It validates that
+    the requested project exists (helpful pre-flight check) and returns
+    a deprecation notice. **Pass `project_id` to every subsequent tool
+    call.**
 
     Args:
-        project_id: Project ID or name to switch to (e.g. "prj_01KK...", "rka_development")
+        project_id: Project ID to verify exists.
     """
-    # Validate project exists — accept ID or name
     async with _client() as c:
         r = await c.get("/api/projects")
         _raise_with_detail(r)
         projects = r.json()
 
-    # Try exact ID match first, then name match
     resolved_id = None
     for p in projects:
         if p["id"] == project_id:
@@ -1778,23 +1872,19 @@ async def rka_set_project(project_id: str) -> str:
 
     if resolved_id is None:
         available = "\n".join(f"  - `{p['id']}`: {p['name']}" for p in projects)
-        return f"Project '{project_id}' not found. Available:\n{available}"
+        return (
+            f"**Deprecation notice:** rka_set_project is a no-op in v2.6+. "
+            f"Pass `project_id` to every tool call explicitly.\n\n"
+            f"Additionally, project '{project_id}' was not found. Available:\n{available}"
+        )
 
-    _session.project_id = resolved_id
-    # Mission 2 — clear session_start fired-marker for this project so the
-    # post-call wrapper refires (Q3 spec: "rka_set_project refires").
-    _session.session_start_fired_for.discard(resolved_id)
-
-    # Fetch project status to confirm
-    async with _client() as c:
-        status_r = await c.get("/api/status")
-        if status_r.is_success:
-            status = status_r.json()
-            name = status.get("project_name", resolved_id)
-            phase = status.get("current_phase", "not set")
-            return f"Switched to project **{name}** (`{resolved_id}`). Phase: {phase}"
-
-    return f"Switched to project `{resolved_id}`."
+    return (
+        f"**Deprecation notice:** rka_set_project is a no-op in v2.6+.\n\n"
+        f"Project `{resolved_id}` exists. Pass `project_id=\"{resolved_id}\"` "
+        f"to every subsequent rka_* tool call explicitly. There is no longer "
+        f"an 'active project' concept at the MCP layer — each call is "
+        f"project-scoped via its required `project_id` kwarg."
+    )
 
 
 @tool()
@@ -1802,7 +1892,10 @@ async def rka_create_project(
     name: str,
     description: str | None = None,
 ) -> str:
-    """Create a new research project and switch to it.
+    """Create a new research project.
+
+    Unscoped (no project_id required — this CREATES one). Returns the
+    new project_id; pass that to subsequent rka_* tool calls.
 
     Args:
         name: Human-readable project name (e.g. "Climate Policy Analysis")
@@ -1816,12 +1909,11 @@ async def rka_create_project(
         _raise_with_detail(r)
         project = r.json()
 
-    # Auto-switch to the new project
-    _session.project_id = project["id"]
-
     return (
-        f"Created project **{project['name']}** (`{project['id']}`).\n"
-        f"Session switched to this project. All subsequent tool calls will target it."
+        f"Created project **{project['name']}** (`{project['id']}`).\n\n"
+        f"Pass `project_id=\"{project['id']}\"` to every subsequent rka_* "
+        f"tool call to operate on this project. There is no 'active project' "
+        f"concept at the MCP layer in v2.6+."
     )
 
 
@@ -1830,9 +1922,9 @@ async def rka_create_project(
 # ============================================================
 
 @tool()
-async def rka_get_status() -> str:
+async def rka_get_status(*, project_id: str) -> str:
     """Get full project state: phase, active mission, open checkpoints, metrics."""
-    async with _client() as c:
+    async with _client(project_id) as c:
         # Gather all status info in parallel-ish (sequential for simplicity)
         status_r = await c.get("/api/status")
         _raise_with_detail(status_r)
@@ -1914,6 +2006,8 @@ async def rka_update_status(
     summary: str | None = None,
     blockers: str | None = None,
     metrics: dict | None = None,
+    *,
+    project_id: str,
 ) -> str:
     """Update project state.
 
@@ -1923,7 +2017,7 @@ async def rka_update_status(
         blockers: Current blockers
         metrics: Key metrics dict
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         body = {
             "current_phase": current_phase, "summary": summary,
             "blockers": blockers, "metrics": metrics,
@@ -1946,6 +2040,8 @@ async def rka_import_bibtex(
     bibtex: str,
     default_status: str = "to_read",
     skip_duplicates: bool = True,
+    *,
+    project_id: str,
 ) -> str:
     """Import literature entries from BibTeX content.
 
@@ -1954,7 +2050,7 @@ async def rka_import_bibtex(
         default_status: Initial status for imported entries — to_read | reading | read
         skip_duplicates: Skip entries that already exist (by DOI or title)
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         body = {
             "bibtex": bibtex,
             "default_status": default_status,
@@ -1979,7 +2075,7 @@ async def rka_import_bibtex(
 
 
 @tool()
-async def rka_enrich_doi(lit_id: str) -> str:
+async def rka_enrich_doi(lit_id: str, *, project_id: str) -> str:
     """Enrich a literature entry by looking up its DOI via CrossRef.
 
     Automatically fills in missing title, authors, year, venue, abstract, and URL
@@ -1988,7 +2084,7 @@ async def rka_enrich_doi(lit_id: str) -> str:
     Args:
         lit_id: Literature entry ID
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.post(f"/api/literature/{lit_id}/enrich-doi")
         _raise_with_detail(r)
         data = r.json()
@@ -2001,6 +2097,8 @@ async def rka_enrich_doi(lit_id: str) -> str:
 async def rka_export_mermaid(
     phase: str | None = None,
     active_only: bool = False,
+    *,
+    project_id: str,
 ) -> str:
     """Export the decision tree as a Mermaid flowchart diagram.
 
@@ -2010,7 +2108,7 @@ async def rka_export_mermaid(
         phase: Filter to a specific research phase
         active_only: Only include active decisions
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         params = {}
         if phase:
             params["phase"] = phase
@@ -2026,6 +2124,8 @@ async def rka_export_mermaid(
 async def rka_batch_import(
     entries: list[dict],
     actor: str = "import",
+    *,
+    project_id: str,
 ) -> str:
     """Batch import multiple entries at once.
 
@@ -2035,7 +2135,7 @@ async def rka_batch_import(
         entries: List of {entity_type: "note"|"literature"|"decision", data: {...}}
         actor: Who is importing — brain | executor | pi | import
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         body = {"entries": entries, "actor": actor}
         r = await c.post("/api/import/batch", json=body)
         _raise_with_detail(r)
@@ -2061,6 +2161,8 @@ async def rka_ingest_document(
     related_decisions: list[str] | None = None,
     related_mission: str | None = None,
     split_by_headings: bool = True,
+    *,
+    project_id: str,
 ) -> str:
     """Ingest a markdown document by splitting it into journal entries.
 
@@ -2081,7 +2183,7 @@ async def rka_ingest_document(
         related_mission: Mission ID all entries belong to
         split_by_headings: Whether to split by ## / ### headings (default: true). If false, creates one entry.
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         body = {
             "content": content, "source": source,
             "default_type": default_type, "phase": phase,
@@ -2110,14 +2212,14 @@ async def rka_ingest_document(
 # ============================================================
 
 @tool()
-async def rka_export(format: str = "markdown", scope: str = "state") -> str:
+async def rka_export(format: str = "markdown", scope: str = "state", *, project_id: str) -> str:
     """Export research data.
 
     Args:
         format: markdown | json | mermaid (mermaid only for decisions scope)
         scope: state | decisions | literature | full
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         if scope == "state":
             r = await c.get("/api/status")
             _raise_with_detail(r)
@@ -2160,6 +2262,8 @@ async def rka_get_context(
     topic: str | None = None,
     phase: str | None = None,
     depth: str = "summary",
+    *,
+    project_id: str,
 ) -> str:
     """Get an importance-ranked context package.
 
@@ -2175,7 +2279,7 @@ async def rka_get_context(
         depth: "summary" (default) returns the ranked list as-is.
             "detailed" adds an LLM-generated narrative if an LLM is configured.
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         body = {"topic": topic, "phase": phase, "depth": depth}
         r = await c.post("/api/context", json={k: v for k, v in body.items() if v is not None})
         _raise_with_detail(r)
@@ -2211,6 +2315,8 @@ async def rka_summarize(
     topic: str | None = None,
     phase: str | None = None,
     entity_ids: list[str] | None = None,
+    *,
+    project_id: str,
 ) -> str:
     """On-demand topic summarization. Produces a narrative summary
     stored as a journal entry.
@@ -2220,7 +2326,7 @@ async def rka_summarize(
         phase: Filter to specific phase
         entity_ids: Specific entity IDs to summarize (overrides topic)
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         body = {"topic": topic, "phase": phase, "entity_ids": entity_ids}
         r = await c.post("/api/summarize", json={k: v for k, v in body.items() if v is not None})
         _raise_with_detail(r)
@@ -2233,7 +2339,7 @@ async def rka_summarize(
 
 
 @tool()
-async def rka_eviction_sweep(dry_run: bool = True) -> str:
+async def rka_eviction_sweep(dry_run: bool = True, *, project_id: str) -> str:
     """Propose entries for archival based on staleness rules.
 
     Finds superseded, abandoned, and unreferenced entries that can be
@@ -2242,7 +2348,7 @@ async def rka_eviction_sweep(dry_run: bool = True) -> str:
     Args:
         dry_run: If true, show what would be archived without taking action
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.post("/api/eviction-sweep", params={"dry_run": str(dry_run).lower()})
         _raise_with_detail(r)
         data = r.json()
@@ -2268,6 +2374,8 @@ async def rka_search_semantic_scholar(
     year_min: int | None = None,
     fields_of_study: list[str] | None = None,
     add_to_library: bool = False,
+    *,
+    project_id: str,
 ) -> str:
     """Search Semantic Scholar for academic papers.
 
@@ -2327,7 +2435,7 @@ async def rka_search_semantic_scholar(
 
         if add_to_library:
             try:
-                async with _client() as c:
+                async with _client(project_id) as c:
                     body = {
                         "title": p.get("title", "Untitled"),
                         "authors": [a.get("name", "") for a in (p.get("authors") or [])],
@@ -2358,6 +2466,8 @@ async def rka_search_arxiv(
     limit: int = 10,
     sort_by: str = "relevance",
     add_to_library: bool = False,
+    *,
+    project_id: str,
 ) -> str:
     """Search arXiv for preprints and papers.
 
@@ -2420,7 +2530,7 @@ async def rka_search_arxiv(
 
         if add_to_library:
             try:
-                async with _client() as c:
+                async with _client(project_id) as c:
                     body = {
                         "title": title,
                         "authors": authors,
@@ -2459,6 +2569,8 @@ def _xml_text(xml: str, tag: str) -> str:
 async def rka_scan_workspace_tree(
     folder_path: str,
     max_depth: int = 2,
+    *,
+    project_id: str,
 ) -> str:
     """Show the directory tree of a workspace folder with file counts and sizes.
 
@@ -2585,6 +2697,8 @@ async def rka_scan_workspace(
     ignore_patterns: list[str] | None = None,
     max_file_size_mb: float = 50.0,
     use_llm: bool = True,
+    *,
+    project_id: str,
 ) -> str:
     """Deep-scan a workspace folder and classify files for ingestion.
 
@@ -2723,7 +2837,7 @@ async def rka_scan_workspace(
     truncated = len(all_host_files) > MAX_SCAN_FILES
     host_files = all_host_files[:MAX_SCAN_FILES]
 
-    async with _client() as c:
+    async with _client(project_id) as c:
         body = {
             "root_path": str(root),
             "files": host_files,
@@ -2805,6 +2919,8 @@ async def rka_bootstrap_workspace(
     skip_files: list[str] | None = None,
     use_llm: bool = True,
     dry_run: bool = False,
+    *,
+    project_id: str,
 ) -> str:
     """One-shot workspace bootstrap: scan + ingest all files in a folder.
 
@@ -2908,7 +3024,7 @@ async def rka_bootstrap_workspace(
     host_files = await asyncio.to_thread(_walk_and_classify)
 
     # Get a scan manifest from the server (dedup + scan_id)
-    async with _client() as c:
+    async with _client(project_id) as c:
         body = {
             "root_path": str(root),
             "files": host_files,
@@ -2977,7 +3093,7 @@ async def rka_bootstrap_workspace(
             total_created += 1
             continue
 
-        async with _client() as c:
+        async with _client(project_id) as c:
             ingest_body = {
                 "scan_id": scan_id,
                 "relative_path": rel,
@@ -3052,7 +3168,7 @@ async def rka_bootstrap_workspace(
 
 
 @tool()
-async def rka_review_bootstrap(scan_id: str) -> str:
+async def rka_review_bootstrap(scan_id: str, *, project_id: str) -> str:
     """Review a completed bootstrap for reorganization.
 
     Returns entry counts, singleton tags, entries needing attention,
@@ -3061,7 +3177,7 @@ async def rka_review_bootstrap(scan_id: str) -> str:
     Args:
         scan_id: The scan ID from rka_bootstrap_workspace output
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.get(f"/api/workspace/review/{scan_id}", timeout=60.0)
         _raise_with_detail(r)
         data = r.json()
@@ -3111,6 +3227,8 @@ async def rka_get_graph(
     include_types: str | None = None,
     phase: str | None = None,
     limit: int = 500,
+    *,
+    project_id: str,
 ) -> str:
     """Get the full knowledge graph as nodes and edges for the research map.
 
@@ -3121,7 +3239,7 @@ async def rka_get_graph(
         phase: Filter by research phase
         limit: Max entities per type (default 500)
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         params = {"limit": limit}
         if include_types:
             params["include_types"] = include_types
@@ -3142,7 +3260,7 @@ async def rka_get_graph(
 
 
 @tool()
-async def rka_get_ego_graph(entity_id: str, depth: int = 1) -> str:
+async def rka_get_ego_graph(entity_id: str, depth: int = 1, *, project_id: str) -> str:
     """Get the neighborhood subgraph around a specific entity.
 
     Shows all entities connected to the given entity within `depth` hops.
@@ -3151,7 +3269,7 @@ async def rka_get_ego_graph(entity_id: str, depth: int = 1) -> str:
         entity_id: The entity to center on (e.g. dec_01H..., jrn_01H...)
         depth: Number of hops to traverse (1-3, default 1)
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.get(f"/api/graph/ego/{entity_id}", params={"depth": depth})
         _raise_with_detail(r)
         d = r.json()
@@ -3167,9 +3285,9 @@ async def rka_get_ego_graph(entity_id: str, depth: int = 1) -> str:
 
 
 @tool()
-async def rka_graph_stats() -> str:
+async def rka_graph_stats(*, project_id: str) -> str:
     """Get knowledge graph statistics: entity counts, edge counts by type."""
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.get("/api/graph/stats")
         _raise_with_detail(r)
         d = r.json()
@@ -3192,6 +3310,8 @@ async def rka_generate_summary(
     scope_type: str = "project",
     scope_id: str | None = None,
     granularity: str = "paragraph",
+    *,
+    project_id: str,
 ) -> str:
     """Generate a multi-granularity summary of research progress.
 
@@ -3203,7 +3323,7 @@ async def rka_generate_summary(
         scope_id: Scope ID (e.g. phase name, mission ID, tag name). None for project-wide.
         granularity: Detail level — one_line | paragraph | narrative
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.post("/api/summaries/generate", json={
             "scope_type": scope_type,
             "scope_id": scope_id,
@@ -3237,6 +3357,8 @@ async def rka_ask(
     session_id: str | None = None,
     scope_type: str | None = None,
     scope_id: str | None = None,
+    *,
+    project_id: str,
 ) -> str:
     """Ask a research question and get an answer grounded in knowledge base evidence.
 
@@ -3249,7 +3371,7 @@ async def rka_ask(
         scope_type: Optional scope filter (phase, tag)
         scope_id: Optional scope ID
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.post("/api/qa/ask", json={
             "question": question,
             "session_id": session_id,
@@ -3308,7 +3430,7 @@ async def rka_session_digest() -> str:
             lines.append(f"  {checkpoint_id}")
 
     try:
-        async with _client() as c:
+        async with _client(project_id) as c:
             status_r = await c.get("/api/status")
             if status_r.is_success:
                 status = status_r.json()
@@ -3340,18 +3462,21 @@ async def rka_session_digest() -> str:
 async def rka_reset_session() -> str:
     """Reset MCP session tracking state without restarting the MCP server.
 
-    Preserves the active project selection.
+    Clears the tool-call counter, entities-created log, decisions-made log,
+    and the per-project session_start fired-marker set. v2.6+: there is no
+    'active project' to preserve since every tool call carries project_id
+    explicitly.
     """
     global _session
-    prev_project = _session.project_id
     _session = MCPSessionState()
-    _session.project_id = prev_project
-    return f"Session state reset. Output verbosity and digest history cleared. Active project: {prev_project or 'proj_default (implicit)'}"
+    return "Session state reset. Tool-call counter, entity log, and session_start fired-markers cleared."
 
 
 @tool()
 async def rka_generate_claude_md(
     role: str = "executor",
+    *,
+    project_id: str,
 ) -> str:
     """Generate a project-specific CLAUDE.md for Claude Code.
 
@@ -3362,7 +3487,7 @@ async def rka_generate_claude_md(
     Args:
         role: Target role — "executor" (default) or "brain"
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.get("/api/generate-claude-md", params={"role": role})
         _raise_with_detail(r)
     data = r.json()
@@ -3379,6 +3504,8 @@ async def rka_list_clusters(
     research_question_id: str | None = None,
     confidence: str | None = None,
     limit: int = 50,
+    *,
+    project_id: str,
 ) -> str:
     """List evidence clusters with claim counts.
 
@@ -3395,7 +3522,7 @@ async def rka_list_clusters(
         params["research_question_id"] = research_question_id
     if confidence:
         params["confidence"] = confidence
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.get("/api/clusters", params=params)
         _raise_with_detail(r)
     clusters = r.json()
@@ -3417,13 +3544,13 @@ async def rka_list_clusters(
 
 
 @tool()
-async def rka_get_research_map() -> str:
+async def rka_get_research_map(*, project_id: str) -> str:
     """Get the three-level research map: Research Questions → Evidence Clusters → Claims.
 
     Returns a structured overview of all research questions with cluster counts,
     confidence indicators, gap counts, and contradiction flags.
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.get("/api/research-map")
         _raise_with_detail(r)
     data = r.json()
@@ -3480,6 +3607,8 @@ async def rka_get_claims(
     verified: bool | None = None,
     stale: bool | None = None,
     limit: int = 20,
+    *,
+    project_id: str,
 ) -> str:
     """Query claims with filters.
 
@@ -3504,7 +3633,7 @@ async def rka_get_claims(
         params["verified"] = verified
     if stale is not None:
         params["stale"] = stale
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.get("/api/claims", params=params)
         _raise_with_detail(r)
     claims = r.json()
@@ -3527,6 +3656,8 @@ async def rka_get_claims(
 async def rka_extract_claims(
     entry_id: str,
     claims: list[dict],
+    *,
+    project_id: str,
 ) -> str:
     """Brain creates claims extracted from a journal entry.
 
@@ -3543,7 +3674,7 @@ async def rka_extract_claims(
     """
     created = []
     assigned = 0
-    async with _client() as c:
+    async with _client(project_id) as c:
         for cl in claims:
             payload = {
                 "source_entry_id": entry_id,
@@ -3573,7 +3704,7 @@ async def rka_extract_claims(
     # Composite event: payload carries entry_id + claim_ids[] (the spec shape).
     # Failures silent.
     try:
-        async with _client() as c:
+        async with _client(project_id) as c:
             await c.post(
                 "/api/hooks/fire",
                 json={
@@ -3604,6 +3735,8 @@ async def rka_create_cluster(
     synthesis: str | None = None,
     confidence: str = "emerging",
     claim_ids: list[str] | None = None,
+    *,
+    project_id: str,
 ) -> str:
     """Brain creates an evidence cluster and optionally assigns claims to it.
 
@@ -3623,7 +3756,7 @@ async def rka_create_cluster(
     if synthesis:
         payload["synthesis"] = synthesis
 
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.post("/api/clusters", json=payload)
         _raise_with_detail(r)
         cluster = r.json()
@@ -3661,6 +3794,8 @@ async def rka_create_cluster(
 async def rka_assign_claims_to_cluster(
     cluster_id: str,
     claim_ids: list[str],
+    *,
+    project_id: str,
 ) -> str:
     """Brain assigns existing claims to an existing evidence cluster.
 
@@ -3671,7 +3806,7 @@ async def rka_assign_claims_to_cluster(
         claim_ids: List of claim IDs to assign
     """
     results = []
-    async with _client() as c:
+    async with _client(project_id) as c:
         for cid in claim_ids:
             edge_payload = {
                 "source_claim_id": cid,
@@ -3697,6 +3832,8 @@ async def rka_supersede_decision(
     decided_by: str = "brain",
     phase: str = "",
     kind: str = "decision",
+    *,
+    project_id: str,
 ) -> str:
     """Atomically supersede a decision and trigger re-distillation of affected knowledge.
 
@@ -3725,7 +3862,7 @@ async def rka_supersede_decision(
         },
     }
     # Call the supersede endpoint via the decisions API
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.post(f"/api/decisions/{old_decision_id}/supersede", json=payload)
         _raise_with_detail(r)
     result = r.json()
@@ -3738,6 +3875,8 @@ async def rka_trace_provenance(
     entity_id: str,
     direction: str = "both",
     max_depth: int = 4,
+    *,
+    project_id: str,
 ) -> str:
     """Trace the full reasoning chain behind any entity.
 
@@ -3749,7 +3888,7 @@ async def rka_trace_provenance(
         direction: upstream (what led to this), downstream (what this led to), or both
         max_depth: Maximum hops to traverse (default 4)
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.get(f"/api/graph/ego/{entity_id}", params={"depth": max_depth})
         _raise_with_detail(r)
     data = r.json()
@@ -3784,6 +3923,8 @@ async def rka_multi_hop_retrieval(
     max_depth: int = 3,
     max_nodes: int = 50,
     edge_weights: dict[str, float] | None = None,
+    *,
+    project_id: str,
 ) -> str:
     """Query-anchored multi-hop subgraph retrieval (v2.4).
 
@@ -3815,7 +3956,7 @@ async def rka_multi_hop_retrieval(
     if edge_weights is not None:
         body["edge_weights"] = edge_weights
 
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.post("/api/graph/multi-hop", json=body)
         _raise_with_detail(r)
     data = r.json()
@@ -3853,6 +3994,8 @@ async def rka_multi_hop_retrieval(
 async def rka_get_review_queue(
     status: str = "pending",
     limit: int = 20,
+    *,
+    project_id: str,
 ) -> str:
     """Get items in the Brain review queue.
 
@@ -3864,7 +4007,7 @@ async def rka_get_review_queue(
         status: Filter by status (pending, acknowledged, resolved, dismissed)
         limit: Max results
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.get("/api/review-queue", params={"status": status, "limit": limit})
         _raise_with_detail(r)
     items = r.json()
@@ -3889,6 +4032,8 @@ async def rka_review_cluster(
     contradictions: list[str] | None = None,
     resolve_queue_items: list[str] | None = None,
     research_question_id: str | None = None,
+    *,
+    project_id: str,
 ) -> str:
     """Brain reviews and enriches an evidence cluster.
 
@@ -3913,7 +4058,7 @@ async def rka_review_cluster(
         "research_question_id": research_question_id,
     }
     body = {k: v for k, v in payload.items() if v is not None}
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.put(f"/api/clusters/{cluster_id}", json=body)
         _raise_with_detail(r)
 
@@ -3937,6 +4082,8 @@ async def rka_review_claims(
     claim_ids: list[str],
     action: str = "approve",
     confidence_override: float | None = None,
+    *,
+    project_id: str,
 ) -> str:
     """Brain reviews extracted claims — approve, adjust confidence, or reject.
 
@@ -3946,7 +4093,7 @@ async def rka_review_claims(
         confidence_override: New confidence value (0.0-1.0), used with action=adjust
     """
     results = []
-    async with _client() as c:
+    async with _client(project_id) as c:
         for cid in claim_ids:
             if action == "approve":
                 payload = {"verified": True}
@@ -3970,6 +4117,8 @@ async def rka_resolve_contradiction(
     cluster_id: str,
     resolution: str,
     claim_actions: dict[str, str] | None = None,
+    *,
+    project_id: str,
 ) -> str:
     """Brain resolves a flagged contradiction within an evidence cluster.
 
@@ -3979,7 +4128,7 @@ async def rka_resolve_contradiction(
         claim_actions: Dict of claim_id → action (keep, reject, reframe). Optional.
     """
     lines = [f"Resolving contradiction in cluster {cluster_id}"]
-    async with _client() as c:
+    async with _client(project_id) as c:
         if claim_actions:
             for cid, action in claim_actions.items():
                 if action == "reject":
@@ -4015,6 +4164,8 @@ async def rka_resolve_contradiction(
 async def rka_get_changelog(
     since: str,
     limit: int = 50,
+    *,
+    project_id: str,
 ) -> str:
     """Show what changed since a given date across all entity types.
 
@@ -4025,7 +4176,7 @@ async def rka_get_changelog(
         since: ISO date/datetime (e.g. "2026-04-10" or "2026-04-10T14:00:00Z")
         limit: Max results per category (default 50)
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.get("/api/changelog", params={"since": since, "limit": limit})
         _raise_with_detail(r)
         data = r.json()
@@ -4062,6 +4213,8 @@ async def rka_get_changelog(
 async def rka_assemble_evidence(
     research_question_id: str,
     format: str = "progress_report",
+    *,
+    project_id: str,
 ) -> str:
     """Assemble evidence under a research question into a structured markdown draft.
 
@@ -4073,7 +4226,7 @@ async def rka_assemble_evidence(
         research_question_id: The RQ decision ID (dec_...)
         format: lit_review | progress_report | proposal_section
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.get("/api/assemble-evidence", params={
             "research_question_id": research_question_id,
             "format": format,
@@ -4088,6 +4241,8 @@ async def rka_assemble_evidence(
 async def rka_split_cluster(
     source_id: str,
     new_clusters: list[dict],
+    *,
+    project_id: str,
 ) -> str:
     """Split a cluster into multiple new clusters by reassigning its claims.
 
@@ -4098,7 +4253,7 @@ async def rka_split_cluster(
         source_id: Cluster to split (ecl_...)
         new_clusters: List of {label: str, claim_ids: [str], research_question_id?: str}
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.post("/api/clusters/split", json={
             "source_id": source_id,
             "new_clusters": new_clusters,
@@ -4120,6 +4275,8 @@ async def rka_merge_clusters(
     target_label: str,
     target_synthesis: str | None = None,
     research_question_id: str | None = None,
+    *,
+    project_id: str,
 ) -> str:
     """Merge multiple clusters into one new cluster.
 
@@ -4132,7 +4289,7 @@ async def rka_merge_clusters(
         target_synthesis: Brain's synthesis for the merged cluster
         research_question_id: RQ to assign the new cluster to
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.post("/api/clusters/merge", json={
             "source_ids": source_ids,
             "target_label": target_label,
@@ -4156,6 +4313,8 @@ async def rka_process_paper(
     lit_id: str,
     annotations: list[dict],
     summary: str | None = None,
+    *,
+    project_id: str,
 ) -> str:
     """Process reading annotations from a paper into structured claims.
 
@@ -4173,7 +4332,7 @@ async def rka_process_paper(
             - cluster_id: Optional cluster to assign to (ecl_...)
         summary: Overall paper summary (becomes the journal entry content)
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.post("/api/literature/process-paper", json={
             "lit_id": lit_id,
             "annotations": annotations,
@@ -4206,6 +4365,8 @@ async def rka_advance_rq(
     status: str,
     conclusion: str | None = None,
     evidence_cluster_ids: list[str] | None = None,
+    *,
+    project_id: str,
 ) -> str:
     """Advance a research question's lifecycle status.
 
@@ -4218,7 +4379,7 @@ async def rka_advance_rq(
         conclusion: Brain's conclusion text (recommended when status=answered)
         evidence_cluster_ids: Clusters that provide the answer (creates justified_by links)
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.post("/api/research-questions/advance", json={
             "rq_id": rq_id,
             "status": status,
@@ -4245,7 +4406,7 @@ async def rka_advance_rq(
 
 
 @tool()
-async def rka_check_integrity() -> str:
+async def rka_check_integrity(*, project_id: str) -> str:
     """Verify knowledge base integrity — check for orphaned edges, missing references, and count mismatches.
 
     Run periodically or after import to ensure data consistency. Checks:
@@ -4253,7 +4414,7 @@ async def rka_check_integrity() -> str:
     - claim_edges reference existing claims and clusters
     - evidence_clusters.claim_count matches actual claim_edges count
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.get("/api/integrity")
         _raise_with_detail(r)
         data = r.json()
@@ -4286,6 +4447,8 @@ async def rka_flag_stale(
     reason: str,
     staleness: str = "yellow",
     propagate: bool = True,
+    *,
+    project_id: str,
 ) -> str:
     """Flag a claim, cluster, or decision as potentially stale.
 
@@ -4298,7 +4461,7 @@ async def rka_flag_stale(
         staleness: yellow (aging/partially conflicting) or red (directly contradicted)
         propagate: If true, traverse dependency graph and flag dependent entities
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.post("/api/freshness/flag-stale", json={
             "entity_id": entity_id, "reason": reason,
             "staleness": staleness, "propagate": propagate,
@@ -4317,6 +4480,8 @@ async def rka_flag_stale(
 @tool()
 async def rka_check_freshness(
     days_threshold: int = 30,
+    *,
+    project_id: str,
 ) -> str:
     """Scan for potentially stale knowledge items.
 
@@ -4327,7 +4492,7 @@ async def rka_check_freshness(
     Args:
         days_threshold: Claims older than this may need freshness review (default 30)
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.get("/api/freshness/check", params={"days_threshold": days_threshold})
         _raise_with_detail(r)
         data = r.json()
@@ -4355,6 +4520,8 @@ async def rka_detect_contradictions(
     entity_id: str,
     similarity_threshold: float = 0.7,
     max_results: int = 5,
+    *,
+    project_id: str,
 ) -> str:
     """Find claims that may contradict a given claim or journal entry.
 
@@ -4367,7 +4534,7 @@ async def rka_detect_contradictions(
         similarity_threshold: Minimum similarity to consider (default 0.7)
         max_results: Maximum candidates to return (default 5)
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.post("/api/freshness/detect-contradictions", json={
             "entity_id": entity_id,
             "similarity_threshold": similarity_threshold,
@@ -4396,7 +4563,7 @@ async def rka_detect_contradictions(
 
 
 @tool()
-async def rka_get_pending_maintenance() -> str:
+async def rka_get_pending_maintenance(*, project_id: str) -> str:
     """Detect knowledge base gaps that need attention. Pure SQL — no LLM needed.
 
     Returns a compact manifest of:
@@ -4412,7 +4579,7 @@ async def rka_get_pending_maintenance() -> str:
     Each category includes entity IDs, counts, and suggested fix actions.
     Use at session start to identify maintenance work before proceeding.
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.get("/api/maintenance")
         _raise_with_detail(r)
         data = r.json()
@@ -4456,6 +4623,8 @@ async def rka_register_manuscript(
     title: str,
     abstract: str | None = None,
     sections: list[str] | None = None,
+    *,
+    project_id: str,
 ) -> str:
     """Create a new manuscript manifest (jrn_ entry tagged 'manuscript').
 
@@ -4475,7 +4644,7 @@ async def rka_register_manuscript(
         payload["abstract"] = abstract
     if sections is not None:
         payload["sections"] = sections
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.post("/api/manuscripts", json=payload)
         _raise_with_detail(r)
         data = r.json()
@@ -4483,7 +4652,7 @@ async def rka_register_manuscript(
 
 
 @tool()
-async def rka_get_manuscript(manuscript_id: str) -> str:
+async def rka_get_manuscript(manuscript_id: str, *, project_id: str) -> str:
     """Read a manuscript manifest by id.
 
     Returns 404 if the journal entry does not exist OR if it is not
@@ -4493,7 +4662,7 @@ async def rka_get_manuscript(manuscript_id: str) -> str:
     Args:
         manuscript_id: The jrn_ id of the manuscript manifest.
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.get(f"/api/manuscripts/{manuscript_id}")
         _raise_with_detail(r)
         data = r.json()
@@ -4506,6 +4675,8 @@ async def rka_validate_reference(
     doi: str | None = None,
     title: str | None = None,
     author: list[dict] | None = None,
+    *,
+    project_id: str,
 ) -> str:
     """Validate a single reference via the Writer's Stage B-G pipeline.
 
@@ -4536,7 +4707,7 @@ async def rka_validate_reference(
         payload["title"] = title
     if author is not None:
         payload["author"] = author
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.post(
             f"/api/manuscripts/{manuscript_id}/validate-reference",
             json=payload,
@@ -4600,7 +4771,7 @@ support; the Skill is authoritative.
 
 Always begin a session by loading context:
 
-1. **`rka_get_status()` first** — returns the active project plus phase, focus, next steps. **Verify the active project is correct before any write.** If it's `proj_default` (or any project other than the one you intend to work in), call `rka_list_projects()` then `rka_set_project(id)` to switch. Do NOT skip this step. The MCP `_session.project_id` is per-process and does not persist across subprocess restarts — previous-session project state is gone. Without explicit verification, writes silently land in `proj_default`. Set `RKA_PROJECT=<project_id>` in `claude_desktop_config.json` → `mcpServers.rka.env` to make this default automatic on session start.
+1. **Pin the project at the start of every conversation.** v2.6+: every project-scoped rka_* tool requires `project_id` as a kwarg on every call — there is no "active project" session state. Call `rka_list_projects()` first to discover available project_ids, ask the PI which project this conversation is about (or recall it from the conversation pin), and pass `project_id="prj_…"` to every subsequent rka_* call. If you omit `project_id`, the tool errors immediately with a clear message — that's by design (it replaces the pre-v2.6 silent-fallback-to-`proj_default` failure mode). Keep the project_id in your working memory; do not assume default fallback.
 2. `rka_get_context()` — full project state (phase, open missions, recent notes, decisions)
 3. `rka_get_pending_maintenance()` — check for provenance gaps
 4. `rka_get_checkpoints(status="open")` — check for unresolved Executor blockers
@@ -4732,7 +4903,7 @@ Skill is authoritative.
 
 ## Session Start Protocol
 
-1. **`rka_get_status()` first** — returns the active project plus phase. **Verify the active project is correct before any write.** If it's `proj_default` (or any project other than the one you intend to work in), call `rka_list_projects()` then `rka_set_project(id)` to switch. Do NOT skip this step. The MCP `_session.project_id` is per-process and does not persist across subprocess restarts — previous-session project state is gone. Without explicit verification, writes silently land in `proj_default`. Set `RKA_PROJECT=<project_id>` in your MCP config (`claude_desktop_config.json` → `mcpServers.rka.env`, or your shell environment) to make this default automatic on session start.
+1. **Pin the project at the start of every conversation.** v2.6+: every project-scoped rka_* tool requires `project_id` as a kwarg on every call — there is no "active project" session state in the MCP server. Call `rka_list_projects()` to discover available project_ids, confirm which project the PI is asking you to work on, and pass `project_id="prj_…"` to every subsequent rka_* call. Omitting `project_id` fails fast with a clear error — this replaces the pre-v2.6 silent-fallback-to-`proj_default` failure mode. The discipline: keep the project_id in your working memory for the whole conversation; pass it on every call.
 2. `rka_get_context()` — load current project state
 3. `rka_get_mission()` — finds the active or most recent pending mission automatically
 4. If a pending mission is found, call `rka_update_mission_status(id, "active")` to claim it
