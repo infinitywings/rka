@@ -444,12 +444,14 @@ def test_resume_token_pi_credentials_ready_accept_returns_accept():
     ) == "accept"
 
 
-def test_resume_token_pi_extend_toolkit_accept_returns_accept():
-    """pi_extend_toolkit (Phase D6) is set-identity ratification of a
-    mid-stream tool extension. Same token semantics as pi_toolkit_ratify."""
-    assert resume_token(
-        interrupt_type="pi_extend_toolkit", action="accept"
-    ) == "accept"
+def test_resume_token_pi_extend_toolkit_is_no_longer_registered():
+    """Phase E3 cleanup: pi_extend_toolkit was a half-built D6 placeholder
+    registered in _ACCEPT_TOKEN_BY_TYPE / _ONBOARDING_INTERRUPT_TYPES /
+    parked_store.InterruptType but never had a node or graph wiring.
+    Removed to prevent the registry from drifting from the running graph.
+    When D6 ships, re-add with full wiring in one PR."""
+    with pytest.raises(ValueError, match="unknown interrupt_type"):
+        resume_token(interrupt_type="pi_extend_toolkit", action="accept")
 
 
 def test_resume_token_onboarding_reject_returns_literal_reject():
@@ -457,7 +459,6 @@ def test_resume_token_onboarding_reject_returns_literal_reject():
         "pi_onboarding_topic",
         "pi_toolkit_ratify",
         "pi_credentials_ready",
-        "pi_extend_toolkit",
     ):
         assert resume_token(interrupt_type=t, action="reject") == "reject"
 

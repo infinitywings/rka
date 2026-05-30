@@ -110,13 +110,30 @@ def consensus_check(
     gate_verdict = state.get("gate1_verdict") or ""
     loops = int(state.get("loop_iterations", 0))
 
+    # Phase E4: increment loop_iterations on each consensus_check pass
+    # so MAX_LOOP_DEPTH actually bounds Brain⇄Executor disagreement
+    # loops. Pre-Phase-E4 this was missing — the counter stayed at 0
+    # forever and the cap check below was dead code.
+    #
+    # Phase E4 adversarial-review hardening (HIGH #6): increment ONLY on
+    # `unresolved` / `disagree` outcomes so legitimate non-disagreement
+    # re-entries (e.g., a graph topology that visits consensus_check on
+    # a successful Brain APPROVED path more than once across a long
+    # mission) don't burn the budget. `agreed` exits and empty-position
+    # exits both leave the counter alone.
+    next_loops_unresolved = loops + 1
+
     if not brain_pos and not exec_pos:
+        # No positions yet — workflow hasn't reached Brain ⇄ Executor
+        # synthesis. Do not consume the loop budget.
         return {
             "current_node": "consensus_check",
             "consensus_state": "unresolved",
         }
 
     if gate_verdict == "approved":
+        # Brain has APPROVED in Gate 1 — no disagreement to bound.
+        # Do not consume the loop budget.
         return {
             "current_node": "consensus_check",
             "consensus_state": "agreed",
@@ -136,11 +153,13 @@ def consensus_check(
                     f"executor_position={exec_pos[:80]!r}",
                 )
             ],
+            "loop_iterations": next_loops_unresolved,
         }
 
     return {
         "current_node": "consensus_check",
         "consensus_state": "unresolved",
+        "loop_iterations": next_loops_unresolved,
     }
 
 

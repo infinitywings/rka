@@ -119,6 +119,44 @@ def test_health_returns_ok(setup):
     assert r.json()["status"] == "ok"
 
 
+# ---------------------------------------------------------------------------
+# Phase H — PI monitoring dashboard
+# ---------------------------------------------------------------------------
+
+
+def test_dashboard_returns_html(setup):
+    """/dashboard serves an HTML page that polls the JSON endpoints."""
+    client, _, _ = setup
+    r = client.get("/dashboard")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/html")
+    body = r.text
+    # Polls the same endpoints the MCP tools use.
+    assert "/runs" in body
+    assert "/inbox" in body
+    # Has the key page elements.
+    assert "RKA Orchestrator" in body
+    assert "PI Monitor" in body
+    # Read-only disclaimer present.
+    assert "Read-only" in body
+
+
+def test_dashboard_polls_via_javascript(setup):
+    """The dashboard uses client-side fetch() polling so the daemon
+    doesn't need WebSocket plumbing. The HTML must reference setInterval
+    + the JSON endpoints so the page actually refreshes."""
+    client, _, _ = setup
+    r = client.get("/dashboard")
+    body = r.text
+    assert "setInterval" in body
+    assert "fetch(" in body
+    # Must escape user-supplied strings to avoid XSS via run/interrupt
+    # fields. (The runner's project_id / mission_id / current_node are
+    # already sanitized at write time, but the dashboard belt-and-suspenders
+    # escapes too.)
+    assert "escapeHtml" in body
+
+
 def test_post_runs_returns_outcome(setup):
     client, store, runner = setup
     runner.script_outcome(
@@ -563,3 +601,73 @@ def test_post_bootstrap_wait_segment_false_returns_starting_shape(setup):
     assert body["workflow_thread_id"] == "thr_boot"
     assert body["status"] == "starting"
     assert body["wait_segment"] is False
+
+
+# ---------------------------------------------------------------------------
+# Phase E1 — workspace mount safety check
+# ---------------------------------------------------------------------------
+
+
+def test_enforce_workspace_mount_safety_refuses_home(monkeypatch):
+    """Refuses when HOST_WORKSPACE_ROOT is unset and HOME is the fallback."""
+    from orchestrator.server import _enforce_workspace_mount_safety, WorkspaceMountUnsafeError
+
+    monkeypatch.delenv("HOST_WORKSPACE_ROOT", raising=False)
+    monkeypatch.delenv("ORCHESTRATOR_ALLOW_HOME_MOUNT", raising=False)
+    monkeypatch.setenv("HOME", "/Users/test")
+    with pytest.raises(WorkspaceMountUnsafeError, match="resolves to your \\$HOME"):
+        _enforce_workspace_mount_safety()
+
+
+def test_enforce_workspace_mount_safety_refuses_root(monkeypatch):
+    from orchestrator.server import _enforce_workspace_mount_safety, WorkspaceMountUnsafeError
+
+    monkeypatch.setenv("HOST_WORKSPACE_ROOT", "/")
+    monkeypatch.delenv("ORCHESTRATOR_ALLOW_HOME_MOUNT", raising=False)
+    with pytest.raises(WorkspaceMountUnsafeError, match="mount the host root"):
+        _enforce_workspace_mount_safety()
+
+
+def test_enforce_workspace_mount_safety_refuses_ancestor_of_ssh(monkeypatch):
+    """If HOST_WORKSPACE_ROOT is an ancestor of ~/.ssh, refuse."""
+    from orchestrator.server import _enforce_workspace_mount_safety, WorkspaceMountUnsafeError
+
+    monkeypatch.setenv("HOME", "/Users/test")
+    monkeypatch.setenv("HOST_WORKSPACE_ROOT", "/Users")
+    monkeypatch.delenv("ORCHESTRATOR_ALLOW_HOME_MOUNT", raising=False)
+    with pytest.raises(WorkspaceMountUnsafeError, match="ancestor of"):
+        _enforce_workspace_mount_safety()
+
+
+def test_enforce_workspace_mount_safety_accepts_research_subdir(monkeypatch):
+    """$HOME/Research is fine — narrow enough."""
+    from orchestrator.server import _enforce_workspace_mount_safety
+
+    monkeypatch.setenv("HOME", "/Users/test")
+    monkeypatch.setenv("HOST_WORKSPACE_ROOT", "/Users/test/Research")
+    monkeypatch.delenv("ORCHESTRATOR_ALLOW_HOME_MOUNT", raising=False)
+    # Should not raise.
+    _enforce_workspace_mount_safety()
+
+
+def test_enforce_workspace_mount_safety_accepts_external_volume(monkeypatch):
+    """An external-drive path is fine — not under $HOME at all."""
+    from orchestrator.server import _enforce_workspace_mount_safety
+
+    monkeypatch.setenv("HOME", "/Users/test")
+    monkeypatch.setenv("HOST_WORKSPACE_ROOT", "/Volumes/base/projects")
+    monkeypatch.delenv("ORCHESTRATOR_ALLOW_HOME_MOUNT", raising=False)
+    _enforce_workspace_mount_safety()
+
+
+def test_enforce_workspace_mount_safety_override(monkeypatch, caplog):
+    """ORCHESTRATOR_ALLOW_HOME_MOUNT=1 bypasses the check with a warning."""
+    import logging
+    from orchestrator.server import _enforce_workspace_mount_safety
+
+    monkeypatch.delenv("HOST_WORKSPACE_ROOT", raising=False)
+    monkeypatch.setenv("HOME", "/Users/test")
+    monkeypatch.setenv("ORCHESTRATOR_ALLOW_HOME_MOUNT", "1")
+    with caplog.at_level(logging.WARNING):
+        _enforce_workspace_mount_safety()
+    assert any("ORCHESTRATOR_ALLOW_HOME_MOUNT" in r.message for r in caplog.records)

@@ -66,6 +66,17 @@ services:
       # writing back to the host file. Single-file mounts are never
       # written to by the SDK (only read), so no EROFS risk here.
       - ${HOME}/.claude.json:/root/.claude.json:ro
+      # Phase B bootstrap writes orchestrator/.env at /app/orchestrator/.env
+      # inside the container. Bind-mount the host file (using HOST_ORCH_ENV
+      # path, default $PWD/orchestrator/.env relative to Compose project
+      # dir = repo root) so PI-side edits show up in the container and
+      # daemon-side writes show up on the host. The :rw mount is safe:
+      # the file is git-ignored and only the daemon + PI touch it.
+      #
+      # If the file doesn't exist yet, create an empty one before
+      # docker compose up to avoid Docker mounting a directory instead:
+      #   touch orchestrator/.env
+      - ${HOST_ORCH_ENV:-${PWD}/orchestrator/.env}:/app/orchestrator/.env:rw
       # PI's workspace root, mounted at the SAME absolute path inside
       # the container as on the host so paths the PI types
       # (project_workspaces.workspace_path) resolve identically for the

@@ -13,10 +13,18 @@ from typing import Any
 
 @dataclass
 class FakeSDK:
-    """Records every `complete()` call; returns the canned reply."""
+    """Records every `complete()` call; returns the canned reply.
+
+    Phase E4: `last_call_cost_usd` carries a fake cost on each call so
+    tests can exercise the per-node cost-accumulation path. Defaults to
+    0.0 — set `canned_cost_usd` on the fixture to inject a non-zero
+    cost per call (uniformly applied to every complete() invocation).
+    """
 
     canned_reply: str = "fake LLM reply"
+    canned_cost_usd: float = 0.0
     calls: list[dict] = field(default_factory=list)
+    last_call_cost_usd: float = 0.0
 
     def complete(
         self,
@@ -26,6 +34,7 @@ class FakeSDK:
         system: str | None = None,
     ) -> str:
         self.calls.append({"prompt": prompt, "max_tokens": max_tokens, "system": system})
+        self.last_call_cost_usd = self.canned_cost_usd
         return self.canned_reply
 
 

@@ -80,7 +80,7 @@ Criticality = Literal[
 
 ManifestType = Literal[
     "baseline",   # Initial onboarding result; one per project
-    "extension",  # Mid-stream addition via pi_extend_toolkit
+    "extension",  # Mid-stream addition (Phase D6 future)
 ]
 
 ToolType = Literal[
@@ -140,7 +140,7 @@ class ToolDecl:
     always_on: bool = False  # If True, included in every mission's subprocess config
     rationale: Optional[str] = None  # Why this tool was picked at onboarding
     # Source tracking for the audit trail:
-    source: Optional[str] = None  # "registry" | "web_search" | "user_added"
+    source: Optional[str] = None  # "registry" | "serpapi_augmented" | "user_added" | "web_search" (legacy)
 
 
 @dataclass

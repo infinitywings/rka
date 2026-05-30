@@ -395,7 +395,7 @@ def test_parked_store_accepts_all_seven_interrupt_types(tmp_path: Path):
         "pi_onboarding_topic",
         "pi_toolkit_ratify",
         "pi_credentials_ready",
-        "pi_extend_toolkit",
+        # Phase E3 cleanup: pi_extend_toolkit removed (was half-built D6).
     ]
     for t in types:
         iid = store.park_interrupt(

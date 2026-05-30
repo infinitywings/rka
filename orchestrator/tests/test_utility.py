@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from orchestrator.budgets import MAX_LOOP_DEPTH
 from orchestrator.nodes import utility
 from orchestrator.state import make_initial_state
@@ -214,3 +216,73 @@ def test_every_utility_node_sets_current_node():
     ]:
         update = fn(state, sdk, mcp)
         assert update["current_node"] == expected
+
+
+# ---------------------------------------------------------------------------
+# Phase E4 — loop_iterations now increments per consensus_check pass
+# ---------------------------------------------------------------------------
+
+
+def test_consensus_check_increments_loop_iterations_on_each_pass():
+    """Phase E4: pre-Phase-E4 loop_iterations was read but never written, so
+    MAX_LOOP_DEPTH could never be reached. Now incremented on every
+    consensus_check pass so the cap actually bounds disagreement loops."""
+    from orchestrator.nodes.utility import consensus_check
+
+    state = {
+        "brain_position": "p1",
+        "executor_position": "p2",
+        "gate1_verdict": "redirected",
+        "loop_iterations": 0,
+    }
+    out = consensus_check(state)
+    assert out["loop_iterations"] == 1
+
+    # Simulate a re-entry with the incremented counter.
+    state2 = {**state, "loop_iterations": out["loop_iterations"]}
+    out2 = consensus_check(state2)
+    assert out2["loop_iterations"] == 2
+
+
+def test_consensus_check_does_not_increment_on_agreed_path():
+    """Phase E4 adversarial-review hardening: when consensus_state is
+    'agreed' (Brain APPROVED in Gate 1), do NOT burn the loop budget.
+    The counter should only advance on disagreement passes, so a long
+    mission that re-enters consensus_check after multiple successful
+    approves doesn't trip MAX_LOOP_DEPTH prematurely."""
+    from orchestrator.nodes.utility import consensus_check
+
+    out = consensus_check({
+        "brain_position": "ok",
+        "executor_position": "ok",
+        "gate1_verdict": "approved",
+        "loop_iterations": 0,
+    })
+    assert out["consensus_state"] == "agreed"
+    # 'agreed' path leaves loop_iterations alone (not returned in update).
+    assert "loop_iterations" not in out
+
+
+def test_consensus_check_does_not_increment_on_empty_positions():
+    """Phase E4 adversarial-review hardening: empty-position passes
+    (workflow hasn't reached Brain ⇄ Executor synthesis) don't burn
+    the budget either."""
+    from orchestrator.nodes.utility import consensus_check
+
+    out = consensus_check({"loop_iterations": 0})
+    assert out["consensus_state"] == "unresolved"
+    assert "loop_iterations" not in out
+
+
+def test_brain_node_accrues_usd_spent_from_sdk_last_call_cost(tmp_path):
+    """Phase E4: Brain nodes must return state['usd_spent'] + sdk.last_call_cost_usd
+    so the workflow running total reflects per-call LLM costs."""
+    from orchestrator.nodes.brain import strategy_node
+    from tests._fakes import FakeSDK, FakeMCP
+
+    sdk = FakeSDK(canned_reply="strategy text", canned_cost_usd=0.42)
+    mcp = FakeMCP()
+    state = {"mission_id": "mis_test", "usd_spent": 0.10}
+    out = strategy_node(state, sdk, mcp)
+    # 0.10 (prior) + 0.42 (this call's cost) = 0.52
+    assert out["usd_spent"] == pytest.approx(0.52)

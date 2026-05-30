@@ -393,8 +393,8 @@ async def orchestrator_get_manifest(project_id: str) -> dict:
     """Return the project's current effective tool manifest.
 
     The effective manifest is the baseline (set by initial onboarding)
-    merged with any per-mission extensions written via
-    `pi_extend_toolkit` (Phase D6). Useful for the PI session to
+    merged with any per-mission extensions written via a future mid-
+    stream extension flow (Phase D6). Useful for the PI session to
     answer "what tools is this project configured to use?"
 
     Raises 404 if the project hasn't been onboarded yet.

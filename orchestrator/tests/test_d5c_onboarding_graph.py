@@ -2,8 +2,8 @@
 
 Covers:
   - build_onboarding_graph compiles cleanly with the LangGraph runtime
-  - Topology: every node from ONBOARDING_NODE_NAMES (sans research_toolkit's
-    sibling pi_extend_toolkit which is D6) is registered
+  - Topology: every node from ONBOARDING_NODE_NAMES is registered
+    (the pi_extend_toolkit D6 placeholder was removed in Phase E3)
   - Routing: pi_toolkit_ratify reject → END; accept → draft_manifest
   - Routing: pi_credentials_ready reject → END; accept → finalize
   - runner.start_onboarding creates a workflow_runs row + runs first

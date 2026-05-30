@@ -255,7 +255,15 @@ class SDKClient(Protocol):
     `asyncio.run` for sync calling from within LangGraph nodes (Phase 1
     has no concurrency that would benefit from async; the SDK call is the
     only place we'd block, and the node IS the work unit).
+
+    Phase E4: `last_call_cost_usd` carries the USD spent on the most
+    recent `complete()` call, extracted from the SDK's ResultMessage.
+    Nodes read this after `complete()` returns and add to
+    `state["usd_spent"]` for workflow-level budget tracking. Fakes used
+    in tests can default this to 0.0 (no real cost).
     """
+
+    last_call_cost_usd: float
 
     def complete(
         self,
@@ -264,7 +272,11 @@ class SDKClient(Protocol):
         max_tokens: int = 4096,
         system: str | None = None,
     ) -> str:
-        """Issue a single LLM call. Returns the assistant's text reply."""
+        """Issue a single LLM call. Returns the assistant's text reply.
+
+        Implementations must reset `last_call_cost_usd` to 0.0 at the
+        start of the call and populate it before returning.
+        """
         ...
 
 
@@ -404,8 +416,16 @@ class _RealSDKClient:
         # the claude-agent-sdk subprocess's `rka mcp` stdio child via
         # McpStdioServerConfig.env={"RKA_PROJECT": project_id}. Stored at
         # construction time so each `complete()` call uses the same project.
+        # (As of v2.6: the env-var threading is dead; project_id is now
+        # threaded per-call by the Brain/Executor LLM. See nodes/brain.py
+        # BRAIN_SYSTEM + nodes/executor.py EXECUTOR_SYSTEM prompts.)
         self._env = env if env is not None else _scrubbed_env()
         self._project_id = project_id
+        # Phase E4: cost of the most recent complete() call in USD,
+        # extracted from the SDK's ResultMessage. Nodes read this after
+        # complete() and add to state["usd_spent"] for budget tracking.
+        # Reset to 0.0 at the start of every complete().
+        self.last_call_cost_usd: float = 0.0
 
     def complete(
         self,
@@ -457,6 +477,9 @@ class _RealSDKClient:
                 allowed_tools=[],
             )
 
+        # Reset cost tracker; populated from ResultMessage if the SDK emits one.
+        self.last_call_cost_usd = 0.0
+
         parts: list[str] = []
         async for message in sdk.query(prompt=prompt, options=options):
             if isinstance(message, sdk.AssistantMessage):
@@ -464,6 +487,15 @@ class _RealSDKClient:
                     text = getattr(block, "text", None)
                     if text:
                         parts.append(text)
+            elif isinstance(message, getattr(sdk, "ResultMessage", type(None))):
+                # Phase E4: SDK's terminal ResultMessage carries
+                # `total_cost_usd` (USD spent on this turn). Extract for
+                # workflow budget tracking. Some SDK versions / fake
+                # implementations may not have this field — degrade
+                # gracefully to 0.
+                cost = getattr(message, "total_cost_usd", None)
+                if isinstance(cost, (int, float)) and cost >= 0:
+                    self.last_call_cost_usd = float(cost)
         return "".join(parts)
 
 

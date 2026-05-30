@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from orchestrator.parked_store import ParkedStore
@@ -49,6 +50,114 @@ DEFAULT_SAVER_PATH = os.environ.get(
     "ORCHESTRATOR_SAVER_PATH", "/data/orchestrator-saver.db"
 )
 DEFAULT_RKA_URL = os.environ.get("RKA_API_URL", "http://rka:9712")
+
+
+class WorkspaceMountUnsafeError(RuntimeError):
+    """Raised at startup if the daemon's workspace bind mount resolves to
+    a path that would over-expose host state ($HOME, `/`, ancestor of
+    well-known credential dirs)."""
+
+
+def _enforce_workspace_mount_safety() -> None:
+    """Refuse to start if the bind-mounted workspace is dangerously broad.
+
+    Phase E1 safety guard. The Compose overlay mounts
+    `${HOST_WORKSPACE_ROOT:-${HOME}}` rw into the container at the same
+    absolute path. If `HOST_WORKSPACE_ROOT` is unset, the fallback is
+    `$HOME` — which gives the SDK subprocess RW access to `~/.ssh`,
+    `~/.aws`, `~/.gnupg`, `~/.config`, the entire `~/Documents`, etc.
+    That's wildly over-broad for a workspace mount whose purpose is the
+    PI's per-project files.
+
+    This check refuses to start when the resolved path is:
+      - empty / None
+      - `/` (the host root)
+      - `$HOME` itself (set HOST_WORKSPACE_ROOT to a child dir, e.g.
+        `$HOME/Research` or an absolute project parent)
+      - an ancestor of well-known credential directories
+
+    The check reads the HOST_WORKSPACE_ROOT env var that Compose
+    interpolates the same way (project-root `.env` or shell env).
+    Workspace operations within the container resolve via the same
+    absolute path the PI sees on the host.
+
+    Bypass: set `ORCHESTRATOR_ALLOW_HOME_MOUNT=1` to explicitly accept the
+    over-broad mount (for development / single-purpose installs that
+    don't have sensitive host state). Logged as a warning each startup
+    so the override is visible in the daemon logs.
+    """
+    if os.environ.get("ORCHESTRATOR_ALLOW_HOME_MOUNT") == "1":
+        logger.warning(
+            "ORCHESTRATOR_ALLOW_HOME_MOUNT=1 set; skipping workspace mount "
+            "safety check. The daemon will accept any HOST_WORKSPACE_ROOT, "
+            "including $HOME and `/`. Use only when you trust the daemon's "
+            "host environment has no sensitive state."
+        )
+        return
+
+    host_root_raw = os.environ.get("HOST_WORKSPACE_ROOT", "").strip()
+    home = os.environ.get("HOME", "").strip()
+
+    # Effective mount target — matches the Compose interpolation
+    # `${HOST_WORKSPACE_ROOT:-${HOME}}`.
+    effective = host_root_raw or home
+    if not effective:
+        raise WorkspaceMountUnsafeError(
+            "Refusing to start: neither HOST_WORKSPACE_ROOT nor HOME is set. "
+            "Set HOST_WORKSPACE_ROOT in the repo-root .env (or shell env) to "
+            "the absolute path of your projects-parent directory (e.g., "
+            "/Volumes/base/projects or /Users/you/Research)."
+        )
+
+    # Normalize: strip trailing slashes, resolve relative
+    effective_norm = effective.rstrip("/") or "/"
+    home_norm = home.rstrip("/") if home else ""
+
+    # Refuse `/`
+    if effective_norm == "/":
+        raise WorkspaceMountUnsafeError(
+            "Refusing to start: HOST_WORKSPACE_ROOT=`/` would mount the host "
+            "root read-write into the daemon container — extreme over-exposure. "
+            "Set HOST_WORKSPACE_ROOT to a specific projects-parent directory "
+            "(e.g., $HOME/Research or /Volumes/.../projects). Override with "
+            "ORCHESTRATOR_ALLOW_HOME_MOUNT=1 if you genuinely intend this."
+        )
+
+    # Refuse $HOME exactly (whether explicit or via fallback)
+    if home_norm and effective_norm == home_norm:
+        suggestion_dir = f"{home_norm}/Research"
+        raise WorkspaceMountUnsafeError(
+            f"Refusing to start: HOST_WORKSPACE_ROOT resolves to your $HOME "
+            f"({home_norm!r}). Mounting $HOME rw into the daemon exposes "
+            f"~/.ssh, ~/.aws, ~/.gnupg, ~/.config, ~/Documents, etc. to the "
+            f"SDK subprocess. Set HOST_WORKSPACE_ROOT to a specific child "
+            f"directory in the repo-root .env, e.g.:\n"
+            f"  echo 'HOST_WORKSPACE_ROOT={suggestion_dir}' >> "
+            f"/Volumes/base/workspace/rka/.env\n"
+            f"(or another absolute path that holds your project workspaces). "
+            f"Override with ORCHESTRATOR_ALLOW_HOME_MOUNT=1 if you genuinely "
+            f"intend this."
+        )
+
+    # Refuse if the effective path is an ancestor of credential paths.
+    # We only check this for host-style paths (POSIX); skip for Windows-
+    # style paths that an external installer might pass.
+    if effective_norm.startswith("/"):
+        sensitive_children = (".ssh", ".aws", ".gnupg", ".config")
+        for child in sensitive_children:
+            if home_norm:
+                cred_path = f"{home_norm}/{child}"
+                # Refuse if the effective path is a strict ancestor of cred_path.
+                if cred_path.startswith(effective_norm + "/") or cred_path == effective_norm:
+                    raise WorkspaceMountUnsafeError(
+                        f"Refusing to start: HOST_WORKSPACE_ROOT={effective_norm!r} "
+                        f"is an ancestor of {cred_path!r}, which would expose "
+                        f"the credentials there to the daemon's SDK subprocess. "
+                        f"Choose a narrower path. Override with "
+                        f"ORCHESTRATOR_ALLOW_HOME_MOUNT=1 if you genuinely intend this."
+                    )
+
+    logger.info("workspace mount safety check passed: %s", effective_norm)
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +189,281 @@ class CorrectRequest(BaseModel):
 
 class RejectRequest(BaseModel):
     reason: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Phase H — PI monitoring dashboard HTML
+# ---------------------------------------------------------------------------
+#
+# Single self-contained HTML page; no build step, no framework. Polls
+# /runs, /inbox, /runs/{id} every 4s and renders the state. Sized for
+# the PI's actual workflow:
+#   - Top: list of active and recent runs
+#   - Middle: parked interrupts (PI's action queue)
+#   - Bottom: a detail panel that fills when you click a run
+# Read-only by design — every state change must go through Claude
+# Desktop's MCP tools so the TWO-TAP ratification stays the only path
+# to writes.
+
+_DASHBOARD_HTML = """\
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>RKA Orchestrator — PI Monitor</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1c2127;
+      --border: #2a3038;
+      --fg: #e6edf3;
+      --muted: #7d8590;
+      --accent: #58a6ff;
+      --good: #56d364;
+      --warn: #d29922;
+      --bad: #f85149;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 18px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: var(--bg); color: var(--fg);
+      font-size: 14px; line-height: 1.45;
+    }
+    h1 { font-size: 18px; margin: 0 0 12px; font-weight: 600; }
+    h2 { font-size: 14px; margin: 0 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
+    .row { display: flex; gap: 18px; flex-wrap: wrap; }
+    .col { flex: 1 1 360px; min-width: 0; }
+    .panel {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 8px; padding: 12px; margin-bottom: 14px;
+    }
+    .meta { color: var(--muted); font-size: 12px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+    tr.clickable { cursor: pointer; }
+    tr.clickable:hover { background: rgba(88,166,255,.07); }
+    tr.selected { background: rgba(88,166,255,.13); }
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 999px;
+      font-size: 11px; font-weight: 600; letter-spacing: .03em;
+    }
+    .b-running { background: rgba(88,166,255,.18); color: var(--accent); }
+    .b-awaiting { background: rgba(210,153,34,.18); color: var(--warn); }
+    .b-complete { background: rgba(86,211,100,.18); color: var(--good); }
+    .b-failed { background: rgba(248,81,73,.18); color: var(--bad); }
+    .b-cancelled { background: rgba(125,133,144,.18); color: var(--muted); }
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+    }
+    pre {
+      background: #0d1117; padding: 10px; border-radius: 6px;
+      overflow: auto; max-height: 280px;
+      border: 1px solid var(--border);
+    }
+    .truncate { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+    .muted { color: var(--muted); }
+    .note {
+      background: rgba(248,81,73,.08); border-left: 3px solid var(--bad);
+      padding: 8px 10px; margin: 8px 0; font-size: 12px;
+    }
+    button.refresh {
+      background: transparent; border: 1px solid var(--border);
+      color: var(--fg); border-radius: 6px; padding: 4px 12px;
+      font-size: 12px; cursor: pointer;
+    }
+    button.refresh:hover { border-color: var(--accent); color: var(--accent); }
+    .header-row {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .empty { color: var(--muted); font-style: italic; padding: 12px 4px; }
+    .kv { display: grid; grid-template-columns: 130px 1fr; gap: 4px 12px; font-size: 13px; }
+    .kv .k { color: var(--muted); }
+    .kv .v { word-break: break-all; }
+  </style>
+</head>
+<body>
+  <div class="header-row">
+    <h1>RKA Orchestrator — PI Monitor <span class="meta" id="lastUpdated"></span></h1>
+    <button class="refresh" onclick="loadAll()">Refresh now</button>
+  </div>
+
+  <div class="row">
+    <div class="col">
+      <div class="panel">
+        <h2>Runs</h2>
+        <div id="runsContainer"><div class="empty">Loading…</div></div>
+      </div>
+
+      <div class="panel">
+        <h2>Parked interrupts (PI action queue)</h2>
+        <div id="inboxContainer"><div class="empty">Loading…</div></div>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="panel">
+        <h2 id="detailHeader">Run detail</h2>
+        <div id="detailContainer"><div class="empty">Click a run on the left to see its full state.</div></div>
+      </div>
+    </div>
+  </div>
+
+  <p class="meta" style="margin-top: 16px">
+    Read-only view. Every accept / reject / correct still goes through the MCP tools in
+    your Claude Desktop / Claude Code session so the two-tap ratification gate stays the
+    only path to writes.
+  </p>
+
+<script>
+const POLL_MS = 4000;
+let selectedRunId = null;
+
+function fmtTime(s) {
+  if (!s) return '';
+  try {
+    const d = new Date(s);
+    if (isNaN(d.getTime())) return s;
+    return d.toLocaleTimeString();
+  } catch (e) { return s; }
+}
+
+function badge(status) {
+  const cls = ({
+    running: 'b-running',
+    awaiting_pi: 'b-awaiting',
+    complete: 'b-complete',
+    failed: 'b-failed',
+    cancelled: 'b-cancelled',
+  })[status] || 'b-running';
+  return `<span class="badge ${cls}">${escapeHtml(status || '?')}</span>`;
+}
+
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '';
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+async function fetchJson(path) {
+  const r = await fetch(path, { headers: { Accept: 'application/json' } });
+  if (!r.ok) throw new Error(`${path} → HTTP ${r.status}`);
+  return await r.json();
+}
+
+function renderRuns(runs) {
+  const c = document.getElementById('runsContainer');
+  if (!Array.isArray(runs) || runs.length === 0) {
+    c.innerHTML = '<div class="empty">No runs yet. Start one with <code>orchestrator_run_start</code>.</div>';
+    return;
+  }
+  const rows = runs.map(r => {
+    const sel = r.workflow_thread_id === selectedRunId ? ' selected' : '';
+    return `
+      <tr class="clickable${sel}" data-id="${escapeHtml(r.workflow_thread_id)}">
+        <td><code class="truncate">${escapeHtml(r.workflow_thread_id || '')}</code></td>
+        <td>${badge(r.status)}</td>
+        <td><code>${escapeHtml(r.current_node || '')}</code></td>
+        <td><code class="truncate">${escapeHtml(r.project_id || '')}</code></td>
+        <td>${escapeHtml(fmtTime(r.updated_at))}</td>
+      </tr>
+    `;
+  }).join('');
+  c.innerHTML = `
+    <table>
+      <thead><tr><th>workflow_thread_id</th><th>status</th><th>node</th><th>project_id</th><th>updated</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+  c.querySelectorAll('tr.clickable').forEach(tr => {
+    tr.addEventListener('click', () => {
+      selectedRunId = tr.getAttribute('data-id');
+      loadAll();
+    });
+  });
+}
+
+function renderInbox(inbox) {
+  const c = document.getElementById('inboxContainer');
+  if (!Array.isArray(inbox) || inbox.length === 0) {
+    c.innerHTML = '<div class="empty">No parked interrupts.</div>';
+    return;
+  }
+  const rows = inbox.map(i => `
+    <tr>
+      <td><code class="truncate">${escapeHtml(i.interrupt_id || '')}</code></td>
+      <td><code>${escapeHtml(i.interrupt_type || '')}</code></td>
+      <td><code class="truncate">${escapeHtml(i.workflow_thread_id || '')}</code></td>
+      <td>${escapeHtml(fmtTime(i.parked_at))}</td>
+    </tr>
+  `).join('');
+  c.innerHTML = `
+    <table>
+      <thead><tr><th>interrupt_id</th><th>type</th><th>workflow_thread_id</th><th>parked_at</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+function renderDetail(run, lastError) {
+  const c = document.getElementById('detailContainer');
+  const h = document.getElementById('detailHeader');
+  if (!run) {
+    h.textContent = 'Run detail';
+    c.innerHTML = '<div class="empty">Click a run on the left to see its full state.</div>';
+    return;
+  }
+  h.innerHTML = `Run detail — <code>${escapeHtml(run.workflow_thread_id || '')}</code>`;
+  const kv = [
+    ['status', badge(run.status)],
+    ['current_node', `<code>${escapeHtml(run.current_node || '')}</code>`],
+    ['project_id', `<code>${escapeHtml(run.project_id || '')}</code>`],
+    ['mission_id', `<code>${escapeHtml(run.mission_id || '')}</code>`],
+    ['created_at', escapeHtml(fmtTime(run.created_at) || '—')],
+    ['updated_at', escapeHtml(fmtTime(run.updated_at) || '—')],
+    ['terminal_state', escapeHtml(run.terminal_state || '')],
+  ].map(([k, v]) => `<div class="k">${escapeHtml(k)}</div><div class="v">${v}</div>`).join('');
+  let errBlock = '';
+  if (lastError) {
+    errBlock = `<div class="note"><strong>last_error:</strong><br><code>${escapeHtml(lastError)}</code></div>`;
+  }
+  c.innerHTML = `<div class="kv">${kv}</div>${errBlock}<pre>${escapeHtml(JSON.stringify(run, null, 2))}</pre>`;
+}
+
+async function loadAll() {
+  try {
+    const runs = await fetchJson('/runs?limit=50');
+    renderRuns(runs);
+    const inbox = await fetchJson('/inbox');
+    renderInbox(inbox);
+    let detail = null, lastError = null;
+    if (selectedRunId) {
+      try {
+        detail = await fetchJson(`/runs/${encodeURIComponent(selectedRunId)}`);
+        lastError = detail && detail.last_error;
+      } catch (e) {
+        detail = null;
+      }
+    }
+    renderDetail(detail, lastError);
+    document.getElementById('lastUpdated').textContent = ' • last poll ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    const c = document.getElementById('runsContainer');
+    c.innerHTML = `<div class="note">Failed to load: ${escapeHtml(String(e))}</div>`;
+  }
+}
+
+loadAll();
+setInterval(loadAll, POLL_MS);
+</script>
+</body>
+</html>
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -151,9 +535,19 @@ def create_app(
     db_path: Optional[str] = None,
     saver_path: Optional[str] = None,
     rka_url: Optional[str] = None,
+    enforce_mount_safety: Optional[bool] = None,
 ) -> FastAPI:
     """Construct the FastAPI app. All injection points are exposed for
-    tests; defaults wire the production daemon."""
+    tests; defaults wire the production daemon.
+
+    `enforce_mount_safety` controls the Phase E1 $HOME bind-mount
+    refusal at lifespan start. When None (default), it's auto-True for
+    pure-production (no store + no runner injected) and auto-False when
+    EITHER store or runner is injected (test-mode signal). Pass True
+    explicitly to force the check even with injection (e.g., to test
+    the check itself); pass False to suppress it entirely (e.g., a
+    custom-bootstrap caller that pre-validates its own mount).
+    """
 
     resolved_db_path = db_path or DEFAULT_DB_PATH
     resolved_saver_path = saver_path or DEFAULT_SAVER_PATH
@@ -161,6 +555,28 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # Phase E1: refuse to start if HOST_WORKSPACE_ROOT is unset (which
+        # defaults to $HOME via Compose interpolation) or otherwise
+        # resolves to $HOME / `/`. Mounting $HOME would expose ~/.ssh,
+        # ~/.aws, ~/.gnupg, ~/.config, etc. read-write to the daemon's
+        # claude-agent-sdk subprocess — wildly over-broad. Workspace
+        # mounts should be a child of $HOME (e.g., $HOME/Research) or
+        # an explicit absolute path (e.g., /Volumes/.../projects).
+        #
+        # When `enforce_mount_safety` is None (default), default to True
+        # only on pure-production (no test injection). A factory that
+        # injects only `store` (e.g., a future Phase O bootstrapper) no
+        # longer accidentally suppresses the check — it must be set
+        # explicitly. See Phase E1 adversarial review (MEDIUM #7).
+        if enforce_mount_safety is True:
+            should_check = True
+        elif enforce_mount_safety is False:
+            should_check = False
+        else:  # None — auto-detect test mode by FULL injection
+            should_check = store is None and runner is None
+        if should_check:
+            _enforce_workspace_mount_safety()
+
         # If the caller injected store/runner, use those; else build them.
         if store is not None:
             app.state.store = store
@@ -253,6 +669,23 @@ def create_app(
     @app.get("/health")
     async def health(request: Request) -> dict:
         return {"status": "ok", "db_path": resolved_db_path}
+
+    # ---------------------------------------------------------------
+    # Phase H — PI monitoring dashboard
+    # ---------------------------------------------------------------
+    # The user runs the orchestrator daemon on 9713 alongside the RKA
+    # core API on 9712. They asked for a "webpage to visualize the
+    # progress so PI can clearly monitor". We can't put the dashboard
+    # on 9712 without modifying the rka/ tree (the agentic bookkeeper
+    # invariant forbids that), so the dashboard lives on the
+    # orchestrator at 9713 instead. Open http://localhost:9713/dashboard
+    # in any browser. The page polls the same JSON endpoints the MCP
+    # tools use (/runs, /inbox), so what the PI sees in Claude Desktop
+    # always matches what the dashboard shows — no separate data
+    # source, no separate auth model.
+    @app.get("/dashboard", response_class=HTMLResponse)
+    async def dashboard(request: Request) -> str:
+        return _DASHBOARD_HTML
 
     def _background_segment(
         request: Request,

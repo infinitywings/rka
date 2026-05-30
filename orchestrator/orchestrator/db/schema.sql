@@ -36,11 +36,13 @@ CREATE INDEX IF NOT EXISTS idx_workflow_runs_status
 -- ============================================================
 -- parked_interrupts — one row per PI interrupt awaiting response
 --
--- Phase-D added 4 new interrupt types for the onboarding subgraph
--- (pi_onboarding_topic, pi_toolkit_ratify, pi_credentials_ready,
--- pi_extend_toolkit). The first three drive baseline onboarding; the
--- fourth surfaces when a mission mid-stream requests a tool not in
--- the project's baseline manifest (Q1 hybrid lifecycle).
+-- Phase-D added 3 interrupt types for the onboarding subgraph
+-- (pi_onboarding_topic, pi_toolkit_ratify, pi_credentials_ready).
+-- Phase E3 removed the originally-planned pi_extend_toolkit type
+-- (mid-stream tool addition) from this table — the runner's accept-
+-- token map and the InterruptType literal — because the half-built
+-- node was never wired into the graph. Mid-stream tool addition will
+-- be reintroduced under a different name when Phase D6 ships.
 -- ============================================================
 CREATE TABLE IF NOT EXISTS parked_interrupts (
     interrupt_id TEXT PRIMARY KEY,
@@ -57,7 +59,6 @@ CREATE TABLE IF NOT EXISTS parked_interrupts (
             'pi_onboarding_topic',
             'pi_toolkit_ratify',
             'pi_credentials_ready',
-            'pi_extend_toolkit',
             -- Phase O — project-onboarding workflow interrupts
             'pi_idea_capture',
             'pi_scope_ratify',

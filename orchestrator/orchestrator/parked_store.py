@@ -43,7 +43,9 @@ InterruptType = Literal[
     "pi_onboarding_topic",
     "pi_toolkit_ratify",
     "pi_credentials_ready",
-    "pi_extend_toolkit",
+    # Phase E3 cleanup: "pi_extend_toolkit" removed. Was half-built D6 —
+    # no node + no graph wiring + no schema CHECK acceptance. Re-add with
+    # full wiring when D6 ships, not as a placeholder.
     # Phase O — project-onboarding workflow interrupts
     "pi_idea_capture",
     "pi_scope_ratify",

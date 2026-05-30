@@ -50,7 +50,11 @@ _ACCEPT_TOKEN_BY_TYPE: dict[str, str] = {
     "pi_onboarding_topic": "approve",       # input gate; greenlight-class
     "pi_toolkit_ratify": "accept",          # set-identity ratification (mirrors pi_decision_select)
     "pi_credentials_ready": "accept",       # "I'm done editing .env" signal
-    "pi_extend_toolkit": "accept",          # set-identity (mid-mission extension; D6)
+    # Phase E3 cleanup: `pi_extend_toolkit` removed from accept-token map.
+    # The type was registered here, in _ONBOARDING_INTERRUPT_TYPES, and in
+    # parked_store.InterruptType but never had a node or graph wiring — a
+    # half-built D6 feature. If/when D6 ships, re-add the entry alongside
+    # the node and graph edges in one PR (not three separate registrations).
     # Phase O — project-onboarding workflow interrupts.
     "pi_idea_capture": "approve",           # free-form input gate; greenlight-class
     "pi_scope_ratify": "accept",            # TWO-TAP set-identity (polished idea)
@@ -326,7 +330,8 @@ class OrchestratorRunner:
             "pi_onboarding_topic",
             "pi_toolkit_ratify",
             "pi_credentials_ready",
-            "pi_extend_toolkit",
+            # Phase E3 cleanup: pi_extend_toolkit removed (was half-built D6
+            # placeholder; no node + no graph wiring shipped).
         }
     )
     """Interrupt types whose response resumes via the Phase D tool-setup
