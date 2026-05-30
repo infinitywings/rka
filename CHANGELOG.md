@@ -186,7 +186,54 @@ manuscripts, results, per-project tools.json, per-project .env) lives
 under the PI's `$HOME/Research/{slug}/`, NEVER in the rka repo. The
 rka repo holds only templates + orchestrator code that knows how to
 create the workspace. See `orchestrator/docs/phase-o-project-onboarding-design.md`
-§"Repo boundary".## [Unreleased] - v2.6.0 — `project_id` required on every MCP tool (BREAKING)
+§"Repo boundary".
+
+## [Unreleased] — `mcp-credentials` skill
+
+New skill at `rka/skills/mcp-credentials/` (mirrored to
+`plugin/skills/mcp-credentials/`) that walks users through provisioning
+credentials for the cross-project MCP servers commonly used alongside
+RKA: Claude OAuth (for the orchestrator daemon's SDK subprocess),
+Zotero, Semantic Scholar, SerpAPI, and OpenAlex.
+
+### What's in the skill
+
+- **`SKILL.md`** — top-level orchestration: identify → walkthrough →
+  sanity-check → persist → restart. Operating principles for
+  plaintext credentials (the platform default), atomic writes, deep
+  merging, backup discipline, and credential-masking-in-chat
+  guardrails.
+- **`catalog.md`** — quick-reference table: every service, its env
+  vars, target config block, validation regex, and link to the
+  detailed walkthrough.
+- **`config-ops.md`** — the load-bearing read/parse/merge/backup/write
+  pattern for `claude_desktop_config.json`, `~/.claude.json`,
+  per-repo `.claude/mcp.json`, and `orchestrator/.env`. Cross-platform
+  paths, atomic-write discipline, restore-from-backup escape hatch.
+- **`walkthroughs/{claude-oauth,zotero,semantic-scholar,serpapi,openalex}.md`** —
+  per-service cards: what you need, where to get it, validation regex,
+  optional API sanity-check (with shell-history-safe variants for
+  long-lived keys), target env vars + file path, restart instructions,
+  common pitfalls.
+
+### Design decisions
+
+- **Plaintext in JSON** — the platform's de-facto pattern for every
+  existing MCP server (Zotero, GitHub, Slack, …). The skill follows
+  it; users who want Keychain-backed secrets can build a wrapper in
+  a follow-up.
+- **Single skill, not per-service skills** — the procedure is the
+  same across services (issue → validate → persist → restart); only
+  the walkthrough card differs. One skill keeps the registration
+  overhead manageable.
+- **No dynamic registry** — the catalog is static markdown, not a
+  parsed registry. Adding a new service = drop a markdown card + add
+  a row to `catalog.md`. Stays low-overhead.
+- **Mirrored to `plugin/skills/`** for the plugin-marketplace install
+  path. The two copies are kept in sync per the existing pattern
+  (brain, executor, pi, writer).
+
+## [Unreleased] - v2.6.0 — `project_id` required on every MCP tool (BREAKING)
 
 Branch: `feat/project-id-required`. Eliminates a long-standing
 silent-failure mode where the MCP server's per-process
