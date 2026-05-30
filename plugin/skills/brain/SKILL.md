@@ -121,30 +121,40 @@ Journal entries get distilled into structured claims during maintenance. Good cl
 
 Confidence ranges:
 - `0.0–0.3` — speculative, needs investigation.
-- `0.3–0.6` — preliminary, first analysis (abstract-level, paper-search snippets).
+- `0.3–0.6` — preliminary, first analysis (abstract-level, snippets).
 - `0.6–0.8` — solid evidence, multiple sources.
 - `0.8–1.0` — verified, replicated (full-text grounded with quoted evidence).
 
-**Confidence cap without full text**: claims extracted from abstracts or search snippets cap at **0.65**. To exceed that, you need full-text grounding with a direct quote from the paper.
+**Confidence cap without full text**: claims extracted from abstracts or search snippets cap at **0.65**. To exceed that, you need full-text grounding with a direct quote.
 
 Full procedure with worked examples and cluster-assignment heuristic: `workflows.md` § "Claim Extraction".
 
-## Literature ingestion via Zotero
+## Literature ingestion + Zotero linkage
 
-The PI maintains a Zotero library that holds full-text PDFs captured via the Zotero Connector browser extension (using their institutional SSO/EZproxy access). Each RKA project has its own Zotero **collection** (auto-created during onboarding); the collection key is recorded in `project_workspaces.zotero_collection_key`.
+Each RKA project has an auto-created Zotero **collection** that holds the project's full-text PDFs (captured by the PI via the Zotero Connector browser extension). RKA literature entries (`lit_…`) carry a `zotero_item_key` field that links them to the matching Zotero item.
 
-When you need full text of a paper to upgrade a claim past 0.65 confidence:
+### Linkage workflow per new paper
 
-1. **Check the project's Zotero collection first**:
-   - `orchestrator_get_zotero_collection(project_id)` → returns `{zotero_collection_key, zotero_collection_name}`
-   - `zotero_search(query="<title or author>")` from zotero-mcp, then filter by collection_key
-2. **If found and has full text**: read via `zotero_get_fulltext(item_key=...)`. Extract claims grounded in quoted evidence.
-3. **If found but no PDF attached**: emit a checkpoint asking the PI to use Zotero Connector to attach the PDF.
-4. **If not found in Zotero**: emit a checkpoint asking the PI to capture it. Use this exact prompt template:
+1. **Add the literature entry** with whatever metadata you have (`rka_add_literature` or `rka_enrich_doi`).
+2. **Try to link it**: `rka_link_literature_to_zotero(lit_id)`. The linker tries five strategies in order — DOI → arXiv ID → URL → ISBN → title+author+year — and persists `zotero_item_key` + `zotero_match_method` on success.
+3. **Read the outcome**:
+   - `{"zotero_item_key": "ABC123", "matched_by": "doi"}` → linked, you can call `zotero_get_fulltext("ABC123")` and extract grounded claims.
+   - `{"zotero_item_key": null, "reason": "no_match"}` → paper isn't in the project's collection yet. Emit a **FULL-TEXT REQUEST** to the PI (template below).
+   - `{"zotero_item_key": null, "reason": "multiple_matches_below_threshold", "candidates": [...]}` → ask the PI to pick from the candidates.
+   - `{"zotero_item_key": null, "reason": "zotero_not_configured"}` → degrade gracefully; cap confidence at 0.65 and note that Zotero linkage is unavailable.
 
-   > "I need full text of **[Author, Year, Title]** to extract grounded claims for **[research question / cluster]**. Please find the paper via your browser (UNC SSO/EZproxy), click the Zotero Connector to save it into the collection `**<zotero_collection_name>**`, and tell me when done. Until then, I'll cap the claim confidence at 0.65."
+### FULL-TEXT REQUEST template
 
-Never skip this step and silently leave claims at 0.5. The "ask PI for full text" pattern is the contract.
+When the paper isn't in Zotero, emit this verbatim — the PI parses it to fetch papers in bulk:
+
+> **FULL-TEXT REQUEST**
+> Paper: `[Author, Year, "Title"]`
+> DOI/URL: `[if known]`
+> Why I need it: `[the specific claim or RQ it would advance]`
+> Where to save: project's Zotero collection (`orchestrator_get_zotero_collection(project_id)` → use the collection name)
+> Until then: I'm capping confidence on related claims at 0.65.
+
+Batch multiple papers in a single block when possible — the PI captures them in one browser session and replies "ready" when done. After the PI confirms, call `rka_link_literature_to_zotero` again on each entry to persist the keys.
 
 ---
 

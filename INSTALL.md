@@ -363,16 +363,15 @@ Edit `claude_desktop_config.json` at the path for your OS (see §4). Add to `mcp
   "mcpServers": {
     "rka": {
       "command": "/Users/<your-username>/.local/bin/rka",
-      "args": ["mcp"],
-      "env": {
-        "RKA_PROJECT": "prj_01ABC..."
-      }
+      "args": ["mcp"]
     }
   }
 }
 ```
 
-Replace `<your-username>` with your actual macOS username (Windows: use `C:\\Users\\<you>\\.local\\bin\\rka.exe` and double the backslashes for JSON). Replace `prj_01ABC...` with your primary project id (find it via `rka_list_projects()` in any Claude session, or read it from the URL bar at `http://localhost:9712` after switching projects).
+Replace `<your-username>` with your actual macOS username (Windows: use `C:\\Users\\<you>\\.local\\bin\\rka.exe` and double the backslashes for JSON).
+
+**v2.6+ project discipline (no env var).** Pre-v2.6 the config included an `env.RKA_PROJECT` entry to pin a default project. That was removed in v2.6 because it reintroduced the silent-default failure mode that v2.6 explicitly eliminates: every project-scoped tool now requires `project_id` as a kwarg, and the LLM threads the project from its conversation context. At the start of every conversation, state which project you're working on (e.g., *"I'm working on prj_01KSMW9R…"* or *"the hyperscaler-auditing project"*) — the LLM keeps it in working memory and passes it on every tool call.
 
 Fully quit + reopen Claude Desktop.
 
@@ -394,7 +393,7 @@ Same JSON shape, in `.claude/mcp.json` (per-project) or `~/.claude/settings.json
 | `/plugin install rka@rka` fails after marketplace add | Marketplace file present but plugin source missing | Check the repo's marketplace.json — `source` field must point at a valid path inside the repo |
 | RKA tools missing in Claude Desktop | Config not saved, or app not fully quit | Verify config at the path in §4 contains the `rka` entry; Cmd+Q fully (not red-X close); reopen |
 | RKA tools missing in Claude Code | Plugin not installed, or VSCode window not reloaded | `/plugin list` to verify; reload window with Cmd+Shift+P → "Developer: Reload Window" |
-| All RKA writes land in `proj_default` | `RKA_PROJECT` not propagated | Either set `default_project_id` in `integration.json` (the wrapper auto-propagates), or add `"env": {"RKA_PROJECT": "prj_..."}` to the `mcpServers.rka` block in your Claude config |
+| All RKA writes land in `proj_default` | LLM forgot to pass `project_id` on a write call (v2.6+ requires it as a kwarg) | The tool should have raised `TypeError: rka_X() missing 1 required keyword-only argument: 'project_id'`. If you see writes silently landing in `proj_default`, you may be on a pre-v2.6 install — upgrade. If on v2.6+, ask the LLM at conversation start to pin `project_id` and thread it through every call. |
 | SessionStart hook says "RKA NOT reachable" | Docker stopped or wrong API URL | Run `docker compose up -d`; check `integration.json`'s `api_endpoint_url` |
 | Wrapper says "version incompatible" | RKA backend version doesn't match the plugin's compatibility range | Either upgrade RKA backend (`git pull && docker compose up -d --build` from the repo) or downgrade the plugin to a matching version |
 

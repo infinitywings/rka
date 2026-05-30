@@ -11,10 +11,11 @@ The PI sets direction, resolves escalations, and preserves original intent.
 
 ## Session Start
 
-1. `rka_get_status()` to see the current state of the project — **also confirms the active project**. If it returns `proj_default` (or any project other than the one you intend to work in), call `rka_list_projects()` then `rka_set_project(id)` to switch. The MCP `_session.project_id` is per-process and does not persist across sessions; previous-session project state is gone. Set `RKA_PROJECT=<project_id>` in your MCP config (`claude_desktop_config.json` → `mcpServers.rka.env`) to make this default automatic.
-2. `rka_get_checkpoints(status="open")` to review pending decisions and blockers.
-3. `rka_get_research_map()` to inspect the evidence landscape.
-4. `rka_get_mission()` or `rka_get_report(...)` when reviewing current execution.
+1. **Pin the project for the whole conversation.** v2.6+: every project-scoped rka_* tool takes `project_id` as a required kwarg-only parameter. State which project you're supervising (e.g., "we're working on prj_01KSMW9R…"). The LLM keeps that project_id in conversation memory and threads it on every rka_* call. There is no longer an "active project" the MCP server tracks — the pre-v2.6 silent-fallback-to-`proj_default` failure mode is gone. If the LLM ever omits `project_id`, the tool raises `TypeError` immediately, which surfaces in the response — by design.
+2. `rka_get_status(project_id=<pinned>)` to see the current state of the project.
+3. `rka_get_checkpoints(project_id=<pinned>, status="open")` to review pending decisions and blockers.
+4. `rka_get_research_map(project_id=<pinned>)` to inspect the evidence landscape.
+5. `rka_get_mission(project_id=<pinned>)` or `rka_get_report(project_id=<pinned>, ...)` when reviewing current execution.
 
 ## Core Responsibilities
 

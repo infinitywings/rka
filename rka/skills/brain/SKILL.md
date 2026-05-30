@@ -21,13 +21,14 @@ Your counterparts: the **Executor** (`skills/executor/SKILL.md`) handles impleme
 
 ## Session Start — Do This Every Time
 
-1. **`rka_get_status()` first** — confirms the active project. If it returns `proj_default` (or any project other than the one you intend to work in), call `rka_list_projects()` then `rka_set_project(project_id)` to switch. Do NOT skip — the MCP `_session.project_id` is per-process and ephemeral; previous sessions' state is gone. Set `RKA_PROJECT=<project_id>` in `claude_desktop_config.json` → `mcpServers.rka.env` to make this default automatic.
-2. `rka_get_changelog(since="<last session date>")` — what changed since last time.
-3. `rka_get_pending_maintenance()` — provenance gaps, untagged entries.
-4. Process up to 10 maintenance items silently. Priority:
+1. **Pin the project for the whole conversation.** v2.6+: every project-scoped rka_* tool takes `project_id` as a required kwarg-only parameter — there is NO "active project" session state on the MCP server. Ask the PI (or recall from their first message) which project this conversation is about, call `rka_list_projects()` once if you need to discover the canonical ID, and pass `project_id="prj_…"` on every subsequent rka_* call. Omitting `project_id` raises `TypeError: rka_X() missing 1 required keyword-only argument: 'project_id'` — by design; this replaces the pre-v2.6 silent-fallback-to-`proj_default` failure mode. **Discipline: keep the project_id in working memory; thread it on every call.** `rka_set_project` still exists as a deprecated no-op (validates the ID exists, emits a deprecation notice — does NOT change subsequent tool behavior). The `RKA_PROJECT` env var was removed in v2.6.
+2. `rka_get_status(project_id=<pinned>)` — current state of the pinned project.
+3. `rka_get_changelog(project_id=<pinned>, since="<last session date>")` — what changed.
+4. `rka_get_pending_maintenance(project_id=<pinned>)` — provenance gaps.
+5. Process up to 10 maintenance items silently. Priority:
    `decisions_without_justified_by` > `missions_without_motivated_by` > `unassigned_clusters` > `entries_missing_cross_refs` > `entries_without_tags`.
-5. `rka_get_research_map()` — structural overview.
-6. Greet the user — now begin the actual conversation.
+6. `rka_get_research_map(project_id=<pinned>)` — structural overview.
+7. Greet the user — now begin the actual conversation.
 
 Full worked walkthrough: `workflows.md` § "Session Start".
 
@@ -121,30 +122,40 @@ Journal entries get distilled into structured claims during maintenance. Good cl
 
 Confidence ranges:
 - `0.0–0.3` — speculative, needs investigation.
-- `0.3–0.6` — preliminary, first analysis (abstract-level, paper-search snippets).
+- `0.3–0.6` — preliminary, first analysis (abstract-level, snippets).
 - `0.6–0.8` — solid evidence, multiple sources.
 - `0.8–1.0` — verified, replicated (full-text grounded with quoted evidence).
 
-**Confidence cap without full text**: claims extracted from abstracts or search snippets cap at **0.65**. To exceed that, you need full-text grounding with a direct quote from the paper.
+**Confidence cap without full text**: claims extracted from abstracts or search snippets cap at **0.65**. To exceed that, you need full-text grounding with a direct quote.
 
 Full procedure with worked examples and cluster-assignment heuristic: `workflows.md` § "Claim Extraction".
 
-## Literature ingestion via Zotero
+## Literature ingestion + Zotero linkage
 
-The PI maintains a Zotero library that holds full-text PDFs captured via the Zotero Connector browser extension (using their institutional SSO/EZproxy access). Each RKA project has its own Zotero **collection** (auto-created during onboarding); the collection key is recorded in `project_workspaces.zotero_collection_key`.
+Each RKA project has an auto-created Zotero **collection** that holds the project's full-text PDFs (captured by the PI via the Zotero Connector browser extension). RKA literature entries (`lit_…`) carry a `zotero_item_key` field that links them to the matching Zotero item.
 
-When you need full text of a paper to upgrade a claim past 0.65 confidence:
+### Linkage workflow per new paper
 
-1. **Check the project's Zotero collection first**:
-   - `orchestrator_get_zotero_collection(project_id)` → returns `{zotero_collection_key, zotero_collection_name}`
-   - `zotero_search(query="<title or author>")` from zotero-mcp, then filter by collection_key
-2. **If found and has full text**: read via `zotero_get_fulltext(item_key=...)`. Extract claims grounded in quoted evidence.
-3. **If found but no PDF attached**: emit a checkpoint asking the PI to use Zotero Connector to attach the PDF.
-4. **If not found in Zotero**: emit a checkpoint asking the PI to capture it. Use this exact prompt template:
+1. **Add the literature entry** with whatever metadata you have (`rka_add_literature` or `rka_enrich_doi`).
+2. **Try to link it**: `rka_link_literature_to_zotero(lit_id)`. The linker tries five strategies in order — DOI → arXiv ID → URL → ISBN → title+author+year — and persists `zotero_item_key` + `zotero_match_method` on success.
+3. **Read the outcome**:
+   - `{"zotero_item_key": "ABC123", "matched_by": "doi"}` → linked, you can call `zotero_get_fulltext("ABC123")` and extract grounded claims.
+   - `{"zotero_item_key": null, "reason": "no_match"}` → paper isn't in the project's collection yet. Emit a **FULL-TEXT REQUEST** to the PI (template below).
+   - `{"zotero_item_key": null, "reason": "multiple_matches_below_threshold", "candidates": [...]}` → ask the PI to pick from the candidates.
+   - `{"zotero_item_key": null, "reason": "zotero_not_configured"}` → degrade gracefully; cap confidence at 0.65 and note that Zotero linkage is unavailable.
 
-   > "I need full text of **[Author, Year, Title]** to extract grounded claims for **[research question / cluster]**. Please find the paper via your browser (UNC SSO/EZproxy), click the Zotero Connector to save it into the collection `**<zotero_collection_name>**`, and tell me when done. Until then, I'll cap the claim confidence at 0.65."
+### FULL-TEXT REQUEST template
 
-Never skip this step and silently leave claims at 0.5. The "ask PI for full text" pattern is the contract.
+When the paper isn't in Zotero, emit this verbatim — the PI parses it to fetch papers in bulk:
+
+> **FULL-TEXT REQUEST**
+> Paper: `[Author, Year, "Title"]`
+> DOI/URL: `[if known]`
+> Why I need it: `[the specific claim or RQ it would advance]`
+> Where to save: project's Zotero collection (`orchestrator_get_zotero_collection(project_id)` → use the collection name)
+> Until then: I'm capping confidence on related claims at 0.65.
+
+Batch multiple papers in a single block when possible — the PI captures them in one browser session and replies "ready" when done. After the PI confirms, call `rka_link_literature_to_zotero` again on each entry to persist the keys.
 
 ---
 

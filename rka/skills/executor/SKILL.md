@@ -19,10 +19,11 @@ Your counterparts: the **Brain** (`skills/brain/SKILL.md`) handles strategy. The
 
 ## Session Start
 
-1. **`rka_get_status()` first** — confirms the active project plus phase. If the active project is `proj_default` (or any project other than the one you intend to work in), call `rka_list_projects()` then `rka_set_project(id)` to switch. Do NOT skip — the MCP `_session.project_id` is per-process and ephemeral; previous-session project state is gone. Set `RKA_PROJECT=<project_id>` in your MCP config (`claude_desktop_config.json` → `mcpServers.rka.env` for Claude Desktop, or your shell environment for Claude Code) to make this default automatic.
-2. `rka_get_context()` to load project state.
-3. `rka_get_mission()` to pick up the active or pending mission.
-4. `rka_get_checkpoints(status="open")` to see blockers that may affect execution.
+1. **Pin the project for the whole conversation.** v2.6+: every project-scoped rka_* tool takes `project_id` as a required kwarg-only parameter — there is NO "active project" session state on the MCP server. When you receive a mission, the mission id implies a project; ask the Brain or PI to confirm the `project_id` if it's not in the mission spec, or call `rka_list_projects()` and verify. Then pass `project_id="prj_…"` on every subsequent rka_* call. Omitting `project_id` raises `TypeError: rka_X() missing 1 required keyword-only argument: 'project_id'` — by design; this replaces the pre-v2.6 silent-fallback-to-`proj_default` failure mode. **Discipline: keep the project_id in working memory; thread it on every call.** `rka_set_project` still exists as a deprecated no-op (validates the ID, emits a deprecation notice — does NOT change subsequent tool behavior). The `RKA_PROJECT` env var was removed in v2.6.
+2. `rka_get_status(project_id=<pinned>)` — phase + focus.
+3. `rka_get_context(project_id=<pinned>)` to load project state.
+4. `rka_get_mission(project_id=<pinned>)` to pick up the active or pending mission.
+5. `rka_get_checkpoints(project_id=<pinned>, status="open")` to see blockers that may affect execution.
 
 ## Mission Pickup Protocol
 
@@ -83,20 +84,6 @@ Raise a checkpoint for these. Don't guess or work around.
 
 Detailed examples for each trigger, and the counterpart-Brain context (Gate 1 plan validation, Confirmation Brief awareness, mission context format): `workflows.md` § "Escalation Triggers" and "Your Counterpart: The Brain".
 
-## Literature ingestion via Zotero
-
-The PI maintains a Zotero library holding full-text PDFs of project literature. Each RKA project has an auto-created Zotero **collection** (named after the workspace folder). When the Brain or PI asks you to read a paper:
-
-1. Get the project's collection key: `orchestrator_get_zotero_collection(project_id)`.
-2. Search the library via zotero-mcp: `zotero_search(query="<title/author>")`, filter results by `zotero_collection_key`.
-3. If found with full text: `zotero_get_fulltext(item_key=...)` and proceed with grounded analysis.
-4. If found but no attached PDF: emit a checkpoint asking the PI to attach the PDF via Zotero Connector.
-5. If not in Zotero: emit a checkpoint asking the PI to capture it. Use this template:
-
-   > "I need full text of [Author, Year, Title] for [mission objective]. Please open the paper in your browser (institutional SSO/EZproxy), click the Zotero Connector to save it into the **`<zotero_collection_name>`** collection, then tell me 'ready'."
-
-6. Do NOT proceed with claim extraction at abstract-level confidence (≤0.65) unless the mission explicitly accepts that ceiling. The Brain caps confidence at 0.65 for snippet-only sources.
-
 ## Workspace Ingestion
 
 When the PI points you at a workspace folder (local research files to ingest into RKA), use this three-step workflow:
@@ -104,6 +91,21 @@ When the PI points you at a workspace folder (local research files to ingest int
 1. **`rka_scan_workspace_tree(folder_path)`** — fast overview of directory structure with file counts. Always start here. Works on any filesystem including slow external drives.
 2. **`rka_scan_workspace(subdirectory_path)`** — deep-scan a specific subdirectory to classify files. Do NOT call on a large root with thousands of files — pick subdirectories from step 1.
 3. **`rka_bootstrap_workspace(subdirectory_path)`** — ingest the classified files into RKA.
+1. **`rka_scan_workspace_tree(folder_path)`** — fast overview of the directory structure with file counts per subdirectory. Always start here. Works on any filesystem including slow external drives.
+2. **`rka_scan_workspace(subdirectory_path)`** — deep-scan a specific subdirectory to classify files by type (markdown, code, PDF, bibtex, data). Do NOT call this on the root if it has thousands of files — pick subdirectories from step 1.
+3. **`rka_bootstrap_workspace(subdirectory_path)`** — ingest the classified files into RKA. Call on the same subdirectory you scanned.
+
+Do NOT skip step 1 and call `rka_scan_workspace` directly on a large root folder — external drives (exFAT, network mounts) are pathologically slow for recursive enumeration.
+
+## Reading a paper for analysis
+
+When a mission asks you to read a paper:
+
+1. Get the project's Zotero collection key (if you don't already know it).
+2. Try `rka_link_literature_to_zotero(lit_id)` first — it auto-resolves via DOI / arXiv ID / URL / ISBN / title+author+year and persists the link on the lit_ entry.
+3. On success, read the PDF: `zotero_get_fulltext(zotero_item_key)`. Extract claims grounded in quoted evidence (confidence ≥ 0.8).
+4. On `reason: "no_match"`: emit a FULL-TEXT REQUEST checkpoint asking the PI to capture the paper into the project's Zotero collection. Do not proceed at abstract-level confidence unless the mission explicitly allows it.
+5. On `reason: "multiple_matches_below_threshold"`: render the candidates and ask the PI to disambiguate via checkpoint.
 
 ## Guardrails
 

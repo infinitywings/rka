@@ -41,8 +41,9 @@ class LiteratureService(BaseService):
             """INSERT INTO literature
                (id, title, authors, year, venue, doi, url, bibtex, pdf_path, abstract,
                 status, key_findings, methodology_notes, relevance, relevance_score,
-                related_decisions, added_by, notes, project_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                related_decisions, added_by, notes,
+                zotero_item_key, zotero_match_method, project_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 lit_id, data.title, self._json_dumps(data.authors),
                 data.year, data.venue, data.doi, data.url, data.bibtex,
@@ -50,7 +51,9 @@ class LiteratureService(BaseService):
                 self._json_dumps(data.key_findings), data.methodology_notes,
                 data.relevance, data.relevance_score,
                 self._json_dumps(data.related_decisions),
-                data.added_by, data.notes, self.project_id,
+                data.added_by, data.notes,
+                data.zotero_item_key, data.zotero_match_method,
+                self.project_id,
             ],
         )
         await self.db.commit()
@@ -209,6 +212,8 @@ class LiteratureService(BaseService):
             notes=row.get("notes"),
             tags=tags,
             enrichment_status=enrichment_status,
+            zotero_item_key=row.get("zotero_item_key"),
+            zotero_match_method=row.get("zotero_match_method"),
             created_at=row.get("created_at"),
             updated_at=row.get("updated_at"),
         )
