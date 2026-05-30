@@ -102,6 +102,17 @@ services:
       RKA_API_URL: "http://rka:9712"
       ORCHESTRATOR_DB_PATH: "/data/orchestrator.db"
       ORCHESTRATOR_SAVER_PATH: "/data/orchestrator-saver.db"
+      # Phase E1 fix — the safety check at server.py:_enforce_workspace_mount_safety
+      # reads HOST_WORKSPACE_ROOT from os.environ INSIDE the container. Compose
+      # YAML interpolation (`${HOST_WORKSPACE_ROOT:-${HOME}}` above) resolves at
+      # mount-time on the HOST, but the resolved VALUE is not propagated to the
+      # container env. Without this line, the check falls back to the container's
+      # HOME (post-Gap-5 = /home/orchestrator) and refuses startup with
+      # "HOST_WORKSPACE_ROOT resolves to your $HOME". Empty-string default allows
+      # operators who haven't set HOST_WORKSPACE_ROOT to inherit the existing
+      # check behavior (which then trips on container HOME — that's still the
+      # right outcome since they're falling back to a bind-mounted host $HOME).
+      HOST_WORKSPACE_ROOT: "${HOST_WORKSPACE_ROOT:-}"
       # Gap 5 — when an OAuth-secret file is mounted at this path
       # (typically via the optional docker-compose.secrets.yml overlay
       # described in orchestrator/docs/secrets-setup.md), server.py
