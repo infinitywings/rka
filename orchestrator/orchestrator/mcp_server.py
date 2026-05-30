@@ -35,7 +35,13 @@ from mcp.server.fastmcp import FastMCP
 logger = logging.getLogger(__name__)
 
 API_URL = os.environ.get("ORCHESTRATOR_API_URL", "http://localhost:9713")
-API_TIMEOUT = float(os.environ.get("ORCHESTRATOR_API_TIMEOUT", "120"))
+# Default 600s (10min) — defense-in-depth headroom over the empirical 4-min
+# segment ceiling that previously tripped the 120s client timeout. The
+# accept/reject/correct endpoints background the graph segment so this
+# timeout only covers the synchronous answer-commit (~ms), but read-side
+# endpoints (/inbox, /runs) and any explicit wait_segment=true caller can
+# legitimately need minutes.
+API_TIMEOUT = float(os.environ.get("ORCHESTRATOR_API_TIMEOUT", "600"))
 
 ORCHESTRATOR_INSTRUCTIONS = """\
 RKA orchestrator MCP — start and supervise LangGraph workflows.
@@ -91,8 +97,12 @@ async def orchestrator_run_start(
     """Start a new orchestrator workflow.
 
     Kicks off the Brain ⇄ Executor ⇄ PI LangGraph topology against the
-    given RKA mission. Returns immediately when the graph parks at its
-    first PI interrupt (or completes if there are none).
+    given RKA mission. Returns IMMEDIATELY after the run row is created
+    + the mission spec is loaded — the first graph segment (Brain
+    strategy_node + confirmation_brief, typically 2 LLM calls = minutes)
+    runs as a background task. Poll `orchestrator_get_run` and
+    `orchestrator_inbox` to discover the first parked interrupt or
+    terminal state.
 
     Args:
         mission_id: RKA mission id (mis_…) the orchestrator should execute.
@@ -102,12 +112,13 @@ async def orchestrator_run_start(
             if omitted (`thr_<unix-ms-hex><uuid-hex>`).
 
     Returns:
-        {workflow_thread_id, parked_interrupt_id?, parked_interrupt_type?,
-         terminal_state?, current_node, usd_spent, final_report_id?}
+        {workflow_thread_id, mission_id, project_id, status: "starting",
+         wait_segment: false}
     """
     async with _client() as c:
         r = await c.post(
             "/runs",
+            params={"wait_segment": "false"},
             json={
                 "mission_id": mission_id,
                 "project_id": project_id,
@@ -215,7 +226,10 @@ async def orchestrator_get_interrupt(interrupt_id: str) -> dict:
 @mcp.tool()
 async def orchestrator_accept(interrupt_id: str) -> dict:
     """PI accepts the interrupt — graph resumes with the type-correct
-    accept token.
+    accept token. Returns immediately after the answer is committed
+    (`status: "resuming"`); the graph segment runs on a background
+    task. Poll `orchestrator_get_run` / `orchestrator_inbox` to
+    discover the next state.
 
     For `pi_greenlight`: emits "approve" → routes to backbrief_draft.
     For `pi_decision_select`: emits "accept" → routes to
@@ -224,11 +238,15 @@ async def orchestrator_accept(interrupt_id: str) -> dict:
         the user explicitly before calling this on pi_decision_select.*
     For `pi_acceptance`: emits "accept" → terminal_state=complete.
 
-    Returns the next segment's outcome (next interrupt parked OR
-    terminal_state). 409 if the interrupt was already answered.
+    Returns `{workflow_thread_id, answered_interrupt_id,
+    answered_interrupt_type, status: "resuming", wait_segment: false}`.
+    409 if the interrupt was already answered.
     """
     async with _client() as c:
-        r = await c.post(f"/inbox/{interrupt_id}/accept")
+        r = await c.post(
+            f"/inbox/{interrupt_id}/accept",
+            params={"wait_segment": "false"},
+        )
         _raise_with_detail(r)
         return r.json()
 
@@ -240,6 +258,10 @@ async def orchestrator_reject(
 ) -> dict:
     """PI rejects the interrupt — graph routes to escalation_router.
 
+    Returns immediately with `status: "resuming"`; the graph segment
+    runs on a background task. Poll `orchestrator_get_run` /
+    `orchestrator_inbox` to discover the next state.
+
     Args:
         interrupt_id: The interrupt to reject.
         reason: Optional human note recorded with the response. Does not
@@ -247,7 +269,11 @@ async def orchestrator_reject(
             "reject".
     """
     async with _client() as c:
-        r = await c.post(f"/inbox/{interrupt_id}/reject", json={"reason": reason})
+        r = await c.post(
+            f"/inbox/{interrupt_id}/reject",
+            json={"reason": reason},
+            params={"wait_segment": "false"},
+        )
         _raise_with_detail(r)
         return r.json()
 
@@ -258,7 +284,10 @@ async def orchestrator_correct(
     response_text: str,
 ) -> dict:
     """PI redirects the interrupt — graph resumes with the freeform
-    text as the response.
+    text as the response. Returns immediately after the answer is
+    committed (`status: "resuming"`); the graph segment runs on a
+    background task. Poll `orchestrator_get_run` /
+    `orchestrator_inbox` to discover the next state.
 
     The graph's routing functions substring-match on "approve" / "accept";
     a correction that doesn't include those tokens routes to
@@ -276,6 +305,7 @@ async def orchestrator_correct(
         r = await c.post(
             f"/inbox/{interrupt_id}/correct",
             json={"response_text": response_text},
+            params={"wait_segment": "false"},
         )
         _raise_with_detail(r)
         return r.json()
@@ -315,6 +345,11 @@ async def orchestrator_onboard_start(
     this drives the project-scoped onboarding wizard that produces the
     project's `tools.json` baseline manifest.
 
+    Returns IMMEDIATELY after the run row is created — the first graph
+    segment (Brain topic-elicitation prompt) runs as a background task.
+    Poll `orchestrator_get_run` and `orchestrator_inbox` to discover the
+    first parked interrupt (`pi_onboarding_topic`).
+
     Flow once started:
       1. Daemon parks at `pi_onboarding_topic` — claude renders the
          topic-elicitation prompt and asks the PI.
@@ -343,6 +378,7 @@ async def orchestrator_onboard_start(
     async with _client() as c:
         r = await c.post(
             "/onboard",
+            params={"wait_segment": "false"},
             json={
                 "project_id": project_id,
                 "workflow_thread_id": workflow_thread_id,
@@ -409,6 +445,11 @@ async def orchestrator_bootstrap_start(
     Distinct from `orchestrator_onboard_start`, which handles per-
     project credentials under `~/rka-projects/<id>/.env`.
 
+    Returns IMMEDIATELY after the run row is created — the first graph
+    segment runs as a background task. Poll `orchestrator_get_run` and
+    `orchestrator_inbox` to discover the first parked interrupt
+    (`pi_bootstrap_intent`).
+
     Flow once started:
       1. Daemon parks at `pi_bootstrap_intent` — claude renders the
          intent-elicitation prompt ("describe your install state").
@@ -430,6 +471,7 @@ async def orchestrator_bootstrap_start(
     async with _client() as c:
         r = await c.post(
             "/bootstrap",
+            params={"wait_segment": "false"},
             json={"workflow_thread_id": workflow_thread_id},
         )
         _raise_with_detail(r)

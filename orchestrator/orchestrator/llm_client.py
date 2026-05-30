@@ -134,13 +134,42 @@ def _prefixed_tools(names: tuple[str, ...], server: str = _MCP_SERVER_NAME) -> l
     return [f"mcp__{server}__{n}" for n in names]
 
 
+# Built-in Claude Code tools that the SDK subprocess needs to actually do
+# filesystem work the mission asks for (read manifests, run Python, write
+# results into the workspace). Granted in addition to the read-only MCP
+# tools so that nodes like `mission_execute` can read `.env`, probe
+# library imports via `Bash`, write outputs to the workspace, etc.
+#
+# Why this is safe w.r.t. Phase 2.7 Option C: the read-only-subprocess
+# invariant was specifically about RKA writes — the subprocess must not
+# call `rka_add_*` / `rka_update_*` directly; writes flow through
+# `pi_decision_select` → `execute_ratified_actions` (parent-side). Built-in
+# filesystem tools touch the host workspace, not RKA state, and the
+# workspace is the PI's own data — the PI mounts it explicitly via
+# HOST_WORKSPACE_ROOT in the compose overlay, so granting access here is
+# the *enabling* counterpart to the mount: without these tools the
+# Executor reports the workspace as inaccessible even when bind-mounted.
+_BUILTIN_FILESYSTEM_TOOLS: tuple[str, ...] = (
+    "Bash",
+    "Read",
+    "Write",
+    "Edit",
+    "Grep",
+    "Glob",
+    "WebFetch",
+    "WebSearch",
+)
+
+
 def _all_allowed_subprocess_tools(include_context7: bool) -> list[str]:
     """Compose the full `allowed_tools` list across every MCP server the
-    subprocess is configured to talk to. Lives separately from READ_TOOLS
-    so the legacy single-server interface stays back-compat."""
+    subprocess is configured to talk to plus the built-in filesystem tools
+    the Executor needs to actually do mission work. Lives separately from
+    READ_TOOLS so the legacy single-server interface stays back-compat."""
     tools = _prefixed_tools(READ_TOOLS)  # rka MCP
     if include_context7:
         tools.extend(_prefixed_tools(_CONTEXT7_TOOLS, server=_CONTEXT7_SERVER_NAME))
+    tools.extend(_BUILTIN_FILESYSTEM_TOOLS)
     return tools
 
 
@@ -480,7 +509,9 @@ __all__ = [
     # Phase 2.7 T2 — subprocess MCP scope (exposed for tests + T3 consumers)
     "READ_TOOLS",
     "WRITE_TOOLS",
+    "_BUILTIN_FILESYSTEM_TOOLS",
     "_prefixed_tools",
     "_find_rka_mcp_binary",
     "_build_mcp_servers_config",
+    "_all_allowed_subprocess_tools",
 ]

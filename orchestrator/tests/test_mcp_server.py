@@ -65,7 +65,7 @@ def _json(body: Any, status: int = 200) -> httpx.Response:
 @pytest.mark.asyncio
 async def test_orchestrator_run_start_posts_to_runs(recorder):
     recorder.script(
-        _json({"workflow_thread_id": "thr_x", "parked_interrupt_id": "int_p"})
+        _json({"workflow_thread_id": "thr_x", "status": "starting"})
     )
     out = await mcp_server.orchestrator_run_start(
         mission_id="mis_test",
@@ -76,6 +76,12 @@ async def test_orchestrator_run_start_posts_to_runs(recorder):
     req = recorder.requests[0]
     assert req.method == "POST"
     assert req.url.path == "/runs"
+    # Phase D2.1: orchestrator_run_start MUST send wait_segment=false so
+    # the HTTP call returns immediately after the run row is committed.
+    # Otherwise the first segment (Brain strategy + confirmation_brief,
+    # typically 2 LLM calls = ~4 min) blows past the MCP client timeout
+    # exactly the way orchestrator_correct used to before the fix.
+    assert req.url.params["wait_segment"] == "false"
     body = json.loads(req.content)
     assert body == {
         "mission_id": "mis_test",
@@ -178,21 +184,26 @@ async def test_orchestrator_get_interrupt_raises_when_missing(recorder):
 
 @pytest.mark.asyncio
 async def test_orchestrator_accept_posts_to_accept_endpoint(recorder):
-    recorder.script(_json({"terminal_state": "complete"}))
-    out = await mcp_server.orchestrator_accept("int_x")
-    assert out["terminal_state"] == "complete"
+    recorder.script(_json({"status": "resuming"}))
+    await mcp_server.orchestrator_accept("int_x")
     req = recorder.requests[0]
     assert req.method == "POST"
     assert req.url.path == "/inbox/int_x/accept"
+    # Phase D2: MCP binary MUST send wait_segment=false so the HTTP call
+    # returns immediately after the answer commit (background-tasks the
+    # graph segment). Otherwise the 600s API_TIMEOUT can still trip on a
+    # particularly slow LLM segment.
+    assert req.url.params["wait_segment"] == "false"
 
 
 @pytest.mark.asyncio
 async def test_orchestrator_reject_posts_with_reason(recorder):
-    recorder.script(_json({"terminal_state": "escalated"}))
+    recorder.script(_json({"status": "resuming"}))
     await mcp_server.orchestrator_reject("int_x", reason="wrong scope")
     req = recorder.requests[0]
     assert req.method == "POST"
     assert req.url.path == "/inbox/int_x/reject"
+    assert req.url.params["wait_segment"] == "false"
     assert json.loads(req.content) == {"reason": "wrong scope"}
 
 
@@ -206,12 +217,13 @@ async def test_orchestrator_reject_with_no_reason(recorder):
 
 @pytest.mark.asyncio
 async def test_orchestrator_correct_posts_text(recorder):
-    recorder.script(_json({"terminal_state": "escalated"}))
+    recorder.script(_json({"status": "resuming"}))
     await mcp_server.orchestrator_correct(
         "int_x", response_text="redirect to plan C"
     )
     req = recorder.requests[0]
     assert req.url.path == "/inbox/int_x/correct"
+    assert req.url.params["wait_segment"] == "false"
     assert json.loads(req.content) == {"response_text": "redirect to plan C"}
 
 

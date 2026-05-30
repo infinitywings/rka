@@ -11,19 +11,13 @@
 # branch modifies" agentic-branch constraint.
 #
 # Auth: the daemon's claude-agent-sdk subprocess needs Claude Max
-# credentials. Two paths, in priority order (see
-# orchestrator/llm_client.py:_verify_claude_max_routing):
-#
-#   1. CLAUDE_CODE_OAUTH_TOKEN env (priority 2 in the auth chain) —
-#      preferred for Docker because it avoids the macOS Keychain
-#      gap. Run `claude setup-token` on the host to mint a long-lived
-#      token, then put it in `orchestrator/.env` (gitignored) as
-#      CLAUDE_CODE_OAUTH_TOKEN=...
-#
-#   2. ~/.claude/.credentials.json — priority 3. Mounted read-only.
-#      Works if you have the file on the host (some Claude Code
-#      installs put credentials in Keychain instead — in that case
-#      use path 1).
+# credentials via CLAUDE_CODE_OAUTH_TOKEN env — set in orchestrator/.env
+# after running `claude setup-token` on the host once to mint a
+# long-lived token. This is the only supported auth path for the daemon
+# (the host's ~/.claude/.credentials.json bind-mount was removed in
+# Phase D2.3 — see below — because the read-only mount triggered EROFS
+# when the SDK's Bash tool tried to write its shell-snapshot state
+# under /root/.claude/shell-snapshots/).
 # =============================================================
 
 services:
@@ -47,19 +41,48 @@ services:
         required: false
     volumes:
       - orchestrator-data:/data
-      # Mount the host's Claude credentials read-only. If
-      # credentials.json doesn't exist on the host (Keychain-only
-      # install), this mount is harmless and the OAuth token from
-      # .env wins via the auth-chain priority.
-      - ${HOME}/.claude:/root/.claude:ro
+      # Phase D2.3: the host's ~/.claude:/root/.claude:ro mount was
+      # REMOVED here. The :ro mount blocked the SDK Bash tool from
+      # writing its shell-snapshot state under
+      # /root/.claude/shell-snapshots/, surfacing as EROFS
+      # ("read-only filesystem") on every Bash call — empirically
+      # observed across three consecutive runs of the hyperscaler-
+      # auditing mission. The daemon now uses CLAUDE_CODE_OAUTH_TOKEN
+      # (priority-2 auth path) exclusively, and the container's
+      # /root/.claude/ is a writable container-local directory for
+      # session state, shell snapshots, transcripts, file history,
+      # etc. Side effect: host .claude session state is no longer
+      # visible inside the container (by design — daemon and host PI
+      # sessions should be isolated). If CLAUDE_CODE_OAUTH_TOKEN
+      # expires, run `claude setup-token` on the host and update
+      # orchestrator/.env.
+      #
       # The host's ~/.claude.json (single file, separate from the
       # .claude/ directory) holds the CLI's global config — user
       # email, last-active-project, etc. The claude CLI 2.x looks for
       # this file and prints a warning + suggests restoring from
       # ./claude/backups/ when missing. Mount it read-only so the
       # container's claude subprocess can read settings without
-      # writing back to the host file.
+      # writing back to the host file. Single-file mounts are never
+      # written to by the SDK (only read), so no EROFS risk here.
       - ${HOME}/.claude.json:/root/.claude.json:ro
+      # PI's workspace root, mounted at the SAME absolute path inside
+      # the container as on the host so paths the PI types
+      # (project_workspaces.workspace_path) resolve identically for the
+      # daemon's claude-agent-sdk subprocess. Default $HOME covers the
+      # typical ~/Research/{slug} layout; override HOST_WORKSPACE_ROOT
+      # in the REPO-ROOT .env (NOT orchestrator/.env — that file is
+      # loaded via env_file: above and only populates container env;
+      # it does NOT feed Compose YAML interpolation). For a non-HOME
+      # parent (external drives, /Volumes/base/projects, etc.), put
+      # HOST_WORKSPACE_ROOT=/your/path in /Volumes/base/workspace/rka/.env
+      # (gitignored) or export it in the shell before docker compose up.
+      # The Executor subprocess (and the Brain when it needs to ground
+      # reasoning in workspace files) reads/writes here using the host
+      # paths the PI sees, no translation. Docker Desktop may need
+      # filesystem access granted for non-$HOME roots (System Settings →
+      # Privacy → Full Disk Access).
+      - ${HOST_WORKSPACE_ROOT:-${HOME}}:${HOST_WORKSPACE_ROOT:-${HOME}}:rw
     environment:
       RKA_API_URL: "http://rka:9712"
       ORCHESTRATOR_DB_PATH: "/data/orchestrator.db"

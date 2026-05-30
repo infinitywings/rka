@@ -402,8 +402,282 @@ holds only template + scaffold code.
 Build estimate: ~13.5 days; deferred for the next implementation
 session.
 
+### Phase D2 — async resume + workspace bind mount + Executor FS tools
+
+Empirical follow-ups from the hyperscaler-auditing live test
+(`prj_01KSMW9RBFXRY6HRRADH3SX7ZP`, mission `mis_01KSTWTJNZMV3893S2FWG4HBYZ`).
+
+**Async PI-response endpoints.** Previously `runner.respond()` drove
+the LangGraph segment synchronously after committing the PI's answer
+to the parked-interrupt store — a 4+ minute segment blew past the
+120s MCP `httpx` timeout and surfaced as an empty error in
+`orchestrator_correct` (the answer was committed; the client just
+couldn't see the next outcome). Split:
+
+- `runner.commit_response()` — Phase 1, synchronous; commits the
+  interrupt answer + flips run to `running`. Returns a handoff dict.
+- `runner.resume_segment()` — Phase 2, may take minutes; drives the
+  graph until next interrupt or terminal. Backgrounded by the server.
+- `runner.respond()` — kept as the synchronous composition for tests
+  and any caller that explicitly passes `?wait_segment=true`.
+
+The `/inbox/{id}/{accept,reject,correct}` endpoints accept
+`wait_segment: bool = True`. The MCP-stdio binary
+(`orchestrator_accept/reject/correct`) now passes
+`wait_segment=false`, so the HTTP call returns immediately after the
+answer is committed (`{status: "resuming", workflow_thread_id, ...}`).
+The PI session polls `orchestrator_get_run` / `orchestrator_inbox` to
+discover the next state. `ORCHESTRATOR_API_TIMEOUT` default bumped
+120 → 600s for any caller that still uses the sync path.
+
+**Workspace bind mount (`HOST_WORKSPACE_ROOT`).** The orchestrator
+daemon runs in Docker but its `claude-agent-sdk` subprocess (the
+Executor) needs to read/write the PI's workspace at the *same
+absolute path* the PI sees on the host. The Compose overlay now
+mounts:
+
+```yaml
+- ${HOST_WORKSPACE_ROOT:-${HOME}}:${HOST_WORKSPACE_ROOT:-${HOME}}:rw
+```
+
+Default `$HOME` covers the typical `~/Research/{slug}` layout. For
+non-HOME workspace roots (external drives, `/Volumes/base/projects`,
+etc.), set `HOST_WORKSPACE_ROOT` in the **repo-root** `.env` (i.e.,
+`/Volumes/base/workspace/rka/.env`, gitignored), **not** in
+`orchestrator/.env`. Docker Compose reads `.env` from the directory
+of the first `-f` file (the repo root here) for YAML `${VAR}`
+interpolation; the `env_file:` directive on the service only
+populates env vars inside the running container and does not feed
+interpolation. Putting `HOST_WORKSPACE_ROOT` in `orchestrator/.env`
+fails silently: the mount falls back to `${HOME}` and the workspace
+appears empty at runtime. Docker Desktop may need filesystem access
+granted for non-`$HOME` roots (System Settings → Privacy → Full Disk
+Access). Path translation is identity — the workspace_path the PI
+types resolves the same inside and outside the container.
+
+**Executor built-in filesystem tools.** The SDK subprocess's
+`allowed_tools` previously contained only the read-side MCP tools
+(`mcp__rka__*`, `mcp__context7__*`). The Executor LLM was being
+denied `Bash`, `Read`, `Write`, etc. when missions asked it to probe
+`.env`, run Python, or write workspace outputs. Added:
+
+```
+Bash, Read, Write, Edit, Grep, Glob, WebFetch, WebSearch
+```
+
+to `allowed_tools` via the new `_BUILTIN_FILESYSTEM_TOOLS` tuple.
+The Phase-2.7 read-only-subprocess invariant is preserved at the RKA
+layer — `WRITE_TOOLS` stay on `disallowed_tools` and writes still
+flow through `pi_decision_select` → `execute_ratified_actions` —
+because built-in FS tools touch the PI's workspace (which the PI
+mounted explicitly), not RKA state.
+
+### Phase D2.1 — post-review fixes (background-task lifecycle + substring-routing exploit + thread-safety)
+
+Multi-lens code+design review (workflows w69b6e8kg + wuew2xgc9)
+surfaced 95 confirmed findings — 22 bugs, 31 design issues, 20 doc
+inconsistencies, 12 risks, 10 nits. Bugs were fixed in this Phase
+D2.1 pass.
+
+**Background-task lifecycle.** The `asyncio.create_task(_drive_segment_bg(ack))`
+fire-and-forget from Phase D2 had four interlocking gaps that the
+review exposed:
+
+- Task could be GC'd mid-run (event loop only keeps weak refs).
+  Fixed: tracking on `app.state.bg_segments: set[Task]` with
+  `task.add_done_callback(set.discard)`.
+- Daemon SIGTERM left runs stuck in `status='running'` forever.
+  Fixed: lifespan `finally` block awaits `asyncio.gather(*pending,
+  return_exceptions=True)` for 30s before cancelling.
+- Daemon restart's startup left previously-running rows orphaned.
+  Fixed: new `ParkedStore.reap_orphaned_running_runs()` called from
+  lifespan startup; flips orphans to `status='failed'`,
+  `last_error='daemon restarted while segment in flight'`.
+- `_drive_segment_bg` only logged on failure — left runs in
+  `status='running'` with no `last_error`. Fixed: exception path
+  now writes `last_error` via `store.update_run(...)` and flips
+  status to `'failed'`.
+
+**Substring-routing exploit (privileged-write bypass).** The graph's
+`_route_after_pi_*` and `pi_*` node helpers substring-match on
+`"approve"` / `"accept"`. Any `action="correct"` text smuggling those
+substrings (e.g. "I cannot approve" / "do not accept this") would
+silently route to the accept branch, bypassing the TWO-TAP
+ratification gate on `pi_decision_select` / `pi_greenlight` /
+`pi_acceptance` / `pi_credentials_ready` / `pi_bootstrap_fill_ack`.
+Fixed via a sentinel-prefix contract:
+
+- New module `orchestrator/orchestrator/response_tokens.py`:
+  `REDIRECT_SENTINEL = "__RKA_REDIRECT__::"` and
+  `is_redirect_token()`.
+- `runner.resume_token()`: for `action="correct"`, the resume token
+  is now `REDIRECT_SENTINEL + response_text` (bare PI text would
+  reach the substring routers; the sentinel prefix forces a redirect
+  route regardless of what English the PI types).
+- All 4 routing helpers (`_route_after_pi_greenlight`,
+  `_route_after_pi_decision`, `_route_after_credentials_ready`,
+  `_route_after_fill_ack`) and 9 `is_accept` sites in `nodes/pi.py`
+  now call `is_redirect_token()` first and short-circuit to the
+  escalation/redirect branch.
+- Tests pin every routing site with adversarial inputs containing
+  "approve"/"accept" substrings.
+
+**SQLite thread-safety.** `ParkedStore` opens one sqlite3 connection
+with `check_same_thread=False` and shares it across FastAPI threads
+dispatched via `asyncio.to_thread`. No lock guarded `_tx()`, so
+concurrent BEGIN/COMMIT could raise OperationalError. Fixed:
+`threading.RLock` added; `_tx()` acquires before BEGIN.
+
+**`cancel_run` terminal-state guard.** `cancel_run` was unguarded —
+a late cancel arriving after the workflow had auto-completed would
+silently rewrite `status='complete'` to `status='cancelled'`, losing
+the terminal_state record. Fixed: UPDATE now guarded by `AND status
+IN ('running', 'awaiting_pi')`.
+
+**Tilde-prefixed workspace paths.** `pi_onboarding_topic`'s regex
+captured `~/Research/...` style paths and stored them verbatim.
+Inside the container, `~` would resolve to `/root/` (not the host
+`$HOME`), so the HOST_WORKSPACE_ROOT bind mount would miss. Fixed:
+regex now matches absolute paths only; PI prompt explicitly forbids
+tilde-prefixed paths and explains why.
+
+**Brain + Executor prompts (Phase D2 follow-through).** Both LLMs
+were unaware of the newly-granted Bash/Read/Write/Edit/Grep/Glob/
+WebFetch/WebSearch tools. Fixed: `BRAIN_SYSTEM` now describes the
+read-FS tools as available + warns Brain to stay read-only at the
+host FS layer; `EXECUTOR_SYSTEM` now describes the full FS toolkit
++ clarifies that built-in FS tools are unratified workspace-scoped
+operations distinct from the ratified RKA writes that flow through
+`proposed_actions`.
+
+**HOST_WORKSPACE_ROOT lives in the REPO-ROOT `.env`, NOT
+`orchestrator/.env`.** Empirical bug surfaced when the PI followed
+the original (incorrect) doc. `orchestrator/.env` is loaded via
+`env_file:` for container-internal env vars and does NOT feed
+Compose YAML interpolation; only the project-root `.env` (or shell
+env, or `--env-file`) does. Both CLAUDE.md and the overlay comment
+updated to point to `/Volumes/base/workspace/rka/.env`.
+
+### Phase D2.2 — async-start endpoints (empirical follow-up)
+
+Phase D2 only backgrounded the segment on `/inbox/*/{accept,reject,
+correct}`. The hyperscaler-auditing test relaunch hit the same
+4-minute-client-timeout failure on `orchestrator_run_start` because
+the first segment (Brain strategy_node + confirmation_brief = 2 LLM
+calls) takes minutes too. Fixed by giving `/runs`, `/onboard`, and
+`/bootstrap` the same `wait_segment=true` (default, sync, for tests)
+vs `wait_segment=false` (async-start, for MCP) split:
+
+- `runner.start_run` / `start_onboarding` / `start_phase_b` each
+  split into `*_commit` (mints workflow_runs row + loads mission
+  spec — fast) and `*_drive` (builds factories + invokes graph —
+  slow). The legacy `start_*` methods are kept as the sync
+  composition for tests.
+- `server._background_segment` is a shared helper used by all
+  async-resume paths (start + inbox respond) — tracks the task on
+  `app.state.bg_segments`, writes `last_error` on failure,
+  participates in lifespan drain.
+- MCP `orchestrator_run_start` / `_onboard_start` / `_bootstrap_start`
+  now send `?wait_segment=false`. Return shape on the async path is
+  `{workflow_thread_id, mission_id, project_id, status: "starting",
+   wait_segment: false}`. PI polls `/runs/{id}` and `/inbox` to
+  discover the first parked interrupt.
+- The MissionNotFoundError → 404 mapping still happens in the
+  synchronous commit phase (rka_get_mission is fast) so a missing
+  mission still fails-fast at the HTTP layer; only the slow graph
+  invoke is backgrounded.
+
+### Phase D2.3 — Bash EROFS fix (empirical follow-up)
+
+The Phase D2 grant of built-in filesystem tools
+(Bash/Read/Write/Edit/Grep/Glob/WebFetch/WebSearch) to the SDK
+subprocess landed, but **three consecutive runs** of the hyperscaler-
+auditing mission's T1 readiness probe surfaced `EROFS` ("read-only
+filesystem") on every `Bash` invocation while `Read`, `Write`,
+`Edit`, `Grep`, and `Glob` all succeeded. Root cause: the Compose
+overlay mounted `${HOME}/.claude:/root/.claude:ro` to expose the
+host's Claude credentials, but the claude-agent-sdk subprocess
+writes shell-state snapshots (`shell-snapshots/snapshot-zsh-*.sh`)
+under `/root/.claude/` on every `Bash` tool call — the `:ro` flag
+on the mount made the write fail. Fix:
+
+- Removed the `${HOME}/.claude:/root/.claude:ro` mount entirely
+  from `orchestrator/docker-compose.yml`. The container's
+  `/root/.claude/` is now a writable container-local directory; the
+  SDK creates `shell-snapshots/`, `sessions/`, `file-history/`,
+  etc. there as needed and Bash works.
+- Kept the `${HOME}/.claude.json:/root/.claude.json:ro` single-file
+  mount — the SDK only reads it, no write risk, and it preserves
+  the CLI's "global config recognized" warning suppression.
+- Auth: the daemon now uses `CLAUDE_CODE_OAUTH_TOKEN` (priority-2
+  auth path) exclusively. Run `claude setup-token` on the host
+  once to mint a long-lived token, put it in `orchestrator/.env`
+  as `CLAUDE_CODE_OAUTH_TOKEN=…`. If the token expires (rare for
+  long-lived tokens but possible), the SDK fails fast with a
+  clear auth error — much better than the silent EROFS we had
+  before.
+
+Trade-off accepted: the daemon and host now have isolated
+`.claude` state. The container can't see host's session history,
+shell snapshots, or per-project conversation logs — by design.
+Daemon Executor is a different actor than the PI's local Claude
+Code session and the isolation is desirable for reproducibility +
+audit.
+
+### Operational note: rka-worker OOM under low Docker memory
+
+The `rka-worker` container loads the FastEmbed
+`nomic-ai/nomic-embed-text-v1.5` model (~250 MB) plus onnxruntime
+on startup. Under low Docker Desktop memory allocation (≤ 4 GB,
+plus orchestrator + rka-server competing for RAM), the worker can
+be OOM-killed during the model load and enter a crash loop
+(observed empirically: `OOMKilled=true`, 28+ restarts in minutes).
+
+Workaround: bump Docker Desktop's Resources → Memory to ≥ 6 GB
+(8 GB recommended for the full stack). Verify with:
+
+```bash
+docker inspect rka-worker --format '{{.RestartCount}} restarts; OOMKilled={{.State.OOMKilled}}'
+```
+
+The worker isn't on the PI's critical path — it processes
+background jobs for embedding queue / LLM enrichment. The
+orchestrator workflow (Brain ⇄ Executor ⇄ PI) does NOT depend on
+the worker; the worker being down only degrades search recall on
+newly-added notes/decisions. Safe to leave for later.
+
+The root `docker-compose.yml` (the file that defines `rka-worker`)
+is off-limits to the `agentic` branch per the bookkeeper
+invariant, so this is documentation-only here. A proper fix
+(memory limit + `restart: on-failure:N` + lazy embedding load)
+belongs upstream on `main`.
+
 ### Deferred follow-ups
 
+Deferred from the Phase D2.1 review — non-blocking but should
+land before the next major orchestrator pass:
+
+- **`pi_extend_toolkit`** is registered in the type literal +
+  `_ACCEPT_TOKEN_BY_TYPE` + `_ONBOARDING_INTERRUPT_TYPES` but
+  has no node and no graph wiring — half-built feature.
+- **`loop_iterations` / `usd_spent`** are read by `budget_check`
+  + `consensus_check` but never written by any node — the
+  MAX_LOOP_DEPTH and budget caps are unreachable. SDK token-cost
+  threading + per-node loop increment needed.
+- **`Phase B bootstrap` writes `orchestrator/.env` inside the
+  container** — host file is consumed via `env_file:` but not
+  bind-mounted, so the bootstrap-emit-template and bootstrap-verify
+  nodes write/read at `/app/orchestrator/.env` which the PI never
+  sees. Needs either a bind mount or a path-translation strategy.
+- **`$HOME` bind-mount over-broad** — when `HOST_WORKSPACE_ROOT`
+  isn't set, the daemon RW-mounts the entire `$HOME` (including
+  `~/.ssh`, `~/.aws`). Workspace-scoped mount needs a refusal to
+  start with a `$HOME`-equivalent root.
+- **`WebFetch` / `WebSearch` un-policed** — granted to the
+  subprocess with `permission_mode='dontAsk'`. No egress allowlist.
+- **Brain over-escalation risk** — Brain prompt now mentions FS
+  tools but no per-call policy enforces read-only at the host FS;
+  audit trail for any Brain-initiated Bash/Write would be valuable.
 - **D3b** — SerpAPI augmentation for `research_toolkit_node`
 - **D6** — `pi_extend_toolkit` for mid-mission tool addition
 - **Phase E** — Capability categories replacing static WRITE_TOOLS

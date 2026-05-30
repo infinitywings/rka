@@ -31,6 +31,7 @@ from orchestrator.llm_client import (
     _AUTH_PATH_KEYCHAIN,
     _AUTH_PATH_NONE,
     _AUTH_PATH_OAUTH_TOKEN,
+    _BUILTIN_FILESYSTEM_TOOLS,
     _MCP_SERVER_NAME,
     _RealSDKClient,
     _prefixed_tools,
@@ -342,10 +343,18 @@ def test_complete_passes_read_tools_allowlist_to_subprocess(
 
     assert len(captured) == 1
     opts = captured[0]
-    # READ_TOOLS land in allowed_tools, prefixed.
+    # READ_TOOLS land in allowed_tools, prefixed; built-in filesystem
+    # tools (Bash/Read/Write/Edit/Grep/Glob/WebFetch/WebSearch) are
+    # appended so the Executor subprocess can actually do mission work
+    # (read .env, run Python, write workspace outputs). The Phase-2.7
+    # read-only-subprocess invariant is preserved at the RKA layer:
+    # WRITE_TOOLS stay on disallowed_tools, and built-in fs tools don't
+    # touch RKA state.
     expected_reads = _prefixed_tools(READ_TOOLS)
-    assert opts.allowed_tools == expected_reads, (
-        f"expected allowed_tools={expected_reads!r}, got {opts.allowed_tools!r}"
+    expected_builtins = list(_BUILTIN_FILESYSTEM_TOOLS)
+    assert opts.allowed_tools == expected_reads + expected_builtins, (
+        f"expected allowed_tools={(expected_reads + expected_builtins)!r}, "
+        f"got {opts.allowed_tools!r}"
     )
     # mcp_servers carries rka stdio config pointing at the discovered binary.
     assert _MCP_SERVER_NAME in opts.mcp_servers

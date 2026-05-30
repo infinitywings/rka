@@ -31,6 +31,7 @@ from orchestrator import graph as graph_module
 from orchestrator.llm_client import SDKClient
 from orchestrator.mcp_client import MCPClient
 from orchestrator.parked_store import ParkedStore, ResponseAction
+from orchestrator.response_tokens import REDIRECT_SENTINEL, is_redirect_token
 from orchestrator.state import make_initial_state
 
 logger = logging.getLogger(__name__)
@@ -87,12 +88,15 @@ def resume_token(
     """Map (interrupt_type, action) to the resume string handed to the graph.
 
     accept   → the type-specific accept token ("approve" for greenlight,
-               "accept" for decision/acceptance)
-    reject   → literal "reject"
-    correct  → the PI's freeform redirection text verbatim. The graph's
-               substring routing will treat anything without "approve" /
-               "accept" as a redirect to escalation_router, which is the
-               correct semantic for a correction.
+               "accept" for decision/acceptance). Bare literal, no prefix.
+    reject   → literal "reject".
+    correct  → the PI's freeform redirection text, **prefixed with
+               REDIRECT_SENTINEL**. The graph's routing functions
+               (graph._route_after_pi_*, onboarding_graph._route_*, etc.)
+               and node-side is_accept checks (nodes/pi.py) detect the
+               sentinel and route to escalation/redirect regardless of
+               whether the PI's text contains the words "approve" or
+               "accept" — closes the substring-smuggling class bug.
 
     Raises ValueError on invalid action or unknown interrupt_type.
     """
@@ -105,7 +109,7 @@ def resume_token(
     if action == "correct":
         if not response_text or not response_text.strip():
             raise ValueError("correct action requires non-empty response_text")
-        return response_text
+        return REDIRECT_SENTINEL + response_text
     raise ValueError(f"unknown action {action!r}")
 
 
@@ -203,10 +207,47 @@ class OrchestratorRunner:
         """Create a workflow_runs row, load the mission spec, and invoke
         the graph from START. Returns when the graph parks at an
         interrupt or hits a terminal state.
+
+        Synchronous composition of `start_run_commit` + `start_run_drive`.
+        FastAPI's async-resume path on `/runs` calls the two halves
+        separately so the HTTP caller can get a fast ack while the first
+        segment (Brain strategy_node + confirmation_brief — typically 2
+        LLM calls = ~minutes) runs as a background task. The legacy sync
+        path is kept for tests and any caller that explicitly passes
+        `?wait_segment=true`.
         """
-        # We need an MCP client to load the mission spec before we have a
-        # workflow_thread_id — but the client wants a thread_id to auto-tag
-        # writes. Pre-create the run row to mint the id.
+        ack = self.start_run_commit(
+            mission_id=mission_id,
+            project_id=project_id,
+            budget_usd=budget_usd,
+            workflow_thread_id=workflow_thread_id,
+        )
+        return self.start_run_drive(
+            workflow_thread_id=ack["workflow_thread_id"],
+            project_id=ack["project_id"],
+            mission_id=ack["mission_id"],
+            motivated_by_decision_id=ack["motivated_by_decision_id"],
+        )
+
+    def start_run_commit(
+        self,
+        *,
+        mission_id: str,
+        project_id: str,
+        budget_usd: float = 5.0,
+        workflow_thread_id: Optional[str] = None,
+    ) -> dict:
+        """Phase 1 of start_run: mint workflow_runs row, validate the
+        mission exists by loading its spec. Does NOT invoke the graph.
+
+        Returns the handoff dict the caller hands to `start_run_drive` to
+        run the first segment — typically on a background task so the
+        HTTP caller gets `{workflow_thread_id, status: "starting"}`
+        immediately and polls `/inbox` for the first parked interrupt.
+
+        Raises MissionNotFoundError if the mission can't be loaded (same
+        contract as `start_run`).
+        """
         thread_id = self.store.create_run(
             mission_id=mission_id,
             project_id=project_id,
@@ -238,17 +279,41 @@ class OrchestratorRunner:
             or mission.get("motivated_by_decision_id")
             or ""
         )
+        return {
+            "workflow_thread_id": thread_id,
+            "project_id": project_id,
+            "mission_id": mission_id,
+            "motivated_by_decision_id": motivated_by,
+        }
+
+    def start_run_drive(
+        self,
+        *,
+        workflow_thread_id: str,
+        project_id: str,
+        mission_id: str,
+        motivated_by_decision_id: str,
+    ) -> SegmentOutcome:
+        """Phase 2 of start_run: build SDK + saver + compiled graph and
+        drive until the first interrupt or terminal.
+
+        Independent of `start_run_commit` so the FastAPI layer can
+        background this on a worker thread while the HTTP client gets
+        the workflow_thread_id ack immediately. Brain's strategy_node +
+        confirmation_brief LLM calls in this segment can take minutes —
+        the same async-resume rationale as `resume_segment`.
+        """
         initial = make_initial_state(
-            workflow_thread_id=thread_id,
+            workflow_thread_id=workflow_thread_id,
             mission_id=mission_id,
-            motivated_by_decision_id=motivated_by,
+            motivated_by_decision_id=motivated_by_decision_id,
             project_id=project_id,
         )
-
+        mcp = self._mcp_factory(workflow_thread_id, project_id)
         sdk = self._sdk_factory(project_id)
-        saver = self._saver_factory(thread_id)
+        saver = self._saver_factory(workflow_thread_id)
         compiled = self._compile_factory(sdk=sdk, mcp=mcp, checkpointer=saver)
-        return self._execute_segment(thread_id, compiled, initial)
+        return self._execute_segment(workflow_thread_id, compiled, initial)
 
     # Interrupt types that belong to the onboarding subgraph. When the
     # runner is responding to one of these, it must use
@@ -304,10 +369,47 @@ class OrchestratorRunner:
         """Mark the interrupt as answered, resume the graph with the
         type-correct token, and return the next segment's outcome.
 
+        Synchronous composition of `commit_response` + `resume_segment` —
+        used by the legacy synchronous endpoint path and by tests. The
+        FastAPI server's async-resume path calls the two halves
+        separately so the HTTP call returns immediately after the
+        answer is committed, with the graph segment driven on a
+        background task (long LLM segments otherwise blow past any
+        reasonable client timeout).
+
         Raises ValueError if the interrupt is missing or already
         answered/cancelled. The `action` argument enforces the
         Phase-2.4 v1 contract: callers can't supply a raw string, so
         they can't accidentally route a greenlight accept to escalation.
+        """
+        ack = self.commit_response(
+            interrupt_id=interrupt_id,
+            action=action,
+            response_text=response_text,
+        )
+        return self.resume_segment(
+            workflow_thread_id=ack["workflow_thread_id"],
+            interrupt_type=ack["interrupt_type"],
+            token=ack["token"],
+            project_id=ack["project_id"],
+        )
+
+    def commit_response(
+        self,
+        *,
+        interrupt_id: str,
+        action: ResponseAction,
+        response_text: Optional[str] = None,
+    ) -> dict:
+        """Phase 1 of respond: commit the PI's answer to the store and
+        flip the run to 'running'. Does NOT drive the graph segment.
+
+        Returns the handoff dict the caller hands to `resume_segment` to
+        run the graph forward — typically on a background task so the
+        HTTP call that committed the answer can return immediately.
+
+        Raises ValueError on missing / already-answered interrupt
+        (same contract as `respond`).
         """
         parked = self.store.get_interrupt(interrupt_id)
         if parked is None:
@@ -324,9 +426,8 @@ class OrchestratorRunner:
             response_text=response_text,
         )
 
-        # Atomic: mark answered (in store), THEN resume graph. The store
-        # write is the durable record of the PI's decision; the graph
-        # resume is the consequence.
+        # The store write is the durable record of the PI's decision;
+        # the graph resume is the consequence and may take minutes.
         self.store.answer_interrupt(
             interrupt_id=interrupt_id,
             response_action=action,
@@ -338,24 +439,49 @@ class OrchestratorRunner:
         # Flip run status back to 'running' for the duration of this segment.
         self.store.update_run(run["workflow_thread_id"], status="running")
 
-        mcp = self._mcp_factory(run["workflow_thread_id"], run["project_id"])
-        sdk = self._sdk_factory(run["project_id"])
-        saver = self._saver_factory(run["workflow_thread_id"])
+        return {
+            "workflow_thread_id": run["workflow_thread_id"],
+            "project_id": run["project_id"],
+            "interrupt_type": parked["interrupt_type"],
+            "interrupt_id": interrupt_id,
+            "token": token,
+        }
+
+    def resume_segment(
+        self,
+        *,
+        workflow_thread_id: str,
+        interrupt_type: str,
+        token: str,
+        project_id: str,
+    ) -> SegmentOutcome:
+        """Phase 2 of respond: drive the graph forward until the next
+        interrupt or terminal state.
+
+        Independent of `commit_response` so the FastAPI layer can
+        background this on a worker thread while the HTTP client gets
+        an immediate ack — long LLM segments otherwise exceed any
+        reasonable client timeout and the client sees an empty timeout
+        error even though the server completes successfully.
+        """
+        mcp = self._mcp_factory(workflow_thread_id, project_id)
+        sdk = self._sdk_factory(project_id)
+        saver = self._saver_factory(workflow_thread_id)
         # Phase D5c / Phase O: pick the compile factory by interrupt
         # type.  Phase D tool-setup interrupts → onboarding subgraph;
         # Phase O workflow interrupts → phase_o subgraph; everything
         # else → mission graph (Phase A).
-        if parked["interrupt_type"] in self._PHASE_O_INTERRUPT_TYPES:
+        if interrupt_type in self._PHASE_O_INTERRUPT_TYPES:
             factory = self._phase_o_compile_factory
-        elif parked["interrupt_type"] in self._PHASE_B_INTERRUPT_TYPES:
+        elif interrupt_type in self._PHASE_B_INTERRUPT_TYPES:
             factory = self._phase_b_compile_factory
-        elif parked["interrupt_type"] in self._ONBOARDING_INTERRUPT_TYPES:
+        elif interrupt_type in self._ONBOARDING_INTERRUPT_TYPES:
             factory = self._onboarding_compile_factory
         else:
             factory = self._compile_factory
         compiled = factory(sdk=sdk, mcp=mcp, checkpointer=saver)
         return self._execute_segment(
-            run["workflow_thread_id"], compiled, Command(resume=token)
+            workflow_thread_id, compiled, Command(resume=token)
         )
 
     # ---- Phase D5c: onboarding subgraph entrypoint ----
@@ -375,21 +501,49 @@ class OrchestratorRunner:
         mission_id, so we use the project_id as the placeholder
         mission_id for now — the runner-level state.mission_id is
         unused during onboarding).
+
+        Synchronous composition of start_onboarding_commit +
+        start_onboarding_drive. FastAPI's async-resume path on /onboard
+        calls the two halves separately so the first segment (Brain
+        topic-elicitation prompt) doesn't block the HTTP caller.
         """
-        # Mint a workflow_runs row. mission_id is the project_id during
-        # onboarding (the parked_interrupts.mission_id NOT NULL constraint
-        # forces us to put SOMETHING; using project_id is the natural
-        # choice and lets `orchestrator_inbox?workflow_thread_id=...`
-        # surface onboarding interrupts uniformly).
+        ack = self.start_onboarding_commit(
+            project_id=project_id, workflow_thread_id=workflow_thread_id,
+        )
+        return self.start_onboarding_drive(
+            workflow_thread_id=ack["workflow_thread_id"],
+            project_id=ack["project_id"],
+        )
+
+    def start_onboarding_commit(
+        self,
+        *,
+        project_id: str,
+        workflow_thread_id: Optional[str] = None,
+    ) -> dict:
+        """Phase 1 of start_onboarding: mint workflow_runs row. Does not
+        invoke the graph. Returns the handoff dict for start_onboarding_drive."""
         thread_id = self.store.create_run(
             mission_id=project_id,  # placeholder; onboarding isn't mission-scoped
             project_id=project_id,
             workflow_thread_id=workflow_thread_id,
         )
+        return {
+            "workflow_thread_id": thread_id,
+            "project_id": project_id,
+        }
 
-        mcp = self._mcp_factory(thread_id, project_id)
+    def start_onboarding_drive(
+        self,
+        *,
+        workflow_thread_id: str,
+        project_id: str,
+    ) -> SegmentOutcome:
+        """Phase 2 of start_onboarding: build factories + invoke the
+        onboarding subgraph until the first interrupt or terminal."""
+        mcp = self._mcp_factory(workflow_thread_id, project_id)
         sdk = self._sdk_factory(project_id)
-        saver = self._saver_factory(thread_id)
+        saver = self._saver_factory(workflow_thread_id)
         compiled = self._onboarding_compile_factory(
             sdk=sdk, mcp=mcp, checkpointer=saver
         )
@@ -397,7 +551,7 @@ class OrchestratorRunner:
         # Initial state: minimal — onboarding nodes read project_id and
         # build up topic_metadata / proposed_toolkit / etc. as they go.
         initial = {
-            "workflow_thread_id": thread_id,
+            "workflow_thread_id": workflow_thread_id,
             "mission_id": project_id,
             "project_id": project_id,
             "motivated_by_decision_id": "",
@@ -425,7 +579,7 @@ class OrchestratorRunner:
             "proposed_toolkit": [],
             "ratified_toolkit": [],
         }
-        return self._execute_segment(thread_id, compiled, initial)
+        return self._execute_segment(workflow_thread_id, compiled, initial)
 
     # ---- Phase O: full project-onboarding workflow entrypoint ----
 
@@ -483,27 +637,51 @@ class OrchestratorRunner:
         works) so we use the sentinel string "_bootstrap_" as both
         the placeholder mission_id and project_id. The runner-level
         state.project_id stays empty during bootstrap.
+
+        Synchronous composition of start_phase_b_commit +
+        start_phase_b_drive. FastAPI's async-resume path on /bootstrap
+        calls the two halves separately so the first segment doesn't
+        block the HTTP caller.
         """
+        ack = self.start_phase_b_commit(workflow_thread_id=workflow_thread_id)
+        return self.start_phase_b_drive(
+            workflow_thread_id=ack["workflow_thread_id"]
+        )
+
+    def start_phase_b_commit(
+        self,
+        *,
+        workflow_thread_id: Optional[str] = None,
+    ) -> dict:
+        """Phase 1 of start_phase_b: mint workflow_runs row.
+        Does not invoke the graph."""
         thread_id = self.store.create_run(
             mission_id="_bootstrap_",  # sentinel; bootstrap isn't mission-scoped
             project_id="_bootstrap_",  # sentinel; bootstrap isn't project-scoped
             workflow_thread_id=workflow_thread_id,
         )
+        return {"workflow_thread_id": thread_id}
 
-        mcp = self._mcp_factory(thread_id, "")
+    def start_phase_b_drive(
+        self,
+        *,
+        workflow_thread_id: str,
+    ) -> SegmentOutcome:
+        """Phase 2 of start_phase_b: build factories + invoke the Phase B
+        subgraph until the first interrupt or terminal."""
+        mcp = self._mcp_factory(workflow_thread_id, "")
         sdk = self._sdk_factory("")
-        saver = self._saver_factory(thread_id)
+        saver = self._saver_factory(workflow_thread_id)
         compiled = self._phase_b_compile_factory(
             sdk=sdk, mcp=mcp, checkpointer=saver
         )
-
         initial = make_initial_state(
-            workflow_thread_id=thread_id,
+            workflow_thread_id=workflow_thread_id,
             mission_id="_bootstrap_",
             motivated_by_decision_id="",
             project_id="",
         )
-        return self._execute_segment(thread_id, compiled, initial)
+        return self._execute_segment(workflow_thread_id, compiled, initial)
 
     def cancel(self, workflow_thread_id: str) -> int:
         """Cancel a run. Returns count of pending interrupts marked cancelled."""

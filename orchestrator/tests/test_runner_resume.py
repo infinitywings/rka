@@ -51,12 +51,22 @@ def test_resume_token_reject_returns_literal_reject_for_all_types():
         assert resume_token(interrupt_type=t, action="reject") == "reject"
 
 
-def test_resume_token_correct_returns_response_text_verbatim():
+def test_resume_token_correct_prefixes_response_text_with_redirect_sentinel():
+    """Phase D2 (post-review): action='correct' now prepends REDIRECT_SENTINEL
+    so the routing functions can short-circuit on it before running the
+    substring approve/accept check. Closes the substring-smuggling class bug
+    where a PI correction like "I cannot approve" would route to accept."""
+    from orchestrator.response_tokens import REDIRECT_SENTINEL, is_redirect_token
+
     text = "redirect to plan B with these changes"
     out = resume_token(
         interrupt_type="pi_greenlight", action="correct", response_text=text
     )
-    assert out == text
+    assert out == REDIRECT_SENTINEL + text
+    assert is_redirect_token(out)
+    # The original text is preserved as a suffix so the escalation_router
+    # node can still read the PI's actual correction.
+    assert out.endswith(text)
 
 
 def test_resume_token_correct_requires_non_empty_text():
@@ -303,7 +313,10 @@ def test_respond_correct_resumes_with_freeform_text(store: ParkedStore):
         response_text=correction,
     )
     resume_input, _ = scripted.invocations[1]
-    assert resume_input.resume == correction
+    # Phase D2 (post-review): action='correct' prepends REDIRECT_SENTINEL.
+    # The graph routes on the sentinel before reading the substring.
+    from orchestrator.response_tokens import REDIRECT_SENTINEL
+    assert resume_input.resume == REDIRECT_SENTINEL + correction
 
 
 def test_respond_rejects_double_answer(store: ParkedStore):
@@ -449,9 +462,116 @@ def test_resume_token_onboarding_reject_returns_literal_reject():
         assert resume_token(interrupt_type=t, action="reject") == "reject"
 
 
-def test_resume_token_onboarding_correct_returns_freeform_text():
+def test_resume_token_onboarding_correct_prefixes_redirect_sentinel():
+    """Phase D2: onboarding interrupts also get REDIRECT_SENTINEL on
+    action='correct' — same sentinel contract as the mission graph, so the
+    onboarding routing helpers can short-circuit before substring match."""
+    from orchestrator.response_tokens import REDIRECT_SENTINEL
+
     text = "use these tools instead: rka, context7 only"
     out = resume_token(
         interrupt_type="pi_toolkit_ratify", action="correct", response_text=text
     )
-    assert out == text
+    assert out == REDIRECT_SENTINEL + text
+
+
+# ---------------------------------------------------------------------------
+# Phase D2 (post-review) — REDIRECT_SENTINEL routing tests
+#
+# Closes the substring-routing-smuggling class bug surfaced by the
+# code review: a PI correction text containing the words "approve" or
+# "accept" must NOT route through the accept branch.
+# ---------------------------------------------------------------------------
+
+
+def test_redirect_sentinel_makes_is_redirect_token_true():
+    from orchestrator.response_tokens import REDIRECT_SENTINEL, is_redirect_token
+
+    assert is_redirect_token(REDIRECT_SENTINEL + "anything")
+    assert is_redirect_token(REDIRECT_SENTINEL + "I cannot approve this")
+    # Bare accept/approve tokens (action='accept' path) do NOT carry sentinel
+    assert not is_redirect_token("approve")
+    assert not is_redirect_token("accept")
+    assert not is_redirect_token("reject")
+    assert not is_redirect_token("")
+    assert not is_redirect_token(None)
+    # Case-insensitive (graph._latest_interrupt_response lowercases first)
+    assert is_redirect_token((REDIRECT_SENTINEL + "x").lower())
+    # Leading whitespace tolerated
+    assert is_redirect_token("  " + REDIRECT_SENTINEL + "x")
+
+
+def test_route_after_pi_greenlight_short_circuits_on_redirect_sentinel():
+    """Smuggling regression test: PI correction "I cannot approve" must
+    route to escalation, not backbrief_draft."""
+    from orchestrator.graph import _route_after_pi_greenlight
+    from orchestrator.response_tokens import REDIRECT_SENTINEL
+
+    # Adversarial: correction text contains "approve" verbatim
+    state = {
+        "interrupts": [
+            {"response": REDIRECT_SENTINEL + "I cannot approve this — redo"}
+        ]
+    }
+    assert _route_after_pi_greenlight(state) == "escalation_router"
+
+    # Plain accept path still routes to backbrief_draft
+    state_accept = {"interrupts": [{"response": "approve"}]}
+    assert _route_after_pi_greenlight(state_accept) == "backbrief_draft"
+
+
+def test_route_after_pi_decision_short_circuits_on_redirect_sentinel():
+    """Adversarial: PI correction "do not accept this — redo the plan"
+    must NOT route through execute_ratified_actions (which would dispatch
+    the WRITE_TOOLS the PI is rejecting)."""
+    from orchestrator.graph import _route_after_pi_decision
+    from orchestrator.response_tokens import REDIRECT_SENTINEL
+
+    state = {
+        "interrupts": [
+            {"response": REDIRECT_SENTINEL + "do not accept this — redo"}
+        ]
+    }
+    assert _route_after_pi_decision(state) == "escalation_router"
+
+    state_accept = {"interrupts": [{"response": "accept"}]}
+    assert _route_after_pi_decision(state_accept) == "execute_ratified_actions"
+
+
+def test_route_after_credentials_ready_short_circuits_on_redirect_sentinel():
+    from orchestrator.onboarding_graph import _route_after_credentials_ready
+    from orchestrator.response_tokens import REDIRECT_SENTINEL
+    from langgraph.graph import END
+
+    state = {
+        "interrupts": [
+            {"response": REDIRECT_SENTINEL + "accept the manifest but fix typos"}
+        ]
+    }
+    assert _route_after_credentials_ready(state) == END
+
+    state_accept = {"interrupts": [{"response": "accept"}]}
+    assert _route_after_credentials_ready(state_accept) == "finalize"
+
+
+def test_route_after_fill_ack_short_circuits_on_redirect_sentinel():
+    from orchestrator.phase_b_graph import _route_after_fill_ack
+    from orchestrator.response_tokens import REDIRECT_SENTINEL
+    from langgraph.graph import END
+
+    state = {
+        "interrupts": [
+            {
+                "node_name": "pi_bootstrap_fill_ack",
+                "response": REDIRECT_SENTINEL + "approve once you reconfirm",
+            }
+        ]
+    }
+    assert _route_after_fill_ack(state) == END
+
+    state_accept = {
+        "interrupts": [
+            {"node_name": "pi_bootstrap_fill_ack", "response": "accept"}
+        ]
+    }
+    assert _route_after_fill_ack(state_accept) == "bootstrap_verify"
