@@ -919,3 +919,95 @@ def test_chain_substitution_works_across_three_step_chain():
     assert pa3["related_decisions"] == ["dec_y"]
     assert len(update["artifacts"]) == 3
     assert "errors" not in update
+
+
+# ---------------------------------------------------------------------------
+# Phase E6 — project_id consistency guard + auto-injection at dispatcher
+# ---------------------------------------------------------------------------
+
+
+def test_execute_ratified_actions_strips_project_id_when_matching_workflow():
+    """Phase E6: LLMs are prompted to include project_id in proposed_actions
+    args, but the orchestrator's RestMCPClient already injects the workflow's
+    project_id at the REST query layer. If the LLM's project_id matches
+    state['project_id'], strip it from args before dispatch (so methods
+    without **kw, e.g. rka_add_decision, don't TypeError)."""
+    mcp = FakeMCP()
+    sdk = FakeSDK()
+    state = _state()
+    state["project_id"] = "prj_workflow"
+    state["ratified_actions"] = [
+        {
+            "tool": "rka_add_note",
+            "args": {
+                "content": "Probe note",
+                "related_mission": "mis_t4_target",
+                "project_id": "prj_workflow",  # matches → stripped
+            },
+            "rationale": "Test",
+        },
+    ]
+
+    update = executor.execute_ratified_actions(state, sdk, mcp)
+
+    add_calls = [c for c in mcp.calls if c["op"] == "rka_add_note"]
+    assert len(add_calls) == 1
+    # project_id should be stripped from the dispatched kwargs.
+    assert "project_id" not in add_calls[0]
+    assert add_calls[0]["content"] == "Probe note"
+    assert "errors" not in update
+
+
+def test_execute_ratified_actions_refuses_cross_project_write():
+    """Phase E6: if the LLM proposes an action with a project_id that
+    differs from the workflow's bound project_id, refuse + ErrorRecord.
+    Brain/Executor must never authorize writes against a project other
+    than the one the PI ratified."""
+    mcp = FakeMCP()
+    sdk = FakeSDK()
+    state = _state()
+    state["project_id"] = "prj_workflow"
+    state["ratified_actions"] = [
+        {
+            "tool": "rka_add_note",
+            "args": {
+                "content": "Cross-project leak",
+                "project_id": "prj_OTHER",  # mismatch → refused
+            },
+            "rationale": "Should be rejected",
+        },
+    ]
+
+    update = executor.execute_ratified_actions(state, sdk, mcp)
+
+    # No MCP call fired.
+    assert all(c["op"] != "rka_add_note" for c in mcp.calls)
+    assert "errors" in update
+    assert update["errors"][0]["error_type"] == "cross_project_write_attempted"
+    assert "prj_OTHER" in update["errors"][0]["detail"]
+    assert "prj_workflow" in update["errors"][0]["detail"]
+
+
+def test_execute_ratified_actions_omitted_project_id_is_dispatched_as_is():
+    """Phase E6: if the LLM omits project_id (older prompt-conformant
+    behavior), no stripping needed and no error raised. The
+    RestMCPClient's _params() re-injects at the REST layer with the
+    workflow-bound project_id."""
+    mcp = FakeMCP()
+    sdk = FakeSDK()
+    state = _state()
+    state["project_id"] = "prj_workflow"
+    state["ratified_actions"] = [
+        {
+            "tool": "rka_add_note",
+            "args": {"content": "no project_id key"},
+            "rationale": "Test",
+        },
+    ]
+
+    update = executor.execute_ratified_actions(state, sdk, mcp)
+
+    add_calls = [c for c in mcp.calls if c["op"] == "rka_add_note"]
+    assert len(add_calls) == 1
+    assert "project_id" not in add_calls[0]
+    assert "errors" not in update

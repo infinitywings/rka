@@ -96,7 +96,34 @@ BRAIN_SYSTEM = (
     "no longer an 'active project' default — by design. Same rule "
     "applies to any rka_* in your `proposed_actions` JSON: each action's "
     "`args` must include `project_id`. The pre-v2.6 RKA_PROJECT env var "
-    "passing was removed; do not rely on session defaults."
+    "passing was removed; do not rely on session defaults.\n\n"
+    # Phase G — FS Actuator self-classification policy
+    "FS Actuator policy. Brain reasoning is host-FS-read-only by design: "
+    "use Read, Grep, Glob, WebFetch, WebSearch freely; do NOT call Bash, "
+    "Write, or Edit directly as Brain. If your reasoning ever needs an "
+    "FS mutation (you want to inspect the side-effect of a probe, or "
+    "draft a file the PI should review), put it in `proposed_fs_actions` "
+    "alongside `proposed_actions` so the PI can ratify before any FS "
+    "side effect lands. The Executor handles the actual mutation; "
+    "Brain's role is to propose, not to execute. Phase G2 will add a "
+    "hook that enforces this at the SDK layer; until then, your "
+    "discipline IS the enforcement.\n\n"
+    # Phase E5 — WebFetch/WebSearch egress policy
+    "Egress policy (WebFetch / WebSearch). These tools reach the public "
+    "internet from the daemon's network — every fetch is observable in "
+    "logs and may carry workspace-derived strings (paths, IDs) into "
+    "third-party telemetry pipelines. Use them only for: (a) retrieving "
+    "published documents (papers, RFCs, standards bodies, vendor docs), "
+    "(b) verifying a claim against a primary source, (c) loading library "
+    "documentation when context7 lacks coverage. Never fetch from known "
+    "telemetry / analytics endpoints (segment.io, segment.com, "
+    "amplitude.com, mixpanel.com, statsig.com, posthog.com, heap.io / "
+    "heapanalytics.com) — these are blocklisted at the notifications "
+    "layer and any reference from your reasoning to them is a smell. "
+    "Never craft a URL that embeds workspace paths, project_ids, or "
+    "decision_ids as query parameters or path segments. Never POST. "
+    "When in doubt prefer RKA tools or context7 over web egress; both "
+    "are scoped and audited."
 )
 
 
@@ -141,6 +168,22 @@ def _artifact(rka_id: str, entity_type: str, node_name: str) -> ArtifactRef:
         "node_name": node_name,
         "timestamp": _now_iso(),
     }
+
+
+def _accrue_cost(state: ResearchWorkflowState, sdk: SDKClient) -> float:
+    """Phase E4: return `state["usd_spent"] + sdk.last_call_cost_usd`.
+
+    Every Brain/Executor node that calls `sdk.complete()` should include
+    `"usd_spent": _accrue_cost(state, sdk)` in its return dict so the
+    workflow's running total reflects the cost of the just-completed LLM
+    call. The `last_call_cost_usd` is reset by complete() at the start
+    of every invocation and populated from the SDK's ResultMessage; for
+    fakes that don't emit a result message, the default 0.0 is a safe
+    no-op.
+    """
+    prev = float(state.get("usd_spent", 0.0) or 0.0)
+    delta = float(getattr(sdk, "last_call_cost_usd", 0.0) or 0.0)
+    return prev + delta
 
 
 def _summarize_position(text: str, *, max_chars: int = 280) -> str:
@@ -251,6 +294,7 @@ def strategy_node(
         "brain_strategy": strategy_text,
         "brain_position": _summarize_position(strategy_text),
         "artifacts": [_artifact(note_id, "journal", "strategy_node")],
+        "usd_spent": _accrue_cost(state, sdk),
     }
 
 
@@ -308,6 +352,7 @@ def confirmation_brief(
                 "source_artifact": note_id,
             }
         ],
+        "usd_spent": _accrue_cost(state, sdk),
     }
 
 
@@ -452,6 +497,7 @@ def decision_present(
                 "source_artifact": note_id,
             }
         ],
+        "usd_spent": _accrue_cost(state, sdk),
     }
 
 
@@ -490,6 +536,7 @@ def cluster_review(
         "current_phase": "brain_review",
         "current_node": "cluster_review",
         "artifacts": [_artifact(note_id, "journal", "cluster_review")],
+        "usd_spent": _accrue_cost(state, sdk),
     }
 
 
@@ -546,6 +593,7 @@ def gate1_validation(
         "gate1_verdict": verdict,
         "brain_position": _summarize_position(verdict_text),
         "artifacts": [_artifact(note_id, "journal", "gate1_validation")],
+        "usd_spent": _accrue_cost(state, sdk),
     }
 
 
@@ -596,4 +644,5 @@ def final_synthesis(
         "current_node": "final_synthesis",
         "terminal_state": "complete",
         "artifacts": [_artifact(note_id, "journal", "final_synthesis")],
+        "usd_spent": _accrue_cost(state, sdk),
     }

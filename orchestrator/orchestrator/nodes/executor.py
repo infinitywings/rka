@@ -186,7 +186,58 @@ EXECUTOR_SYSTEM = (
     "`project_id`. Without it, execute_ratified_actions raises a "
     "ratified_action_call_failed ErrorRecord and the EC8 guard escalates "
     "the whole run. The pre-v2.6 RKA_PROJECT env var passing was "
-    "removed; do not rely on session defaults."
+    "removed; do not rely on session defaults.\n\n"
+    # Phase G — FS Actuator self-classification policy
+    "FS Actuator policy (Bash / Write / Edit). Before calling Bash, Write, "
+    "or Edit, classify the operation. Three categories:\n"
+    " (i)  SCOPED — reads, or writes inside {workspace_path}, or Bash "
+    "      that runs analysis/probe (`python …`, `ls`, `grep`, etc.). "
+    "      Call the tool directly.\n"
+    " (ii) RATIFY_REQUIRED — emit a `proposed_fs_actions` block instead "
+    "      of calling the tool. The PI must ratify before the actuator "
+    "      dispatches. Triggers:\n"
+    "        * `rm -rf` (any), `git push`, `git reset --hard`, "
+    "          `git clean -f`, `git rebase`, `git merge`\n"
+    "        * `npm publish`, `pip install --system`, `docker rmi`, "
+    "          `docker push`, `docker system prune`, `kubectl delete`\n"
+    "        * `terraform apply` or `destroy`, `gcloud … delete`, "
+    "          `aws … delete`, `systemctl stop/disable`, `crontab -r`\n"
+    "        * any Write/Edit whose `file_path` escapes "
+    "          `{workspace_path}` (e.g., `/etc/…`, `~/.aws/…`, sibling "
+    "          project folders)\n"
+    "        * redirects writing under `/etc/`\n"
+    "(iii) DENIED — never executable, even with PI ratification. "
+    "      `rm -rf /`, `rm -rf $HOME`, `sudo …`, `chmod 777`, "
+    "      `mkfs.*`, `dd … of=/dev/sd*`, `curl | sh`, `wget | bash`, "
+    "      fork-bombs. If a mission requires one of these, escalate "
+    "      via `rka_submit_checkpoint` with the explicit reason; the "
+    "      PI must rewrite the mission scope before any such operation "
+    "      becomes possible.\n"
+    "The `proposed_fs_actions` block has the same JSON shape as "
+    "`proposed_actions` but the `tool` field is one of Bash/Write/Edit "
+    "and `args` is the tool's native argument shape. Example: "
+    "`{\"tool\": \"Bash\", \"args\": {\"command\": \"git push origin "
+    "main\"}, \"rationale\": \"publishing T5 release per mission "
+    "spec\"}`. Phase G2 will add a hook that intercepts your direct "
+    "Bash/Write/Edit calls and reroutes ratify_required ones; until "
+    "Phase G2 ships, YOU are the enforcement point.\n\n"
+    # Phase E5 — WebFetch/WebSearch egress policy
+    "Egress policy (WebFetch / WebSearch). These tools are granted but "
+    "their use is observable in network logs and may carry workspace "
+    "strings into third-party telemetry. Permitted uses: (a) fetching "
+    "published documents (papers, RFCs, vendor docs, standards), (b) "
+    "verifying a missioned claim against a primary source, (c) loading "
+    "library docs when context7 lacks coverage, (d) downloading inputs "
+    "the mission explicitly enumerates. FORBIDDEN: any URL whose host "
+    "is segment.io, segment.com, amplitude.com, mixpanel.com, "
+    "statsig.com, posthog.com, heap.io, or heapanalytics.com (these "
+    "match the orchestrator's WEBHOOK_BLOCKLIST). FORBIDDEN: embedding "
+    "workspace paths, project_ids, mission_ids, decision_ids, or "
+    ".env-derived secrets in query parameters or path segments — every "
+    "fetch URL is loggable. FORBIDDEN: POST or any mutation verb (these "
+    "tools are GET-only by intent; if the mission needs a mutation, "
+    "describe it in proposed_actions or escalate). When unsure prefer "
+    "RKA tools, context7 docs, or escalation over web egress."
 )
 
 
@@ -201,6 +252,19 @@ def _artifact(rka_id: str, entity_type: str, node_name: str) -> ArtifactRef:
         "node_name": node_name,
         "timestamp": _now_iso(),
     }
+
+
+def _accrue_cost(state: ResearchWorkflowState, sdk: SDKClient) -> float:
+    """Phase E4: return `state["usd_spent"] + sdk.last_call_cost_usd`.
+
+    Mirror of brain._accrue_cost — see there for full semantics. Each
+    Executor node that calls `sdk.complete()` returns the accumulated
+    cost via `"usd_spent": _accrue_cost(state, sdk)` so the workflow's
+    running total reflects every LLM call.
+    """
+    prev = float(state.get("usd_spent", 0.0) or 0.0)
+    delta = float(getattr(sdk, "last_call_cost_usd", 0.0) or 0.0)
+    return prev + delta
 
 
 def _summarize_position(text: str, *, max_chars: int = 280) -> str:
@@ -293,6 +357,7 @@ def backbrief_draft(
         "executor_backbrief": backbrief_text,
         "executor_position": _summarize_position(backbrief_text),
         "artifacts": [_artifact(note_id, "journal", "backbrief_draft")],
+        "usd_spent": _accrue_cost(state, sdk),
     }
 
 
@@ -458,6 +523,7 @@ def mission_execute(
         "executor_position": _summarize_position(work_log),
         "artifacts": [_artifact(note_id, "journal", "mission_execute")],
         "proposed_actions": proposed_actions,
+        "usd_spent": _accrue_cost(state, sdk),
     }
     if parse_error is not None:
         update["errors"] = [parse_error]
@@ -724,6 +790,49 @@ def execute_ratified_actions(
             )
             continue
 
+        # Phase E6 — project_id consistency guard + dispatcher-layer
+        # auto-injection. The orchestrator's RestMCPClient already injects
+        # `self.project_id` into every REST call's query params (see
+        # `RestMCPClient._params()`), so the per-action `project_id` kwarg
+        # would be redundant at best and contradictory at worst. Behavior:
+        #   (a) if the LLM passed a `project_id` that doesn't match the
+        #       workflow's `state["project_id"]`, raise a
+        #       cross_project_write_attempted ErrorRecord and skip — the
+        #       Brain/Executor must never authorize writes against a
+        #       different project than the one the PI ratified.
+        #   (b) otherwise, strip `project_id` from resolved_args before
+        #       dispatch. The client adds it back at the REST layer with
+        #       the correct, workflow-bound value. This makes per-action
+        #       project_id LLM-omittable (prompts still encourage it,
+        #       but a forgotten kwarg no longer fails methods whose
+        #       signatures don't accept **kw, e.g. rka_add_decision).
+        workflow_project_id = (state.get("project_id") or "").strip()
+        if "project_id" in resolved_args:
+            proposed_pid = (resolved_args.get("project_id") or "").strip()
+            if (
+                workflow_project_id
+                and proposed_pid
+                and proposed_pid != workflow_project_id
+            ):
+                new_errors.append(
+                    _make_error(
+                        "execute_ratified_actions",
+                        "cross_project_write_attempted",
+                        (
+                            f"PA-{idx}: tool={tool!r} action proposed "
+                            f"project_id={proposed_pid!r} but the workflow "
+                            f"is bound to project_id={workflow_project_id!r}. "
+                            f"Cross-project writes are forbidden — escalate "
+                            f"to PI if you need to write to a different "
+                            f"project."
+                        ),
+                    )
+                )
+                continue
+            # Drop project_id from args; RestMCPClient will re-inject the
+            # workflow-bound value at the REST layer via `_params()`.
+            resolved_args = {k: v for k, v in resolved_args.items() if k != "project_id"}
+
         try:
             rka_id = method(**resolved_args)
         except Exception as e:  # noqa: BLE001 — surface all failures as ErrorRecord
@@ -799,4 +908,5 @@ def submit_report(
         "current_node": "submit_report",
         "final_report_id": report_id,
         "artifacts": [_artifact(report_id, "report", "submit_report")],
+        "usd_spent": _accrue_cost(state, sdk),
     }
