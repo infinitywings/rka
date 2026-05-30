@@ -72,7 +72,19 @@ BRAIN_SYSTEM = (
     "value written on every artifact during a context, used to scope "
     "retrospective queries. Treat workflow-membership tagging as the same "
     "affordance pattern applied to workflow-scoped retrieval — naming the "
-    "similarity makes future generalizations cheap."
+    "similarity makes future generalizations cheap.\n\n"
+    # Phase D2 — built-in filesystem tools available to the subprocess
+    "Available tools beyond RKA read-side MCP: you may call the built-in "
+    "Read, Grep, Glob, WebFetch, and WebSearch tools to read host-side "
+    "files in the PI's mounted workspace (HOST_WORKSPACE_ROOT) and to "
+    "ground reasoning in source material. Bash, Write, and Edit are also "
+    "available, but Brain work should remain READ-ONLY at the host FS "
+    "layer — strategy decisions and journal/decision writes flow through "
+    "`proposed_actions` for PI ratification, never through direct file "
+    "mutations. Use the read tools liberally to verify claims before "
+    "you propose; use the write/Bash tools only when the mission "
+    "explicitly assigns a small probe (e.g., `python -c \"import X\"` "
+    "to verify a dependency)."
 )
 
 

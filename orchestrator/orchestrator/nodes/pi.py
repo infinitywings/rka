@@ -22,6 +22,7 @@ from typing import Any, Callable
 
 from orchestrator.llm_client import SDKClient  # noqa: F401  (kept for signature parity)
 from orchestrator.mcp_client import MCPClient
+from orchestrator.response_tokens import is_redirect_token
 from orchestrator.state import InterruptRecord, ResearchWorkflowState
 
 PI_BATCH_REVIEW_THRESHOLD: int = 10
@@ -137,7 +138,7 @@ def pi_decision_select(
     # If PI selected "accept" or "modify", record a decision in RKA.
     artifacts: list[dict] = []
     response_text = str(pi_response).lower()
-    is_accept = "accept" in response_text
+    is_accept = (not is_redirect_token(response_text)) and "accept" in response_text
     if items and is_accept:
         first_item = items[0]
         rka_id = mcp.rka_add_decision(
@@ -259,7 +260,10 @@ def pi_acceptance(
     pi_response = interrupt_fn(payload)
 
     response_text = str(pi_response).lower()
-    if "accept" in response_text:
+    # Sentinel short-circuit — a PI correction like "this is unacceptable,
+    # retry" must NOT collapse the run to terminal=complete via the
+    # substring match on "accept".
+    if (not is_redirect_token(response_text)) and "accept" in response_text:
         terminal: str = "complete"
     else:
         terminal = "escalated"
@@ -487,7 +491,7 @@ def pi_scope_ratify(
 
     pi_response = interrupt_fn(payload)
     response_text = str(pi_response or "").lower()
-    is_accept = "accept" in response_text
+    is_accept = (not is_redirect_token(response_text)) and "accept" in response_text
 
     update: dict[str, Any] = {
         "current_phase": "init",
@@ -589,7 +593,7 @@ def pi_deepresearch_prompt(
     }
     pi_response = interrupt_fn(payload)
     response_text = str(pi_response or "").lower()
-    is_accept = "accept" in response_text
+    is_accept = (not is_redirect_token(response_text)) and "accept" in response_text
 
     update: dict[str, Any] = {
         "current_phase": "init",
@@ -732,7 +736,7 @@ def pi_claims_review(
 
     pi_response = interrupt_fn(payload)
     response_text = str(pi_response or "").lower()
-    is_accept = "accept" in response_text
+    is_accept = (not is_redirect_token(response_text)) and "accept" in response_text
 
     update: dict[str, Any] = {
         "current_phase": "init",
@@ -1036,7 +1040,7 @@ def pi_plan_ratify(
 
     pi_response = interrupt_fn(payload)
     response_text = str(pi_response or "").lower()
-    is_accept = "accept" in response_text
+    is_accept = (not is_redirect_token(response_text)) and "accept" in response_text
 
     update: dict[str, Any] = {
         "current_phase": "init",
@@ -1214,7 +1218,7 @@ def pi_phase_entry_ack(
 
     pi_response = interrupt_fn(payload)
     response_text = str(pi_response or "").lower()
-    is_accept = "approve" in response_text or "accept" in response_text
+    is_accept = (not is_redirect_token(response_text)) and ("approve" in response_text or "accept" in response_text)
 
     update: dict[str, Any] = {
         "current_phase": "init",
@@ -1272,10 +1276,15 @@ def pi_onboarding_topic(
             "  2. The research field\n"
             "  3. Target venue (conference/journal)\n"
             "  4. 3-5 keywords\n"
-            "  5. **Workspace path** — the absolute path to your existing "
-            "project folder on disk (e.g., /Volumes/FuSpace/Projects/my-project "
-            "or ~/Research/my-project). If you don't have one yet, tell me "
-            "where you'd like it and create the directory yourself.\n\n"
+            "  5. **Workspace path** — the **fully-resolved absolute** path "
+            "to your existing project folder on disk (e.g., "
+            "/Volumes/FuSpace/Projects/my-project or "
+            "/Users/yourname/Research/my-project). Do NOT use tilde-prefixed "
+            "paths (`~/Research/...`) — `~` is interpreted differently inside "
+            "the orchestrator's Docker container (would resolve to `/root/`, "
+            "not your host home), so the workspace bind mount would miss. "
+            "If you don't have one yet, tell me where you'd like it and "
+            "create the directory yourself.\n\n"
             "Your response drives tool-discovery in the next step."
         ),
         "items": [],
@@ -1286,14 +1295,19 @@ def pi_onboarding_topic(
     response_str = str(pi_response)
 
     # Extract workspace_path if the PI included one in their response.
-    # Look for an absolute path (starts with / or ~/) on a line that
-    # mentions "workspace" or "path" or "folder", or just any line
-    # that looks like an absolute path.
+    # ONLY match fully-resolved absolute paths (starting with `/`). Tilde
+    # paths are rejected here — they would resolve to /root/ inside the
+    # daemon container (not the PI's home), and the HOST_WORKSPACE_ROOT
+    # bind mount wouldn't cover them. The prompt above instructs the PI
+    # to use a fully-resolved path; if they paste `~/...` anyway, we
+    # log it but don't accept it, so the downstream workspace_setup_node
+    # treats the workspace_path as unset and emits a clarifying checkpoint.
     import re
     workspace_path = ""
+    tilde_seen = False
     for line in response_str.splitlines():
-        # Match lines with absolute paths
-        m = re.search(r'(?:^|[\s:])(/[A-Za-z][^\s,;]*|~/[^\s,;]*)', line)
+        # Match fully-resolved absolute paths only.
+        m = re.search(r'(?:^|[\s:])(/[A-Za-z][^\s,;]*)', line)
         if m:
             candidate = m.group(1).strip().rstrip(".")
             # Prefer lines that mention workspace/path/folder/directory
@@ -1303,6 +1317,15 @@ def pi_onboarding_topic(
             # Fall back to first absolute path found
             if not workspace_path:
                 workspace_path = candidate
+        # Track tilde paths separately so we can warn the PI downstream
+        # without silently using a wrong location.
+        if re.search(r'(?:^|[\s:])~/[^\s,;]*', line):
+            tilde_seen = True
+    if tilde_seen and not workspace_path:
+        # Don't expand on the host; the host's $HOME != the container's $HOME.
+        # Leaving workspace_path empty surfaces a clarifying checkpoint in
+        # workspace_setup_node, which is the correct path for ambiguous input.
+        pass
 
     topic = {"summary": response_str, "research_field": None, "venue": None, "keywords": []}
 
@@ -1398,7 +1421,7 @@ def pi_toolkit_ratify(
 
     # On accept, the full proposed_toolkit moves to ratified_toolkit.
     response_text = str(pi_response).lower()
-    is_accept = "accept" in response_text
+    is_accept = (not is_redirect_token(response_text)) and "accept" in response_text
     ratified = list(proposed) if is_accept else []
 
     return {
@@ -1602,7 +1625,7 @@ def pi_bootstrap_ratify(
     )
     pi_response = interrupt_fn(payload)
     response_text = str(pi_response).lower()
-    is_accept = "accept" in response_text or "approve" in response_text
+    is_accept = (not is_redirect_token(response_text)) and ("accept" in response_text or "approve" in response_text)
     ratified = list(proposed_ids) if is_accept else []
 
     remaining = [d for d in pending if d.get("source_node") != "bootstrap_propose"]

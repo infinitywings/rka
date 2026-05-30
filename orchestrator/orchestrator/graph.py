@@ -47,6 +47,7 @@ from langgraph.types import interrupt as lg_interrupt
 from orchestrator.llm_client import SDKClient
 from orchestrator.mcp_client import MCPClient
 from orchestrator.nodes import brain, executor, pi, utility
+from orchestrator.response_tokens import is_redirect_token
 from orchestrator.state import ResearchWorkflowState
 
 
@@ -64,6 +65,10 @@ def _latest_interrupt_response(state: dict) -> str:
 
 def _route_after_pi_greenlight(state: dict) -> str:
     response = _latest_interrupt_response(state)
+    # Sentinel short-circuit — closes the substring-smuggling bug where a
+    # PI correction like "I cannot approve this" would route to accept.
+    if is_redirect_token(response):
+        return "escalation_router"
     return "backbrief_draft" if "approve" in response else "escalation_router"
 
 
@@ -87,7 +92,45 @@ def _route_after_pi_decision(state: dict) -> str:
     # before final_synthesis closes the run. On reject/escape, escalate
     # directly (no writes to commit).
     response = _latest_interrupt_response(state)
+    # Sentinel short-circuit — prevents a PI correction containing the word
+    # "accept" (e.g. "do not accept this — redo") from bypassing the
+    # TWO-TAP ratification gate via substring match.
+    if is_redirect_token(response):
+        return "escalation_router"
     return "execute_ratified_actions" if "accept" in response else "escalation_router"
+
+
+def _route_after_execute_ratified_actions(state: dict) -> str:
+    """EC8 set-identity guard (Phase D2.4 empirical follow-up).
+
+    Before this guard, execute_ratified_actions appended ErrorRecords for
+    each failed WRITE_TOOLS dispatch BUT the graph then unconditionally
+    advanced to final_synthesis → pi_acceptance, surfacing the failures
+    only as an `error_count` in the pi_acceptance payload. Concrete
+    impact observed on thr_19e790f90b4f9301179: PI ratified 4 actions,
+    PA-3 (rka_submit_checkpoint) and PA-4 (rka_submit_report) failed
+    with TypeError on an adapter signature mismatch — and the graph
+    treated the run as "complete-class" instead of escalating. EC8 says
+    ratified MUST equal proposed; partial dispatch violates the
+    invariant and should escalate loud, not silently advance.
+
+    Routing rule: if execute_ratified_actions accumulated ANY
+    ErrorRecord with node_name='execute_ratified_actions', route to
+    escalation_router so the PI sees the partial-dispatch failure as
+    an escalation context (not buried in error_count on a pi_acceptance
+    payload that looks complete). On clean dispatch (zero errors), or
+    on no-op (state['ratified_actions'] was empty), proceed to
+    final_synthesis as before.
+    """
+    errors = state.get("errors", []) or []
+    erroring_actions = [
+        e for e in errors
+        if isinstance(e, dict)
+        and e.get("node_name") == "execute_ratified_actions"
+    ]
+    if erroring_actions:
+        return "escalation_router"
+    return "final_synthesis"
 
 
 # ---------------------------------------------------------------------------
@@ -223,10 +266,22 @@ def build_graph(
         },
     )
 
-    # Phase 2.7 T3f: execute_ratified_actions sits between pi_decision_select
-    # (accept path) and final_synthesis. The node is a no-op when
-    # state["ratified_actions"] is empty, so no extra routing logic needed.
-    sg.add_edge("execute_ratified_actions", "final_synthesis")
+    # Phase 2.7 T3f / Phase D2.4: execute_ratified_actions sits between
+    # pi_decision_select (accept path) and final_synthesis. EC8 set-
+    # identity guard: if ANY ratified action's dispatch raised an error,
+    # route to escalation_router so the partial-dispatch failure escalates
+    # explicitly instead of being buried as an error_count on a
+    # pi_acceptance payload that otherwise looks "complete-class". On
+    # zero errors (including the no-op state['ratified_actions'] == []
+    # case), proceed to final_synthesis as before.
+    sg.add_conditional_edges(
+        "execute_ratified_actions",
+        _route_after_execute_ratified_actions,
+        {
+            "final_synthesis": "final_synthesis",
+            "escalation_router": "escalation_router",
+        },
+    )
     sg.add_edge("final_synthesis", "pi_acceptance")
     sg.add_edge("escalation_router", "pi_acceptance")
     sg.add_edge("pi_acceptance", END)

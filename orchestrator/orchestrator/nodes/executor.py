@@ -146,7 +146,33 @@ EXECUTOR_SYSTEM = (
     "placeholder strings like `\"REQUIRES_PA1_DECISION_ID\"` — they pass "
     "through unmodified to the dispatcher and the call fails at the RKA "
     "API boundary. If a chain you need can't be expressed in this syntax, "
-    "escalate via `rka_submit_checkpoint` describing the structure."
+    "escalate via `rka_submit_checkpoint` describing the structure.\n\n"
+    # Phase D2 — built-in filesystem tools (Bash/Read/Write/Edit/Grep/Glob/
+    # WebFetch/WebSearch) are granted to the subprocess for actual mission
+    # work. The Phase-2.7 read-only-subprocess invariant is preserved at the
+    # RKA layer (writes still flow through pi_decision_select → ratified
+    # actions); built-in FS tools touch the PI's workspace, NOT RKA state.
+    "Filesystem tools. Bash, Read, Write, Edit, Grep, Glob, WebFetch, "
+    "WebSearch are available to you. Use them to actually perform mission "
+    "work: read the workspace (PI's project files at HOST_WORKSPACE_ROOT, "
+    "mounted at the same absolute path as on the host), probe `.env` for "
+    "secrets your mission needs, run Python via `Bash` for analysis or "
+    "library-version checks, write outputs to `{workspace_path}/results/` "
+    "or wherever the mission's scope says. These tools operate on the "
+    "PI's workspace, NOT on RKA state — they do NOT replace the "
+    "`proposed_actions` ratification gate: any RKA write (rka_add_note, "
+    "rka_add_decision, rka_submit_report, rka_update_*, etc.) MUST still "
+    "go through `proposed_actions` so the PI can ratify. The split is: "
+    "(a) Bash/Read/Write/Edit/Grep/Glob/WebFetch/WebSearch = filesystem "
+    "actions, unratified, scoped to the PI's mounted workspace; (b) "
+    "rka_* WRITE_TOOLS via proposed_actions = knowledge-base writes, "
+    "ratified, scoped to RKA. NEVER call rka_add_* / rka_update_* / "
+    "rka_submit_* directly from a subprocess tool call — that path is "
+    "explicitly denied at the SDK level (WRITE_TOOLS are on "
+    "`disallowed_tools`). Run Bash commands that read or analyze freely; "
+    "be cautious about Bash that mutates the host shell environment, "
+    "deletes files, or contacts external services — when in doubt, "
+    "escalate via rka_submit_checkpoint."
 )
 
 

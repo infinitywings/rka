@@ -191,9 +191,12 @@ def test_onboarding_e2e_walks_through_three_interrupts_to_terminal(setup):
     assert seg2["parked_interrupt_type"] == "pi_toolkit_ratify"
     int2 = seg2["parked_interrupt_id"]
 
-    # Verify the resume token carried the topic text verbatim.
+    # Verify the resume token carried the topic text — wrapped in the
+    # Phase D2 REDIRECT_SENTINEL because action='correct' is the post-
+    # Phase-D2 path for PI freeform input (closes substring-routing bug).
+    from orchestrator.response_tokens import REDIRECT_SENTINEL
     resume_input = fake_graph.invocations[1][0]
-    assert resume_input.resume == topic_text
+    assert resume_input.resume == REDIRECT_SENTINEL + topic_text
 
     # Step 4: inbox shows the toolkit ratification payload.
     r = client.get(f"/inbox?workflow_thread_id={thread_id}")

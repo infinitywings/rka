@@ -47,6 +47,7 @@ from orchestrator.llm_client import SDKClient
 from orchestrator.mcp_client import MCPClient
 from orchestrator.nodes import bootstrap as bootstrap_nodes
 from orchestrator.nodes import pi
+from orchestrator.response_tokens import is_redirect_token
 from orchestrator.state import ResearchWorkflowState
 
 
@@ -74,6 +75,11 @@ def _route_after_fill_ack(state: dict) -> str:
     if last.get("node_name") != "pi_bootstrap_fill_ack":
         return END
     response = str(last.get("response", "")).lower()
+    # Sentinel short-circuit prevents a PI correction containing "accept"
+    # or "approve" (e.g. "approve once you reconfirm secrets") from
+    # routing past the ratification gate via substring match.
+    if is_redirect_token(response):
+        return END
     return "bootstrap_verify" if ("accept" in response or "approve" in response) else END
 
 

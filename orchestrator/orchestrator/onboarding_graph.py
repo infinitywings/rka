@@ -38,6 +38,7 @@ from langgraph.types import interrupt as lg_interrupt
 from orchestrator.llm_client import SDKClient
 from orchestrator.mcp_client import MCPClient
 from orchestrator.nodes import onboarding, pi
+from orchestrator.response_tokens import is_redirect_token
 from orchestrator.state import ResearchWorkflowState
 
 
@@ -68,8 +69,14 @@ def _route_after_credentials_ready(state: dict) -> str:
     Accept emits 'accept' per the runner contract; reject yields
     'reject' which doesn't contain 'accept'. END short-circuits the
     finalize step + audit entry — PI rejected, no manifest commit.
+
+    Sentinel short-circuit prevents a PI correction containing the
+    word "accept" (e.g. "accept the manifest but fix typos") from
+    routing to finalize via substring match.
     """
     response = _latest_interrupt_response(state)
+    if is_redirect_token(response):
+        return END
     return "finalize" if "accept" in response else END
 
 

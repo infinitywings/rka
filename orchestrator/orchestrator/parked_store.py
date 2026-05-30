@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -91,6 +92,15 @@ class ParkedStore:
             isolation_level=None,  # autocommit; we manage transactions explicitly
         )
         self._conn.row_factory = sqlite3.Row
+        # Serializes _tx() — FastAPI dispatches handlers concurrently via
+        # asyncio.to_thread, and check_same_thread=False alone does NOT
+        # protect a single sqlite3 connection from interleaved BEGIN/COMMIT
+        # across threads. Two concurrent _tx() calls without this lock can
+        # raise OperationalError "cannot start a transaction within a
+        # transaction" or corrupt rollback semantics. RLock so a nested
+        # _tx() call from the same thread (rare but possible via helpers)
+        # doesn't self-deadlock.
+        self._tx_lock = threading.RLock()
         self._init_schema()
 
     def _init_schema(self) -> None:
@@ -193,14 +203,18 @@ class ParkedStore:
 
     @contextmanager
     def _tx(self) -> Iterator[sqlite3.Connection]:
-        """Single-statement transaction context."""
-        try:
-            self._conn.execute("BEGIN")
-            yield self._conn
-            self._conn.execute("COMMIT")
-        except Exception:
-            self._conn.execute("ROLLBACK")
-            raise
+        """Single-statement transaction context. Thread-safe via _tx_lock —
+        the shared sqlite3 connection (check_same_thread=False) cannot
+        otherwise survive concurrent BEGIN/COMMIT from threads dispatched
+        by FastAPI / asyncio.to_thread."""
+        with self._tx_lock:
+            try:
+                self._conn.execute("BEGIN")
+                yield self._conn
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
 
     # -----------------------------------------------------------------
     # workflow_runs
@@ -393,7 +407,16 @@ class ParkedStore:
 
     def cancel_run(self, workflow_thread_id: str) -> int:
         """Mark all pending interrupts for the run as cancelled, set run
-        status='cancelled'. Returns the count of cancelled interrupts."""
+        status='cancelled'. Returns the count of cancelled interrupts.
+
+        Idempotent and TERMINAL-SAFE: cancellation only takes effect on
+        runs whose current status is 'running' or 'awaiting_pi'. A run
+        already in 'complete' / 'escalated' / 'failed' / 'cancelled' is
+        left untouched — preventing a late cancel call from overwriting
+        a successful terminal_state with 'cancelled' (and losing the
+        original outcome) when the segment happens to finish during the
+        cancel window.
+        """
         with self._tx() as c:
             cur = c.execute(
                 "UPDATE parked_interrupts SET status = 'cancelled', "
@@ -404,10 +427,40 @@ class ParkedStore:
             count = cur.rowcount
             c.execute(
                 "UPDATE workflow_runs SET status = 'cancelled', "
-                "updated_at = ? WHERE workflow_thread_id = ?",
+                "updated_at = ? "
+                "WHERE workflow_thread_id = ? "
+                "  AND status IN ('running', 'awaiting_pi')",
                 (_now_iso(), workflow_thread_id),
             )
         return count
+
+    def reap_orphaned_running_runs(
+        self, *, last_error: str = "daemon restart"
+    ) -> int:
+        """Mark any workflow_runs left in status='running' as 'failed' with
+        last_error so the PI session sees the orphan instead of polling a
+        run nothing is driving.
+
+        Called from the FastAPI lifespan startup so a prior process that
+        crashed / was SIGTERM'd / OOM-killed during an async-resume
+        background segment doesn't leave runs permanently in 'running'.
+        Conservative scope: only 'running' rows; 'awaiting_pi' rows are
+        durably parked (the PI's next response resumes them) so they
+        don't need reaping.
+
+        Returns the count of rows reaped.
+        """
+        with self._tx() as c:
+            cur = c.execute(
+                "UPDATE workflow_runs "
+                "SET status = 'failed', "
+                "    terminal_state = 'failed', "
+                "    last_error = ?, "
+                "    updated_at = ? "
+                "WHERE status = 'running'",
+                (last_error[:500], _now_iso()),
+            )
+            return cur.rowcount
 
     # -----------------------------------------------------------------
     # project_workspaces — PI-provided workspace path per project

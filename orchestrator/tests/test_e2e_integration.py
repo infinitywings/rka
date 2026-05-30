@@ -271,7 +271,11 @@ def test_correction_passes_freeform_text_to_graph(stack):
     assert r.status_code == 200
 
     resume_input, _ = fake_graph.invocations[1]
-    assert resume_input.resume == correction
+    # Phase D2: action='correct' prepends REDIRECT_SENTINEL so substring
+    # routing can't smuggle a PI correction containing "approve"/"accept"
+    # into the accept branch.
+    from orchestrator.response_tokens import REDIRECT_SENTINEL
+    assert resume_input.resume == REDIRECT_SENTINEL + correction
 
     # Empty corrections rejected by pydantic before reaching the graph.
     r = client.post(f"/inbox/int_bogus/correct", json={"response_text": ""})
