@@ -24,7 +24,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -93,34 +93,89 @@ _CONTEXT7_TOOLS: tuple[str, ...] = (
     "resolve-library-id",
 )
 
-# Parent-side WRITE_TOOLS registry. Subprocess `disallowed_tools` mirrors this list
-# (prefixed); the orchestrator's `executor.execute_ratified_actions` node (T3) is the
-# only call site that invokes these. `rka_update_note` joins MCPClient Protocol in T3
-# (pre-registered here per T1 ratification).
+# Parent-side write-tool registry organized by CAPABILITY (Phase 2.14 —
+# capability-categories WRITE_TOOLS replacement). Each tool belongs to
+# exactly one capability bucket. WRITE_TOOLS is derived from this mapping
+# so adding a new RKA write requires only a row in `TOOL_CAPABILITIES`;
+# subprocess `disallowed_tools`, the dispatcher's allowlist check, and
+# the Brain/Executor prompt's tool enumeration all pick it up
+# automatically.
 #
-# Phase 2.13 (mis_01KRYZMEAT01SMNNXQXS3JRC4W T2; per dec_01KRYZGF8N1SNJX5TSP0GM77Z7
-# Option A): `rka_bulk_update` added as 7th entry. Closes the 10th trigger surfaced
-# empirically by Phase 2.12 — brain LLM methodologically chose rka_bulk_update for
-# cross-reference hygiene (target journal documented using it), but it was not
-# allowlisted. The matching Protocol method + RestMCPClient fanout adapter shipped
-# in T1 (commit bb6d008).
-WRITE_TOOLS: tuple[str, ...] = (
-    "rka_add_note",
-    "rka_add_decision",
-    "rka_submit_checkpoint",
-    "rka_submit_report",
-    "rka_create_mission",
-    "rka_update_note",
-    "rka_bulk_update",
-    # Phase-A2 (agentic, PI-ratified scope expansion) — added after
-    # Phase-1 IoT-edge-LLM mission's first pi_decision_select surfaced
-    # the gap. Brain proposed these tools (real, exposed by the rka MCP
-    # server) but execute_ratified_actions correctly rejected them
-    # because they were not in WRITE_TOOLS. Now allowlisted with
-    # matching MCPClient Protocol methods + RestMCPClient impls.
-    "rka_update_mission_status",
-    "rka_ingest_document",
+# Capabilities also let future workflows authorize a subset
+# ("this mission may RECORD_KNOWLEDGE + EXECUTION_GATES but NOT
+# MISSION_LIFECYCLE"). The MVP wires capability tracking into
+# `execute_ratified_actions` — caller-side restriction wiring is
+# additive (`allowed_capabilities` kwarg, defaults to "all"; pre-2.14
+# behavior preserved).
+#
+# Capability buckets (the load-bearing taxonomy):
+#   - RECORD_KNOWLEDGE   — add new journal/decision/claim entries
+#   - UPDATE_KNOWLEDGE   — mutate existing entries
+#   - MISSION_LIFECYCLE  — create + transition missions
+#   - EXECUTION_GATES    — submit checkpoints + reports (the
+#                          execution-side ratification surface)
+#   - INGESTION          — ingest external documents into RKA
+#
+# Phase 2.13 (mis_01KRYZMEAT01SMNNXQXS3JRC4W T2; per
+# dec_01KRYZGF8N1SNJX5TSP0GM77Z7 Option A): `rka_bulk_update` joined
+# the registry. The original Phase 2.7 T1 ratification picked up
+# `rka_update_note` + the 7-entry base; Phase-A2 added
+# `rka_update_mission_status` + `rka_ingest_document`; Phase 2.14
+# preserves all of these and reorganizes into capability buckets.
+
+Capability = Literal[
+    "record_knowledge",
+    "update_knowledge",
+    "mission_lifecycle",
+    "execution_gates",
+    "ingestion",
+]
+
+ALL_CAPABILITIES: tuple[Capability, ...] = (
+    "record_knowledge",
+    "update_knowledge",
+    "mission_lifecycle",
+    "execution_gates",
+    "ingestion",
 )
+
+TOOL_CAPABILITIES: dict[str, Capability] = {
+    "rka_add_note": "record_knowledge",
+    "rka_add_decision": "record_knowledge",
+    "rka_update_note": "update_knowledge",
+    "rka_bulk_update": "update_knowledge",
+    "rka_create_mission": "mission_lifecycle",
+    "rka_update_mission_status": "mission_lifecycle",
+    "rka_submit_checkpoint": "execution_gates",
+    "rka_submit_report": "execution_gates",
+    "rka_ingest_document": "ingestion",
+}
+
+
+def tools_for_capabilities(
+    capabilities: tuple[Capability, ...] | list[Capability] | None = None,
+) -> tuple[str, ...]:
+    """Return the tool names allowed under `capabilities`.
+
+    `None` (default) → all capabilities (full WRITE_TOOLS surface).
+    Order matches `TOOL_CAPABILITIES` insertion order for stable
+    diffs/tests.
+    """
+    if capabilities is None:
+        return tuple(TOOL_CAPABILITIES.keys())
+    wanted = set(capabilities)
+    return tuple(t for t, c in TOOL_CAPABILITIES.items() if c in wanted)
+
+
+def capability_of(tool: str) -> Capability | None:
+    """Return the capability bucket for `tool`, or None if `tool` is not
+    a registered write tool."""
+    return TOOL_CAPABILITIES.get(tool)
+
+
+# WRITE_TOOLS derived from TOOL_CAPABILITIES. Preserved as a tuple so
+# call sites that import it continue to work unchanged.
+WRITE_TOOLS: tuple[str, ...] = tuple(TOOL_CAPABILITIES.keys())
 
 
 def _prefixed_tools(names: tuple[str, ...], server: str = _MCP_SERVER_NAME) -> list[str]:
@@ -393,6 +448,98 @@ def _scrubbed_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k not in _ENV_VARS_TO_SCRUB}
 
 
+# ---------------------------------------------------------------------------
+# Phase G2 — FS Actuator can_use_tool hook
+# ---------------------------------------------------------------------------
+#
+# The Phase G MVP shipped `orchestrator/fs_actuator.py` with a `classify_fs_action`
+# policy and prompt-level Brain/Executor guidance to self-classify each FS
+# action. Phase G2 closes the enforcement loop: the SDK's `can_use_tool`
+# callback fires in the parent process for every tool invocation the
+# subprocess attempts. We consult `classify_fs_action` and:
+#
+#   - allow `read` and `scoped_write`  (return PermissionResultAllow)
+#   - deny `ratify_required` with a message telling the LLM to use
+#     `proposed_fs_actions` instead (return PermissionResultDeny)
+#   - deny `deny` with a no-override message + suggestion to escalate
+#
+# Non-FS tools (rka_*, context7, etc.) are auto-allowed by the hook — the
+# subprocess's `allowed_tools` / `disallowed_tools` lists are still the
+# primary mechanism for read-vs-write scoping at the MCP layer; this hook
+# adds the FS-Actuator policy on top.
+
+
+def _build_fs_actuator_hook(workspace_path: str):
+    """Return an async `can_use_tool` callable wired with `workspace_path`.
+
+    Importing the SDK + fs_actuator inside the closure keeps this module
+    importable in tooling envs that don't have either installed; the
+    hook is only constructed at SDK-call time inside _async_complete.
+    """
+
+    async def can_use_tool(tool_name, tool_input, context):  # noqa: ARG001
+        import claude_agent_sdk as sdk
+
+        from orchestrator import fs_actuator
+
+        # Phase G2 defense-in-depth (adversarial-review H1): if any
+        # mcp__rka__* WRITE_TOOLS-prefixed call reaches the hook, refuse
+        # it explicitly. Today the SDK's `disallowed_tools` blocks
+        # before `can_use_tool` fires, so this branch is unreachable.
+        # But if an upstream SDK change ever inverts that precedence,
+        # this guard prevents silent regression of the Phase 2.7
+        # Option C "no writes from subprocess" invariant.
+        for write_tool in WRITE_TOOLS:
+            mcp_prefixed = f"mcp__{_MCP_SERVER_NAME}__{write_tool}"
+            if tool_name == mcp_prefixed:
+                return sdk.PermissionResultDeny(
+                    message=(
+                        f"Phase 2.7 Option C invariant: {tool_name} is a "
+                        f"WRITE_TOOLS-class operation and may not run "
+                        f"from the subprocess. Emit it in proposed_actions "
+                        f"instead so the orchestrator's parent process "
+                        f"dispatches it after PI ratification."
+                    ),
+                    interrupt=False,
+                )
+
+        # Non-mutating-FS tools auto-allowed — the MCP layer's
+        # allowed_tools / disallowed_tools already constrain RKA writes.
+        if tool_name not in fs_actuator.FS_ACTUATOR_MUTATING_TOOLS:
+            return sdk.PermissionResultAllow()
+
+        cls, rationale = fs_actuator.classify_fs_action(
+            {"tool": tool_name, "args": tool_input or {}},
+            workspace_path=workspace_path,
+        )
+        if cls in ("read", "scoped_write"):
+            return sdk.PermissionResultAllow()
+        if cls == "ratify_required":
+            return sdk.PermissionResultDeny(
+                message=(
+                    f"Phase G2 FS-Actuator policy: {tool_name} requires PI "
+                    f"ratification — {rationale}. Do NOT retry as a direct "
+                    f"call. Instead emit this in your `proposed_fs_actions` "
+                    f"block; the orchestrator will dispatch it after the PI "
+                    f"accepts via pi_decision_select."
+                ),
+                interrupt=False,
+            )
+        # cls == "deny" — no PI override available
+        return sdk.PermissionResultDeny(
+            message=(
+                f"Phase G2 FS-Actuator policy: {tool_name} DENIED — "
+                f"{rationale}. This operation has no PI-ratification path "
+                f"available. Escalate via rka_submit_checkpoint with the "
+                f"mission scope explicitly rewritten to avoid the denied "
+                f"operation."
+            ),
+            interrupt=False,
+        )
+
+    return can_use_tool
+
+
 class _RealSDKClient:
     """Production `SDKClient` wrapping `claude_agent_sdk.query`.
 
@@ -411,6 +558,7 @@ class _RealSDKClient:
         *,
         env: dict[str, str] | None = None,
         project_id: str | None = None,
+        workspace_path: str | None = None,
     ) -> None:
         # Phase 2.9 T1: `project_id` propagates parent's project context to
         # the claude-agent-sdk subprocess's `rka mcp` stdio child via
@@ -421,11 +569,31 @@ class _RealSDKClient:
         # BRAIN_SYSTEM + nodes/executor.py EXECUTOR_SYSTEM prompts.)
         self._env = env if env is not None else _scrubbed_env()
         self._project_id = project_id
+        # Phase G2: workspace_path drives the `can_use_tool` hook's
+        # workspace-escape detection. When None, falls back to
+        # HOST_WORKSPACE_ROOT — broader but still meaningfully scoped
+        # (host root, not /etc). For mission workflows the runner should
+        # pass the project-specific workspace_path explicitly to get
+        # per-project containment.
+        self._workspace_path = workspace_path
         # Phase E4: cost of the most recent complete() call in USD,
         # extracted from the SDK's ResultMessage. Nodes read this after
         # complete() and add to state["usd_spent"] for budget tracking.
         # Reset to 0.0 at the start of every complete().
         self.last_call_cost_usd: float = 0.0
+
+    def _resolve_workspace_path(self) -> str:
+        """Phase G2: pick the workspace_path for the FS Actuator hook.
+
+        Priority: explicit `self._workspace_path` (set by the runner when
+        a workflow has a project-specific workspace) → HOST_WORKSPACE_ROOT
+        env var (broader fallback — host root, not /etc) → empty string
+        (in which case `classify_fs_action` skips Write/Edit escape
+        detection but still enforces DENY-tier bash patterns).
+        """
+        if self._workspace_path:
+            return self._workspace_path
+        return os.environ.get("HOST_WORKSPACE_ROOT", "").strip()
 
     def complete(
         self,
@@ -453,6 +621,13 @@ class _RealSDKClient:
 
         if mcp_servers:
             include_context7 = _CONTEXT7_SERVER_NAME in mcp_servers
+            # Phase G2: install the FS-Actuator can_use_tool hook so
+            # destructive Bash/Write/Edit invocations from the subprocess
+            # are intercepted in the parent process and routed per the
+            # `fs_actuator.classify_fs_action` policy. SDK MCP/RKA tools
+            # are always allowed by the hook (it only enforces FS
+            # mutating-tool policy); RKA writes remain disallowed_tools
+            # so they still flow through `proposed_actions` → PI ratify.
             options = sdk.ClaudeAgentOptions(
                 system_prompt=system,
                 env=self._env,
@@ -464,6 +639,9 @@ class _RealSDKClient:
                 allowed_tools=_all_allowed_subprocess_tools(include_context7),
                 disallowed_tools=_prefixed_tools(WRITE_TOOLS),
                 permission_mode="dontAsk",   # deny anything off-allowlist silently
+                can_use_tool=_build_fs_actuator_hook(
+                    self._resolve_workspace_path(),
+                ),
             )
         else:
             logger.warning(
@@ -499,7 +677,11 @@ class _RealSDKClient:
         return "".join(parts)
 
 
-def make_sdk(project_id: str | None = None) -> SDKClient:
+def make_sdk(
+    project_id: str | None = None,
+    *,
+    workspace_path: str | None = None,
+) -> SDKClient:
     """Construct the production SDK client.
 
     Args:
@@ -510,6 +692,13 @@ def make_sdk(project_id: str | None = None) -> SDKClient:
             surfaced this gap empirically; Phase 2.9 closes it. Defaults
             to None for back-compat (pre-Phase-2.9 callers continue to
             work; subprocess falls through to its default project session).
+        workspace_path: Phase G2 — explicit workspace_path for the
+            FS-Actuator can_use_tool hook to enforce Write/Edit escape
+            detection against. When None, the hook falls back to
+            `HOST_WORKSPACE_ROOT` env var (broader but still meaningful).
+            For mission workflows the runner should pass the project-
+            specific workspace to get per-project containment instead of
+            host-root containment.
 
     Pre-flight checks (in order):
       1. Auth-path verification — emit a single INFO log naming the
@@ -535,7 +724,11 @@ def make_sdk(project_id: str | None = None) -> SDKClient:
             "Keychain entry, no OAuth token in env). Run `claude login`."
         )
 
-    return _RealSDKClient(env=_scrubbed_env(), project_id=project_id)
+    return _RealSDKClient(
+        env=_scrubbed_env(),
+        project_id=project_id,
+        workspace_path=workspace_path,
+    )
 
 
 __all__ = [
@@ -551,4 +744,10 @@ __all__ = [
     "_find_rka_mcp_binary",
     "_build_mcp_servers_config",
     "_all_allowed_subprocess_tools",
+    "_build_fs_actuator_hook",  # Phase G2
+    "Capability",  # Phase 2.14 — capability categories
+    "ALL_CAPABILITIES",
+    "TOOL_CAPABILITIES",
+    "tools_for_capabilities",
+    "capability_of",
 ]

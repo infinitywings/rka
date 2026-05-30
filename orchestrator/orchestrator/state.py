@@ -225,6 +225,15 @@ class ResearchWorkflowState(TypedDict, total=False):
     # each in a single workflow pass.
     proposed_actions: list[dict]
     ratified_actions: list[dict]
+    # Phase 2.14 (agentic) — capability-scoped dispatch. When set to a
+    # non-empty list of capability strings (e.g. ["record_knowledge",
+    # "execution_gates"]), `execute_ratified_actions` rejects any tool
+    # whose capability is NOT in this list with a
+    # `ratified_action_capability_not_allowed` ErrorRecord. Empty or
+    # missing = no restriction (the workflow may dispatch any tool in
+    # WRITE_TOOLS). Set by mission-creation flow per the mission's
+    # ratified scope.
+    allowed_capabilities: list[str]
 
     # Phase D (agentic) — onboarding subgraph state.
     # `topic_metadata` is set by pi_onboarding_topic (a TopicMetadata

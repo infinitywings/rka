@@ -19,7 +19,11 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from orchestrator.llm_client import SDKClient, WRITE_TOOLS
+from orchestrator.llm_client import (
+    SDKClient,
+    WRITE_TOOLS,
+    capability_of,  # Phase 2.14
+)
 from orchestrator.mcp_client import MCPClient
 from orchestrator.state import ArtifactRef, ErrorRecord, ResearchWorkflowState
 
@@ -705,14 +709,48 @@ def execute_ratified_actions(
     ErrorRecord and skip the offending action without aborting the
     rest of the chain.
 
+    Phase 2.14 (agentic) — capability-aware dispatch. Each ratified
+    tool's capability is read from `llm_client.TOOL_CAPABILITIES`. If
+    `state["allowed_capabilities"]` is set (a non-empty list of
+    capability strings), tools whose capability is NOT in that list are
+    rejected with a `ratified_action_capability_not_allowed`
+    ErrorRecord. When the field is absent or empty, all capabilities
+    are allowed (pre-2.14 behavior preserved).
+
     A no-op when `state["ratified_actions"]` is empty (rejected, escaped,
     or never populated). This means the node sits unconditionally between
     `pi_decision_select` and `final_synthesis` in the graph without
     requiring routing logic to skip it.
     """
-    actions = state.get("ratified_actions", []) or []
+    # Phase 2.14: capability allowlist. Empty / missing → no restriction.
+    # A malformed value (e.g., a plain string instead of list-of-strings)
+    # is treated as missing AND surfaces a one-shot ErrorRecord so the
+    # workflow operator sees the typo instead of silently losing the
+    # capability restriction.
+    raw_caps = state.get("allowed_capabilities")
     new_artifacts: list[ArtifactRef] = []
     new_errors: list[ErrorRecord] = []
+    if raw_caps is None or raw_caps == [] or raw_caps == ():
+        allowed_caps: set[str] = set()
+    elif isinstance(raw_caps, (list, tuple, set)) and all(
+        isinstance(c, str) for c in raw_caps
+    ):
+        allowed_caps = {c for c in raw_caps}
+    else:
+        allowed_caps = set()
+        new_errors.append(
+            _make_error(
+                "execute_ratified_actions",
+                "ratified_action_capability_allowlist_malformed",
+                (
+                    f"state['allowed_capabilities']={raw_caps!r} is not a "
+                    f"list of capability strings; ignored. Pre-2.14 "
+                    f"behavior (no restriction) applies. Fix the workflow "
+                    f"that populated this field."
+                ),
+            )
+        )
+    actions = state.get("ratified_actions", []) or []
     # 1-indexed map of action-position → returned rka_id; populated as we
     # dispatch successfully. Phase-C chain substitution consults this.
     previous_results: dict[int, str] = {}
@@ -731,7 +769,8 @@ def execute_ratified_actions(
         tool = action.get("tool", "")
         args = action.get("args", {}) or {}
 
-        # Defense in depth: only the static WRITE_TOOLS registry is callable.
+        # Defense in depth: only the WRITE_TOOLS registry (now derived
+        # from TOOL_CAPABILITIES per Phase 2.14) is callable.
         if tool not in WRITE_TOOLS:
             new_errors.append(
                 _make_error(
@@ -746,6 +785,31 @@ def execute_ratified_actions(
                 )
             )
             continue
+
+        # Phase 2.14: capability-scoped restriction. When the workflow
+        # state has narrowed the allowed capability set (a non-empty
+        # `allowed_capabilities` list), each action's tool must belong
+        # to a capability the workflow has authorized. Empty allowlist
+        # = no restriction (pre-2.14 behavior).
+        if allowed_caps:
+            tool_capability = capability_of(tool)
+            if tool_capability is None or tool_capability not in allowed_caps:
+                new_errors.append(
+                    _make_error(
+                        "execute_ratified_actions",
+                        "ratified_action_capability_not_allowed",
+                        (
+                            f"PA-{idx}: tool {tool!r} (capability="
+                            f"{tool_capability!r}) is not in this "
+                            f"workflow's allowed_capabilities="
+                            f"{sorted(allowed_caps)!r}. Either widen the "
+                            f"workflow's capability allowlist or rewrite "
+                            f"the action to use a tool from an authorized "
+                            f"capability."
+                        ),
+                    )
+                )
+                continue
 
         method = getattr(mcp, tool, None)
         if method is None:
