@@ -666,8 +666,29 @@ class _RealSDKClient:
         # Reset cost tracker; populated from ResultMessage if the SDK emits one.
         self.last_call_cost_usd = 0.0
 
+        # Phase G2 follow-up — when `can_use_tool` is set on options, the SDK
+        # requires `prompt` to be an `AsyncIterable[dict]`, not a string. We
+        # wrap the string prompt in a one-shot async generator emitting the
+        # canonical streaming-input shape per claude_agent_sdk.query docstring:
+        #   { "type": "user",
+        #     "message": {"role": "user", "content": "..."},
+        #     "parent_tool_use_id": None,
+        #     "session_id": "..." }
+        # Empirically surfaced as `RuntimeError: can_use_tool callback requires
+        # streaming mode. Please provide prompt as an AsyncIterable instead of
+        # a string.` on the first Run-5 launch after Phase G2 landed.
+        async def _streaming_prompt():
+            yield {
+                "type": "user",
+                "message": {"role": "user", "content": prompt},
+                "parent_tool_use_id": None,
+                "session_id": "rka-orchestrator-brain-executor",
+            }
+
+        prompt_input = _streaming_prompt() if mcp_servers else prompt
+
         parts: list[str] = []
-        async for message in sdk.query(prompt=prompt, options=options):
+        async for message in sdk.query(prompt=prompt_input, options=options):
             if isinstance(message, sdk.AssistantMessage):
                 for block in message.content:
                     text = getattr(block, "text", None)
