@@ -69,7 +69,22 @@ mcp = FastMCP("rka-orchestrator", instructions=ORCHESTRATOR_INSTRUCTIONS)
 
 
 def _client() -> httpx.AsyncClient:
-    return httpx.AsyncClient(base_url=API_URL, timeout=API_TIMEOUT)
+    """Build an AsyncClient with HTTP keep-alive disabled.
+
+    See `rka/mcp/server.py:_client` for the full rationale. Same bug, same
+    fix: macOS Docker Desktop bridge connections to the daemon (here, the
+    orchestrator daemon on 9713) can wedge in CLOSE_WAIT after the server
+    closes its side, and the default httpx pool tries to reuse the stale
+    entry on the next call, blocking until the OS times it out. Disabling
+    keep-alive (`max_keepalive_connections=0`) forces a fresh TCP connection
+    per call. Empirically observed on `orchestrator_correct` after several
+    successful calls in the same session.
+    """
+    return httpx.AsyncClient(
+        base_url=API_URL,
+        timeout=API_TIMEOUT,
+        limits=httpx.Limits(max_keepalive_connections=0, max_connections=10),
+    )
 
 
 def _raise_with_detail(r: httpx.Response) -> None:
