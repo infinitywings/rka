@@ -1,5 +1,22 @@
 # Orchestrator Cross-Run Correction Channel — Architectural Recommendation
 
+> **See also: Phase-X² (In-Run Redraft Channel) — sibling fix landed
+> after this doc.** Phase-X (this doc) solved the *cross-run*
+> durability gap (PI redirect text evaporated when a workflow_thread
+> terminated). Phase-X² (CLAUDE.md "Phase-X² — In-Run Redraft Channel"
+> section + `confirmation_brief_redraft` node + bounded back-edge to
+> `confirmation_brief`) solved the *in-run* counterpart: a `correct`
+> action at `pi_greenlight` used to dead-end into
+> `escalation_router → pi_acceptance` instead of looping back to a
+> Brain redraft. Both channels now converge on the same
+> `state['run_overrides']` dict (cross-run via
+> `prior_redirects` + `pi_instructions`; in-run via
+> `in_run_redirects`) and share one prompt-injection-defended
+> `_format_pi_overrides_block` formatter. Read this doc for the
+> Phase-X cross-run design, then read CLAUDE.md's Phase-X² section
+> for the in-run loop semantics and the bounded-redraft (`MAX_GREENLIGHT_REDRAFTS=3`)
+> contract.
+
 ## 1. Executive Summary
 
 - **The gap.** PI corrections issued via `pi_greenlight` `correct` land in two thread-scoped sinks (`state["interrupts"]` in LangGraph SqliteSaver; `parked_interrupts.response_text` keyed by `workflow_thread_id`), but the next `orchestrator_run_start` mints a fresh `workflow_thread_id`, a fresh `make_initial_state` (interrupts=[]), and `_build_strategy_prompt` reads neither sink. **There is no surface in the prompt-build path that is (mission-scoped) ∧ (durable across threads) ∧ (read by Brain).** Redirects evaporate.

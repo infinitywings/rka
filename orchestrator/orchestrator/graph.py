@@ -1,20 +1,29 @@
 """LangGraph topology + SqliteSaver checkpointer.
 
-Wires all 15 nodes into a flat `StateGraph` keyed on `ResearchWorkflowState`.
-Phase 1 keeps the topology single-thread + linear-with-escalation-shortcuts;
-no Send-API parallelism, no subgraphs. T7 deliverable.
+Wires all 18 mission-graph nodes into a flat `StateGraph` keyed on
+`ResearchWorkflowState`. Phase 1 kept the topology single-thread +
+linear-with-escalation-shortcuts; Phase-X² (`confirmation_brief_redraft`)
+introduced the first cycle — a bounded back-edge for in-run pi_greenlight
+redirects. No Send-API parallelism, no subgraphs. T7 deliverable.
 
 Each node-callable is bound to its (sdk, mcp[, interrupt_fn]) dependencies
 via `functools.partial`, so the function LangGraph receives accepts only
 `(state,)` — keeping the engine-facing surface uniform.
 
-Topology (16 nodes; 5 conditional branches):
+Topology (18 mission-graph nodes; 7 conditional branches):
 
   START
     → strategy_node
-    → confirmation_brief
+    → confirmation_brief  ◄────────────────────────┐
     → pi_greenlight     ── approve → backbrief_draft
-                       └─ else    → escalation_router
+                       ├─ correct (sentinel) → confirmation_brief_redraft ┤
+                       │                                                  │
+                       │   (Phase-X²: redraft node mutates state, then    │
+                       │    loops back to confirmation_brief — bounded   │
+                       │    at MAX_GREENLIGHT_REDRAFTS; on cap-exceed    │
+                       │    emits real ErrorRecord and falls to          │
+                       │    escalation_router)                           │
+                       └─ reject/other → escalation_router
     → backbrief_draft
     → gate1_validation  ── approved   → mission_execute
                        └─ redirected → escalation_router
@@ -26,9 +35,11 @@ Topology (16 nodes; 5 conditional branches):
     → submit_report
     → cluster_review
     → decision_present
-    → pi_decision_select ── accept → execute_ratified_actions → final_synthesis
+    → pi_decision_select ── accept → execute_ratified_actions
+                                       ── clean → execute_ratified_fs_actions
+                                       └─ partial-dispatch → escalation_router
                          └─ else  → escalation_router
-    → execute_ratified_actions    # Phase 2.7 T3e — parent-side WRITE_TOOLS calls
+    → execute_ratified_fs_actions    # Gap 2 — parent-side FS dispatch
     → final_synthesis
     → pi_acceptance     → END
     escalation_router   → pi_acceptance
@@ -64,12 +75,43 @@ def _latest_interrupt_response(state: dict) -> str:
 
 
 def _route_after_pi_greenlight(state: dict) -> str:
+    """Three-way routing at the first-look brief-ratification gate:
+
+      approve (substring on a non-sentinel response)
+          → backbrief_draft       (happy path, proceed to Backbrief)
+      correct (REDIRECT_SENTINEL-prefixed response)
+          → confirmation_brief_redraft  (Phase-X² in-run loop-back; Brain
+            redrafts the brief with the PI's correction prepended to the
+            prompt, then re-parks pi_greenlight for ratification.
+            Bounded by MAX_GREENLIGHT_REDRAFTS — see
+            brain.confirmation_brief_redraft.)
+      reject / other (no sentinel, no "approve" substring)
+          → escalation_router      (hard reject of the framing; PI is
+            saying "this brief is fundamentally wrong, escalate")
+
+    The sentinel short-circuit MUST stay at the TOP, before any
+    substring match — closes the substring-smuggling class bug
+    (Phase D2.1) where "I cannot approve this" would otherwise route
+    to backbrief_draft. The fix is purely destination routing; the
+    sentinel detection itself is unchanged.
+    """
     response = _latest_interrupt_response(state)
-    # Sentinel short-circuit — closes the substring-smuggling bug where a
-    # PI correction like "I cannot approve this" would route to accept.
     if is_redirect_token(response):
-        return "escalation_router"
+        return "confirmation_brief_redraft"
     return "backbrief_draft" if "approve" in response else "escalation_router"
+
+
+def _route_after_confirmation_brief_redraft(state: dict) -> str:
+    """Phase-X²: the redraft node sets next_node_override='escalation_router'
+    when the redraft budget is exceeded (or on a defensive empty-redirect
+    / missing-record case), emitting a real ErrorRecord first so
+    escalation_router has a genuine error to classify. Happy path
+    (budget OK + sanitized text present) loops back to
+    confirmation_brief for the LLM redraft.
+    """
+    if state.get("next_node_override") == "escalation_router":
+        return "escalation_router"
+    return "confirmation_brief"
 
 
 def _route_after_gate1(state: dict) -> str:
@@ -174,9 +216,18 @@ def build_graph(
     """
     sg: StateGraph = StateGraph(ResearchWorkflowState)
 
-    # ---- 6 Brain nodes ----
+    # ---- 7 Brain nodes (Phase-X² added confirmation_brief_redraft) ----
     sg.add_node("strategy_node", _bind(brain.strategy_node, sdk, mcp))
     sg.add_node("confirmation_brief", _bind(brain.confirmation_brief, sdk, mcp))
+    # Phase-X² (In-Run Redraft Channel): owns the redraft policy
+    # (extract latest pi_greenlight redirect → sanitize → cap →
+    # increment counter). No LLM call here; downstream
+    # confirmation_brief picks up the sanitized redirect text from
+    # state['run_overrides']['in_run_redirects'].
+    sg.add_node(
+        "confirmation_brief_redraft",
+        _bind(brain.confirmation_brief_redraft, sdk, mcp),
+    )
     sg.add_node("decision_present", _bind(brain.decision_present, sdk, mcp))
     sg.add_node("cluster_review", _bind(brain.cluster_review, sdk, mcp))
     sg.add_node("gate1_validation", _bind(brain.gate1_validation, sdk, mcp))
@@ -229,6 +280,27 @@ def build_graph(
         _route_after_pi_greenlight,
         {
             "backbrief_draft": "backbrief_draft",
+            # Phase-X² in-run redraft loop-back. The sentinel
+            # (REDIRECT_SENTINEL-prefixed correct action) routes here;
+            # confirmation_brief_redraft mutates run_overrides +
+            # increments greenlight_redrafts, then routes back to
+            # confirmation_brief for the actual Brain redraft LLM
+            # call. Bounded by MAX_GREENLIGHT_REDRAFTS.
+            "confirmation_brief_redraft": "confirmation_brief_redraft",
+            "escalation_router": "escalation_router",
+        },
+    )
+    sg.add_conditional_edges(
+        "confirmation_brief_redraft",
+        _route_after_confirmation_brief_redraft,
+        {
+            # Happy redraft: back into confirmation_brief which
+            # re-builds the prompt with the just-appended
+            # in_run_redirects block at the top.
+            "confirmation_brief": "confirmation_brief",
+            # Cap exceeded / defensive escapes (missing record /
+            # empty text after sanitize): the node has already
+            # appended a real ErrorRecord.
             "escalation_router": "escalation_router",
         },
     )
@@ -324,14 +396,16 @@ def open_checkpointer(db_path: str | None = None) -> SqliteSaver:
 # Names exported (for T11 audit-symmetry)
 # ---------------------------------------------------------------------------
 
-# The 16 canonical node names in topology order. T11 audit-symmetry
+# The 18 canonical node names in topology order. T11 audit-symmetry
 # cross-checks this against the set of nodes registered in the graph
 # and the set of node names referenced from any state["current_node"]
 # assignment in the codebase.
 NODE_NAMES: tuple[str, ...] = (
-    # Brain (6)
+    # Brain (7) — Phase-X² added confirmation_brief_redraft (no-LLM
+    # state mutator that owns the in-run pi_greenlight redraft policy).
     "strategy_node",
     "confirmation_brief",
+    "confirmation_brief_redraft",
     "decision_present",
     "cluster_review",
     "gate1_validation",

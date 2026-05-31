@@ -111,8 +111,23 @@ def pi_greenlight(
     # allowed_capabilities (from mission spec, possibly empty) is
     # preserved. Empty proposed_capabilities = no override (we don't
     # null out the mission-set allowlist by accident).
+    #
+    # Phase-X² (latent-bug fix exposed by the in-run redraft loop):
+    # pi_greenlight's accept token is "approve" — `_ACCEPT_TOKEN_BY_TYPE`
+    # in runner.py maps pi_greenlight → "approve" (other gates use
+    # "accept"). The original check was `"accept" in response_text`,
+    # which is False for "approve" (the substring "accept" does NOT
+    # appear inside "approve"), so `is_accept` was always False at
+    # pi_greenlight and the proposed_capabilities → allowed_capabilities
+    # plumbing never fired on a legitimate approve. With the redraft
+    # cycling now exercising pi_greenlight more often, that path
+    # matters. Accept either substring; sentinel guard still short-
+    # circuits any "approve"-smuggling correct token.
     response_text = str(pi_response or "").lower()
-    is_accept = (not is_redirect_token(response_text)) and "accept" in response_text
+    is_accept = (
+        (not is_redirect_token(response_text))
+        and ("accept" in response_text or "approve" in response_text)
+    )
     remaining = [d for d in pending if d.get("source_node") != "confirmation_brief"]
     update: dict = {
         "current_phase": "pi_greenlight",

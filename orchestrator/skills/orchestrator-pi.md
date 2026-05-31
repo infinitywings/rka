@@ -143,8 +143,8 @@ guarantees a human-typed answer rather than your inference.
 ```
 AskUserQuestion("Respond to this interrupt?", [
     {label: "Accept", description: "Approve and continue"},
-    {label: "Reject", description: "Escalate (workflow ends or routes to escalation_router)"},
-    {label: "Correct", description: "Redirect with freeform direction"},
+    {label: "Reject", description: "Hard reject (escalation_router → terminal pi_acceptance)"},
+    {label: "Correct", description: "Redirect with freeform direction. At pi_greenlight: triggers Brain redraft (Phase-X²); at pi_acceptance: marks run escalated and ends. See gate semantics below."},
 ])
 ```
 
@@ -154,6 +154,43 @@ Then call:
 - **Reject** → `orchestrator_reject(interrupt_id, reason="...")`
 - **Correct** → ask the PI for the redirection text, then
   `orchestrator_correct(interrupt_id, response_text="<their text>")`
+
+#### What `correct` does at each gate (Phase-X² semantic)
+
+The redirect destination depends on the gate type — the PI should
+understand this BEFORE picking "Correct":
+
+- **`pi_greenlight` (Confirmation Brief, first-look)** — `correct`
+  loops back to a Brain redraft of the brief: the sanitized redirect
+  text is prepended to the next strategy prompt as an "IN-RUN PI
+  REDIRECT" block (top priority, supersedes mission body + cross-run
+  history), Brain re-generates the Confirmation Brief, and a fresh
+  `pi_greenlight` parks for ratification. Bounded at
+  `MAX_GREENLIGHT_REDRAFTS` (=3) in-run redrafts; the 4th `correct`
+  escalates with a real `greenlight_redraft_budget_exceeded` error so
+  the PI can adjudicate rather than spiral.
+- **`pi_decision_select` (TWO-TAP ratification, brain-proposed writes)**
+  — `correct` escalates the run via `escalation_router` → terminal
+  `pi_acceptance`. This is the autonomy-licensing gate; redrafting
+  write proposals mid-run is OUT of scope for this surface (file as
+  a follow-up if needed).
+- **`pi_acceptance` (terminal mission review)** — `correct` (or
+  `reject`) marks `terminal_state="escalated"` and ends the run.
+  There is no meaningful loopback target after `final_synthesis`.
+- **`pi_credentials_ready` / `pi_bootstrap_fill_ack` (onboarding /
+  Phase B)** — `correct`/`reject` ends the subgraph cleanly; the
+  PI re-enters via the slash command (state on disk persists where
+  applicable).
+
+If the PI wants their correction to survive across runs of the same
+mission (e.g. cancel + relaunch later), use `correct` on
+`pi_greenlight` — Phase-X also auto-rehydrates `pi_greenlight`
+redirects into the NEXT run's `prior_redirects` block. The in-run
+redraft channel (this PR, Phase-X²) and the cross-run channel
+(Phase-X, shipped earlier) compose: a redirect at `pi_greenlight`
+ALWAYS becomes part of the audit-tracked PI-overrides chain, whether
+the current run completes the redraft or terminates and a future
+run picks it up.
 
 ### For pi_decision_select (TWO-TAP — REQUIRED):
 

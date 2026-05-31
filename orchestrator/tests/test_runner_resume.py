@@ -503,8 +503,16 @@ def test_redirect_sentinel_makes_is_redirect_token_true():
 
 
 def test_route_after_pi_greenlight_short_circuits_on_redirect_sentinel():
-    """Smuggling regression test: PI correction "I cannot approve" must
-    route to escalation, not backbrief_draft."""
+    """Phase-X² + Phase D2.1: substring-smuggling guard still fires
+    FIRST, AND the new destination is the in-run redraft node (not
+    escalation_router, which was the pre-Phase-X² dead-end).
+
+    PI correction "I cannot approve" — REDIRECT_SENTINEL-prefixed at
+    the runner layer — must (a) NOT match the 'approve' substring →
+    backbrief_draft (smuggling), AND (b) route to
+    confirmation_brief_redraft so Brain redrafts the brief
+    incorporating the PI's correction. Pre-Phase-X² this routed to
+    escalation_router (the bug); the loopback is the fix."""
     from orchestrator.graph import _route_after_pi_greenlight
     from orchestrator.response_tokens import REDIRECT_SENTINEL
 
@@ -514,11 +522,18 @@ def test_route_after_pi_greenlight_short_circuits_on_redirect_sentinel():
             {"response": REDIRECT_SENTINEL + "I cannot approve this — redo"}
         ]
     }
-    assert _route_after_pi_greenlight(state) == "escalation_router"
+    assert (
+        _route_after_pi_greenlight(state) == "confirmation_brief_redraft"
+    )
 
     # Plain accept path still routes to backbrief_draft
     state_accept = {"interrupts": [{"response": "approve"}]}
     assert _route_after_pi_greenlight(state_accept) == "backbrief_draft"
+
+    # Plain reject path (no sentinel, no 'approve' substring) still
+    # escalates — preserving the genuine hard-reject semantic.
+    state_reject = {"interrupts": [{"response": "reject this brief"}]}
+    assert _route_after_pi_greenlight(state_reject) == "escalation_router"
 
 
 def test_route_after_pi_decision_short_circuits_on_redirect_sentinel():

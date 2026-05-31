@@ -64,12 +64,15 @@ def test_build_graph_registers_all_canonical_nodes(sdk, mcp, fake_interrupt):
         assert expected in nodes, f"node {expected} not registered"
 
 
-def test_node_names_tuple_has_exactly_seventeen():
+def test_node_names_tuple_has_exactly_eighteen():
     # Phase 2.7 T3e added `execute_ratified_actions` (16th node).
     # Gap 2 added `execute_ratified_fs_actions` (17th, parallel FS
     # dispatcher for PI-ratified Bash/Write/Edit).
-    assert len(graph.NODE_NAMES) == 17
-    assert len(set(graph.NODE_NAMES)) == 17  # no dupes
+    # Phase-X² added `confirmation_brief_redraft` (18th, in-run
+    # pi_greenlight redirect state-mutator that owns the redraft
+    # policy + bounded loop counter).
+    assert len(graph.NODE_NAMES) == 18
+    assert len(set(graph.NODE_NAMES)) == 18  # no dupes
 
 
 def test_execute_ratified_actions_is_in_node_names():
@@ -94,14 +97,89 @@ def test_route_after_pi_greenlight_approve_continues_to_backbrief():
     assert graph._route_after_pi_greenlight(state) == "backbrief_draft"
 
 
-def test_route_after_pi_greenlight_redirect_routes_to_escalation():
+def test_route_after_pi_greenlight_bare_redirect_text_still_escalates():
+    """Bare 'redirect' (no REDIRECT_SENTINEL prefix) is treated as a hard
+    reject — no sentinel → no loopback. Sentinel detection is the load-
+    bearing distinction between 'PI wants a redraft' (correct action,
+    server prepends sentinel) and 'PI hard-rejects' (reject action, no
+    sentinel)."""
     state = {"interrupts": [{"response": "redirect"}]}
     assert graph._route_after_pi_greenlight(state) == "escalation_router"
 
 
+def test_route_after_pi_greenlight_redirect_sentinel_loops_to_redraft():
+    """Phase-X² — REDIRECT_SENTINEL-prefixed response routes to
+    confirmation_brief_redraft for the in-run Brain redraft loop,
+    NOT to escalation_router (the pre-Phase-X² dead-end). The
+    sentinel short-circuit fires FIRST, BEFORE any substring match
+    — so a smuggled 'approve' inside the corrected body still
+    routes to the redraft path, not to backbrief_draft."""
+    from orchestrator.response_tokens import REDIRECT_SENTINEL
+    state = {
+        "interrupts": [
+            {"response": REDIRECT_SENTINEL + "rework §4 budget framing"}
+        ]
+    }
+    assert (
+        graph._route_after_pi_greenlight(state) == "confirmation_brief_redraft"
+    )
+
+
+def test_route_after_pi_greenlight_sentinel_with_approve_substring_still_redrafts():
+    """Substring-smuggling guard (Phase D2.1) preserved: 'I cannot
+    approve this — redo §4' as the BODY of a correct action gets
+    REDIRECT_SENTINEL-prefixed at the runner layer; routing must
+    honor the sentinel and loop to redraft, NOT match 'approve' and
+    route to backbrief_draft."""
+    from orchestrator.response_tokens import REDIRECT_SENTINEL
+    state = {
+        "interrupts": [
+            {
+                "response": (
+                    REDIRECT_SENTINEL
+                    + "I cannot approve this brief — redo §4 budget framing"
+                )
+            }
+        ]
+    }
+    assert (
+        graph._route_after_pi_greenlight(state) == "confirmation_brief_redraft"
+    )
+
+
 def test_route_after_pi_greenlight_empty_interrupts_escalates():
-    # Defensive: no PI response yet → conservative route to escalation.
+    # Defensive: no PI response yet → conservative route to escalation
+    # (NOT to redraft — a missing signal is not a redirect-to-redraft
+    # request).
     assert graph._route_after_pi_greenlight({}) == "escalation_router"
+
+
+def test_route_after_confirmation_brief_redraft_default_loops_to_brief():
+    """Phase-X² happy path: with no next_node_override (cleared by the
+    redraft node on success), routes back to confirmation_brief for the
+    actual Brain redraft LLM call."""
+    state = {"next_node_override": ""}
+    assert (
+        graph._route_after_confirmation_brief_redraft(state)
+        == "confirmation_brief"
+    )
+    assert (
+        graph._route_after_confirmation_brief_redraft({})
+        == "confirmation_brief"
+    )
+
+
+def test_route_after_confirmation_brief_redraft_escalates_on_override():
+    """Phase-X² budget-cap / defensive path: the redraft node sets
+    next_node_override='escalation_router' after emitting a real
+    ErrorRecord; the router routes there so escalation_router has a
+    genuine error to classify (not the synthetic 'unclassified' that
+    used to fire pre-Phase-X²)."""
+    state = {"next_node_override": "escalation_router"}
+    assert (
+        graph._route_after_confirmation_brief_redraft(state)
+        == "escalation_router"
+    )
 
 
 def test_route_after_gate1_approved_continues():

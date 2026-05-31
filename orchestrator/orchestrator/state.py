@@ -181,21 +181,33 @@ class ResearchWorkflowState(TypedDict, total=False):
     # subprocess's `rka mcp` stdio child. Additive (TypedDict total=False);
     # pre-Phase-2.9 state shapes continue to work without it.
     project_id: str
-    # Phase-X (Cross-Run Correction Channel): per-run PI overrides loaded
-    # from workflow_runs.run_overrides at start_run_drive. Shape:
+    # Phase-X (Cross-Run Correction Channel) + Phase-X² (In-Run Redraft
+    # Channel): per-run PI overrides. Two channels converge on this field:
+    #
     #   {
+    #     # Phase-X (cross-run; seeded at start_run_drive from
+    #     # workflow_runs.run_overrides):
     #     "pi_instructions": "<optional PI text from orchestrator_run_start>",
     #     "prior_redirects": [
     #       {"workflow_thread_id": "...", "interrupt_id": "...",
     #        "responded_at": "...", "response_text": "..."},
     #       ...
+    #     ],
+    #     # Phase-X² (in-run; mutated by confirmation_brief_redraft when
+    #     # the PI sends a 'correct' action at pi_greenlight — capped at
+    #     # MAX_GREENLIGHT_REDRAFTS entries):
+    #     "in_run_redirects": [
+    #       {"responded_at": "...", "response_text": "<sanitized>"},
+    #       ...
     #     ]
     #   }
-    # Read by Brain at _build_strategy_prompt and prefixed under a
-    # delimited "PI OVERRIDES" block at the top of the prompt. Empty dict
-    # ({}) means "no overrides for this run" — the block is suppressed.
-    # Additive (TypedDict total=False); pre-Phase-X state shapes continue
-    # to work without it.
+    #
+    # Read by Brain at _build_strategy_prompt (cross-run) AND
+    # _build_confirmation_prompt (in-run, on redraft), prefixed under a
+    # delimited "PI OVERRIDES" block at the top of the prompt. Empty
+    # dict ({}) means "no overrides for this run" — the block is
+    # suppressed. Additive (TypedDict total=False); pre-Phase-X state
+    # shapes continue to work without it.
     run_overrides: dict
 
     # Position
@@ -218,6 +230,15 @@ class ResearchWorkflowState(TypedDict, total=False):
     # Budget
     usd_spent: float
     loop_iterations: int
+    # Phase-X² (In-Run Redraft Channel): per-thread counter incremented
+    # by confirmation_brief_redraft each time the PI sends a 'correct'
+    # action at pi_greenlight. Capped at MAX_GREENLIGHT_REDRAFTS (see
+    # bottom of module) — on the (cap+1)th redraft the node emits a
+    # real `greenlight_redraft_budget_exceeded` ErrorRecord and routes
+    # to escalation_router (which now finds a genuine error and behaves
+    # correctly). Last-write-wins scalar, initialized to 0 in
+    # make_initial_state.
+    greenlight_redrafts: int
 
     # Consensus
     brain_position: str
@@ -376,6 +397,7 @@ def make_initial_state(
         notifications=[],
         usd_spent=0.0,
         loop_iterations=0,
+        greenlight_redrafts=0,
         brain_position="",
         executor_position="",
         consensus_state="unresolved",
@@ -426,3 +448,12 @@ def make_initial_state(
 ALL_PHASES: frozenset[str] = frozenset(WorkflowPhase.__args__)  # type: ignore[attr-defined]
 ALL_CONSENSUS_STATES: frozenset[str] = frozenset(ConsensusState.__args__)  # type: ignore[attr-defined]
 ALL_TERMINAL_STATES: frozenset[str] = frozenset(TerminalState.__args__)  # type: ignore[attr-defined]
+
+
+# Phase-X² — bound on the in-run pi_greenlight redirect loop. After this
+# many `correct` actions in a single workflow_thread_id,
+# confirmation_brief_redraft emits a real ErrorRecord and routes to
+# escalation_router instead of looping again. Closes the unbounded-cycle
+# risk that CLAUDE.md previously flagged as a deferred follow-up
+# ('loop_iterations declared but never written').
+MAX_GREENLIGHT_REDRAFTS: int = 3

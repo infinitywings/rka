@@ -19,11 +19,17 @@ auto-injection contract in `mcp_client.py`). Tests inject Fake clients.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 
 from orchestrator.llm_client import SDKClient
 from orchestrator.mcp_client import MCPClient
-from orchestrator.state import ArtifactRef, ResearchWorkflowState
+from orchestrator.state import (
+    MAX_GREENLIGHT_REDRAFTS,
+    ArtifactRef,
+    ErrorRecord,
+    ResearchWorkflowState,
+)
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -269,56 +275,138 @@ _PI_OVERRIDES_CLOSE = "--- END PI OVERRIDES ---"
 # leaving it in confuses the "treat as PI directive" framing. Imported
 # here rather than at module top to avoid a circular import (brain ↔
 # orchestrator.response_tokens is fine but kept colocated for clarity).
-from orchestrator.response_tokens import REDIRECT_SENTINEL
+from orchestrator.response_tokens import REDIRECT_SENTINEL, is_redirect_token
+
+
+# H1 hardening (Phase-X² adversarial review wrhahen1y) — Unicode dash
+# equivalents that an LLM may semantically equate with the ASCII
+# triple-hyphen fence. Normalized to ASCII U+002D before the
+# fence-defang substring check so the case-insensitive +
+# variance-tolerant match catches em-dash / en-dash / box-drawing /
+# horizontal-bar variants that would otherwise pass through the
+# original `if literal in s` check untouched.
+_UNICODE_DASH_PATTERN = re.compile(
+    r"[‐‑‒–—―−─━﹘﹣－]"
+)
+
+# Markdown-heading injection vector — if PI prose contains a line-start
+# `## IN-RUN PI REDIRECT` (or any markdown heading mentioning a known
+# sub-section label), the LLM may semantically treat it as a new
+# section header inside the PI-overrides block, smuggling a fake
+# "newer" correction past the structural framing. Defang by replacing
+# the markdown heading marker (`#+` or setext underline) with a benign
+# bullet so the section-label text survives but the structural cue is
+# removed.
+_SECTION_LABELS = (
+    "PI INSTRUCTIONS",
+    "PRIOR-RUN PI REDIRECTS",
+    "IN-RUN PI REDIRECT",
+)
+_MARKDOWN_HEADING_INJECTION_PATTERN = re.compile(
+    r"(?im)^(\s*)(#+\s*)("
+    + "|".join(re.escape(lbl) for lbl in _SECTION_LABELS)
+    + r")"
+)
 
 
 def _sanitize_override_text(text: str) -> str:
     """Strip the REDIRECT_SENTINEL routing prefix and silently neutralize
-    any literal close-delimiter occurrences in a PI/redirect-supplied
-    text body before it lands in Brain's prompt.
+    any fence-shaped delimiter or sub-section-heading occurrences in a
+    PI/redirect-supplied text body before it lands in Brain's prompt.
 
-    Two adversarial-review fixes:
+    Three adversarial-review fixes:
       H1 — a PI text containing the literal `--- END PI OVERRIDES ---`
-           would close the override block early and let post-fence text
-           appear to Brain as if it were the mission-body section. We
-           defang by inserting a zero-width-ish separator inside the
-           delimiter so the literal match no longer fires. Both the OPEN
-           and CLOSE delimiter literals are neutralized for symmetry.
+           (or any visually-equivalent dash variant, case mutation, or
+           markdown-heading shape that mentions a known sub-section
+           label) would close the override block early and let
+           post-fence text appear to Brain as if it had exited the
+           PI-directive scope. Hardened (workflow wrhahen1y) against:
+             - ASCII triple-hyphen + variants (4-hyphen, extra whitespace)
+             - Unicode dash equivalents (em-dash, en-dash, horizontal-bar,
+               box-drawing, mathematical minus, fullwidth)
+             - Case mutations (`--- end pi overrides ---`)
+             - Markdown-heading injection (`## IN-RUN PI REDIRECT`)
+           Defang by inserting a zero-width-ish separator inside the
+           delimiter / replacing the heading marker with a bullet so
+           the literal match no longer fires.
       H2 — answer_interrupt stores `REDIRECT_SENTINEL + body` for
-           action="correct". We strip a leading sentinel here so Brain
-           sees clean prose.
+           action="correct". We strip leading sentinels (a `while`
+           loop catches a hypothetical double-prefix from a
+           composition bug) so Brain sees clean prose.
     """
     if not isinstance(text, str):
         return ""
     s = text
-    # H2 — strip a leading REDIRECT_SENTINEL (case-insensitive, mirrors
-    # is_redirect_token's whitespace handling).
-    stripped = s.lstrip()
-    if stripped.upper().startswith(REDIRECT_SENTINEL):
+
+    # H2 — strip leading REDIRECT_SENTINEL(s) defensively in a loop.
+    # Production runner.commit_response only prepends once, but a
+    # future composition error (re-wrapping for re-route) shouldn't
+    # leak the routing token into Brain's prompt.
+    while True:
+        stripped = s.lstrip()
+        if not stripped.upper().startswith(REDIRECT_SENTINEL):
+            break
         s = stripped[len(REDIRECT_SENTINEL):]
-    # H1 — defang any literal delimiter occurrence. Splitting the
-    # 3-dash run keeps the text human-readable while making the literal
-    # match impossible.
-    for literal in (_PI_OVERRIDES_OPEN, _PI_OVERRIDES_CLOSE):
-        if literal in s:
-            s = s.replace(literal, literal.replace("---", "- - -"))
-    # Also defang bare `--- END PI OVERRIDES ---`-shaped tokens that
-    # would smuggle out even with wording variance.
-    for variant in ("--- END PI OVERRIDES", "--- BEGIN PI OVERRIDES"):
-        if variant in s:
-            s = s.replace(variant, variant.replace("---", "- - -"))
+
+    # H1 — defang ANY fence-shaped close-delimiter occurrence. The
+    # detection is:
+    #   1. Normalize Unicode-dash variants to ASCII U+002D in a
+    #      WORKING COPY (we still surface the original text to the
+    #      LLM with the original characters — only the detection is
+    #      ASCII-normalized).
+    #   2. Use a case-insensitive regex over the normalized copy to
+    #      find every fence span (≥2 dashes + label + ≥2 dashes,
+    #      whitespace-tolerant); the span boundaries map back to the
+    #      original text and we slice the dashes in the original.
+    normalized = _UNICODE_DASH_PATTERN.sub("-", s)
+    fence_re = re.compile(
+        r"-{2,}\s*(BEGIN|END)\s+PI\s+OVERRIDES(?:\s*\([^)]*\))?\s*-{2,}|"
+        r"-{2,}\s*(BEGIN|END)\s+PI\s+OVERRIDES",
+        re.IGNORECASE,
+    )
+    # Splice spans from end-to-start so positions remain valid.
+    spans = list(fence_re.finditer(normalized))
+    if spans:
+        out_chars = list(s)
+        # Defang dashes ONLY BETWEEN consecutive dashes (lookahead) so
+        # `---` becomes `- - -` (the original H1 shape, single spacing).
+        # This breaks the structural fence shape while preserving
+        # readable prose and exactly matching the pre-hardening
+        # defanged-output shape that prior tests asserted on.
+        between_consecutive_dashes_re = re.compile(
+            r"[‐‑‒–—―−─━﹘﹣－\-](?=[‐‑‒–—―−─━﹘﹣－\-])"
+        )
+        for m in reversed(spans):
+            start, end = m.start(), m.end()
+            span_original = s[start:end]
+            defanged = between_consecutive_dashes_re.sub(
+                lambda ch: ch.group(0) + " ", span_original
+            )
+            out_chars[start:end] = list(defanged)
+        s = "".join(out_chars)
+
+    # H1 (continued) — defang markdown-heading injection of sub-section
+    # labels. Replace the leading `#+` (or any heading marker) with a
+    # benign bullet so the LLM reads "label as bullet text" rather than
+    # "label as heading announcing a new section."
+    s = _MARKDOWN_HEADING_INJECTION_PATTERN.sub(r"\1- \3", s)
+
     return s
 
 
 def _format_pi_overrides_block(run_overrides: dict) -> str:
-    """Phase-X: render the PI-overrides block that prefixes the strategy
-    prompt. Returns the empty string when there are no overrides.
+    """Phase-X + Phase-X²: render the PI-overrides block that prefixes
+    Brain's prompts. Returns the empty string when there are no
+    overrides.
 
     Shape of run_overrides (any subset may be absent):
       {
-        "pi_instructions": "<text>",
+        # Phase-X (cross-run):
+        "pi_instructions": "<text from orchestrator_run_start>",
         "prior_redirects": [{"workflow_thread_id": ..., "responded_at": ...,
-                             "response_text": ...}, ...]
+                             "response_text": ...}, ...],
+        # Phase-X² (in-run, mutated by confirmation_brief_redraft):
+        "in_run_redirects": [{"responded_at": ..., "response_text": ...}, ...]
       }
 
     The block opens with a fence and an explicit "treat as PI directive,
@@ -327,15 +415,23 @@ def _format_pi_overrides_block(run_overrides: dict) -> str:
     Each body text passes through `_sanitize_override_text` which strips
     the REDIRECT_SENTINEL routing prefix (H2) and defangs any literal
     close-delimiter occurrence inside the prose (H1).
+
+    Three sub-sections rendered in order (most-recent-PI-input last so
+    it reads as "latest word"):
+      1. PI INSTRUCTIONS (this run)            — pi_instructions
+      2. PRIOR-RUN PI REDIRECTS                 — prior_redirects
+      3. IN-RUN PI REDIRECT (this segment)      — in_run_redirects
     """
     if not isinstance(run_overrides, dict) or not run_overrides:
         return ""
 
     pi_instructions = run_overrides.get("pi_instructions")
     prior_redirects = run_overrides.get("prior_redirects") or []
+    in_run_redirects = run_overrides.get("in_run_redirects") or []
     has_any = bool(
         (pi_instructions and pi_instructions.strip())
         or prior_redirects
+        or in_run_redirects
     )
     if not has_any:
         return ""
@@ -370,6 +466,23 @@ def _format_pi_overrides_block(run_overrides: dict) -> str:
                 "mission-body wording):"
             )
             lines.extend(rendered)
+    if in_run_redirects:
+        rendered_in_run: list[str] = []
+        for r in in_run_redirects:
+            ts = r.get("responded_at", "?")
+            text = _sanitize_override_text(r.get("response_text") or "").strip()
+            if not text:
+                continue
+            rendered_in_run.append(f"  [{ts}] {text}")
+        if rendered_in_run:
+            lines.append("")
+            lines.append(
+                "IN-RUN PI REDIRECT (this segment — supersedes any prior "
+                "framing including the prior-run redirects above; this is "
+                "the PI's most recent correction and your redraft MUST "
+                "honor it):"
+            )
+            lines.extend(rendered_in_run)
     lines.append(_PI_OVERRIDES_CLOSE)
     return "\n".join(lines)
 
@@ -531,8 +644,20 @@ def _parse_proposed_capabilities_with_provenance(
 def _build_confirmation_prompt(
     state: ResearchWorkflowState, mission: dict | None
 ) -> str:
+    # Phase-X² (In-Run Redraft Channel): when confirmation_brief is
+    # re-entered via the pi_greenlight redirect loop-back,
+    # confirmation_brief_redraft has already appended the sanitized
+    # redirect text to state['run_overrides']['in_run_redirects'].
+    # Prefixing _format_pi_overrides_block here makes the redirect
+    # visible to the Brain LLM redrafting the brief — symmetric with
+    # _build_strategy_prompt. On a fresh (first-time) brief
+    # generation, run_overrides typically has only Phase-X cross-run
+    # content (or nothing), and the same formatter handles that case.
+    override_block = _format_pi_overrides_block(state.get("run_overrides", {}))
+    prefix = (override_block + "\n\n") if override_block else ""
     return (
-        "Produce a Confirmation Brief for the PI summarizing:\n"
+        prefix
+        + "Produce a Confirmation Brief for the PI summarizing:\n"
         "  1. What this workflow run will attempt.\n"
         "  2. Key assumptions the PI should validate.\n"
         "  3. The decision points where PI input will be requested.\n"
@@ -578,6 +703,161 @@ def confirmation_brief(
             }
         ],
         "usd_spent": _accrue_cost(state, sdk),
+    }
+
+
+# ---------------------------------------------------------------------------
+# 2b. confirmation_brief_redraft — Phase-X² in-run redirect channel
+# ---------------------------------------------------------------------------
+#
+# Routing: pi_greenlight on a `correct` action returns a sentinel-prefixed
+# token; `_route_after_pi_greenlight` routes that branch HERE instead of
+# to `escalation_router`. This node owns the redraft policy in one
+# place:
+#
+#   1. Locate the latest pi_greenlight redirect in state['interrupts'].
+#   2. Sanitize via _sanitize_override_text (H1 delimiter-defang + H2
+#      sentinel-strip), reusing the Phase-X formatter so the in-run
+#      and cross-run paths share identical prompt-injection defenses.
+#   3. Append the sanitized text to state['run_overrides']['in_run_redirects']
+#      (capped at MAX_GREENLIGHT_REDRAFTS entries; oldest drop first).
+#   4. Increment state['greenlight_redrafts'].
+#   5. On budget cap, emit a real ErrorRecord (`greenlight_redraft_budget_exceeded`)
+#      and set next_node_override='escalation_router' so the escalation
+#      flows from a genuine error, not a synthetic 'unclassified'.
+#
+# No LLM call here — pure state mutation, cheap. The downstream
+# `confirmation_brief` does the redraft LLM work; its prompt builder
+# (`_build_confirmation_prompt`) already prefixes
+# `_format_pi_overrides_block(state['run_overrides'])` so the redirect
+# text reaches Brain on the next pass.
+
+
+def _latest_greenlight_redirect_record(
+    state: ResearchWorkflowState,
+) -> dict | None:
+    """Scan state['interrupts'] reversed for the most recent
+    pi_greenlight record whose response is a REDIRECT_SENTINEL-prefixed
+    token. Returns the record dict, or None if no such entry exists.
+
+    Filtering by node_name='pi_greenlight' is load-bearing: the
+    `interrupts` list is shared across pi_greenlight / pi_decision_select
+    / pi_acceptance writes, and a redirect at a sibling gate must NOT
+    leak into the redraft loop's source-of-truth.
+    """
+    interrupts = state.get("interrupts", []) or []
+    for record in reversed(interrupts):
+        if not isinstance(record, dict):
+            continue
+        if record.get("node_name") != "pi_greenlight":
+            continue
+        response = str(record.get("response", ""))
+        if is_redirect_token(response):
+            return record
+    return None
+
+
+def confirmation_brief_redraft(
+    state: ResearchWorkflowState, sdk: SDKClient, mcp: MCPClient
+) -> dict:
+    """Phase-X² entry point for the in-run pi_greenlight redirect loop.
+
+    See header comment block for the full responsibility list. This
+    function is a pure state mutator — it does NOT call the LLM. The
+    downstream `confirmation_brief` reads the updated
+    `state['run_overrides']` via `_build_confirmation_prompt` and
+    pays the redraft cost there.
+
+    `sdk` is unused but kept in the signature for binding symmetry with
+    other Brain nodes (matches `_bind` contract in graph.py).
+    """
+    current_count = int(state.get("greenlight_redrafts", 0) or 0)
+    existing_overrides = dict(state.get("run_overrides") or {})
+
+    # Locate the redirect that triggered this redraft.
+    record = _latest_greenlight_redirect_record(state)
+    if record is None:
+        # Defensive: route helper should have prevented this, but if we
+        # arrive without a redirect to consume, escalate via a real
+        # error rather than silently looping.
+        err: ErrorRecord = {
+            "node_name": "confirmation_brief_redraft",
+            "error_type": "greenlight_redirect_text_missing",
+            "detail": (
+                "Routed to redraft but no pi_greenlight redirect record "
+                "found in state['interrupts']."
+            ),
+            "timestamp": _now_iso(),
+        }
+        return {
+            "current_phase": "brain_confirmation",
+            "current_node": "confirmation_brief_redraft",
+            "next_node_override": "escalation_router",
+            "errors": [err],
+        }
+
+    sanitized = _sanitize_override_text(record.get("response") or "").strip()
+    if not sanitized:
+        # Sentinel-only / empty redirect text — escalate with a real
+        # error rather than rerunning Brain with no new guidance.
+        err = {
+            "node_name": "confirmation_brief_redraft",
+            "error_type": "greenlight_redirect_text_empty",
+            "detail": (
+                "PI redirect at pi_greenlight had no usable text after "
+                "REDIRECT_SENTINEL strip + delimiter defang."
+            ),
+            "timestamp": _now_iso(),
+        }
+        return {
+            "current_phase": "brain_confirmation",
+            "current_node": "confirmation_brief_redraft",
+            "next_node_override": "escalation_router",
+            "errors": [err],
+        }
+
+    next_count = current_count + 1
+    if next_count > MAX_GREENLIGHT_REDRAFTS:
+        # Bounded loop: emit a real ErrorRecord so escalation_router
+        # picks it up legitimately (no synthetic 'unclassified').
+        err = {
+            "node_name": "confirmation_brief_redraft",
+            "error_type": "greenlight_redraft_budget_exceeded",
+            "detail": (
+                f"PI requested redraft #{next_count} at pi_greenlight; "
+                f"cap is {MAX_GREENLIGHT_REDRAFTS}. Routing to "
+                "escalation_router so the PI can adjudicate."
+            ),
+            "timestamp": _now_iso(),
+        }
+        return {
+            "current_phase": "brain_confirmation",
+            "current_node": "confirmation_brief_redraft",
+            "next_node_override": "escalation_router",
+            "errors": [err],
+        }
+
+    # Happy path: append the sanitized redirect to run_overrides and
+    # let the downstream confirmation_brief produce a fresh brief.
+    in_run = list(existing_overrides.get("in_run_redirects") or [])
+    in_run.append({
+        "responded_at": record.get("timestamp", _now_iso()),
+        "response_text": sanitized,
+    })
+    # Cap the list at MAX_GREENLIGHT_REDRAFTS entries (drop oldest).
+    if len(in_run) > MAX_GREENLIGHT_REDRAFTS:
+        in_run = in_run[-MAX_GREENLIGHT_REDRAFTS:]
+    new_overrides = {**existing_overrides, "in_run_redirects": in_run}
+
+    return {
+        "current_phase": "brain_confirmation",
+        "current_node": "confirmation_brief_redraft",
+        # Clear any stale next_node_override (e.g. from a prior
+        # budget_check pass) so the happy-path route helper sees a
+        # clean state.
+        "next_node_override": "",
+        "run_overrides": new_overrides,
+        "greenlight_redrafts": next_count,
     }
 
 

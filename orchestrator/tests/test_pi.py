@@ -93,6 +93,93 @@ def test_pi_greenlight_payload_contains_title():
     assert captured["type"] == "pi_greenlight"
 
 
+def test_pi_greenlight_approve_copies_proposed_capabilities_to_allowed():
+    """Phase-X² latent-bug fix at nodes/pi.py:115.
+
+    pi_greenlight's accept token is 'approve' (per
+    _ACCEPT_TOKEN_BY_TYPE in runner.py); the original is_accept check
+    tested for the 'accept' substring, which is NOT contained in
+    'approve' — so the proposed_capabilities → allowed_capabilities
+    plumbing silently never fired. Pin the fix: on a literal 'approve'
+    response, the proposed_capabilities from strategy_node MUST be
+    copied to allowed_capabilities. Sentinel guard still short-circuits
+    any approve-smuggling correct token (separate test below)."""
+    sdk = FakeSDK()
+    mcp = FakeMCP()
+    interrupt_fn = FakeInterrupt(canned_response="approve")
+    state = _state()
+    state["decisions_to_present"] = [
+        {"source_node": "confirmation_brief", "context": "brief"}
+    ]
+    state["proposed_capabilities"] = ["record_knowledge", "execution_gates"]
+
+    update = pi.pi_greenlight(state, sdk, mcp, interrupt_fn)
+
+    assert update.get("allowed_capabilities") == [
+        "record_knowledge",
+        "execution_gates",
+    ]
+
+
+def test_pi_greenlight_accept_substring_also_copies_capabilities():
+    """Symmetric guard: 'accept' substring (used at other pi_* gates
+    via copy-paste) ALSO triggers the plumbing — the fix accepts
+    either token to stay forward-compatible."""
+    sdk = FakeSDK()
+    mcp = FakeMCP()
+    interrupt_fn = FakeInterrupt(canned_response="accept")
+    state = _state()
+    state["decisions_to_present"] = [
+        {"source_node": "confirmation_brief", "context": "brief"}
+    ]
+    state["proposed_capabilities"] = ["mission_lifecycle"]
+
+    update = pi.pi_greenlight(state, sdk, mcp, interrupt_fn)
+
+    assert update.get("allowed_capabilities") == ["mission_lifecycle"]
+
+
+def test_pi_greenlight_sentinel_redirect_does_not_copy_capabilities():
+    """Adversarial: REDIRECT_SENTINEL-prefixed body containing 'approve'
+    as a substring (e.g. 'I cannot approve this — redo') must NOT
+    trigger the plumbing. is_redirect_token short-circuits BEFORE the
+    substring check, so the smuggled 'approve' has no effect."""
+    from orchestrator.response_tokens import REDIRECT_SENTINEL
+
+    sdk = FakeSDK()
+    mcp = FakeMCP()
+    interrupt_fn = FakeInterrupt(
+        canned_response=REDIRECT_SENTINEL + "I cannot approve this — redo"
+    )
+    state = _state()
+    state["decisions_to_present"] = [
+        {"source_node": "confirmation_brief", "context": "brief"}
+    ]
+    state["proposed_capabilities"] = ["record_knowledge"]
+
+    update = pi.pi_greenlight(state, sdk, mcp, interrupt_fn)
+
+    # No allowed_capabilities write — the redirect is not an accept.
+    assert "allowed_capabilities" not in update
+
+
+def test_pi_greenlight_reject_does_not_copy_capabilities():
+    """Plain reject (no sentinel, no 'accept'/'approve' substring) must
+    NOT copy capabilities."""
+    sdk = FakeSDK()
+    mcp = FakeMCP()
+    interrupt_fn = FakeInterrupt(canned_response="reject this brief")
+    state = _state()
+    state["decisions_to_present"] = [
+        {"source_node": "confirmation_brief", "context": "brief"}
+    ]
+    state["proposed_capabilities"] = ["record_knowledge"]
+
+    update = pi.pi_greenlight(state, sdk, mcp, interrupt_fn)
+
+    assert "allowed_capabilities" not in update
+
+
 # ---------------------------------------------------------------------------
 # 2. pi_decision_select
 # ---------------------------------------------------------------------------

@@ -767,6 +767,120 @@ Reference: [`orchestrator/docs/cross-run-correction-channel.md`](orchestrator/do
 for the full architectural recommendation including option analysis,
 industry comparison, adversarial critique, and acceptance criteria.
 
+### Phase-X² — In-Run Redraft Channel (sibling of Phase-X)
+
+Empirical follow-up surfaced live during attempt-3 of Run-5 on the
+hyperscaler-auditing test harness. Phase-X solved cross-run
+durability of `pi_greenlight` redirect text; Phase-X² closes the
+corresponding in-run gap.
+
+**Bug surfaced.** In `_route_after_pi_greenlight`, a `correct` action
+(REDIRECT_SENTINEL-prefixed token) routed to `escalation_router`
+identically to a hard `reject`. `escalation_router` is an error
+handler — when `state['errors']` was empty (the redirect is not a
+genuine error), it synthesized a generic "unclassified" `ErrorRecord`,
+emitted a junk checkpoint into RKA, and dead-ended to terminal
+`pi_acceptance`. The PI's redirect text was preserved in
+`parked_interrupts.response_text` but never reached Brain inside the
+same run — the intended semantic ("Brain redrafts the Confirmation
+Brief incorporating the PI's correction, then re-parks for
+ratification") was never implemented. Phase-X masked this for the
+*next* run via auto-rehydration; Phase-X² fixes the *in-run*
+dynamic.
+
+**Architecture — Option C** (dedicated redraft node + bounded
+back-edge; chosen over the simpler direct-back-edge Option A
+because that path silently no-ops if `_build_confirmation_prompt`'s
+override prefix is forgotten, and over the heavier auto-restart
+Option B because it would require new authorization surface for
+cross-thread loops):
+
+- **New node `brain.confirmation_brief_redraft`** owns the redraft
+  policy: (1) locate the latest `pi_greenlight` redirect in
+  `state['interrupts']` (filtered by node_name to avoid cross-gate
+  leakage), (2) sanitize via the existing Phase-X
+  `_sanitize_override_text` (H1 delimiter-defang + H2
+  REDIRECT_SENTINEL-strip), (3) append to
+  `state['run_overrides']['in_run_redirects']` capped at
+  `MAX_GREENLIGHT_REDRAFTS` entries, (4) increment
+  `state['greenlight_redrafts']`. On cap-exceed (or defensive
+  missing-record / empty-text), emit a *real*
+  `greenlight_redraft_budget_exceeded` `ErrorRecord` and set
+  `next_node_override='escalation_router'` so escalation flows from
+  a genuine error, not a synthetic one. Zero LLM calls in this node
+  — pure state mutation, cheap.
+- **`_format_pi_overrides_block` extended** with a third sub-section
+  ("IN-RUN PI REDIRECT (this segment — supersedes any prior framing
+  including the prior-run redirects above)") rendered after the
+  Phase-X `pi_instructions` + `prior_redirects` sections. Same fence,
+  same sanitizer — H1/H2 protections symmetric across cross-run and
+  in-run paths.
+- **`_build_confirmation_prompt` updated** to prepend the override
+  block — symmetric with `_build_strategy_prompt`. On a fresh
+  (first-time) brief the block is empty and the prompt is unchanged.
+- **`_route_after_pi_greenlight` rewired** to a three-way distinction:
+  `approve` → `backbrief_draft` (unchanged), `correct` (sentinel) →
+  `confirmation_brief_redraft` (NEW back-edge), `reject`/other →
+  `escalation_router` (unchanged genuine hard-reject path). The
+  sentinel short-circuit still fires FIRST, preserving the Phase D2.1
+  substring-smuggling guard.
+- **Bounded loop**: `MAX_GREENLIGHT_REDRAFTS=3` (state.py constant).
+  This is the first concrete node-incremented loop counter — closes
+  the deferred-followup risk that CLAUDE.md previously flagged
+  ("`loop_iterations` never written by any node, so MAX_LOOP_DEPTH
+  and budget caps are unreachable"). Sets a positive precedent for
+  future loop-bound work.
+- **Latent pi.py bug fix** (exposed by redraft cycling exercising
+  `pi_greenlight` more often): the original `is_accept` check at
+  `nodes/pi.py:115` used `"accept" in response_text`, but
+  `pi_greenlight`'s accept token is `"approve"` (per
+  `_ACCEPT_TOKEN_BY_TYPE` in `runner.py:46`). Since `"accept"` is
+  NOT a substring of `"approve"`, `is_accept` was always False on a
+  legitimate approve and the
+  `proposed_capabilities → allowed_capabilities` plumbing never
+  fired. Fix: also check for `"approve"` substring; sentinel guard
+  still short-circuits any approve-smuggling correct token.
+
+**Three-storage discipline preserved.** Redirect text lives in
+`state['interrupts']` (LangGraph SqliteSaver) for in-run plumbing and
+in `parked_store.parked_interrupts.response_text` (orchestrator
+SQLite) for cross-run durability. RKA is unaffected — no domain
+truth involves redraft policy.
+
+**Acyclic-convention divergence (documented).** Phase B and
+onboarding subgraphs deliberately keep their redirect paths acyclic
+(`redirect → END + re-enter`) because their PI-correction lifecycle
+crosses workspace state on disk (`.env.example` files persisted,
+RKA project records created). The mission graph's pi_greenlight
+redirect operates entirely inside one segment's state — no disk
+side effects to preserve — so the back-edge is the right tradeoff.
+Documented in `_route_after_pi_greenlight` and the topology header
+comment.
+
+**Sibling bug filed, NOT bundled.** `_route_after_pi_decision` has
+the identical dead-end shape — but `pi_decision_select` is the
+TWO-TAP autonomy-licensing gate for privileged WRITE_TOOLS dispatch.
+Its redirect-routing fix deserves isolated review (different cost
+profile for the redraft target — `decision_present` vs full
+`strategy_node` re-run; different EC8 set-identity invariants).
+Tracked in the **Deferred follow-ups** list below ("pi_decision_select
+redirect dead-ends at escalation_router — same Phase-X² topology shape,
+fix as separate PR for autonomy-contract review").
+
+NODE_NAMES tuple grows from 17 → 18 (`confirmation_brief_redraft`).
+`test_invariants.py` automatically audits the new node's
+`current_node` writes against NODE_NAMES.
+
+**Cross-references.** PI-facing wording lives in
+[`orchestrator/skills/orchestrator-pi.md`](orchestrator/skills/orchestrator-pi.md)
+("What `correct` does at each gate"); the Phase-X sibling design
+(cross-run channel; shares the `run_overrides` field) is at
+[`orchestrator/docs/cross-run-correction-channel.md`](orchestrator/docs/cross-run-correction-channel.md).
+The sibling bug (`_route_after_pi_decision` has the same dead-end
+shape) is filed in the **Deferred follow-ups** list below — fix
+deserves isolated review because pi_decision_select is the TWO-TAP
+autonomy-licensing gate for privileged WRITE_TOOLS.
+
 ### Deferred follow-ups
 
 Deferred from the Phase D2.1 review — non-blocking but should
@@ -793,6 +907,33 @@ land before the next major orchestrator pass:
 - **Brain over-escalation risk** — Brain prompt now mentions FS
   tools but no per-call policy enforces read-only at the host FS;
   audit trail for any Brain-initiated Bash/Write would be valuable.
+- **Phase-X² sibling — `_route_after_pi_decision` dead-end** —
+  `pi_decision_select` `correct` routes to `escalation_router` which
+  synthesizes an unclassified checkpoint and terminates. Same shape
+  as the Phase-X² pi_greenlight bug, but the redraft target is the
+  TWO-TAP autonomy-licensing gate. Fix as separate PR for
+  autonomy-contract review; decide redraft target (`decision_present`
+  cheap re-render vs `strategy_node` full re-strategize) with
+  explicit EC8 set-identity check on the loop-back.
+- **Phase-X² polish (from wrhahen1y adversarial review)** —
+  non-blocking but worth a sweep: (a) `confirmation_brief_redraft`
+  cap-exceeded return omits `greenlight_redrafts: next_count` (counter
+  freezes at pre-increment) — cosmetic for current topology; (b) align
+  `_route_after_pi_greenlight` substring check with `pi.py:115` (both
+  `accept` and `approve`) via a shared `_is_accept_token` helper;
+  (c) bump `nodes/pi.py:_now_iso` to millisecond precision (parked_store
+  already does; `state['interrupts'][*].timestamp` currently seconds);
+  (d) collapse dead `in_run_redirects[-MAX:]` trim into an `assert`
+  (budget guard makes it unreachable); (e) surface
+  `latest_error_type` and `latest_checkpoint_reason` on the
+  `pi_acceptance` payload so the PI sees specific escalation cause
+  rather than only `error_count`; (f) tighten orchestrator-pi.md
+  AskUserQuestion 'Correct' description to surface gate-specific
+  Phase-X² semantics before the option choice; (g) add BRAIN_SYSTEM
+  instruction defining literal override-block delimiters to defend
+  against XML / setext / `</PI_OVERRIDES>` fence-equivalent markers
+  (separate class from H1's Unicode/case/markdown defenses, already
+  hardened).
 - **D3b** — SerpAPI augmentation for `research_toolkit_node`
 - **D6** — `pi_extend_toolkit` for mid-mission tool addition
 - **Phase E** — Capability categories replacing static WRITE_TOOLS
