@@ -88,6 +88,8 @@ async def test_orchestrator_run_start_posts_to_runs(recorder):
         "project_id": "prj_test",
         "budget_usd": 3.0,
         "workflow_thread_id": None,
+        # Phase-X — additive field; None when PI doesn't pass run_instructions.
+        "run_instructions": None,
     }
 
 

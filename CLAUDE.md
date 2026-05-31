@@ -694,6 +694,79 @@ unchanged by v2.6. WRITE_TOOLS dispatched from
 provided the LLM included `project_id` in each action's `args`.
 
 
+### Phase-X — Cross-Run Correction Channel
+
+Landed during PI live-test of Run-5: a `pi_greenlight` redirect's
+`response_text` was thread-scoped (lived only in `state["interrupts"]` /
+`parked_interrupts.response_text` for that workflow_thread_id). After
+`orchestrator_run_start` created a fresh thread, `_build_strategy_prompt`
+saw `make_initial_state`'s empty `interrupts=[]` and Brain regenerated
+the brief from mission body alone — reproducing whatever framing the
+redirect was meant to correct. Cross-run continuity was not plumbed.
+
+**Architecture** — adds a `run_overrides JSON` column to `workflow_runs`
+(the orchestrator-owned Layer-2 storage that was always the right
+seam — the redirect just had no surface there). Two write paths
+converge on the same column:
+
+1. **Manual.** `orchestrator_run_start(..., run_instructions=…)`
+   accepts an optional PI string. `start_run_commit` writes it as
+   `run_overrides["pi_instructions"]`. Redacted from the ack dict so
+   it doesn't leak to FastAPI access logs.
+2. **Auto-rehydration.** `start_run_commit` calls
+   `ParkedStore.list_answered_redirects_for_mission(mission_id,
+   since_last_terminal_complete=True, limit=3)` and merges the prior
+   `pi_greenlight` `correct` response_texts as
+   `run_overrides["prior_redirects"]`. The PI does not need to retype
+   a redirect they already submitted on an earlier run of the same
+   mission.
+
+Read path: `start_run_drive` reads the column, seeds
+`state["run_overrides"]`, and `_build_strategy_prompt` prefixes a
+delimited `--- BEGIN PI OVERRIDES (highest priority) --- ... --- END ---`
+block at the top of the strategy prompt (BEFORE project status / context /
+mission body). The block explicitly instructs Brain to treat the text as
+PI directive and prefer it over contradicting mission-body wording.
+
+**PI escape valve.** `orchestrator_cancel_overrides(mission_id)` (new
+MCP tool) stamps `mission_metadata.overrides_cleared_at = now()`.
+Future runs filter out any prior redirects with
+`responded_at <= cleared_at`. Useful when the PI has confirmed prior
+corrections are fully absorbed and wants a fresh planning slate without
+GC'ing `parked_interrupts`.
+
+**Industry precedent.** Airflow `dag_run.conf` + OpenAI Assistants
+`additional_instructions`. The pattern: per-run override lives on the
+run record, not the workflow definition. Our `workflow_runs` table was
+designed for this; we just hadn't exposed it.
+
+**Excluded designs (with reason).**
+- Mission-body append (Option i in design doc) — pollutes RKA's
+  system-of-record with workflow-position concerns; inverts the
+  three-storage discipline.
+- Phase-aware mission structure (Option C / Phase E or F) — correct
+  long-term model for budgets/gates/queues, orthogonal to the
+  redirect bug; multi-day refactor that needs Phase O's H-step
+  semantics to land first.
+
+**Schema migration.** Existing `workflow_runs` rows get the new
+nullable column via `_migrate_workflow_runs_run_overrides_if_needed`
+in `ParkedStore._init_schema` (sniff-`sqlite_master` pattern,
+consistent with `_migrate_project_workspaces_columns_if_needed`).
+Also creates `mission_metadata` + `schema_migrations` tables (the
+latter is for future migrations; the migration-version-tracking
+implementation is its own follow-up).
+
+**Timestamp precision.** `_now_iso()` was bumped from second to
+millisecond precision (and `db/schema.sql`'s `strftime` DEFAULTs match).
+Two events <1s apart now get distinct stamps — critical because the
+`overrides_cleared_at > responded_at` filter would otherwise drop a
+legitimate post-clear redirect.
+
+Reference: [`orchestrator/docs/cross-run-correction-channel.md`](orchestrator/docs/cross-run-correction-channel.md)
+for the full architectural recommendation including option analysis,
+industry comparison, adversarial critique, and acceptance criteria.
+
 ### Deferred follow-ups
 
 Deferred from the Phase D2.1 review — non-blocking but should

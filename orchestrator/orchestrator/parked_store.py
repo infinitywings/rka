@@ -65,7 +65,16 @@ RunStatus = Literal[
 
 
 def _now_iso() -> str:
-    return datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    """ISO-8601 UTC timestamp with millisecond precision.
+
+    Millisecond precision (was seconds pre-Phase-X) so two events <1s
+    apart get distinct stamps — critical for `responded_at` comparisons
+    in `list_answered_redirects_for_mission`, where the
+    `overrides_cleared_at` cutoff and a later redirect's `responded_at`
+    could otherwise collide on the same second and the `>` filter would
+    drop a legitimate post-clear redirect.
+    """
+    return datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")[:-4] + "Z"
 
 
 def _new_id(prefix: str) -> str:
@@ -111,6 +120,14 @@ class ParkedStore:
             self._conn.executescript(sql)
         self._migrate_pre_phase_o_if_needed()
         self._migrate_project_workspaces_columns_if_needed()
+        # Phase-X (Cross-Run Correction Channel) — additive column on
+        # workflow_runs. The schema.sql CREATE TABLE IF NOT EXISTS only
+        # creates the column on fresh databases; existing DBs need an
+        # ALTER. Idempotent via the sniff-sqlite_master pattern (consistent
+        # with the other _migrate_*_if_needed helpers; schema_migrations
+        # table-based versioning is a separate hygiene PR per the design
+        # doc and intentionally scoped out here).
+        self._migrate_workflow_runs_run_overrides_if_needed()
 
     def _migrate_project_workspaces_columns_if_needed(self) -> None:
         """Add manifest_json, manifest_hash, audit_journal_id, updated_at
@@ -140,7 +157,7 @@ class ParkedStore:
                 )
                 self._conn.execute(
                     "UPDATE project_workspaces SET updated_at = "
-                    "strftime('%Y-%m-%dT%H:%M:%SZ', 'now') "
+                    "strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
                     "WHERE updated_at IS NULL"
                 )
             if "zotero_collection_key" not in create_sql:
@@ -151,6 +168,66 @@ class ParkedStore:
                 self._conn.execute(
                     "ALTER TABLE project_workspaces ADD COLUMN zotero_collection_name TEXT"
                 )
+
+    def _migrate_workflow_runs_run_overrides_if_needed(self) -> None:
+        """Phase-X — add the `run_overrides TEXT` column to workflow_runs
+        on existing databases. Idempotent.
+
+        New databases get the column from schema.sql's CREATE TABLE;
+        existing databases miss it until this ALTER runs.
+
+        Adversarial-review M2 fix: also normalize any legacy
+        second-precision timestamps (length 20, ending in "Z") to
+        millisecond precision by injecting ".000" before the "Z".
+        Otherwise a legacy `workflow_runs.updated_at = "2026-05-31T03:45:00Z"`
+        compares lexicographically GREATER than a new
+        `parked_interrupts.responded_at = "2026-05-31T03:45:00.500Z"`
+        because `Z`=0x5A > `.`=0x2E — silently dropping every redirect
+        recorded within the same wall-clock second as a completed
+        legacy run.
+
+        Both fixes share one migration entry so existing DBs upgrade
+        in a single pass.
+        """
+        row = self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='workflow_runs'"
+        ).fetchone()
+        if row is None:
+            return
+        create_sql = row[0] or ""
+        needs_column = "run_overrides" not in create_sql
+        with self._conn:
+            if needs_column:
+                self._conn.execute(
+                    "ALTER TABLE workflow_runs ADD COLUMN run_overrides TEXT DEFAULT NULL"
+                )
+            # M2: normalize legacy second-precision timestamps in any
+            # row that pre-dates the millisecond bump. Targets BOTH
+            # workflow_runs and parked_interrupts. Targets length=20
+            # (canonical YYYY-MM-DDTHH:MM:SSZ — 20 chars exactly);
+            # millisecond-precision rows are length 24 and skipped.
+            # Backfills with ".000" (epoch ms within that second).
+            self._conn.execute(
+                "UPDATE workflow_runs SET updated_at = "
+                "substr(updated_at, 1, 19) || '.000Z' "
+                "WHERE length(updated_at) = 20 AND updated_at LIKE '%Z'"
+            )
+            self._conn.execute(
+                "UPDATE workflow_runs SET started_at = "
+                "substr(started_at, 1, 19) || '.000Z' "
+                "WHERE length(started_at) = 20 AND started_at LIKE '%Z'"
+            )
+            self._conn.execute(
+                "UPDATE parked_interrupts SET parked_at = "
+                "substr(parked_at, 1, 19) || '.000Z' "
+                "WHERE length(parked_at) = 20 AND parked_at LIKE '%Z'"
+            )
+            self._conn.execute(
+                "UPDATE parked_interrupts SET responded_at = "
+                "substr(responded_at, 1, 19) || '.000Z' "
+                "WHERE responded_at IS NOT NULL "
+                "  AND length(responded_at) = 20 AND responded_at LIKE '%Z'"
+            )
 
     def _migrate_pre_phase_o_if_needed(self) -> None:
         """Detect a parked_interrupts CHECK constraint missing Phase-O
@@ -229,15 +306,27 @@ class ParkedStore:
         project_id: str,
         budget_usd: float = 5.0,
         workflow_thread_id: Optional[str] = None,
+        run_overrides: Optional[dict] = None,
     ) -> str:
-        """Insert a new workflow_runs row. Returns the workflow_thread_id."""
+        """Insert a new workflow_runs row. Returns the workflow_thread_id.
+
+        Phase-X: `run_overrides` (when non-empty) is JSON-serialized into
+        the new `run_overrides` column. Brain at strategy_node reads this
+        via state["run_overrides"] and prefixes it under a delimited
+        ``## PI OVERRIDES`` block in the strategy prompt. Empty dict /
+        None → NULL in the column (no override block in the prompt).
+        """
         thread_id = workflow_thread_id or _new_id("thr")
+        overrides_json = (
+            json.dumps(run_overrides) if run_overrides else None
+        )
         with self._tx() as c:
             c.execute(
                 """INSERT INTO workflow_runs
-                   (workflow_thread_id, mission_id, project_id, budget_usd)
-                   VALUES (?, ?, ?, ?)""",
-                (thread_id, mission_id, project_id, budget_usd),
+                   (workflow_thread_id, mission_id, project_id, budget_usd,
+                    run_overrides)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (thread_id, mission_id, project_id, budget_usd, overrides_json),
             )
         return thread_id
 
@@ -246,7 +335,19 @@ class ParkedStore:
             "SELECT * FROM workflow_runs WHERE workflow_thread_id = ?",
             (workflow_thread_id,),
         ).fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        d = dict(row)
+        # Phase-X: deserialize the JSON column into a dict (or {} if NULL).
+        raw = d.get("run_overrides")
+        if raw:
+            try:
+                d["run_overrides"] = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                d["run_overrides"] = {}
+        else:
+            d["run_overrides"] = {}
+        return d
 
     def list_runs(
         self,
@@ -476,7 +577,7 @@ class ParkedStore:
                    VALUES (?, ?)
                    ON CONFLICT(project_id) DO UPDATE
                      SET workspace_path = excluded.workspace_path,
-                         updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')""",
+                         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')""",
                 (project_id, workspace_path),
             )
 
@@ -509,7 +610,7 @@ class ParkedStore:
                          SET workspace_path = excluded.workspace_path,
                              manifest_json = excluded.manifest_json,
                              manifest_hash = excluded.manifest_hash,
-                             updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')""",
+                             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')""",
                     (project_id, workspace_path, manifest_json, manifest_hash),
                 )
             else:
@@ -517,7 +618,7 @@ class ParkedStore:
                 c.execute(
                     """UPDATE project_workspaces
                        SET manifest_json = ?, manifest_hash = ?,
-                           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
                        WHERE project_id = ?""",
                     (manifest_json, manifest_hash, project_id),
                 )
@@ -545,7 +646,7 @@ class ParkedStore:
                 """UPDATE project_workspaces
                    SET zotero_collection_key = ?,
                        zotero_collection_name = ?,
-                       updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
                    WHERE project_id = ?""",
                 (collection_key, collection_name, project_id),
             )
@@ -556,7 +657,135 @@ class ParkedStore:
             c.execute(
                 """UPDATE project_workspaces
                    SET audit_journal_id = ?,
-                       updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
                    WHERE project_id = ?""",
                 (audit_journal_id, project_id),
             )
+
+    # -----------------------------------------------------------------
+    # Phase-X — Cross-Run Correction Channel
+    # -----------------------------------------------------------------
+
+    def list_answered_redirects_for_mission(
+        self,
+        mission_id: str,
+        *,
+        interrupt_type: str = "pi_greenlight",
+        since_last_terminal_complete: bool = True,
+        limit: int = 3,
+    ) -> list[dict]:
+        """Return prior PI `correct` (redirect) interrupt responses for
+        this mission, suitable for rehydrating into a fresh run's
+        `run_overrides["prior_redirects"]` block.
+
+        Each row: {interrupt_id, workflow_thread_id, mission_id,
+        interrupt_type, response_text, responded_at}.
+
+        Filtering:
+          - `interrupt_type` defaults to "pi_greenlight". Only confirmation-
+            brief redirects are meant to scope future runs.
+          - response_action='correct'. Accepts and rejects are not
+            rehydrated.
+          - status='answered'. Skips currently-pending interrupts.
+          - response_text IS NOT NULL AND != ''. Empty redirects are
+            historical noise.
+          - `since_last_terminal_complete=True` (default) filters to
+            redirects that landed AFTER the last `terminal_state='complete'`
+            run for this mission (i.e., redirects that have not been
+            superseded by a successful run). Set False to get the full
+            history (useful for audit + tests).
+          - `mission_metadata.overrides_cleared_at`: redirects with
+            responded_at <= cleared_at are excluded. Honors the PI's
+            explicit "I've absorbed these" affordance.
+          - `limit` — most-recent-first cap.
+
+        Single transactional SELECT (one statement, JOINed to two
+        max-time subqueries) so the slice is consistent under concurrent
+        writes.
+        """
+        # Effective cutoff is the LATEST of all active cutoffs. SQLite's
+        # MAX() scalar form misbehaves when one arg is a correlated
+        # subquery wrapped in COALESCE — so we express the constraint as
+        # AND of "responded_at > cutoff" clauses instead. Each cutoff
+        # uses COALESCE to fall back to a far-past sentinel when its
+        # source is NULL (no completed runs yet / no cleared_at stamp).
+        cutoff_clauses: list[str] = []
+        if since_last_terminal_complete:
+            # Adversarial-review C1 fix: require BOTH terminal_state='complete'
+            # AND final_report_id IS NOT NULL. The pi_acceptance node writes
+            # terminal_state='complete' whenever the PI types "accept",
+            # including on the escalation_router → pi_acceptance path where
+            # the PI is acknowledging an escalation (no successful mission
+            # work). Filtering on terminal_state alone would self-erase
+            # the very redirect that caused the escalation — Brain's next
+            # run would not see it. Successful mission completion runs
+            # submit_report() which sets final_report_id; escalation
+            # acceptances do not. AND'ing both fields correctly distinguishes
+            # the two.
+            cutoff_clauses.append(
+                "responded_at > COALESCE("
+                "  (SELECT MAX(updated_at) FROM workflow_runs "
+                "   WHERE mission_id = :mid "
+                "     AND terminal_state = 'complete' "
+                "     AND final_report_id IS NOT NULL),"
+                "  '0000-00-00T00:00:00.000Z'"
+                ")"
+            )
+        cutoff_clauses.append(
+            "responded_at > COALESCE("
+            "  (SELECT overrides_cleared_at FROM mission_metadata "
+            "   WHERE mission_id = :mid),"
+            "  '0000-00-00T00:00:00.000Z'"
+            ")"
+        )
+        cutoff_sql = " AND ".join(cutoff_clauses)
+
+        query = (
+            "SELECT interrupt_id, workflow_thread_id, mission_id, "
+            "       interrupt_type, response_text, responded_at "
+            "FROM parked_interrupts "
+            "WHERE mission_id = :mid "
+            "  AND interrupt_type = :type "
+            "  AND status = 'answered' "
+            "  AND response_action = 'correct' "
+            "  AND response_text IS NOT NULL "
+            "  AND response_text != '' "
+            f"  AND {cutoff_sql} "
+            "ORDER BY responded_at DESC "
+            "LIMIT :lim"
+        )
+        rows = self._conn.execute(
+            query,
+            {"mid": mission_id, "type": interrupt_type, "lim": limit},
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def set_mission_overrides_cleared(self, mission_id: str) -> str:
+        """Stamp mission_metadata.overrides_cleared_at = now() for this
+        mission. Future calls to list_answered_redirects_for_mission
+        will filter out any redirects with responded_at <= this stamp.
+
+        Returns the timestamp written. PI's escape valve when prior
+        redirects have been fully absorbed and a fresh planning slate
+        is desired.
+        """
+        ts = _now_iso()
+        with self._tx() as c:
+            c.execute(
+                """INSERT INTO mission_metadata
+                     (mission_id, overrides_cleared_at, updated_at)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(mission_id) DO UPDATE
+                     SET overrides_cleared_at = excluded.overrides_cleared_at,
+                         updated_at = excluded.updated_at""",
+                (mission_id, ts, ts),
+            )
+        return ts
+
+    def get_mission_overrides_cleared_at(self, mission_id: str) -> Optional[str]:
+        """Read the cleared_at stamp; None when never set."""
+        row = self._conn.execute(
+            "SELECT overrides_cleared_at FROM mission_metadata WHERE mission_id = ?",
+            (mission_id,),
+        ).fetchone()
+        return row["overrides_cleared_at"] if row else None

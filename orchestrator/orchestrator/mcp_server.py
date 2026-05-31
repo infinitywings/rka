@@ -108,6 +108,7 @@ async def orchestrator_run_start(
     project_id: str,
     budget_usd: float = 5.0,
     workflow_thread_id: Optional[str] = None,
+    run_instructions: Optional[str] = None,
 ) -> dict:
     """Start a new orchestrator workflow.
 
@@ -125,10 +126,20 @@ async def orchestrator_run_start(
         budget_usd: USD cap on LLM spend. Default 5.0.
         workflow_thread_id: Optional explicit thread id. Auto-generated
             if omitted (`thr_<unix-ms-hex><uuid-hex>`).
+        run_instructions: Phase-X (Cross-Run Correction Channel) — optional
+            per-run PI override text that supersedes contradicting framing
+            in the mission body for THIS run only. Use this to declare
+            run-level scope, budget intent, or other corrections without
+            polluting the mission body. Brain renders it under a delimited
+            "PI OVERRIDES (highest priority)" block at the top of the
+            strategy prompt, alongside any auto-rehydrated prior
+            pi_greenlight redirects for this mission. Redacted from the
+            response (returned as "<set>" not the raw text) to avoid
+            leaking to logs.
 
     Returns:
         {workflow_thread_id, mission_id, project_id, status: "starting",
-         wait_segment: false}
+         wait_segment: false, run_instructions: "<set>" | null}
     """
     async with _client() as c:
         r = await c.post(
@@ -139,8 +150,38 @@ async def orchestrator_run_start(
                 "project_id": project_id,
                 "budget_usd": budget_usd,
                 "workflow_thread_id": workflow_thread_id,
+                "run_instructions": run_instructions,
             },
         )
+        _raise_with_detail(r)
+        return r.json()
+
+
+@mcp.tool()
+async def orchestrator_cancel_overrides(mission_id: str) -> dict:
+    """Phase-X PI escape valve — clear auto-rehydrated prior redirects
+    for this mission.
+
+    The orchestrator auto-rehydrates the most-recent pi_greenlight
+    redirect responses for a mission into each new run's strategy prompt
+    so the PI doesn't have to re-type corrections across run boundaries.
+    Once the PI has confirmed those corrections are fully absorbed (e.g.,
+    Brain's last brief reflected them correctly), call this tool to stamp
+    `mission_metadata.overrides_cleared_at` so future runs start with a
+    fresh slate (no prior_redirects in the override block).
+
+    Manual `run_instructions` passed to a subsequent `orchestrator_run_start`
+    still apply — this only clears the AUTO-rehydration, not the manual
+    per-run channel.
+
+    Args:
+        mission_id: RKA mission id (mis_…) to clear overrides for.
+
+    Returns:
+        {mission_id, overrides_cleared_at: <ISO-8601 UTC timestamp>}
+    """
+    async with _client() as c:
+        r = await c.post(f"/missions/{mission_id}/overrides/cancel")
         _raise_with_detail(r)
         return r.json()
 

@@ -248,6 +248,7 @@ class OrchestratorRunner:
         project_id: str,
         budget_usd: float = 5.0,
         workflow_thread_id: Optional[str] = None,
+        run_instructions: Optional[str] = None,
     ) -> SegmentOutcome:
         """Create a workflow_runs row, load the mission spec, and invoke
         the graph from START. Returns when the graph parks at an
@@ -260,12 +261,19 @@ class OrchestratorRunner:
         LLM calls = ~minutes) runs as a background task. The legacy sync
         path is kept for tests and any caller that explicitly passes
         `?wait_segment=true`.
+
+        Phase-X: `run_instructions` is the PI's per-run override text
+        (passed via orchestrator_run_start). Persisted into
+        workflow_runs.run_overrides alongside any auto-rehydrated prior
+        redirects, and seeded into state["run_overrides"] for Brain to
+        consume at strategy_node.
         """
         ack = self.start_run_commit(
             mission_id=mission_id,
             project_id=project_id,
             budget_usd=budget_usd,
             workflow_thread_id=workflow_thread_id,
+            run_instructions=run_instructions,
         )
         return self.start_run_drive(
             workflow_thread_id=ack["workflow_thread_id"],
@@ -282,6 +290,7 @@ class OrchestratorRunner:
         project_id: str,
         budget_usd: float = 5.0,
         workflow_thread_id: Optional[str] = None,
+        run_instructions: Optional[str] = None,
     ) -> dict:
         """Phase 1 of start_run: mint workflow_runs row, validate the
         mission exists by loading its spec. Does NOT invoke the graph.
@@ -293,13 +302,72 @@ class OrchestratorRunner:
 
         Raises MissionNotFoundError if the mission can't be loaded (same
         contract as `start_run`).
+
+        Phase-X: auto-rehydrates prior pi_greenlight redirect responses
+        for this mission via `parked_store.list_answered_redirects_for_mission`
+        (filtered by since-last-complete and the optional
+        `orchestrator_cancel_overrides` cutoff). Merges with any explicit
+        `run_instructions` kwarg into the workflow_runs.run_overrides
+        column. The resulting dict shape is:
+          {
+            "pi_instructions": "<from kwarg, optional>",
+            "prior_redirects": [{"workflow_thread_id": ...,
+                                 "responded_at": ...,
+                                 "response_text": ...}, ...]
+          }
+        Either or both keys may be absent if there's nothing to record.
         """
-        thread_id = self.store.create_run(
-            mission_id=mission_id,
-            project_id=project_id,
-            budget_usd=budget_usd,
-            workflow_thread_id=workflow_thread_id,
-        )
+        # Phase-X: build the run_overrides dict BEFORE the create_run call
+        # so the column is populated in one INSERT (no later UPDATE).
+        #
+        # Adversarial-review M1: hold the store's _tx_lock around BOTH
+        # the rehydration query AND the create_run INSERT. Without this,
+        # two concurrent start_run_commit calls for the same mission can
+        # both observe the same set of prior_redirects (the SELECT runs
+        # outside any transaction). Holding _tx_lock serializes them so
+        # the second start sees the first's run_overrides as a committed
+        # row (without affecting the set of prior PI-greenlight redirects,
+        # which only grow on PI action, not on run_start). This is a
+        # belt-and-suspenders consistency guarantee — the worst-case
+        # without the lock is two parallel runs surfacing the same
+        # corrections, which is a minor duplication, not corruption.
+        # We take the lock anyway because it's free and removes the
+        # need to reason about the race for future readers.
+        run_overrides: dict = {}
+        if run_instructions and run_instructions.strip():
+            run_overrides["pi_instructions"] = run_instructions.strip()
+        with self.store._tx_lock:
+            try:
+                prior_redirects = self.store.list_answered_redirects_for_mission(
+                    mission_id,
+                    interrupt_type="pi_greenlight",
+                    since_last_terminal_complete=True,
+                    limit=3,
+                )
+            except Exception:  # noqa: BLE001
+                # Defensive: if the lookup fails (e.g., schema-migration issue
+                # on an older DB), proceed with no auto-rehydration rather
+                # than blocking the run. Brain still sees pi_instructions
+                # if PI passed any.
+                prior_redirects = []
+            if prior_redirects:
+                run_overrides["prior_redirects"] = [
+                    {
+                        "workflow_thread_id": r["workflow_thread_id"],
+                        "interrupt_id": r["interrupt_id"],
+                        "responded_at": r["responded_at"],
+                        "response_text": r["response_text"],
+                    }
+                    for r in prior_redirects
+                ]
+
+            thread_id = self.store.create_run(
+                mission_id=mission_id,
+                project_id=project_id,
+                budget_usd=budget_usd,
+                workflow_thread_id=workflow_thread_id,
+                run_overrides=run_overrides if run_overrides else None,
+            )
 
         mcp = self._mcp_factory(thread_id, project_id)
         try:
@@ -367,13 +435,28 @@ class OrchestratorRunner:
         Gap 3A — `allowed_capabilities` seeds the workflow's capability
         allowlist from the mission spec (populated by `start_run_commit`
         from `mission.capabilities`). None/empty = no restriction.
+
+        Phase-X — reads workflow_runs.run_overrides from the store
+        (populated by `start_run_commit` from `run_instructions` kwarg +
+        auto-rehydrated prior pi_greenlight redirects) and seeds it
+        into state["run_overrides"]. Brain's `_build_strategy_prompt`
+        consumes this to render a PI OVERRIDES delimited block.
+        Defensive: missing row / missing column / non-dict value all
+        fall back to empty {} so the run still launches cleanly.
         """
+        run_overrides: dict = {}
+        run_row = self.store.get_run(workflow_thread_id)
+        if run_row:
+            raw = run_row.get("run_overrides")
+            if isinstance(raw, dict):
+                run_overrides = raw
         initial = make_initial_state(
             workflow_thread_id=workflow_thread_id,
             mission_id=mission_id,
             motivated_by_decision_id=motivated_by_decision_id,
             project_id=project_id,
             allowed_capabilities=allowed_capabilities,
+            run_overrides=run_overrides,
         )
         # Gap 1 fix: per-project workspace_path threads into make_sdk so the
         # Phase G2 can_use_tool hook can scope FS escape detection to THIS

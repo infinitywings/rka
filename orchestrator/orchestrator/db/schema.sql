@@ -26,8 +26,17 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     final_report_id TEXT,
     usd_spent REAL NOT NULL DEFAULT 0.0,
     last_error TEXT,
-    started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    -- Phase-X (Cross-Run Correction Channel): JSON dict carrying per-run
+    -- PI overrides (manual run_instructions kwarg from orchestrator_run_start
+    -- AND auto-rehydrated prior pi_greenlight redirects for the same mission).
+    -- Stored as TEXT; SQLite's json1 extension queries the contents. Read by
+    -- start_run_drive into state["run_overrides"] and prefixed into Brain's
+    -- strategy prompt under a delimited "PI OVERRIDES" block. Defaulting to
+    -- NULL (not '{}') so the existing `idx_workflow_runs_status` doesn't get
+    -- a phantom rebuild on migration.
+    run_overrides TEXT DEFAULT NULL,
+    started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_status
@@ -77,7 +86,7 @@ CREATE TABLE IF NOT EXISTS parked_interrupts (
     response_action TEXT
         CHECK (response_action IS NULL OR response_action IN ('accept', 'reject', 'correct')),
     response_text TEXT,
-    parked_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    parked_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     responded_at TEXT
 );
 
@@ -106,6 +115,38 @@ CREATE TABLE IF NOT EXISTS project_workspaces (
     audit_journal_id TEXT,          -- rka_add_note id set by finalize_node
     zotero_collection_key TEXT,     -- Zotero Collection key (8-char alnum) where this project's papers live
     zotero_collection_name TEXT,    -- human-readable name of the collection (project slug)
-    registered_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    registered_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+-- ============================================================
+-- mission_metadata — per-mission orchestrator-side metadata
+--
+-- Phase-X (Cross-Run Correction Channel). Tracks an
+-- `overrides_cleared_at` timestamp the PI can set via the
+-- orchestrator_cancel_overrides MCP tool. The auto-rehydration
+-- query in start_run_commit filters parked_interrupts.responded_at
+-- > overrides_cleared_at, so the PI has an explicit affordance to
+-- declare "all prior redirects absorbed, start fresh" without
+-- having to garbage-collect the parked_interrupts table.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS mission_metadata (
+    mission_id TEXT PRIMARY KEY,
+    overrides_cleared_at TEXT,
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+-- ============================================================
+-- schema_migrations — version tracking
+--
+-- Replaces the sniff-sqlite_master pattern in parked_store.py's
+-- `_migrate_*_if_needed` methods. New migrations land as
+-- migration_N(conn) functions; their version is recorded here on
+-- success. ParkedStore._init_schema reads max(version) and applies
+-- newer migrations in order.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );

@@ -181,6 +181,22 @@ class ResearchWorkflowState(TypedDict, total=False):
     # subprocess's `rka mcp` stdio child. Additive (TypedDict total=False);
     # pre-Phase-2.9 state shapes continue to work without it.
     project_id: str
+    # Phase-X (Cross-Run Correction Channel): per-run PI overrides loaded
+    # from workflow_runs.run_overrides at start_run_drive. Shape:
+    #   {
+    #     "pi_instructions": "<optional PI text from orchestrator_run_start>",
+    #     "prior_redirects": [
+    #       {"workflow_thread_id": "...", "interrupt_id": "...",
+    #        "responded_at": "...", "response_text": "..."},
+    #       ...
+    #     ]
+    #   }
+    # Read by Brain at _build_strategy_prompt and prefixed under a
+    # delimited "PI OVERRIDES" block at the top of the prompt. Empty dict
+    # ({}) means "no overrides for this run" — the block is suppressed.
+    # Additive (TypedDict total=False); pre-Phase-X state shapes continue
+    # to work without it.
+    run_overrides: dict
 
     # Position
     current_phase: WorkflowPhase
@@ -318,6 +334,7 @@ def make_initial_state(
     motivated_by_decision_id: str,
     project_id: str = "",
     allowed_capabilities: list[str] | None = None,
+    run_overrides: dict | None = None,
 ) -> ResearchWorkflowState:
     """Construct the canonical initial state at workflow start.
 
@@ -334,6 +351,11 @@ def make_initial_state(
     spec carries `capabilities=["record_knowledge", "execution_gates"]`
     narrows the dispatcher accordingly). None / empty list = no
     restriction (pre-2.14 behavior).
+
+    Phase-X: `run_overrides` carries per-run PI corrections (manual
+    pi_instructions + auto-rehydrated prior_redirects). Seeded by the
+    runner from workflow_runs.run_overrides at start_run_drive. Empty
+    dict {} (default) means "no overrides for this run".
     """
 
     return ResearchWorkflowState(
@@ -341,6 +363,7 @@ def make_initial_state(
         mission_id=mission_id,
         motivated_by_decision_id=motivated_by_decision_id,
         project_id=project_id,
+        run_overrides=dict(run_overrides or {}),
         current_phase="init",
         current_node="",
         next_node_override="",

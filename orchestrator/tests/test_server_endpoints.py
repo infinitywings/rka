@@ -186,6 +186,8 @@ def test_post_runs_returns_outcome(setup):
             "project_id": "prj_test",
             "budget_usd": 2.0,
             "workflow_thread_id": None,
+            # Phase-X — additive field; None when PI doesn't pass run_instructions.
+            "run_instructions": None,
         }
     ]
 

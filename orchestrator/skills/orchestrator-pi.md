@@ -39,6 +39,59 @@ The tool returns immediately with either:
 - `{terminal_state: "complete"|"escalated"|"failed", final_report_id, ...}`
   — graph completed without needing PI input.
 
+### Per-run PI overrides — `run_instructions=...`
+
+`orchestrator_run_start` accepts an optional `run_instructions: str`
+kwarg (Phase-X — Cross-Run Correction Channel). Use it when the PI
+wants to scope or correct THIS run without polluting the mission body:
+
+- Per-run budget scoping ("this run only does T1–T4 at $25; T5–T8 are
+  future runs requiring separate authorization")
+- Surfacing prior session context ("attempt-2 surfaced a $100 misframing;
+  authorized cap is $25")
+- Explicit assumption overrides ("treat Bash as available — EROFS was
+  resolved in jrn_…")
+
+The orchestrator stores it in `workflow_runs.run_overrides.pi_instructions`
+and Brain's `strategy_node` reads it under a delimited "PI OVERRIDES
+(highest priority)" block at the top of the strategy prompt. The block
+explicitly tells Brain to treat the text as PI directive and prefer it
+over contradicting mission-body wording.
+
+The response from `orchestrator_run_start` redacts the actual text to
+`"<set>"` to avoid logging PI prose — the canonical record lives in
+`workflow_runs.run_overrides` accessible via `orchestrator_get_run`.
+
+### Cross-run auto-rehydration
+
+`pi_greenlight` redirects on previous attempts of the same mission are
+auto-rehydrated into the next `orchestrator_run_start`'s `run_overrides`
+under `prior_redirects`. The PI does NOT need to re-type a redirect that
+they already submitted on an earlier (now-terminal) run of the same
+mission — Brain will see it again at the next strategy_node.
+
+Auto-rehydration is filtered by:
+- Most-recent 3 redirects (corrects) for this mission
+- Excludes redirects from runs that subsequently reached
+  `terminal_state="complete"` (those corrections are assumed absorbed)
+- Excludes redirects with `responded_at <= mission_metadata.overrides_cleared_at`
+  (PI explicit "I've absorbed everything" affordance — see next section)
+
+### `orchestrator_cancel_overrides(mission_id)`
+
+PI escape valve when the prior-redirect auto-rehydration is no longer
+desired. Stamps `mission_metadata.overrides_cleared_at = now()`. Future
+runs of this mission will not surface any prior redirects whose
+`responded_at <= cleared_at`. Manual `run_instructions=` kwarg is
+unaffected; only the auto-rehydration channel is cleared.
+
+When to call:
+- The PI just inspected the latest brief and verified all prior
+  corrections were correctly absorbed.
+- A mission has gone through multiple iteration cycles and the
+  `prior_redirects` block is becoming noise.
+- An incorrect or now-irrelevant prior redirect needs to be retired.
+
 ## Rendering inbox items
 
 Each `InboxItem` has a `payload` field with the graph's structured
@@ -154,15 +207,23 @@ in the SqliteSaver.
 ## Tool reference (this skill's surface)
 
 - `orchestrator_health()` — daemon smoke test
-- `orchestrator_run_start(mission_id, project_id, budget_usd?)` — start
+- `orchestrator_run_start(mission_id, project_id, budget_usd?, run_instructions?)` — start;
+  Phase-X `run_instructions` is the manual per-run PI override channel
 - `orchestrator_list_runs(status?, limit?)` — runs list
-- `orchestrator_get_run(workflow_thread_id)` — run detail
+- `orchestrator_get_run(workflow_thread_id)` — run detail (includes
+  `run_overrides` showing what overrides were active for the run)
 - `orchestrator_cancel(workflow_thread_id)` — abort
+- `orchestrator_cancel_overrides(mission_id)` — Phase-X PI escape valve;
+  clears auto-rehydration of prior pi_greenlight redirects for this
+  mission's next run
 - `orchestrator_inbox(workflow_thread_id?)` — pending interrupts
 - `orchestrator_get_interrupt(interrupt_id)` — one interrupt detail
 - `orchestrator_accept(interrupt_id)` — accept (server emits type-correct token)
 - `orchestrator_reject(interrupt_id, reason?)` — reject → escalation
-- `orchestrator_correct(interrupt_id, response_text)` — freeform redirect
+- `orchestrator_correct(interrupt_id, response_text)` — freeform redirect.
+  On `pi_greenlight`, the response text auto-rehydrates into the NEXT
+  run's `prior_redirects` block (per Phase-X). Useful when the PI wants
+  the correction to survive across run boundaries without re-typing.
 
 ## Notes for the PI's RKA writes (separate surface)
 

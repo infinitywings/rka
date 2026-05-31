@@ -210,6 +210,15 @@ class StartRunRequest(BaseModel):
     project_id: str
     budget_usd: float = 5.0
     workflow_thread_id: Optional[str] = None
+    # Phase-X (Cross-Run Correction Channel): per-run PI override text.
+    # Persisted into workflow_runs.run_overrides["pi_instructions"] and
+    # rendered into Brain's strategy prompt under a delimited PI OVERRIDES
+    # block. Supersedes contradictory framing in the mission body for THIS
+    # run only. Redacted from the ack dict in the response (the value is
+    # passthrough to runner; the ack returns the literal string "<set>"
+    # in its place to avoid leaking PI prose to FastAPI access logs /
+    # downstream proxies). Defaults to None (no override).
+    run_instructions: Optional[str] = None
 
 
 class StartOnboardingRequest(BaseModel):
@@ -814,6 +823,7 @@ def create_app(
                     project_id=req.project_id,
                     budget_usd=req.budget_usd,
                     workflow_thread_id=req.workflow_thread_id,
+                    run_instructions=req.run_instructions,
                 )
             except MissionNotFoundError as e:
                 raise HTTPException(status_code=404, detail=str(e))
@@ -827,6 +837,7 @@ def create_app(
                 project_id=req.project_id,
                 budget_usd=req.budget_usd,
                 workflow_thread_id=req.workflow_thread_id,
+                run_instructions=req.run_instructions,
             )
         except MissionNotFoundError as e:
             raise HTTPException(status_code=404, detail=str(e))
@@ -844,12 +855,28 @@ def create_app(
             ),
             log_tag="start_run",
         )
+        # Phase-X: redact run_instructions from the ack so the value
+        # doesn't bounce out to FastAPI access logs / MCP-caller traces.
+        # The PI knows what they passed; the canonical record is on
+        # workflow_runs.run_overrides accessible via /runs/{id}.
+        #
+        # Adversarial-review M3 clarification: this is LOG-HYGIENE
+        # redaction, NOT a confidentiality guarantee. The value IS
+        # retrievable via GET /runs/{id} (the PI needs an audit trail
+        # of what they authorized). Operators who consider their
+        # run_instructions sensitive must restrict access to /runs/{id}
+        # at the proxy/network layer; the orchestrator does not gate it
+        # behind a session header.
+        run_instructions_status = (
+            "<set>" if req.run_instructions and req.run_instructions.strip() else None
+        )
         return {
             "workflow_thread_id": ack["workflow_thread_id"],
             "mission_id": ack["mission_id"],
             "project_id": ack["project_id"],
             "status": "starting",
             "wait_segment": False,
+            "run_instructions": run_instructions_status,
         }
 
     @app.post("/onboard")
@@ -1017,6 +1044,21 @@ def create_app(
         runner_: OrchestratorRunner = request.app.state.runner
         count = runner_.cancel(workflow_thread_id)
         return {"cancelled_interrupts": count}
+
+    @app.post("/missions/{mission_id}/overrides/cancel")
+    async def cancel_mission_overrides(
+        mission_id: str, request: Request
+    ) -> dict:
+        """Phase-X — PI's escape valve. Stamps mission_metadata.overrides_cleared_at
+        so future runs' auto-rehydration filters out any prior redirects
+        with responded_at <= cleared_at. Use when the PI considers all
+        prior pi_greenlight redirects fully absorbed and wants a fresh
+        planning slate without garbage-collecting parked_interrupts."""
+        store_: ParkedStore = request.app.state.store
+        ts = await asyncio.to_thread(
+            store_.set_mission_overrides_cleared, mission_id
+        )
+        return {"mission_id": mission_id, "overrides_cleared_at": ts}
 
     @app.get("/inbox")
     async def inbox(

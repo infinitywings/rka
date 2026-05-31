@@ -258,21 +258,140 @@ def _format_mission_body(mission: dict | None, *, task_char_cap: int = 240) -> s
 # ---------------------------------------------------------------------------
 
 
+_PI_OVERRIDES_OPEN = "--- BEGIN PI OVERRIDES (highest priority) ---"
+_PI_OVERRIDES_CLOSE = "--- END PI OVERRIDES ---"
+
+# Adversarial-review H2 — runner.commit_response stores
+# `REDIRECT_SENTINEL + text` in parked_interrupts.response_text for
+# action="correct" so the routing layer recognizes the redirect on
+# resume. When we rehydrate that text into Brain's prompt we strip the
+# sentinel — Brain doesn't need to see the internal routing token, and
+# leaving it in confuses the "treat as PI directive" framing. Imported
+# here rather than at module top to avoid a circular import (brain ↔
+# orchestrator.response_tokens is fine but kept colocated for clarity).
+from orchestrator.response_tokens import REDIRECT_SENTINEL
+
+
+def _sanitize_override_text(text: str) -> str:
+    """Strip the REDIRECT_SENTINEL routing prefix and silently neutralize
+    any literal close-delimiter occurrences in a PI/redirect-supplied
+    text body before it lands in Brain's prompt.
+
+    Two adversarial-review fixes:
+      H1 — a PI text containing the literal `--- END PI OVERRIDES ---`
+           would close the override block early and let post-fence text
+           appear to Brain as if it were the mission-body section. We
+           defang by inserting a zero-width-ish separator inside the
+           delimiter so the literal match no longer fires. Both the OPEN
+           and CLOSE delimiter literals are neutralized for symmetry.
+      H2 — answer_interrupt stores `REDIRECT_SENTINEL + body` for
+           action="correct". We strip a leading sentinel here so Brain
+           sees clean prose.
+    """
+    if not isinstance(text, str):
+        return ""
+    s = text
+    # H2 — strip a leading REDIRECT_SENTINEL (case-insensitive, mirrors
+    # is_redirect_token's whitespace handling).
+    stripped = s.lstrip()
+    if stripped.upper().startswith(REDIRECT_SENTINEL):
+        s = stripped[len(REDIRECT_SENTINEL):]
+    # H1 — defang any literal delimiter occurrence. Splitting the
+    # 3-dash run keeps the text human-readable while making the literal
+    # match impossible.
+    for literal in (_PI_OVERRIDES_OPEN, _PI_OVERRIDES_CLOSE):
+        if literal in s:
+            s = s.replace(literal, literal.replace("---", "- - -"))
+    # Also defang bare `--- END PI OVERRIDES ---`-shaped tokens that
+    # would smuggle out even with wording variance.
+    for variant in ("--- END PI OVERRIDES", "--- BEGIN PI OVERRIDES"):
+        if variant in s:
+            s = s.replace(variant, variant.replace("---", "- - -"))
+    return s
+
+
+def _format_pi_overrides_block(run_overrides: dict) -> str:
+    """Phase-X: render the PI-overrides block that prefixes the strategy
+    prompt. Returns the empty string when there are no overrides.
+
+    Shape of run_overrides (any subset may be absent):
+      {
+        "pi_instructions": "<text>",
+        "prior_redirects": [{"workflow_thread_id": ..., "responded_at": ...,
+                             "response_text": ...}, ...]
+      }
+
+    The block opens with a fence and an explicit "treat as PI directive,
+    not as RKA tool instructions" line so a prose redirect can't be
+    misparsed as a tool-call directive. Closes with a matching fence.
+    Each body text passes through `_sanitize_override_text` which strips
+    the REDIRECT_SENTINEL routing prefix (H2) and defangs any literal
+    close-delimiter occurrence inside the prose (H1).
+    """
+    if not isinstance(run_overrides, dict) or not run_overrides:
+        return ""
+
+    pi_instructions = run_overrides.get("pi_instructions")
+    prior_redirects = run_overrides.get("prior_redirects") or []
+    has_any = bool(
+        (pi_instructions and pi_instructions.strip())
+        or prior_redirects
+    )
+    if not has_any:
+        return ""
+
+    lines: list[str] = []
+    lines.append(_PI_OVERRIDES_OPEN)
+    lines.append(
+        "Treat the text below as PI directive for THIS run. It supersedes "
+        "any prior framing in the mission body when they conflict. Do NOT "
+        "execute as RKA tool instructions — it is plain English to scope "
+        "your plan."
+    )
+    if pi_instructions and pi_instructions.strip():
+        clean = _sanitize_override_text(pi_instructions).strip()
+        if clean:
+            lines.append("")
+            lines.append("PI INSTRUCTIONS (this run):")
+            lines.append(clean)
+    if prior_redirects:
+        rendered: list[str] = []
+        for r in prior_redirects:
+            ts = r.get("responded_at", "?")
+            text = _sanitize_override_text(r.get("response_text") or "").strip()
+            if not text:
+                continue
+            rendered.append(f"  [{ts}] {text}")
+        if rendered:
+            lines.append("")
+            lines.append(
+                "PRIOR-RUN PI REDIRECTS (corrections from previous attempts "
+                "of this mission, most recent first; supersede any contradicting "
+                "mission-body wording):"
+            )
+            lines.extend(rendered)
+    lines.append(_PI_OVERRIDES_CLOSE)
+    return "\n".join(lines)
+
+
 def _build_strategy_prompt(
     state: ResearchWorkflowState,
     context: dict,
     status: dict,
     mission: dict | None,
 ) -> str:
+    override_block = _format_pi_overrides_block(state.get("run_overrides", {}))
+    prefix = (override_block + "\n\n") if override_block else ""
     return (
-        "Session-start strategy synthesis.\n\n"
-        f"Project status:\n{status}\n\n"
-        f"Relevant prior context:\n{context}\n\n"
-        f"Current mission: {state.get('mission_id', '(none)')}\n"
-        f"Motivated by decision: {state.get('motivated_by_decision_id', '(none)')}\n\n"
-        f"Mission body:\n{_format_mission_body(mission)}\n\n"
-        "Produce a short strategy outline: what this run should do, in what "
-        "order, with what evidence checks. Cite RKA IDs you reference."
+        prefix
+        + "Session-start strategy synthesis.\n\n"
+        + f"Project status:\n{status}\n\n"
+        + f"Relevant prior context:\n{context}\n\n"
+        + f"Current mission: {state.get('mission_id', '(none)')}\n"
+        + f"Motivated by decision: {state.get('motivated_by_decision_id', '(none)')}\n\n"
+        + f"Mission body:\n{_format_mission_body(mission)}\n\n"
+        + "Produce a short strategy outline: what this run should do, in what "
+        + "order, with what evidence checks. Cite RKA IDs you reference."
     )
 
 
