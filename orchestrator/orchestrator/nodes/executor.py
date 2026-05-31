@@ -24,7 +24,20 @@ from orchestrator.llm_client import (
     WRITE_TOOLS,
     capability_of,  # Phase 2.14
 )
-from orchestrator.mcp_client import MCPClient
+from orchestrator.mcp_client import CheckpointError, MCPClient
+from orchestrator.rka_enums import (
+    RKA_CHECKPOINT_TYPES,
+    RKA_CONFIDENCES,
+    RKA_DECISION_DECIDED_BY,
+    RKA_DECISION_KINDS,
+    RKA_DECISION_STATUSES,
+    RKA_IMPORTANCES,
+    RKA_JOURNAL_STATUSES,
+    RKA_JOURNAL_TYPES_V2_CANONICAL,
+    RKA_MISSION_STATUSES,
+    RKA_SOURCES,
+    validate_action_args,  # Phase-X² polish
+)
 from orchestrator.state import ArtifactRef, ErrorRecord, ResearchWorkflowState
 
 logger = logging.getLogger(__name__)
@@ -151,6 +164,34 @@ EXECUTOR_SYSTEM = (
     "through unmodified to the dispatcher and the call fails at the RKA "
     "API boundary. If a chain you need can't be expressed in this syntax, "
     "escalate via `rka_submit_checkpoint` describing the structure.\n\n"
+    # Phase-X² polish — enumerate valid RKA enum values. Empirical Run-5
+    # surfaced Brain proposing `confidence='confirmed'` (HTTP 422) and
+    # Executor inherits the same constraint set when it emits proposed_actions.
+    "RKA write-tool field values (v2.6+). Every string field with a "
+    "constrained value space must use one of the values below — "
+    "out-of-enum values are rejected pre-dispatch by the orchestrator "
+    "(`ratified_action_arg_invalid_enum_value`) AND at the RKA API "
+    "(HTTP 422). For executor-authored journal entries use `source='executor'`.\n"
+    "  - `confidence`: " + " | ".join(sorted(RKA_CONFIDENCES))
+    + ". The value 'confirmed' is NOT valid — use 'verified' for "
+    "cross-checked findings, 'tested' for empirically-probed findings.\n"
+    "  - `importance`: " + " | ".join(sorted(RKA_IMPORTANCES)) + ".\n"
+    "  - `source`: " + " | ".join(sorted(RKA_SOURCES))
+    + ". For Executor-authored entries, use 'executor'.\n"
+    "  - `type` (journal v2 canonical): "
+    + " | ".join(sorted(RKA_JOURNAL_TYPES_V2_CANONICAL))
+    + ". Legacy values silently normalized server-side but avoid in new writes.\n"
+    "  - `status` (journal lifecycle): "
+    + " | ".join(sorted(RKA_JOURNAL_STATUSES)) + ".\n"
+    "  - `decided_by`: " + " | ".join(sorted(RKA_DECISION_DECIDED_BY)) + ".\n"
+    "  - `kind` (decision): " + " | ".join(sorted(RKA_DECISION_KINDS))
+    + ". 'research_question' is reserved for advanceable RQs.\n"
+    "  - `status` (decision lifecycle): "
+    + " | ".join(sorted(RKA_DECISION_STATUSES)) + ".\n"
+    "  - `type` (checkpoint): " + " | ".join(sorted(RKA_CHECKPOINT_TYPES))
+    + ". 'gate' for blocking go/no-go points; 'decision' for forks "
+    "needing PI adjudication.\n"
+    "  - `status` (mission): " + " | ".join(sorted(RKA_MISSION_STATUSES)) + ".\n\n"
     # Phase D2 — built-in filesystem tools (Bash/Read/Write/Edit/Grep/Glob/
     # WebFetch/WebSearch) are granted to the subprocess for actual mission
     # work. The Phase-2.7 read-only-subprocess invariant is preserved at the
@@ -854,6 +895,38 @@ def execute_ratified_actions(
             )
             continue
 
+        # Phase-X² polish — pre-dispatch enum validation. Run-5 PA-2
+        # failed with HTTP 422 because Brain proposed
+        # `confidence='confirmed'` (not in RKA's enum). Catch the
+        # equivalent failure modes here BEFORE the network round-trip:
+        # short-circuits the EC8 escalation path on known-bad enum
+        # values, and produces a clearer ErrorRecord (with the
+        # offending field + value + expected set) than the
+        # downstream 422-reason enrichment can. Validation runs AFTER
+        # chain substitution so `{{PA-N.id}}`-resolved values are
+        # checked. Open-world tolerance: unknown tools and unknown
+        # args produce no violations (the upstream WRITE_TOOLS check
+        # already refuses unknown tools).
+        enum_violations = validate_action_args(tool, resolved_args)
+        if enum_violations:
+            detail_parts = [
+                f"{arg}={value!r} not in {sorted(expected)!r}"
+                for arg, value, expected in enum_violations
+            ]
+            new_errors.append(
+                _make_error(
+                    "execute_ratified_actions",
+                    "ratified_action_arg_invalid_enum_value",
+                    (
+                        f"PA-{idx}: tool={tool!r} invalid enum value(s): "
+                        + "; ".join(detail_parts)
+                        + " — rejected pre-dispatch to short-circuit the "
+                        "HTTP 422 round-trip."
+                    ),
+                )
+            )
+            continue
+
         # Phase E6 — project_id consistency guard + dispatcher-layer
         # auto-injection. The orchestrator's RestMCPClient already injects
         # `self.project_id` into every REST call's query params (see
@@ -900,11 +973,24 @@ def execute_ratified_actions(
         try:
             rka_id = method(**resolved_args)
         except Exception as e:  # noqa: BLE001 — surface all failures as ErrorRecord
+            # Phase-X² polish — belt-and-suspenders: if the failure was a
+            # CheckpointError with a structured `mcp_response`, append
+            # it to the detail so the ErrorRecord carries the full body
+            # even if the upstream RestMCPClient 422 enrichment misses
+            # an edge case. The reason string itself already carries
+            # the field-name summary for Pydantic 422s; this dumps the
+            # full parsed body for programmatic inspection downstream.
+            detail = (
+                f"PA-{idx}: tool={tool!r} "
+                f"args_keys={sorted(resolved_args.keys())!r} exc={e!r}"
+            )
+            if isinstance(e, CheckpointError) and getattr(e, "mcp_response", None):
+                detail += f" mcp_response={e.mcp_response!r}"
             new_errors.append(
                 _make_error(
                     "execute_ratified_actions",
                     "ratified_action_call_failed",
-                    f"PA-{idx}: tool={tool!r} args_keys={sorted(resolved_args.keys())!r} exc={e!r}",
+                    detail,
                 )
             )
             continue

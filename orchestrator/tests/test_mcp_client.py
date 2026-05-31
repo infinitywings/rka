@@ -408,6 +408,245 @@ def test_500_does_not_map_to_checkpoint_error():
 
 
 # ---------------------------------------------------------------------------
+# Phase-X² polish — FastAPI Pydantic 422 detail enrichment in reason string
+# ---------------------------------------------------------------------------
+
+
+def test_422_pydantic_detail_landed_in_reason():
+    """Run-5 PA-2 exact regression: confidence='confirmed' was rejected
+    with a Pydantic literal_error. The reason string MUST now include
+    the field name + the offending value, so the downstream
+    ErrorRecord surfaces actionable info instead of the generic
+    'knowledge-pack integrity' label."""
+    pydantic_body = {
+        "detail": [
+            {
+                "type": "literal_error",
+                "loc": ["body", "confidence"],
+                "msg": (
+                    "Input should be 'hypothesis', 'tested', 'verified', "
+                    "'superseded' or 'retracted'"
+                ),
+                "input": "confirmed",
+            }
+        ]
+    }
+    http = FakeHttp(
+        canned=FakeResp(status_code=422, _json=pydantic_body, content=b"x")
+    )
+    c = _client(http)
+    with pytest.raises(CheckpointError) as exc_info:
+        c.rka_add_note("x")
+    err = exc_info.value
+    # New behavior: "validation" label (not the legacy "knowledge-pack
+    # integrity" label) AND the field name + invalid value surface.
+    assert "422" in str(err)
+    assert "validation" in str(err)
+    assert "confidence" in str(err)
+    assert "confirmed" in str(err)
+    # mcp_response still carries the full parsed body for programmatic
+    # inspection by downstream tooling.
+    assert err.mcp_response == pydantic_body
+
+
+def test_422_multiple_validation_errors_joined_in_reason():
+    """A 422 with two field violations renders both in the reason
+    string, joined by '; '."""
+    body = {
+        "detail": [
+            {
+                "type": "literal_error",
+                "loc": ["body", "confidence"],
+                "msg": "Input should be 'verified' | ...",
+                "input": "confirmed",
+            },
+            {
+                "type": "literal_error",
+                "loc": ["body", "importance"],
+                "msg": "Input should be 'high' | ...",
+                "input": "very-high",
+            },
+        ]
+    }
+    http = FakeHttp(
+        canned=FakeResp(status_code=422, _json=body, content=b"x")
+    )
+    c = _client(http)
+    with pytest.raises(CheckpointError) as exc_info:
+        c.rka_add_note("x")
+    msg = str(exc_info.value)
+    assert "confidence" in msg
+    assert "confirmed" in msg
+    assert "importance" in msg
+    assert "very-high" in msg
+
+
+def test_422_malformed_body_falls_through_to_generic_label():
+    """If the response body isn't JSON, we still raise CheckpointError
+    with the legacy 'knowledge-pack integrity' label, mcp_response
+    carries the raw text."""
+
+    class _NonJsonResp(FakeResp):
+        def json(self):
+            raise ValueError("not json")
+
+    http = FakeHttp(
+        canned=_NonJsonResp(status_code=422, content=b"plain text body")
+    )
+    http.canned.text = "plain text body"
+    c = _client(http)
+    with pytest.raises(CheckpointError) as exc_info:
+        c.rka_add_note("x")
+    err = exc_info.value
+    assert "422" in str(err)
+    assert "knowledge-pack integrity" in str(err)
+    assert err.mcp_response == {"text": "plain text body"}
+
+
+def test_422_non_list_detail_falls_through_to_generic_label():
+    """Affordance-G shape `{error, detail: str, hint}` must continue to
+    surface as 'knowledge-pack integrity' — its semantic is preserved
+    even though we now special-case the Pydantic list shape."""
+    affordance_g_body = {
+        "error": "checkpoint_invalid_payload",
+        "detail": "field required",
+        "hint": "send mission_id",
+    }
+    http = FakeHttp(
+        canned=FakeResp(status_code=422, _json=affordance_g_body, content=b"x"),
+    )
+    c = _client(http)
+    with pytest.raises(CheckpointError) as exc_info:
+        c.rka_add_note("x")
+    err = exc_info.value
+    assert "knowledge-pack integrity" in str(err)
+    assert "validation" not in str(err)
+    assert err.mcp_response == affordance_g_body
+
+
+def test_422_redacts_secret_in_loc():
+    """If loc path contains a secret-shaped name (token/key/secret/
+    password/auth), the input value MUST be redacted before landing
+    in the reason string — secrets shouldn't be journaled."""
+    body = {
+        "detail": [
+            {
+                "type": "string_too_short",
+                "loc": ["body", "api_key"],
+                "msg": "String should have at least 16 characters",
+                "input": "sk-leaked-secret-value",
+            }
+        ]
+    }
+    http = FakeHttp(canned=FakeResp(status_code=422, _json=body, content=b"x"))
+    c = _client(http)
+    with pytest.raises(CheckpointError) as exc_info:
+        c.rka_add_note("x")
+    msg = str(exc_info.value)
+    assert "api_key" in msg
+    assert "REDACTED" in msg
+    # The actual secret MUST NOT appear in the reason string.
+    assert "sk-leaked-secret-value" not in msg
+
+
+@pytest.mark.parametrize(
+    "loc_name,leaked_value",
+    [
+        # Adversarial-review wf_ed78d6f8 must-fix #3: extend secret
+        # vocabulary beyond token/key/secret/password/auth to cover the
+        # common credential fields that would otherwise leak through
+        # the new 422 reason-string surface.
+        ("credential", "cred-leak-123"),
+        ("credentials", "creds-leak-456"),
+        ("passphrase", "correct-horse-battery-staple"),
+        ("bearer", "Bearer ey-leak-789"),
+        ("pwd", "hunter2"),
+        ("pin", "123456"),
+        ("cookie", "sessionid=leak-abc"),
+        ("session", "sess-leak-def"),
+        ("cert", "MIIB-leak-cert"),
+        ("signature", "sha256:leak-sig"),
+        ("private", "-----BEGIN PRIVATE KEY-----"),
+    ],
+)
+def test_422_redacts_extended_secret_field_names(loc_name, leaked_value):
+    """Run-5 demonstrated that the 422 reason crosses three storage
+    tiers (workflow_runs → parked_interrupts → RKA journal). The hint
+    set must cover the common credential vocabulary, not just
+    token/key/secret/password/auth."""
+    body = {
+        "detail": [
+            {
+                "type": "string_too_short",
+                "loc": ["body", loc_name],
+                "msg": "validation failed",
+                "input": leaked_value,
+            }
+        ]
+    }
+    http = FakeHttp(canned=FakeResp(status_code=422, _json=body, content=b"x"))
+    c = _client(http)
+    with pytest.raises(CheckpointError) as exc_info:
+        c.rka_add_note("x")
+    msg = str(exc_info.value)
+    assert loc_name in msg
+    assert "REDACTED" in msg
+    assert leaked_value not in msg, (
+        f"secret value for loc={loc_name!r} leaked into reason string"
+    )
+
+
+def test_422_caps_long_input_value():
+    """Individual input values longer than 80 chars are truncated with
+    '...' so a giant pasted blob doesn't dominate the summary."""
+    long_input = "x" * 200
+    body = {
+        "detail": [
+            {
+                "type": "value_error",
+                "loc": ["body", "content"],
+                "msg": "too long",
+                "input": long_input,
+            }
+        ]
+    }
+    http = FakeHttp(canned=FakeResp(status_code=422, _json=body, content=b"x"))
+    c = _client(http)
+    with pytest.raises(CheckpointError) as exc_info:
+        c.rka_add_note("x")
+    msg = str(exc_info.value)
+    # Original 200 chars must not appear verbatim
+    assert long_input not in msg
+    # Truncation marker present
+    assert "..." in msg
+
+
+def test_422_summary_caps_total_length_with_overflow_marker():
+    """Many validation errors get capped at ~500 chars with '+N more'
+    overflow marker so the PI cockpit rendering isn't overwhelmed."""
+    body = {
+        "detail": [
+            {
+                "type": "literal_error",
+                "loc": ["body", f"field_{i}"],
+                "msg": "A reasonably long error message that adds up across multiple entries",
+                "input": f"invalid-value-{i}",
+            }
+            for i in range(20)
+        ]
+    }
+    http = FakeHttp(canned=FakeResp(status_code=422, _json=body, content=b"x"))
+    c = _client(http)
+    with pytest.raises(CheckpointError) as exc_info:
+        c.rka_add_note("x")
+    msg = str(exc_info.value)
+    assert "+" in msg and "more" in msg
+    # mcp_response still carries the FULL 20-item body for programmatic
+    # inspection.
+    assert len(exc_info.value.mcp_response["detail"]) == 20
+
+
+# ---------------------------------------------------------------------------
 # Factory + Protocol compliance
 # ---------------------------------------------------------------------------
 

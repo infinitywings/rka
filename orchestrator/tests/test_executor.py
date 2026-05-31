@@ -523,6 +523,273 @@ def test_execute_ratified_actions_captures_call_failure_as_ErrorRecord():
     assert update["errors"][0]["error_type"] == "ratified_action_call_failed"
 
 
+# ---------------------------------------------------------------------------
+# Phase-X² polish — pre-dispatch enum validation in execute_ratified_actions
+# ---------------------------------------------------------------------------
+
+
+def test_execute_ratified_actions_rejects_invalid_confidence_pre_dispatch():
+    """Run-5 PA-2 exact regression. Brain proposed `confidence='confirmed'`
+    which is not in the RKA enum. The validator must catch this BEFORE
+    the network round-trip — emits a `ratified_action_arg_invalid_enum_value`
+    ErrorRecord, skips the action, no MCP call fired."""
+    mcp = FakeMCP()
+    sdk = FakeSDK()
+    state = _state()
+    state["ratified_actions"] = [
+        {
+            "tool": "rka_add_note",
+            "args": {
+                "content": "T3 findings",
+                "source": "brain",
+                "confidence": "confirmed",  # ← invalid
+                "importance": "high",
+            },
+            "rationale": "Run-5 PA-2 regression",
+        }
+    ]
+
+    update = executor.execute_ratified_actions(state, sdk, mcp)
+
+    # No MCP call fired (validation short-circuited before dispatch).
+    assert all(c["op"] != "rka_add_note" for c in mcp.calls)
+    # ErrorRecord with the new error_type, mentions the field + value.
+    assert "errors" in update
+    assert update["errors"][0]["error_type"] == "ratified_action_arg_invalid_enum_value"
+    detail = update["errors"][0]["detail"]
+    assert "confidence" in detail
+    assert "confirmed" in detail
+    # Pre-dispatch framing must be explicit (audit-trail clarity).
+    assert "pre-dispatch" in detail
+
+
+def test_execute_ratified_actions_rejects_invalid_importance_pre_dispatch():
+    mcp = FakeMCP()
+    sdk = FakeSDK()
+    state = _state()
+    state["ratified_actions"] = [
+        {
+            "tool": "rka_add_note",
+            "args": {
+                "content": "x",
+                "importance": "very-high",  # ← invalid (no hyphen form)
+            },
+            "rationale": "test",
+        }
+    ]
+
+    update = executor.execute_ratified_actions(state, sdk, mcp)
+
+    assert "errors" in update
+    assert update["errors"][0]["error_type"] == "ratified_action_arg_invalid_enum_value"
+    assert "importance" in update["errors"][0]["detail"]
+    assert "very-high" in update["errors"][0]["detail"]
+
+
+def test_execute_ratified_actions_rejects_invalid_decision_kind_pre_dispatch():
+    """Run-5 v3 PA-2 surfaced rka_advance_rq with a non-research-question
+    decision. We can't dispatch rka_advance_rq (not in WRITE_TOOLS), but
+    the equivalent kind-mismatch on rka_add_decision is catchable by the
+    enum validator."""
+    mcp = FakeMCP()
+    sdk = FakeSDK()
+    state = _state()
+    state["ratified_actions"] = [
+        {
+            "tool": "rka_add_decision",
+            "args": {
+                "content": "Methods validation",
+                "kind": "research-question",  # ← hyphen instead of underscore
+            },
+            "rationale": "regression for kind validation",
+        }
+    ]
+
+    update = executor.execute_ratified_actions(state, sdk, mcp)
+
+    assert "errors" in update
+    assert update["errors"][0]["error_type"] == "ratified_action_arg_invalid_enum_value"
+    assert "kind" in update["errors"][0]["detail"]
+
+
+def test_execute_ratified_actions_passes_valid_enums():
+    """Sanity check: a fully-valid action passes the new validator and
+    proceeds to dispatch as before."""
+    mcp = FakeMCP()
+    sdk = FakeSDK()
+    state = _state()
+    state["ratified_actions"] = [
+        {
+            "tool": "rka_add_note",
+            "args": {
+                "content": "valid note",
+                "source": "brain",
+                "confidence": "verified",
+                "importance": "high",
+                "type": "note",
+            },
+            "rationale": "happy path",
+        }
+    ]
+
+    update = executor.execute_ratified_actions(state, sdk, mcp)
+
+    # Dispatched cleanly: one artifact, no errors.
+    assert "artifacts" in update
+    assert len(update["artifacts"]) == 1
+    assert "errors" not in update
+
+
+def test_execute_ratified_actions_skips_only_offending_action_in_mixed_batch():
+    """A batch with one invalid + one valid action: the invalid one is
+    skipped (with ErrorRecord); the valid one still dispatches. Mirrors
+    the skip-and-continue semantics of ratified_action_tool_not_allowed."""
+    mcp = FakeMCP()
+    sdk = FakeSDK()
+    state = _state()
+    state["ratified_actions"] = [
+        {
+            "tool": "rka_add_note",
+            "args": {"content": "bad", "confidence": "confirmed"},  # invalid
+            "rationale": "should be skipped",
+        },
+        {
+            "tool": "rka_add_note",
+            "args": {"content": "good", "confidence": "verified"},  # valid
+            "rationale": "should land",
+        },
+    ]
+
+    update = executor.execute_ratified_actions(state, sdk, mcp)
+
+    # One artifact (the second action landed).
+    assert "artifacts" in update
+    assert len(update["artifacts"]) == 1
+    # One error (the first action was rejected).
+    assert "errors" in update
+    assert len(update["errors"]) == 1
+    assert update["errors"][0]["error_type"] == "ratified_action_arg_invalid_enum_value"
+
+
+def test_execute_ratified_actions_tolerates_unenumerated_tool():
+    """If Brain proposes a tool with no enum map (e.g. rka_ingest_document),
+    the validator returns no violations and dispatch proceeds. Open-world
+    tolerance is intentional — WRITE_TOOLS allowlist catches unknown tools
+    at the upstream check."""
+    mcp = FakeMCP()
+    sdk = FakeSDK()
+    state = _state()
+    state["ratified_actions"] = [
+        {
+            "tool": "rka_ingest_document",
+            "args": {"path": "/tmp/x", "type": "paper"},
+            "rationale": "open-world tolerance",
+        }
+    ]
+
+    update = executor.execute_ratified_actions(state, sdk, mcp)
+
+    # No ratified_action_arg_invalid_enum_value (validator skipped silently)
+    # — any errors would come from elsewhere (e.g. unknown method on
+    # FakeMCP) which is fine for this test's intent.
+    enum_errors = [
+        e for e in update.get("errors", [])
+        if e["error_type"] == "ratified_action_arg_invalid_enum_value"
+    ]
+    assert enum_errors == []
+
+
+def test_execute_ratified_actions_validates_post_chain_substitution():
+    """{{PA-N.id}} substitution happens BEFORE the enum check. If a chain
+    ref resolved value is enum-invalid, the validator must still catch it.
+    (Brain doesn't currently produce this shape — chain refs go into
+    args like related_decisions, not into enum fields — but the contract
+    should be that validation runs on the final resolved args.)"""
+    mcp = FakeMCP()
+    sdk = FakeSDK()
+    state = _state()
+    state["ratified_actions"] = [
+        # PA-1 produces a decision id; PA-2 invalidly threads it into
+        # `confidence` (a string enum field).
+        {
+            "tool": "rka_add_decision",
+            "args": {"content": "first", "kind": "design_choice"},
+            "rationale": "PA-1",
+        },
+        {
+            "tool": "rka_add_note",
+            "args": {
+                "content": "second",
+                "confidence": "{{PA-1.id}}",  # post-sub: e.g. "dec_..."
+            },
+            "rationale": "PA-2 — confidence will resolve to a dec_… id, which is invalid",
+        },
+    ]
+
+    update = executor.execute_ratified_actions(state, sdk, mcp)
+
+    # PA-1 dispatched; PA-2's resolved confidence value is not in the
+    # enum so it must be rejected by the validator.
+    errors = update.get("errors", [])
+    enum_errors = [
+        e for e in errors
+        if e["error_type"] == "ratified_action_arg_invalid_enum_value"
+    ]
+    assert len(enum_errors) == 1
+    assert "confidence" in enum_errors[0]["detail"]
+
+
+def test_execute_ratified_actions_preserves_422_mcp_response_in_error_record():
+    """Phase-X² polish belt-and-suspenders: if the MCP call raises
+    CheckpointError with `mcp_response` (the structured 422 body), the
+    ErrorRecord's detail string must include it so downstream debugging
+    has the full body, not just the (already-enriched) reason string."""
+    from orchestrator.mcp_client import CheckpointError
+
+    pydantic_body = {
+        "detail": [
+            {
+                "type": "literal_error",
+                "loc": ["body", "confidence"],
+                "msg": "must be one of …",
+                "input": "confirmed",
+            }
+        ]
+    }
+
+    class _PydanticBoomMCP(FakeMCP):
+        def rka_add_note(self, **kw):  # noqa: ARG002
+            raise CheckpointError(
+                "RKA returned 422 (validation); path=/api/notes; "
+                "confidence='confirmed' (must be one of …)",
+                mcp_response=pydantic_body,
+            )
+
+    mcp = _PydanticBoomMCP()
+    sdk = FakeSDK()
+    state = _state()
+    # Use a value that PASSES our pre-dispatch validator (so the call
+    # actually fires) but causes the mock to raise CheckpointError —
+    # tests the belt-and-suspenders enrichment in the except block.
+    state["ratified_actions"] = [
+        {
+            "tool": "rka_add_note",
+            "args": {"content": "x", "confidence": "verified"},
+            "rationale": "test",
+        }
+    ]
+
+    update = executor.execute_ratified_actions(state, sdk, mcp)
+
+    assert "errors" in update
+    err = update["errors"][0]
+    assert err["error_type"] == "ratified_action_call_failed"
+    # The mcp_response body is appended to the detail string.
+    assert "mcp_response" in err["detail"]
+    assert "confidence" in err["detail"]
+    assert "confirmed" in err["detail"]
+
+
 def test_execute_ratified_actions_dispatches_rka_bulk_update():
     """Phase 2.13 T3 (mis_01KRYZMEAT01SMNNXQXS3JRC4W): exercises the
     dispatch path for the newly-allowlisted rka_bulk_update tool. Closes
@@ -1011,3 +1278,62 @@ def test_execute_ratified_actions_omitted_project_id_is_dispatched_as_is():
     assert len(add_calls) == 1
     assert "project_id" not in add_calls[0]
     assert "errors" not in update
+
+
+# ---------------------------------------------------------------------------
+# Phase-X² polish — EXECUTOR_SYSTEM enumerates RKA enums + forbids
+# lifecycle tools (parallel to BRAIN_SYSTEM checks)
+# ---------------------------------------------------------------------------
+
+
+def test_EXECUTOR_SYSTEM_enumerates_rka_enum_values():
+    """Phase-X² polish: parallel to BRAIN_SYSTEM, EXECUTOR_SYSTEM lists
+    the canonical RKA enum values so the executor LLM emits in-spec
+    proposed_actions."""
+    text = executor.EXECUTOR_SYSTEM
+    # confidence values
+    for v in ("hypothesis", "tested", "verified", "superseded", "retracted"):
+        assert v in text, (
+            f"EXECUTOR_SYSTEM missing confidence enum value {v!r}"
+        )
+    # importance values
+    for v in ("critical", "high", "normal", "low"):
+        assert v in text, (
+            f"EXECUTOR_SYSTEM missing importance enum value {v!r}"
+        )
+    # source values
+    for v in ("brain", "executor", "pi"):
+        assert v in text, f"EXECUTOR_SYSTEM missing source enum value {v!r}"
+    # decision kinds
+    for v in ("research_question", "design_choice", "decision"):
+        assert v in text, f"EXECUTOR_SYSTEM missing decision kind {v!r}"
+    # checkpoint types
+    for v in ("decision", "clarification", "inspection", "gate"):
+        assert v in text, f"EXECUTOR_SYSTEM missing checkpoint type {v!r}"
+
+
+def test_EXECUTOR_SYSTEM_explicitly_warns_against_confirmed():
+    """The Run-5 PA-2 anti-pattern is enumerated as forbidden in
+    EXECUTOR_SYSTEM too (Executor may emit proposed_actions of its
+    own from mission_execute)."""
+    text = executor.EXECUTOR_SYSTEM
+    assert "'confirmed'" in text or '"confirmed"' in text
+
+
+def test_brain_system_and_executor_system_share_forbidden_lifecycle_tools():
+    """Prevent wording divergence: both system prompts must enumerate
+    the same lifecycle tools as forbidden (rka_advance_rq,
+    rka_resolve_checkpoint, rka_supersede_decision)."""
+    from orchestrator.nodes import brain
+    forbidden = (
+        "rka_advance_rq",
+        "rka_resolve_checkpoint",
+        "rka_supersede_decision",
+    )
+    for f in forbidden:
+        assert f in brain.BRAIN_SYSTEM, (
+            f"BRAIN_SYSTEM missing forbidden tool {f!r}"
+        )
+        assert f in executor.EXECUTOR_SYSTEM, (
+            f"EXECUTOR_SYSTEM missing forbidden tool {f!r}"
+        )

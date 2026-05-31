@@ -22,8 +22,20 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
-from orchestrator.llm_client import SDKClient
+from orchestrator.llm_client import SDKClient, WRITE_TOOLS
 from orchestrator.mcp_client import MCPClient
+from orchestrator.rka_enums import (
+    RKA_CHECKPOINT_TYPES,
+    RKA_CONFIDENCES,
+    RKA_DECISION_DECIDED_BY,
+    RKA_DECISION_KINDS,
+    RKA_DECISION_STATUSES,
+    RKA_IMPORTANCES,
+    RKA_JOURNAL_STATUSES,
+    RKA_JOURNAL_TYPES_V2_CANONICAL,
+    RKA_MISSION_STATUSES,
+    RKA_SOURCES,
+)
 from orchestrator.state import (
     MAX_GREENLIGHT_REDRAFTS,
     ArtifactRef,
@@ -103,6 +115,61 @@ BRAIN_SYSTEM = (
     "applies to any rka_* in your `proposed_actions` JSON: each action's "
     "`args` must include `project_id`. The pre-v2.6 RKA_PROJECT env var "
     "passing was removed; do not rely on session defaults.\n\n"
+    # Phase-X² polish — allowed WRITE_TOOLS + forbidden lifecycle tools
+    "Allowed write tools — your `proposed_actions[*].tool` MUST be one of: "
+    + ", ".join(sorted(WRITE_TOOLS)) + ". The parent-side "
+    "`execute_ratified_actions` dispatcher rejects any tool outside this "
+    "list with `ratified_action_tool_not_allowed` — your proposed work "
+    "will be lost. NEVER propose `rka_advance_rq` / `rka_resolve_checkpoint` "
+    "/ `rka_supersede_decision` from inside the orchestrator: these are "
+    "lifecycle-management tools documented for direct-Claude-as-Brain "
+    "flows; the orchestrator's parent-side dispatcher does NOT allowlist "
+    "them. Propose state changes through journal entries (`rka_add_note`) "
+    "and decisions (`rka_add_decision`) only; let the PI close lifecycle "
+    "gates manually via `rka_resolve_checkpoint` in their own RKA "
+    "session. Also forbidden: `rka_present_decision` (the orchestrator's "
+    "`pi_decision_select` already renders to PI; use `rka_add_decision` "
+    "and let the orchestrator stage the rendering).\n\n"
+    # Phase-X² polish — enumerate valid RKA enum values
+    "RKA write-tool field values (v2.6+). When you propose an action, "
+    "every string field with a constrained value space must use one of "
+    "the values below — out-of-enum values are rejected pre-dispatch by "
+    "the orchestrator (`ratified_action_arg_invalid_enum_value`) AND "
+    "at the RKA API (HTTP 422), so the failure is loud + the write is "
+    "lost.\n"
+    "  - `confidence` (rka_add_note / rka_update_note): "
+    + " | ".join(sorted(RKA_CONFIDENCES))
+    + ". The value 'confirmed' is NOT valid (common Brain hallucination) — "
+    "use 'verified' for findings that have been cross-checked, or "
+    "'tested' for findings that have been empirically probed.\n"
+    "  - `importance` (rka_add_note / rka_update_note): "
+    + " | ".join(sorted(RKA_IMPORTANCES)) + ".\n"
+    "  - `source` (rka_add_note / rka_update_note): "
+    + " | ".join(sorted(RKA_SOURCES))
+    + ". For Brain-authored notes, always use 'brain'.\n"
+    "  - `type` (rka_add_note / rka_update_note) — v2 canonical: "
+    + " | ".join(sorted(RKA_JOURNAL_TYPES_V2_CANONICAL))
+    + ". Prefer these; legacy values (finding, insight, observation, ...) "
+    "are silently normalized server-side for back-compat but should be "
+    "avoided in new writes.\n"
+    "  - `status` (rka_add_note / rka_update_note journal lifecycle): "
+    + " | ".join(sorted(RKA_JOURNAL_STATUSES)) + ".\n"
+    "  - `decided_by` (rka_add_decision / rka_update_decision): "
+    + " | ".join(sorted(RKA_DECISION_DECIDED_BY))
+    + ". When Brain authors the decision, use 'brain'.\n"
+    "  - `kind` (rka_add_decision / rka_update_decision): "
+    + " | ".join(sorted(RKA_DECISION_KINDS))
+    + ". 'research_question' is reserved for advanceable RQs; don't use "
+    "it casually — most decisions are 'decision' or 'design_choice'.\n"
+    "  - `status` (rka_add_decision / rka_update_decision lifecycle): "
+    + " | ".join(sorted(RKA_DECISION_STATUSES)) + ".\n"
+    "  - `type` (rka_submit_checkpoint): "
+    + " | ".join(sorted(RKA_CHECKPOINT_TYPES))
+    + ". 'gate' for blocking go/no-go points; 'decision' for forks "
+    "needing PI adjudication; 'clarification' for ambiguity surfaces; "
+    "'inspection' for hands-off review.\n"
+    "  - `status` (rka_create_mission / rka_update_mission_status): "
+    + " | ".join(sorted(RKA_MISSION_STATUSES)) + ".\n\n"
     # Phase G — FS Actuator self-classification policy
     "FS Actuator policy. Brain reasoning is host-FS-read-only by design: "
     "use Read, Grep, Glob, WebFetch, WebSearch freely; do NOT call Bash, "

@@ -512,6 +512,86 @@ def test_BRAIN_SYSTEM_includes_phase_2_5_deltas():
 
 
 # ---------------------------------------------------------------------------
+# Phase-X² polish — BRAIN_SYSTEM enumerates WRITE_TOOLS + RKA enums + forbids
+# lifecycle tools with rationale
+# ---------------------------------------------------------------------------
+
+
+def test_BRAIN_SYSTEM_enumerates_write_tools_allowlist():
+    """Empirical Run-5: Brain proposed rka_advance_rq (not in WRITE_TOOLS)
+    without knowing the allowlist existed. BRAIN_SYSTEM now expands the
+    full WRITE_TOOLS list inline so Brain can self-constrain."""
+    from orchestrator.llm_client import WRITE_TOOLS
+
+    text = brain.BRAIN_SYSTEM
+    for tool in WRITE_TOOLS:
+        assert tool in text, (
+            f"BRAIN_SYSTEM missing WRITE_TOOLS entry {tool!r} — Brain "
+            f"won't know it can propose this tool."
+        )
+
+
+def test_BRAIN_SYSTEM_forbids_lifecycle_tools_with_rationale():
+    """Phase-X² polish: BRAIN_SYSTEM explicitly enumerates the
+    lifecycle/dispatch tools that are forbidden in orchestrator context
+    (Brain v3 v3 PA-2 mistakenly proposed rka_advance_rq because Brain's
+    skill docs in rka/skills/brain/workflows.md DO list it as available
+    in direct-Claude-as-Brain flows; the orchestrator parent-side
+    dispatcher does NOT allowlist it)."""
+    text = brain.BRAIN_SYSTEM
+    for forbidden in (
+        "rka_advance_rq",
+        "rka_resolve_checkpoint",
+        "rka_supersede_decision",
+        "rka_present_decision",
+    ):
+        assert forbidden in text, (
+            f"BRAIN_SYSTEM should explicitly forbid {forbidden!r}"
+        )
+
+
+def test_BRAIN_SYSTEM_enumerates_rka_enum_values():
+    """Phase-X² polish: enumerate canonical enum values so Brain doesn't
+    propose out-of-enum values like Run-5's `confidence='confirmed'`."""
+    text = brain.BRAIN_SYSTEM
+    # confidence values
+    for v in ("hypothesis", "tested", "verified", "superseded", "retracted"):
+        assert v in text, f"BRAIN_SYSTEM missing confidence enum value {v!r}"
+    # importance values
+    for v in ("critical", "high", "normal", "low", "archived"):
+        assert v in text, f"BRAIN_SYSTEM missing importance enum value {v!r}"
+    # source values
+    for v in ("brain", "executor", "pi"):
+        assert v in text, f"BRAIN_SYSTEM missing source enum value {v!r}"
+    # decision kinds
+    for v in ("research_question", "design_choice", "decision", "operational"):
+        assert v in text, f"BRAIN_SYSTEM missing decision kind {v!r}"
+    # checkpoint types
+    for v in ("decision", "clarification", "inspection", "gate"):
+        assert v in text, f"BRAIN_SYSTEM missing checkpoint type {v!r}"
+
+
+def test_BRAIN_SYSTEM_explicitly_warns_against_confirmed():
+    """Phase-X² polish: the empirical Run-5 PA-2 trigger ('confirmed')
+    gets a negative callout so Brain doesn't propose it again."""
+    text = brain.BRAIN_SYSTEM
+    assert "'confirmed'" in text or '"confirmed"' in text, (
+        "BRAIN_SYSTEM must explicitly name the 'confirmed' anti-pattern "
+        "from Run-5 PA-2"
+    )
+    # The warning should be near a clarifying word like NOT/invalid/avoid.
+    # Lower-case to make substring search robust.
+    text_lower = text.lower()
+    confirmed_idx = text_lower.find("confirmed")
+    assert confirmed_idx >= 0
+    window = text_lower[max(0, confirmed_idx - 100): confirmed_idx + 100]
+    assert any(w in window for w in ("not", "invalid", "avoid")), (
+        "BRAIN_SYSTEM should clarify that 'confirmed' is not a valid enum "
+        "value (the Run-5 PA-2 trigger)"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Phase-X² — confirmation_brief_redraft node + _build_confirmation_prompt
 # in-run override block
 # ---------------------------------------------------------------------------

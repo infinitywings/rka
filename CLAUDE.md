@@ -871,6 +871,91 @@ NODE_NAMES tuple grows from 17 → 18 (`confirmation_brief_redraft`).
 `test_invariants.py` automatically audits the new node's
 `current_node` writes against NODE_NAMES.
 
+**Validated in production traffic on Run-5** (mission
+`mis_01KSTWTJNZMV3893S2FWG4HBYZ`, hyperscaler-auditing test harness,
+2026-05-31). End-to-end: 4 PI redirects exercised the in-run redraft
+loop across the cap, EC8 partial-dispatch routing caught a real
+PA-2 422, terminal close at `terminal_state='complete'` activated
+the Phase-X C1 cutoff. Empirical follow-ups (validation-chain
+hardening) shipped as the Phase-X² polish PR — see CLAUDE.md
+"Phase-X² polish — validation-chain hardening" section below.
+
+### Phase-X² polish — validation-chain hardening (Run-5 follow-ups)
+
+Consolidated follow-up PR for the four architectural findings
+surfaced during Run-5's live test. All four are validation-layer
+hardening that shortens the diagnostic chain when a Brain proposal
+hits the API boundary:
+
+- **`RestMCPClient._request` preserves FastAPI 422 detail** —
+  Run-5's PA-2 failure surfaced as the opaque "knowledge-pack
+  integrity" label. The actual API response carried structured
+  detail (`body.confidence='confirmed'` + the valid-values list)
+  that got collapsed. The 422 branch now renders the Pydantic
+  validation-error list into the `CheckpointError` reason string
+  (field-name + offending value + message) while preserving the
+  full parsed body on `mcp_response` for programmatic inspection.
+  Falls through to the legacy "knowledge-pack integrity" label
+  for Affordance-G shapes (custom `{error, detail: str, hint}`).
+  Includes Unicode-codepoint-safe truncation at 80 chars per
+  value + ~500 chars total with `+N more` overflow marker +
+  secret-redaction when the `loc` path matches the extended
+  `_SECRET_LOC_HINTS` vocabulary (token/key/secret/password/auth
+  + credential/passphrase/bearer/pwd/pin/cookie/session/cert/
+  signature/private).
+- **`execute_ratified_actions` pre-dispatch enum validator** —
+  new module `orchestrator/rka_enums.py` provides per-tool
+  `TOOL_ARG_ENUMS` lookup + `validate_action_args(tool, args)`.
+  Catches Run-5's `confidence='confirmed'` (and structurally
+  equivalent failure modes — decision kind mismatch, importance
+  typo, etc.) BEFORE the network round-trip. Emits a new
+  `ratified_action_arg_invalid_enum_value` ErrorRecord with
+  skip-and-continue semantics (mirrors `ratified_action_tool_not_allowed`).
+  EC8 partial-dispatch routing already escalates on any
+  ErrorRecord scoped to `execute_ratified_actions`, so the new
+  error type integrates without graph changes.
+- **BRAIN_SYSTEM + EXECUTOR_SYSTEM enumerate valid RKA enum values
+  + forbidden lifecycle tools** — Run-5 v3 PA-2 surfaced two
+  Brain-prompt gaps. (a) Brain proposed `rka_advance_rq` despite it
+  not being in WRITE_TOOLS (skill docs in `rka/skills/brain/workflows.md`
+  list it as a Brain tool for direct-Claude flows; the orchestrator
+  parent-side dispatcher does NOT allowlist it). BRAIN_SYSTEM now
+  expands WRITE_TOOLS inline + explicitly forbids
+  `rka_advance_rq` / `rka_resolve_checkpoint` /
+  `rka_supersede_decision` / `rka_present_decision` with rationale.
+  (b) Brain proposed `confidence='confirmed'` because no
+  field-value enum was in the prompt. BRAIN_SYSTEM (and
+  EXECUTOR_SYSTEM) now enumerate the canonical sets for
+  `confidence`, `importance`, `source`, `type` (v2 canonical),
+  `status` (journal lifecycle), `decided_by`, `kind` (decision),
+  `status` (decision lifecycle), `type` (checkpoint), `status`
+  (mission). Includes negative callout: *"The value 'confirmed' is
+  NOT valid (common Brain hallucination)."*
+- **Bookkeeper invariant preserved** — new `rka_enums.py` is a
+  **manual mirror** of `rka/db/schema.sql` + `rka/models/*.py`,
+  documented as such. NO `from rka` / `import rka` anywhere in
+  the new module (test_rka_enums.py::test_module_does_not_import_rka
+  AST-scans the source to enforce). Drift is reconciled manually
+  when RKA's schema or Pydantic models change.
+
+Adversarial-review hardening (workflow w6de8mbjz, 4 lenses):
+- `rka_ingest_document` added to `TOOL_ARG_ENUMS` (was a gap —
+  in WRITE_TOOLS but missing from the validator's lookup).
+- `rka_create_mission` removed from `TOOL_ARG_ENUMS` —
+  `MissionCreate` has no `status` field (`extra='forbid'`), so
+  advertising a `status` enum check would mislead about coverage.
+- `_SECRET_LOC_HINTS` extended from 7 → 17 fragments to cover the
+  common credential vocabulary (the 422 reason surface crosses
+  workflow_runs → parked_interrupts → RKA journal — leaving any
+  credential-naming field unredacted was a real secret-leak path).
+- Three "dead" `TOOL_ARG_ENUMS` entries (`rka_update_decision`,
+  `rka_add_literature`, `rka_update_literature`) pruned because
+  they're not in WRITE_TOOLS — re-add when/if they land in the
+  dispatcher allowlist.
+
+Test count delta: +64 net (1084 → 1148). Bookkeeper invariant
+(`git diff main -- rka/`) unchanged from Phase-X² shipped state.
+
 **Cross-references.** PI-facing wording lives in
 [`orchestrator/skills/orchestrator-pi.md`](orchestrator/skills/orchestrator-pi.md)
 ("What `correct` does at each gate"); the Phase-X sibling design

@@ -50,6 +50,89 @@ class CheckpointError(Exception):
         self.mcp_response = mcp_response
 
 
+# Phase-X² polish — extract the structured FastAPI 422 detail into a
+# compact human-readable summary that lands in the CheckpointError
+# reason string (and thus in execute_ratified_actions's ErrorRecord
+# detail via `repr(exc)`). Falls through to None when the body shape
+# doesn't match Pydantic v2's validation-error shape, so legacy
+# Affordance-G semantics (custom `{error, detail: str, hint}`) keep
+# their existing label downstream.
+# Field-name fragments that indicate a secret-bearing value. Expanded
+# per adversarial review wf_ed78d6f8 to cover the common credential
+# vocabulary (pwd/pin/bearer/passphrase/cookie/session/cert/etc.) — the
+# new 422-reason surface crosses three storage layers (workflow_runs →
+# parked interrupts → RKA journal), so any field name fragment indicating
+# secret content must redact.
+_SECRET_LOC_HINTS: frozenset[str] = frozenset({
+    "token", "key", "secret", "password", "auth", "api_key", "apikey",
+    "credential", "credentials", "passphrase", "bearer", "pwd", "pin",
+    "cookie", "session", "cert", "signature", "private",
+})
+_SUMMARY_MAX_CHARS: int = 500
+
+
+def _summarize_422_detail(body: Any) -> str | None:
+    """Render FastAPI's Pydantic-v2 validation-error list as a one-line
+    summary, or return None if the body isn't that shape.
+
+    Pydantic v2 422 shape: `{"detail": [{"type": "...", "loc": [...],
+    "msg": "...", "input": ...}]}`. We extract `loc` (dot-joined,
+    skipping the leading "body" segment), `input` (the offending
+    value, redacted if loc looks like a secret), and `msg`. Multiple
+    errors are joined with "; ". Total length is capped; overflow is
+    indicated with "… +N more".
+
+    Returns the empty string if the detail list is empty (degenerate
+    Pydantic case) so callers can distinguish "no items" from
+    "wrong shape entirely".
+    """
+    if not isinstance(body, dict):
+        return None
+    items = body.get("detail")
+    if not isinstance(items, list):
+        return None
+    summaries: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            return None
+        loc = item.get("loc")
+        msg = item.get("msg")
+        if not isinstance(loc, list) or not isinstance(msg, str):
+            return None
+        # Skip the leading "body" segment that FastAPI prepends.
+        loc_segments = [str(s) for s in loc if s != "body"]
+        field = ".".join(loc_segments) if loc_segments else "<root>"
+        value = item.get("input")
+        # Redact secrets if the field name looks sensitive.
+        loc_lower = field.lower()
+        is_secret = any(hint in loc_lower for hint in _SECRET_LOC_HINTS)
+        if is_secret:
+            value_repr = "<REDACTED>"
+        else:
+            value_repr = repr(value)
+            # Cap individual input length so a giant pasted blob
+            # doesn't dominate the summary.
+            if len(value_repr) > 80:
+                value_repr = value_repr[:77] + "..."
+        summaries.append(f"{field}={value_repr} ({msg})")
+    if not summaries:
+        return ""
+    joined = "; ".join(summaries)
+    if len(joined) <= _SUMMARY_MAX_CHARS:
+        return joined
+    # Overflow: keep as many full entries as fit, then indicate
+    # truncation.
+    kept: list[str] = []
+    running = 0
+    for s in summaries:
+        if running + len(s) + 2 > _SUMMARY_MAX_CHARS:
+            break
+        kept.append(s)
+        running += len(s) + 2
+    n_more = len(summaries) - len(kept)
+    return "; ".join(kept) + f"… +{n_more} more"
+
+
 class MCPClient(Protocol):
     """Workflow-tagged wrapper over the 13 RKA MCP tools.
 
@@ -255,10 +338,26 @@ class RestMCPClient:
                 detail = resp.json()
             except Exception:  # noqa: BLE001
                 detail = {"text": resp.text}
-            raise CheckpointError(
-                f"RKA returned 422 (knowledge-pack integrity); path={path}",
-                mcp_response=detail,
-            )
+            # Phase-X² polish — surface structured FastAPI validation
+            # detail in the CheckpointError reason string. Run-5's PA-2
+            # failure was opaque ("knowledge-pack integrity"); the
+            # actual 422 body carried `body.confidence='confirmed'` +
+            # the valid-values list. Enrich the reason so the
+            # ErrorRecord (via `repr(exc)` in execute_ratified_actions)
+            # surfaces the actionable info. Fall through to the
+            # legacy label for Affordance-G shapes (custom `{error,
+            # detail: str, hint}`) so that semantic stays preserved.
+            summary = _summarize_422_detail(detail)
+            if summary:
+                reason = (
+                    f"RKA returned 422 (validation); path={path}; {summary}"
+                )
+            else:
+                reason = (
+                    f"RKA returned 422 (knowledge-pack integrity); "
+                    f"path={path}"
+                )
+            raise CheckpointError(reason, mcp_response=detail)
         resp.raise_for_status()
         if resp.status_code == 204 or not resp.content:
             return None
