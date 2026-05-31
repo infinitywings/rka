@@ -176,9 +176,27 @@ def _client(project_id: str | None = None) -> httpx.AsyncClient:
     The MCP layer surfaces missing project_id as a clear error to the LLM/caller
     so the silent-fallback-to-proj_default failure mode is structurally
     impossible.
+
+    Disable HTTP/1.1 keep-alive entirely (`max_keepalive_connections=0`). The
+    `async with _client() as c:` pattern below creates a fresh client per tool
+    call, but httpx's default `Limits` keep idle connections in a pool that
+    can wedge in `CLOSE_WAIT` after the daemon closes its side — particularly
+    on macOS Docker Desktop's bridge network. The next tool call's
+    `async with _client()` then blocks on a half-dead pool entry until the OS
+    times it out (well past Claude Desktop's 4-min tool-call ceiling).
+    Empirically observed: after several successful calls, both the host
+    `rka` and `rka-orchestrator-mcp` subprocesses began silently hanging on
+    further requests; a freshly-spawned subprocess returned the same calls
+    instantly. Per-call TCP handshake cost on localhost is ~1ms, negligible
+    against the multi-second LLM round-trip the calls are part of.
     """
     headers = {"X-RKA-Project": project_id} if project_id else {}
-    return httpx.AsyncClient(base_url=API_URL, timeout=API_TIMEOUT, headers=headers)
+    return httpx.AsyncClient(
+        base_url=API_URL,
+        timeout=API_TIMEOUT,
+        headers=headers,
+        limits=httpx.Limits(max_keepalive_connections=0, max_connections=10),
+    )
 
 
 def _raise_with_detail(r: httpx.Response) -> None:
