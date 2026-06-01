@@ -88,9 +88,6 @@ Detailed examples for each trigger, and the counterpart-Brain context (Gate 1 pl
 
 When the PI points you at a workspace folder (local research files to ingest into RKA), use this three-step workflow:
 
-1. **`rka_scan_workspace_tree(folder_path)`** — fast overview of directory structure with file counts. Always start here. Works on any filesystem including slow external drives.
-2. **`rka_scan_workspace(subdirectory_path)`** — deep-scan a specific subdirectory to classify files. Do NOT call on a large root with thousands of files — pick subdirectories from step 1.
-3. **`rka_bootstrap_workspace(subdirectory_path)`** — ingest the classified files into RKA.
 1. **`rka_scan_workspace_tree(folder_path)`** — fast overview of the directory structure with file counts per subdirectory. Always start here. Works on any filesystem including slow external drives.
 2. **`rka_scan_workspace(subdirectory_path)`** — deep-scan a specific subdirectory to classify files by type (markdown, code, PDF, bibtex, data). Do NOT call this on the root if it has thousands of files — pick subdirectories from step 1.
 3. **`rka_bootstrap_workspace(subdirectory_path)`** — ingest the classified files into RKA. Call on the same subdirectory you scanned.

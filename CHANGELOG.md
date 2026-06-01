@@ -3,6 +3,209 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [agentic — v2.6.0+agentic] — 2026-05-31 (Phase A → Phase-X² polish; orchestrator capability tier)
+
+Branch-scoped release. `main` is unaffected at the tag level; this tag
+sits on top of main's v2.6 contract (project_id required on every
+project-scoped MCP tool, absorbed via merge train) plus the full
+orchestrator package built on top.
+
+The `+agentic` build-metadata suffix preserves the convention from
+`v2.5.3+agentic`. Per strict semver / PEP 440, `v2.6.0` and
+`v2.6.0+agentic` sort equal — the suffix denotes the orchestrator-track
+flavor of the same core RKA contract baseline.
+
+### Headline
+
+Full Brain ⇄ Executor ⇄ PI loop with a Claude-Code-native PI surface
+(FastAPI daemon on port 9713 + dedicated `rka-orchestrator-mcp` stdio
+binary), per-project tool onboarding, daemon-level credential bootstrap,
+ratification-gated filesystem actuator, and cross-run + in-run PI
+correction channels. **Bookkeeper invariant (`git diff main -- rka/`
+must be empty) held across the entire +agentic delta and is now
+machine-enforced** by new test_invariants.py checks.
+
+### Shipped since `v2.5.3+agentic`
+
+This release telescopes ~100 commits spanning eight named phases plus
+absorbed main-line work. The full chronology is in CLAUDE.md; the
+phase-level summary:
+
+- **Phase A — Claude-Code-native PI surface.** FastAPI daemon on
+  port 9713; `rka-orchestrator-mcp` stdio binary (8 tools:
+  `orchestrator_run_start` / `_list_runs` / `_inbox` / `_accept` /
+  `_reject` / `_correct` / `_cancel` / `_get_run` / `_get_interrupt`
+  / `_health`); orchestrator-owned SQLite at `/data/orchestrator.db`
+  (`workflow_runs`, `parked_interrupts`); Phase-2.4 v1 response-token
+  regression locked at contract level (callers pick
+  `action: accept|reject|correct`; server emits type-correct resume
+  token).
+- **Phase A2 + Phase B + Phase C — WRITE_TOOLS expansion + Docker
+  auth fixes + dynamic prompt enumeration + chain substitution.**
+  `rka_update_mission_status` + `rka_ingest_document` added to
+  WRITE_TOOLS; `~/.claude.json` mount + `CLAUDE_CODE_OAUTH_TOKEN`
+  auth path; EXECUTOR_SYSTEM dynamically enumerates WRITE_TOOLS;
+  `execute_ratified_actions` supports `{{PA-N.id}}` chain
+  substitution with clean error-record on resolution failure.
+- **Phase D MVP (D1–D8) — onboarding subgraph for per-project tool
+  discovery.** `pi_onboarding_topic` → `research_toolkit` →
+  `pi_toolkit_ratify` → `draft_manifest` → `pi_credentials_ready` →
+  `finalize`. Adds 2 MCP tools (`orchestrator_onboard_start`,
+  `orchestrator_get_manifest`) + 2 slash commands
+  (`/orchestrator-onboard`, `/orchestrator-manifest`). Manifest IO
+  + supersedes chain + criticality-aware credential validator with
+  zero secret leakage (probe results NEVER contain secret values;
+  enforced by leak-detection assertion in tests).
+- **Phase D2.1 → D2.5 — async PI-response endpoints + workspace
+  bind mount + Executor FS tools + Brain-prompt FS guardrails +
+  background-task lifecycle hardening + EROFS fix + EC8 routing
+  + substring-routing exploit fix + SQLite thread-safety +
+  tilde-prefixed workspace guard + v2.6 contract absorption.**
+  The largest single hardening band; close-out for the
+  hyperscaler-auditing live-test failure modes.
+- **Phase E1 / E2 / E3 / E5 / E6 / E7 — capability surfaces.**
+  HOST_WORKSPACE_ROOT propagation (REPO-ROOT `.env` for Docker
+  Compose YAML interpolation), per-project workspace_path
+  threading, capability categories replacing static WRITE_TOOLS,
+  egress policy on WebFetch/WebSearch, project_id consistency
+  guard in `execute_ratified_actions`, cross-project write refusal.
+- **Phase F + Phase G + Phase G2 — topology variants + Phase G FS
+  actuator + SDK hook enforcement.** light/heavy mission classes,
+  Bash/Edit/Write FS actuator behind ratification, AST classifier
+  for `Bash`, allowlist mode, ephemeral sandbox design (Gap 4c),
+  non-root container user + Docker-secret OAuth path (Gap 5),
+  capability propagation (mission spec + Brain proposal — Gap 3A/3B),
+  PI-ratified FS dispatcher (Gap 2 + hardening).
+- **Phase O design — full project-onboarding workflow** (idea
+  capture → workspace + Deep Research → hygiene + claim extraction
+  → plan synthesis + ratification → tool setup → mission queue
+  handoff). Design doc only at the time of tagging.
+- **Phase-X — Cross-Run Correction Channel** (commit `f78496f`).
+  Adds `run_overrides` JSON column to `workflow_runs`. PI redirects
+  at `pi_greenlight` (the `correct` action) auto-rehydrate into the
+  next run's strategy prompt as a delimited "PI OVERRIDES" block.
+  Manual override via `orchestrator_run_start(..., run_instructions=…)`.
+  Escape valve: `orchestrator_cancel_overrides(mission_id)` stamps
+  `mission_metadata.overrides_cleared_at`. Adversarial-review
+  hardening: H1 delimiter defang, H2 sentinel strip, M1 SQLite
+  serialization, M2 timestamp-precision normalization, C1 cutoff
+  requires `final_report_id IS NOT NULL`. Cross-run PI-correction
+  durability via the existing three-storage discipline (RKA SQLite
+  for domain truth; LangGraph SqliteSaver for workflow position;
+  orchestrator SQLite for parked interrupts; never crossed).
+- **Phase-X² — In-Run Redraft Channel** (commit `04a733c`).
+  Closes the sibling in-run gap. `pi_greenlight` `correct` now
+  loops back to `confirmation_brief_redraft` (a new no-LLM
+  state-mutator node) → `confirmation_brief` (LLM redraft with
+  the PI's correction prepended to the prompt) → fresh
+  `pi_greenlight` parked for ratification. Bounded at
+  `MAX_GREENLIGHT_REDRAFTS=3` per workflow_thread — first concrete
+  node-incremented loop counter, closes the deferred-followup risk
+  CLAUDE.md previously flagged. Adversarial-review hardening:
+  Unicode-dash + case-insensitive + markdown-heading-injection
+  fence defang; double-sentinel-strip defense in depth. Latent
+  `pi.py:115` `is_accept` bug fixed: now accepts both `accept`
+  and `approve` substrings (pi_greenlight's accept token is
+  `approve`).
+- **Phase-X² polish — validation-chain hardening** (commit
+  `291f6f8`, this release). Run-5 live-test follow-ups:
+  - `RestMCPClient._request` preserves Pydantic 422 detail in
+    `CheckpointError` reason strings (field name + offending value
+    + msg) instead of collapsing to "knowledge-pack integrity".
+    Affordance-G shapes (custom `{error, detail: str, hint}`) keep
+    legacy label. Secret-redaction on a 17-fragment vocabulary
+    (`token`, `key`, `secret`, `password`, `auth`, `api_key`,
+    `apikey`, `credential`, `credentials`, `passphrase`, `bearer`,
+    `pwd`, `pin`, `cookie`, `session`, `cert`, `signature`,
+    `private`). Codepoint-safe truncation at 80 chars per value
+    + ~500 chars total with `+N more` overflow.
+  - `execute_ratified_actions` adds pre-dispatch enum validation
+    via new `validate_action_args(tool, args)` from
+    `orchestrator/rka_enums.py`. Catches Run-5's
+    `confidence='confirmed'` before the network round-trip with
+    new `ratified_action_arg_invalid_enum_value` ErrorRecord
+    (skip-and-continue semantics).
+  - New `orchestrator/rka_enums.py` shared single source of truth
+    for the RKA Pydantic / schema enums. **Manual mirror** of
+    `rka/db/schema.sql` + `rka/models/*.py`; bookkeeper-invariant-
+    preserving (zero `from rka` / `import rka`; AST-scanned by
+    `test_module_does_not_import_rka`).
+  - BRAIN_SYSTEM + EXECUTOR_SYSTEM enumerate WRITE_TOOLS +
+    forbidden lifecycle tools (`rka_advance_rq`,
+    `rka_resolve_checkpoint`, `rka_supersede_decision`,
+    `rka_present_decision`) with rationale + canonical RKA enum
+    values for `confidence` / `importance` / `source` / `type` /
+    `status` / `decided_by` / `kind` / checkpoint type / mission
+    status. Explicit anti-pattern callout:
+    *"The value `'confirmed'` is NOT valid (common Brain
+    hallucination)."*
+
+### Absorbed from `main` since `v2.5.3+agentic`
+
+The agentic branch absorbs main via merge (never the other way) per
+the project's branch model. This tag rides on top of:
+
+- `v2.5.4` → `v2.5.11` — full main release train (rka MCP server
+  evolution, Phase-3 cluster-review chapter, Writer skill venue
+  expansion, Zotero linking, hierarchical workspace scan,
+  Dockerless mode, host-side FS refactor).
+- `v2.6` contract (PR #32, commit `82fe9cc` `feat(mcp)!:`):
+  `project_id` is now a required kwarg-only parameter on every
+  project-scoped `rka_*` tool. `rka_set_project` is a deprecated
+  no-op; the `RKA_PROJECT` env var was removed at both MCP and REST
+  layers. Orchestrator Brain + Executor system prompts updated to
+  thread `project_id` on every call.
+- `mcp-credentials` skill (PR #33) — guided credential setup for
+  Claude Desktop MCP integrations.
+- MCP keep-alive fix (commits `34b1377`, `44be169`) — `httpx.Limits(
+  max_keepalive_connections=0)` to fix CLOSE_WAIT wedge on macOS
+  Docker bridge in the host MCP stdio binaries.
+
+### Test surface
+
+- **+318 tests since `v2.5.3+agentic`** (~830 → 1148, all green).
+  Phase-X² shipped at +44 net; Phase-X² polish shipped at +64 net.
+- Invariant tests grew from 4 → 8: added
+  `test_bookkeeper_invariant_rka_untouched_by_agentic` +
+  `test_worker_invariant_worker_py_untouched_by_agentic` (this
+  release). The bookkeeper invariant is now machine-enforced; a
+  stale merge-conflict residue in `rka/skills/executor/SKILL.md`
+  that had been silently violating the invariant for ~24 hours
+  was caught + fixed in this release-prep pass.
+
+### Architecture references
+
+- `CLAUDE.md` — full agentic-branch documentation: Phase A → Phase-X²
+  polish narratives, three-storage discipline, bookkeeper invariant,
+  deferred follow-ups list.
+- `orchestrator/docs/cross-run-correction-channel.md` — Phase-X
+  design recommendation (architectural option analysis, industry
+  comparison, adversarial critique, acceptance criteria) with
+  Phase-X² addendum.
+- `orchestrator/skills/orchestrator-pi.md` — PI-facing rendering +
+  TWO-TAP ratification guide for the Claude Desktop PI surface.
+
+### Deferred follow-ups
+
+Tracked in CLAUDE.md "Deferred follow-ups" — non-blocking but the
+natural next engineering pass:
+
+- `orchestrator_get_run` cache-visibility gap (LangGraph checkpoint
+  surfacing for in-run telemetry; surfaced as a "false alarm stall"
+  during Run-5 mission_execute).
+- BRAIN_SYSTEM strict-scope enforcement (Brain regenerates wholesale
+  on redirects rather than surgically editing).
+- DeepSeek cost-estimator calibration (~2× under-report vs dashboard
+  during Run-5).
+- `_route_after_pi_decision` Phase-X³ topology fix (TWO-TAP
+  autonomy gate — sibling of Phase-X² with same dead-end shape,
+  deserves isolated review).
+- Wiki refresh (`rka.wiki.git` is ~5 months stale: tool count
+  55 → 91, `jnl_` → `jrn_` prefix typo, deployment runbooks
+  unpublished). Deferred to `v2.6.1+agentic` docs-only follow-up.
+
+---
+
 ## [agentic — Phase B] — 2026-05-27 (orchestrator-level credential bootstrap)
 
 Branch-scoped release notes for the `agentic` branch. `main` is unaffected.

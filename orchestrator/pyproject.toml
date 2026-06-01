@@ -4,8 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rka-orchestrator"
-version = "0.1.0"
-description = "RKA + LangGraph orchestrator (Phase 1, agentic branch)"
+# Bumped 0.1.0 → 0.6.0 at v2.6.0+agentic release to acknowledge
+# Phase A → Phase-X² polish maturation. The +agentic tag train is
+# the RKA-side anchor; this package version is an independent
+# pre-1.0 semver line that tracks the orchestrator's surface
+# evolution. Major-digit (0.X) bumped per shipped phase band;
+# resets on a future 1.0 cut.
+version = "0.6.0"
+description = "RKA + LangGraph orchestrator (Phase A → Phase-X² polish; agentic branch)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
