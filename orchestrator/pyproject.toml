@@ -13,7 +13,13 @@ name = "rka-orchestrator"
 # 0.6.0 → 0.6.1: Phase D2.6 async-resume watchdog patch — closes
 # the silent post-segment stall failure mode via probe-and-retry
 # in _background_segment + runner-side post-invoke hardening.
-version = "0.6.1"
+# 0.6.1 → 0.6.2: Phase-X²' polish — schema-divergence validation
+# chain. Closes the field-NAME validator gap (mirror of Phase-X²'s
+# field-VALUE work): TOOL_REQUIRED_FIELDS + check_required_fields,
+# `content` alias on rka_submit_checkpoint adapter, canonical-name
+# block in BRAIN/EXECUTOR_SYSTEM, PI diagnostic surface on
+# pi_acceptance.
+version = "0.6.2"
 description = "RKA + LangGraph orchestrator (Phase A → Phase-X² polish; agentic branch)"
 readme = "README.md"
 requires-python = ">=3.11"

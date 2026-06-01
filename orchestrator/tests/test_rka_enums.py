@@ -27,6 +27,8 @@ from orchestrator.rka_enums import (
     RKA_MISSION_STATUSES,
     RKA_SOURCES,
     TOOL_ARG_ENUMS,
+    TOOL_REQUIRED_FIELDS,
+    check_required_fields,
     validate_action_args,
 )
 
@@ -358,3 +360,201 @@ def test_rka_literature_tools_not_in_tool_arg_enums() -> None:
     """Same rationale as rka_update_decision."""
     assert "rka_add_literature" not in TOOL_ARG_ENUMS
     assert "rka_update_literature" not in TOOL_ARG_ENUMS
+
+
+# ---------------------------------------------------------------------------
+# Phase-X²' polish — TOOL_REQUIRED_FIELDS + check_required_fields
+# ---------------------------------------------------------------------------
+
+
+def test_check_required_fields_happy_path() -> None:
+    """All required alias-sets satisfied → empty list."""
+    args = {
+        "description": "checkpoint body",
+        "mission_id": "mis_test",
+        "type": "decision",
+    }
+    assert check_required_fields("rka_submit_checkpoint", args) == []
+
+
+def test_check_required_fields_missing_canonical_description() -> None:
+    """Empirical 2026-06-01 bug shape — `rka_submit_checkpoint(content=...)`
+    instead of description= and the validator flags missing alias-set."""
+    args = {"mission_id": "mis_test"}  # no description/message/reason/content
+    errors = check_required_fields("rka_submit_checkpoint", args)
+    assert len(errors) == 1
+    assert "rka_submit_checkpoint" in errors[0]
+    assert "description" in errors[0]
+    assert "content" in errors[0]  # Layer 1 alias mentioned in alts
+    assert "message" in errors[0]
+    assert "reason" in errors[0]
+
+
+def test_check_required_fields_content_alias_satisfies_after_layer_1() -> None:
+    """Phase-X²' Layer 1 added `content` as a fourth alias on
+    rka_submit_checkpoint's body field. The validator must reflect this
+    so `{content: 'foo', mission_id: '...'}` is NOT flagged as missing.
+    """
+    args = {"content": "checkpoint body", "mission_id": "mis_test"}
+    assert check_required_fields("rka_submit_checkpoint", args) == []
+
+
+def test_check_required_fields_message_alias_still_satisfies() -> None:
+    """Pre-Phase-X²' aliases (`message`, `reason`) continue to satisfy."""
+    args = {"message": "checkpoint body", "mission_id": "mis_test"}
+    assert check_required_fields("rka_submit_checkpoint", args) == []
+    args = {"reason": "checkpoint body", "related_mission": "mis_test"}
+    assert check_required_fields("rka_submit_checkpoint", args) == []
+
+
+def test_check_required_fields_multi_missing_returns_multiple_errors() -> None:
+    """rka_add_decision requires BOTH content AND related_journal. Missing
+    both → two errors."""
+    errors = check_required_fields("rka_add_decision", {})
+    assert len(errors) == 2
+    error_text = "\n".join(errors)
+    assert "content" in error_text
+    assert "related_journal" in error_text
+
+
+def test_check_required_fields_unknown_tool_open_world() -> None:
+    """Unknown tool → empty list (open-world tolerance)."""
+    assert check_required_fields("rka_unknown_tool", {"foo": "bar"}) == []
+    assert check_required_fields("rka_unknown_tool", {}) == []
+
+
+def test_check_required_fields_explicit_none_treated_as_missing() -> None:
+    """{description: None} must be flagged the same as {} — None signals
+    a missing value at the dispatcher seam."""
+    args = {"description": None, "mission_id": "mis_test"}
+    errors = check_required_fields("rka_submit_checkpoint", args)
+    assert len(errors) == 1
+    assert "description" in errors[0]
+
+
+def test_check_required_fields_excludes_project_id() -> None:
+    """Invariant: project_id is dispatcher-injected by RestMCPClient and
+    must NEVER appear in TOOL_REQUIRED_FIELDS — otherwise every action
+    would false-positive (the dispatcher strips project_id before the
+    validator runs in Phase-E6)."""
+    for tool, sets in TOOL_REQUIRED_FIELDS.items():
+        all_fields = set().union(*sets)
+        assert "project_id" not in all_fields, (
+            f"{tool} has project_id in TOOL_REQUIRED_FIELDS — invariant "
+            f"violation"
+        )
+
+
+def test_tool_required_fields_per_tool_lock() -> None:
+    """Lock-tests pin the per-tool entries against silent drift. When
+    the RestMCPClient adapter signature changes, the test fails loudly
+    and forces a manual sync (matching the TOOL_ARG_ENUMS posture)."""
+    assert TOOL_REQUIRED_FIELDS["rka_add_note"] == [frozenset({"content"})]
+    assert TOOL_REQUIRED_FIELDS["rka_add_decision"] == [
+        frozenset({"content"}),
+        frozenset({"related_journal"}),
+    ]
+    assert TOOL_REQUIRED_FIELDS["rka_submit_checkpoint"] == [
+        frozenset({"description", "message", "reason", "content"}),
+        frozenset({"mission_id", "related_mission"}),
+    ]
+    assert TOOL_REQUIRED_FIELDS["rka_submit_report"] == [
+        frozenset({"mission_id", "related_mission"}),
+    ]
+    assert TOOL_REQUIRED_FIELDS["rka_create_mission"] == [
+        frozenset({"objective"}),
+        frozenset({"motivated_by_decision"}),
+        frozenset({"acceptance_criteria"}),
+    ]
+    assert TOOL_REQUIRED_FIELDS["rka_update_note"] == [frozenset({"id"})]
+    assert TOOL_REQUIRED_FIELDS["rka_update_mission_status"] == [
+        frozenset({"id"}),
+    ]
+    assert TOOL_REQUIRED_FIELDS["rka_bulk_update"] == [frozenset({"updates"})]
+    assert TOOL_REQUIRED_FIELDS["rka_ingest_document"] == [
+        frozenset({"content"}),
+    ]
+
+
+def test_tool_required_fields_covers_write_tools_in_arg_enums() -> None:
+    """The required-field validator should cover at least every tool
+    that the enum-value validator covers. Drift detection: if a future
+    PR adds a new tool to TOOL_ARG_ENUMS without adding the matching
+    TOOL_REQUIRED_FIELDS entry, the asymmetry is flagged.
+    """
+    enum_tools = set(TOOL_ARG_ENUMS.keys())
+    required_tools = set(TOOL_REQUIRED_FIELDS.keys())
+    missing = enum_tools - required_tools
+    assert not missing, (
+        f"Tools in TOOL_ARG_ENUMS but not TOOL_REQUIRED_FIELDS: "
+        f"{sorted(missing)}. Add the required-field entries or document "
+        f"the intentional omission."
+    )
+
+
+def test_tool_required_fields_matches_write_tools_set() -> None:
+    """Drift-detection (adversarial review NIT #3): TOOL_REQUIRED_FIELDS
+    must cover every WRITE_TOOL. If a future PR adds a write tool
+    without updating the required-field table, the validator silently
+    no-ops on it (open-world tolerance) — defeating the Phase-X²'
+    polish goal. Pin the coverage.
+    """
+    from orchestrator.llm_client import WRITE_TOOLS
+
+    required_tools = set(TOOL_REQUIRED_FIELDS.keys())
+    write_tools = set(WRITE_TOOLS)
+    missing = write_tools - required_tools
+    extra = required_tools - write_tools
+    assert not missing, (
+        f"WRITE_TOOLS missing from TOOL_REQUIRED_FIELDS: {sorted(missing)} "
+        f"— add the required-field entries"
+    )
+    assert not extra, (
+        f"TOOL_REQUIRED_FIELDS has entries for non-WRITE_TOOLS: "
+        f"{sorted(extra)} — remove them or add to WRITE_TOOLS"
+    )
+
+
+# Adversarial review MEDIUM #1 — validator must reject empty / whitespace
+# strings the same way the adapter does (truthy-check semantics).
+
+
+def test_check_required_fields_rejects_empty_string() -> None:
+    """`{description: '', mission_id: 'mis_x'}` previously passed the
+    validator and then failed at the adapter — the validator now
+    rejects empty strings as missing (matching mcp_client.py:585's
+    `if not description:` semantics)."""
+    args = {"description": "", "mission_id": "mis_x"}
+    errors = check_required_fields("rka_submit_checkpoint", args)
+    assert len(errors) == 1
+    assert "description" in errors[0]
+
+
+def test_check_required_fields_rejects_whitespace_only_string() -> None:
+    """`{description: '   '}` is also rejected (mirrors
+    rka_ingest_document's `if not content or not content.strip()` at
+    mcp_client.py:967)."""
+    args = {"description": "   \n  ", "mission_id": "mis_x"}
+    errors = check_required_fields("rka_submit_checkpoint", args)
+    assert len(errors) == 1
+    assert "description" in errors[0]
+
+
+def test_check_required_fields_rejects_empty_collection_for_required_list() -> None:
+    """Required list-typed fields (e.g. rka_create_mission's
+    `acceptance_criteria: list[str]`) reject empty lists — truthy
+    semantics apply uniformly."""
+    args = {
+        "objective": "test",
+        "motivated_by_decision": "dec_x",
+        "acceptance_criteria": [],
+    }
+    errors = check_required_fields("rka_create_mission", args)
+    assert any("acceptance_criteria" in e for e in errors)
+
+
+def test_check_required_fields_accepts_meaningful_string() -> None:
+    """Non-empty non-whitespace strings continue to satisfy
+    (regression guard against the truthy-check tightening)."""
+    args = {"description": "real content", "mission_id": "mis_x"}
+    assert check_required_fields("rka_submit_checkpoint", args) == []

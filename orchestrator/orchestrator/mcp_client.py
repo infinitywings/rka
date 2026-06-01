@@ -546,6 +546,16 @@ class RestMCPClient:
 
         Brain-ism aliases tolerated:
           message → description    (the Brain LLM frequently emits 'message')
+          content → description    (Phase-X²' polish — Brain extrapolates
+                                    `content` as the universal "body
+                                    field" name across WRITE_TOOLS;
+                                    surfaced empirically on 2026-06-01
+                                    hyperscaler-auditing PA-2 dispatch
+                                    failure. Symmetric with
+                                    `rka_submit_report` which has
+                                    accepted `content` since Phase D2.4.
+                                    The asymmetry between sibling
+                                    EXECUTION_GATES tools was the bug.)
           data    → context        (Brain often packages structured fields here;
                                     we JSON-encode it into the `context` field
                                     so no data is lost)
@@ -562,17 +572,20 @@ class RestMCPClient:
         """
         import json as _json
 
-        # Pull the "description / reason / message" body from any of the
-        # accepted argument shapes.
+        # Pull the "description / message / reason / content" body from
+        # any of the accepted argument shapes. The `content` alias was
+        # added in Phase-X²' polish — symmetric with rka_submit_report.
         description = (
             kw.pop("description", None)
             or kw.pop("message", None)
             or kw.pop("reason", None)
+            or kw.pop("content", None)
             or (args[0] if args else None)
         )
         if not description:
             raise ValueError(
-                "rka_submit_checkpoint requires a description/message/reason"
+                "rka_submit_checkpoint requires a description/message/"
+                "reason/content"
             )
 
         mission_id = kw.pop("mission_id", None) or kw.pop("related_mission", None)

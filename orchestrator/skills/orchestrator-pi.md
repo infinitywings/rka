@@ -126,6 +126,17 @@ count, error count, checkpoint count, USD spent, `final_report_id`,
 and a one-line `summary`. Ask: "Accept the mission outcome, or
 escalate?"
 
+When the run accumulated errors or checkpoints, the Phase-X²' polish
+also surfaces three top-level diagnostic hints on the same item:
+`latest_error_type` (e.g.
+`ratified_action_arg_missing_required_field`), `latest_failed_tool`
+(e.g. `rka_submit_checkpoint`), and `latest_checkpoint_reason`
+(free-text from the most recent checkpoint). Render these in the
+acceptance prompt so the PI sees the specific escalation cause
+before drilling into `errors[]` / `checkpoints[]`. Absent (null)
+when the run had no errors/checkpoints — the happy-path payload is
+unchanged in shape.
+
 ### Batched view
 
 If `payload.batched == true`, the graph paginated the items (>10).

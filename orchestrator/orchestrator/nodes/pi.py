@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 from orchestrator.llm_client import SDKClient  # noqa: F401  (kept for signature parity)
 from orchestrator.mcp_client import MCPClient
@@ -281,15 +281,57 @@ def pi_acceptance(
     # final_report_id + accumulated artifacts + interrupts + errors.
     # Phase 2.9 T4: summary now composed from counts (no longer leaks
     # gate1 verdict text via brain_position).
+    #
+    # Phase-X²' polish (Layer 4): surface the LATEST error_type +
+    # failed_tool + checkpoint_reason on the top-level payload so the
+    # PI sees the specific escalation cause without drilling into
+    # errors[]. Closes the diagnostic surface gap that made the
+    # 2026-06-01 hyperscaler-auditing session's PA-2 failure take
+    # longer than necessary to triage (PI saw only `error_count=1`
+    # and had to drill into errors[]/checkpoints[] manually to find
+    # the schema-mismatch root cause).
+    errors = state.get("errors", []) or []
+    checkpoints = state.get("checkpoints", []) or []
+    latest_error_type: Optional[str] = None
+    latest_failed_tool: Optional[str] = None
+    if errors:
+        last_err = errors[-1] if isinstance(errors[-1], dict) else {}
+        latest_error_type = last_err.get("error_type")
+        # The dispatcher emits "PA-{idx}: tool={tool!r} ..." in the
+        # canonical `detail` field (ErrorRecord shape at state.py:94;
+        # written by _make_error at executor.py:558-564). `reason` is
+        # kept as a fallback for hand-constructed dicts (e.g. tests
+        # that pre-dated this Phase-X²' polish).
+        detail_text = last_err.get("detail") or last_err.get("reason") or ""
+        if isinstance(detail_text, str):
+            import re as _re
+            m = _re.search(r"tool=([\"\'])([^\"\']+)\1", detail_text)
+            if m:
+                latest_failed_tool = m.group(2)
+    latest_checkpoint_reason: Optional[str] = None
+    if checkpoints:
+        last_cp = checkpoints[-1] if isinstance(checkpoints[-1], dict) else {}
+        latest_checkpoint_reason = (
+            last_cp.get("reason")
+            or last_cp.get("description")
+            or last_cp.get("message")
+        )
+
     items = [
         {
             "final_report_id": state.get("final_report_id"),
             "artifact_count": len(state.get("artifacts", [])),
             "interrupt_count": len(state.get("interrupts", [])),
-            "error_count": len(state.get("errors", [])),
-            "checkpoint_count": len(state.get("checkpoints", [])),
+            "error_count": len(errors),
+            "checkpoint_count": len(checkpoints),
             "usd_spent": state.get("usd_spent", 0.0),
             "summary": _compose_acceptance_summary(state),
+            # Phase-X²' polish — top-level diagnostic hints. Absent
+            # (None) when the run had no errors / no checkpoints, so
+            # the happy-path payload is unchanged in shape.
+            "latest_error_type": latest_error_type,
+            "latest_failed_tool": latest_failed_tool,
+            "latest_checkpoint_reason": latest_checkpoint_reason,
         }
     ]
 

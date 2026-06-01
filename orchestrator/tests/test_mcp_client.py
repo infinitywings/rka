@@ -823,6 +823,59 @@ def test_rka_submit_checkpoint_legacy_positional_reason_still_works():
     assert body["description"] == "legacy reason text"
 
 
+def test_rka_submit_checkpoint_accepts_content_alias_phase_x_prime():
+    """Phase-X²' polish (Layer 1) — Brain emits `content=` extrapolating
+    from rka_add_note's worked example in EXECUTOR_SYSTEM. The adapter
+    now accepts `content` as a fourth alias for `description`, symmetric
+    with rka_submit_report which has accepted `content` since Phase D2.4.
+    The asymmetry between sibling EXECUTION_GATES tools was the bug
+    surfaced on 2026-06-01 hyperscaler-auditing PA-2 dispatch failure.
+    """
+    http = FakeHttp(canned=FakeResp(_json={"id": "chk_content"}))
+    c = _client(http)
+    out = c.rka_submit_checkpoint(
+        mission_id="mis_test",
+        type="gate",
+        content="checkpoint body via content kwarg",
+        blocking=True,
+    )
+    assert out == "chk_content"
+    body = http.calls[0]["json"]
+    assert body["description"] == "checkpoint body via content kwarg"
+    assert body["type"] == "gate"
+    assert body["blocking"] is True
+
+
+def test_rka_submit_checkpoint_description_wins_when_both_supplied():
+    """Phase-X²' polish — collision rule: when BOTH description= and
+    content= are passed, description= wins (it's first in the pop
+    chain). Pin this to prevent silent drift."""
+    http = FakeHttp(canned=FakeResp(_json={"id": "chk_both"}))
+    c = _client(http)
+    c.rka_submit_checkpoint(
+        mission_id="mis_test",
+        type="decision",
+        description="canonical wins",
+        content="alias loses",
+    )
+    body = http.calls[0]["json"]
+    assert body["description"] == "canonical wins"
+
+
+def test_rka_submit_checkpoint_missing_body_raises():
+    """All four body-aliases absent → ValueError mentions every accepted
+    alias so the operator sees what shape would have worked."""
+    http = FakeHttp(canned=FakeResp(_json={"id": "chk_x"}))
+    c = _client(http)
+    with pytest.raises(ValueError) as exc:
+        c.rka_submit_checkpoint(mission_id="mis_x", type="decision")
+    msg = str(exc.value)
+    assert "description" in msg
+    assert "message" in msg
+    assert "reason" in msg
+    assert "content" in msg
+
+
 def test_rka_submit_report_accepts_canonical_brain_shape():
     """Brain emits {mission_id, summary, findings, anomalies, questions,
     codebase_state, recommended_next} matching the RKA MCP tool. Adapter

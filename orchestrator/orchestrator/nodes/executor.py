@@ -36,6 +36,7 @@ from orchestrator.rka_enums import (
     RKA_JOURNAL_TYPES_V2_CANONICAL,
     RKA_MISSION_STATUSES,
     RKA_SOURCES,
+    check_required_fields,  # Phase-X²' polish
     validate_action_args,  # Phase-X² polish
 )
 from orchestrator.state import ArtifactRef, ErrorRecord, ResearchWorkflowState
@@ -192,6 +193,33 @@ EXECUTOR_SYSTEM = (
     + ". 'gate' for blocking go/no-go points; 'decision' for forks "
     "needing PI adjudication.\n"
     "  - `status` (mission): " + " | ".join(sorted(RKA_MISSION_STATUSES)) + ".\n\n"
+    # Phase-X²' polish — canonical field NAMES per WRITE_TOOL.
+    # Parallel insert with BRAIN_SYSTEM's Phase-X²' block. See the
+    # design doc at orchestrator/docs/phase-x-prime-polish-design.md §5.3.
+    "RKA write-tool canonical field names (Phase-X²' polish). The 9 "
+    "WRITE_TOOLS use FIVE different vocabularies for the primary body "
+    "field. Emit the canonical name below; rejection at the dispatcher "
+    "is the `ratified_action_arg_missing_required_field` ErrorRecord.\n"
+    "  - `rka_add_note`: `content` (required).\n"
+    "  - `rka_add_decision`: `content` (required) + `related_journal: "
+    "list[str]` (required) + `decided_by` + `phase`.\n"
+    "  - `rka_create_mission`: `objective` (required) + "
+    "`motivated_by_decision: str` + `acceptance_criteria: list[str]`.\n"
+    "  - `rka_update_mission_status`: `id` (required) + `status`.\n"
+    "  - `rka_submit_checkpoint`: `description` (required, NOT "
+    "`content` — common Brain hallucination; the adapter tolerates "
+    "`content`/`message`/`reason` as aliases since the Phase-X²' "
+    "polish, but emit `description`) + `mission_id` + `type`.\n"
+    "  - `rka_submit_report`: `summary` (required, NOT `content` — "
+    "`content` is tolerated as alias) + `mission_id`.\n"
+    "  - `rka_ingest_document`: `content` (required).\n"
+    "  - `rka_update_note`: `id` (required, jrn-id).\n"
+    "  - `rka_bulk_update`: `updates: list[dict]` (required).\n"
+    "Common Brain hallucination — same shape as BRAIN_SYSTEM's callout: "
+    "`content` is NOT canonical for rka_submit_checkpoint (use "
+    "`description`) or rka_submit_report (use `summary`). The adapter "
+    "tolerates `content` as an alias for both since the Phase-X²' "
+    "polish, but emit the canonical name for audit-trail clarity.\n\n"
     # Phase D2 — built-in filesystem tools (Bash/Read/Write/Edit/Grep/Glob/
     # WebFetch/WebSearch) are granted to the subprocess for actual mission
     # work. The Phase-2.7 read-only-subprocess invariant is preserved at the
@@ -922,6 +950,36 @@ def execute_ratified_actions(
                         + "; ".join(detail_parts)
                         + " — rejected pre-dispatch to short-circuit the "
                         "HTTP 422 round-trip."
+                    ),
+                )
+            )
+            continue
+
+        # Phase-X²' polish — pre-dispatch required-field validation.
+        # The 2026-06-01 hyperscaler-auditing PA-2 failure surfaced
+        # this gap: Brain emitted `rka_submit_checkpoint(content=...)`
+        # instead of `description=...`. The enum validator returned
+        # empty (no enum violations); the adapter at mcp_client.py:574
+        # then raised ValueError at dispatch time and EC8 escalated
+        # to a failure checkpoint. The required-field validator
+        # closes this at the same dispatcher seam as the enum check:
+        # alias-set-of-sets semantics so legitimate `message=`-only
+        # or `reason=`-only calls still satisfy the body-field set
+        # for rka_submit_checkpoint. Layered after the enum check so
+        # an action with BOTH a wrong enum value AND a missing
+        # required field surfaces the enum error first (more
+        # actionable for Brain).
+        missing_fields = check_required_fields(tool, resolved_args)
+        if missing_fields:
+            new_errors.append(
+                _make_error(
+                    "execute_ratified_actions",
+                    "ratified_action_arg_missing_required_field",
+                    (
+                        f"PA-{idx}: tool={tool!r} missing required "
+                        f"field(s): " + "; ".join(missing_fields)
+                        + " — rejected pre-dispatch to short-circuit "
+                        "the adapter-layer ValueError or REST 422."
                     ),
                 )
             )

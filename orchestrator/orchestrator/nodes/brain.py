@@ -170,6 +170,49 @@ BRAIN_SYSTEM = (
     "'inspection' for hands-off review.\n"
     "  - `status` (rka_create_mission / rka_update_mission_status): "
     + " | ".join(sorted(RKA_MISSION_STATUSES)) + ".\n\n"
+    # Phase-X²' polish — canonical field NAMES per WRITE_TOOL.
+    # Mirror of the enum-VALUE block above at the field-NAME layer.
+    # Surfaced empirically on 2026-06-01: Brain emitted
+    # `rka_submit_checkpoint(content=...)` instead of `description=...`
+    # — the universal "content is the body field" pattern from
+    # rka_add_note's worked example generalises incorrectly across
+    # sibling write tools. Out-of-spec field names are rejected
+    # pre-dispatch with `ratified_action_arg_missing_required_field`.
+    "RKA write-tool canonical field names (Phase-X²' polish). The 9 "
+    "WRITE_TOOLS use FIVE different vocabularies for the same semantic "
+    "role (the primary body field). Emit the canonical name below for "
+    "each tool — some accept aliases for backward compatibility, but "
+    "the canonical name is preferred for clarity:\n"
+    "  - `rka_add_note`: `content` (required) — the note body.\n"
+    "  - `rka_add_decision`: emit `content` as the body field — the "
+    "adapter then maps it to RKA's `question` field internally. Plus "
+    "`related_journal: list[str]` (required) + `decided_by` + `phase`. "
+    "Do NOT emit `question=` directly — the adapter does not accept "
+    "that kwarg and would silently drop it via **kw absorption.\n"
+    "  - `rka_create_mission`: `objective` (required) + "
+    "`motivated_by_decision: str` (required, decision-id reference) + "
+    "`acceptance_criteria: list[str]` (required).\n"
+    "  - `rka_update_mission_status`: `id` (required, mission-id) + "
+    "`status` (optional but typically set).\n"
+    "  - `rka_submit_checkpoint`: `description` (required, the "
+    "checkpoint body — NOT `content` — though the adapter tolerates "
+    "`content`/`message`/`reason` as aliases since the Phase-X²' "
+    "polish). Common Brain hallucination: emitting `content=` here. "
+    "Canonical is `description`. Plus `mission_id` (required) + "
+    "`type` (optional, defaults to 'decision').\n"
+    "  - `rka_submit_report`: `summary` (required, the report body — "
+    "NOT `content` — though `content` is tolerated as an alias) + "
+    "`mission_id` (required).\n"
+    "  - `rka_ingest_document`: `content` (required) — the document body.\n"
+    "  - `rka_update_note`: `id` (required, jrn-id) + any subset of "
+    "the rka_add_note kwargs to patch.\n"
+    "  - `rka_bulk_update`: `updates: list[dict]` (required) — each "
+    "dict has `entity_type`, `id`, `data`.\n"
+    "Negative callout: `content` is NOT canonical for "
+    "rka_submit_checkpoint or rka_submit_report (those want "
+    "`description` and `summary` respectively). Common Brain "
+    "hallucination — emit the canonical name even though the alias "
+    "would also work; canonical-name clarity helps the audit trail.\n\n"
     # Phase G — FS Actuator self-classification policy
     "FS Actuator policy. Brain reasoning is host-FS-read-only by design: "
     "use Read, Grep, Glob, WebFetch, WebSearch freely; do NOT call Bash, "

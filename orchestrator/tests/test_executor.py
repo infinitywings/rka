@@ -713,7 +713,10 @@ def test_execute_ratified_actions_validates_post_chain_substitution():
         # `confidence` (a string enum field).
         {
             "tool": "rka_add_decision",
-            "args": {"content": "first", "kind": "design_choice"},
+            "args": {
+                "content": "first", "kind": "design_choice",
+                "related_journal": ["jrn_t"],
+            },
             "rationale": "PA-1",
         },
         {
@@ -907,6 +910,135 @@ def test_EXECUTOR_SYSTEM_documents_chain_substitution_syntax():
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Phase-X²' polish — pre-dispatch required-field validation
+# ---------------------------------------------------------------------------
+
+
+def test_required_field_missing_emits_error_record_and_skips_dispatch():
+    """When Brain proposes a write missing a required field (e.g.
+    `rka_submit_checkpoint(content=...)` without description-alias) the
+    new pre-dispatch validator emits
+    `ratified_action_arg_missing_required_field` and the action is
+    skipped — same skip-and-continue semantics as the enum validator."""
+    from orchestrator.nodes import executor
+
+    class _RecordingMCP:
+        def __init__(self):
+            self.calls: list[dict] = []
+
+        def rka_add_note(self, **kw):
+            self.calls.append({"op": "rka_add_note", **kw})
+            return "jrn_ok"
+
+        def rka_submit_checkpoint(self, **kw):
+            self.calls.append({"op": "rka_submit_checkpoint", **kw})
+            return "chk_x"
+
+    state = _state_with_actions(
+        [
+            {
+                "tool": "rka_submit_checkpoint",
+                # missing description/message/reason/content — empirical
+                # 2026-06-01 bug shape minus the `content=` alias the
+                # Layer 1 adapter fix now absorbs.
+                "args": {"mission_id": "mis_test", "type": "decision"},
+                "rationale": "PA-1: missing body",
+            },
+            {
+                "tool": "rka_add_note",
+                "args": {"content": "PA-2 follows after PA-1 skip"},
+                "rationale": "PA-2: independent",
+            },
+        ]
+    )
+    mcp = _RecordingMCP()
+    update = executor.execute_ratified_actions(state, _StubSDK(), mcp)
+    # PA-1 must have emitted a missing-required-field ErrorRecord;
+    # PA-2 must have dispatched normally.
+    error_types = [
+        e.get("error_type") for e in update.get("errors", [])
+        if isinstance(e, dict)
+    ]
+    assert "ratified_action_arg_missing_required_field" in error_types
+    pa2_calls = [c for c in mcp.calls if c.get("op") == "rka_add_note"]
+    assert len(pa2_calls) == 1
+
+
+def test_required_field_content_alias_satisfies_checkpoint_dispatch():
+    """Layer 1 + Layer 2 collaboration: `rka_submit_checkpoint(content=,
+    mission_id=, type=)` must satisfy the pre-dispatch required-field
+    check (because content is an accepted alias post-Layer-1) and
+    proceed to dispatch."""
+    from orchestrator.nodes import executor
+
+    class _RecordingMCP:
+        def __init__(self):
+            self.calls: list[dict] = []
+
+        def rka_submit_checkpoint(self, **kw):
+            self.calls.append({"op": "rka_submit_checkpoint", **kw})
+            return "chk_via_content"
+
+    state = _state_with_actions(
+        [
+            {
+                "tool": "rka_submit_checkpoint",
+                "args": {
+                    "content": "checkpoint body",
+                    "mission_id": "mis_test",
+                    "type": "decision",
+                },
+                "rationale": "PA-1: uses content alias",
+            },
+        ]
+    )
+    mcp = _RecordingMCP()
+    update = executor.execute_ratified_actions(state, _StubSDK(), mcp)
+    error_types = [
+        e.get("error_type") for e in update.get("errors", [])
+        if isinstance(e, dict)
+    ]
+    assert "ratified_action_arg_missing_required_field" not in error_types
+    assert len(mcp.calls) == 1
+    assert mcp.calls[0]["op"] == "rka_submit_checkpoint"
+
+
+def test_required_field_message_alias_satisfies_checkpoint_dispatch():
+    """Pre-Phase-X²' aliases (`message`) still satisfy the validator."""
+    from orchestrator.nodes import executor
+
+    class _RecordingMCP:
+        def __init__(self):
+            self.calls: list[dict] = []
+
+        def rka_submit_checkpoint(self, **kw):
+            self.calls.append({"op": "rka_submit_checkpoint", **kw})
+            return "chk_via_message"
+
+    state = _state_with_actions(
+        [
+            {
+                "tool": "rka_submit_checkpoint",
+                "args": {
+                    "message": "checkpoint via message alias",
+                    "related_mission": "mis_test",  # legacy alias
+                    "type": "decision",
+                },
+                "rationale": "PA-1: uses message + related_mission",
+            },
+        ]
+    )
+    mcp = _RecordingMCP()
+    update = executor.execute_ratified_actions(state, _StubSDK(), mcp)
+    error_types = [
+        e.get("error_type") for e in update.get("errors", [])
+        if isinstance(e, dict)
+    ]
+    assert "ratified_action_arg_missing_required_field" not in error_types
+    assert len(mcp.calls) == 1
+
+
 class _ChainTrackingMCP:
     """FakeMCP that returns predictable ids and records the args it was
     called with (so chain-substitution tests can assert the substituted
@@ -993,7 +1125,7 @@ def test_chain_substitution_handles_nested_dict_and_list_args():
     mcp = _ChainTrackingMCP(return_ids=["dec_root", "jrn_child"])
     state = _state_with_actions(
         [
-            {"tool": "rka_add_decision", "args": {"content": "x"}, "rationale": ""},
+            {"tool": "rka_add_decision", "args": {"content": "x", "related_journal": ["jrn_t"]}, "rationale": ""},
             {
                 "tool": "rka_add_note",
                 "args": {
@@ -1025,7 +1157,7 @@ def test_chain_substitution_rejects_forward_reference():
             },
             {
                 "tool": "rka_add_decision",
-                "args": {"content": "ok"},
+                "args": {"content": "ok", "related_journal": ["jrn_t"]},
                 "rationale": "PA-2: independent",
             },
         ]
@@ -1065,7 +1197,7 @@ def test_chain_substitution_rejects_out_of_range():
     mcp = _ChainTrackingMCP(return_ids=["dec_001"])
     state = _state_with_actions(
         [
-            {"tool": "rka_add_decision", "args": {"content": "x"}, "rationale": ""},
+            {"tool": "rka_add_decision", "args": {"content": "x", "related_journal": ["jrn_t"]}, "rationale": ""},
             {
                 "tool": "rka_add_note",
                 "args": {"content": "bogus {{PA-99.id}}"},
@@ -1087,7 +1219,7 @@ def test_chain_substitution_rejects_unsupported_field():
     mcp = _ChainTrackingMCP(return_ids=["dec_001"])
     state = _state_with_actions(
         [
-            {"tool": "rka_add_decision", "args": {"content": "x"}, "rationale": ""},
+            {"tool": "rka_add_decision", "args": {"content": "x", "related_journal": ["jrn_t"]}, "rationale": ""},
             {
                 "tool": "rka_add_note",
                 "args": {"content": "ts: {{PA-1.timestamp}}"},
@@ -1111,7 +1243,7 @@ def test_chain_substitution_rejects_reference_to_failed_prior_action():
     mcp = _FailingMCP()
     state = _state_with_actions(
         [
-            {"tool": "rka_add_decision", "args": {"content": "x"}, "rationale": ""},
+            {"tool": "rka_add_decision", "args": {"content": "x", "related_journal": ["jrn_t"]}, "rationale": ""},
             {
                 "tool": "rka_add_note",
                 "args": {"content": "depends on {{PA-1.id}}"},

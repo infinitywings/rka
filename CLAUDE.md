@@ -1129,6 +1129,107 @@ Reference: workflow `wqicgntwi` (5-facet root-cause synthesis,
 [`orchestrator/docs/v2.6.x-roadmap.md`](orchestrator/docs/v2.6.x-roadmap.md)
 §4 — PR1; orchestrator/pyproject.toml bumped 0.6.0 → 0.6.1.
 
+### Phase-X²' polish — schema-divergence validation chain (field-NAME layer)
+
+Sibling fix to the Phase-X² polish (validation-chain hardening at the
+field-VALUE layer). Phase-X² closed the enum-VALUE validation gap;
+Phase-X²' closes the field-NAME validation gap that empirically
+surfaced on 2026-06-01 hyperscaler-auditing PA-2:
+`rka_submit_checkpoint(content=...)` instead of `description=...`.
+The enum-VALUE validator returned empty; the adapter at
+`mcp_client.py:574` then raised `ValueError` at dispatch time and
+EC8 escalated to a failure checkpoint. The PI session manually
+resolved per Path (i) (resolve EC8 failure checkpoint with the
+substantive Q1-Q4 answers + root cause).
+
+**5-facet root-cause analysis** (workflow `wjyk2x82n`, 2026-06-01)
+identified the structural mechanism: RKA's 9 WRITE_TOOLS use FIVE
+different vocabularies for the same semantic role ("primary body
+field"): `content` (3 tools: rka_add_note, rka_update_note,
+rka_ingest_document), `question` (rka_add_decision), `objective`
+(rka_create_mission), `description` (rka_submit_checkpoint),
+`summary` (rka_submit_report). Brain's only worked example in
+EXECUTOR_SYSTEM uses `content=` for rka_add_note, which generalises
+incorrectly across sibling write tools.
+
+**Four-layer fix** (per the design doc at
+[`orchestrator/docs/phase-x-prime-polish-design.md`](orchestrator/docs/phase-x-prime-polish-design.md)
+§5; all four ship atomically because any one alone is a treadmill):
+
+- **Layer 1 — `content` alias on `rka_submit_checkpoint` adapter.**
+  `orchestrator/orchestrator/mcp_client.py:567-579`. Symmetric with
+  `rka_submit_report` (which has accepted `content` since Phase
+  D2.4). The asymmetry between sibling EXECUTION_GATES tools was
+  the proximate bug. Collision rule: `description` wins when both
+  are supplied.
+- **Layer 2 — `TOOL_REQUIRED_FIELDS` + `check_required_fields`.**
+  `orchestrator/orchestrator/rka_enums.py`. Alias-set-of-sets
+  data structure (`dict[str, list[frozenset[str]]]`) so legitimate
+  `message=`-only or `reason=`-only calls satisfy the body-field
+  set. Wired into `execute_ratified_actions` immediately after the
+  Phase-X² enum check. New
+  `ratified_action_arg_missing_required_field` ErrorRecord with
+  skip-and-continue semantics; integrates with EC8 routing without
+  graph changes. Per-tool entries for 9 WRITE_TOOLS; excludes
+  `project_id` (dispatcher-injected per Phase E6); bookkeeper-safe
+  manual mirror of `mcp_client.py` adapter signatures, lock-tests
+  pin each entry against drift.
+- **Layer 3 — Canonical-field-name block in BRAIN_SYSTEM +
+  EXECUTOR_SYSTEM.** Per-tool canonical-name table for all 9
+  WRITE_TOOLS + explicit "common Brain hallucination" negative
+  callout for `content=` on `rka_submit_checkpoint`. Symmetric
+  with the existing Phase-X² `confidence='confirmed'` callout.
+- **Layer 4 — PI diagnostic surface on `pi_acceptance` payload.**
+  Three new top-level fields: `latest_error_type`,
+  `latest_failed_tool`, `latest_checkpoint_reason`. Closes the
+  drill-into-errors[] gap that made the 2026-06-01 mission's
+  triage take longer than necessary; the PI cockpit can now read
+  the specific escalation cause from the top-level interrupt
+  payload.
+
+**Order in `execute_ratified_actions`**: enum validator FIRST,
+then required-field validator, then project_id consistency check,
+then dispatch. An action with both a wrong enum value AND a
+missing required field surfaces the enum error first (more
+actionable for Brain — wrong values give Brain a hint about what
+to fix; missing fields don't carry that signal).
+
+**Three-storage discipline preserved.** New validator reads
+proposed_actions args (LangGraph state); writes ErrorRecord into
+state.errors (LangGraph state); never touches RKA domain truth.
+Phase-X² + Phase-X²' share the `rka_enums.py` manual-mirror
+module — same bookkeeper-safe posture, same drift-detection
+lock-tests.
+
+**Tests** (27 new): 11 in `test_rka_enums.py` (validator unit
+semantics + alias-set + lock-tests + project_id-excluded
+invariant), 4 in `test_mcp_client.py` (Layer 1 adapter alias +
+collision rule + missing-body), 3 in `test_executor.py` (dispatcher
+integration: missing-required emits ErrorRecord, content alias
+satisfies, message alias satisfies), 9 in new
+`test_phase_x_prime_polish.py` (Layer 3 prompt assertions + Layer
+4 PI surface). 3 pre-existing test fixtures tightened to satisfy
+the new validator (the fixtures were sloppy — the validator caught
+them, which is correct behaviour).
+
+**Deferred to follow-up PRs** (in the **Deferred follow-ups** list
+below): `rka_add_decision` adapter expansion to accept canonical
+`question` kwarg; `rka_create_mission` adapter expansion for
+canonical `tasks`/`context`/`checkpoint_triggers`; `**kw` adapter
+tightening (silent-drop unknown kwargs); pre-dispatch ID-prefix
+validator; pre-dispatch type-shape validator. RKA-side
+improvements (additive aliases, Annotated Literal type hints,
+schema-lie fix on rka_submit_report, docstring sweep, 4xx/5xx
+response enrichment) land separately as main v2.6.1 + v2.6.2 per
+the roadmap.
+
+Reference: design doc
+[`orchestrator/docs/phase-x-prime-polish-design.md`](orchestrator/docs/phase-x-prime-polish-design.md);
+roadmap
+[`orchestrator/docs/v2.6.x-roadmap.md`](orchestrator/docs/v2.6.x-roadmap.md)
+§5 — PR2; root-cause workflow `wjyk2x82n` (2026-06-01);
+`orchestrator/pyproject.toml` 0.6.1 → 0.6.2.
+
 ### Deferred follow-ups
 
 Deferred from the Phase D2.1 review — non-blocking but should

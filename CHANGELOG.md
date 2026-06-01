@@ -3,6 +3,171 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [agentic — v2.6.0+agentic.2] — 2026-06-01 (Phase-X²' polish — schema-divergence validation chain)
+
+Branch-scoped patch on top of `v2.6.0+agentic.1`. Closes the field-NAME
+validation gap that Phase-X² left open at the field-VALUE layer.
+Empirically surfaced on the 2026-06-01 hyperscaler-auditing PA-2
+dispatch failure: Brain emitted
+`rka_submit_checkpoint(content=...)` instead of `description=...`. The
+enum-VALUE validator (Phase-X²) saw no enum mismatch; the adapter at
+`mcp_client.py:574` then raised `ValueError` at dispatch time and EC8
+escalated to a failure checkpoint. The field-NAME validator closes
+this at the same dispatcher seam.
+
+Per the design at
+[`orchestrator/docs/phase-x-prime-polish-design.md`](orchestrator/docs/phase-x-prime-polish-design.md),
+this PR bundles all three agentic-side layers atomically (alone any
+one is a treadmill).
+
+### Added
+
+- **Layer 1 — `content` alias on `rka_submit_checkpoint` adapter**
+  (`orchestrator/orchestrator/mcp_client.py:567-579`). Symmetric
+  with `rka_submit_report` which has accepted `content` since Phase
+  D2.4 — the asymmetry between sibling EXECUTION_GATES tools was the
+  bug. Collision rule (when both `description` and `content` are
+  supplied): `description` wins (first in pop chain).
+- **Layer 2 — `TOOL_REQUIRED_FIELDS` + `check_required_fields`** in
+  `orchestrator/orchestrator/rka_enums.py`. Alias-set-of-sets shape
+  (`dict[str, list[frozenset[str]]]`) so legitimate `message=`-only
+  calls satisfy the body-field set for rka_submit_checkpoint. Wired
+  into `execute_ratified_actions` immediately after the existing
+  enum check, with new
+  `ratified_action_arg_missing_required_field` ErrorRecord (skip-
+  and-continue semantics; integrates with existing EC8 routing).
+  Excludes `project_id` (dispatcher-injected per Phase E6).
+- **Layer 3 — Canonical-field-name block in BRAIN_SYSTEM +
+  EXECUTOR_SYSTEM** (`orchestrator/orchestrator/nodes/brain.py:172`
+  + `orchestrator/orchestrator/nodes/executor.py:195`). Per-tool
+  canonical-name table for all 9 WRITE_TOOLS + explicit "common
+  Brain hallucination" negative callout for the `content=` on
+  `rka_submit_checkpoint` shape (symmetric with the existing
+  `confidence='confirmed'` callout from Phase-X² polish).
+- **Layer 4 — PI diagnostic surface on `pi_acceptance` payload**
+  (`orchestrator/orchestrator/nodes/pi.py:274-345`). Three new
+  top-level fields: `latest_error_type`, `latest_failed_tool`,
+  `latest_checkpoint_reason`. Surfaced from the LAST error/checkpoint
+  in `state['errors'] / state['checkpoints']`; absent when those
+  collections are empty (happy-path shape stable). Closes the
+  drilling-into-errors[] gap that made the 2026-06-01 mission's PA-2
+  triage take longer than necessary.
+- **Net new tests across 5 files** (1195 → ~1227 collected, exact
+  count varies with adversarial-review hardening): 16 `check_
+  required_fields` unit tests in `test_rka_enums.py` (including
+  drift-detection, empty-string/whitespace rejection, and
+  WRITE_TOOLS-coverage lock-test), 4 adapter alias regression
+  tests in `test_mcp_client.py`, 3 dispatcher integration tests in
+  `test_executor.py`, 9 prompt + PI surface tests in new
+  `test_phase_x_prime_polish.py` (PI surface tests use the real
+  `_make_error(...)` constructor so the canonical ErrorRecord
+  shape is exercised, not a synthetic dict).
+
+### Changed
+
+- **`execute_ratified_actions` adds required-field validator
+  immediately after enum validator.** Order matters: an action
+  with BOTH a wrong enum value AND a missing required field
+  surfaces the enum error first (more actionable for Brain).
+- **`rka_submit_checkpoint` adapter docstring updated** to
+  document the new `content` alias and reference the Phase-X²'
+  polish surface area.
+- **3 test fixtures tightened** to satisfy the new validator:
+  `test_executor.py` (rka_add_decision: added
+  `related_journal: ["jrn_t"]`), `test_capabilities.py`
+  (rka_create_mission: added `motivated_by_decision` +
+  `acceptance_criteria`; rka_submit_checkpoint: added
+  `mission_id`). These fixtures were sloppy pre-validator — the
+  validator caught them, which is correct behaviour.
+
+### Operational
+
+- Bookkeeper invariant intact (`git diff main -- rka/` empty).
+- Grep-gate intact (no new `from rka` / `import rka` in
+  `orchestrator/`).
+- `orchestrator/pyproject.toml` version 0.6.1 → 0.6.2.
+- Total orchestrator test count rises ~1182 → ~1209 (+27).
+- Bookkeeper invariant: `TOOL_REQUIRED_FIELDS` is a MANUAL MIRROR
+  of `mcp_client.py` adapter signatures; lock-tests pin each entry
+  against drift. Symmetric posture with the Phase-X²
+  `TOOL_ARG_ENUMS` mirror.
+
+### Adversarial review hardening
+
+Adversarial review workflow `wmyy2wr5q` (3 lenses + verify):
+19 findings surfaced, 17 confirmed (2 HIGH + 4 MEDIUM + 7 LOW +
+4 NIT), 2 refuted. All HIGH + load-bearing MEDIUM landed in-PR:
+
+- **HIGH #1 + #2** (same root cause) — Layer 4's
+  `latest_failed_tool` regex extraction read `last_err.get('reason')
+  or last_err.get('details')`, but the canonical `ErrorRecord` shape
+  (`state.py:94`) uses `detail` (singular). Every production
+  ErrorRecord goes through `_make_error()` which writes to `detail`,
+  so the regex ran against the empty-string fallback and the polish
+  was effectively dead code for real escalations. **Fix**: read
+  `detail` (canonical) first, fall back to `reason` for legacy
+  hand-constructed dicts; drop the `details` typo branch. Test
+  hardened to build error via `_make_error()` so it exercises the
+  production shape.
+- **MEDIUM #1** — `check_required_fields` treated `''` and
+  whitespace-only as satisfied, but adapter truthy-checks reject
+  them (`if not description:` at `mcp_client.py:585`). **Fix**:
+  added `_is_satisfied()` helper that mirrors adapter semantics
+  (None → missing; str → bool(strip()); other → bool()). Adversarial
+  tests pin `''`, `'   '`, empty list, regression for
+  non-empty-meaningful-string acceptance.
+- **MEDIUM #2** — `orchestrator-pi.md` + `plugin/skills/.../SKILL.md`
+  documented the old pi_acceptance payload shape and PI cockpit
+  would not surface the new `latest_*` fields. **Fix**: both skill
+  files updated with a paragraph documenting the three new fields
+  and rendering guidance.
+- **LOW #3** — BRAIN_SYSTEM block described `rka_add_decision`'s
+  adapter incorrectly (claimed `content` was positional-only, but
+  it's accepted as a kwarg). **Fix**: reworded to "emit `content`
+  as the body field; do NOT emit `question=` — adapter would
+  silently drop it via **kw absorption". Aligns with the actual
+  deferred-followup #1 in the design doc.
+- **LOW #5** — EXECUTOR_SYSTEM block lacked the same "common Brain
+  hallucination" callout that BRAIN_SYSTEM had. **Fix**: appended
+  the symmetric callout so the two prompts stay in lockstep.
+- **NIT #3** — TOOL_REQUIRED_FIELDS / WRITE_TOOLS coverage drift
+  was intentional but lacked an explicit invariant test. **Fix**:
+  added `test_tool_required_fields_matches_write_tools_set` that
+  pins both directions (no WRITE_TOOL omitted; no foreign tool
+  included).
+
+Remaining LOW/NIT items (sibling-tool comparison table, ordering,
+mutual cross-reference between enum + canonical blocks, etc.) are
+cosmetic prompt-quality improvements filed for a follow-on
+Phase-X²'' polish if/when prioritized.
+
+### Deferred to Phase-X²'' or follow-on PRs
+
+- `rka_add_decision` adapter expansion to accept canonical
+  `question` kwarg (today TypeErrors). Filed in the design doc's
+  §9 deferred-followups.
+- `rka_create_mission` adapter expansion for canonical `tasks`,
+  `context`, `checkpoint_triggers` (today silently dropped).
+- `**kw` adapter tightening (silent-drop unknown kwargs).
+- Pre-dispatch ID-prefix validator.
+- The 5 main-side RKA improvements (additive aliases, Annotated
+  Literal type hints, schema-lie fix, docstring sweep, 4xx/5xx
+  response enrichment) ship in main v2.6.1 + v2.6.2 per the
+  roadmap.
+
+### Reference
+
+- Architectural design:
+  [`orchestrator/docs/phase-x-prime-polish-design.md`](orchestrator/docs/phase-x-prime-polish-design.md)
+- Sequencing: [`orchestrator/docs/v2.6.x-roadmap.md`](orchestrator/docs/v2.6.x-roadmap.md)
+  §5 — PR2.
+- Root-cause audit: workflow `wjyk2x82n` (5-facet synthesis,
+  2026-06-01).
+- Empirical event: hyperscaler-auditing PA-2 dispatch failure
+  (`chk_01KT1TVKFKK3Q21A9ZGQMBRRSA`, 2026-06-01).
+
+---
+
 ## [agentic — v2.6.0+agentic.1] — 2026-06-01 (Phase D2.6 — async-resume watchdog)
 
 Branch-scoped patch on top of `v2.6.0+agentic`. Closes the silent

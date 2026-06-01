@@ -127,7 +127,7 @@ def test_dispatch_when_no_allowed_capabilities_dispatches_all():
     state = _state()
     state["ratified_actions"] = [
         {"tool": "rka_add_note", "args": {"content": "n1"}, "rationale": "r"},
-        {"tool": "rka_create_mission", "args": {"objective": "g"}, "rationale": "r"},
+        {"tool": "rka_create_mission", "args": {"objective": "g", "motivated_by_decision": "dec_t", "acceptance_criteria": ["a"]}, "rationale": "r"},
     ]
 
     update = executor.execute_ratified_actions(state, sdk, mcp)
@@ -149,7 +149,7 @@ def test_dispatch_with_allowed_capabilities_filters_out_others():
     state["allowed_capabilities"] = ["record_knowledge"]
     state["ratified_actions"] = [
         {"tool": "rka_add_note", "args": {"content": "n1"}, "rationale": "r"},
-        {"tool": "rka_create_mission", "args": {"objective": "g"}, "rationale": "r"},
+        {"tool": "rka_create_mission", "args": {"objective": "g", "motivated_by_decision": "dec_t", "acceptance_criteria": ["a"]}, "rationale": "r"},
     ]
 
     update = executor.execute_ratified_actions(state, sdk, mcp)
@@ -177,10 +177,10 @@ def test_dispatch_with_multiple_allowed_capabilities():
         {"tool": "rka_add_note", "args": {"content": "n1"}, "rationale": "r"},
         {
             "tool": "rka_submit_checkpoint",
-            "args": {"reason": "test", "type": "decision"},
+            "args": {"reason": "test", "type": "decision", "mission_id": "mis_t"},
             "rationale": "r",
         },
-        {"tool": "rka_create_mission", "args": {"objective": "g"}, "rationale": "r"},
+        {"tool": "rka_create_mission", "args": {"objective": "g", "motivated_by_decision": "dec_t", "acceptance_criteria": ["a"]}, "rationale": "r"},
     ]
 
     update = executor.execute_ratified_actions(state, sdk, mcp)
@@ -204,7 +204,7 @@ def test_dispatch_with_empty_list_allowed_capabilities_dispatches_all():
     state = _state()
     state["allowed_capabilities"] = []  # empty → no restriction
     state["ratified_actions"] = [
-        {"tool": "rka_create_mission", "args": {"objective": "g"}, "rationale": "r"},
+        {"tool": "rka_create_mission", "args": {"objective": "g", "motivated_by_decision": "dec_t", "acceptance_criteria": ["a"]}, "rationale": "r"},
     ]
 
     update = executor.execute_ratified_actions(state, sdk, mcp)
@@ -283,7 +283,7 @@ def test_dispatch_with_set_allowed_capabilities_is_accepted():
     state["allowed_capabilities"] = {"record_knowledge"}
     state["ratified_actions"] = [
         {"tool": "rka_add_note", "args": {"content": "n"}, "rationale": "r"},
-        {"tool": "rka_create_mission", "args": {"objective": "g"}, "rationale": "r"},
+        {"tool": "rka_create_mission", "args": {"objective": "g", "motivated_by_decision": "dec_t", "acceptance_criteria": ["a"]}, "rationale": "r"},
     ]
     update = executor.execute_ratified_actions(state, sdk, mcp)
     assert any(c["op"] == "rka_add_note" for c in mcp.calls)

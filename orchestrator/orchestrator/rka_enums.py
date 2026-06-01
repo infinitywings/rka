@@ -250,3 +250,164 @@ def validate_action_args(
         if value not in expected:
             violations.append((arg_name, value, expected))
     return violations
+
+
+# ---------------------------------------------------------------------------
+# Phase-X²' polish — per-tool required-field validation
+# ---------------------------------------------------------------------------
+#
+# Closes the field-NAME validation gap that the enum-VALUE validator
+# (TOOL_ARG_ENUMS / validate_action_args) left open. The 2026-06-01
+# hyperscaler-auditing PA-2 failure surfaced this: Brain emitted
+# `rka_submit_checkpoint(content=...)` instead of `description=...`. The
+# enum validator returned empty (no enum violations); the adapter then
+# raised ValueError at dispatch time and EC8 escalated to a failure
+# checkpoint.
+#
+# Design: per-tool list of ALIAS SETS. Each set is a "required-OR" — if
+# ANY field in the set is present (and not None), the requirement is
+# satisfied. This matches how the RestMCPClient adapters absorb Brain
+# shape variation:
+#
+#   rka_submit_checkpoint accepts description / message / reason /
+#   content as aliases for the body field; mission_id / related_mission
+#   as aliases for the mission anchor. The required-set declaration
+#   reflects the post-Layer-1 adapter surface so this validator stays
+#   consistent with what the adapter will and will not accept.
+#
+# Bookkeeper invariant: the table is a MANUAL MIRROR of the RestMCPClient
+# adapter signatures at `orchestrator/mcp_client.py`. NO `from rka` /
+# `import rka` here or in the lock-tests. Drift is reconciled MANUALLY
+# when the adapter's alias surface changes.
+#
+# Source of truth for each per-tool entry below: the adapter signature
+# and pop chain in `orchestrator/mcp_client.py`. Cited lines refer to
+# the live tree at this PR's tip.
+#
+# project_id is INTENTIONALLY excluded from every required set: the
+# orchestrator's RestMCPClient injects it from the workflow's project
+# binding via query params (see RestMCPClient._params); the executor's
+# project_id consistency guard (`cross_project_write_attempted`) is the
+# upstream check that catches per-action project_id mismatches.
+
+TOOL_REQUIRED_FIELDS: dict[str, list[frozenset[str]]] = {
+    # rka_add_note(content: str, **kw) — content is positional-required.
+    "rka_add_note": [
+        frozenset({"content"}),
+    ],
+    # rka_add_decision(content: str, *, related_journal: list[str], ...)
+    # — content + related_journal are no-default required.
+    "rka_add_decision": [
+        frozenset({"content"}),
+        frozenset({"related_journal"}),
+    ],
+    # rka_submit_checkpoint(*args, **kw) — description-alias-set
+    # (POST-Layer-1, so `content` is included) + mission_id-alias-set.
+    # type defaults to "decision" at the adapter, so it is NOT required.
+    "rka_submit_checkpoint": [
+        frozenset({"description", "message", "reason", "content"}),
+        frozenset({"mission_id", "related_mission"}),
+    ],
+    # rka_submit_report(*args, **kw) — mission_id-alias-set is the
+    # hard requirement; summary tolerates absence at the adapter (defaults
+    # to "") so we don't enforce it pre-dispatch.
+    "rka_submit_report": [
+        frozenset({"mission_id", "related_mission"}),
+    ],
+    # rka_create_mission(objective: str, *, motivated_by_decision: str,
+    # acceptance_criteria: list[str], ...) — three no-default required.
+    "rka_create_mission": [
+        frozenset({"objective"}),
+        frozenset({"motivated_by_decision"}),
+        frozenset({"acceptance_criteria"}),
+    ],
+    # rka_update_note(id: str, **kw) — id raises ValueError if empty.
+    "rka_update_note": [
+        frozenset({"id"}),
+    ],
+    # rka_update_mission_status(id: str, **kw) — id raises ValueError if
+    # empty. status goes through _drop_none (falls through if None), so
+    # the adapter tolerates status-less calls; we don't enforce it.
+    "rka_update_mission_status": [
+        frozenset({"id"}),
+    ],
+    # rka_bulk_update(updates: list[dict]) — updates is positional-required.
+    "rka_bulk_update": [
+        frozenset({"updates"}),
+    ],
+    # rka_ingest_document(content: str, **kw) — content raises
+    # ValueError if empty or whitespace-only.
+    "rka_ingest_document": [
+        frozenset({"content"}),
+    ],
+}
+
+
+def check_required_fields(tool: str, args: dict) -> list[str]:
+    """Return a list of human-readable error reasons for any required
+    alias-set in `tool`'s TOOL_REQUIRED_FIELDS entry that is NOT
+    satisfied by `args`.
+
+    Semantics:
+      - For each alias-set, the requirement is satisfied if ANY field
+        in the set is present in `args` with a truthy-string value
+        (non-empty, non-whitespace-only) OR a truthy non-string value
+        (e.g. a non-empty list / dict / a non-zero number).
+      - A field whose value is None / '' / '   ' (whitespace-only) is
+        treated as MISSING. This mirrors the adapter truthy-checks at
+        mcp_client.py (e.g. `if not description:` in
+        rka_submit_checkpoint at line 585; `if not content or not
+        content.strip():` in rka_ingest_document at line 967) so the
+        validator catches the empirical failure modes BEFORE the
+        adapter-layer ValueError.
+      - Unknown tool (not in TOOL_REQUIRED_FIELDS) returns []. The
+        upstream WRITE_TOOLS allowlist check handles unknown-tool
+        cases via `ratified_action_tool_not_allowed`.
+
+    Open-world tolerance mirrors validate_action_args: this validator
+    catches the empirical "missing-required-field" failure modes (e.g.
+    rka_submit_checkpoint(content=...) without a description/message/
+    reason alias) BEFORE the network round-trip. It does NOT replicate
+    RKA's full Pydantic validation; the REST 422 path remains
+    authoritative for the long-tail of field requirements.
+    """
+    required_sets = TOOL_REQUIRED_FIELDS.get(tool)
+    if not required_sets:
+        return []
+
+    def _is_satisfied(value: object) -> bool:
+        """True iff `value` would survive the adapter's truthy-check.
+
+        Adversarial-review MEDIUM #1: the adapter truthy-checks reject
+        '' and '   '; the validator must mirror this or the pre-dispatch
+        guard is defeated for whitespace-only emissions.
+        """
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return bool(value.strip())
+        # Non-string truthy semantics: empty list/dict/0/False are also
+        # rejected. The adapter's `if not X:` check applies uniformly.
+        return bool(value)
+
+    errors: list[str] = []
+    for required_set in required_sets:
+        satisfied = any(
+            field in args and _is_satisfied(args[field])
+            for field in required_set
+        )
+        if satisfied:
+            continue
+        sorted_alts = sorted(required_set)
+        if len(sorted_alts) == 1:
+            errors.append(
+                f"{tool}: required field {sorted_alts[0]!r} is missing, "
+                f"None, or empty"
+            )
+        else:
+            errors.append(
+                f"{tool}: at least one of {sorted_alts!r} is required "
+                f"(all missing, None, or empty) — these are adapter-"
+                f"accepted aliases for the same field"
+            )
+    return errors
