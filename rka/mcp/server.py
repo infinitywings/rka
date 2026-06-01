@@ -420,7 +420,7 @@ async def rka_update_literature(
 
 
 @tool()
-async def rka_link_literature_to_zotero(id: str) -> dict:
+async def rka_link_literature_to_zotero(id: str, *, project_id: str) -> dict:
     """Resolve a literature entry to its Zotero item key for full-text access.
 
     Tries five strategies in order: DOI -> arXiv ID -> URL -> ISBN ->
@@ -441,9 +441,22 @@ async def rka_link_literature_to_zotero(id: str) -> dict:
     tool to read the paper's full text for grounded claim extraction.
 
     Args:
-        id: Literature ID (lit_...)
+        id: Literature ID (lit_...).
+        project_id: RKA project ID (prj_...) — required per the v2.6
+          project-scoping contract. Without it the REST layer's
+          `get_scoped_literature_service` falls back to the sentinel
+          `proj_default`, which mismatches the literature row's actual
+          owning project. `LiteratureService.get(lit_id)` then runs
+          `WHERE id=? AND project_id='proj_default'`, returns None, and
+          the REST handler raises HTTPException(404, "Literature lit_...
+          not found") — a misleading 404 that names the lit_ id even
+          though the underlying row is intact. This kwarg threads
+          `X-RKA-Project` through `_client(project_id)` so the scoping
+          resolves correctly. Empirical regression: introduced in
+          commit 6e7a2d6 (Phase-3.4 zotero linker, 2026-05-28) which
+          landed AFTER PR #32 (v2.6 contract) without the kwarg.
     """
-    async with _client() as c:
+    async with _client(project_id) as c:
         r = await c.post(f"/api/literature/{id}/link_zotero")
         _raise_with_detail(r)
         return r.json()
@@ -3451,8 +3464,21 @@ async def rka_ask(
 # ============================================================
 
 @tool()
-async def rka_session_digest() -> str:
-    """Get a compact summary of the current MCP session."""
+async def rka_session_digest(*, project_id: str) -> str:
+    """Get a compact summary of the current MCP session.
+
+    Args:
+        project_id: RKA project ID (prj_...) — required per the v2.6
+          project-scoping contract. The session digest pulls
+          `/api/status` and `/api/checkpoints` which are both
+          project-scoped REST endpoints; threading project_id through
+          `_client(project_id)` sets the `X-RKA-Project` header so the
+          REST layer scopes correctly. Sibling bug to
+          rka_link_literature_to_zotero — both regressed in / after
+          PR #32 (v2.6 contract). Without the kwarg this function
+          previously NameError'd at the `_client(project_id)` site
+          because `project_id` was an undefined symbol.
+    """
     session = _session
 
     lines = [
