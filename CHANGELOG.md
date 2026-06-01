@@ -3,6 +3,94 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [2.6.2] — 2026-06-01 (patch — Phase-X²' polish on main: Annotated[Literal] LLM-schema promotion + 4xx/5xx enrichment)
+
+Patch release. Closes the v2.6.x cycle for Phase-X²' polish on main
+(see v2.6.1 entry below for Layers 5/7/8; this release ships Layers
+6 and 9). All changes are backward-compatible — `Annotated[Literal]`
+is a type-hint refinement (FastMCP's `inputSchema` rendering becomes
+more LLM-friendly without changing accepted values), and the
+enrichment of `_raise_with_detail` is strict superset behavior
+(non-structured detail still renders as before).
+
+### Added
+
+- **`Annotated[Literal[...], Field(description=...)]` enum
+  type-hint promotion on enum-typed WRITE_TOOL parameters** in
+  `rka/mcp/server.py`. FastMCP renders Annotated[Literal] into
+  `inputSchema.properties.*.enum`, so LLM clients (Claude
+  Desktop / Claude Code) see the constrained value set DIRECTLY in
+  the rendered tool definition — they can refuse out-of-enum
+  proposals pre-call, closing the third rung in the validation
+  ladder (after server-side Pydantic models + orchestrator-side
+  `TOOL_ARG_ENUMS` mirror). Tools promoted:
+    - `rka_add_note`: `confidence`, `importance`, `source`
+    - `rka_add_decision`: `decided_by`, `kind`
+    - `rka_submit_checkpoint`: `type`
+    - `rka_update_mission_status`: `status`
+    - `rka_ingest_document`: `source`
+  Module-level type aliases (`ConfidenceLiteral`,
+  `ImportanceLiteral`, `SourceLiteral`, `DecidedByLiteral`,
+  `DecisionKindLiteral`, `CheckpointTypeLiteral`,
+  `MissionStatusLiteral`, `IngestSourceLiteral`) keep the
+  promotions DRY and mirror the canonical sets at
+  `orchestrator/orchestrator/rka_enums.py` + SQLite CHECK
+  constraints.
+- **4xx/5xx response-enrichment in `_raise_with_detail`**
+  (`rka/mcp/server.py:304`). FastAPI's structured 422 validation
+  detail (list-of-dicts shape) now renders as
+  `<field>=<input>: <msg> (allowed: <set>)` per offending field
+  instead of being collapsed via `str(list)`. Mirrors the Phase-X²
+  polish orchestrator-side enrichment for consistent diagnostic
+  surface. 404 / 409 / 500 with plain-string `detail` continue to
+  render unchanged.
+- **New `tests/test_mcp/test_v262_annotated_literal_and_enrichment.py`**
+  — 15 tests pinning (a) every promoted parameter resolves to
+  `Annotated[Literal[...]]` with the expected value set,
+  (b) `confidence` set excludes 'confirmed' (empirical Brain
+  hallucination), (c) structured 422 detail renders per-field with
+  the offending value visible, (d) plain-string 404 / 500 detail
+  passes through unchanged, (e) the `loc` prefix (`body`/`query`/
+  `path`/`header`) is stripped from rendered messages.
+
+### Operational
+
+- `pyproject.toml` + `rka/__init__.py` version bump 2.6.1 → 2.6.2.
+- Total RKA test suite rises 941 → 956 (+15 in
+  `test_v262_annotated_literal_and_enrichment.py`).
+- No DB migration; no breaking signature changes.
+- Type aliases are reusable: future WRITE_TOOLS can adopt the same
+  pattern with one line.
+
+### What this does NOT change
+
+- The accepted value sets are unchanged — `Annotated[Literal[...]]`
+  reflects what the Pydantic models + DB CHECK constraints already
+  accept. An LLM that disregards the rendered schema and proposes
+  an out-of-enum value still hits the orchestrator's
+  `TOOL_ARG_ENUMS` validator (pre-dispatch) or the REST 422 path
+  (post-roundtrip). The new layer is anticipatory — most LLM
+  clients consume the inputSchema and constrain their emissions
+  upfront.
+- The legacy `type` parameter on `rka_add_note` / `rka_update_note`
+  is intentionally NOT promoted because it accepts the legacy
+  superset (e.g. 'finding', 'insight', 'methodology') that's
+  silently normalized server-side via JOURNAL_TYPE_MAP. Promoting
+  it would break existing callers relying on those legacy types.
+  A v2.7.0 cleanup can retire the legacy set and promote `type`
+  to Literal.
+- `default_type` on `rka_ingest_document` follows the same logic
+  (legacy compatibility).
+
+### Reference
+
+- Architectural design: [`orchestrator/docs/phase-x-prime-polish-design.md`](orchestrator/docs/phase-x-prime-polish-design.md) §5 (Layers 6 + 9)
+- Sequencing: [`orchestrator/docs/v2.6.x-roadmap.md`](orchestrator/docs/v2.6.x-roadmap.md) §7 — PR4.
+- Companion: v2.6.1 (commit 27e250d) shipped Layers 5/7/8 (aliases +
+  schema-lie + docstring sweep).
+
+---
+
 ## [2.6.1] — 2026-06-01 (patch — Phase-X²' polish on main: WRITE_TOOLS schema hygiene)
 
 Patch release. Backward-compatible RKA-side fixes for the schema-

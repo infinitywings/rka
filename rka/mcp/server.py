@@ -12,11 +12,113 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
+from typing import Annotated, Literal
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 import httpx
 
 from rka.models.mission import MissionTask
+
+
+# ---------------------------------------------------------------------------
+# v2.6.2 — Annotated[Literal] enum type aliases for WRITE_TOOLS
+# ---------------------------------------------------------------------------
+# Promotes the canonical RKA enum values from docstring-only declarations
+# (where LLMs would have to read prose to learn the allowed set) into
+# FastMCP-rendered `inputSchema.properties.*.enum`. LLM clients that
+# consume the rendered schema (Claude Desktop, Claude Code, etc.) now
+# see the constrained set directly and refuse out-of-enum proposals
+# pre-call. This closes the third rung in the validation-chain ladder:
+#
+#   - v2.6.0: enum constraints exist in the Pydantic models +
+#     SQLite CHECK constraints (server-side, post-roundtrip)
+#   - v2.6.0+agentic Phase-X² polish: orchestrator-side
+#     TOOL_ARG_ENUMS mirror catches enum mismatches at
+#     execute_ratified_actions (pre-dispatch, in-orchestrator)
+#   - v2.6.2 (THIS): Annotated[Literal[...]] on the MCP signatures
+#     so the FastMCP rendering puts the enum into the LLM's tool
+#     definition itself (pre-proposal, in-LLM)
+#
+# Mirror of the canonical sets at orchestrator/orchestrator/rka_enums.py
+# and rka/db/schema.sql CHECK constraints. When the canonical sets
+# change, update BOTH this file and rka_enums.py.
+
+# Journal entry confidence (rka/db/schema.sql + rka/models/journal.py).
+# Run-5's empirical Brain hallucination was 'confirmed' — NOT a valid
+# value. The orchestrator Phase-X² polish catches it pre-dispatch; this
+# Annotated promotion catches it pre-LLM-emission via the inputSchema.
+ConfidenceLiteral = Annotated[
+    Literal["hypothesis", "tested", "verified", "superseded", "retracted"],
+    Field(
+        description=(
+            "Confidence level for the journal entry / claim. The Brain "
+            "LLM commonly hallucinates 'confirmed' — that value is NOT "
+            "in the allowed set. Use 'verified' for cross-checked "
+            "findings or 'tested' for empirically probed findings."
+        )
+    ),
+]
+
+# Journal entry importance.
+ImportanceLiteral = Annotated[
+    Literal["critical", "high", "normal", "low", "archived"],
+    Field(description="Importance level for the journal entry."),
+]
+
+# Actor-of-record across journal / decision / literature writes.
+SourceLiteral = Annotated[
+    Literal["brain", "executor", "pi", "web_ui", "llm"],
+    Field(
+        description=(
+            "Who created this record. For Brain-authored entries, use "
+            "'brain'. For Executor-authored, use 'executor'."
+        )
+    ),
+]
+
+# Decision lifecycle / authorship.
+DecidedByLiteral = Annotated[
+    Literal["pi", "brain", "executor"],
+    Field(description="Who decided this. PI for ratified, Brain for proposed."),
+]
+
+# Decision kind.
+DecisionKindLiteral = Annotated[
+    Literal["research_question", "design_choice", "decision", "operational"],
+    Field(
+        description=(
+            "Kind of decision. 'research_question' is reserved for "
+            "advanceable RQs; most decisions are 'decision' or "
+            "'design_choice'."
+        )
+    ),
+]
+
+# Checkpoint kind.
+CheckpointTypeLiteral = Annotated[
+    Literal["decision", "clarification", "inspection", "gate"],
+    Field(
+        description=(
+            "Type of checkpoint. 'gate' for blocking go/no-go points; "
+            "'decision' for forks needing PI adjudication; "
+            "'clarification' for ambiguity surfaces; 'inspection' for "
+            "hands-off review."
+        )
+    ),
+]
+
+# Mission lifecycle status (rka_update_mission_status).
+MissionStatusLiteral = Annotated[
+    Literal["pending", "active", "complete", "partial", "blocked", "cancelled"],
+    Field(description="Mission lifecycle status."),
+]
+
+# Document ingestion source (added_by-equivalent for rka_ingest_document).
+IngestSourceLiteral = Annotated[
+    Literal["brain", "executor", "pi", "import", "web_ui"],
+    Field(description="Actor of record for the ingested document."),
+]
 
 # Skills are shipped as package data inside rka/skills/
 _SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
@@ -199,13 +301,76 @@ def _client(project_id: str | None = None) -> httpx.AsyncClient:
     )
 
 
+def _format_validation_detail(detail: list) -> str:
+    """Render FastAPI's structured 422 detail (list of per-field errors)
+    into a compact human-readable form.
+
+    FastAPI's default 422 body shape is:
+      {"detail": [
+        {"loc": ["body", "confidence"], "msg": "Input should be ...",
+         "type": "literal_error", "input": "confirmed", "ctx": {...}},
+        ...
+      ]}
+
+    Pre-v2.6.2 this list was stringified via str(...) which produced
+    repr-style output that buried the actionable info (field name +
+    offending value + expected). v2.6.2 renders each entry as
+    `<loc-path>=<input!r> not in <ctx-or-msg>` so the Brain LLM sees
+    which field needs fixing.
+
+    Closes the Phase-X²' polish Layer 9 consumer-side gap on the MCP
+    binary — mirrors the orchestrator's RestMCPClient enrichment.
+    """
+    parts: list[str] = []
+    for item in detail:
+        if not isinstance(item, dict):
+            parts.append(str(item))
+            continue
+        loc = item.get("loc") or []
+        # Drop the leading 'body' prefix; it's noise for caller-facing
+        # messages and 'body.foo' reads less cleanly than 'foo'.
+        if loc and loc[0] in ("body", "query", "path", "header"):
+            loc = loc[1:]
+        loc_str = ".".join(str(x) for x in loc) if loc else "<root>"
+        msg = item.get("msg") or ""
+        observed = item.get("input")
+        observed_repr = (
+            f"={observed!r}" if observed is not None else ""
+        )
+        ctx = item.get("ctx") or {}
+        expected = ctx.get("expected")
+        if expected:
+            parts.append(f"{loc_str}{observed_repr}: {msg} (allowed: {expected})")
+        else:
+            parts.append(f"{loc_str}{observed_repr}: {msg}")
+    return "; ".join(parts)
+
+
 def _raise_with_detail(r: httpx.Response) -> None:
-    """Like _raise_with_detail(r) but includes the response body in the error."""
+    """Raise a structured error from a non-success HTTP response.
+
+    v2.6.2 — enriched rendering of FastAPI 422 validation errors so
+    the LLM caller sees `field=<value>: <msg>` per offending field
+    instead of a repr'd list. Mirrors the Phase-X² polish
+    orchestrator-side enrichment for consistent diagnostic surface.
+    Non-422 errors (404 / 409 / 500) continue to use the string
+    `detail` field if present, falling back to raw response text.
+    """
     if r.is_success:
         return
+    detail: object
     try:
-        detail = r.json().get("detail", r.text)
-    except Exception:
+        body = r.json()
+    except Exception:  # noqa: BLE001 — body might not be JSON
+        body = None
+    if isinstance(body, dict) and "detail" in body:
+        raw = body["detail"]
+        if isinstance(raw, list):
+            # Structured Pydantic-validation detail (FastAPI 422 path).
+            detail = _format_validation_detail(raw)
+        else:
+            detail = raw
+    else:
         detail = r.text
     raise Exception(f"API error {r.status_code}: {detail}")
 
@@ -218,15 +383,15 @@ def _raise_with_detail(r: httpx.Response) -> None:
 async def rka_add_note(
     content: str,
     type: str = "note",
-    source: str = "executor",
+    source: SourceLiteral = "executor",
     phase: str | None = None,
     verbatim_input: str | None = None,
     related_decisions: list[str] | None = None,
     related_literature: list[str] | None = None,
     related_mission: str | None = None,
     supersedes: str | None = None,
-    confidence: str = "hypothesis",
-    importance: str = "normal",
+    confidence: ConfidenceLiteral = "hypothesis",
+    importance: ImportanceLiteral = "normal",
     tags: list[str] | None = None,
     *,
     project_id: str,
@@ -467,14 +632,14 @@ async def rka_link_literature_to_zotero(id: str, *, project_id: str) -> dict:
 async def rka_add_decision(
     question: str,
     phase: str,
-    decided_by: str,
+    decided_by: DecidedByLiteral,
     options: list[dict] | None = None,
     chosen: str | None = None,
     rationale: str | None = None,
     parent_id: str | None = None,
     related_literature: list[str] | None = None,
     related_journal: list[str] | None = None,
-    kind: str = "decision",
+    kind: DecisionKindLiteral = "decision",
     assumptions: list[str] | None = None,
     *,
     project_id: str,
@@ -1202,7 +1367,7 @@ async def rka_get_mission(id: str | None = None, *, project_id: str) -> str:
 @tool()
 async def rka_update_mission_status(
     id: str,
-    status: str,
+    status: MissionStatusLiteral,
     tasks: list[MissionTask] | None = None,
     *,
     project_id: str,
@@ -1407,7 +1572,7 @@ async def rka_get_report(mission_id: str | None = None, *, project_id: str) -> s
 @tool()
 async def rka_submit_checkpoint(
     mission_id: str,
-    type: str,
+    type: CheckpointTypeLiteral,
     description: str | None = None,
     task_reference: str | None = None,
     context: str | None = None,
@@ -2301,7 +2466,7 @@ async def rka_batch_import(
 @tool()
 async def rka_ingest_document(
     content: str,
-    source: str = "brain",
+    source: IngestSourceLiteral = "brain",
     default_type: str = "finding",
     phase: str | None = None,
     tags: list[str] | None = None,
