@@ -10,7 +10,10 @@ name = "rka-orchestrator"
 # pre-1.0 semver line that tracks the orchestrator's surface
 # evolution. Major-digit (0.X) bumped per shipped phase band;
 # resets on a future 1.0 cut.
-version = "0.6.0"
+# 0.6.0 → 0.6.1: Phase D2.6 async-resume watchdog patch — closes
+# the silent post-segment stall failure mode via probe-and-retry
+# in _background_segment + runner-side post-invoke hardening.
+version = "0.6.1"
 description = "RKA + LangGraph orchestrator (Phase A → Phase-X² polish; agentic branch)"
 readme = "README.md"
 requires-python = ">=3.11"

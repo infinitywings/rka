@@ -259,8 +259,17 @@ def test_worker_invariant_worker_py_untouched_by_agentic():
 
 
 def test_suite_meets_minimum_unit_test_floor():
-    # Count test items across the orchestrator suite. ≥50 was the
-    # Backbrief commitment; we land well above.
+    # Count test items across the orchestrator suite.
+    #
+    # History: the Backbrief commitment was ≥50 tests. The suite has
+    # grown organically — Phase A, Phase B, Phase D, Phase O, Phase-X /
+    # Phase-X² / Phase-X²' polish, Phase D2.6 watchdog — and now sits
+    # in the ~1100-1200 range. Phase D2.6 adversarial review (workflow
+    # `wdxj6zm3b`, 2026-06-01) flagged the 50-test floor as so generous
+    # it provides no real CI guarantee. Bumped to 1100 — leaves room
+    # for ~80 deletes during legitimate refactors but catches
+    # catastrophic regressions (e.g., an empty conftest.py that hides
+    # half the suite).
     import subprocess
 
     venv_py = Path(__file__).resolve().parent.parent.parent / ".venv" / "bin" / "python3"
@@ -276,4 +285,8 @@ def test_suite_meets_minimum_unit_test_floor():
     match = re.search(r"(\d+)\s+tests collected", result.stdout)
     assert match is not None, f"could not parse pytest collect output:\n{result.stdout[-400:]}"
     count = int(match.group(1))
-    assert count >= 50, f"only {count} tests; Backbrief floor is ≥50"
+    assert count >= 1100, (
+        f"only {count} tests; floor is 1100 since Phase D2.6 — a drop "
+        f"below this likely indicates an accidentally-disabled conftest "
+        f"or fixture import error swallowing whole files"
+    )

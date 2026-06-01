@@ -3,6 +3,108 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [agentic — v2.6.0+agentic.1] — 2026-06-01 (Phase D2.6 — async-resume watchdog)
+
+Branch-scoped patch on top of `v2.6.0+agentic`. Closes the silent
+post-segment stall surfaced 2026-06-01 on the hyperscaler-auditing
+mission (`thr_19e838ecc3054efe626`): the bg thread driving
+`compiled.invoke()` deadlocked on the SDK subprocess pipe wait;
+`compiled.invoke()` returned without advancing the run, leaving
+`status='running'`, no parked interrupt, no terminal_state, and no
+exception. The PI's `/runs/{id}` polls showed no change for minutes
+until the runtime was manually kicked.
+
+### Added
+
+- **`_WatchdogProbe` dataclass + `_capture_probe` + `_probe_advanced`
+  + `_cache_sync` + `_read_live_probe_fields`** at module scope in
+  `orchestrator/server.py`. Probe captures four structural signals
+  (`status`, `checkpoint_id`, `pending_interrupt_ids`,
+  `terminal_state`) plus live `current_node` + `usd_spent` for the
+  cache-sync side effect. `_probe_advanced` is a disjunction over
+  the four signals (any advance → True); the stall path is the
+  contrapositive at the call site.
+- **Watchdog wiring inside `_background_segment`** — captures
+  before-probe, awaits coro, captures after-probe; on detected
+  stall performs ONE bounded retry of the same coro_factory.
+  After retry still no advance → status='failed' with a structured
+  `last_error` mentioning checkpoint_id and the likely SDK
+  pipe-wait root cause.
+- **37 watchdog + runner-side tests**
+  (`orchestrator/tests/test_watchdog.py`) covering helper unit
+  semantics, integration through `/inbox/*/accept` AND the three
+  `/runs` / `/onboard` / `/bootstrap` async-start paths, real
+  SqliteSaver round-trip, terminal-safe overwrite protection,
+  capture/cache-sync swallowed-exception paths, last_error
+  truncation, and the runner's defensive paths (non-dict, None,
+  missing terminal_state with warning-default).
+- **`update_run(*, terminal_safe: bool = False, ...)` kwarg on
+  `ParkedStore`** — when True, adds `AND status IN ('running',
+  'awaiting_pi')` to the WHERE clause and returns the rowcount.
+  Symmetric with the Phase D2.1 `cancel_run` TERMINAL-SAFE guard;
+  closes the race where a PI `DELETE /runs/{id}` (cancellation)
+  landing during the watchdog's probe-and-retry window could be
+  silently overwritten by the escalation's
+  `status='failed'` UPDATE. Used at all three escalation sites
+  (initial-crash, retry-crash, deterministic-stall escalation)
+  and on the retry's CancelledError diagnostic write.
+- **Adversarial review workflow `wdxj6zm3b`** (4 lenses + verify):
+  32 findings surfaced, 23 confirmed (1 critical + 3 high +
+  8 medium + 7 low + 4 nit), 9 refuted. All critical + high +
+  load-bearing medium findings addressed in-PR; remaining
+  low/nit items filed as deferred follow-ups.
+
+### Changed
+
+- **`/inbox/{id}/{accept,reject,correct}` consolidated onto shared
+  `_background_segment`.** The previously-inline `_drive_segment_bg`
+  closure had identical lifecycle handling but WITHOUT the
+  watchdog. Routing all four async-resume callsites (`/runs`,
+  `/onboard`, `/bootstrap`, `/inbox/*`) through one helper means one
+  set of probe-and-retry semantics covers them all.
+- **`runner._execute_segment` post-invoke inspection hardened.**
+  Wrapped in `try/except` so a non-dict return (LangGraph 1.x
+  pregel internal early-return shape, or a None return) surfaces
+  as `status='failed'` instead of an uncaught `AttributeError`.
+  Missing-`terminal_state` (legitimate END-node case for Phase B
+  bootstrap, onboarding subgraph, Phase O project onboarding) is
+  tolerated: defaults to `'complete'` with a warning log so the
+  empirical "silent early return" class is still visible in
+  operator logs. The Phase D2.6 watchdog at the bg-task layer
+  catches the silent-stall class authoritatively via checkpoint-
+  id progress; the runner intentionally keeps back-compat with
+  END nodes that don't set terminal_state. Unexpected
+  `terminal_state` values are also normalised to `'complete'`
+  with a warning log.
+
+### Operational
+
+- Bookkeeper invariant intact (`git diff main -- rka/` empty).
+- Grep-gate intact (no new `from rka` / `import rka` in
+  `orchestrator/`).
+- **Test-count floor bumped 50 → 1100** in
+  `tests/test_invariants.py` (adversarial review NIT #4 —
+  50 was so generous it provided no real CI guarantee; 1100
+  leaves ~80 deletes' headroom for refactors but catches
+  catastrophic regressions like a half-disabled conftest).
+- Total orchestrator test count rises from 1156 to 1193
+  (+37 new in `test_watchdog.py`).
+- Three-storage discipline preserved — probe reads workflow_runs +
+  LangGraph checkpoint + parked_interrupts; never touches RKA
+  domain truth.
+- `orchestrator/pyproject.toml` version 0.6.0 → 0.6.1.
+
+### Reference
+
+- Empirical event: `thr_19e838ecc3054efe626` (hyperscaler-auditing
+  mission, 2026-06-01).
+- Root-cause synthesis: workflow `wqicgntwi` (5 facets, 2026-06-01).
+- Architectural plan:
+  [`orchestrator/docs/v2.6.x-roadmap.md`](orchestrator/docs/v2.6.x-roadmap.md)
+  §4 — PR1.
+
+---
+
 ## [agentic — v2.6.0+agentic] — 2026-05-31 (Phase A → Phase-X² polish; orchestrator capability tier)
 
 Branch-scoped release. `main` is unaffected at the tag level; this tag

@@ -864,47 +864,117 @@ class OrchestratorRunner:
                 workflow_thread_id=thread_id, terminal_state="failed"
             )
 
-        # Inspect for interrupt vs terminal.
-        interrupts = output.get("__interrupt__") if isinstance(output, dict) else None
-        if interrupts:
-            first = interrupts[0]
-            payload = dict(first.value) if isinstance(first.value, dict) else {"raw": first.value}
-            interrupt_type = payload.get("type", "")
-            iid = self.store.park_interrupt(
-                workflow_thread_id=thread_id,
-                mission_id=output.get("mission_id") or self.store.get_run(thread_id)["mission_id"],
-                interrupt_type=interrupt_type,
-                payload=payload,
-            )
+        # Phase D2.6 — defensive post-invoke inspection.
+        # `compiled.invoke()` is documented to return a dict of channel
+        # values (optionally with `__interrupt__`), but LangGraph 1.x's
+        # internal pregel loop has an early-return path (`if not
+        # self.tasks: ... return False` in pregel/_loop.py:645-647)
+        # that surfaces as a non-dict or shape-incomplete return. The
+        # silent `or 'complete'` default at the terminal branch
+        # historically mislabeled these as successful completion; we
+        # now make them explicit failures so the server-side watchdog
+        # (orchestrator.server._background_segment) and downstream
+        # polls can surface the issue accurately.
+        try:
+            if not isinstance(output, dict):
+                raise RuntimeError(
+                    f"compiled.invoke returned non-dict output "
+                    f"({type(output).__name__}); thread={thread_id}"
+                )
+
+            interrupts = output.get("__interrupt__")
+            if interrupts:
+                first = interrupts[0]
+                payload = (
+                    dict(first.value)
+                    if isinstance(first.value, dict)
+                    else {"raw": first.value}
+                )
+                interrupt_type = payload.get("type", "")
+                run_row = self.store.get_run(thread_id) or {}
+                mission_id = output.get("mission_id") or run_row.get("mission_id")
+                iid = self.store.park_interrupt(
+                    workflow_thread_id=thread_id,
+                    mission_id=mission_id,
+                    interrupt_type=interrupt_type,
+                    payload=payload,
+                )
+                self.store.update_run(
+                    thread_id,
+                    current_node=output.get("current_node"),
+                    usd_spent=float(output.get("usd_spent", 0.0) or 0.0),
+                )
+                return SegmentOutcome(
+                    workflow_thread_id=thread_id,
+                    parked_interrupt_id=iid,
+                    parked_interrupt_type=interrupt_type,
+                    current_node=output.get("current_node"),
+                    usd_spent=float(output.get("usd_spent", 0.0) or 0.0),
+                )
+
+            # Terminal branch. The Phase D2.6 watchdog in
+            # `orchestrator/server.py:_background_segment` catches the
+            # "no checkpoint advance" class authoritatively at the
+            # bg-task layer (via a probe-and-retry on the LangGraph
+            # checkpoint_id). At THIS layer we tolerate a missing
+            # `terminal_state` because several legitimate subgraphs
+            # (Phase B bootstrap, onboarding subgraph, Phase O
+            # project-onboarding) terminate at END nodes that don't
+            # explicitly set terminal_state — they rely on the runner
+            # to default to 'complete'. Removing that default broke
+            # their happy paths (PR1 adversarial review CRITICAL #1).
+            # We log a warning so the empirical "silent early return"
+            # class is still visible in operator logs, but the run is
+            # still marked 'complete' so back-compat holds.
+            terminal = output.get("terminal_state")
+            if terminal is None:
+                logger.warning(
+                    "runner: compiled.invoke for thread %s returned "
+                    "without __interrupt__ and without terminal_state "
+                    "(output_keys=%s); defaulting to 'complete' (the "
+                    "Phase D2.6 watchdog catches the silent-stall class "
+                    "authoritatively via checkpoint progress)",
+                    thread_id, sorted(output.keys())[:20],
+                )
+                terminal = "complete"
+            if terminal not in ("complete", "escalated", "failed"):
+                # Tolerate (but normalize) unexpected values rather than
+                # silently mapping to 'complete' — this keeps the audit
+                # trail honest: the runner observed something it didn't
+                # recognise and chose a known status.
+                logger.warning(
+                    "runner: unexpected terminal_state=%r on thread %s; "
+                    "normalising to 'complete'", terminal, thread_id,
+                )
+                terminal = "complete"
             self.store.update_run(
                 thread_id,
+                status=terminal,
+                terminal_state=terminal,
+                final_report_id=output.get("final_report_id"),
                 current_node=output.get("current_node"),
                 usd_spent=float(output.get("usd_spent", 0.0) or 0.0),
             )
             return SegmentOutcome(
                 workflow_thread_id=thread_id,
-                parked_interrupt_id=iid,
-                parked_interrupt_type=interrupt_type,
+                terminal_state=terminal,
                 current_node=output.get("current_node"),
                 usd_spent=float(output.get("usd_spent", 0.0) or 0.0),
+                final_report_id=output.get("final_report_id"),
             )
-
-        # Terminal.
-        terminal = output.get("terminal_state") or "complete"
-        if terminal not in ("complete", "escalated", "failed"):
-            terminal = "complete"
-        self.store.update_run(
-            thread_id,
-            status=terminal,
-            terminal_state=terminal,
-            final_report_id=output.get("final_report_id"),
-            current_node=output.get("current_node"),
-            usd_spent=float(output.get("usd_spent", 0.0) or 0.0),
-        )
-        return SegmentOutcome(
-            workflow_thread_id=thread_id,
-            terminal_state=terminal,
-            current_node=output.get("current_node"),
-            usd_spent=float(output.get("usd_spent", 0.0) or 0.0),
-            final_report_id=output.get("final_report_id"),
-        )
+        except Exception as e:  # noqa: BLE001 — post-invoke shape-safety
+            logger.exception(
+                "post-invoke inspection failed for thread %s", thread_id
+            )
+            try:
+                self.store.update_run(
+                    thread_id, status="failed", last_error=str(e)[:500]
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "failed to write last_error for thread %s "
+                    "(post-invoke path)", thread_id,
+                )
+            return SegmentOutcome(
+                workflow_thread_id=thread_id, terminal_state="failed"
+            )

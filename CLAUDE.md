@@ -966,6 +966,169 @@ shape) is filed in the **Deferred follow-ups** list below — fix
 deserves isolated review because pi_decision_select is the TWO-TAP
 autonomy-licensing gate for privileged WRITE_TOOLS.
 
+### Phase D2.6 — async-resume watchdog (silent post-segment stall fix)
+
+Empirical follow-up from the 2026-06-01 hyperscaler-auditing live
+test. After a `pi_decision_select` `accept`, the orchestrator returned
+`{status: 'resuming', ...}` but the actual run sat at `status='running'`
+for minutes with no parked interrupt, no terminal_state, no exception.
+Workflow `wqicgntwi` (5-facet discovery) converged on the root cause:
+the background thread driving `compiled.invoke()` deadlocked on the SDK
+subprocess stdout pipe wait. The bg helper's only failure path was
+exception → write `last_error`; clean-but-no-progress was unhandled.
+
+**Architecture.** Added module-level helpers in
+`orchestrator/orchestrator/server.py`:
+
+- `_WatchdogProbe` (frozen dataclass) — snapshots four structural
+  signals: `status`, `checkpoint_id`, `pending_interrupt_ids`,
+  `terminal_state`. Plus `live_current_node` + `live_usd_spent` from
+  the LangGraph checkpoint and `cached_current_node` + `cached_usd_spent`
+  from `workflow_runs` for the cache-sync side effect.
+- `_read_live_probe_fields(thread_id, saver_path)` — opens a fresh
+  `sqlite3` connection + `SqliteSaver`, reads `tup.checkpoint['id']`
+  and `channel_values['current_node' / 'usd_spent']`. Graceful
+  degradation: returns `(None, None, 0.0)` on any failure.
+- `_capture_probe(store, saver_path, thread_id)` — composes the probe
+  from workflow_runs (cache) + parked_interrupts.list_pending_interrupts
+  (orchestrator-owned) + the live checkpoint.
+- `_probe_advanced(before, after) -> bool` — disjunction over four
+  signals: status flipped away from 'running', terminal_state newly
+  set, checkpoint_id changed (tolerates None on either side), or
+  pending interrupt set IDENTITY changed (catches park-then-answer
+  races where cardinality is equal but identity differs).
+- `_cache_sync(store, thread_id, probe)` — idempotent push of live
+  `current_node` and (monotonic-non-decreasing) `usd_spent` into
+  the workflow_runs cache row at the watchdog boundary. Best-effort:
+  a write failure logs but does not derail the watchdog's primary
+  purpose.
+
+**Watchdog wiring** (`_background_segment` inside `create_app`):
+
+1. Capture `before = _capture_probe(...)` before await.
+2. `await coro_factory()` in existing try/except.
+3. On clean return, capture `after = _capture_probe(...)`.
+4. If `_probe_advanced(before, after)` → `_cache_sync`, return.
+5. Else log warning + perform ONE bounded retry of the same
+   `coro_factory()`.
+6. After retry, if still no advance → `update_run(status='failed',
+   last_error='watchdog: ... returned without advancing after single
+   retry; likely SDK subprocess pipe wait or LangGraph internal
+   early return (checkpoint_id=...)')`.
+
+The retry is bounded to a single attempt — Option A from the
+synthesis. Empirical evidence (the manual kick on
+`thr_19e838ecc3054efe626` advanced 5 nodes) shows the LangGraph-
+internal-early-return class recovers on a fresh invoke; deterministic
+stalls (SDK pipe-wait deadlock) need surfacing rather than masking,
+hence the escalation after one retry.
+
+**Consolidation.** The previously-inline `_drive_segment_bg` closure
+inside `/inbox/{id}/{accept,reject,correct}` (server.py:1281-1318)
+had structurally identical lifecycle handling but WITHOUT the
+watchdog. Refactored to call the shared `_background_segment` helper.
+All four async-resume callsites (`/runs`/start_run_drive,
+`/onboard`/start_onboarding_drive, `/bootstrap`/start_phase_b_drive,
+`/inbox/*`/resume_segment) now share one set of probe-and-retry
+semantics.
+
+**Runner-side hardening** (`runner._execute_segment`). Two
+amplifier-class defects fixed:
+
+- Non-dict `compiled.invoke()` return previously fell through to
+  the terminal branch's `output.get(...)` which raised
+  `AttributeError`. Now wrapped in `try/except`; the AttributeError
+  surfaces as `status='failed'` with a structured `last_error`.
+- The silent `or 'complete'` default on missing `terminal_state`
+  labelled any non-interrupt early return as success — the LangGraph
+  internal early-return class (`pregel/_loop.py:645-647`
+  `if not self.tasks: ... return False` when `prepare_next_tasks`
+  returns empty). Removed; explicit `RuntimeError` now fires for
+  dict outputs that have neither `__interrupt__` nor
+  `terminal_state`. Unexpected terminal_state VALUES are still
+  normalised to 'complete' (back-compat).
+
+**Three-storage discipline preserved.** Probe reads workflow_runs
+(orchestrator-owned), the LangGraph checkpoint (workflow-position
+storage), and parked_interrupts (orchestrator-owned). It does NOT
+touch RKA domain truth. Bookkeeper invariant intact (`git diff main
+-- rka/` empty); grep-gate intact (no new `from rka` imports).
+
+**Tests** (`orchestrator/tests/test_watchdog.py`, 37 tests).
+Coverage: probe-advance disjunction over each signal + None-
+checkpoint tolerance + fresh-saver advance + status-already-non-
+running guard (adversarial review MEDIUM #1); capture_probe reads
+workflow_runs / parked_interrupts / live + graceful degrade +
+swallowed-exception paths for get_run and list_pending_interrupts;
+cache_sync writes-when-differs + noop-in-sync + noop-no-live +
+monotonic-usd + swallowed-exception path; integration via FastAPI
+TestClient for /inbox/{id}/accept (happy-path / transient stall /
+deterministic stall / exception bypass) AND start_run_drive /
+start_onboarding_drive / start_phase_b_drive (the three async-start
+paths previously uncovered by the watchdog integration suite);
+set-identity test for the park-then-answer race; real SqliteSaver
+round-trip; terminal_safe overwrite-protection (cancel races
+watchdog escalation → cancel wins); last_error 500-char truncation
+cap; 4 runner-side tests (non-dict / None output / missing-
+terminal-state warning-default / unexpected-terminal-state
+normalisation).
+
+**Adversarial review** (workflow `wdxj6zm3b`, 4 lenses + verify):
+32 findings surfaced, 23 confirmed, 9 refuted. Landed in this PR:
+
+- **Critical #1** — runner's strict `terminal_state` required
+  check broke legitimate END terminals for Phase B / onboarding /
+  Phase O. **Fix**: defaulted to 'complete' with a warning log;
+  the watchdog catches the silent-stall class authoritatively.
+- **High #1 + #2** — escalation overwrites terminal states via
+  unguarded update_run. **Fix**: added
+  `terminal_safe: bool = False` kwarg to
+  `ParkedStore.update_run`; when True, adds
+  `AND status IN ('running', 'awaiting_pi')` to the WHERE clause
+  and returns rowcount. Applied at all watchdog escalation
+  sites (initial-crash, retry-crash, deterministic-stall
+  escalation, retry-cancelled diagnostic).
+- **High #3** — start-path watchdog not covered. **Fix**: added
+  3 integration tests + extended `_WatchdogFakeRunner` with
+  scriptable `start_run_drive` / `start_onboarding_drive` /
+  `start_phase_b_drive`.
+- **Medium #1** — `_probe_advanced` disjunct 1 false-positive
+  when before.status was already non-running. **Fix**:
+  tightened to `before.status == 'running' and after.status !=
+  'running'`.
+- **Medium #3** — probe sqlite I/O on event loop. **Fix**:
+  wrapped each `_capture_probe` invocation in
+  `await asyncio.to_thread(...)`.
+- **Medium #4, #5, #6, #7, #8** — five test-gap items. **Fix**:
+  10 new tests addressing each gap.
+- **NIT #4** — test-count floor 50 was so generous it provided
+  no real CI guarantee. **Fix**: bumped to 1100 in
+  `test_invariants.py` (leaves ~80 deletes' headroom for
+  refactors but catches catastrophic regressions).
+
+Deferred to follow-up PRs (added to the **Deferred follow-ups**
+list below):
+
+- **MEDIUM #2** — coro hang detection (asyncio.wait_for around
+  the await). Watchdog catches the silent-return case empirically
+  observed; the hung-subprocess case would need configurable
+  per-coro timeout. Design decision: defer until a real hung
+  case surfaces in production.
+- **LOW #5** — _read_live_state vs _read_live_probe_fields code
+  duplication; refactor to shared `_open_checkpoint_tuple` helper.
+- **LOW #6** — roadmap doc test-count claim. Reconciled in-PR.
+- **LOW #7** — _background_segment grew to 130 lines; extract
+  `_safe_update_run_last_error` + `_watchdog_drive_once` helpers
+  for testability. Pure refactor, no behaviour change.
+- **NIT #3** — `run_overrides` not probed (intentional, per
+  three-storage discipline). Documentation-only follow-up.
+
+Reference: workflow `wqicgntwi` (5-facet root-cause synthesis,
+2026-06-01); workflow `wdxj6zm3b` (4-lens adversarial review,
+2026-06-01);
+[`orchestrator/docs/v2.6.x-roadmap.md`](orchestrator/docs/v2.6.x-roadmap.md)
+§4 — PR1; orchestrator/pyproject.toml bumped 0.6.0 → 0.6.1.
+
 ### Deferred follow-ups
 
 Deferred from the Phase D2.1 review — non-blocking but should

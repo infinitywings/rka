@@ -371,12 +371,27 @@ class ParkedStore:
     def update_run(
         self,
         workflow_thread_id: str,
+        *,
+        terminal_safe: bool = False,
         **fields: Any,
-    ) -> None:
+    ) -> int:
         """Patch arbitrary columns. Always bumps updated_at.
 
         Allowed columns are restricted to the schema; passing an unknown
         key raises ValueError so a typo can't silently no-op.
+
+        Returns the number of rows actually updated (0 when the
+        `terminal_safe` guard rejected the write because the run is
+        already in a terminal state).
+
+        Phase D2.6: `terminal_safe=True` adds an
+        `AND status IN ('running', 'awaiting_pi')` predicate to the
+        UPDATE so a late writer can't silently overwrite a legitimate
+        terminal_state ('complete' / 'escalated' / 'failed' /
+        'cancelled') back to one of its own values. Symmetric with the
+        Phase D2.1 `cancel_run` TERMINAL-SAFE guard. Used by the
+        async-resume watchdog's escalation path to avoid clobbering
+        a `cancel_run` that lands during the probe-and-retry window.
         """
         allowed = {
             "status",
@@ -390,17 +405,20 @@ class ParkedStore:
         if bad:
             raise ValueError(f"update_run: unknown columns {sorted(bad)}")
         if not fields:
-            return
+            return 0
         cols = ", ".join(f"{k} = ?" for k in fields)
         params = list(fields.values())
         params.append(_now_iso())
         params.append(workflow_thread_id)
+        where = "WHERE workflow_thread_id = ?"
+        if terminal_safe:
+            where += " AND status IN ('running', 'awaiting_pi')"
         with self._tx() as c:
-            c.execute(
-                f"UPDATE workflow_runs SET {cols}, updated_at = ? "
-                f"WHERE workflow_thread_id = ?",
+            cur = c.execute(
+                f"UPDATE workflow_runs SET {cols}, updated_at = ? {where}",
                 params,
             )
+            return cur.rowcount or 0
 
     # -----------------------------------------------------------------
     # parked_interrupts

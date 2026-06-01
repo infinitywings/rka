@@ -20,6 +20,7 @@ invocation happens inside `asyncio.to_thread` so a long-running segment
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -648,6 +649,218 @@ def _read_live_state(workflow_thread_id: str, saver_path: Optional[str]) -> Opti
     return live
 
 
+# ---------------------------------------------------------------
+# Phase D2.6 — async-resume watchdog
+# ---------------------------------------------------------------
+# The async-resume background-task helpers (_background_segment +
+# the inline _drive_segment_bg for /inbox/*) historically handled
+# only TWO outcomes from the wrapped drive coroutine:
+#
+#   (1) raised exception   → write last_error, status='failed'
+#   (2) clean return       → discard task, status as runner set it
+#
+# A third outcome surfaced empirically during the 2026-06-01
+# hyperscaler-auditing post-accept stall (thr_19e838ecc3054efe626):
+#
+#   (3) clean return WITHOUT advancing the run — the SDK
+#       subprocess pipe-wait deadlocked the bg thread; `compiled.
+#       invoke()` returned silently with no checkpoint progress, no
+#       parked interrupt, no terminal_state, no exception. The run
+#       sat at `status='running'` forever; the PI's `/runs/{id}`
+#       polls showed no change.
+#
+# Root cause investigation (workflow `wqicgntwi`, 2026-06-01)
+# converged on the design below: a `_WatchdogProbe` of four
+# structural signals captured before and after the await, and a
+# single bounded retry of the coro_factory when the probe shows
+# no advance. The probe lives in `orchestrator/server.py` rather
+# than in `runner._execute_segment` so the same watchdog covers
+# every async-resume callsite (/runs/start_run_drive,
+# /onboard/start_onboarding_drive, /bootstrap/start_phase_b_drive,
+# /inbox/*/resume_segment) via the shared `_background_segment`
+# helper.
+#
+# Three-storage discipline preserved: the probe reads workflow_runs
+# (orchestrator-owned), the LangGraph checkpoint (workflow-position
+# storage), and parked_interrupts (orchestrator-owned). It does
+# NOT touch RKA domain truth.
+
+
+def _read_live_probe_fields(
+    workflow_thread_id: str, saver_path: Optional[str]
+) -> tuple[Optional[str], Optional[str], float]:
+    """Read (checkpoint_id, current_node, usd_spent) from the live
+    LangGraph checkpoint for a workflow thread.
+
+    Returns (None, None, 0.0) when the saver path isn't configured,
+    the file doesn't exist yet (fresh install or post-commit pre-
+    first-node), or the thread has no checkpoint yet. Graceful
+    degrade on any other exception — the watchdog tolerates a
+    None checkpoint_id (it just relies on other probe fields).
+    """
+    if not saver_path:
+        return (None, None, 0.0)
+    if not os.path.exists(saver_path):
+        return (None, None, 0.0)
+    try:
+        import sqlite3
+        from langgraph.checkpoint.sqlite import SqliteSaver
+
+        conn = sqlite3.connect(saver_path, check_same_thread=False)
+        try:
+            saver = SqliteSaver(conn)
+            config = {"configurable": {"thread_id": workflow_thread_id}}
+            tup = saver.get_tuple(config)
+        finally:
+            conn.close()
+        if tup is None:
+            return (None, None, 0.0)
+        ckpt_id = tup.checkpoint.get("id")
+        channels = tup.checkpoint.get("channel_values") or {}
+        current_node = channels.get("current_node")
+        usd_spent = float(channels.get("usd_spent") or 0.0)
+        return (ckpt_id, current_node, usd_spent)
+    except Exception:  # noqa: BLE001 — graceful degrade
+        return (None, None, 0.0)
+
+
+@dataclasses.dataclass(frozen=True)
+class _WatchdogProbe:
+    """Snapshot of four structural signals used to detect
+    post-segment silent stalls.
+
+    All four are populated from the orchestrator's authoritative
+    sources at the moment of capture:
+
+      - `status` / `terminal_state` / `cached_current_node` /
+        `cached_usd_spent` — from workflow_runs (cache).
+      - `checkpoint_id` / `live_current_node` / `live_usd_spent`
+        — from the LangGraph checkpoint (live).
+      - `pending_interrupt_ids` — from parked_interrupts.
+
+    The before/after pair is the basis for _probe_advanced().
+    Cache-sync (Layer 8 of the watchdog design) uses live_* vs
+    cached_* fields to push live progress into the cached row at
+    the watchdog boundary.
+    """
+
+    status: Optional[str]
+    checkpoint_id: Optional[str]
+    pending_interrupt_ids: frozenset[str]
+    terminal_state: Optional[str]
+    live_current_node: Optional[str]
+    live_usd_spent: float
+    cached_current_node: Optional[str]
+    cached_usd_spent: float
+
+
+def _capture_probe(
+    store: Any, saver_path: Optional[str], workflow_thread_id: str
+) -> _WatchdogProbe:
+    """Snapshot the watchdog probe for a workflow thread.
+
+    Reads workflow_runs (cache) + LangGraph checkpoint (live) +
+    parked_interrupts.list_pending_interrupts (live). Each read is
+    independently fault-tolerant; missing fields default to
+    None/empty rather than raising.
+    """
+    try:
+        run = store.get_run(workflow_thread_id)
+    except Exception:  # noqa: BLE001
+        run = None
+    run = run or {}
+    try:
+        pending = frozenset(
+            row["interrupt_id"]
+            for row in store.list_pending_interrupts(workflow_thread_id)
+        )
+    except Exception:  # noqa: BLE001
+        pending = frozenset()
+    ckpt_id, live_node, live_usd = _read_live_probe_fields(
+        workflow_thread_id, saver_path
+    )
+    return _WatchdogProbe(
+        status=run.get("status"),
+        checkpoint_id=ckpt_id,
+        pending_interrupt_ids=pending,
+        terminal_state=run.get("terminal_state"),
+        live_current_node=live_node,
+        live_usd_spent=live_usd,
+        cached_current_node=run.get("current_node"),
+        cached_usd_spent=float(run.get("usd_spent") or 0.0),
+    )
+
+
+def _probe_advanced(before: _WatchdogProbe, after: _WatchdogProbe) -> bool:
+    """Return True iff any of four signals indicates the segment
+    progressed between the two probe captures:
+
+      1. `status` flipped away from 'running' (park flipped it to
+         'awaiting_pi'; terminal flipped it to one of
+         'complete'/'escalated'/'failed'/'cancelled').
+      2. `terminal_state` is now set (was None before).
+      3. `checkpoint_id` changed (new LangGraph super-step ran).
+         Tolerates None on either side — only fires when after has
+         a non-None id that differs from before.
+      4. `pending_interrupt_ids` set IDENTITY changed (catches
+         park-then-answer races where cardinality stays equal but
+         identity differs).
+
+    Detection is a DISJUNCTION (any one signal → advance). The
+    pre-retry conjunction (all four absent → stall) is the
+    contrapositive at the call site.
+    """
+    # Signal 1 — status flipped AWAY from 'running'. Guard against the
+    # false-positive case where before.status was already non-'running'
+    # (e.g., the bg task was scheduled over an already-parked run). Only
+    # a transition is an advance; a steady non-'running' state is not.
+    if before.status == "running" and after.status != "running":
+        return True
+    if after.terminal_state is not None and after.terminal_state != before.terminal_state:
+        return True
+    if (
+        after.checkpoint_id is not None
+        and after.checkpoint_id != before.checkpoint_id
+    ):
+        return True
+    if after.pending_interrupt_ids != before.pending_interrupt_ids:
+        return True
+    return False
+
+
+def _cache_sync(store: Any, workflow_thread_id: str, probe: _WatchdogProbe) -> None:
+    """Idempotent sync of live LangGraph checkpoint values into the
+    workflow_runs cache row at the watchdog boundary.
+
+    Pushes only fields that DIFFER from the cached row. No-op when
+    live and cached are in sync, or when the live values are None
+    (no checkpoint to read from). Best-effort: a write failure is
+    logged but never raises — the watchdog's primary purpose
+    (stall detection + retry) must not be derailed by a cache-sync
+    failure.
+    """
+    if probe.live_current_node is None and probe.live_usd_spent == 0.0:
+        return  # no live signal worth syncing
+    fields: dict = {}
+    if (
+        probe.live_current_node is not None
+        and probe.live_current_node != probe.cached_current_node
+    ):
+        fields["current_node"] = probe.live_current_node
+    # usd_spent only ever increases; sync if live > cached.
+    if probe.live_usd_spent > probe.cached_usd_spent:
+        fields["usd_spent"] = probe.live_usd_spent
+    if not fields:
+        return
+    try:
+        store.update_run(workflow_thread_id, **fields)
+    except Exception:  # noqa: BLE001 — best-effort
+        logger.exception(
+            "watchdog cache_sync failed for thread %s (non-fatal)",
+            workflow_thread_id,
+        )
+
+
 def _default_saver_factory(saver_path: str):
     """Return a factory closure that opens a fresh SqliteSaver per call.
 
@@ -857,10 +1070,27 @@ def create_app(
         returning an awaitable) as a tracked asyncio task and wires
         last_error + bg_segments lifecycle. Errors land in
         workflow_runs.last_error so the PI can discover them by polling
-        /runs/{id}."""
+        /runs/{id}.
+
+        Phase D2.6: wraps the await in a watchdog (`_WatchdogProbe`
+        before/after pair + single bounded retry on detected stall).
+        Closes the silent post-segment stall failure mode where the
+        background thread returns from `compiled.invoke()` without
+        having advanced the run (SDK subprocess pipe-wait deadlock
+        and analogous LangGraph internal early-return cases).
+        """
         store_ = request.app.state.store
+        saver_path = getattr(request.app.state, "saver_path", None)
 
         async def _drive() -> None:
+            # Phase D2.6 — watchdog probe-and-retry around coro_factory.
+            # Probe captures contain SQLite reads (workflow_runs row +
+            # parked_interrupts query + LangGraph checkpoint tuple);
+            # they're wrapped in `asyncio.to_thread` so the bg event
+            # loop doesn't block under concurrent runs.
+            before = await asyncio.to_thread(
+                _capture_probe, store_, saver_path, thread_id
+            )
             try:
                 await coro_factory()
             except asyncio.CancelledError:
@@ -872,9 +1102,13 @@ def create_app(
                 logger.exception(
                     "background %s failed for thread %s", log_tag, thread_id,
                 )
+                # terminal_safe=True: if the PI raced a DELETE /runs/{id}
+                # during the coro await, status is now 'cancelled' and
+                # we must NOT overwrite it with 'failed'.
                 try:
                     store_.update_run(
                         thread_id,
+                        terminal_safe=True,
                         status="failed",
                         last_error=f"background {log_tag} crashed: {e!r}"[:500],
                     )
@@ -882,6 +1116,117 @@ def create_app(
                     logger.exception(
                         "failed to write last_error for thread %s", thread_id,
                     )
+                return
+
+            # Clean return — probe whether the run actually advanced.
+            after = await asyncio.to_thread(
+                _capture_probe, store_, saver_path, thread_id
+            )
+            if _probe_advanced(before, after):
+                _cache_sync(store_, thread_id, after)
+                return
+
+            # Pre-retry status re-check. If a PI cancel landed in the
+            # gap window, the after-probe's status is already 'cancelled'
+            # / 'complete' / etc. — _probe_advanced would have returned
+            # True via signal 1. This guard is belt-and-suspenders for
+            # the edge case where probe-after captured 'running' but a
+            # cancel lands between the probe and the retry await.
+            if after.status not in ("running", "awaiting_pi"):
+                logger.info(
+                    "watchdog: skipping retry for thread %s — status is "
+                    "%r, run is no longer eligible", thread_id, after.status,
+                )
+                _cache_sync(store_, thread_id, after)
+                return
+
+            # Stall detected — bounded single retry.
+            logger.warning(
+                "watchdog: background %s for thread %s returned without "
+                "advancing (status=%s, checkpoint_id=%s, pending=%d, "
+                "terminal_state=%s); performing single bounded retry",
+                log_tag, thread_id, after.status,
+                after.checkpoint_id, len(after.pending_interrupt_ids),
+                after.terminal_state,
+            )
+            try:
+                await coro_factory()
+            except asyncio.CancelledError:
+                logger.info(
+                    "background %s retry cancelled for thread %s",
+                    log_tag, thread_id,
+                )
+                # Best-effort diagnostic so the reap-orphans sweep on
+                # next startup can surface the lifespan-cancel context
+                # rather than the generic 'daemon restarted while
+                # segment in flight' message.
+                try:
+                    store_.update_run(
+                        thread_id,
+                        terminal_safe=True,
+                        last_error=(
+                            f"watchdog: {log_tag} retry cancelled by "
+                            f"daemon shutdown after detected stall"
+                        )[:500],
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                raise
+            except Exception as e:  # noqa: BLE001
+                logger.exception(
+                    "background %s retry failed for thread %s",
+                    log_tag, thread_id,
+                )
+                try:
+                    store_.update_run(
+                        thread_id,
+                        terminal_safe=True,
+                        status="failed",
+                        last_error=(
+                            f"watchdog retry of {log_tag} crashed: {e!r}"
+                        )[:500],
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        "failed to write last_error after retry crash "
+                        "for thread %s", thread_id,
+                    )
+                return
+
+            after_retry = await asyncio.to_thread(
+                _capture_probe, store_, saver_path, thread_id
+            )
+            if _probe_advanced(after, after_retry):
+                _cache_sync(store_, thread_id, after_retry)
+                return
+
+            # Deterministic stall — escalate. terminal_safe=True ensures
+            # a concurrent cancel that landed mid-retry wins (Phase D2.1
+            # cancel_run is also terminal-safe; the symmetric guard
+            # here closes the escalation-overwrites-cancel race).
+            logger.error(
+                "watchdog: background %s for thread %s STILL did not "
+                "advance after single retry (checkpoint_id unchanged at "
+                "%s); escalating to status='failed'",
+                log_tag, thread_id, after_retry.checkpoint_id,
+            )
+            try:
+                store_.update_run(
+                    thread_id,
+                    terminal_safe=True,
+                    status="failed",
+                    last_error=(
+                        f"watchdog: {log_tag} returned without advancing "
+                        f"after single retry; likely SDK subprocess pipe "
+                        f"wait or LangGraph internal early return "
+                        f"(checkpoint_id={after_retry.checkpoint_id})"
+                    )[:500],
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "failed to write last_error after watchdog "
+                    "escalation for thread %s", thread_id,
+                )
 
         task = asyncio.create_task(_drive())
         request.app.state.bg_segments.add(task)
@@ -1269,59 +1614,24 @@ def create_app(
                 raise HTTPException(status_code=409, detail=msg)
             raise HTTPException(status_code=400, detail=msg)
 
-        # Background-task the segment. runner._execute_segment catches
-        # exceptions raised by compiled.invoke and writes them to
-        # workflow_runs.last_error itself; but exceptions raised BEFORE
-        # invoke (factory/compile/saver instantiation in resume_segment)
-        # would otherwise be swallowed and leave status='running' forever.
-        # The except clause below covers that gap by writing last_error
-        # explicitly so the PI's `/runs/{id}` shows the failure.
-        store_ = request.app.state.store
-
-        async def _drive_segment_bg(ack_: dict) -> None:
-            try:
-                await asyncio.to_thread(
-                    runner_.resume_segment,
-                    workflow_thread_id=ack_["workflow_thread_id"],
-                    interrupt_type=ack_["interrupt_type"],
-                    token=ack_["token"],
-                    project_id=ack_["project_id"],
-                )
-            except asyncio.CancelledError:
-                # Lifespan shutdown cancelled us; the startup-sweep on
-                # next boot will surface the orphan. Re-raise per asyncio
-                # convention.
-                logger.info(
-                    "background segment cancelled for thread %s",
-                    ack_["workflow_thread_id"],
-                )
-                raise
-            except Exception as e:  # noqa: BLE001 — background; surface via last_error
-                logger.exception(
-                    "background segment failed for thread %s after answering "
-                    "interrupt %s",
-                    ack_["workflow_thread_id"], ack_["interrupt_id"],
-                )
-                # Write the failure to workflow_runs.last_error so the PI's
-                # poll of /runs/{id} surfaces it instead of seeing a stuck
-                # status='running'.
-                try:
-                    store_.update_run(
-                        ack_["workflow_thread_id"],
-                        status="failed",
-                        last_error=f"background segment crashed: {e!r}"[:500],
-                    )
-                except Exception:  # noqa: BLE001
-                    logger.exception(
-                        "failed to write last_error for thread %s",
-                        ack_["workflow_thread_id"],
-                    )
-
-        task = asyncio.create_task(_drive_segment_bg(ack))
-        # Retain a strong reference so the GC doesn't collect the task
-        # mid-run; discard on completion to bound memory.
-        request.app.state.bg_segments.add(task)
-        task.add_done_callback(request.app.state.bg_segments.discard)
+        # Background-task the segment via the shared _background_segment
+        # helper. Phase D2.6 consolidation: the previously-inline
+        # _drive_segment_bg closure had identical lifecycle handling but
+        # WITHOUT the watchdog. Routing through the shared helper covers
+        # all four async-resume callsites (/runs, /onboard, /bootstrap,
+        # /inbox/*) with one set of probe-and-retry semantics.
+        _background_segment(
+            request,
+            ack["workflow_thread_id"],
+            lambda: asyncio.to_thread(
+                runner_.resume_segment,
+                workflow_thread_id=ack["workflow_thread_id"],
+                interrupt_type=ack["interrupt_type"],
+                token=ack["token"],
+                project_id=ack["project_id"],
+            ),
+            log_tag=f"resume_segment[{ack['interrupt_type']}]",
+        )
 
         return {
             "workflow_thread_id": ack["workflow_thread_id"],
