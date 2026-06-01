@@ -19,7 +19,14 @@ name = "rka-orchestrator"
 # `content` alias on rka_submit_checkpoint adapter, canonical-name
 # block in BRAIN/EXECUTOR_SYSTEM, PI diagnostic surface on
 # pi_acceptance.
-version = "0.6.2"
+# 0.6.2 → 0.6.3: registry fix — add `zotero-mcp` to always-on
+# baseline so Brain/Executor subprocesses inherit Zotero tools to
+# match the daemon's pre-existing per-project Zotero plumbing
+# (set_project_zotero_collection / /projects/{id}/zotero_collection
+# endpoint / zotero_client.py from commit 6e19486). Closes the
+# manifest-asymmetry bug surfaced 2026-06-01 where PI session had
+# zotero MCP but Executor subprocess did not.
+version = "0.6.3"
 description = "RKA + LangGraph orchestrator (Phase A → Phase-X² polish; agentic branch)"
 readme = "README.md"
 requires-python = ">=3.11"

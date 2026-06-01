@@ -367,6 +367,62 @@ def test_registry_unknown_domain_returns_empty():
     assert TR.tools_for_domain("nonexistent-domain") == []
 
 
+# ---------------------------------------------------------------------------
+# v2.6.3 — Zotero MCP added to the baseline registry. Empirical regression
+# from prj_01KSMW9RBFXRY6HRRADH3SX7ZP (2026-06-01): the orchestrator had
+# first-class per-project Zotero plumbing (set_project_zotero_collection
+# / /projects/{id}/zotero_collection / zotero_client.py) since commit
+# 6e19486, but `zotero-mcp` was never added as an offerable tool, so
+# Brain/Executor subprocesses spawned by the orchestrator could never
+# call zotero_get_* — manifest gap discovered when the L-phase tried to
+# pull full text from the project's Zotero collection.
+# ---------------------------------------------------------------------------
+
+
+def test_registry_always_on_includes_zotero():
+    """Zotero is part of the baseline since v2.6.3 — pairs with the
+    daemon-side `set_project_zotero_collection` + `/projects/{id}/
+    zotero_collection` plumbing that's existed since commit 6e19486.
+    Without this entry, the asymmetry surfaces: PI session has zotero
+    tools (via Claude Desktop config) but Executor subprocess doesn't
+    (manifest is the only source of tools for the SDK subprocess).
+    """
+    tools = TR.always_on_tools()
+    names = {t.name for t in tools}
+    assert "zotero" in names, (
+        "zotero must be in the always-on baseline since v2.6.3 — "
+        f"got {sorted(names)}"
+    )
+
+
+def test_registry_zotero_secrets_match_known_env_shape():
+    """Pin the secret-env names Zotero MCP expects. If the upstream
+    zotero-mcp package renames an env var, this test fails loudly so
+    the registry stays in sync. ZOTERO_API_KEY + ZOTERO_LIBRARY_ID are
+    required; the LIBRARY_TYPE / LOCAL flags are optional defaults."""
+    tools = TR.always_on_tools()
+    zotero = next(t for t in tools if t.name == "zotero")
+    secret_names = {s.name for s in zotero.secrets}
+    required = {s.name for s in zotero.secrets if s.criticality == "required"}
+    assert "ZOTERO_API_KEY" in required
+    assert "ZOTERO_LIBRARY_ID" in required
+    # Library type + local flag default — must be present but optional.
+    assert "ZOTERO_LIBRARY_TYPE" in secret_names
+    assert "ZOTERO_LOCAL" in secret_names
+
+
+def test_registry_zotero_command_uses_uvx_serve():
+    """Pin the invocation shape — `uvx zotero-mcp serve`. The `serve`
+    subcommand is the MCP-stdio entry point; the package also exposes
+    `setup`, `update-db`, etc. that are NOT MCP-compatible. If the
+    registry drops `serve`, the Executor would launch `zotero-mcp`
+    bare and get a usage banner instead of an MCP handshake."""
+    tools = TR.always_on_tools()
+    zotero = next(t for t in tools if t.name == "zotero")
+    assert zotero.command == "uvx"
+    assert zotero.args == ["zotero-mcp", "serve"]
+
+
 def test_registry_list_domains_returns_known_keys():
     domains = TR.list_domains()
     assert "finance" in domains

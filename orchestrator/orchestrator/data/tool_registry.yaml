@@ -95,6 +95,67 @@ always_on:
         criticality: optional
         description: CORE API key (core.ac.uk) for full-text open access search.
 
+  # v2.6.3 — Zotero MCP added to the baseline registry. Closes the
+  # registry-omission half of the manifest-gap bug surfaced 2026-06-01
+  # on prj_01KSMW9RBFXRY6HRRADH3SX7ZP: the orchestrator has had
+  # first-class per-project Zotero plumbing since commit 6e19486
+  # (set_project_zotero_collection + /projects/{id}/zotero_collection
+  # endpoint + zotero_client.py REST shim), but `zotero-mcp` was
+  # never added as an offerable tool, so Brain/Executor subprocesses
+  # spawned by the orchestrator could never call zotero_get_*.
+  # PI session retained Zotero access via its own claude_desktop_config
+  # — the asymmetry caused the L-phase access friction this entry fixes.
+  - name: zotero
+    type: mcp_stdio
+    rationale: |
+      Project-scoped Zotero literature retrieval. Pairs with the
+      orchestrator's per-project collection-key plumbing
+      (set_project_zotero_collection + /projects/{id}/zotero_collection):
+      the collection key is registered at onboarding, then Brain +
+      Executor query the project's literature via zotero_get_collection_items
+      → zotero_get_item_fulltext (plus zotero_search, zotero_get_item_metadata,
+      etc.) against the registered collection. Avoids the broken
+      rka_link_literature_to_zotero bridge entirely. PI opts out at
+      pi_toolkit_ratify if the project doesn't use Zotero.
+    command: uvx
+    args: ["zotero-mcp", "serve"]
+    install_hint: |
+      requires uv (uvx auto-installs on first call). Alternative: install
+      once via `uv tool install zotero-mcp` and reference
+      ~/.local/bin/zotero-mcp directly. The package exposes the
+      `serve` subcommand which speaks MCP stdio.
+    secrets:
+      - name: ZOTERO_API_KEY
+        auth_type: api_key
+        criticality: required
+        probe_url: https://api.zotero.org/keys/{value}
+        description: |
+          Personal API key from https://www.zotero.org/settings/keys.
+          Needs library read access; group-level read if querying group
+          libraries. Same key powers the orchestrator's daemon-side
+          zotero_client.py REST shim.
+      - name: ZOTERO_LIBRARY_ID
+        auth_type: identifier
+        criticality: required
+        description: |
+          User library ID (numeric, e.g. 9646912) from the URL of your
+          Zotero account settings page, OR group library ID for group
+          libraries.
+      - name: ZOTERO_LIBRARY_TYPE
+        auth_type: identifier
+        criticality: optional
+        description: |
+          Either "user" (default, personal library) or "group" (shared
+          group library). Omit to use the default.
+      - name: ZOTERO_LOCAL
+        auth_type: flag
+        criticality: optional
+        description: |
+          Set to "true" to query the local Zotero desktop client's HTTP
+          API (port 23119) instead of api.zotero.org. Defaults to "false"
+          (cloud API). Use cloud unless the daemon is co-located with
+          Zotero Desktop AND credentials cannot leave the host.
+
 by_domain:
   # ---- Computer science / ML systems ----
   ml_systems:

@@ -3,6 +3,74 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [agentic — v2.6.0+agentic.3] — 2026-06-01 (registry fix — zotero-mcp baseline)
+
+Branch-scoped patch on top of `v2.6.0+agentic.2`. Closes the manifest-
+asymmetry bug surfaced 2026-06-01 on `prj_01KSMW9RBFXRY6HRRADH3SX7ZP`:
+the orchestrator daemon had first-class per-project Zotero plumbing
+since commit `6e19486` (2026-05-28) —
+`set_project_zotero_collection`, `/projects/{id}/zotero_collection`
+endpoint, `zotero_client.py` REST shim — but `zotero-mcp` was never
+added to the curated `tool_registry.yaml`. Result: Brain/Executor
+subprocesses spawned by the orchestrator could never call
+`zotero_get_collection_items` / `zotero_get_item_fulltext`, even
+though every other layer of the integration was wired. PI session
+retained zotero access via its own `claude_desktop_config.json` —
+the asymmetry caused the L-phase access friction empirically observed
+on the hyperscaler-auditing measure-development run.
+
+### Added
+
+- **`zotero` MCP entry in `orchestrator/data/tool_registry.yaml`
+  always-on baseline.** Invocation: `uvx zotero-mcp serve`. Secrets:
+  `ZOTERO_API_KEY` (required), `ZOTERO_LIBRARY_ID` (required),
+  `ZOTERO_LIBRARY_TYPE` (optional, defaults to `user`), `ZOTERO_LOCAL`
+  (optional, defaults to `false` for cloud API). The probe URL
+  validates the key against `https://api.zotero.org/keys/{value}`.
+- **3 lock-tests in `tests/test_d1_manifest_and_registry.py`** pinning
+  (a) `zotero` is in the always-on baseline, (b) the secret env-var
+  names match upstream zotero-mcp expectations, (c) the invocation
+  uses `uvx zotero-mcp serve` (not bare `zotero-mcp`, which would
+  print the usage banner and fail the MCP handshake).
+
+### Operational
+
+- Future projects onboarded after this release automatically get
+  `zotero` offered at `pi_toolkit_ratify`. PI can opt-out per
+  project at that gate.
+- **Existing projects** (e.g., `prj_01KSMW9RBFXRY6HRRADH3SX7ZP`
+  onboarded 2026-05-28 01:57 UTC, before commit `6e19486` landed)
+  still have manifests without zotero. Two remediation paths:
+  (a) re-run `orchestrator_onboard_start(project_id, …)` to
+  re-baseline; (b) deferred: ship the `orchestrator_extend_manifest`
+  MCP tool (a planned follow-up that revives a scoped version of
+  the Phase-D6 `pi_extend_toolkit` mechanism removed in Phase E3
+  cleanup; would allow per-tool additions to an existing manifest
+  without full re-onboarding).
+- Bookkeeper invariant intact (`git diff main -- rka/` empty).
+- Grep-gate intact.
+- `orchestrator/pyproject.toml` version 0.6.2 → 0.6.3.
+- Test count rises ~1217 → 1220 (+3 lock-tests).
+
+### Reference
+
+- Empirical event: PI session L-phase access asymmetry surfaced
+  2026-06-01 on Run 6 (`thr_19e844d3d20c249885a`,
+  `mis_01KT0HP12N51TXXKGKQ097RD1P`).
+- Commit timeline:
+  - `2026-05-26 18:33 UTC` — `tool_registry.yaml` created
+    (Phase D1, commit `65c6c1f`)
+  - `2026-05-28 01:57 UTC` — project `prj_01KSMW9RBFXRY6HRRADH3SX7ZP`
+    onboarded (manifest frozen with no zotero)
+  - `2026-05-28 19:02 UTC` — Zotero per-project plumbing added
+    (commit `6e19486`) — but registry untouched
+  - `2026-06-01` — manifest gap empirically observed; this patch
+    closes the registry half
+- Deferred follow-up: `orchestrator_extend_manifest` MCP tool for
+  in-place manifest mutation of already-onboarded projects.
+
+---
+
 ## [agentic — v2.6.0+agentic.2] — 2026-06-01 (Phase-X²' polish — schema-divergence validation chain)
 
 Branch-scoped patch on top of `v2.6.0+agentic.1`. Closes the field-NAME
