@@ -498,6 +498,50 @@ async def orchestrator_get_manifest(project_id: str) -> dict:
 
 
 @mcp.tool()
+async def orchestrator_extend_manifest(
+    project_id: str, tool_name: str
+) -> dict:
+    """v2.6.0+agentic.4 — append a registry-known tool to an
+    already-onboarded project's manifest in-place.
+
+    Use case: a project was onboarded before a tool was added to the
+    curated registry, OR the PI realizes mid-stream that a tool is
+    needed (e.g., the empirical
+    `prj_01KSMW9RBFXRY6HRRADH3SX7ZP` case where Zotero MCP was added
+    to the registry in v2.6.0+agentic.3 but the project was onboarded
+    a week earlier). Without this tool, the only fix was to re-run
+    `orchestrator_onboard_start` — which goes through the full Phase D
+    wizard and risks clobbering existing manifest customizations.
+
+    Behavior:
+      - Idempotent: returns `added: false` if the tool is already in
+        the manifest (no mutation, no hash change).
+      - Validates `tool_name` against the registry (400 if unknown).
+      - Validates project has a baseline manifest (404 if onboarding
+        never completed).
+      - Recomputes manifest hash on successful append.
+
+    Audit hygiene: this tool does NOT auto-write a journal entry.
+    The PI session should call
+    `rka_add_note(type='log', source='pi', verbatim_input='...')`
+    after extending if a project-scoped audit record is desired.
+    Keeps the daemon's role narrow (no per-project RKA project_id
+    binding required from the orchestrator).
+
+    Returns:
+        {project_id, tool_name, added: bool, manifest_hash,
+         total_tools, reason?: str}
+    """
+    async with _client() as c:
+        r = await c.post(
+            f"/projects/{project_id}/manifest/tools",
+            json={"tool_name": tool_name},
+        )
+        _raise_with_detail(r)
+        return r.json()
+
+
+@mcp.tool()
 async def orchestrator_get_zotero_collection(project_id: str) -> dict:
     """Return the Zotero collection key + name for this project's literature.
 

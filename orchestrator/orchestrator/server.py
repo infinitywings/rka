@@ -241,6 +241,23 @@ class RejectRequest(BaseModel):
     reason: Optional[str] = None
 
 
+class ExtendManifestRequest(BaseModel):
+    """v2.6.0+agentic.4 — payload for POST /projects/{id}/manifest/tools.
+
+    `tool_name` must match a name in the curated tool registry
+    (orchestrator/data/tool_registry.yaml) — either in `always_on` or
+    under any `by_domain` section. Unknown names return 400.
+    """
+
+    tool_name: str = Field(
+        ...,
+        description=(
+            "Registry-known tool name to append to the project's "
+            "manifest, e.g. 'zotero', 'sec-edgar', 'wrds'."
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Phase H — PI monitoring dashboard HTML
 # ---------------------------------------------------------------------------
@@ -1460,6 +1477,113 @@ def create_app(
                 detail=f"no manifest found for project {project_id} — has onboarding completed?",
             )
         return manifest.to_dict()
+
+    @app.post("/projects/{project_id}/manifest/tools")
+    async def extend_project_manifest(
+        project_id: str, req: ExtendManifestRequest, request: Request
+    ) -> dict:
+        """v2.6.0+agentic.4 — append a registry-known tool to an
+        already-onboarded project's manifest in-place.
+
+        Closes the post-onboarding manifest-staleness gap for projects
+        that were created before a tool was added to the registry
+        (empirical case: `prj_01KSMW9RBFXRY6HRRADH3SX7ZP` was onboarded
+        2026-05-28 01:57 UTC, before the Zotero registry entry landed
+        in v2.6.0+agentic.3). Without this endpoint, the only way to
+        add a tool to an existing project was to re-run
+        `orchestrator_onboard_start`, which goes through the full
+        Phase D wizard and can clobber project-specific manifest
+        customizations.
+
+        Idempotent: if the tool is already in the manifest, returns
+        `added: false` with no mutation. Returns 400 if the tool name
+        is unknown to the registry, 404 if the project has no manifest
+        yet (i.e., onboarding hasn't completed).
+
+        Audit: a JSON-merge-patch summary is written to
+        `project_workspaces.manifest_json` and the hash is recomputed.
+        Operators who want a journal-entry audit trail should call
+        `rka_add_note(type='log', source='pi', verbatim_input=<reason>)`
+        from the PI session after extending — keeping the daemon's
+        role narrow (no per-project RKA project binding required).
+        """
+        import json
+        from orchestrator import manifest as M
+        from orchestrator import tool_registry as TR
+
+        store_: ParkedStore = request.app.state.store
+        row = store_.get_project_manifest(project_id)
+        if row is None or not row.get("manifest_json"):
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"no manifest found for project {project_id} — has "
+                    f"onboarding completed?"
+                ),
+            )
+
+        try:
+            manifest_dict = json.loads(row["manifest_json"])
+        except json.JSONDecodeError:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"stored manifest for project {project_id} is not "
+                    f"valid JSON; manual repair needed"
+                ),
+            )
+
+        existing_tool_names = {
+            t.get("name") for t in (manifest_dict.get("tools") or [])
+        }
+        if req.tool_name in existing_tool_names:
+            # Idempotent — return the unchanged manifest summary.
+            return {
+                "project_id": project_id,
+                "tool_name": req.tool_name,
+                "added": False,
+                "manifest_hash": row.get("manifest_hash"),
+                "total_tools": len(existing_tool_names),
+                "reason": "tool already in manifest",
+            }
+
+        tool_decl = TR.find_tool_by_name(req.tool_name)
+        if tool_decl is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"tool {req.tool_name!r} not found in registry — "
+                    f"available always-on tools: "
+                    f"{[t.name for t in TR.always_on_tools()]}; "
+                    f"available domains: {list(TR.list_domains().keys())}"
+                ),
+            )
+
+        # Append the new tool to the manifest's tools list and recompute
+        # the hash. Use ToolManifest.from_dict for canonical handling of
+        # the manifest envelope (manifest_type / supersedes_* fields).
+        try:
+            manifest = M.ToolManifest.from_dict(manifest_dict)
+        except Exception as e:  # noqa: BLE001 — defensive
+            raise HTTPException(
+                status_code=500,
+                detail=f"stored manifest fails ToolManifest.from_dict: {e!r}",
+            )
+        manifest.tools = list(manifest.tools) + [tool_decl]
+        new_manifest_json = manifest.to_json()
+        new_manifest_hash = manifest.compute_hash()
+
+        store_.set_project_manifest(
+            project_id, new_manifest_json, new_manifest_hash
+        )
+
+        return {
+            "project_id": project_id,
+            "tool_name": req.tool_name,
+            "added": True,
+            "manifest_hash": new_manifest_hash,
+            "total_tools": len(manifest.tools),
+        }
 
     @app.get("/runs")
     async def list_runs(

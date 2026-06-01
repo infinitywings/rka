@@ -123,3 +123,30 @@ def list_domains(*, path: Optional[Path] = None) -> dict[str, str]:
     reg = load_registry(path=path)
     by_domain = reg.get("by_domain") or {}
     return {k: (v.get("description") or "").strip() for k, v in by_domain.items()}
+
+
+def find_tool_by_name(
+    name: str, *, path: Optional[Path] = None
+) -> Optional[ToolDecl]:
+    """Look up a single tool by name across the entire registry
+    (always-on baseline + every by_domain section).
+
+    Used by the mid-stream manifest-extension flow (v2.6.0+agentic.4):
+    `orchestrator_extend_manifest(project_id, tool_name)` calls this
+    to resolve a registry-known tool spec into a `ToolDecl` it can
+    append to the project's existing manifest.
+
+    Returns None when no tool with that name exists in any section.
+    Matching is case-sensitive (mirrors the rest of the registry
+    surface: `always_on_tools()` / `tools_for_domain()` both return
+    case-sensitive names).
+    """
+    reg = load_registry(path=path)
+    for entry in reg.get("always_on") or []:
+        if entry.get("name") == name:
+            return _to_tool_decl(entry, source="registry")
+    for _domain_key, domain_block in (reg.get("by_domain") or {}).items():
+        for entry in domain_block.get("tools") or []:
+            if entry.get("name") == name:
+                return _to_tool_decl(entry, source="registry")
+    return None

@@ -423,6 +423,52 @@ def test_registry_zotero_command_uses_uvx_serve():
     assert zotero.args == ["zotero-mcp", "serve"]
 
 
+# ---------------------------------------------------------------------------
+# v2.6.0+agentic.4 — find_tool_by_name registry lookup helper
+# Powers the orchestrator_extend_manifest mid-stream extension flow.
+# ---------------------------------------------------------------------------
+
+
+def test_find_tool_by_name_resolves_always_on_entry():
+    """Resolves a name from always_on (rka is a stable canonical
+    baseline that the registry should always carry)."""
+    tool = TR.find_tool_by_name("rka")
+    assert tool is not None
+    assert tool.name == "rka"
+    assert tool.source == "registry"
+
+
+def test_find_tool_by_name_resolves_zotero():
+    """Confirms the v2.6.0+agentic.3 zotero registry entry is reachable
+    via the extension-flow lookup path."""
+    tool = TR.find_tool_by_name("zotero")
+    assert tool is not None
+    assert tool.name == "zotero"
+    assert tool.command == "uvx"
+
+
+def test_find_tool_by_name_resolves_by_domain_entry():
+    """Cross-section resolution — sec-edgar lives under by_domain.finance."""
+    tool = TR.find_tool_by_name("sec-edgar")
+    assert tool is not None
+    assert tool.name == "sec-edgar"
+
+
+def test_find_tool_by_name_returns_none_for_unknown_name():
+    """Unknown name → None (callers raise 400 with diagnostic detail)."""
+    assert TR.find_tool_by_name("definitely-not-a-real-tool") is None
+
+
+def test_find_tool_by_name_is_case_sensitive():
+    """Lock case-sensitivity — matches the rest of the registry surface
+    (always_on_tools / tools_for_domain are also case-sensitive). A
+    future caller that depends on case-insensitive lookup needs an
+    explicit lowercase normalization step."""
+    assert TR.find_tool_by_name("RKA") is None
+    assert TR.find_tool_by_name("Zotero") is None
+    assert TR.find_tool_by_name("rka") is not None
+
+
 def test_registry_list_domains_returns_known_keys():
     domains = TR.list_domains()
     assert "finance" in domains

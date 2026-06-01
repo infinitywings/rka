@@ -3,6 +3,116 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [agentic — v2.6.0+agentic.4] — 2026-06-01 (in-place manifest extension)
+
+Branch-scoped patch on top of `v2.6.0+agentic.3`. Closes the second
+half of the manifest-asymmetry bug: v2.6.0+agentic.3 added `zotero-mcp`
+to the registry baseline so FUTURE projects automatically get it, but
+EXISTING projects (whose manifests were frozen at onboarding time)
+still couldn't acquire it without re-running the full Phase D
+onboarding wizard.
+
+This release adds an in-place manifest-extension mechanism so an
+already-onboarded project can pick up a registry-known tool without
+re-onboarding. Empirical case: `prj_01KSMW9RBFXRY6HRRADH3SX7ZP`
+(onboarded 2026-05-28 01:57 UTC) can now acquire `zotero` via one
+`orchestrator_extend_manifest()` call instead of a full re-onboard.
+
+### Added
+
+- **`orchestrator_extend_manifest(project_id, tool_name)` MCP tool**
+  in `mcp_server.py:518`. Proxies to a new HTTP endpoint; returns
+  `{project_id, tool_name, added: bool, manifest_hash, total_tools,
+  reason?: str}`.
+- **`POST /projects/{id}/manifest/tools` HTTP endpoint** in
+  `server.py:1465` accepting `{tool_name: str}`. Semantics:
+  - **Idempotent**: if the tool is already in the manifest, returns
+    `200` with `added: false`, hash unchanged, no mutation.
+  - **Validates against the registry**: returns `400` if `tool_name`
+    is unknown to `find_tool_by_name()` (the detail includes the
+    list of available always-on tools + known domains for diagnosis).
+  - **Validates onboarding**: returns `404` if the project has no
+    baseline manifest yet (matches GET /manifest's posture).
+  - **Recomputes manifest hash** via `ToolManifest.compute_hash()`
+    on successful append.
+- **`tool_registry.find_tool_by_name(name)`** helper in
+  `tool_registry.py:128`. Looks up a single tool by name across the
+  entire registry (always_on + every by_domain section). Returns
+  the first match as a `ToolDecl` with `source="registry"`, or None
+  on no-match. Case-sensitive (matches the rest of the registry
+  surface).
+- **10 new tests** (1191 → 1201):
+  - 5 in `test_d1_manifest_and_registry.py` — find_tool_by_name unit
+    semantics (always-on resolution, zotero resolution, by-domain
+    resolution, unknown-name None, case-sensitivity lock).
+  - 5 in `test_d5c_endpoints_and_mcp.py` — endpoint integration tests
+    (happy-path adds-and-bumps-hash, idempotency on duplicate, 400
+    on unknown tool with diagnostic detail, 404 on never-onboarded
+    project, append-preserves-existing-tools).
+
+### Audit hygiene (intentional design constraint)
+
+`orchestrator_extend_manifest` does NOT auto-write an RKA journal
+entry. Rationale: the orchestrator daemon would need a per-project
+RKA project_id binding to write a project-scoped note, which expands
+the daemon's responsibilities. Operators who want a journal-entry
+audit trail call `rka_add_note(type='log', source='pi',
+verbatim_input=<reason>)` from the PI session after extending.
+Keeps the daemon's role narrow + lets the PI control the audit
+message wording.
+
+### Why not resurrect `pi_extend_toolkit` instead
+
+`pi_extend_toolkit` was the original Phase D6 mechanism for
+mid-stream toolkit extensions. It was removed in Phase E3 cleanup
+(runner.py:53,482) as half-built. Resurrecting it would require
+re-wiring the LangGraph back-edge + the interrupt-type literal +
+the routing helpers — substantial work for a feature that's
+actually best served by an out-of-band MCP tool rather than an
+in-workflow interrupt. The MCP tool runs whenever the PI wants;
+the in-workflow interrupt would only fire during a run.
+
+### Operational
+
+- Bookkeeper invariant intact (`git diff main -- rka/` empty).
+- Grep-gate intact.
+- `orchestrator/pyproject.toml` version 0.6.3 → 0.6.4.
+- Test count rises 1191 → 1201 (+10 net).
+
+### How to use
+
+```python
+# From PI session (after a project is onboarded but missing a tool):
+orchestrator_extend_manifest(
+    project_id="prj_01KSMW9RBFXRY6HRRADH3SX7ZP",
+    tool_name="zotero",
+)
+# → {project_id: ..., tool_name: "zotero", added: True,
+#    manifest_hash: "...", total_tools: N+1}
+
+# Optional audit record:
+rka_add_note(
+    project_id="prj_01KSMW9RBFXRY6HRRADH3SX7ZP",
+    type="log",
+    source="pi",
+    importance="normal",
+    confidence="verified",
+    verbatim_input="Extended manifest with zotero (v2.6.0+agentic.3 "
+                   "registry addition; project pre-dated it).",
+)
+```
+
+### Reference
+
+- Architectural sibling: v2.6.0+agentic.3 (registry baseline fix).
+  This patch closes the post-onboarding remediation path that the
+  registry fix alone couldn't.
+- Empirical event: PI session L-phase access asymmetry surfaced
+  2026-06-01 on Run 6 (`thr_19e844d3d20c249885a`,
+  `mis_01KT0HP12N51TXXKGKQ097RD1P`).
+
+---
+
 ## [agentic — v2.6.0+agentic.3] — 2026-06-01 (registry fix — zotero-mcp baseline)
 
 Branch-scoped patch on top of `v2.6.0+agentic.2`. Closes the manifest-

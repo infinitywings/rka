@@ -26,7 +26,16 @@ name = "rka-orchestrator"
 # endpoint / zotero_client.py from commit 6e19486). Closes the
 # manifest-asymmetry bug surfaced 2026-06-01 where PI session had
 # zotero MCP but Executor subprocess did not.
-version = "0.6.3"
+# 0.6.3 → 0.6.4: in-place manifest extension — adds
+# orchestrator_extend_manifest(project_id, tool_name) MCP tool +
+# POST /projects/{id}/manifest/tools endpoint + find_tool_by_name
+# registry lookup. Closes the second half of the manifest-asymmetry
+# bug: projects onboarded BEFORE a registry addition (e.g.
+# prj_01KSMW9RBFXRY6HRRADH3SX7ZP onboarded 2026-05-28 01:57 UTC
+# before zotero hit the registry on 2026-06-01 13:34 UTC) can now
+# add the missing tool in-place without re-running the full Phase D
+# onboarding wizard.
+version = "0.6.4"
 description = "RKA + LangGraph orchestrator (Phase A → Phase-X² polish; agentic branch)"
 readme = "README.md"
 requires-python = ">=3.11"
