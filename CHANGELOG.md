@@ -3,6 +3,72 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [agentic — v2.6.0+agentic.5] — 2026-06-01 (hot-patch — SecretDecl `shared_with` + from_dict forward-compat)
+
+Branch-scoped hot-patch on top of `v2.6.0+agentic.4`. Closes the
+manifest round-trip bug surfaced empirically when smoke-testing the F2
+extend-manifest flow against `prj_01KSMW9RBFXRY6HRRADH3SX7ZP`: the
+persisted manifest's `sec-xbrl-structured` entry had a `shared_with`
+field on its `SEC_EDGAR_USER_AGENT` secret, but `SecretDecl` never
+declared that field — so `ToolManifest.from_dict()` raised
+`TypeError("SecretDecl.__init__() got an unexpected keyword argument
+'shared_with'")` on every round-trip. The F2 endpoint went through
+from_dict on every call, so the bug blocked every extend-manifest
+attempt against any project whose manifest carried `shared_with`.
+
+### Fixed
+
+- **`SecretDecl.shared_with: Optional[str] = None`** added as a
+  first-class dataclass field. Documents the canonical semantic:
+  "this secret is shared with another tool's same-named env var"
+  (canonical case: `SEC_EDGAR_USER_AGENT` shared between `sec-edgar`
+  and `sec-xbrl-structured`). The field was already being written
+  to persisted manifests by Phase D onboarding's user-added entries;
+  this just makes it a real field on the dataclass.
+- **Forward-compat filter on `ToolManifest.from_dict`'s nested
+  reconstruction.** The top-level `from_dict` already drops unknown
+  top-level keys (per its docstring contract); this patch extends
+  the same posture to nested `SecretDecl` and `ToolDecl` kwargs.
+  Future drift (e.g., a Phase D7 onboarding wizard that adds another
+  semantic flag to user-added entries) round-trips cleanly without
+  breaking from_dict.
+
+### Added
+
+- **2 regression tests in `test_d1_manifest_and_registry.py`**:
+  - `test_secret_decl_accepts_shared_with_field` — pins the new
+    field, its default value (None), and the semantic.
+  - `test_manifest_from_dict_tolerates_extra_secret_fields` —
+    pins the forward-compat filter against synthetic unknown
+    fields on both SecretDecl and ToolDecl, including a full
+    round-trip via `to_json()` → `from_json()`.
+
+### Operational
+
+- Bookkeeper invariant intact (`git diff main -- rka/` empty).
+- Grep-gate intact.
+- `orchestrator/pyproject.toml` version 0.6.4 → 0.6.5.
+- Test count rises 1201 → 1203 (+2 regression tests).
+- Sibling change: enables the v2.6.0+agentic.4 F2 endpoint to actually
+  work against real-world manifests; without this patch the endpoint
+  would return 500 with the synthesised "stored manifest fails
+  ToolManifest.from_dict" detail on every call against a project
+  whose manifest carries `shared_with`.
+
+### Reference
+
+- Empirical event: 2026-06-01 ~15:55 PT — smoke-test of F2 against
+  `prj_01KSMW9RBFXRY6HRRADH3SX7ZP` returned 500 from
+  `POST /projects/{id}/manifest/tools` with the
+  TypeError detail in the response body.
+- Architectural sibling: v2.6.0+agentic.4 (F2 — in-place manifest
+  extension). This hot-patch is a pre-existing latent bug that F2's
+  strict round-trip happened to surface; without F2, the bug never
+  fired because no code path other than `compose_effective_manifest`
+  + `from_json` exercised it on stored manifests.
+
+---
+
 ## [agentic — v2.6.0+agentic.4] — 2026-06-01 (in-place manifest extension)
 
 Branch-scoped patch on top of `v2.6.0+agentic.3`. Closes the second

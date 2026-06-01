@@ -469,6 +469,80 @@ def test_find_tool_by_name_is_case_sensitive():
     assert TR.find_tool_by_name("rka") is not None
 
 
+# ---------------------------------------------------------------------------
+# v2.6.0+agentic.5 — SecretDecl shared_with field + from_dict forward-compat.
+# Regression from prj_01KSMW9RBFXRY6HRRADH3SX7ZP: F2's manifest-extension
+# flow round-trips the persisted manifest through ToolManifest.from_dict
+# but the persisted sec-xbrl-structured entry's secret had a `shared_with`
+# field that SecretDecl didn't declare → TypeError on from_dict reload.
+# ---------------------------------------------------------------------------
+
+
+def test_secret_decl_accepts_shared_with_field():
+    """SecretDecl now has a `shared_with` field documenting which other
+    tool shares this credential (e.g. sec-edgar's SEC_EDGAR_USER_AGENT
+    is shared with sec-xbrl-structured). Pin the shape so a future
+    refactor that drops it fails loudly."""
+    s = M.SecretDecl(
+        name="SEC_EDGAR_USER_AGENT",
+        auth_type="api_key",
+        criticality="required",
+        shared_with="sec-edgar",
+    )
+    assert s.shared_with == "sec-edgar"
+    assert s.name == "SEC_EDGAR_USER_AGENT"
+    # Default when unset — None.
+    s2 = M.SecretDecl(name="X")
+    assert s2.shared_with is None
+
+
+def test_manifest_from_dict_tolerates_extra_secret_fields():
+    """Forward-compat: a persisted manifest that carries extra fields on
+    nested SecretDecl / ToolDecl entries (e.g. user-added entries with
+    semantic flags not yet declared) must NOT fail to load. Mirrors the
+    top-level ToolManifest.from_dict forward-compat posture.
+
+    Empirical regression: the F2 endpoint
+    (`orchestrator_extend_manifest`) round-trips the manifest through
+    from_dict; without this tolerance, every project whose manifest
+    has unknown nested fields can't be extended.
+    """
+    raw = {
+        "project_id": "prj_x",
+        "tools": [
+            {
+                "name": "sec-xbrl-structured",
+                "type": "mcp_stdio",
+                "source": "user_added",
+                "secrets": [
+                    {
+                        "name": "SEC_EDGAR_USER_AGENT",
+                        "criticality": "required",
+                        # Known field (post-v2.6.0+agentic.5):
+                        "shared_with": "sec-edgar",
+                        # Synthetic UNKNOWN field — forward-compat
+                        # filter must drop this without raising.
+                        "future_field_we_havent_added_yet": "ignored",
+                    }
+                ],
+                # Also test unknown ToolDecl-level fields are dropped.
+                "future_tool_field": "also_ignored",
+            }
+        ],
+    }
+    manifest = M.ToolManifest.from_dict(raw)
+    assert len(manifest.tools) == 1
+    tool = manifest.tools[0]
+    assert tool.name == "sec-xbrl-structured"
+    assert len(tool.secrets) == 1
+    secret = tool.secrets[0]
+    assert secret.name == "SEC_EDGAR_USER_AGENT"
+    assert secret.shared_with == "sec-edgar"
+    # Round-trip: re-serialise and re-load to confirm idempotency.
+    re_loaded = M.ToolManifest.from_json(manifest.to_json())
+    assert re_loaded.tools[0].secrets[0].shared_with == "sec-edgar"
+
+
 def test_registry_list_domains_returns_known_keys():
     domains = TR.list_domains()
     assert "finance" in domains

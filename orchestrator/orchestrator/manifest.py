@@ -115,6 +115,14 @@ class SecretDecl:
     probe_header: Optional[str] = None  # e.g., "Authorization: Bearer <value>"
     # Human-facing prompt for the credential UX
     description: Optional[str] = None
+    # v2.6.0+agentic.5 — back-fill of the `shared_with` semantic that was
+    # written into user-added entries during Phase D onboarding but never
+    # declared on the dataclass. When the same env var serves multiple
+    # tools (canonical case: SEC_EDGAR_USER_AGENT shared between sec-edgar
+    # and sec-xbrl-structured), the secondary tool's secret entry sets
+    # `shared_with` to the canonical tool's name. Used by the credential-
+    # UX flow to avoid double-prompting the operator for the same value.
+    shared_with: Optional[str] = None
 
 
 @dataclass
@@ -208,10 +216,29 @@ class ToolManifest:
         supersedes_extension_hash = d.get("supersedes_extension_hash")
         topic_raw = d.get("topic")
         topic = TopicMetadata(**topic_raw) if topic_raw else None
+        # v2.6.0+agentic.5 — forward-compat filter for nested dataclasses.
+        # The top-level ToolManifest.from_dict already drops unknown
+        # top-level keys (matching the docstring). Mirror that posture
+        # for the nested SecretDecl + ToolDecl reconstructions so a
+        # stored manifest with extra fields (e.g. user-added entries
+        # that carry semantic flags not yet declared on the dataclass)
+        # round-trips cleanly. Without this filter, any persisted
+        # manifest written via set_project_manifest with a field the
+        # dataclass doesn't declare fails to load with a TypeError.
+        import dataclasses as _dc
+
+        _secret_fields = {f.name for f in _dc.fields(SecretDecl)}
+        _tool_fields = {f.name for f in _dc.fields(ToolDecl)}
         tools = []
         for t in d.get("tools", []):
-            secrets = [SecretDecl(**s) for s in t.get("secrets", [])]
-            t_kwargs = {k: v for k, v in t.items() if k != "secrets"}
+            secrets = [
+                SecretDecl(**{k: v for k, v in s.items() if k in _secret_fields})
+                for s in t.get("secrets", [])
+            ]
+            t_kwargs = {
+                k: v for k, v in t.items()
+                if k != "secrets" and k in _tool_fields
+            }
             tools.append(ToolDecl(**t_kwargs, secrets=secrets))
         return cls(
             project_id=project_id,

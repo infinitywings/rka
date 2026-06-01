@@ -35,7 +35,16 @@ name = "rka-orchestrator"
 # before zotero hit the registry on 2026-06-01 13:34 UTC) can now
 # add the missing tool in-place without re-running the full Phase D
 # onboarding wizard.
-version = "0.6.4"
+# 0.6.4 → 0.6.5: hot-patch — back-fill the `shared_with` semantic
+# field on SecretDecl (was written into user-added manifest entries
+# by Phase D onboarding but never declared on the dataclass) +
+# forward-compat filter on ToolManifest.from_dict's nested SecretDecl
+# and ToolDecl reconstruction so a persisted manifest with unknown
+# nested fields round-trips cleanly. Empirical regression surfaced
+# by F2's extend-manifest round-trip against
+# prj_01KSMW9RBFXRY6HRRADH3SX7ZP (sec-xbrl-structured's secret
+# carried shared_with='sec-edgar').
+version = "0.6.5"
 description = "RKA + LangGraph orchestrator (Phase A → Phase-X² polish; agentic branch)"
 readme = "README.md"
 requires-python = ">=3.11"
