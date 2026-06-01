@@ -391,7 +391,44 @@ rka repo holds only templates + orchestrator code that knows how to
 create the workspace. See `orchestrator/docs/phase-o-project-onboarding-design.md`
 §"Repo boundary".
 
-## [Unreleased] — `mcp-credentials` skill
+## [2.6.0] — 2026-05-31 (BREAKING — `project_id` required on every MCP tool; mcp-credentials skill; Writer W3+W4; v2.6 contract follow-up)
+
+This release graduates three Unreleased work-streams that landed on
+main since v2.5.11, plus a contract follow-up fix surfaced empirically
+during a live PI session on 2026-05-31:
+
+- **BREAKING**: `project_id` is now a required kwarg-only argument on
+  every project-scoped MCP tool. Eliminates the silent-failure mode
+  where the per-process `_session.project_id` would reset to
+  `proj_default` on every restart. Full migration guide in
+  the dedicated section below.
+- **`mcp-credentials` skill** — guided credential setup for the
+  cross-project MCP servers commonly used alongside RKA (Claude OAuth,
+  Zotero, Semantic Scholar, SerpAPI, OpenAlex).
+- **Writer Phase W3 + W4** — venue registry expanded 7 → 58 (CS
+  conferences, CS journals, FT50 accounting/finance/management) +
+  `kind: proposal` with NSF PAPPG as the inheritable baseline.
+- **v2.6 contract follow-up fix** (this release) — two tools regressed
+  during/after PR #32 without the kwarg: `rka_link_literature_to_zotero`
+  (commit `6e7a2d6`, 2026-05-28) and `rka_session_digest` (latent
+  NameError on `project_id` referenced as a free symbol). Both fixed +
+  locked behind an AST contract-scan test (`tests/test_mcp/
+  test_v26_project_id_contract.py`) that walks every `@tool()`-
+  decorated function and asserts each `_client(...)` call passes a
+  non-empty argument (unless on the explicit `_UNSCOPED_TOOLS_ALLOWLIST`).
+  Empirical reproduction: PI session reported 404 on
+  `lit_01KSNPRCZR7...` in project `prj_01KSMW9RBFXRY6HRRADH3SX7ZP`
+  despite `rka_get` + `rka_get_literature` resolving the same row.
+
+Note on tagging history: this is the first tagged release on main
+since v2.5.11. pyproject.toml was at 2.5.12 in-flight but never
+tagged. The historical `[2.5.12]` entry below documents the Writer
+plugin-bundle work that landed at that pyproject version even though
+no `v2.5.12` git tag was cut.
+
+---
+
+### A. `mcp-credentials` skill (cross-project credential setup)
 
 New skill at `rka/skills/mcp-credentials/` (mirrored to
 `plugin/skills/mcp-credentials/`) that walks users through provisioning
@@ -436,7 +473,7 @@ Zotero, Semantic Scholar, SerpAPI, and OpenAlex.
   path. The two copies are kept in sync per the existing pattern
   (brain, executor, pi, writer).
 
-## [Unreleased] - v2.6.0 — `project_id` required on every MCP tool (BREAKING)
+### B. `project_id` required on every MCP tool (BREAKING — PR #32)
 
 Branch: `feat/project-id-required`. Eliminates a long-standing
 silent-failure mode where the MCP server's per-process
@@ -531,7 +568,7 @@ every call).
 - `rka/skills/{brain,executor,pi}/SKILL.md` — session-start discipline
 - `tests/test_mcp/`, `tests/skills/writer/` — 14 migrated test sites
 - `CHANGELOG.md`, `README.md`, `INSTALL.md`
-## [Unreleased] - Writer Phase W3 + W4 (registry expansion + NSF proposals)
+### C. Writer Phase W3 + W4 (registry expansion + NSF proposals)
 
 Branch: `feat/writer-venue-registry-w3w4`. Third and fourth slices of
 the multi-phase Writer expansion. W3 grows the curated registry from
@@ -742,6 +779,85 @@ their CFP URL.
   FT50 accounting/finance/management).
 - W4 lands `proposals/NSF-PAPPG.yaml` baseline + solicitation
   inheritance demo.
+
+### D. v2.6 contract follow-up — `rka_link_literature_to_zotero` + `rka_session_digest` fixed; AST contract-scan added
+
+Commit: `90605c9`. Two MCP tools regressed when added/touched without
+the kwarg-only `*, project_id: str` parameter required by the v2.6
+contract:
+
+- **`rka_link_literature_to_zotero`** (added in commit `6e7a2d6`,
+  2026-05-28 — Phase-3.4 zotero linker). Empirical reproduction
+  in a PI session on 2026-05-31: 404 on `lit_01KSNPRCZR7…` in
+  project `prj_01KSMW9RBFXRY6HRRADH3SX7ZP` despite `rka_get` and
+  `rka_get_literature` retrieving the same row cleanly.
+
+  Failure path (masked by a misleading error message):
+  - Tool signature had no `project_id` kwarg
+  - `_client()` called with no arg → no `X-RKA-Project` header
+  - REST falls back to `DEFAULT_PROJECT_ID = 'proj_default'`
+  - `require_project` PASSES (proj_default IS seeded by migration 004)
+  - `LiteratureService.get(lit_id)` runs `WHERE id=? AND project_id='proj_default'`
+    against the literature row owned by the real project → returns None
+  - REST handler raises `HTTPException(404, f'Literature {lit_id} not found')`
+
+  The 404 message names the lit_ id, which makes the user think the
+  row is missing. The row is intact; the bug is the missing
+  project-scoping in the MCP wrapper.
+
+- **`rka_session_digest`** — sibling regression with the same
+  shape but worse: the function body referenced `project_id` as a
+  free symbol (`async with _client(project_id) as c:`) without
+  declaring it in the signature. NameError at runtime on any
+  invocation. Caught by the new AST contract-scan test surfacing
+  both bugs at once.
+
+#### Fix shape
+
+Pure MCP-wrapper change — added `*, project_id: str` to both
+function signatures, threaded `_client(project_id)`, updated the
+docstrings to document the new kwarg. REST + service layers are
+already correct; this was a wrapper-only contract regression.
+
+#### Recurrence prevention — AST contract-scan
+
+`tests/test_mcp/test_v26_project_id_contract.py` (5 new tests):
+
+- `test_rka_link_literature_to_zotero_requires_project_id_kwarg` —
+  per-tool signature contract for the empirical regression.
+- `test_rka_session_digest_requires_project_id_kwarg` — sibling
+  per-tool contract.
+- **`test_every_scoped_tool_threads_project_id_to_client`** — AST
+  walk over every `@tool()`-decorated function in
+  `rka/mcp/server.py`; asserts each `_client(...)` call passes a
+  non-empty argument UNLESS the function is on the explicit
+  `_UNSCOPED_TOOLS_ALLOWLIST` (`rka_list_projects`,
+  `rka_create_project`, `rka_set_project`, `rka_get_changelog`).
+  Catches the next regression of this shape automatically at PR time.
+- `test_every_scoped_tool_declares_project_id_kwarg` — companion
+  signature contract.
+- `test_unscoped_allowlist_only_contains_real_tools` — allowlist
+  hygiene.
+
+#### Empirical verification
+
+Host MCP binary reinstalled (`UV_CACHE_DIR=/tmp/uv-cache uv tool
+install --force .`); both tools now carry the v2.6 contract in
+`/Users/<user>/.local/share/uv/tools/rka/lib/.../server.py`. The
+PI's `rka_link_literature_to_zotero(id='lit_01KSNPRCZR7...',
+project_id='prj_01KSMW9RBFXRY6HRRADH3SX7ZP')` call (with the new
+required kwarg) threads `X-RKA-Project` correctly, REST layer
+scopes to the real project, `LiteratureService.get()` matches the
+row, zotero linker fires.
+
+#### Test surface delta
+
+878 → 883 host tests pass; full orchestrator+host suite green;
+bookkeeper invariant (`git diff main -- rka/` empty on agentic
+after merge) confirmed via `orchestrator/tests/test_invariants.py
+::test_bookkeeper_invariant_rka_untouched_by_agentic`.
+
+---
 
 ## [2.5.12] — 2026-05-23 (patch release; Writer plugin-bundle integration)
 
