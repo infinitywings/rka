@@ -220,6 +220,9 @@ class MissionService(BaseService):
         """Submit an execution report for a mission."""
         report = MissionReport(
             mission_id=mis_id,
+            # v2.6.1 — `summary` is now a first-class field; see
+            # MissionReportCreate docstring for the migration note.
+            summary=data.summary,
             tasks_completed=data.tasks_completed,
             findings=data.findings,
             anomalies=data.anomalies,

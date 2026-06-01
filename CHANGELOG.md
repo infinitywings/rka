@@ -3,6 +3,104 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [2.6.1] — 2026-06-01 (patch — Phase-X²' polish on main: WRITE_TOOLS schema hygiene)
+
+Patch release. Backward-compatible RKA-side fixes for the schema-
+divergence failure modes that the agentic-branch Phase-X²' polish
+(see [`orchestrator/docs/phase-x-prime-polish-design.md`](orchestrator/docs/phase-x-prime-polish-design.md))
+closed at the orchestrator layer. Per the v2.6.x roadmap at
+[`orchestrator/docs/v2.6.x-roadmap.md`](orchestrator/docs/v2.6.x-roadmap.md)
+§6, this release addresses Layers 5 / 7 / 8 (additive aliases +
+schema-lie fix + docstring/test). Layer 6 (Annotated[Literal] type-hint
+promotion) and Layer 9 (4xx/5xx response enrichment) ship together
+as v2.6.2.
+
+### Added
+
+- **`content` additive alias on three EXECUTION_GATES tools**
+  (`rka_submit_checkpoint`, `rka_submit_report`,
+  `rka_update_status`) at `rka/mcp/server.py`. Brain LLMs that
+  extrapolate the universal "content is the body field" pattern
+  from `rka_add_note`'s worked example now succeed against these
+  three sibling write tools too, without going through the
+  orchestrator's adapter-layer alias absorption. Collision rule:
+  if both the canonical field (`description` / `summary`) AND
+  `content` are supplied with different values, the call raises a
+  400 with a diagnostic message; supplying the same value is
+  tolerated.
+- **First-class `summary` field on `MissionReportCreate` and
+  `MissionReport`** (`rka/models/mission.py`). Pre-v2.6.1 the MCP
+  signature of `rka_submit_report` exposed `summary: str` as the
+  primary body field, but the Pydantic body had no such field —
+  the wrapper synthesised it as `tasks_completed=[summary]`. Brain
+  LLMs reading the canonical OpenAPI schema were misled. The field
+  is now stored in its own column; `tasks_completed=[summary]` is
+  retained for one release as a back-compat fallback for downstream
+  readers that haven't migrated.
+- **`PRIMARY FIELD: <name>` docstring convention** across all 9
+  WRITE_TOOLS in `rka/mcp/server.py`. Every WRITE_TOOL docstring
+  summary now opens with the canonical body-field name so an LLM
+  rendering the OpenAPI schema sees the canonical name first.
+- **New `tests/test_mcp/test_mcp_tool_surface.py`** — 41-test
+  cross-check that pins (a) the PRIMARY FIELD convention per
+  WRITE_TOOL, (b) the canonical field name matches the registered
+  expectation, (c) the field exists as a parameter on the signature,
+  (d) the three additive aliases (`content` on submit_checkpoint /
+  submit_report / update_status) are kwarg-only-with-no-default,
+  (e) `MissionReportCreate` and `MissionReport` carry the new
+  `summary` field. Catches the next schema-lie or drift at CI time.
+
+### Changed
+
+- `rka_submit_checkpoint`: `description` parameter is now
+  `str | None = None` (was required positional). The wrapper
+  enforces the requirement explicitly with a diagnostic ValueError
+  when neither `description` nor the `content` alias is supplied,
+  so the error message is more actionable than the previous
+  positional TypeError.
+- `rka_submit_report`: `summary` parameter is now
+  `str | None = None`. Same requirement enforcement as above.
+- `rka_submit_report` wrapper now persists `summary` as a
+  first-class field on the POST body in addition to the legacy
+  `tasks_completed=[summary]` wrap.
+- All 9 WRITE_TOOLS docstrings updated to open with
+  `PRIMARY FIELD: <name>` — pure documentation refinement; no
+  behavior change.
+
+### Migration notes
+
+- **No DB migration required.** Mission reports are stored as JSON
+  (`MissionReport.model_dump_json` into the `report` column of
+  `missions`); the new `summary` field lands as additive JSON
+  property. Old reports without `summary` continue to read back
+  with `summary=None`.
+- **Old API consumers still work.** Downstream readers that look
+  for the report body in `tasks_completed[0]` continue to find it
+  (the wrapper still populates that field for one release).
+  Consumers should migrate to reading `summary` directly; the
+  `tasks_completed=[summary]` fallback will be retired in v2.7.0.
+- **The `content` aliases are purely additive.** All existing
+  canonical callers (`description=` on submit_checkpoint, `summary=`
+  on submit_report / update_status) continue to work unchanged.
+
+### Operational
+
+- `pyproject.toml` + `rka/__init__.py` version bump 2.6.0 → 2.6.1.
+- Test count rises 900 → 941 (+41 in `test_mcp_tool_surface.py`).
+- Full RKA test suite passes locally; Docker rebuild required to
+  pick up signature changes on the running container.
+
+### Reference
+
+- Architectural design: [`orchestrator/docs/phase-x-prime-polish-design.md`](orchestrator/docs/phase-x-prime-polish-design.md)
+- Sequencing: [`orchestrator/docs/v2.6.x-roadmap.md`](orchestrator/docs/v2.6.x-roadmap.md) §6 — PR3.
+- Empirical event: hyperscaler-auditing PA-2 dispatch failure
+  (`chk_01KT1TVKFKK3Q21A9ZGQMBRRSA`, 2026-06-01).
+- Companion orchestrator-side change: `v2.6.0+agentic.2`
+  (agentic branch) shipped Layers 1-4 on 2026-06-01.
+
+---
+
 ## [2.6.0] — 2026-05-31 (BREAKING — `project_id` required on every MCP tool; mcp-credentials skill; Writer W3+W4; v2.6 contract follow-up)
 
 This release graduates three Unreleased work-streams that landed on

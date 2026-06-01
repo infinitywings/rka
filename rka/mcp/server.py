@@ -231,10 +231,10 @@ async def rka_add_note(
     *,
     project_id: str,
 ) -> str:
-    """Add a research journal entry.
+    """PRIMARY FIELD: content. Add a research journal entry.
 
     Args:
-        content: The note content (Brain's analysis when recording PI input)
+        content: The note content (PRIMARY FIELD — Brain's analysis when recording PI input)
         type: Entry type — note | log | directive (legacy types like finding/insight/methodology are auto-mapped)
         source: Who created this — brain | executor | pi | llm | web_ui | system
         phase: Research phase (uses current if omitted)
@@ -281,11 +281,12 @@ async def rka_update_note(
     *,
     project_id: str,
 ) -> str:
-    """Update an existing journal entry.
+    """PRIMARY FIELD: id (plus content for the body update).
+    Update an existing journal entry.
 
     Args:
-        id: The note ID to update
-        content: New content
+        id: The note ID to update (PRIMARY FIELD — required addressing key)
+        content: New content (the canonical body field for the update)
         type: New type — note | log | directive
         confidence: New confidence level — hypothesis | tested | verified | superseded | retracted
         importance: New importance level — critical | high | normal | low
@@ -478,10 +479,11 @@ async def rka_add_decision(
     *,
     project_id: str,
 ) -> str:
-    """Add a decision node to the research decision tree.
+    """PRIMARY FIELD: question. Add a decision node to the research
+    decision tree.
 
     Args:
-        question: The decision question
+        question: The decision question (PRIMARY FIELD — NOT `content`)
         phase: Research phase
         decided_by: pi | brain | executor
         options: List of options [{label, description}]
@@ -1044,13 +1046,14 @@ async def rka_bulk_update(
     *,
     project_id: str,
 ) -> str:
-    """Bulk update multiple entities in one call.
+    """PRIMARY FIELD: updates. Bulk update multiple entities in one
+    call.
 
     Each update must have 'entity_type', 'id', and 'data' fields.
     Supported entity_types: 'note', 'decision', 'literature'.
 
     Args:
-        updates: List of updates, e.g. [{"entity_type": "note", "id": "jrn_01...", "data": {"type": "note", "confidence": "verified", "tags": ["v1.6-audit"]}}]
+        updates: List of updates (PRIMARY FIELD), e.g. [{"entity_type": "note", "id": "jrn_01...", "data": {"type": "note", "confidence": "verified", "tags": ["v1.6-audit"]}}]
     """
     async with _client(project_id) as c:
         results = []
@@ -1118,11 +1121,17 @@ async def rka_create_mission(
     *,
     project_id: str,
 ) -> str:
-    """Create a new mission for the Executor.
+    """PRIMARY FIELD: objective. Create a new mission for the Executor.
 
     PROVENANCE: Always provide `motivated_by_decision` to link the triggering decision.
     Include relevant decision IDs, journal entry IDs, and literature IDs in the `context`
     field so the Executor can read the full reasoning chain before starting work.
+
+    Note for LLM callers: the primary mission body is `objective` —
+    NOT `content`. Other write tools use different vocabularies for
+    the body field (rka_add_note: content, rka_submit_checkpoint:
+    description, rka_submit_report: summary); the canonical-name
+    convention is documented per-tool in the docstring opener.
 
     Args:
         phase: Research phase
@@ -1198,10 +1207,11 @@ async def rka_update_mission_status(
     *,
     project_id: str,
 ) -> str:
-    """Update mission status and task progress.
+    """PRIMARY FIELD: id (plus status for the transition). Update
+    mission status and task progress.
 
     Args:
-        id: Mission ID
+        id: Mission ID (PRIMARY FIELD — required addressing key)
         status: pending | active | complete | partial | blocked | cancelled
         tasks: Updated task list with progress
     """
@@ -1282,35 +1292,71 @@ async def rka_update_mission(
 @tool()
 async def rka_submit_report(
     mission_id: str,
-    summary: str,
+    summary: str | None = None,
     findings: str = "",
     anomalies: str = "",
     questions: str = "",
     codebase_state: str = "",
     recommended_next: str = "",
     *,
+    content: str | None = None,  # v2.6.1 additive alias for summary
     project_id: str,
 ) -> str:
-    """Submit an execution report for a completed mission.
+    """PRIMARY FIELD: summary. Submit an execution report for a
+    completed mission.
 
     The summary is the main report body — put the full narrative there.
     Other fields are optional structured sections (one item per line).
 
+    v2.6.1 — `summary` is now a first-class field on
+    MissionReportCreate (was a schema-lie before: the MCP signature
+    exposed `summary` but the Pydantic body had no such field; the
+    wrapper synthesised it as `tasks_completed=[summary]`).
+    Downstream readers will see both fields populated for one
+    release as a migration window.
+
     Args:
         mission_id: Mission ID
-        summary: Full report text (methodology, results, what was done)
+        summary: Full report text — methodology, results, what was
+            done (PRIMARY FIELD).
         findings: Key findings, one per line (optional)
         anomalies: Unexpected observations or issues, one per line (optional)
         questions: Open questions for the PI, one per line (optional)
         codebase_state: Description of codebase state after mission (optional)
         recommended_next: Suggested next steps as a single string (optional)
+        content: v2.6.1 additive alias for `summary` — accepted so
+            LLMs that extrapolate the universal "content is the body
+            field" pattern from rka_add_note still succeed. Collision
+            rule: explicit `summary` wins; supplying both with
+            different values raises 400.
     """
+    # v2.6.1 — additive `content` alias for `summary`.
+    if summary is None and content is not None:
+        summary = content
+    elif (
+        summary is not None and content is not None and summary != content
+    ):
+        raise ValueError(
+            "rka_submit_report: pass either `summary` or `content` "
+            "(additive alias), not both with different values"
+        )
+    if not summary:
+        raise ValueError(
+            "rka_submit_report: `summary` (or its alias `content`) is "
+            "required"
+        )
+
     def _split(text: str) -> list[str] | None:
         if not text or not text.strip():
             return None
         return [line.strip() for line in text.strip().splitlines() if line.strip()]
 
     body: dict = {
+        # v2.6.1 — persist `summary` as a first-class field. Keep
+        # tasks_completed=[summary] as back-compat for one release
+        # so downstream readers that haven't migrated still see the
+        # value where they expect it.
+        "summary": summary,
         "tasks_completed": [summary],
         "findings": _split(findings),
         "anomalies": _split(anomalies),
@@ -1362,27 +1408,51 @@ async def rka_get_report(mission_id: str | None = None, *, project_id: str) -> s
 async def rka_submit_checkpoint(
     mission_id: str,
     type: str,
-    description: str,
+    description: str | None = None,
     task_reference: str | None = None,
     context: str | None = None,
     options: list[dict] | None = None,
     recommendation: str | None = None,
     blocking: bool = True,
     *,
+    content: str | None = None,  # v2.6.1 additive alias for description
     project_id: str,
 ) -> str:
-    """Submit a checkpoint — escalate a decision/question to Brain/PI.
+    """PRIMARY FIELD: description. Submit a checkpoint — escalate a
+    decision/question to Brain/PI.
 
     Args:
         mission_id: Current mission ID
         type: decision | clarification | inspection | gate
-        description: What needs resolving
+        description: What needs resolving (PRIMARY FIELD).
         task_reference: Which task triggered this
         context: Additional context
         options: Possible options [{label, description, consequence}]
         recommendation: Executor's non-binding recommendation
         blocking: Whether this blocks further progress
+        content: v2.6.1 additive alias for `description` — accepted
+            so LLMs that extrapolate the universal "content is the
+            body field" pattern from rka_add_note still succeed.
+            Collision rule: explicit `description` wins; supplying
+            both raises 400.
     """
+    # v2.6.1 — additive `content` alias for `description`. Phase-X²' polish
+    # sibling on the orchestrator side has the same alias on the adapter;
+    # this server-side acceptance closes the gap so the alias works even
+    # for direct MCP callers (not just orchestrator-routed calls).
+    if description is None and content is not None:
+        description = content
+    elif description is not None and content is not None and description != content:
+        raise ValueError(
+            "rka_submit_checkpoint: pass either `description` or "
+            "`content` (additive alias), not both with different values"
+        )
+    if not description:
+        raise ValueError(
+            "rka_submit_checkpoint: `description` (or its alias "
+            "`content`) is required"
+        )
+
     async with _client(project_id) as c:
         body = {
             "mission_id": mission_id, "type": type, "description": description,
@@ -2068,16 +2138,33 @@ async def rka_update_status(
     blockers: str | None = None,
     metrics: dict | None = None,
     *,
+    content: str | None = None,  # v2.6.1 additive alias for summary
     project_id: str,
 ) -> str:
-    """Update project state.
+    """PRIMARY FIELD: summary. Update project state.
 
     Args:
         current_phase: New phase
-        summary: Updated project summary
+        summary: Updated project summary (PRIMARY FIELD).
         blockers: Current blockers
         metrics: Key metrics dict
+        content: v2.6.1 additive alias for `summary` — accepted so
+            LLMs that extrapolate the universal "content is the body
+            field" pattern still succeed. Collision rule: explicit
+            `summary` wins; supplying both with different values
+            raises 400.
     """
+    # v2.6.1 — additive `content` alias for `summary`.
+    if summary is None and content is not None:
+        summary = content
+    elif (
+        summary is not None and content is not None and summary != content
+    ):
+        raise ValueError(
+            "rka_update_status: pass either `summary` or `content` "
+            "(additive alias), not both with different values"
+        )
+
     async with _client(project_id) as c:
         body = {
             "current_phase": current_phase, "summary": summary,
@@ -2225,7 +2312,8 @@ async def rka_ingest_document(
     *,
     project_id: str,
 ) -> str:
-    """Ingest a markdown document by splitting it into journal entries.
+    """PRIMARY FIELD: content. Ingest a markdown document by
+    splitting it into journal entries.
 
     Accepts a full markdown document (e.g. a report, analysis, literature review)
     and automatically splits it by headings (## or ###) into individual journal entries.
