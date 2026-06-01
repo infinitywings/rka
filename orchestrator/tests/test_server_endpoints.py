@@ -673,3 +673,149 @@ def test_enforce_workspace_mount_safety_override(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING):
         _enforce_workspace_mount_safety()
     assert any("ORCHESTRATOR_ALLOW_HOME_MOUNT" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Phase-X² polish — orchestrator_get_run cache-visibility gap
+#
+# The workflow_runs row is updated only at park/terminal boundaries; the
+# LangGraph SqliteSaver checkpoint IS the live source of truth during a
+# segment. /runs/{id} now overlays live state under a `live_state` key.
+# These tests cover happy-path + graceful degradation paths.
+# ---------------------------------------------------------------------------
+
+
+def test_get_run_live_state_none_when_no_saver_path(setup):
+    """Default setup() doesn't configure a saver_path (FakeRunner has
+    no SqliteSaver). The endpoint must still return the cached row +
+    `live_state: None` rather than 500."""
+    client, store, runner = setup
+    tid = store.create_run(mission_id="m", project_id="p")
+    r = client.get(f"/runs/{tid}")
+    assert r.status_code == 200
+    body = r.json()
+    assert "live_state" in body
+    assert body["live_state"] is None
+    # Cached fields still present.
+    assert body["workflow_thread_id"] == tid
+    assert body["status"] in ("running", "starting")
+
+
+def test_get_run_live_state_overlays_langgraph_checkpoint(tmp_path):
+    """When the saver path is configured AND a checkpoint exists for the
+    thread, live_state reflects the LangGraph state — independent of the
+    cached workflow_runs row. This is the empirically-documented gap
+    closure: cache shows old node, checkpoint shows current node."""
+    import sqlite3
+    from langgraph.checkpoint.sqlite import SqliteSaver
+    from orchestrator.server import _read_live_state
+
+    saver_path = str(tmp_path / "saver.db")
+    # Manually write a LangGraph checkpoint with non-trivial state.
+    conn = sqlite3.connect(saver_path, check_same_thread=False)
+    try:
+        saver = SqliteSaver(conn)
+        saver.setup()
+        # LangGraph requires checkpoint_ns in the config — empty string
+        # is the default namespace for the mission graph.
+        config = {
+            "configurable": {"thread_id": "thr_live", "checkpoint_ns": ""}
+        }
+        checkpoint = {
+            "v": 4,
+            "id": "1f15dc11-9033-6583-800b-9f1783dd7c59",
+            "ts": "2026-06-01T13:52:00Z",
+            "channel_values": {
+                # The fields the PI cockpit cares about mid-segment:
+                "current_node": "mission_execute",
+                "current_phase": "executor_mission",
+                "usd_spent": 1.2535744,
+                "greenlight_redrafts": 2,
+                "run_overrides": {
+                    "pi_instructions": "T1-T4 only at $25 cap",
+                    "in_run_redirects": [
+                        {"responded_at": "ts1", "response_text": "fix §4"},
+                        {"responded_at": "ts2", "response_text": "fix §6"},
+                    ],
+                },
+                "proposed_actions": [],
+                "ratified_actions": [],
+                "interrupts": [
+                    {"node_name": "pi_greenlight", "response": "approve"},
+                    {"node_name": "pi_greenlight", "response": "__RKA_REDIRECT__::fix §4"},
+                    {"node_name": "pi_greenlight", "response": "approve"},
+                ],
+                "artifacts": [{"rka_id": "jrn_x"}, {"rka_id": "jrn_y"}],
+            },
+            "channel_versions": {},
+            "versions_seen": {},
+        }
+        saver.put(config, checkpoint, {}, {})
+    finally:
+        conn.close()
+
+    live = _read_live_state("thr_live", saver_path)
+    assert live is not None
+    assert live["current_node"] == "mission_execute"
+    assert live["current_phase"] == "executor_mission"
+    assert live["usd_spent"] == 1.2535744
+    assert live["greenlight_redrafts"] == 2
+    assert live["run_overrides"]["pi_instructions"] == "T1-T4 only at $25 cap"
+    assert len(live["run_overrides"]["in_run_redirects"]) == 2
+    # Derived freshness signals
+    assert live["interrupts_count"] == 3
+    assert live["latest_interrupt_node"] == "pi_greenlight"
+    assert live["artifacts_count"] == 2
+
+
+def test_get_run_live_state_none_when_thread_has_no_checkpoint(tmp_path):
+    """A run that was just committed but hasn't reached the first node
+    yet has no LangGraph checkpoint. Endpoint must NOT 500 — live_state
+    is just None (the PI keeps polling)."""
+    from orchestrator.server import _read_live_state
+
+    saver_path = str(tmp_path / "empty_saver.db")
+    # Don't write any checkpoint — just create the DB.
+    import sqlite3
+    from langgraph.checkpoint.sqlite import SqliteSaver
+    conn = sqlite3.connect(saver_path, check_same_thread=False)
+    try:
+        SqliteSaver(conn).setup()
+    finally:
+        conn.close()
+
+    live = _read_live_state("thr_no_checkpoint", saver_path)
+    assert live is None
+
+
+def test_get_run_live_state_handles_unreachable_saver_path(tmp_path):
+    """If the saver path doesn't exist or is unreadable, gracefully
+    degrade to a live_state dict with an `_error` key rather than
+    raising (which would 500 the endpoint and hide the cached row)."""
+    from orchestrator.server import _read_live_state
+
+    # Path that doesn't exist + can't be created (parent missing).
+    bad_path = str(tmp_path / "nonexistent" / "saver.db")
+    live = _read_live_state("thr_x", bad_path)
+    # Either None (DB couldn't even open) or an _error key — both are
+    # acceptable graceful-degrade outcomes; what matters is no raise.
+    assert live is None or "_error" in live
+
+
+def test_get_run_live_state_none_when_saver_path_falsy():
+    """Explicit None / empty string saver path → graceful None."""
+    from orchestrator.server import _read_live_state
+
+    assert _read_live_state("thr_x", None) is None
+    assert _read_live_state("thr_x", "") is None
+
+
+def test_get_run_response_shape_documents_live_state_field(setup):
+    """Contract test: every GET /runs/{id} response carries a
+    `live_state` key, even if its value is None. PI cockpit code can
+    rely on the key being present."""
+    client, store, _ = setup
+    tid = store.create_run(mission_id="m", project_id="p")
+    r = client.get(f"/runs/{tid}")
+    assert r.status_code == 200
+    assert "live_state" in r.json()

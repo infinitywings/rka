@@ -564,6 +564,90 @@ def _default_mcp_factory(base_url: str):
     return _factory
 
 
+# Phase-X² polish — set of state fields the /runs/{id} endpoint
+# extracts from the live LangGraph checkpoint. Intentionally narrow:
+# expose the fields that the PI cockpit needs to observe mid-segment
+# progress (current_node, usd_spent for spend tick, greenlight_redrafts
+# + run_overrides.in_run_redirects for the Phase-X² redraft cycle,
+# proposed_actions + ratified_actions for the TWO-TAP gate awareness,
+# interrupts count as a freshness signal). NOT exposing brain_strategy
+# / executor_backbrief / artifacts (large blobs that would inflate
+# every poll's response) — those land in parked_interrupts.payload_json
+# when they matter for the PI.
+_LIVE_STATE_FIELDS: tuple[str, ...] = (
+    "current_node",
+    "current_phase",
+    "usd_spent",
+    "loop_iterations",
+    "greenlight_redrafts",
+    "run_overrides",
+    "proposed_actions",
+    "ratified_actions",
+    "next_node_override",
+    "terminal_state",
+    "final_report_id",
+    "consensus_state",
+    "gate1_verdict",
+)
+
+
+def _read_live_state(workflow_thread_id: str, saver_path: Optional[str]) -> Optional[dict]:
+    """Read the latest LangGraph checkpoint for the given thread and
+    return a compact dict of fields the PI cockpit cares about.
+
+    Returns None if the saver path isn't configured, the thread has no
+    checkpoint yet (freshly-committed run pre-first-node), or
+    deserialization fails. Graceful degradation by design — the cached
+    workflow_runs row is still returned alongside, so a None live_state
+    is a hint to the PI to keep polling, not a failure mode.
+    """
+    if not saver_path:
+        return None
+    # Treat missing-file as "no checkpoint yet" rather than an error.
+    # Tests + fresh installs commonly point at a path that hasn't been
+    # created yet; the user-actionable signal there is the same as
+    # "no checkpoint for this thread" — keep polling, nothing to read.
+    import os
+
+    if not os.path.exists(saver_path):
+        return None
+    try:
+        import sqlite3
+        from langgraph.checkpoint.sqlite import SqliteSaver
+
+        conn = sqlite3.connect(saver_path, check_same_thread=False)
+        try:
+            saver = SqliteSaver(conn)
+            config = {"configurable": {"thread_id": workflow_thread_id}}
+            tup = saver.get_tuple(config)
+        finally:
+            conn.close()
+        if tup is None:
+            return None
+        channels = tup.checkpoint.get("channel_values") or {}
+    except Exception as e:  # noqa: BLE001 — graceful degrade
+        return {"_error": f"checkpoint read failed: {type(e).__name__}: {e}"}
+
+    live: dict = {}
+    for field in _LIVE_STATE_FIELDS:
+        if field in channels:
+            live[field] = channels[field]
+    # Add a few derived signals the PI cockpit uses for freshness:
+    # interrupts count (vs cache's stale snapshot), artifact count
+    # (mid-execution journaling activity), and the latest interrupt
+    # node_name so the PI can see "Brain just queued a pi_greenlight"
+    # without inflating the response with the full interrupt history.
+    interrupts = channels.get("interrupts") or []
+    if isinstance(interrupts, list):
+        live["interrupts_count"] = len(interrupts)
+        if interrupts and isinstance(interrupts[-1], dict):
+            live["latest_interrupt_node"] = interrupts[-1].get("node_name")
+    artifacts = channels.get("artifacts") or []
+    if isinstance(artifacts, list):
+        live["artifacts_count"] = len(artifacts)
+    return live
+
+
 def _default_saver_factory(saver_path: str):
     """Return a factory closure that opens a fresh SqliteSaver per call.
 
@@ -656,6 +740,17 @@ def create_app(
                 mcp_factory=_default_mcp_factory(resolved_rka_url),
                 saver_factory=_default_saver_factory(resolved_saver_path),
             )
+
+        # Phase-X² polish — stash the saver path on app.state so the
+        # /runs/{id} endpoint can open a SqliteSaver and read the live
+        # LangGraph checkpoint state. Closes the cache-visibility gap
+        # where workflow_runs (a snapshot updated only at park/terminal)
+        # would show stale current_node + usd_spent + run_overrides
+        # during a long-running segment (Brain backbrief / gate1 /
+        # mission_execute, Executor running Bash/Python). Verified
+        # empirically during Run-5 (mission_execute false-alarm stall)
+        # and the 2026-06-01 D1 survey (cache 2 nodes behind reality).
+        app.state.saver_path = resolved_saver_path
 
         # Wire the workspace path resolver so manifest.workspace_dir()
         # consults project_workspaces (PI-provided paths) before falling
@@ -1034,6 +1129,19 @@ def create_app(
         row = store_.get_run(workflow_thread_id)
         if row is None:
             raise HTTPException(status_code=404, detail="run not found")
+        # Phase-X² polish — overlay live LangGraph SqliteSaver state.
+        # workflow_runs is a cache updated only at park/terminal
+        # boundaries; mid-segment the snapshot is stale (verified
+        # empirically: Run-5 mission_execute false-alarm, the
+        # 2026-06-01 D1 survey false-alarm). The live checkpoint is
+        # the source of truth for current_node / usd_spent /
+        # greenlight_redrafts / run_overrides during execution.
+        saver_path = getattr(
+            request.app.state, "saver_path", None
+        )
+        row["live_state"] = _read_live_state(
+            workflow_thread_id, saver_path
+        )
         return row
 
     @app.delete("/runs/{workflow_thread_id}")

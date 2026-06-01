@@ -209,7 +209,43 @@ async def orchestrator_list_runs(
 
 @mcp.tool()
 async def orchestrator_get_run(workflow_thread_id: str) -> dict:
-    """Get detail for one workflow run."""
+    """Get detail for one workflow run.
+
+    Returns the cached `workflow_runs` row (status, current_node,
+    usd_spent, last_error, terminal_state, final_report_id, started_at,
+    updated_at, run_overrides) PLUS a `live_state` overlay read from the
+    LangGraph SqliteSaver checkpoint.
+
+    **Why `live_state` matters (Phase-X² polish, 2026-06-01).** The
+    `workflow_runs` row is a cache updated only at park/terminal
+    boundaries; during a long-running segment (Brain backbrief /
+    gate1_validation / mission_execute / Executor running Bash/Python)
+    its `current_node`, `usd_spent`, and `run_overrides` fields are
+    stale by minutes. The PI cockpit was misdiagnosing healthy
+    long-running execution as "stalled" because the cached row stayed
+    frozen between segment boundaries. `live_state` exposes the live
+    LangGraph checkpoint so the PI can observe mid-segment progress:
+
+      live_state.current_node          — what node the graph is at NOW
+      live_state.current_phase         — workflow_phase enum
+      live_state.usd_spent             — running spend (often higher
+                                          than cached usd_spent)
+      live_state.greenlight_redrafts   — Phase-X² in-run redraft counter
+      live_state.run_overrides         — full mid-run override dict
+                                          (cache only has start-of-run)
+      live_state.proposed_actions      — Brain's pending PA list
+                                          (before pi_decision_select)
+      live_state.ratified_actions      — post-accept dispatch list
+      live_state.interrupts_count      — for freshness comparison
+      live_state.latest_interrupt_node — most recent pi_* node visited
+      live_state.artifacts_count       — RKA writes journaled this run
+
+    `live_state` is `None` when the saver isn't configured, the
+    thread has no checkpoint yet (just-committed run pre-first-node),
+    or the checkpoint file is missing. Returns `{"_error": "..."}`
+    on a corrupted-checkpoint edge case — graceful degradation, the
+    cached row is still returned alongside.
+    """
     async with _client() as c:
         r = await c.get(f"/runs/{workflow_thread_id}")
         _raise_with_detail(r)
