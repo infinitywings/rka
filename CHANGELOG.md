@@ -658,6 +658,192 @@ rka repo holds only templates + orchestrator code that knows how to
 create the workspace. See `orchestrator/docs/phase-o-project-onboarding-design.md`
 §"Repo boundary".
 
+## [2.6.2] — 2026-06-01 (patch — Phase-X²' polish on main: Annotated[Literal] LLM-schema promotion + 4xx/5xx enrichment)
+
+Patch release. Closes the v2.6.x cycle for Phase-X²' polish on main
+(see v2.6.1 entry below for Layers 5/7/8; this release ships Layers
+6 and 9). All changes are backward-compatible — `Annotated[Literal]`
+is a type-hint refinement (FastMCP's `inputSchema` rendering becomes
+more LLM-friendly without changing accepted values), and the
+enrichment of `_raise_with_detail` is strict superset behavior
+(non-structured detail still renders as before).
+
+### Added
+
+- **`Annotated[Literal[...], Field(description=...)]` enum
+  type-hint promotion on enum-typed WRITE_TOOL parameters** in
+  `rka/mcp/server.py`. FastMCP renders Annotated[Literal] into
+  `inputSchema.properties.*.enum`, so LLM clients (Claude
+  Desktop / Claude Code) see the constrained value set DIRECTLY in
+  the rendered tool definition — they can refuse out-of-enum
+  proposals pre-call, closing the third rung in the validation
+  ladder (after server-side Pydantic models + orchestrator-side
+  `TOOL_ARG_ENUMS` mirror). Tools promoted:
+    - `rka_add_note`: `confidence`, `importance`, `source`
+    - `rka_add_decision`: `decided_by`, `kind`
+    - `rka_submit_checkpoint`: `type`
+    - `rka_update_mission_status`: `status`
+    - `rka_ingest_document`: `source`
+  Module-level type aliases (`ConfidenceLiteral`,
+  `ImportanceLiteral`, `SourceLiteral`, `DecidedByLiteral`,
+  `DecisionKindLiteral`, `CheckpointTypeLiteral`,
+  `MissionStatusLiteral`, `IngestSourceLiteral`) keep the
+  promotions DRY and mirror the canonical sets at
+  `orchestrator/orchestrator/rka_enums.py` + SQLite CHECK
+  constraints.
+- **4xx/5xx response-enrichment in `_raise_with_detail`**
+  (`rka/mcp/server.py:304`). FastAPI's structured 422 validation
+  detail (list-of-dicts shape) now renders as
+  `<field>=<input>: <msg> (allowed: <set>)` per offending field
+  instead of being collapsed via `str(list)`. Mirrors the Phase-X²
+  polish orchestrator-side enrichment for consistent diagnostic
+  surface. 404 / 409 / 500 with plain-string `detail` continue to
+  render unchanged.
+- **New `tests/test_mcp/test_v262_annotated_literal_and_enrichment.py`**
+  — 15 tests pinning (a) every promoted parameter resolves to
+  `Annotated[Literal[...]]` with the expected value set,
+  (b) `confidence` set excludes 'confirmed' (empirical Brain
+  hallucination), (c) structured 422 detail renders per-field with
+  the offending value visible, (d) plain-string 404 / 500 detail
+  passes through unchanged, (e) the `loc` prefix (`body`/`query`/
+  `path`/`header`) is stripped from rendered messages.
+
+### Operational
+
+- `pyproject.toml` + `rka/__init__.py` version bump 2.6.1 → 2.6.2.
+- Total RKA test suite rises 941 → 956 (+15 in
+  `test_v262_annotated_literal_and_enrichment.py`).
+- No DB migration; no breaking signature changes.
+- Type aliases are reusable: future WRITE_TOOLS can adopt the same
+  pattern with one line.
+
+### What this does NOT change
+
+- The accepted value sets are unchanged — `Annotated[Literal[...]]`
+  reflects what the Pydantic models + DB CHECK constraints already
+  accept. An LLM that disregards the rendered schema and proposes
+  an out-of-enum value still hits the orchestrator's
+  `TOOL_ARG_ENUMS` validator (pre-dispatch) or the REST 422 path
+  (post-roundtrip). The new layer is anticipatory — most LLM
+  clients consume the inputSchema and constrain their emissions
+  upfront.
+- The legacy `type` parameter on `rka_add_note` / `rka_update_note`
+  is intentionally NOT promoted because it accepts the legacy
+  superset (e.g. 'finding', 'insight', 'methodology') that's
+  silently normalized server-side via JOURNAL_TYPE_MAP. Promoting
+  it would break existing callers relying on those legacy types.
+  A v2.7.0 cleanup can retire the legacy set and promote `type`
+  to Literal.
+- `default_type` on `rka_ingest_document` follows the same logic
+  (legacy compatibility).
+
+### Reference
+
+- Architectural design: [`orchestrator/docs/phase-x-prime-polish-design.md`](orchestrator/docs/phase-x-prime-polish-design.md) §5 (Layers 6 + 9)
+- Sequencing: [`orchestrator/docs/v2.6.x-roadmap.md`](orchestrator/docs/v2.6.x-roadmap.md) §7 — PR4.
+- Companion: v2.6.1 (commit 27e250d) shipped Layers 5/7/8 (aliases +
+  schema-lie + docstring sweep).
+
+---
+
+## [2.6.1] — 2026-06-01 (patch — Phase-X²' polish on main: WRITE_TOOLS schema hygiene)
+
+Patch release. Backward-compatible RKA-side fixes for the schema-
+divergence failure modes that the agentic-branch Phase-X²' polish
+(see [`orchestrator/docs/phase-x-prime-polish-design.md`](orchestrator/docs/phase-x-prime-polish-design.md))
+closed at the orchestrator layer. Per the v2.6.x roadmap at
+[`orchestrator/docs/v2.6.x-roadmap.md`](orchestrator/docs/v2.6.x-roadmap.md)
+§6, this release addresses Layers 5 / 7 / 8 (additive aliases +
+schema-lie fix + docstring/test). Layer 6 (Annotated[Literal] type-hint
+promotion) and Layer 9 (4xx/5xx response enrichment) ship together
+as v2.6.2.
+
+### Added
+
+- **`content` additive alias on three EXECUTION_GATES tools**
+  (`rka_submit_checkpoint`, `rka_submit_report`,
+  `rka_update_status`) at `rka/mcp/server.py`. Brain LLMs that
+  extrapolate the universal "content is the body field" pattern
+  from `rka_add_note`'s worked example now succeed against these
+  three sibling write tools too, without going through the
+  orchestrator's adapter-layer alias absorption. Collision rule:
+  if both the canonical field (`description` / `summary`) AND
+  `content` are supplied with different values, the call raises a
+  400 with a diagnostic message; supplying the same value is
+  tolerated.
+- **First-class `summary` field on `MissionReportCreate` and
+  `MissionReport`** (`rka/models/mission.py`). Pre-v2.6.1 the MCP
+  signature of `rka_submit_report` exposed `summary: str` as the
+  primary body field, but the Pydantic body had no such field —
+  the wrapper synthesised it as `tasks_completed=[summary]`. Brain
+  LLMs reading the canonical OpenAPI schema were misled. The field
+  is now stored in its own column; `tasks_completed=[summary]` is
+  retained for one release as a back-compat fallback for downstream
+  readers that haven't migrated.
+- **`PRIMARY FIELD: <name>` docstring convention** across all 9
+  WRITE_TOOLS in `rka/mcp/server.py`. Every WRITE_TOOL docstring
+  summary now opens with the canonical body-field name so an LLM
+  rendering the OpenAPI schema sees the canonical name first.
+- **New `tests/test_mcp/test_mcp_tool_surface.py`** — 41-test
+  cross-check that pins (a) the PRIMARY FIELD convention per
+  WRITE_TOOL, (b) the canonical field name matches the registered
+  expectation, (c) the field exists as a parameter on the signature,
+  (d) the three additive aliases (`content` on submit_checkpoint /
+  submit_report / update_status) are kwarg-only-with-no-default,
+  (e) `MissionReportCreate` and `MissionReport` carry the new
+  `summary` field. Catches the next schema-lie or drift at CI time.
+
+### Changed
+
+- `rka_submit_checkpoint`: `description` parameter is now
+  `str | None = None` (was required positional). The wrapper
+  enforces the requirement explicitly with a diagnostic ValueError
+  when neither `description` nor the `content` alias is supplied,
+  so the error message is more actionable than the previous
+  positional TypeError.
+- `rka_submit_report`: `summary` parameter is now
+  `str | None = None`. Same requirement enforcement as above.
+- `rka_submit_report` wrapper now persists `summary` as a
+  first-class field on the POST body in addition to the legacy
+  `tasks_completed=[summary]` wrap.
+- All 9 WRITE_TOOLS docstrings updated to open with
+  `PRIMARY FIELD: <name>` — pure documentation refinement; no
+  behavior change.
+
+### Migration notes
+
+- **No DB migration required.** Mission reports are stored as JSON
+  (`MissionReport.model_dump_json` into the `report` column of
+  `missions`); the new `summary` field lands as additive JSON
+  property. Old reports without `summary` continue to read back
+  with `summary=None`.
+- **Old API consumers still work.** Downstream readers that look
+  for the report body in `tasks_completed[0]` continue to find it
+  (the wrapper still populates that field for one release).
+  Consumers should migrate to reading `summary` directly; the
+  `tasks_completed=[summary]` fallback will be retired in v2.7.0.
+- **The `content` aliases are purely additive.** All existing
+  canonical callers (`description=` on submit_checkpoint, `summary=`
+  on submit_report / update_status) continue to work unchanged.
+
+### Operational
+
+- `pyproject.toml` + `rka/__init__.py` version bump 2.6.0 → 2.6.1.
+- Test count rises 900 → 941 (+41 in `test_mcp_tool_surface.py`).
+- Full RKA test suite passes locally; Docker rebuild required to
+  pick up signature changes on the running container.
+
+### Reference
+
+- Architectural design: [`orchestrator/docs/phase-x-prime-polish-design.md`](orchestrator/docs/phase-x-prime-polish-design.md)
+- Sequencing: [`orchestrator/docs/v2.6.x-roadmap.md`](orchestrator/docs/v2.6.x-roadmap.md) §6 — PR3.
+- Empirical event: hyperscaler-auditing PA-2 dispatch failure
+  (`chk_01KT1TVKFKK3Q21A9ZGQMBRRSA`, 2026-06-01).
+- Companion orchestrator-side change: `v2.6.0+agentic.2`
+  (agentic branch) shipped Layers 1-4 on 2026-06-01.
+
+---
+
 ## [2.6.0] — 2026-05-31 (BREAKING — `project_id` required on every MCP tool; mcp-credentials skill; Writer W3+W4; v2.6 contract follow-up)
 
 This release graduates three Unreleased work-streams that landed on

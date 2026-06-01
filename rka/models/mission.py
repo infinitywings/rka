@@ -66,10 +66,25 @@ class MissionReportCreate(BaseModel):
     """Executor's structured report for a completed mission.
 
     extra="forbid" defense-in-depth — see MissionCreate for context.
+
+    v2.6.1 — `summary` is now a first-class field on the schema. The
+    MCP tool `rka_submit_report` previously exposed `summary: str` in
+    its signature but synthesised it as `tasks_completed=[summary]`
+    in the wrapper (rka/mcp/server.py:1313) — a schema-lie that
+    misled any Brain LLM reading the canonical OpenAPI schema. Per
+    the Phase-X²' polish roadmap (v2.6.x cycle, see
+    orchestrator/docs/v2.6.x-roadmap.md §6), summary is now stored
+    in its own field; the synthetic tasks_completed=[summary] wrap
+    is retained for one release as a back-compat fallback for
+    downstream readers that haven't migrated.
     """
 
     model_config = ConfigDict(extra="forbid")
 
+    # v2.6.1 — first-class `summary` field. Was synthesised via
+    # tasks_completed=[summary] pre-v2.6.1; both code paths populated
+    # for one-release migration window.
+    summary: str | None = None
     tasks_completed: list[str] | None = None
     findings: list[str] | None = None
     anomalies: list[str] | None = None
@@ -82,6 +97,9 @@ class MissionReport(BaseModel):
     """Stored mission report."""
 
     mission_id: str
+    # v2.6.1 — first-class `summary` (see MissionReportCreate
+    # docstring for the migration note).
+    summary: str | None = None
     tasks_completed: list[str] | None = None
     findings: list[str] | None = None
     anomalies: list[str] | None = None
