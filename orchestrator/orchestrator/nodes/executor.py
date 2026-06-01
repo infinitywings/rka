@@ -22,8 +22,11 @@ from datetime import datetime, timezone
 from orchestrator.llm_client import (
     SDKClient,
     WRITE_TOOLS,
-    capability_of,  # Phase 2.14
 )
+# Note: capability_of lookup is now inside `check_action_capability`
+# (orchestrator/rka_enums.py) as of v2.6.0+agentic.6. The direct
+# import here was removed when the inline capability check was lifted
+# into the rka_enums vocabulary.
 from orchestrator.mcp_client import CheckpointError, MCPClient
 from orchestrator.rka_enums import (
     RKA_CHECKPOINT_TYPES,
@@ -36,6 +39,7 @@ from orchestrator.rka_enums import (
     RKA_JOURNAL_TYPES_V2_CANONICAL,
     RKA_MISSION_STATUSES,
     RKA_SOURCES,
+    check_action_capability,  # v2.6.0+agentic.6
     check_required_fields,  # Phase-X²' polish
     validate_action_args,  # Phase-X² polish
 )
@@ -855,30 +859,23 @@ def execute_ratified_actions(
             )
             continue
 
-        # Phase 2.14: capability-scoped restriction. When the workflow
-        # state has narrowed the allowed capability set (a non-empty
-        # `allowed_capabilities` list), each action's tool must belong
-        # to a capability the workflow has authorized. Empty allowlist
-        # = no restriction (pre-2.14 behavior).
-        if allowed_caps:
-            tool_capability = capability_of(tool)
-            if tool_capability is None or tool_capability not in allowed_caps:
+        # v2.6.0+agentic.6 — Phase 2.14 capability-scoped restriction
+        # via the unified rka_enums.check_action_capability helper.
+        # Lifted from an inline block (functionally identical) so the
+        # check composes alongside validate_action_args + check_required_fields
+        # and is independently unit-testable. Error type name preserved
+        # for journal-grep consumer compatibility.
+        capability_errors = check_action_capability(tool, allowed_caps)
+        if capability_errors:
+            for reason in capability_errors:
                 new_errors.append(
                     _make_error(
                         "execute_ratified_actions",
                         "ratified_action_capability_not_allowed",
-                        (
-                            f"PA-{idx}: tool {tool!r} (capability="
-                            f"{tool_capability!r}) is not in this "
-                            f"workflow's allowed_capabilities="
-                            f"{sorted(allowed_caps)!r}. Either widen the "
-                            f"workflow's capability allowlist or rewrite "
-                            f"the action to use a tool from an authorized "
-                            f"capability."
-                        ),
+                        f"PA-{idx}: {reason}",
                     )
                 )
-                continue
+            continue
 
         method = getattr(mcp, tool, None)
         if method is None:

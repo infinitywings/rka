@@ -28,6 +28,7 @@ from orchestrator.rka_enums import (
     RKA_SOURCES,
     TOOL_ARG_ENUMS,
     TOOL_REQUIRED_FIELDS,
+    check_action_capability,
     check_required_fields,
     validate_action_args,
 )
@@ -558,3 +559,131 @@ def test_check_required_fields_accepts_meaningful_string() -> None:
     (regression guard against the truthy-check tightening)."""
     args = {"description": "real content", "mission_id": "mis_x"}
     assert check_required_fields("rka_submit_checkpoint", args) == []
+
+
+# ---------------------------------------------------------------------------
+# v2.6.0+agentic.6 — check_action_capability tests
+# ---------------------------------------------------------------------------
+
+
+def test_check_action_capability_empty_allowlist_permits_everything() -> None:
+    """Pre-2.14 semantics — empty/None allowlist means no restriction.
+    Pins backward compatibility with existing workflows that never
+    set allowed_capabilities."""
+    assert check_action_capability("rka_add_note", set()) == []
+    assert check_action_capability("rka_update_mission_status", []) == []
+    assert check_action_capability("rka_submit_checkpoint", ()) == []
+    # None-equivalent — passing None directly is the same shape the
+    # state field carries when unset.
+    assert check_action_capability("rka_add_note", None) == []  # type: ignore[arg-type]
+
+
+def test_check_action_capability_permits_tool_in_allowed_capability() -> None:
+    """Happy path — tool's capability is in the allowlist → no errors.
+    Pins the canonical case the empirical PA-1/2/3 dispatch hit."""
+    # record_knowledge tools
+    assert check_action_capability("rka_add_note", {"record_knowledge"}) == []
+    assert check_action_capability(
+        "rka_add_decision", {"record_knowledge", "execution_gates"}
+    ) == []
+    # execution_gates tools
+    assert check_action_capability("rka_submit_checkpoint", {"execution_gates"}) == []
+    assert check_action_capability("rka_submit_report", {"execution_gates"}) == []
+
+
+def test_check_action_capability_rejects_tool_outside_allowlist() -> None:
+    """The empirical PA-4 failure shape — rka_update_mission_status
+    requires mission_lifecycle but workflow holds only
+    ['execution_gates', 'record_knowledge']. The error message must
+    name the tool, its capability, and the allowed set."""
+    errors = check_action_capability(
+        "rka_update_mission_status",
+        {"execution_gates", "record_knowledge"},
+    )
+    assert len(errors) == 1
+    msg = errors[0]
+    assert "rka_update_mission_status" in msg
+    assert "mission_lifecycle" in msg
+    assert "execution_gates" in msg
+    assert "record_knowledge" in msg
+
+
+def test_check_action_capability_unknown_tool_returns_empty() -> None:
+    """Unknown tool defers to ratified_action_tool_not_allowed upstream;
+    no double-fire. Open-world tolerance matches validate_action_args
+    + check_required_fields posture."""
+    assert check_action_capability("rka_unknown_tool", {"record_knowledge"}) == []
+    assert check_action_capability("foo_bar_baz", {"execution_gates"}) == []
+
+
+def test_check_action_capability_accepts_list_tuple_set() -> None:
+    """allowed_capabilities can be a list (from JSON), tuple (Phase-2.14
+    legacy), or set (set arithmetic). All three shapes work
+    identically — pins the Phase-2.14 callsite tolerance."""
+    perms = {"execution_gates"}
+    list_form = ["execution_gates"]
+    tuple_form = ("execution_gates",)
+    assert check_action_capability("rka_submit_checkpoint", perms) == []
+    assert check_action_capability("rka_submit_checkpoint", list_form) == []
+    assert check_action_capability("rka_submit_checkpoint", tuple_form) == []
+    # Rejection invariant across shapes.
+    assert check_action_capability("rka_update_mission_status", perms) != []
+    assert check_action_capability("rka_update_mission_status", list_form) != []
+    assert check_action_capability("rka_update_mission_status", tuple_form) != []
+
+
+def test_check_action_capability_all_capabilities_permits_all_tools() -> None:
+    """Pin the full-capability case — useful for tests + admin tooling."""
+    full = {
+        "record_knowledge", "update_knowledge",
+        "mission_lifecycle", "execution_gates", "ingestion",
+    }
+    from orchestrator.llm_client import TOOL_CAPABILITIES
+    for tool in TOOL_CAPABILITIES:
+        assert check_action_capability(tool, full) == [], (
+            f"{tool} rejected under full-capability allowlist"
+        )
+
+
+def test_check_action_capability_diagnostic_message_actionable() -> None:
+    """The error message must point operators at the two correct
+    remediations: widen the allowlist OR rewrite to use an authorized
+    tool. Symmetric to check_required_fields's diagnostic posture."""
+    errors = check_action_capability(
+        "rka_create_mission", {"record_knowledge"}
+    )
+    assert len(errors) == 1
+    msg = errors[0]
+    assert "widen" in msg.lower() or "allowlist" in msg.lower()
+    assert "authorized" in msg.lower() or "capability" in msg.lower()
+
+
+# ---------------------------------------------------------------------------
+# BRAIN_SYSTEM capability-set enumeration (v2.6.0+agentic.6 prompt anchor)
+# ---------------------------------------------------------------------------
+
+
+def test_brain_system_enumerates_canonical_capability_buckets() -> None:
+    """The Phase-X²''-style prompt block must list the five canonical
+    capability buckets so Brain self-prunes mission_lifecycle (and
+    update_knowledge, ingestion) proposals when those aren't in the
+    workflow's ratified allowlist.
+    """
+    from orchestrator.nodes.brain import BRAIN_SYSTEM
+
+    assert "record_knowledge" in BRAIN_SYSTEM
+    assert "update_knowledge" in BRAIN_SYSTEM
+    assert "mission_lifecycle" in BRAIN_SYSTEM
+    assert "execution_gates" in BRAIN_SYSTEM
+    assert "ingestion" in BRAIN_SYSTEM
+
+
+def test_brain_system_warns_against_mission_lifecycle_in_execution_segments() -> None:
+    """Empirical PA-4 callout — Brain proposed `rka_update_mission_status`
+    in an execution-segment workflow. The prompt must explicitly name
+    this hallucination class so future Brain emissions self-prune."""
+    from orchestrator.nodes.brain import BRAIN_SYSTEM
+
+    assert "rka_update_mission_status" in BRAIN_SYSTEM
+    # Must explicitly call out PI-actor scope for lifecycle transitions.
+    assert "PI-actor" in BRAIN_SYSTEM or "out-of-band" in BRAIN_SYSTEM

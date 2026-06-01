@@ -253,6 +253,88 @@ def validate_action_args(
 
 
 # ---------------------------------------------------------------------------
+# v2.6.0+agentic.6 — capability-allowlist pre-dispatch validator
+# ---------------------------------------------------------------------------
+#
+# Lifts the existing per-action capability check (formerly inline at
+# execute_ratified_actions) into the rka_enums.py validator vocabulary
+# so it composes alongside `validate_action_args` (enum values) and
+# `check_required_fields` (required field names). The chain position
+# in execute_ratified_actions is UNCHANGED — the check still fires
+# early in the action loop, before chain substitution. This is purely
+# a refactor for testability + future composition + Brain-prompt
+# enumeration symmetry; behavior is identical to v0.6.5.
+#
+# Companion change: BRAIN_SYSTEM (in llm_client.py) now enumerates the
+# canonical capability buckets so Brain self-prunes capability-
+# disallowed proposals at the LLM emission layer — the same pattern
+# used for WRITE_TOOLS / enum values / required field names.
+#
+# Empirical motivation: PA-4 of mis_01KT0HP12N51TXXKGKQ097RD1P on
+# 2026-06-01 surfaced the gap. Brain proposed rka_update_mission_status
+# (capability=mission_lifecycle) but the workflow allowed only
+# ['execution_gates', 'record_knowledge']. The check correctly rejected
+# the dispatch; the gap was Brain not knowing the constraint upfront.
+
+
+def check_action_capability(
+    tool: str, allowed_capabilities: set[str] | list[str] | tuple[str, ...]
+) -> list[str]:
+    """v2.6.0+agentic.6 — pre-dispatch capability allowlist check.
+
+    Returns a list of human-readable error reasons when `tool`'s
+    capability bucket (from `llm_client.TOOL_CAPABILITIES`) is NOT in
+    the workflow's `allowed_capabilities`. Empty list means the tool
+    is permitted (or the allowlist is empty, which means no restriction
+    per Phase-2.14 semantics).
+
+    Semantics:
+      - Empty / None / empty-tuple `allowed_capabilities` → [] (no
+        restriction; pre-2.14 behavior preserved).
+      - Unknown tool (not in TOOL_CAPABILITIES) → [] — the upstream
+        WRITE_TOOLS allowlist check (`ratified_action_tool_not_allowed`)
+        already catches truly unknown tools; we don't double-fire.
+      - Tool capability is in `allowed_capabilities` → []
+      - Otherwise → one error reason naming the tool, its capability,
+        and the allowed set.
+
+    Mirrors `check_required_fields` + `validate_action_args` in posture:
+    same vocabulary, same return-shape, same callable-from-anywhere
+    discipline. Bookkeeper invariant: imports `TOOL_CAPABILITIES` from
+    `.llm_client` (same-package); NO `from rka` imports.
+
+    Empirical motivation: surfaced 2026-06-01 on PA-4 of
+    mis_01KT0HP12N51TXXKGKQ097RD1P (chk_01KT2D8VY6YZMVXJFEDJZBXYAD,
+    since resolved). The check itself already worked correctly — but
+    living as an inline block inside `execute_ratified_actions`, it
+    was not composable for unit testing OR reachable by upstream
+    proposal-shaping code. Lifting here gives both.
+    """
+    from orchestrator.llm_client import capability_of  # local import — avoids cycle
+
+    if not allowed_capabilities:
+        return []  # pre-2.14 semantics — no restriction
+    allowed_set = (
+        allowed_capabilities
+        if isinstance(allowed_capabilities, set)
+        else set(allowed_capabilities)
+    )
+    tool_capability = capability_of(tool)
+    if tool_capability is None:
+        # Unknown tool — defer to ratified_action_tool_not_allowed
+        # upstream; do not double-fire.
+        return []
+    if tool_capability in allowed_set:
+        return []
+    return [
+        f"{tool}: capability {tool_capability!r} is not in the workflow's "
+        f"allowed_capabilities={sorted(allowed_set)!r}. Either widen the "
+        f"workflow's capability allowlist or rewrite the action to use a "
+        f"tool from an authorized capability."
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Phase-X²' polish — per-tool required-field validation
 # ---------------------------------------------------------------------------
 #

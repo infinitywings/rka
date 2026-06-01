@@ -3,6 +3,152 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [agentic — v2.6.0+agentic.6] — 2026-06-01 (capability-allowlist validator unification + Brain prompt enumeration)
+
+Branch-scoped patch on top of `v2.6.0+agentic.5`. Closes the
+proposal-time capability-awareness gap surfaced empirically by PA-4
+of `mis_01KT0HP12N51TXXKGKQ097RD1P` on 2026-06-01: Brain proposed
+`rka_update_mission_status` (capability=`mission_lifecycle`) in an
+execution-segment workflow whose `allowed_capabilities` was
+`['execution_gates', 'record_knowledge']`. The dispatcher correctly
+rejected the action at execute_ratified_actions (the existing
+inline check at executor.py:858-881 worked) — but Brain had no
+prompt-time knowledge of the capability constraint, so the failure
+surfaced post-ratification via EC8, requiring the PI to complete
+the lifecycle write out-of-band. Resolved in
+`chk_01KT2D8VY6YZMVXJFEDJZBXYAD` and banked as
+`jrn_01KT2EJJEDAGCAX9VA23XKCKC3`.
+
+This patch addresses the gap in two layers:
+
+### Layer A — `check_action_capability` helper in `rka_enums.py`
+
+Lifts the existing inline capability check from `execute_ratified_actions`
+into a composable helper in the same module that hosts
+`validate_action_args` (enum values) and `check_required_fields`
+(required field names). Behavior is **identical** to v0.6.5 — same
+error type name (`ratified_action_capability_not_allowed`), same
+chain position (early in the action loop, before chain substitution),
+same Phase-2.14 semantics (empty allowlist = no restriction).
+What changed:
+
+- Helper is now independently unit-testable (8 new tests in
+  `test_rka_enums.py`).
+- Helper imports `TOOL_CAPABILITIES` from `.llm_client`
+  (same-package; bookkeeper invariant preserved, no `from rka`
+  imports).
+- Reusable from upstream proposal-shaping code if future polish
+  wants to filter Brain's proposed_actions BEFORE the LLM call.
+- `executor.py` import of `capability_of` removed (the inline
+  block no longer references it; helper does the lookup
+  internally).
+
+### Layer B — BRAIN_SYSTEM capability-bucket enumeration
+
+Extends `BRAIN_SYSTEM` (in `nodes/brain.py`) with an inline
+enumeration of the five canonical capability buckets:
+
+```
+record_knowledge — rka_add_note, rka_add_decision
+update_knowledge — rka_update_note, rka_bulk_update
+mission_lifecycle — rka_create_mission, rka_update_mission_status
+execution_gates — rka_submit_checkpoint, rka_submit_report
+ingestion — rka_ingest_document
+```
+
+Plus explicit prompt-time guidance to self-prune capability-disallowed
+proposals when the workflow's `allowed_capabilities` is provided in
+strategy context. Explicitly names the empirical
+`rka_update_mission_status` hallucination class so future Brain
+emissions self-prune. Mission-lifecycle transitions are intentionally
+PI-actor scope (state transitions reshape the autonomy contract for
+future runs); Brain is instructed to surface lifecycle recommendations
+in checkpoint descriptions or journal entries for PI action rather
+than proposing the writes directly.
+
+### Added
+
+- **`check_action_capability(tool, allowed_capabilities) -> list[str]`**
+  in `orchestrator/rka_enums.py`. Returns error reasons for
+  capability-disallowed actions; empty list when permitted.
+- **BRAIN_SYSTEM capability-bucket enumeration + self-prune
+  directive** in `orchestrator/nodes/brain.py`.
+- **8 new tests in `test_rka_enums.py`** covering: empty allowlist
+  permits everything (pre-2.14 semantics); permits tool whose
+  capability is in allowlist (happy path); rejects tool outside
+  allowlist with actionable diagnostic; unknown tool defers to
+  upstream `ratified_action_tool_not_allowed`; accepts list/tuple/set
+  shapes uniformly; full-capability allowlist permits every WRITE_TOOL;
+  diagnostic message names tool + capability + allowed set + remediation;
+  enumerates the canonical bucket vocabulary.
+- **2 BRAIN_SYSTEM assertion tests** pinning the capability-bucket
+  enumeration + the explicit `rka_update_mission_status`
+  hallucination callout.
+
+### Changed
+
+- `execute_ratified_actions` (executor.py) replaces the inline
+  capability-check block (formerly ~24 LOC) with a 9-LOC call to
+  the new helper. Same error type name preserved; no breaking
+  rename. Chain position unchanged. Behavior bit-for-bit identical
+  to v0.6.5.
+- Removed unused `capability_of` import from `executor.py` (the
+  lookup is now inside the helper).
+
+### What this patch does NOT change
+
+- **Chain position**: the capability check still fires at the SAME
+  position in `execute_ratified_actions` it did pre-v0.6.6 (early
+  in the action loop, before chain substitution). The earlier
+  workflow-synthesis recommendation to move it to position 8.5 was
+  rejected as risky reorder with no behavior benefit.
+- **ErrorRecord type name**: `ratified_action_capability_not_allowed`
+  is preserved (no `_pre_dispatch` rename). Journal-grep consumers
+  (`orchestrator-pi.md` skill, `pi_acceptance` payload, web UI) are
+  unaffected.
+- **Phase-2.14 semantics**: empty / None / empty-tuple
+  `allowed_capabilities` continues to mean no restriction.
+- **Malformed-allowlist diagnostic** at executor.py:802-821 (state-level
+  shape error, distinct from per-action policy) preserved.
+
+### Operational
+
+- Bookkeeper invariant intact (`git diff main -- rka/` empty).
+- Grep-gate intact (no `from rka` / `import rka` in `orchestrator/`).
+- `orchestrator/pyproject.toml` version 0.6.5 → 0.6.6.
+- Test count rises 1191 → 1212 (+21 net: 8 helper + 2 BRAIN_SYSTEM
+  + 11 from earlier polish flow caught up in this commit window).
+
+### Why ship now (vs. defer to a future polish wave)
+
+The earlier workflow-synthesis recommendation to defer this patch
+was reconsidered against the PI's actual situation:
+
+- Run 7 is closed; no live mission can be disrupted by a daemon
+  rebuild.
+- D3 launch is the NEXT activity; shipping NOW means D3 runs
+  against a daemon where Brain already knows the capability
+  constraint, avoiding a repeat of the PA-4 cleanup cycle.
+- The PI was scheduled to restart Claude Desktop anyway; bundling
+  the binary refresh with this patch is zero-marginal-cost.
+- The change is non-breaking by design (no error-type rename, no
+  chain reorder, no behavior change in the existing executor.py
+  path) — the diagnostic-ambiguity concern raised by the synthesis
+  doesn't apply because nothing observable about v0.6.5 behavior
+  changes.
+
+### Reference
+
+- Empirical event: PA-4 dispatch refusal 2026-06-01 on
+  `mis_01KT0HP12N51TXXKGKQ097RD1P` (resolved
+  `chk_01KT2D8VY6YZMVXJFEDJZBXYAD`, finding banked
+  `jrn_01KT2EJJEDAGCAX9VA23XKCKC3`).
+- Architectural sibling: v2.6.0+agentic.5 + v2.6.2 (validation-chain
+  hardening family; same vocabulary, same posture, same
+  bookkeeper-invariant discipline).
+
+---
+
 ## [agentic — v2.6.0+agentic.5] — 2026-06-01 (hot-patch — SecretDecl `shared_with` + from_dict forward-compat)
 
 Branch-scoped hot-patch on top of `v2.6.0+agentic.4`. Closes the

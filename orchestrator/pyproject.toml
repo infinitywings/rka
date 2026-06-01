@@ -44,7 +44,18 @@ name = "rka-orchestrator"
 # by F2's extend-manifest round-trip against
 # prj_01KSMW9RBFXRY6HRRADH3SX7ZP (sec-xbrl-structured's secret
 # carried shared_with='sec-edgar').
-version = "0.6.5"
+# 0.6.5 → 0.6.6: capability-allowlist validator unification.
+# Lifts the existing inline per-action capability check into
+# rka_enums.check_action_capability (composable + unit-testable;
+# behaviorally identical) + extends BRAIN_SYSTEM with capability-
+# bucket enumeration so Brain self-prunes mission_lifecycle
+# proposals in execution-only segments. Empirical motivation:
+# PA-4 of mis_01KT0HP12N51TXXKGKQ097RD1P (chk_01KT2D8VY6YZ...,
+# since resolved) — Brain proposed rka_update_mission_status whose
+# capability was not in the workflow's allowed_capabilities; the
+# check correctly rejected it, but the gap was Brain not knowing
+# the constraint at proposal time.
+version = "0.6.6"
 description = "RKA + LangGraph orchestrator (Phase A → Phase-X² polish; agentic branch)"
 readme = "README.md"
 requires-python = ">=3.11"
