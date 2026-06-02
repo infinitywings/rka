@@ -143,12 +143,30 @@ Detailed operating guidance is available via MCP prompts:
 
 Use these prompts to load role-specific guidance at session start.
 
+## Tool Surface (v2.6.3+) — Navigator Architecture
+RKA ships ~94 tools split into two tiers:
+- **Always-on (12 tools, visible at startup):** `rka_get_status`, `rka_get_context`,
+  `rka_get_pending_maintenance`, `rka_get_checkpoints`, `rka_get_research_map`,
+  `rka_search`, `rka_get`, `rka_add_note`, `rka_resolve_checkpoint`,
+  `rka_load_tools`, `rka_list_tools`, `rka_help`.
+- **Deferred (~82 tools, hidden until loaded):** everything else (project mgmt,
+  decisions, literature, missions, reports, reviews, retrieval, etc.).
+
+To use a deferred tool, register it first:
+- `rka_load_tools(names=["rka_add_literature", "rka_create_mission", ...])` —
+  idempotent; fires `notifications/tools/list_changed` so the client picks up
+  the new tools live.
+- `rka_list_tools(category=..., query=..., tier=...)` — browse the catalog.
+- `rka_help(name=...)` — render one tool's signature + docstring (works for
+  active OR deferred tools).
+
 ## Minimal Session Start
-1. `rka_get_context()` — load current project state and recent knowledge
-2. `rka_get_status()` — current phase, focus, blockers
-3. `rka_get_pending_maintenance()` — provenance gaps and stale knowledge
-4. `rka_get_checkpoints(status="open")` — unresolved blockers
-5. `rka_get_review_queue()` and `rka_get_research_map()` — Brain/PI review surfaces
+1. `rka_get_context(project_id=...)` — load current project state and recent knowledge
+2. `rka_get_status(project_id=...)` — current phase, focus, blockers
+3. `rka_get_pending_maintenance(project_id=...)` — provenance gaps and stale knowledge
+4. `rka_get_checkpoints(project_id=..., status="open")` — unresolved blockers
+5. Load the tools you need next via `rka_load_tools(names=[...])`, e.g.
+   `rka_get_review_queue`, `rka_get_research_map`.
 
 ## Core Provenance Rules
 - Decisions require `related_journal=[...]`
@@ -156,16 +174,22 @@ Use these prompts to load role-specific guidance at session start.
 - Notes should set `related_decisions=[...]` and/or `related_mission=...` when applicable
 - PI input must use `source="pi"` and `verbatim_input="..."` with exact wording
 
-## High-Value Tools
-- Project: `rka_list_projects`, `rka_set_project`, `rka_get_status`
-- Recording: `rka_add_note`, `rka_add_decision`, `rka_add_literature`
+## High-Value Tools (DEFERRED — call rka_load_tools first)
+- Project discovery: `rka_list_projects`
+- Recording: `rka_add_decision`, `rka_add_literature` (`rka_add_note` is always-on)
 - Execution: `rka_create_mission`, `rka_submit_checkpoint`, `rka_submit_report`
-- Research map: `rka_get_research_map`, `rka_review_cluster`, `rka_resolve_contradiction`
-- Retrieval: `rka_search`, `rka_trace_provenance`, `rka_get_journal`
+- Research map: `rka_review_cluster`, `rka_resolve_contradiction` (`rka_get_research_map` is always-on)
+- Retrieval: `rka_trace_provenance`, `rka_get_journal` (`rka_search` is always-on)
 
-## Multi-Project
-If project scope is unclear, call `rka_list_projects()` and `rka_set_project(id)` first.
-All tools operate on the active project.
+Example: `rka_load_tools(names=["rka_list_projects", "rka_add_decision",
+"rka_create_mission", "rka_submit_checkpoint", "rka_submit_report",
+"rka_get_journal", "rka_trace_provenance"])`.
+
+## Project Scoping
+Every project-scoped tool requires `project_id` as a kwarg-only parameter on
+every call — there is no "active project" session state. To discover available
+projects: `rka_load_tools(names=["rka_list_projects"])` then
+`rka_list_projects()`. `rka_set_project` is a deprecated no-op since v2.6.
 """
 
 mcp = FastMCP("Research Knowledge Agent", instructions=RKA_INSTRUCTIONS)
@@ -5433,7 +5457,16 @@ support; the Skill is authoritative.
 
 Always begin a session by loading context:
 
-1. **Pin the project at the start of every conversation.** v2.6+: every project-scoped rka_* tool requires `project_id` as a kwarg on every call — there is no "active project" session state. Call `rka_list_projects()` first to discover available project_ids, ask the PI which project this conversation is about (or recall it from the conversation pin), and pass `project_id="prj_…"` to every subsequent rka_* call. If you omit `project_id`, the tool errors immediately with a clear message — that's by design (it replaces the pre-v2.6 silent-fallback-to-`proj_default` failure mode). Keep the project_id in your working memory; do not assume default fallback.
+0. **Activate the deferred tools you need (v2.6.3+ navigator).** RKA ships an
+   always-on layer of 12 tools (`rka_get_status`, `rka_get_context`,
+   `rka_get_pending_maintenance`, `rka_get_checkpoints`, `rka_get_research_map`,
+   `rka_search`, `rka_get`, `rka_add_note`, `rka_resolve_checkpoint`,
+   `rka_load_tools`, `rka_list_tools`, `rka_help`); the rest (~82) are deferred.
+   Call once at session start:
+   `rka_load_tools(names=["rka_list_projects", "rka_create_mission", "rka_get_mission", "rka_add_decision", "rka_get_decision_tree", "rka_get_review_queue", "rka_get_journal", "rka_get_literature", "rka_review_cluster", "rka_resolve_contradiction", "rka_trace_provenance", "rka_supersede_decision", "rka_update_status", "rka_summarize"])`.
+   Use `rka_list_tools(category=...)` / `rka_help(name=...)` to browse the
+   catalog and pull more on demand.
+1. **Pin the project at the start of every conversation.** v2.6+: every project-scoped rka_* tool requires `project_id` as a kwarg on every call — there is no "active project" session state. After loading `rka_list_projects` above, call `rka_list_projects()` to discover available project_ids, ask the PI which project this conversation is about (or recall it from the conversation pin), and pass `project_id="prj_…"` to every subsequent rka_* call. If you omit `project_id`, the tool errors immediately with a clear message — that's by design (it replaces the pre-v2.6 silent-fallback-to-`proj_default` failure mode). Keep the project_id in your working memory; do not assume default fallback. `rka_set_project` is a deprecated no-op since v2.6.
 2. `rka_get_context()` — full project state (phase, open missions, recent notes, decisions)
 3. `rka_get_pending_maintenance()` — check for provenance gaps
 4. `rka_get_checkpoints(status="open")` — check for unresolved Executor blockers
@@ -5565,7 +5598,16 @@ Skill is authoritative.
 
 ## Session Start Protocol
 
-1. **Pin the project at the start of every conversation.** v2.6+: every project-scoped rka_* tool requires `project_id` as a kwarg on every call — there is no "active project" session state in the MCP server. Call `rka_list_projects()` to discover available project_ids, confirm which project the PI is asking you to work on, and pass `project_id="prj_…"` to every subsequent rka_* call. Omitting `project_id` fails fast with a clear error — this replaces the pre-v2.6 silent-fallback-to-`proj_default` failure mode. The discipline: keep the project_id in your working memory for the whole conversation; pass it on every call.
+0. **Activate the deferred tools you need (v2.6.3+ navigator).** RKA ships an
+   always-on layer of 12 tools (`rka_get_status`, `rka_get_context`,
+   `rka_get_pending_maintenance`, `rka_get_checkpoints`, `rka_get_research_map`,
+   `rka_search`, `rka_get`, `rka_add_note`, `rka_resolve_checkpoint`,
+   `rka_load_tools`, `rka_list_tools`, `rka_help`); the rest (~82) are deferred.
+   Call once at session start:
+   `rka_load_tools(names=["rka_list_projects", "rka_get_mission", "rka_update_mission_status", "rka_submit_report", "rka_submit_checkpoint", "rka_ingest_document", "rka_get_decision_tree", "rka_get_literature", "rka_search_semantic_scholar", "rka_search_arxiv", "rka_add_decision", "rka_get_report", "rka_update_status", "rka_summarize"])`.
+   Use `rka_list_tools(category=...)` / `rka_help(name=...)` to browse the
+   catalog and pull more on demand.
+1. **Pin the project at the start of every conversation.** v2.6+: every project-scoped rka_* tool requires `project_id` as a kwarg on every call — there is no "active project" session state in the MCP server. After loading `rka_list_projects` above, call `rka_list_projects()` to discover available project_ids, confirm which project the PI is asking you to work on, and pass `project_id="prj_…"` to every subsequent rka_* call. Omitting `project_id` fails fast with a clear error — this replaces the pre-v2.6 silent-fallback-to-`proj_default` failure mode. The discipline: keep the project_id in your working memory for the whole conversation; pass it on every call. `rka_set_project` is a deprecated no-op since v2.6.
 2. `rka_get_context()` — load current project state
 3. `rka_get_mission()` — finds the active or most recent pending mission automatically
 4. If a pending mission is found, call `rka_update_mission_status(id, "active")` to claim it

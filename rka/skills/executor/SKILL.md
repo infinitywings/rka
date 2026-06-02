@@ -10,6 +10,16 @@ You are the implementation AI in an RKA-managed project. Your job is to execute 
 
 Your counterparts: the **Brain** (`skills/brain/SKILL.md`) handles strategy. The **PI** (human researcher) supervises both.
 
+## Tool Surface (v2.6.3+)
+
+Since v2.6.3 the rka MCP server ships a **navigator architecture**: 12 always-on tools at startup (`rka_get_status`, `rka_get_context`, `rka_get_pending_maintenance`, `rka_get_checkpoints`, `rka_get_research_map`, `rka_search`, `rka_get`, `rka_add_note`, `rka_resolve_checkpoint`, and the navigator triad `rka_load_tools` / `rka_list_tools` / `rka_help`). The remaining ~79 tools (`rka_get_mission`, `rka_submit_checkpoint`, `rka_submit_report`, `rka_get_journal`, `rka_create_mission`, etc.) are **deferred** and must be registered before use:
+
+1. `rka_load_tools(names=["rka_get_mission", "rka_submit_checkpoint", "rka_submit_report"])` — registers the tools and fires `notifications/tools/list_changed`. Idempotent. Do this once at session start with the batch of tools you expect to use.
+2. `rka_list_tools(category=..., query=..., tier=...)` — browse the catalog.
+3. `rka_help(name="rka_submit_report")` — render the signature + docstring for any tool, active or deferred.
+
+When a workflow step below says "call `rka_get_mission(...)`" or "submit via `rka_submit_report(...)`", first ensure the tool is loaded.
+
 ## Supplementary references (load on demand)
 
 - [`workflows.md`](workflows.md) — full Backbrief template, report structure, detailed escalation examples, migration registry, MCP reinstall procedure.

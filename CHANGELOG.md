@@ -3,6 +3,93 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [2.6.4] — 2026-06-02 (patch — Navigator architecture doc sweep: RKA_INSTRUCTIONS + orientation prompts + SKILL.md + README/USAGE_GUIDE)
+
+Patch release on top of v2.6.3. The navigator architecture (v2.6.3) is
+fully functional; the broadcast-staleness this patch closes was
+identified by the post-push adversarial-review workflow `w2nfnfi1q`
+(2026-06-02, 39 confirmed findings — 0 blocking, 1 critical orchestrator
+regression closed in the agentic-side v2.6.0+agentic.7 patch, 32 v2.6.4
+follow-ups). This release lands the rka-side subset of the punch list
+(the orchestrator-side companion ships separately on the agentic branch
+because it touches only `orchestrator/`).
+
+The core problem: v2.6.3 split the rka MCP surface into 12 always-on +
+82 deferred tools and added 3 navigator tools (`rka_load_tools`,
+`rka_list_tools`, `rka_help`) to bring the deferred set online on
+demand. But the server-instructions string `RKA_INSTRUCTIONS` and the
+orientation prompts (`brain_orientation`, `executor_orientation`)
+continued to recommend tools like `rka_list_projects`,
+`rka_set_project` (deprecated no-op), `rka_create_mission`,
+`rka_add_decision`, etc. — every one of which is DEFERRED and not
+callable from a fresh surface. Effect: clients receiving this guidance
+at session-start either issued tool-call failures or never discovered
+the navigator. v2.6.4 sweeps that staleness across every broadcast
+surface so the navigator's existence is visible from the first
+keystroke of every session.
+
+### Changed
+
+- **`RKA_INSTRUCTIONS` string** in [`rka/mcp/server.py`](rka/mcp/server.py)
+  (sent to every MCP client at the `initialize` handshake).
+  - Added `## Tool Surface (v2.6.3+) — Navigator Architecture`
+    subsection naming the 12 always-on tools + the 3 navigator tools
+    + the high-level always-on / deferred / load-on-demand model.
+  - Rewrote `## Minimal Session Start` to include `project_id`
+    kwargs and reference `rka_load_tools` for the deferred tools.
+  - Reframed `## High-Value Tools` as **DEFERRED — call
+    `rka_load_tools` first** with a concrete example.
+  - Replaced `## Multi-Project` with `## Project Scoping`
+    explaining the kwarg contract, the `rka_load_tools` path to
+    `rka_list_projects`, and the `rka_set_project` deprecation
+    explicitly.
+
+- **`brain_orientation()` prompt** in
+  [`rka/mcp/server.py`](rka/mcp/server.py) — `Session Start Protocol`
+  gains a new Step 0 `Activate the deferred tools you need (v2.6.3+
+  navigator)` enumerating the 12 always-on tools + a single
+  `rka_load_tools` call covering Brain's typical deferred set.
+
+- **`executor_orientation()` prompt** in
+  [`rka/mcp/server.py`](rka/mcp/server.py) — parallel treatment for
+  Executor's typical deferred set.
+
+- **`rka/skills/brain/SKILL.md`**, **`rka/skills/executor/SKILL.md`**,
+  **`rka/skills/pi/SKILL.md`** — each gains a `Tool Surface (v2.6.3+)`
+  preamble naming the 12 always-on tools and pointing at
+  `rka_load_tools` / `rka_list_tools` / `rka_help` as the discovery
+  + access path.
+
+- **`README.md`** — added `The navigator architecture (v2.6.3+)`
+  paragraph in the project-pinning section pointing at the
+  `notifications/tools/list_changed` MCP capability.
+
+- **`USAGE_GUIDE.md`** — added a navigator preamble blockquote right
+  after the intro paragraph.
+
+### Tests
+
+- 12 new tests in `tests/test_mcp/test_v264_navigator_integration.py`
+  pinning the contract changes.
+
+Full repo on main: **994 tests passing** (982 v2.6.3 baseline + 12 new).
+
+### Migration
+
+None required. Pure documentation + broadcast-string sweep on top
+of v2.6.3's already-shipped behavior.
+
+### Related
+
+- v2.6.3 (`784592c`) — original navigator architecture release.
+- `agentic` branch — the v2.6.0+agentic.7 patch on agentic ships
+  the orchestrator-side companion (navigator tools added to the
+  SDK subprocess's `allowed_tools` list + `BRAIN_SYSTEM` /
+  `EXECUTOR_SYSTEM` navigator awareness sections). Without that
+  patch, the orchestrator backend could not access the 79 deferred
+  RKA tools at all — a strict regression introduced by v2.6.3 and
+  closed by the agentic-side companion.
+
 ## [2.6.3] — 2026-06-02 (minor — Navigator architecture: dynamic tool surface via tools/list_changed)
 
 Architectural release. RKA's MCP server has grown to **91 tools**, and

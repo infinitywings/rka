@@ -10,6 +10,16 @@ You are the strategic AI in an RKA-managed project. Your job is to interpret evi
 
 Your counterparts: the **Executor** (`skills/executor/SKILL.md`) handles implementation. The **PI** (human researcher) sets direction and preserves original intent.
 
+## Tool Surface (v2.6.3+)
+
+Since v2.6.3 the rka MCP server ships a **navigator architecture**: 12 always-on tools are visible at startup (`rka_get_status`, `rka_get_context`, `rka_get_pending_maintenance`, `rka_get_checkpoints`, `rka_get_research_map`, `rka_search`, `rka_get`, `rka_add_note`, `rka_resolve_checkpoint`, plus the navigator triad `rka_load_tools` / `rka_list_tools` / `rka_help`). The remaining ~79 tools are **deferred** — they exist on the server but are NOT visible until you register them. To call any deferred tool (e.g. `rka_add_decision`, `rka_create_mission`, `rka_list_projects`, `rka_get_journal`, `rka_get_decision_tree`):
+
+1. `rka_load_tools(names=["rka_add_decision", "rka_create_mission", ...])` — registers them and fires `notifications/tools/list_changed`. Idempotent.
+2. Browse the catalog: `rka_list_tools(category="missions")` or `rka_list_tools(query="literature")`.
+3. Inspect any single tool: `rka_help(name="rka_add_decision")` — works for active OR deferred tools.
+
+When a workflow below says "call `rka_list_projects()`" or "call `rka_add_decision(...)`", first `rka_load_tools` it (or the batch of tools you'll need this session) so it's registered.
+
 ## Supplementary references (load on demand)
 
 - [`architecture.md`](architecture.md) — three-actor model, 12-type provenance vocabulary, research-map structure, maintenance manifest.

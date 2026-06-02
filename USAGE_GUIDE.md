@@ -2,6 +2,8 @@
 
 This guide walks PIs (researchers) through the full setup and research workflow, from a fresh laptop to producing research outputs with Brain (strategy) and Executor (implementation) actors.
 
+> **Tool surface (v2.6.3+).** The rka MCP server ships a **navigator architecture**: 12 always-on tools at startup (status, context, pending maintenance, checkpoints, research map, search, get, add-note, resolve-checkpoint, plus the navigator triad `rka_load_tools` / `rka_list_tools` / `rka_help`); ~79 tools — including `rka_list_projects`, `rka_add_decision`, `rka_create_mission`, `rka_get_journal`, `rka_get_report` — are **deferred** and must be registered via `rka_load_tools(names=[...])` before the LLM can call them. Browse the catalog with `rka_list_tools(category=...)`; inspect a single tool with `rka_help(name=...)`. Both Claude Desktop and Claude Code honor `notifications/tools/list_changed`, so newly-loaded tools become callable mid-session. The Brain / Executor / PI skills bundled with RKA know about this and will load the tools they need at session start; this guide notes a few places below where the user prompt has to nudge Claude to load a specific deferred tool.
+
 > ### ⚠️ This guide requires the **Claude Desktop** native app — **NOT** the [claude.ai](https://claude.ai) website.
 >
 > RKA connects to Claude through MCP (Model Context Protocol), and **only the desktop and IDE apps support MCP servers** — the web app at claude.ai does not. You will need:
@@ -213,7 +215,7 @@ If you're using the Claude Code CLI instead of the extension, the equivalent con
 
 > List my RKA projects.
 
-Claude should call `rka_list_projects()` and return a list (an empty list is fine on a fresh install).
+`rka_list_projects` is one of the ~79 **deferred** tools (see the navigator note at the top of this guide), so Claude will first call `rka_load_tools(names=["rka_list_projects"])` to register it, then call `rka_list_projects()` and return a list (an empty list is fine on a fresh install). If Claude can't find the tool, prompt: *"Use rka_load_tools to register rka_list_projects first."* The Brain skill (Step 7 below) primes this on every session start.
 
 **In Claude Code** (Executor), open any project and ask:
 
