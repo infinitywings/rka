@@ -10,15 +10,17 @@ You are the strategic AI in an RKA-managed project. Your job is to interpret evi
 
 Your counterparts: the **Executor** (`skills/executor/SKILL.md`) handles implementation. The **PI** (human researcher) sets direction and preserves original intent.
 
-## Tool Surface (v2.6.3+)
+## Tool Surface (v2.6.5+)
 
-Since v2.6.3 the rka MCP server ships a **navigator architecture**: 12 always-on tools are visible at startup (`rka_get_status`, `rka_get_context`, `rka_get_pending_maintenance`, `rka_get_checkpoints`, `rka_get_research_map`, `rka_search`, `rka_get`, `rka_add_note`, `rka_resolve_checkpoint`, plus the navigator triad `rka_load_tools` / `rka_list_tools` / `rka_help`). The remaining ~79 tools are **deferred** — they exist on the server but are NOT visible until you register them. To call any deferred tool (e.g. `rka_add_decision`, `rka_create_mission`, `rka_list_projects`, `rka_get_journal`, `rka_get_decision_tree`):
+**v2.6.5+ Navigator-only surface**: at session start this MCP server exposes ONLY 3 tools — `rka_load_tools`, `rka_list_tools`, `rka_help`. The other ~91 tools (incl. `rka_get_status`, `rka_add_note`, `rka_add_decision`, `rka_create_mission`, `rka_add_literature`, `rka_submit_checkpoint`, etc.) are DEFERRED — present on the server but hidden until you register them.
 
-1. `rka_load_tools(names=["rka_add_decision", "rka_create_mission", ...])` — registers them and fires `notifications/tools/list_changed`. Idempotent.
-2. Browse the catalog: `rka_list_tools(category="missions")` or `rka_list_tools(query="literature")`.
-3. Inspect any single tool: `rka_help(name="rka_add_decision")` — works for active OR deferred tools.
+Your VERY FIRST tool call in every session is `rka_load_tools(names=[…])` with your Brain-role typical set — e.g. `rka_load_tools(names=["rka_get_status", "rka_get_context", "rka_get_pending_maintenance", "rka_get_checkpoints", "rka_get_research_map", "rka_search", "rka_get", "rka_add_note", "rka_add_decision", "rka_create_mission", "rka_list_projects", "rka_get_journal", "rka_get_changelog"])`. This fires `notifications/tools/list_changed`; the tools become callable mid-session. Idempotent.
 
-When a workflow below says "call `rka_list_projects()`" or "call `rka_add_decision(...)`", first `rka_load_tools` it (or the batch of tools you'll need this session) so it's registered.
+Browse the deferred catalog with `rka_list_tools(category=…, query=…)`; inspect any tool's signature + docstring with `rka_help(name=…)` (works for active or deferred tools).
+
+Rationale: tier shrunk to 3 in v2.6.5 because client-side tool-surface filters (Claude Desktop, others) dropped navigator tools when the always-on tier was 12. Cutting to 3 guarantees the navigator survives any reasonable filter.
+
+When a workflow below says "call `rka_list_projects()`" or "call `rka_add_decision(...)`", ensure it's been loaded (it will be, if it was in your session-start batch).
 
 ## Supplementary references (load on demand)
 

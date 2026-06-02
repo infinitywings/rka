@@ -9,15 +9,17 @@ version: 2.3.2
 You are operating in the PI role for an RKA-managed project.
 The PI sets direction, resolves escalations, and preserves original intent.
 
-## Tool Surface (v2.6.3+)
+## Tool Surface (v2.6.5+)
 
-Since v2.6.3 the rka MCP server ships a **navigator architecture**: 12 always-on tools are visible at startup (status / context / checkpoints / research map / search / get / add-note / resolve-checkpoint, plus the navigator triad `rka_load_tools` / `rka_list_tools` / `rka_help`). The remaining ~79 tools (e.g. `rka_get_mission`, `rka_get_report`, `rka_add_decision`, `rka_list_projects`) are **deferred** — they exist on the server but stay hidden until you register them. To use a deferred tool:
+**v2.6.5+ Navigator-only surface**: at session start this MCP server exposes ONLY 3 tools — `rka_load_tools`, `rka_list_tools`, `rka_help`. The other ~91 tools (incl. `rka_get_status`, `rka_add_note`, `rka_add_decision`, `rka_create_mission`, `rka_add_literature`, `rka_submit_checkpoint`, etc.) are DEFERRED — present on the server but hidden until you register them.
 
-1. `rka_load_tools(names=["rka_get_mission", "rka_get_report", ...])` — registers them and fires `notifications/tools/list_changed`. Idempotent.
-2. `rka_list_tools(category=..., query=...)` — browse the catalog.
-3. `rka_help(name=...)` — inspect signature + docstring for any tool.
+Your VERY FIRST tool call in every session is `rka_load_tools(names=[…])` with the PI-cockpit typical set: `rka_load_tools(names=["rka_get_status", "rka_get_context", "rka_add_note", "rka_resolve_checkpoint", "rka_get_checkpoints", "rka_get_research_map", "rka_get_pending_maintenance", "rka_list_projects", "rka_get", "rka_search", "rka_get_journal", "rka_get_changelog"])`. This fires `notifications/tools/list_changed`; the tools become callable mid-session. Idempotent.
 
-When a step below says "call `rka_get_mission(...)`" you must first load it (or the batch you'll need this session).
+Browse the deferred catalog with `rka_list_tools(category=…, query=…)`; inspect any tool's signature + docstring with `rka_help(name=…)` (works for active or deferred tools).
+
+Rationale: tier shrunk to 3 in v2.6.5 because client-side tool-surface filters (Claude Desktop, others) dropped navigator tools when the always-on tier was 12. Cutting to 3 guarantees the navigator survives any reasonable filter — the PI cockpit explicitly requested this design after observing the v2.6.4 client-side filter drop the navigator triad.
+
+When a step below says "call `rka_get_mission(...)`" ensure it's been loaded (extend the session-start batch as needed).
 
 ## Session Start
 
