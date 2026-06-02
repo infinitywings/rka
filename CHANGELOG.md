@@ -3,6 +3,140 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [2.6.3] — 2026-06-02 (minor — Navigator architecture: dynamic tool surface via tools/list_changed)
+
+Architectural release. RKA's MCP server has grown to **91 tools**, and
+empirical PI-cockpit sessions (2026-06-01 hyperscaler-auditing mission)
+confirmed that Claude Desktop's client-side tool-surface filter caps
+the effective visible/usable set at roughly 30–50 tools per server
+before tool-selection accuracy degrades. Tools past that cap remain on
+the MCP transport but become invisible to the LLM's tool-picker — the
+PI could not call `rka_add_literature` even though the tools/list
+response contained it.
+
+v2.6.3 closes the gap structurally — NOT by splitting the server, NOT
+by pruning the surface — by adopting a **navigator architecture** with
+two tiers and runtime expansion via the standard MCP
+`notifications/tools/list_changed` mechanism:
+
+- **Always-on (12 tools)** registered at module import — covers the
+  documented Minimal Session Start + universal retrieval +
+  most-frequent writes + 3 navigator tools. Comfortably under any
+  reasonable client cap.
+- **Deferred (82 tools)** registered into a server-side `_TOOL_REGISTRY`
+  but NOT handed to FastMCP's tool manager until a navigator call. On
+  demand, the navigator registers the requested tool(s) and emits
+  `notifications/tools/list_changed`; both Claude Desktop and Claude
+  Code (including its plugin mode) honor the notification and refresh
+  their surface within ~1 round-trip.
+
+This is the same pattern Claude Code uses internally for its
+`ToolSearch` system — a small in-context navigator that brings
+deferred tools online by name. The server-side equivalent works for
+every MCP client that honors the base-protocol `tools.listChanged`
+capability.
+
+### Added
+
+- **`rka_load_tools(names: list[str])`** — navigator tool. Registers
+  the requested deferred tools with FastMCP's `_tool_manager.add_tool`
+  (the same path `@mcp.tool()` uses at import, so the rendered
+  `inputSchema` is byte-identical to what an always-on tool of the
+  same shape would have produced — no schema asymmetry). Idempotent
+  (already-active names returned in `already_active`); unknown names
+  returned in `unknown` without error. Fires
+  `Context.session.send_tool_list_changed()` iff anything actually
+  changed (no spurious notifications on idempotent re-loads).
+- **`rka_list_tools(category=..., query=..., tier=...)`** — browse
+  the catalog. Returns the full registry grouped by category, with
+  `{name, tier, summary, registered}` per entry. Filters compose:
+  category + tier + substring query against name and summary.
+- **`rka_help(name)`** — render one tool's full signature, summary,
+  and docstring. Works for both active and deferred tools, so the
+  LLM can inspect a tool's contract before deciding to load it.
+- **`tools.listChanged: true`** capability advertised in the initialize
+  handshake. The default FastMCP run path passes
+  `notification_options=None` (→ all flags False). v2.6.3 patches
+  both `run_stdio_async` (stdio transport, the production path) and
+  `mcp._mcp_server.create_initialization_options` (covers
+  Streamable-HTTP / SSE transports + any future entry point) to force
+  `tools_changed=True`. The patch preserves any
+  `prompts_changed` / `resources_changed` the caller may have set
+  for parity with the default body.
+
+### Changed
+
+- **`tool()` decorator signature** — gains `tier: str = "deferred"`
+  (default flipped from "implicit always-on" to "deferred" so adding a
+  new tool requires an explicit `tier="always_on"` to enter the
+  startup layer) and `category: str = "general"` (free-form metadata
+  for `rka_list_tools` grouping). All 91 existing tools get explicit
+  category tags; the 9 chosen always-on tools get
+  `tier="always_on"`. Tool bodies are unchanged.
+- **Always-on layer membership (load-bearing list, asserted by
+  `test_always_on_tier_membership`)** — `rka_get_status`,
+  `rka_get_context`, `rka_get_pending_maintenance`,
+  `rka_get_checkpoints`, `rka_get_research_map`, `rka_search`,
+  `rka_get`, `rka_add_note`, `rka_resolve_checkpoint`, +
+  `rka_load_tools`, `rka_list_tools`, `rka_help`. Future surface
+  changes that try to expand the always-on layer surface a test
+  failure rather than silently regressing the client-cap headroom.
+
+### Compatibility
+
+- **Both Claude Desktop and Claude Code** (raw MCP + plugin mode) honor
+  the `tools/list_changed` notification at the base-protocol layer.
+  In Claude Code plugin mode tools appear under the
+  `mcp__plugin_rka_rka__*` namespace; the navigator's `names` argument
+  takes the UNPREFIXED canonical form (e.g. `rka_add_literature`) —
+  the harness handles namespace translation transparently.
+- **Backwards-compatible for non-listChanged clients** — deferred tools
+  remain invisible after the navigator runs, identical to today's
+  effective behavior for over-the-cap tools. No regression: a strict
+  surface improvement everywhere it works at all.
+- **Schema parity** — a deferred tool, once loaded, gets the same
+  `inputSchema` rendering as an always-on tool of the same shape
+  (asserted by `test_loaded_tool_schema_matches_signature`). The
+  `@wraps(func)` decorator preserves the inner function's signature
+  and annotations through the wrapper, which is what FastMCP's tool
+  manager `inspect.signature(...)` (default `follow_wrapped=True`)
+  resolves to.
+
+### Tests
+
+26 new tests in `tests/test_mcp/test_v263_navigator.py` covering:
+- Tier-split invariants (registry contains all rka tools; always-on
+  membership matches the load-bearing list; deferred layer covers
+  the remainder; only always-on visible at startup; every tool has
+  category metadata).
+- Capability handshake (`tools.listChanged: true` advertised;
+  capability override preserves prompts/resources flags).
+- `rka_list_tools` (no-filter; category filter; tier filter;
+  substring query; unknown category → empty).
+- `rka_help` (deferred tool record; always-on record; unknown name
+  → structured error shape; blank name → unknown).
+- `rka_load_tools` (registers + fires notification; idempotent;
+  unknown names returned not errored; mixed-batch semantics; blank
+  names skipped silently; empty list is no-op; notification failure
+  does NOT reverse registration).
+- Schema parity (loaded tool has `project_id` in its inputSchema;
+  loaded tool resolvable via FastMCP tool manager).
+- Bookkeeper (the 3 navigator tools are themselves in the always-on
+  layer — without them, clients can never discover the deferred
+  surface).
+
+Full repo: **982 tests passing** (956 baseline + 26 new).
+
+### Migration
+
+None required. Existing clients continue to see the always-on layer
+exactly as they would have seen the equivalent subset of the v2.6.2
+surface. Clients that DON'T call `rka_load_tools` get a curated
+always-on layer of the most-used tools (a strict UX improvement over
+the old "first ~30-50 by registration order, rest invisible" failure
+mode). Clients that DO call the navigator get the full 94-tool
+surface incrementally.
+
 ## [2.6.2] — 2026-06-01 (patch — Phase-X²' polish on main: Annotated[Literal] LLM-schema promotion + 4xx/5xx enrichment)
 
 Patch release. Closes the v2.6.x cycle for Phase-X²' polish on main
