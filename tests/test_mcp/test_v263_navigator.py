@@ -1,9 +1,8 @@
 """v2.6.3 — Dynamic tool surface (navigator architecture) tests.
 
 The navigator architecture splits the rka MCP tool surface into two tiers:
-- 3 always-on navigator tools registered at module import
-  (v2.6.5 shrunk the always-on tier from 12 → 3 — see test_always_on_tier_membership)
-- ~91 deferred tools registered on demand via `rka_load_tools` + a
+- ~12 always-on tools registered at module import
+- ~79 deferred tools registered on demand via `rka_load_tools` + a
   `notifications/tools/list_changed` notification
 
 These tests verify the split is correct, the navigator semantics are
@@ -106,21 +105,26 @@ def test_registry_contains_all_rka_tools():
 
 
 def test_always_on_tier_membership():
-    """v2.6.5 — the always-on layer is NAVIGATOR-ONLY (3 tools).
+    """The always-on layer is the documented Minimal Session Start +
+    universal retrieval + most-frequent writes + 3 navigator tools.
 
-    v2.6.5 shrunk the always-on tier from 12 → 3 after Claude Desktop's
-    client-side tool-surface filter was empirically observed dropping
-    navigator tools when multiple MCP servers competed for the budget
-    (mcp-server-rka.log, 2026-06-02 04:25:56Z). With only 3 navigator
-    tools always-on, the loader survives any reasonable filter and the
-    client's first turn loads its working surface via rka_load_tools.
-
-    This is the load-bearing list — 3 navigator tools — if a tool moves
-    between tiers it will surface here so the change is deliberate, not
-    silent.
+    This is the load-bearing list — if a tool moves between tiers it
+    will surface here so the change is deliberate, not silent.
     """
     expected_always_on = {
-        # Navigator (the entire always-on surface — v2.6.5)
+        # Minimal Session Start
+        "rka_get_status",
+        "rka_get_context",
+        "rka_get_pending_maintenance",
+        "rka_get_checkpoints",
+        "rka_get_research_map",
+        # Universal retrieval
+        "rka_search",
+        "rka_get",
+        # Most-frequent writes
+        "rka_add_note",
+        "rka_resolve_checkpoint",
+        # Navigator
         "rka_load_tools",
         "rka_list_tools",
         "rka_help",
@@ -136,20 +140,17 @@ def test_always_on_tier_membership():
 
 
 def test_deferred_tier_size_within_cap():
-    """v2.6.5 — the deferred layer is every non-navigator rka tool.
-
-    Post-v2.6.5: always-on = 3 (navigator), deferred = 88+ (everything
-    else, including rka_get_status / rka_search / rka_add_note that
-    used to be always-on through v2.6.4).
-    """
+    """The deferred layer must be every non-always-on rka tool. We
+    care about the count vs the always-on count so future refactors
+    don't leak tools into either tier silently."""
     always_on = [
         n for n, r in _TOOL_REGISTRY.items() if r["tier"] == _TIER_ALWAYS_ON
     ]
     deferred = [
         n for n, r in _TOOL_REGISTRY.items() if r["tier"] == _TIER_DEFERRED
     ]
-    assert len(always_on) == 3
-    assert len(deferred) >= 88  # 91 original + room for future deferred tools
+    assert len(always_on) == 12
+    assert len(deferred) >= 80  # 79 original + room for future deferred tools
     assert set(always_on).isdisjoint(set(deferred))
 
 
@@ -254,7 +255,7 @@ async def test_list_tools_tier_filter():
     for cat, tools in result["categories"].items():
         for t in tools:
             assert t["tier"] == "always_on"
-    assert len(flat) == 3  # v2.6.5 — navigator-only always-on layer
+    assert len(flat) == 12  # always-on layer size
 
 
 @pytest.mark.asyncio
@@ -294,9 +295,7 @@ async def test_help_returns_full_record_for_deferred_tool():
 
 @pytest.mark.asyncio
 async def test_help_returns_full_record_for_always_on_tool():
-    # v2.6.5 — always-on tier shrunk to navigator-only; use rka_load_tools
-    # (one of the 3 navigator tools) as the always-on example.
-    result = await _call("rka_help", name="rka_load_tools")
+    result = await _call("rka_help", name="rka_add_note")
     assert result["tier"] == "always_on"
     assert result["registered"] is True
 
@@ -485,137 +484,3 @@ def test_navigator_tools_registered_at_startup():
     assert "rka_load_tools" in mgr_names
     assert "rka_list_tools" in mgr_names
     assert "rka_help" in mgr_names
-
-
-# ---------------------------------------------------------------------------
-# v2.6.5 — Tier-shrink contract pins (navigator-only always-on)
-# ---------------------------------------------------------------------------
-#
-# v2.6.5 EMPIRICAL FAILURE OBSERVED 2026-06-02:
-# - Server returned 12 always-on tools at startup
-# - Claude Desktop's client-side tool-surface filter narrowed 12 → 7
-# - The 5 it DROPPED included all 3 navigator tools
-# - Cockpit was left unable to reach any of the 79 deferred RKA tools
-#
-# v2.6.5 fix: cut always-on tier 12 → 3, leaving ONLY the navigator. With
-# 3 tools, the navigator survives any reasonable filter, and the LLM's
-# first turn MUST call rka_load_tools to bring up its working surface.
-
-
-def test_v265_only_navigator_tools_are_always_on():
-    """v2.6.5 — the startup tool surface is EXACTLY the 3 navigator tools.
-
-    No other rka_* tool may be visible at session start. This is the
-    structural fix for the Claude Desktop client-side filter problem
-    that v2.6.4's 12-tool always-on surface ran into.
-    """
-    always_on_names = {
-        n for n, r in _TOOL_REGISTRY.items() if r["tier"] == _TIER_ALWAYS_ON
-    }
-    assert always_on_names == {
-        "rka_load_tools",
-        "rka_list_tools",
-        "rka_help",
-    }
-
-
-def test_v265_get_status_is_deferred():
-    """v2.6.5 — rka_get_status (always-on in v2.6.3/4) is now deferred.
-
-    The PI cockpit's first turn must call rka_load_tools to register
-    rka_get_status before any session-start status query.
-    """
-    rec = _TOOL_REGISTRY["rka_get_status"]
-    assert rec["tier"] == _TIER_DEFERRED
-    assert rec["registered"] is False
-
-
-def test_v265_previously_always_on_tools_all_deferred():
-    """v2.6.5 — all 9 tools that were always-on through v2.6.4 (the
-    Minimal Session Start + universal retrieval + most-frequent writes
-    set) are now deferred. The 3 navigator tools remain always-on.
-    """
-    previously_always_on = [
-        # Minimal Session Start
-        "rka_get_status",
-        "rka_get_context",
-        "rka_get_pending_maintenance",
-        "rka_get_checkpoints",
-        "rka_get_research_map",
-        # Universal retrieval
-        "rka_search",
-        "rka_get",
-        # Most-frequent writes
-        "rka_add_note",
-        "rka_resolve_checkpoint",
-    ]
-    for name in previously_always_on:
-        rec = _TOOL_REGISTRY[name]
-        assert rec["tier"] == _TIER_DEFERRED, (
-            f"{name} was always-on in v2.6.4; v2.6.5 should have moved "
-            f"it to deferred, but tier={rec['tier']!r}"
-        )
-        assert rec["registered"] is False, (
-            f"{name} should not be registered at module-import baseline "
-            f"after v2.6.5 (it's deferred)"
-        )
-
-
-@pytest.mark.asyncio
-async def test_v265_session_start_loads_typical_set(ctx):
-    """v2.6.5 — simulate a Brain-role client's session-start `rka_load_tools`
-    call activating the historically-always-on tools. After the call all
-    9 must become registered and the FastMCP tool manager exposes them.
-
-    This is the new session-start protocol baked into v2.6.5: client
-    initialize → 3 navigator tools → client calls rka_load_tools(role-set)
-    → server registers + fires tools/list_changed → client refetches.
-    """
-    typical_set = [
-        # Minimal Session Start
-        "rka_get_status",
-        "rka_get_context",
-        "rka_get_pending_maintenance",
-        "rka_get_checkpoints",
-        "rka_get_research_map",
-        # Universal retrieval
-        "rka_search",
-        "rka_get",
-        # Most-frequent writes
-        "rka_add_note",
-        "rka_resolve_checkpoint",
-    ]
-    result = await _call("rka_load_tools", names=typical_set, ctx=ctx)
-    # Every tool in the typical set loaded (none already-active because
-    # all 9 are deferred at module-import baseline post-v2.6.5).
-    assert result["loaded"] == typical_set
-    assert result["already_active"] == []
-    assert result["unknown"] == []
-    # Single notification for the whole batch (existing semantics).
-    assert ctx.session.notifications == 1
-    # Every loaded tool now visible via FastMCP tool manager.
-    mgr_names = {t.name for t in mcp._tool_manager.list_tools()}
-    for name in typical_set:
-        assert name in mgr_names, (
-            f"{name} should be registered via FastMCP tool manager after "
-            f"rka_load_tools"
-        )
-        assert _TOOL_REGISTRY[name]["registered"] is True
-
-
-def test_v265_visible_startup_surface_is_three():
-    """v2.6.5 — the FastMCP tool manager exposes exactly 3 rka_* tools at
-    module-import baseline. Anything else means a deferred tool leaked
-    into the always-on layer (or didn't get reset by the autouse
-    fixture).
-    """
-    visible_rka = sorted(
-        t.name
-        for t in mcp._tool_manager.list_tools()
-        if t.name.startswith("rka_")
-    )
-    assert visible_rka == [
-        "rka_help",
-        "rka_list_tools",
-        "rka_load_tools",
-    ]
