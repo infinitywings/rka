@@ -455,7 +455,13 @@ def test_phase_2_9_read_tools_includes_project_selectors():
 
     Phase-A (agentic) added 3 external-API search tools (semantic
     scholar, arxiv, doi-enrich) so the Brain can enrich context
-    without escalating to the PI; total is now 14.
+    without escalating to the PI; total grew to 14.
+
+    v2.6.4 (post-navigator-architecture) added the 3 navigator tools
+    (rka_load_tools, rka_list_tools, rka_help) so the SDK subprocess
+    can reach the 79 deferred RKA tools — without them the subprocess
+    sees only the 12 always-on surface and cannot bring deferred
+    tools online. Total is now 17.
     """
     assert "rka_list_projects" in READ_TOOLS, (
         "Phase 2.9 T2: rka_list_projects must be in READ_TOOLS so brain "
@@ -467,11 +473,11 @@ def test_phase_2_9_read_tools_includes_project_selectors():
         "LLM can switch session project as recovery path"
     )
     # READ_TOOLS lineage: 9 (Phase 2.7) → 11 (Phase 2.9) → 14 (Phase-A
-    # external-API tools).
-    assert len(READ_TOOLS) == 14, (
-        f"READ_TOOLS should have exactly 14 entries (Phase 2.7's 9 + "
+    # external-API tools) → 17 (v2.6.4 navigator tools).
+    assert len(READ_TOOLS) == 17, (
+        f"READ_TOOLS should have exactly 17 entries (Phase 2.7's 9 + "
         f"Phase 2.9's 2 project selectors + Phase-A's 3 external-API "
-        f"search tools); got {len(READ_TOOLS)}"
+        f"search tools + v2.6.4's 3 navigator tools); got {len(READ_TOOLS)}"
     )
 
 

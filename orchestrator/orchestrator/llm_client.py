@@ -80,6 +80,21 @@ READ_TOOLS: tuple[str, ...] = (
     "rka_search_semantic_scholar",
     "rka_search_arxiv",
     "rka_enrich_doi",
+    # v2.6.3 navigator tools — RKA's MCP server now ships a two-tier
+    # surface: ~12 always-on tools advertised at startup, ~79 deferred
+    # tools that the client must register at runtime via
+    # `rka_load_tools(names=[...])`. Without the three navigator tools
+    # in the subprocess's `allowed_tools` list, the Brain/Executor SDK
+    # subprocess CANNOT call rka_load_tools and therefore cannot reach
+    # any deferred RKA tool — the orchestrator's effective tool surface
+    # would regress from ~91 to ~12. Navigator tools are read-side
+    # only: rka_load_tools mutates the MCP server's runtime tool
+    # registry (firing notifications/tools/list_changed) but does NOT
+    # touch RKA domain truth, so they belong in READ_TOOLS rather than
+    # WRITE_TOOLS.
+    "rka_load_tools",
+    "rka_list_tools",
+    "rka_help",
 )
 
 # Context7 MCP server — external documentation lookup. Useful when the

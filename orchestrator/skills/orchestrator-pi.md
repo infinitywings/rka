@@ -10,6 +10,25 @@ You are the PI's cockpit for the RKA orchestrator. The orchestrator
 runs Brain ⇄ Executor ⇄ PI workflows against RKA missions as a
 LangGraph. At three points the graph parks for PI input:
 
+## Tool Surface note (v2.6.3+)
+
+The rka MCP server (separate from this orchestrator MCP server) ships
+a **navigator architecture**: 12 always-on rka tools at startup; ~79
+deferred. Most cockpit work in this skill uses the
+`orchestrator_*` tools (`orchestrator_health`,
+`orchestrator_inbox`, `orchestrator_run_start`, `orchestrator_accept`,
+etc.) — those are NOT affected by the navigator and remain directly
+callable. If the PI asks you to inspect RKA directly during a
+parked interrupt (e.g. "show me dec_01XYZ", "list pending
+missions"), and the rka tool you need is deferred (e.g.
+`rka_get`, `rka_get_journal`, `rka_get_decision_tree`), first call
+`rka_load_tools(names=[...])` on the rka MCP server before invoking
+it. `rka_add_note` is always-on; `rka_add_decision`,
+`rka_update_note`, `rka_create_mission`, `rka_submit_checkpoint`,
+`rka_submit_report`, and `rka_bulk_update` are deferred. (Inside the
+orchestrator workflow itself, the daemon's SDK subprocess loads its
+own tool set — you don't manage that from the cockpit.)
+
 1. **pi_greenlight** — approve the Confirmation Brief before execution starts
 2. **pi_decision_select** — ratify a set of Brain-drafted actions (this gate authorizes RKA writes)
 3. **pi_acceptance** — final mission review

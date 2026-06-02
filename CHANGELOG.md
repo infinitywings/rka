@@ -3,6 +3,85 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [agentic — v2.6.0+agentic.7] — 2026-06-02 (CRITICAL: orchestrator SDK-subprocess navigator regression closure)
+
+Branch-scoped patch on top of `v2.6.0+agentic.6`. Companion to the
+v2.6.4 doc-sweep release on `main` (`1d90c57`). Closes the CRITICAL
+regression v2.6.3 introduced for the orchestrator's
+`claude-agent-sdk` subprocess.
+
+### The regression
+
+v2.6.3 split the RKA MCP tool surface into 12 always-on + 79 deferred
+tools, and added 3 navigator tools (`rka_load_tools`, `rka_list_tools`,
+`rka_help`) to bring deferred tools online at runtime. The
+`orchestrator-server`'s SDK subprocess (the LLM that drives the Brain
+and Executor LangGraph nodes) has a static `allowed_tools` list
+assembled at startup from `READ_TOOLS` + `WRITE_TOOLS` in
+`orchestrator/llm_client.py`, prefixed with `mcp__rka__`. v2.6.3 added
+the 3 navigator tools to `rka/mcp/server.py` but NOT to
+`READ_TOOLS` — so the SDK subprocess could neither call
+`rka_load_tools` (denied by `allowed_tools`) nor reach any of the 79
+deferred RKA tools (hidden by the server). Net effect: the
+orchestrator backend regressed from 91 callable RKA tools to 12.
+
+The regression was identified by the post-push adversarial-review
+workflow `w2nfnfi1q` (2026-06-02), which surfaced 39 confirmed
+findings — 1 CRITICAL (this regression) + 32 v2.6.4 follow-ups + 6
+v2.6.5+/doc-only.
+
+### Changed
+
+- **`orchestrator/orchestrator/llm_client.py`** — `READ_TOOLS`
+  expanded from 14 to 17 entries: `rka_load_tools`, `rka_list_tools`,
+  `rka_help` added. Inline rationale comment documents the navigator
+  architecture and why these belong in `READ_TOOLS` (they mutate
+  the MCP server's runtime tool registry, not RKA domain truth).
+
+- **`orchestrator/orchestrator/nodes/brain.py`** — `BRAIN_SYSTEM`
+  gains a new `## Tool surface (v2.6.3+)` section inserted
+  immediately before the existing `Allowed write tools` enumeration
+  block. Explains: always-on / deferred two-tier architecture; how
+  to call `rka_load_tools`; how to discover via `rka_list_tools`
+  and `rka_help`; deferred tools commonly needed during Brain
+  planning; that the always-on layer suffices for read-only context
+  loading but planning workflows that propose writes must call
+  `rka_load_tools` first.
+
+- **`orchestrator/orchestrator/nodes/executor.py`** —
+  `EXECUTOR_SYSTEM` gains a parallel `## Tool surface (v2.6.3+)`
+  section with Executor-tailored examples. Calls out that the
+  parent-side `execute_ratified_actions` dispatcher handles
+  `WRITE_TOOLS` via REST (bypassing the MCP surface), so the
+  navigator matters primarily for Executor's READ-side needs.
+
+- **`orchestrator/skills/orchestrator-pi.md`** — added a `Tool
+  Surface note (v2.6.3+)` section after the intro clarifying that
+  PI-cockpit interactions with the rka MCP go through the navigator
+  pattern.
+
+- **`orchestrator/tests/test_llm_client_real.py`** —
+  `test_phase_2_9_read_tools_includes_project_selectors` lock-test
+  bumped from `len(READ_TOOLS) == 14` to `== 17`, with rationale
+  comment noting the v2.6.4 navigator-tools addition.
+
+### Tests
+
+1245 orchestrator tests + 2 skipped, ALL passing.
+
+### Bookkeeper invariant
+
+`git diff main -- rka/` is empty after this patch. All changes are
+under `orchestrator/`. Grep-gate (no `from rka` / `import rka` in
+`orchestrator/`) intact.
+
+### Related
+
+- v2.6.3 (`784592c` on main) — original navigator architecture.
+- v2.6.4 (`1d90c57` on main) — rka-side doc sweep companion.
+- Workflow `wzhxgxxhp` — the parallel patch workflow that produced
+  this commit and the v2.6.4 commit, with verification gates.
+
 ## [2.6.4] — 2026-06-02 (patch — Navigator architecture doc sweep: RKA_INSTRUCTIONS + orientation prompts + SKILL.md + README/USAGE_GUIDE)
 
 Patch release on top of v2.6.3. The navigator architecture (v2.6.3) is

@@ -55,7 +55,23 @@ name = "rka-orchestrator"
 # capability was not in the workflow's allowed_capabilities; the
 # check correctly rejected it, but the gap was Brain not knowing
 # the constraint at proposal time.
-version = "0.6.6"
+# 0.6.6 → 0.6.7: v2.6.0+agentic.7 — closes the CRITICAL regression
+# v2.6.3 introduced for the orchestrator's SDK subprocess. v2.6.3
+# split the RKA MCP tool surface into 12 always-on + 79 deferred
+# tools, with 3 new navigator tools (rka_load_tools, rka_list_tools,
+# rka_help) to bring deferred tools online at runtime. The
+# subprocess's static allowed_tools list was pre-populated with
+# rka MCP tools by name — but the 3 navigator tools were not
+# added, so the subprocess could never call them, and therefore
+# could never reach the 79 deferred RKA tools. Net effect:
+# orchestrator backend regressed from 91 callable RKA tools to 12.
+# This patch (a) adds the 3 navigator tools to READ_TOOLS so they
+# join the subprocess's allowed_tools list, (b) extends
+# BRAIN_SYSTEM + EXECUTOR_SYSTEM with a "Tool surface (v2.6.3+)"
+# section teaching each role about the navigator architecture and
+# how to call rka_load_tools when a deferred tool is needed,
+# (c) bumps the READ_TOOLS lock-test from 14 to 17.
+version = "0.6.7"
 description = "RKA + LangGraph orchestrator (Phase A → Phase-X² polish; agentic branch)"
 readme = "README.md"
 requires-python = ">=3.11"
