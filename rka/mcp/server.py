@@ -19,6 +19,16 @@ from pydantic import Field
 import httpx
 
 from rka.models.mission import MissionTask
+from rka.mcp._enums import (
+    ChkTypeLit,
+    ConfidenceLit,
+    DecidedByLit,
+    DecisionKindLit,
+    ImportanceLit,
+    IngestSourceLit,
+    MissionStatusLit,
+    SourceLit,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -36,20 +46,24 @@ from rka.models.mission import MissionTask
 #   - v2.6.0+agentic Phase-X² polish: orchestrator-side
 #     TOOL_ARG_ENUMS mirror catches enum mismatches at
 #     execute_ratified_actions (pre-dispatch, in-orchestrator)
-#   - v2.6.2 (THIS): Annotated[Literal[...]] on the MCP signatures
+#   - v2.6.2: Annotated[Literal[...]] on the MCP signatures
 #     so the FastMCP rendering puts the enum into the LLM's tool
 #     definition itself (pre-proposal, in-LLM)
+#   - v2.7.0 PR-0: the underlying plain Literal aliases live in
+#     rka/mcp/_enums.py so v2.7.0 verbs and v2.6.x tools share the
+#     same source. The Annotated wrappers below preserve each tool's
+#     existing parameter description for FastMCP rendering.
 #
 # Mirror of the canonical sets at orchestrator/orchestrator/rka_enums.py
 # and rka/db/schema.sql CHECK constraints. When the canonical sets
-# change, update BOTH this file and rka_enums.py.
+# change, update BOTH _enums.py here and rka_enums.py in orchestrator.
 
 # Journal entry confidence (rka/db/schema.sql + rka/models/journal.py).
 # Run-5's empirical Brain hallucination was 'confirmed' — NOT a valid
 # value. The orchestrator Phase-X² polish catches it pre-dispatch; this
 # Annotated promotion catches it pre-LLM-emission via the inputSchema.
 ConfidenceLiteral = Annotated[
-    Literal["hypothesis", "tested", "verified", "superseded", "retracted"],
+    ConfidenceLit,
     Field(
         description=(
             "Confidence level for the journal entry / claim. The Brain "
@@ -62,13 +76,13 @@ ConfidenceLiteral = Annotated[
 
 # Journal entry importance.
 ImportanceLiteral = Annotated[
-    Literal["critical", "high", "normal", "low", "archived"],
+    ImportanceLit,
     Field(description="Importance level for the journal entry."),
 ]
 
 # Actor-of-record across journal / decision / literature writes.
 SourceLiteral = Annotated[
-    Literal["brain", "executor", "pi", "web_ui", "llm"],
+    SourceLit,
     Field(
         description=(
             "Who created this record. For Brain-authored entries, use "
@@ -79,13 +93,13 @@ SourceLiteral = Annotated[
 
 # Decision lifecycle / authorship.
 DecidedByLiteral = Annotated[
-    Literal["pi", "brain", "executor"],
+    DecidedByLit,
     Field(description="Who decided this. PI for ratified, Brain for proposed."),
 ]
 
 # Decision kind.
 DecisionKindLiteral = Annotated[
-    Literal["research_question", "design_choice", "decision", "operational"],
+    DecisionKindLit,
     Field(
         description=(
             "Kind of decision. 'research_question' is reserved for "
@@ -97,7 +111,7 @@ DecisionKindLiteral = Annotated[
 
 # Checkpoint kind.
 CheckpointTypeLiteral = Annotated[
-    Literal["decision", "clarification", "inspection", "gate"],
+    ChkTypeLit,
     Field(
         description=(
             "Type of checkpoint. 'gate' for blocking go/no-go points; "
@@ -110,13 +124,13 @@ CheckpointTypeLiteral = Annotated[
 
 # Mission lifecycle status (rka_update_mission_status).
 MissionStatusLiteral = Annotated[
-    Literal["pending", "active", "complete", "partial", "blocked", "cancelled"],
+    MissionStatusLit,
     Field(description="Mission lifecycle status."),
 ]
 
 # Document ingestion source (added_by-equivalent for rka_ingest_document).
 IngestSourceLiteral = Annotated[
-    Literal["brain", "executor", "pi", "import", "web_ui"],
+    IngestSourceLit,
     Field(description="Actor of record for the ingested document."),
 ]
 
@@ -5401,6 +5415,1041 @@ def _create_init_with_list_changed(notification_options=None, experimental_capab
 
 
 mcp._mcp_server.create_initialization_options = _create_init_with_list_changed
+
+
+# ============================================================
+# v2.7.0 PR-1 — Always-on verbs (additive; legacy 91 tools unchanged)
+# ============================================================
+# Eight always-on verbs that collapse the read/write surface for the
+# Brain / Executor / PI loops:
+#   - rka_query (29 read scopes)
+#   - rka_record_note
+#   - rka_record_decision
+#   - rka_record_literature       (PR-2 will land via parallel agent)
+#   - rka_mission                 (PR-2 will land via parallel agent)
+#   - rka_checkpoint              (PR-2 will land via parallel agent)
+#   - rka_review                  (PR-2 will land via parallel agent)
+#   - rka_session                 (unscoped meta)
+#
+# This block ships 4 of the 8 (per PR-1 scope). Each verb is a thin
+# adapter that calls the existing REST endpoints — the service layer
+# (rka/services/*) is UNCHANGED, and the 91 legacy @tool() decorators
+# above stay in place so existing call sites remain wire-compatible.
+#
+# Per the v2.7.0 design synthesis (workflow w2cnkgz0k):
+#   - Graft A: provenance is a TOP-LEVEL kwarg, not nested deep.
+#   - Graft C: every docstring leads with role tag [BRAIN]/[EXECUTOR]/[PI]/[ANY].
+#   - Enum constraints (ConfidenceLit, ImportanceLit, ...) stay on
+#     TOP-LEVEL kwargs so the Annotated[Literal] promotion survives
+#     and FastMCP can render them into inputSchema.
+
+from typing import Literal as _Literal
+
+# Discriminator literals — kept inline (vs an _enums.py addition) so the
+# verb-surface is self-contained and reviewable in one place.
+
+# rka_query scope set — 29 read scopes per the semantic-mapping table.
+# Covers every read-side legacy tool plus the session-level get_status /
+# get_research_map / get_context that the orchestrator's minimal session
+# start uses.
+QueryScopeLit = _Literal[
+    "status", "context", "search", "entity", "journal", "literature",
+    "mission", "report", "checkpoints", "decision_tree", "calibration_metrics",
+    "hooks", "hook_executions", "brain_notifications", "research_map",
+    "review_queue", "clusters", "claims", "manuscript", "graph",
+    "ego_graph", "graph_stats", "graph_mermaid", "provenance", "multi_hop",
+    "summarize", "generate_summary", "evidence", "freshness", "contradictions",
+    "integrity", "pending_maintenance", "changelog", "bootstrap_review",
+    "workspace_tree", "workspace_scan",
+]
+
+# rka_session action set — unscoped/meta operations.
+SessionActionLit = _Literal[
+    "list_projects", "create_project", "set_project", "reset",
+    "digest", "health", "help", "export", "generate_claude_md",
+]
+
+
+def _strip_none(d: dict) -> dict:
+    """Drop keys whose value is None — convenience for REST bodies."""
+    return {k: v for k, v in d.items() if v is not None}
+
+
+async def _query_get(project_id: str | None, path: str, *, params: dict | None = None) -> str:
+    """GET wrapper used by rka_query dispatches. Returns raw JSON text."""
+    async with _client(project_id) as c:
+        r = await c.get(path, params=_strip_none(params or {}) or None)
+        _raise_with_detail(r)
+        return json.dumps(r.json(), indent=2)
+
+
+async def _query_post(project_id: str | None, path: str, body: dict | None = None) -> str:
+    """POST wrapper used by rka_query dispatches that hit POST endpoints
+    (search, multi-hop, etc.). Returns raw JSON text."""
+    async with _client(project_id) as c:
+        r = await c.post(path, json=_strip_none(body or {}))
+        _raise_with_detail(r)
+        return json.dumps(r.json(), indent=2)
+
+
+@tool(tier=_TIER_ALWAYS_ON, category="verb")
+async def rka_query(
+    scope: Annotated[QueryScopeLit, Field(description="What to read.")],
+    *,
+    project_id: str,
+    id: str | None = None,
+    query: str | None = None,
+    limit: int = 20,
+    filters: dict | None = None,
+    options: dict | None = None,
+) -> str:
+    """[ANY] READ from the project knowledge base. ALL read scopes flow through this verb.
+
+    Trigger phrases: "what's the status", "search for", "show me decisions",
+    "list literature", "fetch entity", "context", "research map", "pending
+    maintenance", "open checkpoints".
+
+    Args:
+        scope: One of the 29 read scopes (status, context, search, entity, ...).
+        project_id: Project ID (prj_...). REQUIRED.
+        id: Entity ID — required for entity / ego_graph / provenance /
+            evidence / manuscript / report / decision_tree (root) /
+            bootstrap_review (scan_id) / mission (omit for current).
+        query: Free-text query — required for search / multi_hop /
+            generate_summary scopes.
+        limit: Cap on result count for list-mode scopes.
+        filters: Scope-specific filter dict (e.g. {"entity_types": ["decision"]},
+            {"status": "open"}, {"phase": "design"}).
+        options: Reserved for scope-specific options (e.g. depth, format).
+    """
+    s = scope
+    f = filters or {}
+    if s == "status":
+        return await _query_get(project_id, "/api/status")
+    if s == "context":
+        body = {"topic": query, "phase": f.get("phase"), "depth": f.get("depth", "summary")}
+        return await _query_post(project_id, "/api/context", body)
+    if s == "search":
+        if not query:
+            return json.dumps({"error": "rka_query(scope='search') requires `query`"}, indent=2)
+        body = {"query": query, "entity_types": f.get("entity_types"), "limit": limit}
+        return await _query_post(project_id, "/api/search", body)
+    if s == "entity":
+        if not id:
+            return json.dumps({"error": "rka_query(scope='entity') requires `id`"}, indent=2)
+        prefix = id.split("_")[0] if "_" in id else ""
+        endpoint_map = {
+            "jrn": f"/api/notes/{id}", "dec": f"/api/decisions/{id}",
+            "lit": f"/api/literature/{id}", "clm": f"/api/claims/{id}",
+            "ecl": f"/api/clusters/{id}", "mis": f"/api/missions/{id}",
+            "chk": f"/api/checkpoints/{id}",
+        }
+        endpoint = endpoint_map.get(prefix)
+        if not endpoint:
+            return json.dumps({"error": f"Unknown ID prefix '{prefix}'"}, indent=2)
+        params = {"include_claims": "true"} if prefix == "ecl" else None
+        return await _query_get(project_id, endpoint, params=params)
+    if s == "journal":
+        params = {
+            "limit": limit, "hide_superseded": True,
+            "type": f.get("type"), "phase": f.get("phase"),
+            "confidence": f.get("confidence"), "status": f.get("status"),
+            "since": f.get("since"), "source": f.get("source"),
+            "tags": f.get("tags"),
+        }
+        return await _query_get(project_id, "/api/notes", params=params)
+    if s == "literature":
+        params = {
+            "status": f.get("status"), "tag": f.get("tag"), "limit": limit,
+        }
+        return await _query_get(project_id, "/api/literature", params=params)
+    if s == "mission":
+        if id:
+            return await _query_get(project_id, f"/api/missions/{id}")
+        # fallback to current active/pending
+        for st in ("active", "pending"):
+            data = await _query_get(project_id, "/api/missions", params={"status": st, "limit": 1})
+            arr = json.loads(data) if data else []
+            if arr:
+                return json.dumps(arr[0], indent=2)
+        return json.dumps({"note": "no active or pending mission"}, indent=2)
+    if s == "report":
+        mid = id
+        if not mid:
+            return json.dumps({"error": "rka_query(scope='report') requires `id` (mission_id)"}, indent=2)
+        return await _query_get(project_id, f"/api/missions/{mid}/report")
+    if s == "checkpoints":
+        return await _query_get(project_id, "/api/checkpoints", params={"status": f.get("status", "open")})
+    if s == "decision_tree":
+        params = {"root_id": id, "phase": f.get("phase"), "depth": f.get("depth")}
+        return await _query_get(project_id, "/api/decisions/tree", params=params)
+    if s == "calibration_metrics":
+        return await _query_get(project_id, "/api/calibration/metrics")
+    if s == "hooks":
+        params = {"enabled": f.get("enabled"), "hook_type": f.get("hook_type")}
+        return await _query_get(project_id, "/api/hooks", params=params)
+    if s == "hook_executions":
+        params = {"hook_id": f.get("hook_id"), "since": f.get("since"), "limit": limit}
+        return await _query_get(project_id, "/api/hooks/executions", params=params)
+    if s == "brain_notifications":
+        params = {"status": f.get("status"), "limit": limit}
+        return await _query_get(project_id, "/api/notifications/brain", params=params)
+    if s == "research_map":
+        return await _query_get(project_id, "/api/research-map")
+    if s == "review_queue":
+        params = {"target_type": f.get("target_type"), "limit": limit}
+        return await _query_get(project_id, "/api/review-queue", params=params)
+    if s == "clusters":
+        params = {
+            "research_question_id": f.get("research_question_id"),
+            "confidence": f.get("confidence"), "limit": limit,
+        }
+        return await _query_get(project_id, "/api/clusters", params=params)
+    if s == "claims":
+        params = {
+            "cluster_id": f.get("cluster_id"), "type": f.get("type"),
+            "confidence": f.get("confidence"), "limit": limit,
+        }
+        return await _query_get(project_id, "/api/claims", params=params)
+    if s == "manuscript":
+        if not id:
+            return json.dumps({"error": "rka_query(scope='manuscript') requires `id`"}, indent=2)
+        return await _query_get(project_id, f"/api/manuscripts/{id}")
+    if s == "graph":
+        params = {
+            "include_types": f.get("include_types"),
+            "phase": f.get("phase"), "limit": limit,
+        }
+        return await _query_get(project_id, "/api/graph", params=params)
+    if s == "ego_graph":
+        if not id:
+            return json.dumps({"error": "rka_query(scope='ego_graph') requires `id`"}, indent=2)
+        return await _query_get(project_id, f"/api/graph/ego/{id}", params={"depth": f.get("depth")})
+    if s == "graph_stats":
+        return await _query_get(project_id, "/api/graph/stats")
+    if s == "graph_mermaid":
+        return await _query_get(project_id, "/api/graph/mermaid", params={"phase": f.get("phase")})
+    if s == "provenance":
+        if not id:
+            return json.dumps({"error": "rka_query(scope='provenance') requires `id`"}, indent=2)
+        return await _query_get(
+            project_id, f"/api/provenance/{id}",
+            params={"depth": f.get("depth"), "direction": f.get("direction")},
+        )
+    if s == "multi_hop":
+        if not query:
+            return json.dumps({"error": "rka_query(scope='multi_hop') requires `query`"}, indent=2)
+        body = {"query": query, "hops": f.get("hops"), "limit": limit}
+        return await _query_post(project_id, "/api/retrieval/multi-hop", body)
+    if s == "summarize":
+        body = {"topic": query, "phase": f.get("phase"), "entity_ids": f.get("entity_ids")}
+        return await _query_post(project_id, "/api/summarize", body)
+    if s == "generate_summary":
+        # v2.4.0 LLM-driven path removed; preserved as a scope stub.
+        return json.dumps({"error": "rka_query(scope='generate_summary') is not yet re-wired post-v2.4.0"}, indent=2)
+    if s == "evidence":
+        if not id:
+            return json.dumps({"error": "rka_query(scope='evidence') requires `id` (research_question_id)"}, indent=2)
+        return await _query_get(
+            project_id, "/api/assemble-evidence",
+            params={"research_question_id": id, "format": f.get("format")},
+        )
+    if s == "freshness":
+        params = {"threshold": f.get("threshold"), "limit": limit}
+        return await _query_get(project_id, "/api/freshness/check", params=params)
+    if s == "contradictions":
+        params = {"scope": f.get("scope"), "limit": limit}
+        return await _query_get(project_id, "/api/contradictions/detect", params=params)
+    if s == "integrity":
+        return await _query_get(project_id, "/api/maintenance/integrity")
+    if s == "pending_maintenance":
+        return await _query_get(project_id, "/api/maintenance")
+    if s == "changelog":
+        params = {"since": f.get("since"), "limit": limit}
+        return await _query_get(project_id, "/api/changelog", params=params)
+    if s == "bootstrap_review":
+        if not id:
+            return json.dumps({"error": "rka_query(scope='bootstrap_review') requires `id` (scan_id)"}, indent=2)
+        return await _query_get(project_id, f"/api/workspace/review/{id}")
+    if s == "workspace_tree":
+        # Read-only filesystem probe; delegated to /api/workspace/tree if
+        # the REST surface exposes it. Legacy rka_scan_workspace_tree did
+        # local os.scandir; the verb routes via the REST layer for
+        # bookkeeper-clean adaptation. Service-layer responsible.
+        params = {"folder_path": f.get("folder_path"), "max_depth": f.get("max_depth")}
+        return await _query_get(project_id, "/api/workspace/tree", params=params)
+    if s == "workspace_scan":
+        body = {
+            "folder_path": f.get("folder_path"),
+            "ignore_patterns": f.get("ignore_patterns"),
+            "max_files": f.get("max_files"),
+        }
+        return await _query_post(project_id, "/api/workspace/scan", body)
+    return json.dumps({"error": f"rka_query: unknown scope '{s}'"}, indent=2)
+
+
+@tool(tier=_TIER_ALWAYS_ON, category="verb")
+async def rka_record_note(
+    content: str,
+    *,
+    project_id: str,
+    source: SourceLiteral = "executor",
+    type: str = "note",
+    confidence: ConfidenceLiteral = "hypothesis",
+    importance: ImportanceLiteral = "normal",
+    verbatim_input: str | None = None,
+    phase: str | None = None,
+    tags: list[str] | None = None,
+    provenance: dict | None = None,
+) -> str:
+    """[BRAIN/EXECUTOR/PI] RECORD a journal entry (note, log, directive).
+
+    Trigger phrases: "log this", "add a note", "record finding", "save the
+    PI directive", "journal".
+
+    PROVENANCE (Graft A — top-level): pass `provenance={"related_decisions":
+    [dec_..], "related_literature": [lit_..], "related_mission": "mis_..",
+    "supersedes": "jrn_.."}`. Each provenance key flattens to a top-level
+    field on the underlying POST /api/notes body so existing service-layer
+    handlers remain unchanged.
+
+    PI input discipline (Phase-X²-prime polish): when `source='pi'`,
+    `verbatim_input` is REQUIRED — the PI's exact wording is the only
+    intellectual-attribution surface for audit.
+
+    Args:
+        content: Note body (PRIMARY).
+        project_id: Project ID (prj_...). REQUIRED.
+        source: brain | executor | pi | web_ui | llm.
+        type: note | log | directive (legacy types auto-normalised).
+        confidence: hypothesis | tested | verified | superseded | retracted.
+        importance: critical | high | normal | low | archived.
+        verbatim_input: PI's exact words. REQUIRED when source='pi'.
+        phase: Research phase override.
+        tags: Free-form tag list.
+        provenance: Optional dict with related_decisions / related_literature /
+            related_mission / supersedes.
+    """
+    if source == "pi" and not verbatim_input:
+        return json.dumps({
+            "error": "rka_record_note(source='pi') requires `verbatim_input` "
+                     "(exact PI wording). This is the Phase-X²-prime polish "
+                     "enforcement — PI intellectual attribution must be "
+                     "preserved verbatim."
+        }, indent=2)
+    prov = provenance or {}
+    body = _strip_none({
+        "content": content, "type": type, "source": source,
+        "phase": phase, "verbatim_input": verbatim_input,
+        "related_decisions": prov.get("related_decisions"),
+        "related_literature": prov.get("related_literature"),
+        "related_mission": prov.get("related_mission"),
+        "supersedes": prov.get("supersedes"),
+        "confidence": confidence, "importance": importance, "tags": tags,
+    })
+    async with _client(project_id) as c:
+        r = await c.post("/api/notes", json=body)
+        _raise_with_detail(r)
+        d = r.json()
+        _record_entity("journal", d["id"], content)
+        return f"Created {d['id']} [{d['type']}] confidence={d['confidence']}"
+
+
+@tool(tier=_TIER_ALWAYS_ON, category="verb")
+async def rka_record_decision(
+    question: str,
+    chosen: str,
+    rationale: str,
+    *,
+    project_id: str,
+    decided_by: DecidedByLiteral,
+    kind: DecisionKindLiteral,
+    related_journal: list[str],
+    options: list[dict] | None = None,
+    supersedes_decision_id: str | None = None,
+    confidence: ConfidenceLiteral = "tested",
+    tags: list[str] | None = None,
+    phase: str | None = None,
+    parent_id: str | None = None,
+    related_literature: list[str] | None = None,
+    assumptions: list[str] | None = None,
+) -> str:
+    """[BRAIN/PI] RECORD a decision node. Provenance-required.
+
+    Trigger phrases: "record decision", "ratify the choice", "log decision",
+    "supersede dec_...", "design choice".
+
+    Provenance discipline (Run-5 hard contract): `related_journal` is
+    REQUIRED non-empty — every decision must justify its conclusion against
+    at least one journal entry. The orchestrator's BRAIN_SYSTEM prompt
+    documents the same constraint; this verb-side check is a defense-in-
+    depth guard so direct (non-orchestrator) callers also satisfy the
+    invariant.
+
+    To supersede an older decision, pass `supersedes_decision_id` —
+    the new decision becomes the head with a `supersedes` link to the
+    old; the older decision's status flips to 'superseded'.
+
+    Args:
+        question: Decision question (PRIMARY).
+        chosen: Chosen option label.
+        rationale: Why this was chosen.
+        project_id: Project ID (prj_...). REQUIRED.
+        decided_by: pi | brain | executor.
+        kind: research_question | design_choice | decision | operational.
+        related_journal: Journal entry IDs justifying this decision. REQUIRED non-empty.
+        options: Considered options [{label, description}, ...].
+        supersedes_decision_id: Old decision this replaces (creates supersede link).
+        confidence: hypothesis | tested | verified | superseded | retracted.
+        tags: Free-form tag list.
+        phase: Research phase override.
+        parent_id: Parent decision ID for tree structure.
+        related_literature: Literature IDs informing this decision.
+        assumptions: Assumptions this decision rests on.
+    """
+    if not related_journal:
+        return json.dumps({
+            "error": "rka_record_decision requires `related_journal=[...]` "
+                     "non-empty. Provenance discipline: every decision must "
+                     "justify its conclusion against at least one journal entry."
+        }, indent=2)
+    # Supersede path: hit the supersede endpoint so the old decision's
+    # status flips correctly + the supersede link materializes.
+    if supersedes_decision_id:
+        body = _strip_none({
+            "question": question, "chosen": chosen, "rationale": rationale,
+            "decided_by": decided_by, "kind": kind, "phase": phase,
+            "options": options, "related_journal": related_journal,
+            "related_literature": related_literature, "tags": tags,
+            "assumptions": assumptions, "parent_id": parent_id,
+            "confidence": confidence,
+        })
+        async with _client(project_id) as c:
+            r = await c.post(
+                f"/api/decisions/{supersedes_decision_id}/supersede", json=body
+            )
+            _raise_with_detail(r)
+            d = r.json()
+            _session.decisions_made.append(d["id"])
+            return (
+                f"Created decision {d['id']} (supersedes "
+                f"{supersedes_decision_id}): {d['question'][:80]}"
+            )
+    body = _strip_none({
+        "question": question, "phase": phase, "decided_by": decided_by,
+        "options": options, "chosen": chosen, "rationale": rationale,
+        "parent_id": parent_id,
+        "related_literature": related_literature,
+        "related_journal": related_journal, "kind": kind,
+        "assumptions": assumptions, "tags": tags, "confidence": confidence,
+    })
+    async with _client(project_id) as c:
+        r = await c.post("/api/decisions", json=body)
+        _raise_with_detail(r)
+        d = r.json()
+        _session.decisions_made.append(d["id"])
+        return f"Created decision {d['id']}: {d['question'][:80]}"
+
+
+@tool(tier=_TIER_ALWAYS_ON, category="verb")
+async def rka_session(
+    action: Annotated[SessionActionLit, Field(description="Session-level action.")],
+    *,
+    project_id: str | None = None,
+    name: str | None = None,
+    description: str | None = None,
+    role: str = "executor",
+    format: str = "markdown",
+    scope: str = "state",
+    since: str | None = None,
+    limit: int = 20,
+) -> str:
+    """[ANY] UNSCOPED meta operations: project discovery / creation / session
+    introspection / health / help / export / claude.md generation.
+
+    Trigger phrases: "list projects", "create project", "session digest",
+    "reset session", "health check", "help on rka_*", "generate CLAUDE.md",
+    "export project".
+
+    Most actions are unscoped (no project_id). Actions that are
+    project-scoped despite living under this verb (`export`,
+    `generate_claude_md`, `digest`, `changelog`) require `project_id`.
+
+    Args:
+        action: list_projects | create_project | set_project (deprecated) |
+            reset | digest | health | help | export | generate_claude_md.
+        project_id: Required for project-scoped actions (export, digest,
+            generate_claude_md).
+        name: Project name — required for action='create_project'.
+        description: Project description — optional for create_project.
+            For action='set_project', the project ID to verify exists.
+        role: Role for generate_claude_md (executor | brain).
+        format: Export format (markdown).
+        scope: Export scope (state | decisions | literature).
+        since: ISO date for filtered exports.
+        limit: Cap for paged exports.
+    """
+    a = action
+    if a == "list_projects":
+        async with _client() as c:
+            r = await c.get("/api/projects")
+            _raise_with_detail(r)
+            return json.dumps(r.json(), indent=2)
+    if a == "create_project":
+        if not name:
+            return json.dumps({"error": "rka_session(action='create_project') requires `name`"}, indent=2)
+        body = _strip_none({"name": name, "description": description})
+        async with _client() as c:
+            r = await c.post("/api/projects", json=body)
+            _raise_with_detail(r)
+            return json.dumps(r.json(), indent=2)
+    if a == "set_project":
+        # Deprecated no-op since v2.6. Validates the project exists.
+        target = description or project_id
+        if not target:
+            return json.dumps({
+                "error": "rka_session(action='set_project') is deprecated in "
+                         "v2.6+ — every tool call carries `project_id` "
+                         "explicitly. Pass the desired project_id directly."
+            }, indent=2)
+        async with _client() as c:
+            r = await c.get("/api/projects")
+            _raise_with_detail(r)
+            projects = r.json()
+        ok = any(p["id"] == target for p in projects)
+        return json.dumps({
+            "deprecated": True,
+            "project_id": target,
+            "exists": ok,
+            "note": "rka_session(action='set_project') is a no-op in v2.6+. "
+                    "Pass `project_id=...` to every subsequent verb call.",
+        }, indent=2)
+    if a == "reset":
+        global _session
+        _session = MCPSessionState()
+        return "Session state reset. Tool-call counter, entity log, and session_start fired-markers cleared."
+    if a == "digest":
+        if not project_id:
+            return json.dumps({"error": "rka_session(action='digest') requires `project_id`"}, indent=2)
+        # Local in-process digest + a remote status pull, mirrors the
+        # legacy rka_session_digest body without the buggy session.project_id
+        # reference (that field was removed in v2.6).
+        lines = [
+            "## Session Digest",
+            f"Project: {project_id}",
+            f"Tool calls: {_session.tool_calls}",
+            f"Session started: {_session.session_start}",
+        ]
+        if _session.entities_created:
+            lines.append(f"\n### Entities Created ({len(_session.entities_created)})")
+            for e in _session.entities_created:
+                lines.append(f"  [{e['type']}] {e['id']}: {e['summary']}")
+        if _session.decisions_made:
+            lines.append(f"\n### Decisions Recorded ({len(_session.decisions_made)})")
+            for did in _session.decisions_made:
+                lines.append(f"  {did}")
+        if _session.checkpoints_raised:
+            lines.append(f"\n### Checkpoints Raised ({len(_session.checkpoints_raised)})")
+            for cid in _session.checkpoints_raised:
+                lines.append(f"  {cid}")
+        try:
+            async with _client(project_id) as c:
+                sr = await c.get("/api/status")
+                if sr.is_success:
+                    st = sr.json()
+                    lines.append("\n### Current Project State")
+                    lines.append(f"Phase: {st.get('current_phase', '?')}")
+                    if st.get("summary"):
+                        lines.append(f"Summary: {st['summary'][:500]}")
+                    if st.get("blockers"):
+                        lines.append(f"Blockers: {st['blockers']}")
+                cr = await c.get("/api/checkpoints", params={"status": "open"})
+                if cr.is_success:
+                    chks = cr.json()
+                    if chks:
+                        lines.append(f"\n### Open Checkpoints ({len(chks)})")
+                        for chk in chks[:5]:
+                            flag = "🔴" if chk.get("blocking") else "🟡"
+                            lines.append(f"  {flag} {chk['id']}: {chk.get('description', '')[:300]}")
+        except Exception:
+            pass
+        return "\n".join(lines)
+    if a == "health":
+        # Lightweight liveness probe — never raises; returns {ok, api_url}.
+        try:
+            async with _client() as c:
+                r = await c.get("/api/projects")
+                ok = r.is_success
+        except Exception as exc:
+            return json.dumps({"ok": False, "api_url": API_URL, "error": str(exc)}, indent=2)
+        return json.dumps({"ok": ok, "api_url": API_URL}, indent=2)
+    if a == "help":
+        # Render the verb registry (or a specific verb if `name` given).
+        # Keeps rka_help (legacy) for full-catalog browsing.
+        if name:
+            rec = _TOOL_REGISTRY.get(name.strip())
+            if rec is None:
+                return json.dumps({"error": "unknown_tool", "name": name}, indent=2)
+            return json.dumps({
+                "name": name, "tier": rec["tier"], "category": rec["category"],
+                "signature": rec["signature"], "summary": rec["summary"],
+                "docstring": rec["docstring"],
+            }, indent=2)
+        verbs = [
+            n for n, r in _TOOL_REGISTRY.items()
+            if r.get("category") == "verb"
+        ]
+        return json.dumps({
+            "verbs": sorted(verbs),
+            "note": "Eight always-on verbs (v2.7.0 PR-1+). Use `name=<verb>` "
+                    "for the full signature/docstring.",
+        }, indent=2)
+    if a == "export":
+        if not project_id:
+            return json.dumps({"error": "rka_session(action='export') requires `project_id`"}, indent=2)
+        params = {"format": format, "scope": scope}
+        async with _client(project_id) as c:
+            r = await c.get("/api/export", params=params)
+            _raise_with_detail(r)
+            try:
+                return json.dumps(r.json(), indent=2)
+            except Exception:
+                return r.text
+    if a == "generate_claude_md":
+        if not project_id:
+            return json.dumps({"error": "rka_session(action='generate_claude_md') requires `project_id`"}, indent=2)
+        async with _client(project_id) as c:
+            r = await c.get("/api/generate-claude-md", params={"role": role})
+            _raise_with_detail(r)
+            data = r.json()
+            return data.get("markdown", "") or json.dumps(data, indent=2)
+    return json.dumps({"error": f"rka_session: unknown action '{a}'"}, indent=2)
+
+
+# ============================================================
+# v2.7.0 PR-1 (Agent B) — 4 write/lifecycle verbs
+# ============================================================
+# Continues the Agent A surface (rka_query, rka_record_note,
+# rka_record_decision, rka_session) with 4 additional write/lifecycle
+# verbs:
+#   - rka_record_literature  (5+ modes: add | bibtex | search S2 | search arXiv |
+#                             enrich DOI | link_zotero | process_paper |
+#                             validate_reference)
+#   - rka_mission            (create | update | update_status |
+#                             submit_report | get_report | advance_rq)
+#   - rka_checkpoint         (submit | resolve | create_gate | evaluate_gate |
+#                             present_decision | pi_select | record_outcome)
+#   - rka_review             (~25 targets: updates, hooks, claims/clusters,
+#                             maintenance, manuscript, workspace, ...)
+#
+# Bodies are thin adapters into rka/mcp/verb_dispatch.py — that module
+# routes to existing legacy @tool(...) functions via _TOOL_REGISTRY so
+# the legacy validation / hook firing / session-tracking path stays
+# unchanged. Legacy 91 tools remain callable; PR-2 demotes their tier.
+#
+# Provenance discipline preserved at the verb layer:
+#   * rka_mission(action='create') -> provenance.motivated_by_decision
+#   * rka_record_literature with action='process_paper' uses lit_id
+#     so the journal entry has derived_from links to the source paper.
+
+from rka.mcp.verb_dispatch import (
+    dispatch_record_literature as _dispatch_record_literature,
+    dispatch_mission as _dispatch_mission,
+    dispatch_checkpoint as _dispatch_checkpoint,
+    dispatch_review as _dispatch_review,
+)
+
+from rka.mcp._enums import LitStatusLit as _LitStatusLit
+
+
+# Action discriminator literals — kept inline alongside the verb so the
+# enum surface is self-contained and review-able.
+MissionActionLit = _Literal[
+    "create", "update", "update_status",
+    "submit_report", "get_report", "advance_rq",
+]
+
+CheckpointActionLit = _Literal[
+    "submit", "resolve", "create_gate", "evaluate_gate",
+    "present_decision", "pi_select", "record_outcome",
+]
+
+LiteratureActionLit = _Literal[
+    "link_zotero", "import_bibtex", "enrich_doi",
+    "search_semantic_scholar", "search_arxiv",
+    "process_paper", "validate_reference",
+]
+
+LiteratureSearchSrcLit = _Literal["semantic_scholar", "arxiv"]
+
+ReviewTargetLit = _Literal[
+    # Entity updates
+    "note_update", "decision_update", "literature_update", "status_update",
+    # Bulk
+    "bulk_update", "batch_import",
+    # Hooks
+    "hook_add", "hook_enable", "hook_disable", "hook_delete",
+    # Notifications
+    "brain_notifications_clear",
+    # Claims / clusters
+    "extract_claims", "cluster", "claims", "cluster_create",
+    "cluster_assign", "cluster_split", "cluster_merge",
+    # Maintenance
+    "contradiction", "flag_stale", "eviction_sweep",
+    # Workspace
+    "bootstrap_workspace",
+    # Manuscript
+    "manuscript_register",
+    # Decision lifecycle (supersede is a record-shape but kept here as
+    # the umbrella maintenance verb; rka_record_decision also offers
+    # it via supersedes_decision_id top-level kwarg).
+    "supersede_decision",
+]
+
+
+@tool(tier=_TIER_ALWAYS_ON, category="verb")
+async def rka_record_literature(
+    *,
+    project_id: str,
+    title: str | None = None,
+    bibtex: str | None = None,
+    search_query: str | None = None,
+    search_source: Annotated[
+        LiteratureSearchSrcLit | None,
+        Field(description="Search backend for search_query mode."),
+    ] = None,
+    doi: str | None = None,
+    authors: list[str] | None = None,
+    year: int | None = None,
+    venue: str | None = None,
+    status: Annotated[
+        _LitStatusLit,
+        Field(description="Reading lifecycle status for new entries."),
+    ] = "to_read",
+    abstract: str | None = None,
+    url: str | None = None,
+    tags: list[str] | None = None,
+    related_decisions: list[str] | None = None,
+    action: Annotated[
+        LiteratureActionLit | None,
+        Field(description="Optional explicit mode discriminator."),
+    ] = None,
+    lit_id: str | None = None,
+    manuscript_id: str | None = None,
+    zotero_key: str | None = None,
+    pdf_path: str | None = None,
+    annotations: list[dict] | None = None,
+    summary: str | None = None,
+    add_to_library: bool = False,
+    limit: int = 10,
+) -> str:
+    """[BRAIN] WRITE / search / import / link literature. Five+ modes:
+
+    - title=... (default): explicit add via fields
+    - bibtex=...: import one or more entries from BibTeX
+    - search_query=... + search_source='semantic_scholar' | 'arxiv': search
+    - doi=... only (no title/authors): bootstrap a row + enrich later
+    - action='link_zotero' + lit_id: resolve Zotero item key
+    - action='enrich_doi' + lit_id: CrossRef enrichment
+    - action='process_paper' + lit_id + annotations: reading-notes pipeline
+    - action='validate_reference' + manuscript_id + (doi | title): Writer validator
+
+    For LIST reads use `rka_query(scope='literature')`. The verb
+    accepts `add_to_library=True` on search modes to auto-create
+    library rows for results.
+
+    Args:
+        project_id: REQUIRED. Project ID (prj_...).
+        title: Paper title (default add mode).
+        bibtex: Raw BibTeX (bulk import mode).
+        search_query: Free-text query for S2/arXiv modes.
+        search_source: 'semantic_scholar' or 'arxiv'.
+        doi: DOI identifier.
+        authors: Author list.
+        year, venue, abstract, url, tags, related_decisions: optional metadata.
+        status: Reading lifecycle for the new entry. Default 'to_read'.
+        action: Explicit mode discriminator; overrides kwarg-presence inference.
+        lit_id: Existing literature ID — required by enrich_doi /
+            link_zotero / process_paper.
+        manuscript_id: Required by validate_reference.
+        zotero_key, pdf_path: Optional adapter kwargs.
+        annotations: Reading-notes list for process_paper mode.
+        summary: Overall paper summary for process_paper mode.
+        add_to_library: On search modes, auto-add results to RKA.
+        limit: Search result cap (default 10).
+    """
+    return await _dispatch_record_literature(
+        project_id=project_id,
+        title=title,
+        bibtex=bibtex,
+        search_query=search_query,
+        search_source=search_source,
+        doi=doi,
+        authors=authors,
+        year=year,
+        venue=venue,
+        status=status,
+        abstract=abstract,
+        url=url,
+        tags=tags,
+        related_decisions=related_decisions,
+        action=action,
+        lit_id=lit_id,
+        manuscript_id=manuscript_id,
+        zotero_key=zotero_key,
+        pdf_path=pdf_path,
+        annotations=annotations,
+        summary=summary,
+        add_to_library=add_to_library,
+        limit=limit,
+    )
+
+
+@tool(tier=_TIER_ALWAYS_ON, category="verb")
+async def rka_mission(
+    action: Annotated[
+        MissionActionLit,
+        Field(description="Mission lifecycle action."),
+    ],
+    *,
+    project_id: str,
+    mission_id: str | None = None,
+    rq_id: str | None = None,
+    objective: str | None = None,
+    phase: str | None = None,
+    tasks: list[dict] | None = None,
+    context: str | None = None,
+    acceptance_criteria: str | None = None,
+    scope_boundaries: str | None = None,
+    checkpoint_triggers: str | None = None,
+    depends_on: str | None = None,
+    parent_mission_id: str | None = None,
+    motivated_by_decision: str | None = None,
+    provenance: dict | None = None,
+    tags: list[str] | None = None,
+    status: MissionStatusLiteral | None = None,
+    summary: str | None = None,
+    content: str | None = None,
+    findings: str = "",
+    anomalies: str = "",
+    questions: str = "",
+    codebase_state: str = "",
+    recommended_next: str = "",
+    conclusion: str | None = None,
+    evidence_cluster_ids: list[str] | None = None,
+) -> str:
+    """[EXECUTOR][BRAIN] Mission verb — action-discriminated.
+
+    Actions: create | update | update_status | submit_report |
+    get_report | advance_rq.
+
+    Provenance: `create` REQUIRES motivated_by_decision (top-level)
+    OR provenance={"motivated_by_decision": "dec_..."} (Graft A
+    surface). Preserves the decision -> mission causality chain.
+
+    For body edits use 'update'; for lifecycle transitions use
+    'update_status'. RQ lifecycle (`advance_rq`) is reserved for
+    decisions of kind=research_question.
+
+    Args:
+        action: PRIMARY discriminator.
+        project_id: REQUIRED.
+        mission_id: REQUIRED for update / update_status / submit_report
+            / get_report (optional).
+        rq_id: REQUIRED for advance_rq.
+        objective: Mission body — required for create.
+        phase: Research phase.
+        tasks: MissionTask list [{description, status}].
+        context, acceptance_criteria, scope_boundaries,
+            checkpoint_triggers, depends_on, parent_mission_id: optional
+            create / update fields.
+        motivated_by_decision: Linked dec_... — provenance entry on create.
+        provenance: Graft A nested form — {motivated_by_decision: dec_...}.
+        tags: Tag list.
+        status: Lifecycle status — for update_status.
+        summary, content: Submit-report body. (content is the v2.6.1 alias.)
+        findings, anomalies, questions, codebase_state, recommended_next:
+            optional structured report sections.
+        conclusion, evidence_cluster_ids: advance_rq payload.
+    """
+    return await _dispatch_mission(
+        action,
+        project_id=project_id,
+        mission_id=mission_id,
+        rq_id=rq_id,
+        objective=objective,
+        phase=phase,
+        tasks=tasks,
+        context=context,
+        acceptance_criteria=acceptance_criteria,
+        scope_boundaries=scope_boundaries,
+        checkpoint_triggers=checkpoint_triggers,
+        depends_on=depends_on,
+        parent_mission_id=parent_mission_id,
+        motivated_by_decision=motivated_by_decision,
+        provenance=provenance,
+        tags=tags,
+        status=status,
+        summary=summary,
+        content=content,
+        findings=findings,
+        anomalies=anomalies,
+        questions=questions,
+        codebase_state=codebase_state,
+        recommended_next=recommended_next,
+        conclusion=conclusion,
+        evidence_cluster_ids=evidence_cluster_ids,
+    )
+
+
+@tool(tier=_TIER_ALWAYS_ON, category="verb")
+async def rka_checkpoint(
+    action: Annotated[
+        CheckpointActionLit,
+        Field(description="Checkpoint / gate / decision-ratification action."),
+    ],
+    *,
+    project_id: str,
+    id: str | None = None,
+    mission_id: str | None = None,
+    decision_id: str | None = None,
+    gate_id: str | None = None,
+    type: CheckpointTypeLiteral | None = None,
+    description: str | None = None,
+    content: str | None = None,
+    task_reference: str | None = None,
+    context: str | None = None,
+    options: list[dict] | None = None,
+    recommendation: str | None = None,
+    blocking: bool = True,
+    resolution: str | None = None,
+    resolved_by: str | None = None,
+    rationale: str | None = None,
+    create_decision: bool = False,
+    gate_type: str | None = None,
+    deliverables: list[str] | None = None,
+    pass_criteria: list[str] | None = None,
+    assumptions_to_verify: list[str] | None = None,
+    verdict: str | None = None,
+    notes: str | None = None,
+    assumption_status: dict[str, str] | None = None,
+    confirmation_brief: str | None = None,
+    pi_preference: str | None = None,
+    selected_option_id: str | None = None,
+    override_rationale: str | None = None,
+    outcome: str | None = None,
+    outcome_details: str | None = None,
+    lessons: str | None = None,
+    recorded_by: str = "pi",
+) -> str:
+    """[BRAIN][PI] Checkpoint + gate + decision-ratification verb.
+
+    Actions: submit | resolve | create_gate | evaluate_gate |
+    present_decision | pi_select | record_outcome.
+
+    `present_decision` is the TWO-TAP autonomy-licensing surface
+    (PI ratification gate for privileged writes); `pi_select`
+    records the PI's answer. `record_outcome` closes the
+    calibration loop — write the real-world result of a decision
+    once known.
+
+    Pass `decision_id` (or `id`) on present_decision / pi_select /
+    record_outcome. Pass `mission_id` on submit / create_gate.
+    Pass `gate_id` on evaluate_gate. Pass `id` on resolve.
+
+    Args:
+        action: PRIMARY discriminator.
+        project_id: REQUIRED.
+        id: Checkpoint ID (resolve target).
+        mission_id: For submit / create_gate.
+        decision_id: For present_decision / pi_select / record_outcome.
+        gate_id: For evaluate_gate.
+        type: Checkpoint type for submit.
+        description, content: Submit body (content is v2.6.1 alias).
+        task_reference, context, options, recommendation, blocking: optional submit.
+        resolution, resolved_by, rationale, create_decision: resolve payload.
+        gate_type, deliverables, pass_criteria, assumptions_to_verify:
+            create_gate payload.
+        verdict, notes, assumption_status: evaluate_gate payload.
+        confirmation_brief, options, pi_preference: present_decision payload.
+        selected_option_id, override_rationale: pi_select payload.
+        outcome, outcome_details, lessons, recorded_by: record_outcome payload.
+    """
+    return await _dispatch_checkpoint(
+        action,
+        project_id=project_id,
+        id=id,
+        mission_id=mission_id,
+        decision_id=decision_id,
+        gate_id=gate_id,
+        type=type,
+        description=description,
+        content=content,
+        task_reference=task_reference,
+        context=context,
+        options=options,
+        recommendation=recommendation,
+        blocking=blocking,
+        resolution=resolution,
+        resolved_by=resolved_by,
+        rationale=rationale,
+        create_decision=create_decision,
+        gate_type=gate_type,
+        deliverables=deliverables,
+        pass_criteria=pass_criteria,
+        assumptions_to_verify=assumptions_to_verify,
+        verdict=verdict,
+        notes=notes,
+        assumption_status=assumption_status,
+        confirmation_brief=confirmation_brief,
+        pi_preference=pi_preference,
+        selected_option_id=selected_option_id,
+        override_rationale=override_rationale,
+        outcome=outcome,
+        outcome_details=outcome_details,
+        lessons=lessons,
+        recorded_by=recorded_by,
+    )
+
+
+@tool(tier=_TIER_ALWAYS_ON, category="verb")
+async def rka_review(
+    target: Annotated[
+        ReviewTargetLit,
+        Field(description="Review / update / maintenance target."),
+    ],
+    *,
+    project_id: str,
+    payload: dict | None = None,
+) -> str:
+    """[BRAIN] Review + update + maintenance verb. Targets cover:
+
+    Entity updates: note_update, decision_update, literature_update,
+        status_update.
+    Bulk: bulk_update, batch_import.
+    Hooks: hook_add, hook_enable, hook_disable, hook_delete.
+    Notifications: brain_notifications_clear.
+    Claims/Clusters: extract_claims, cluster, claims, cluster_create,
+        cluster_assign, cluster_split, cluster_merge.
+    Maintenance: contradiction, flag_stale, eviction_sweep.
+    Workspace: bootstrap_workspace.
+    Manuscript: manuscript_register.
+    Decision lifecycle: supersede_decision (also addressable via
+        rka_record_decision with supersedes_decision_id).
+
+    Pass per-target args as `payload={...}`. Each target validates
+    required payload keys and returns a structured error if missing.
+
+    Args:
+        target: PRIMARY discriminator. See list above.
+        project_id: REQUIRED.
+        payload: Per-target arg bag. Schema varies by target;
+            consult the legacy tool of the same name for the shape
+            (e.g. target='cluster' -> rka_review_cluster's signature).
+    """
+    return await _dispatch_review(
+        target, project_id=project_id, payload=payload
+    )
 
 
 # ============================================================

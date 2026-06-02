@@ -98,6 +98,12 @@ _UNSCOPED_TOOLS_ALLOWLIST: frozenset[str] = frozenset({
     "rka_set_project",
     # Global changelog read — not project-scoped at the REST layer.
     "rka_get_changelog",
+    # v2.7.0-alpha — unscoped meta verb. Dispatches between scoped and
+    # unscoped actions internally: list_projects/create_project/set_project/
+    # reset/health/help are unscoped; digest/export/generate_claude_md
+    # explicitly check + require project_id at the per-action handler. The
+    # function signature reflects this with `project_id: str | None = None`.
+    "rka_session",
 })
 
 

@@ -3,6 +3,210 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [2.7.0a1] — 2026-06-02 (alpha — Intent-grouped verb surface: PR-0 enum consolidation + PR-1 8 verbs additive; 91 legacy stays callable)
+
+**FUNDAMENTAL REDESIGN — alpha release.** The v2.6.3-v2.6.6 arc
+established empirically that Claude Desktop / Claude Code's ToolSearch
+filter ranks tools by semantic relevance per turn — small or generic
+tool surfaces lose the ranking race (v2.6.5 navigator-only got 0 of 3
+visible). Anthropic's own guidance is intent-grouped thin verb surfaces
+(Cloudflare ships 2 tools for ~2,500 API endpoints). v2.7.0 implements
+that architecture for RKA.
+
+This is an **alpha** release: 8 new intent verbs are added at
+`tier="always_on"` ALONGSIDE the 91 legacy tools (which remain
+unchanged). All work via thin adapters to the same REST endpoints the
+legacy tools hit, so behavior is bit-identical at the wire layer.
+PR-2 (separate release) demotes the 12 legacy always-on tools to
+deferred AFTER the PR-4 A/B test confirms the verb surface survives
+ToolSearch end-to-end on 5 representative PI conversations.
+
+### Architecture choice (HYBRID design from workflow w2cnkgz0k)
+
+- **Spine**: Design B (mid-grain 7+1 verbs)
+- **Graft A**: `provenance` becomes a first-class top-level kwarg (not
+  nested in a body dict) on every write verb — visible to the LLM,
+  pre-dispatch-validated.
+- **Graft C**: every verb description leads with a role tag
+  `[BRAIN]` / `[EXECUTOR]` / `[PI]` / `[ANY]` so ToolSearch's
+  per-turn embedding sees role-relevance signal before evaluating
+  content.
+
+### Added (8 new always-on verbs)
+
+| Verb | Discriminator | Replaces (sample) |
+|---|---|---|
+| `rka_query(scope, *, project_id, …)` | 29-scope universal read | rka_search, rka_get, rka_get_status, rka_get_context, rka_get_journal, rka_get_decision_tree, rka_get_literature, rka_get_mission, rka_get_report, rka_trace_provenance, rka_multi_hop_retrieval, rka_get_graph, rka_get_ego_graph, … |
+| `rka_record_note(content, *, project_id, source, type, confidence, importance, verbatim_input?, phase?, tags?, provenance?)` | — | rka_add_note + flattens provenance kwarg to existing service-layer fields. **Phase-X²' polish extension**: `source="pi"` REQUIRES `verbatim_input` (structural enforcement, not LLM-convention) |
+| `rka_record_decision(question, chosen, rationale, *, project_id, decided_by, kind, related_journal, supersedes_decision_id?, …)` | — | rka_add_decision + rka_supersede_decision (top-level `supersedes_decision_id` kwarg routes to `/api/decisions/{old}/supersede`) |
+| `rka_record_literature(*, project_id, title?\|bibtex?\|search_query?\|doi-only?, …)` | mode by kwarg presence | rka_add_literature, rka_import_bibtex, rka_search_semantic_scholar, rka_search_arxiv, rka_enrich_doi, rka_link_literature_to_zotero, rka_process_paper, rka_validate_reference |
+| `rka_mission(action, *, project_id, …)` | create \| update \| update_status \| submit_report \| get_report \| advance_rq | rka_create_mission, rka_update_mission, rka_update_mission_status, rka_submit_report, rka_get_report, rka_advance_rq |
+| `rka_checkpoint(action, *, project_id, …)` | submit \| resolve \| create_gate \| evaluate_gate \| present_decision \| pi_select | rka_submit_checkpoint, rka_resolve_checkpoint, rka_create_gate, rka_evaluate_gate, rka_present_decision, rka_record_pi_selection, rka_record_outcome |
+| `rka_review(target, *, project_id, payload)` | ~24 review/update/cluster/claim/maintenance/hook targets | rka_update_note, rka_update_literature, rka_update_decision, rka_bulk_update, rka_extract_claims, rka_review_claims, rka_create_cluster, rka_review_cluster, rka_assign_claims_to_cluster, rka_split_cluster, rka_merge_clusters, rka_resolve_contradiction, rka_check_freshness, rka_check_integrity, rka_detect_contradictions, rka_flag_stale, rka_eviction_sweep, rka_ingest_document, rka_register_manuscript, rka_batch_import, rka_scan_workspace, rka_bootstrap_workspace, rka_review_bootstrap, rka_add_hook, rka_list_hooks, rka_enable_hook, rka_disable_hook, rka_delete_hook, rka_get_hook_executions, rka_get_brain_notifications, rka_clear_brain_notifications |
+| `rka_session(action)` | UNSCOPED. list_projects \| create_project \| set_project (dep) \| reset \| digest \| health \| help \| export \| generate_claude_md | rka_list_projects, rka_set_project, rka_create_project, rka_reset_session, rka_session_digest, rka_get_changelog, rka_export, rka_generate_claude_md, plus help |
+
+**Total always-on count: 12 legacy baseline + 8 new verbs = 20.**
+
+### Added (precursor PR-0 — shared module)
+
+- **`rka/mcp/_enums.py`** — single source of truth for RKA enum
+  surfaces. Promotes the 8 module-level `Annotated[Literal[...]]`
+  aliases from `server.py:47-121` into plain `Literal[...]` exports
+  (ConfidenceLit, ImportanceLit, SourceLit, NoteTypeLit, DecidedByLit,
+  DecisionKindLit, LitStatusLit, MissionStatusLit, ChkTypeLit,
+  GateTypeLit, VerdictLit, ClaimTypeLit, ClusterConfLit, RQStatusLit,
+  OutcomeLit, StalenessLit, IngestSourceLit). `server.py` imports
+  the aliases and re-wraps as `Annotated[..., Field(description=...)]`
+  at call sites. Pure refactor: 994 tests pass byte-identical to
+  v2.6.6 baseline. Each Literal set is anchored against
+  `rka/db/schema.sql` CHECK constraints + `rka/models/*.py` Pydantic
+  literals (manually verified per Literal).
+
+### Added (PR-1 dispatch infrastructure)
+
+- **`rka/mcp/verb_dispatch.py`** (1629 LOC) — the single source of
+  truth for routing verb calls to existing REST endpoints. Eight
+  dispatcher functions (`dispatch_query`, `dispatch_record_note`,
+  `dispatch_record_decision`, `dispatch_record_literature`,
+  `dispatch_mission`, `dispatch_checkpoint`, `dispatch_review`,
+  `dispatch_session`) each contain a per-verb table mapping
+  discriminator → REST `(method, path, body_builder)`. Each
+  dispatcher hits the SAME REST paths the legacy tools hit, so
+  parity is automatic (asserted by
+  `test_v270_legacy_parity.py`).
+  - Table sizes: `_QUERY_DISPATCH`=36, `_SESSION_ACTIONS`=9,
+    `rka_record_literature_modes`=9, `rka_mission_actions`=6,
+    `rka_checkpoint_actions`=7, `rka_review_targets`=24.
+  - Validators inline per verb: provenance kwarg unpacks to existing
+    fields; `source="pi"` + `verbatim_input` enforcement on
+    `dispatch_record_note`; non-empty `related_journal` enforcement
+    on `dispatch_record_decision`; mode-exclusivity (exactly one of
+    `title`/`bibtex`/`search_query`/`doi-only`) on
+    `dispatch_record_literature`; unknown-discriminator handlers
+    return structured errors.
+
+### Tests (4 new test files, 233 tests, all passing)
+
+- **`test_v270_verb_surface.py`** — pins the 8-verb tier contract,
+  enforces ≤500-char descriptions per Anthropic guidance, asserts
+  each description starts with the role tag `[BRAIN]` / `[EXECUTOR]`
+  / `[PI]` / `[ANY]`.
+- **`test_v270_verb_enum_promotion.py`** — asserts each verb's
+  discriminator (scope/action/target) renders as an `inputSchema`
+  enum on FastMCP registration (preserves v2.6.2 enum promotion).
+- **`test_v270_verb_dispatch.py`** — unit tests with `httpx.MockTransport`:
+  provenance validation, enum rejection, mode-exclusivity for
+  record_literature, source='pi' guard on record_note, unknown
+  discriminator handling.
+- **`test_v270_legacy_parity.py`** — parametrized byte-identical
+  REST payload between legacy + verb call: `rka_add_note(content="x")`
+  ≡ `rka_record_note(content="x")`, `rka_get_status()` ≡
+  `rka_query(scope="status")`, `rka_submit_checkpoint(description=...)`
+  ≡ `rka_checkpoint(action="submit", description=...)`,
+  `rka_create_mission(...)` ≡ `rka_mission(action="create", ...)`,
+  and more.
+
+### Changed (legacy lock-tests bumped 12 → 20)
+
+- `test_v263_navigator.py::test_always_on_tier_membership` — expected
+  set extended with the 8 new verbs.
+- `test_v263_navigator.py::test_deferred_tier_size_within_cap` —
+  `len(always_on) == 20`; `len(deferred) >= 79` (unchanged 79
+  legacy deferred tools).
+- `test_v263_navigator.py::test_list_tools_tier_filter` —
+  `len(flat) == 20`.
+- `test_v26_project_id_contract.py::_UNSCOPED_TOOLS_ALLOWLIST` —
+  `rka_session` added with rationale (the verb dispatches between
+  scoped + unscoped actions internally; the function signature has
+  `project_id: str | None = None` and per-action handlers enforce
+  per-action requirements).
+
+### Provenance preservation
+
+Every load-bearing v2.6 / Phase-X² / Phase-X²' constraint preserved:
+- `project_id` required (kwarg-only) on every project-scoped verb.
+- `related_journal` required non-empty on `rka_record_decision`.
+- `motivated_by_decision` required on `rka_mission(action="create")`
+  via the `provenance` kwarg.
+- `source` enum on notes preserved as `Annotated[SourceLit, Field(...)]`.
+- `confidence='confirmed'` rejection — three defense layers:
+  server-side Pydantic, orchestrator `TOOL_ARG_ENUMS` validator,
+  LLM-emission-time `Annotated[Literal]` inputSchema enum.
+- `description` ↔ `content` body-field alias on
+  `rka_checkpoint(action="submit")` preserved at the verb's dispatch
+  layer (Phase-X²' Layer 1 forward).
+- **New v2.7.0-alpha enforcement**: `rka_record_note(source="pi")`
+  REQUIRES `verbatim_input` at the verb dispatch layer. Phase-X²
+  caught wrong values; Phase-X²' caught wrong field names; v2.7.0
+  catches PI-attribution discipline structurally.
+
+### Service layer untouched
+
+`rka/services/*.py` (notes, decisions, literature, missions,
+checkpoints, claims, clusters, hooks, project, search, graph,
+maintenance, research_map, context, academic, calibration,
+decision_options, review_queue, artifacts, manuscript, workspace,
+summary, zotero_linker) — ZERO changes. Verbs are thin REST
+adapters. REST endpoints unchanged. DB schema unchanged.
+Pydantic models unchanged.
+
+### Migration path
+
+- **Right now (v2.7.0-alpha)**: clients can use either the 8 verbs
+  OR the 91 legacy tools. ToolSearch will pick whichever is most
+  relevant per turn. Verbs typically win on the relevance ranking
+  because their descriptions are richer (role tag + trigger phrases).
+- **PR-2 (next release)**: 91 legacy tools demote to `tier="deferred"`.
+  Cockpit sees ONLY the 20 always-on (8 verbs + 12 legacy baseline).
+  Legacy stays callable via `rka_load_tools(...)` for backwards-compat.
+- **PR-3 (orchestrator integration)**: `READ_TOOLS` 17→2,
+  `WRITE_TOOLS` 9→6, `TOOL_CAPABILITIES` rekeyed to
+  `(verb, discriminator)` tuples. Brain/Executor SDK subprocess
+  prompts rewritten to use verbs.
+- **v2.8.0**: 91 legacy tools removed entirely (after telemetry
+  shows <5%/week call rate for 3 consecutive weeks).
+
+### Experimental validation (PR-4 gate before v2.7.0 GA)
+
+5 PI conversations against the verb surface to verify ToolSearch
+survival across representative session shapes:
+- **T1** Bare session open — "what's the project status"
+- **T2** Mid-mission cockpit — "what's blocked, render the research map"
+- **T3** Decision authoring — "record that we decided X, jrn_Y justifies"
+- **T4** Literature trawl — bibtex + S2 search
+- **T5** Review queue — claim review + cluster confidence
+
+**Go criteria**: every verb survives ToolSearch on every prompt where
+its scope is needed. **No-go**: escalate to v2.7.1 split of the
+highest-traffic `rka_review` targets (`claim_extract`, `cluster_review`,
+`decision_present` → named verbs), grows surface 8 → 11.
+
+### Rollback
+
+Three independent layers:
+1. **Per-PR revert**: any phase's commit independently revertable.
+2. **Feature flag**: `RKA_VERB_SURFACE_ENABLED=true|false` env var
+   flips verb registration at runtime (TODO — PR-2 implementation).
+3. **Hard rollback**: `git revert` to v2.6.6.
+
+### Test counts
+
+- **MCP suite**: 355 passing (122 v2.6.x baseline + 233 v2.7.0 new).
+- **Full repo**: 1227 passing.
+- **Bookkeeper invariant**: `git diff main -- rka/` would be nonzero
+  here because this IS a main-side release; agentic absorbs via merge
+  in the standard pattern.
+
+### Related
+
+- Postmortem workflow `w86p5bxrp` (2026-06-02) — confirmed the
+  ToolSearch mechanism + Anthropic's `_meta["anthropic/alwaysLoad"]`
+  hint + the Cloudflare intent-verb pattern.
+- Design workflow `w2cnkgz0k` (2026-06-02) — multi-lens A/B/C
+  designs + adversarial critique + HYBRID synthesis.
+- Implementation workflow `whvuxrvvj` (2026-06-02) — PR-0 + PR-1
+  parallel impl + 233 new tests.
+
 ## [2.6.6] — 2026-06-02 (revert — Restore v2.6.4 baseline: v2.6.5's 3-tool always-on tier was empirically incompatible with Claude Desktop)
 
 This release reverts v2.6.5 (`fa5bc8b`) and restores the v2.6.4
