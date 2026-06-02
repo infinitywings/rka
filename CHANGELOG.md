@@ -3,133 +3,95 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
-## [2.6.5] — 2026-06-02 (minor — Shrink always-on tier 12 → 3 (navigator-only) so client filters cannot drop the navigator)
+## [2.6.6] — 2026-06-02 (revert — Restore v2.6.4 baseline: v2.6.5's 3-tool always-on tier was empirically incompatible with Claude Desktop)
 
-Empirical follow-up to v2.6.4. v2.6.3 assumed Claude Desktop's
-client-side tool-surface filter would let a 12-tool always-on tier
-through; v2.6.4 doc-swept that assumption. Live test on 2026-06-02
-falsified it: Claude Desktop received all 12 tools from the rka MCP
-(confirmed in the `mcp-server-rka.log` `tools/list` response after
-restart) and then narrowed them down to 7 before exposing them to the
-LLM's function list. The 5 it dropped included ALL 3 navigator tools
-(`rka_load_tools`, `rka_list_tools`, `rka_help`), leaving the PI
-cockpit unable to reach any of the 79 deferred RKA tools — the access
-path was filtered out.
+This release reverts v2.6.5 (`fa5bc8b`) and restores the v2.6.4
+always-on tier (12 tools) as the published baseline.
 
-The PI cockpit's empirical diagnosis was exactly right: "v2.6.4 being
-live on the daemon is necessary but not sufficient: the loader has to
-be exposed to me, by the client that builds my tool list, and it
-isn't. This is a client-surfacing gap, not a daemon-binary gap." The
-fix has to come from the rka side — by leaving fewer tools competing
-for the client's slot allocation.
+### Why
 
-v2.6.5 cuts the always-on tier from 12 → 3 (the 3 navigator tools
-ONLY). At session start, the client receives a 3-tool surface; the
-LLM's very first tool call is `rka_load_tools(names=[...])` with the
-role's typical set. The server then registers those tools and fires
-`tools/list_changed`; on the next turn the client sees the full
-working set. The single-turn cost at session start is the price of
-guaranteed navigator visibility on EVERY client (Claude Desktop,
-Claude Code plugin mode, future MCP clients), regardless of how many
-other MCP servers are also loaded.
+v2.6.3 introduced the navigator architecture (12 always-on + 79
+deferred). v2.6.4 doc-swept the broadcast surfaces. v2.6.5
+empirically tested the theory that shrinking always-on from 12 → 3
+(navigator-only) would let the navigator survive Claude Desktop's
+client-side tool-surface filter. The test FAILED:
 
-### Changed
+- Pre-v2.6.5: 12 always-on → Claude Desktop showed 7 to the LLM
+  (rka_add_note, rka_get, rka_get_checkpoints,
+  rka_resolve_checkpoint, rka_get_status, rka_get_research_map,
+  rka_get_pending_maintenance). Empirically observed in the
+  PI cockpit through 2026-06-01 and the early hours of 2026-06-02.
+- Post-v2.6.5: 3 always-on → Claude Desktop showed **0** to the LLM
+  this morning. The cockpit reported a function-list of orchestrator
+  + Desktop Commander + zotero tools with NO rka tools whatsoever.
+  Confirmed via `mcp-server-rka.log` at 13:26:11Z — the server
+  delivered the 3 navigator tools to Claude Desktop; the client
+  hid all of them.
 
-- **Always-on tier shrunk from 12 → 3.** In [`rka/mcp/server.py`](rka/mcp/server.py),
-  the 9 tools previously tagged `@tool(tier="always_on", ...)` had
-  their tier kwarg removed (defaults back to `"deferred"`). The 9:
-  `rka_add_note`, `rka_get_checkpoints`, `rka_resolve_checkpoint`,
-  `rka_search`, `rka_get`, `rka_get_status`, `rka_get_context`,
-  `rka_get_research_map`, `rka_get_pending_maintenance`.
+The likely root cause is one (or both) of: (a) Claude Desktop has a
+per-server minimum-tool-count threshold below which it hides the
+entire server; (b) Claude Desktop's filter is usage-based and the
+navigator tools, never having been called in conversation history,
+ranked too low for inclusion. Either way the navigator architecture
+as designed cannot bootstrap on Claude Desktop — the meta-tool
+needs to be called once to populate usage history, but it can't be
+called when it's not in the surface.
 
-  The 3 tools that REMAIN always-on are the navigator:
-  `rka_load_tools`, `rka_list_tools`, `rka_help`.
+### Changed (revert)
 
-  Tool bodies, signatures, and behavior are unchanged for all 12 —
-  only the registration tier flipped.
+All v2.6.5 changes reverted:
+- 9 tools restored from `@tool(category="...")` to `@tool(tier="always_on", category="...")`:
+  rka_add_note, rka_get_checkpoints, rka_resolve_checkpoint,
+  rka_search, rka_get, rka_get_status, rka_get_context,
+  rka_get_research_map, rka_get_pending_maintenance.
+- `RKA_INSTRUCTIONS`, `brain_orientation`, `executor_orientation`
+  reverted to the v2.6.4 "12 always-on" wording.
+- `rka/skills/{brain,executor,pi}/SKILL.md`, `README.md`,
+  `USAGE_GUIDE.md` reverted to the v2.6.4 navigator-aware preambles.
+- `tests/test_mcp/test_v263_navigator.py` and
+  `tests/test_mcp/test_v264_navigator_integration.py` reverted to
+  the v2.6.4 assertions (12 always-on tools, the v2.6.4 always-on
+  set, etc.).
 
-- **`RKA_INSTRUCTIONS`** (`rka/mcp/server.py:134-193`) — rewritten to
-  open with the minimum-surface statement and add a "Session Start
-  (mandatory)" subsection with a concrete `rka_load_tools` call that
-  recovers the pre-v2.6.5 baseline surface (the 9 flipped tools +
-  `rka_list_projects`).
+### Architectural status
 
-- **`brain_orientation()`** prompt — Step 0 is now mandatory and
-  unambiguous: "Your VERY FIRST tool call must be
-  `rka_load_tools(names=[…])`" followed by the Brain's typical
-  19-tool working set.
+The navigator tools (`rka_load_tools`, `rka_list_tools`, `rka_help`)
+remain shipped and functional — they're part of the 12 always-on
+tier. A client that DOES see them can still use them to bring
+deferred tools online. But the design that hides everything BUT
+the navigator at startup is shelved pending a working architecture
+for Claude Desktop's filter.
 
-- **`executor_orientation()`** prompt — parallel treatment with the
-  Executor's typical 22-tool working set.
+### Forward work
 
-- **`rka/skills/{brain,executor,pi}/SKILL.md`** — each preamble
-  updated to the 3-tool floor + role-specific `rka_load_tools` batch
-  + rationale. The PI SKILL.md gets the cockpit-typical batch
-  (`rka_get_status`, `rka_get_context`, `rka_add_note`,
-  `rka_resolve_checkpoint`, `rka_get_checkpoints`,
-  `rka_get_research_map`, `rka_get_pending_maintenance`,
-  `rka_list_projects`, `rka_get`, `rka_search`, `rka_get_journal`,
-  `rka_get_changelog`) so the cockpit's first turn recovers the
-  surface it had pre-v2.6.5.
+A v2.6.7+ design needs to:
+- Either keep most/all tools always-on (let Claude Desktop's filter
+  pick from a richer pool, accepting that 30%+ won't surface), OR
+- Investigate Claude Desktop's filter heuristic empirically (which
+  isn't possible from the server side), OR
+- Provide an out-of-band channel to "warm" the navigator's usage
+  history (likely impossible too).
 
-- **`README.md`** + **`USAGE_GUIDE.md`** — navigator paragraph updated
-  to reflect the 3-tool floor.
-
-### Tests
-
-- Updated `test_v263_navigator.py`: `test_always_on_tier_membership`
-  now asserts the 3-tool navigator-only set;
-  `test_deferred_tier_size_within_cap` asserts
-  `len(always_on) == 3` and `len(deferred) >= 88`;
-  `test_list_tools_tier_filter` asserts `len(flat) == 3`.
-- Updated `test_v264_navigator_integration.py`:
-  `rka_help` always-on example tool changed from `rka_add_note`
-  to `rka_load_tools`; instructions-string assertion still passes
-  (RKA_INSTRUCTIONS still mentions `rka_load_tools`).
-- 5 new v2.6.5 contract tests in `test_v263_navigator.py`:
-  - `test_v265_only_navigator_tools_are_always_on` — startup surface
-    is EXACTLY `{rka_load_tools, rka_list_tools, rka_help}`.
-  - `test_v265_get_status_is_deferred` — `rka_get_status` (was
-    always-on in v2.6.3/4) is now deferred.
-  - `test_v265_previously_always_on_tools_all_deferred` — all 9
-    flipped tools are deferred.
-  - `test_v265_session_start_loads_typical_set` — simulate loading
-    the "typical Brain set" via `rka_load_tools` and assert the
-    historically-always-on tools become registered.
-
-Full repo on main: **999 tests passing** (994 v2.6.4 baseline + 5 new).
+The PI cockpit's empirical instinct — that the navigator-bootstrap
+problem is structural, not a fix-it bug — has been validated.
 
 ### Migration
 
-**Required: clients must call `rka_load_tools` at session start
-to recover their working surface.** This is documented in the
-updated `RKA_INSTRUCTIONS` (broadcast on `initialize`) and in each
-SKILL.md preamble. The orchestrator daemon's `BRAIN_SYSTEM` /
-`EXECUTOR_SYSTEM` system prompts (v2.6.0+agentic.7) already had a
-navigator-awareness section and continue to work; they may benefit
-from a follow-up agentic patch to explicitly mention "Step 0 = load
-your tools" for the SDK subprocess, but the existing wording is
-sufficient.
-
-For HUMAN clients (PI cockpit / Brain in Claude Desktop / Executor
-in Claude Code), the model is: read the orientation prompt or SKILL,
-emit a single `rka_load_tools` call with the role's typical set, then
-proceed on the next turn.
-
-### Rationale
-
-The choice of "3" is not arbitrary: it's the minimum surface that
-guarantees a working navigator. We can't shrink to 1 (the LLM needs
-`rka_help` to inspect tools it doesn't already know) or 2 (catalog
-browsing via `rka_list_tools` is meaningfully different from
-per-tool `rka_help`). With 3 navigator tools, every reasonable
-client tool-surface filter lets all 3 through. The pre-v2.6.5
-"read-side always-on" set (rka_get_status, rka_search, etc.) was
-convenience, not architecture — convenience that empirically broke
-the navigator.
+None required. Reverting fully restores v2.6.4 contracts. Clients
+that absorbed v2.6.5's "3-tool surface" assumption (none in
+production) would adjust automatically because the server now
+returns 12 tools again at startup.
 
 ### Related
 
+- v2.6.3 (`784592c`) — navigator architecture (still functional).
+- v2.6.4 (`1d90c57`) — doc sweep (restored as baseline).
+- v2.6.5 (`fa5bc8b`) — tier shrink (REVERTED in this release;
+  `b2c4d1e` is the revert commit).
+- 2026-06-02 PI-cockpit empirical signal: 16-tool function list
+  with zero rka entries after the v2.6.5 deploy + Claude Desktop
+  restart. Falsified the per-server-cap hypothesis I was working
+  from.
 - v2.6.3 (`784592c`) — original navigator architecture.
 - v2.6.4 (`1d90c57`) — doc sweep across broadcast surfaces.
 - v2.6.0+agentic.7 (`e48fcdb`) — orchestrator-side companion.

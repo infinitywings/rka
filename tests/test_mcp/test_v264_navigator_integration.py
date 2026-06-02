@@ -286,11 +286,10 @@ async def test_list_tools_deferred_tier_contains_expected():
     assert "rka_create_mission" in flat
     assert "rka_add_literature" in flat
     # And the non-emptiness floor — deferred layer should be the bulk
-    # of the surface. v2.6.5 shrunk always-on tier 12 → 3, so deferred
-    # absorbed the 9 previously-always-on tools; floor bumped 70 → 80.
-    assert len(flat) >= 80, (
+    # of the surface.
+    assert len(flat) >= 70, (
         f"deferred tier has only {len(flat)} tools — expected at "
-        f"least 80; tier-split may have regressed"
+        f"least 70; tier-split may have regressed"
     )
 
 
@@ -347,13 +346,9 @@ async def test_help_on_always_on_tool_reports_always_on_and_registered():
     """`rka_help` on an always-on tool reports tier=always_on +
     registered=True. This is the simple half of the navigator's
     help-introspection contract.
-
-    v2.6.5 — the always-on tier is navigator-only; we use `rka_load_tools`
-    (one of the 3 navigator tools) as the always-on example here.
-    Pre-v2.6.5 this test used `rka_add_note`, which is now deferred.
     """
-    result = await _call("rka_help", name="rka_load_tools")
-    assert result["name"] == "rka_load_tools"
+    result = await _call("rka_help", name="rka_add_note")
+    assert result["name"] == "rka_add_note"
     assert result["tier"] == _TIER_ALWAYS_ON
     assert result["registered"] is True
     assert result["summary"]  # non-empty
