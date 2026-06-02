@@ -352,7 +352,12 @@ def _summarize_doc(doc: str | None) -> str:
     return ""
 
 
-def tool(*, tier: str = _TIER_DEFERRED, category: str = "general"):
+def tool(
+    *,
+    tier: str = _TIER_DEFERRED,
+    category: str = "general",
+    always_load: bool | None = None,
+):
     """Register an MCP tool and increment session state on every invocation.
 
     The wrapper extracts `project_id` from the call's kwargs (every
@@ -365,7 +370,20 @@ def tool(*, tier: str = _TIER_DEFERRED, category: str = "general"):
     (`deferred`, the default). `category` is metadata for rka_list_tools.
     Every tool is recorded in `_TOOL_REGISTRY` regardless of tier so the
     navigator can list/help/load it.
+
+    v2.7.0a2 — `always_load` controls the Anthropic-namespaced
+    `anthropic/alwaysLoad` hint that pins a tool into Claude Code's
+    per-turn toolset (bypassing ToolSearch's ranking). When None
+    (default), tier='always_on' tools get always_load=True, and
+    tier='deferred' tools get always_load=False. Setting always_load
+    explicitly overrides the tier-inferred default. The hint surfaces
+    in the MCP tool descriptor's `_meta` field; Claude Code v2.1.121+
+    recognises it. Older clients ignore the opaque metadata.
     """
+
+    # Resolve always_load default from tier when caller didn't override.
+    if always_load is None:
+        always_load = tier == _TIER_ALWAYS_ON
 
     def decorator(func):
         import inspect as _inspect
@@ -393,9 +411,16 @@ def tool(*, tier: str = _TIER_DEFERRED, category: str = "general"):
             "signature": sig_str,
             "docstring": (func.__doc__ or "").strip(),
             "registered": False,
+            "always_load": always_load,
         }
         if tier == _TIER_ALWAYS_ON:
-            registered = mcp.tool()(wrapper)
+            # v2.7.0a2 — pin always-on tools into Claude Code's per-turn
+            # toolset via the Anthropic-namespaced `_meta` hint.
+            meta = {"anthropic/alwaysLoad": True} if always_load else None
+            if meta is not None:
+                registered = mcp.tool(meta=meta)(wrapper)
+            else:
+                registered = mcp.tool()(wrapper)
             _TOOL_REGISTRY[name]["registered"] = True
             return registered
         # Deferred — return the wrapped fn so module-level references still
@@ -2823,6 +2848,7 @@ async def rka_search_semantic_scholar(
     year_min: int | None = None,
     fields_of_study: list[str] | None = None,
     add_to_library: bool = False,
+    import_top_n: int | None = None,
     *,
     project_id: str,
 ) -> str:
@@ -2834,6 +2860,9 @@ async def rka_search_semantic_scholar(
         year_min: Minimum publication year filter
         fields_of_study: Filter by field (e.g. ["Computer Science"])
         add_to_library: If true, automatically add results to RKA literature
+        import_top_n: When add_to_library=True, import only the first N
+            results. None = import all returned. Ignored when
+            add_to_library=False.
     """
     import httpx as hx
 
@@ -2867,6 +2896,14 @@ async def rka_search_semantic_scholar(
     lines = [f"Found {data.get('total', len(papers))} papers (showing {len(papers)}):"]
     added_ids = []
 
+    # v2.7.0a2 Decision 2 (Option C): import_top_n caps the slice of
+    # results that get imported when add_to_library=True. None means
+    # "import all returned"; the listing itself is always full-length.
+    to_import = (
+        papers[:import_top_n] if (add_to_library and import_top_n is not None) else papers
+    )
+    import_set = {id(p) for p in to_import}
+
     for p in papers:
         authors = ", ".join(a.get("name", "") for a in (p.get("authors") or [])[:3])
         if len(p.get("authors") or []) > 3:
@@ -2882,7 +2919,7 @@ async def rka_search_semantic_scholar(
         if p.get("abstract"):
             lines.append(f"   {p['abstract'][:200]}...")
 
-        if add_to_library:
+        if add_to_library and id(p) in import_set:
             try:
                 async with _client(project_id) as c:
                     body = {
@@ -2915,6 +2952,8 @@ async def rka_search_arxiv(
     limit: int = 10,
     sort_by: str = "relevance",
     add_to_library: bool = False,
+    import_top_n: int | None = None,
+    year_min: int | None = None,
     *,
     project_id: str,
 ) -> str:
@@ -2925,11 +2964,25 @@ async def rka_search_arxiv(
         limit: Max results (default: 10)
         sort_by: relevance | lastUpdatedDate | submittedDate
         add_to_library: If true, automatically add results to RKA literature
+        import_top_n: When add_to_library=True, import only the first N
+            results. None = import all returned. Ignored when
+            add_to_library=False.
+        year_min: Minimum submission year. Translates to arXiv
+            `submittedDate:[YYYY0101 TO *]` filter; applied via boolean
+            AND with the user query.
     """
     import httpx as hx
 
+    search_query = f"all:{query}"
+    if year_min:
+        # arXiv search uses YYYYMMDDHHMM format; year-floor of Jan 1 covers
+        # the whole year. Boolean AND joins to the free-text query.
+        search_query = (
+            f"({search_query})+AND+submittedDate:[{year_min}01010000+TO+*]"
+        )
+
     params = {
-        "search_query": f"all:{query}",
+        "search_query": search_query,
         "max_results": min(limit, 50),
         "sortBy": sort_by,
         "sortOrder": "descending",
@@ -2951,6 +3004,16 @@ async def rka_search_arxiv(
 
     lines = [f"Found {len(entries)} arXiv papers:"]
     added_ids = []
+
+    # v2.7.0a2 Decision 2 (Option C): import_top_n caps the slice of
+    # results that get imported when add_to_library=True. None = import
+    # all returned. The listing itself remains full-length.
+    to_import_entries = (
+        entries[:import_top_n]
+        if (add_to_library and import_top_n is not None)
+        else entries
+    )
+    import_xml_set = set(to_import_entries)
 
     for entry_xml in entries:
         title = _xml_text(entry_xml, "title").replace("\n", " ").strip()
@@ -2977,7 +3040,7 @@ async def rka_search_arxiv(
         if summary:
             lines.append(f"   {summary[:200]}...")
 
-        if add_to_library:
+        if add_to_library and entry_xml in import_xml_set:
             try:
                 async with _client(project_id) as c:
                     body = {
@@ -5505,9 +5568,12 @@ async def rka_query(
 ) -> str:
     """[ANY] READ from the project knowledge base. ALL read scopes flow through this verb.
 
-    Trigger phrases: "what's the status", "search for", "show me decisions",
-    "list literature", "fetch entity", "context", "research map", "pending
-    maintenance", "open checkpoints".
+    Trigger phrases: "what's the status", "what's blocked", "what needs
+    attention", "what's broken", "search for", "show me decisions",
+    "list literature", "fetch entity", "context", "research map",
+    "render the map", "decision tree", "ego graph", "trace provenance",
+    "multi-hop", "claims", "clusters", "review queue", "open checkpoints",
+    "pending maintenance", "needs ratification".
 
     Args:
         scope: One of the 29 read scopes (status, context, search, entity, ...).
@@ -6032,9 +6098,9 @@ async def rka_session(
 # Continues the Agent A surface (rka_query, rka_record_note,
 # rka_record_decision, rka_session) with 4 additional write/lifecycle
 # verbs:
-#   - rka_record_literature  (5+ modes: add | bibtex | search S2 | search arXiv |
-#                             enrich DOI | link_zotero | process_paper |
-#                             validate_reference)
+#   - rka_record_literature  (several modes: add | bibtex | search S2 |
+#                             search arXiv | enrich DOI | link_zotero |
+#                             process_paper | validate_reference)
 #   - rka_mission            (create | update | update_status |
 #                             submit_report | get_report | advance_rq)
 #   - rka_checkpoint         (submit | resolve | create_gate | evaluate_gate |
@@ -6120,7 +6186,7 @@ async def rka_record_literature(
     ] = None,
     doi: str | None = None,
     authors: list[str] | None = None,
-    year: int | None = None,
+    year_min: int | None = None,
     venue: str | None = None,
     status: Annotated[
         _LitStatusLit,
@@ -6141,9 +6207,11 @@ async def rka_record_literature(
     annotations: list[dict] | None = None,
     summary: str | None = None,
     add_to_library: bool = False,
+    import_top_n: int | None = None,
     limit: int = 10,
+    year: int | None = None,
 ) -> str:
-    """[BRAIN] WRITE / search / import / link literature. Five+ modes:
+    """[BRAIN] WRITE / search / import / link literature. Several modes:
 
     - title=... (default): explicit add via fields
     - bibtex=...: import one or more entries from BibTeX
@@ -6156,7 +6224,8 @@ async def rka_record_literature(
 
     For LIST reads use `rka_query(scope='literature')`. The verb
     accepts `add_to_library=True` on search modes to auto-create
-    library rows for results.
+    library rows for results; pair with `import_top_n=N` to cap the
+    slice of results that get imported.
 
     Args:
         project_id: REQUIRED. Project ID (prj_...).
@@ -6166,7 +6235,12 @@ async def rka_record_literature(
         search_source: 'semantic_scholar' or 'arxiv'.
         doi: DOI identifier.
         authors: Author list.
-        year, venue, abstract, url, tags, related_decisions: optional metadata.
+        year_min: Minimum publication year. On search modes
+            (semantic_scholar / arxiv), filters results to year>=year_min.
+            On default-add mode, populates the paper's publication year
+            directly (a single-paper year is the floor of its own year
+            set). Legacy alias: `year` — deprecated, removal v2.8.
+        venue, abstract, url, tags, related_decisions: optional metadata.
         status: Reading lifecycle for the new entry. Default 'to_read'.
         action: Explicit mode discriminator; overrides kwarg-presence inference.
         lit_id: Existing literature ID — required by enrich_doi /
@@ -6176,7 +6250,12 @@ async def rka_record_literature(
         annotations: Reading-notes list for process_paper mode.
         summary: Overall paper summary for process_paper mode.
         add_to_library: On search modes, auto-add results to RKA.
+        import_top_n: On search modes with add_to_library=True, import
+            only the first N results. None = import all returned.
+            Ignored when add_to_library=False.
         limit: Search result cap (default 10).
+        year: DEPRECATED — alias of `year_min`. Setting both raises
+            `conflicting_args`. Will be removed in v2.8.
     """
     return await _dispatch_record_literature(
         project_id=project_id,
@@ -6186,7 +6265,7 @@ async def rka_record_literature(
         search_source=search_source,
         doi=doi,
         authors=authors,
-        year=year,
+        year_min=year_min,
         venue=venue,
         status=status,
         abstract=abstract,
@@ -6201,7 +6280,9 @@ async def rka_record_literature(
         annotations=annotations,
         summary=summary,
         add_to_library=add_to_library,
+        import_top_n=import_top_n,
         limit=limit,
+        year=year,
     )
 
 
