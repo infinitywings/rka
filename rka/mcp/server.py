@@ -245,16 +245,93 @@ def _record_entity(entity_type: str, entity_id: str, summary: str) -> None:
     )
 
 
-def tool():
+# ---------------------------------------------------------------------------
+# v2.6.3 — Dynamic tool surface (navigator architecture)
+# ---------------------------------------------------------------------------
+# Claude Desktop's tool-surface filter caps the visible/usable rka tools at
+# roughly 30-50 per server before tool-selection accuracy degrades. RKA has
+# ~91 tools; the previous all-eager registration meant a chunk of the
+# literature / claim / hook / cluster surface was effectively invisible to
+# the PI cockpit at session start (empirically surfaced 2026-06-01 during
+# the hyperscaler-auditing mission — PI could not call rka_add_literature
+# even though it was on the wire).
+#
+# v2.6.3 splits the surface into two tiers:
+#
+#   - ALWAYS-ON  (~12 tools): the documented "Minimal Session Start" +
+#     most-frequent writes + the three navigator tools below. Registered
+#     at module import via mcp.tool().
+#   - DEFERRED   (~79 tools): registered into `_TOOL_REGISTRY` but NOT
+#     handed to mcp._tool_manager until the LLM (or PI) calls
+#     `rka_load_tools(names=[...])`. After registration the navigator
+#     fires `notifications/tools/list_changed` (MCP-protocol-level) so
+#     both Claude Desktop AND Claude Code (incl. plugin mode) refresh
+#     their surface and the new tools become callable.
+#
+# Cross-client compatibility:
+#   - The notification mechanism is part of the base MCP protocol; both
+#     Claude Desktop and Claude Code honor it.
+#   - In Claude Code plugin mode the rka MCP appears under the
+#     `mcp__plugin_rka_rka__` namespace; the navigator's `names` argument
+#     takes the UNPREFIXED canonical form (e.g. `rka_add_literature`).
+#     The harness handles namespace translation transparently.
+#   - On older clients that don't honor `tools/list_changed`, deferred
+#     tools simply remain invisible — same as today's effective behavior
+#     for the over-the-cap tools, so this is a strict surface improvement
+#     with no regression.
+#
+# Capability flag: `tools.listChanged: true` is advertised via the
+# NotificationOptions wired into run_stdio_async / run_streamable_http_async
+# at the bottom of this module.
+
+# Categories used by rka_list_tools for browsing. Free-form strings; not
+# enforced by code other than as a filter on the navigator output.
+_TIER_ALWAYS_ON = "always_on"
+_TIER_DEFERRED = "deferred"
+
+# Registry of EVERY rka_* tool — both always-on and deferred. Populated by
+# the @tool() decorator at module import. Used by:
+#   - rka_load_tools to look up a deferred function by name and register it
+#   - rka_list_tools to render the full directory
+#   - rka_help to render a single tool's signature + docstring
+#
+# Shape: { name: {fn, tier, category, summary, signature, registered} }
+#   - registered: bool — flips True once mcp._tool_manager.add_tool has
+#     been called (true at import for always-on; flipped by rka_load_tools
+#     for deferred). Idempotent on repeat loads.
+_TOOL_REGISTRY: dict[str, dict] = {}
+
+
+def _summarize_doc(doc: str | None) -> str:
+    """Pull the first non-empty line of a docstring as the one-line summary
+    used by rka_list_tools."""
+    if not doc:
+        return ""
+    for line in doc.strip().splitlines():
+        s = line.strip()
+        if s:
+            return s
+    return ""
+
+
+def tool(*, tier: str = _TIER_DEFERRED, category: str = "general"):
     """Register an MCP tool and increment session state on every invocation.
 
     The wrapper extracts `project_id` from the call's kwargs (every
     project-scoped tool takes it as a kwarg-only parameter post-v2.6) and
     threads it into the session_start hook firing. Unscoped tools that
     don't carry project_id pass None to the hook which is a no-op there.
+
+    v2.6.3 — `tier` controls whether the tool registers at module import
+    (`always_on`) or only after a navigator call to `rka_load_tools`
+    (`deferred`, the default). `category` is metadata for rka_list_tools.
+    Every tool is recorded in `_TOOL_REGISTRY` regardless of tier so the
+    navigator can list/help/load it.
     """
 
     def decorator(func):
+        import inspect as _inspect
+
         @wraps(func)
         async def wrapper(*args, **kwargs):
             _tick()
@@ -265,7 +342,27 @@ def tool():
             await _maybe_fire_session_start(kwargs.get("project_id"))
             return result
 
-        return mcp.tool()(wrapper)
+        name = func.__name__
+        try:
+            sig_str = str(_inspect.signature(func))
+        except (TypeError, ValueError):  # pragma: no cover
+            sig_str = "(...)"
+        _TOOL_REGISTRY[name] = {
+            "fn": wrapper,
+            "tier": tier,
+            "category": category,
+            "summary": _summarize_doc(func.__doc__),
+            "signature": sig_str,
+            "docstring": (func.__doc__ or "").strip(),
+            "registered": False,
+        }
+        if tier == _TIER_ALWAYS_ON:
+            registered = mcp.tool()(wrapper)
+            _TOOL_REGISTRY[name]["registered"] = True
+            return registered
+        # Deferred — return the wrapped fn so module-level references still
+        # work (tests sometimes import the decorated callable directly).
+        return wrapper
 
     return decorator
 
@@ -379,7 +476,7 @@ def _raise_with_detail(r: httpx.Response) -> None:
 # Knowledge Management
 # ============================================================
 
-@tool()
+@tool(tier="always_on", category="core")
 async def rka_add_note(
     content: str,
     type: str = "note",
@@ -429,7 +526,7 @@ async def rka_add_note(
         return f"Created {d['id']} [{d['type']}] confidence={d['confidence']}"
 
 
-@tool()
+@tool(category="journal")
 async def rka_update_note(
     id: str,
     content: str | None = None,
@@ -479,7 +576,7 @@ async def rka_update_note(
         return f"Updated {id} fields={','.join(changed)}"
 
 
-@tool()
+@tool(category="literature")
 async def rka_add_literature(
     title: str,
     authors: list[str] | None = None,
@@ -526,7 +623,7 @@ async def rka_add_literature(
         return f"Created {d['id']}: {d['title']}"
 
 
-@tool()
+@tool(category="literature")
 async def rka_update_literature(
     id: str,
     title: str | None = None,
@@ -585,7 +682,7 @@ async def rka_update_literature(
         return f"Updated {id}"
 
 
-@tool()
+@tool(category="literature")
 async def rka_link_literature_to_zotero(id: str, *, project_id: str) -> dict:
     """Resolve a literature entry to its Zotero item key for full-text access.
 
@@ -628,7 +725,7 @@ async def rka_link_literature_to_zotero(id: str, *, project_id: str) -> dict:
         return r.json()
 
 
-@tool()
+@tool(category="decision")
 async def rka_add_decision(
     question: str,
     phase: str,
@@ -675,7 +772,7 @@ async def rka_add_decision(
         return f"Created decision {d['id']}: {d['question'][:80]}"
 
 
-@tool()
+@tool(category="decision")
 async def rka_update_decision(
     id: str,
     status: str | None = None,
@@ -734,7 +831,7 @@ async def rka_update_decision(
 # responsible for Stage 1 option generation with PI preference stripped.
 
 
-@tool()
+@tool(category="decision")
 async def rka_present_decision(
     decision_id: str,
     confirmation_brief: str,
@@ -908,7 +1005,7 @@ async def rka_present_decision(
         }, indent=2)
 
 
-@tool()
+@tool(category="decision")
 async def rka_record_pi_selection(
     decision_id: str,
     selected_option_id: str | None = None,
@@ -945,7 +1042,7 @@ async def rka_record_pi_selection(
         return json.dumps(r.json(), indent=2)
 
 
-@tool()
+@tool(category="decision")
 async def rka_record_outcome(
     decision_id: str,
     outcome: str,
@@ -999,7 +1096,7 @@ async def rka_record_outcome(
         return json.dumps(r.json(), indent=2)
 
 
-@tool()
+@tool(category="decision")
 async def rka_get_calibration_metrics(*, project_id: str) -> str:
     """Get calibration metrics for the active project.
 
@@ -1036,7 +1133,7 @@ async def rka_get_calibration_metrics(*, project_id: str) -> str:
 # tools itself).
 
 
-@tool()
+@tool(category="hooks")
 async def rka_add_hook(
     event: str,
     handler_type: str,
@@ -1082,7 +1179,7 @@ async def rka_add_hook(
         return json.dumps(r.json(), indent=2)
 
 
-@tool()
+@tool(category="hooks")
 async def rka_list_hooks(
     event: str | None = None,
     enabled_only: bool = False,
@@ -1106,7 +1203,7 @@ async def rka_list_hooks(
         return json.dumps(r.json(), indent=2)
 
 
-@tool()
+@tool(category="hooks")
 async def rka_enable_hook(hook_id: str, *, project_id: str) -> str:
     """Enable a previously-disabled hook."""
     async with _client(project_id) as c:
@@ -1115,7 +1212,7 @@ async def rka_enable_hook(hook_id: str, *, project_id: str) -> str:
         return json.dumps(r.json(), indent=2)
 
 
-@tool()
+@tool(category="hooks")
 async def rka_disable_hook(hook_id: str, *, project_id: str) -> str:
     """Disable a hook without deleting it. Re-enable later via rka_enable_hook."""
     async with _client(project_id) as c:
@@ -1124,7 +1221,7 @@ async def rka_disable_hook(hook_id: str, *, project_id: str) -> str:
         return json.dumps(r.json(), indent=2)
 
 
-@tool()
+@tool(category="hooks")
 async def rka_delete_hook(hook_id: str, *, project_id: str) -> str:
     """Delete a hook permanently. Cascades to hook_executions via FK."""
     async with _client(project_id) as c:
@@ -1135,7 +1232,7 @@ async def rka_delete_hook(hook_id: str, *, project_id: str) -> str:
         return json.dumps({"deleted": hook_id})
 
 
-@tool()
+@tool(category="hooks")
 async def rka_get_hook_executions(
     hook_id: str | None = None,
     since: str | None = None,
@@ -1165,7 +1262,7 @@ async def rka_get_hook_executions(
         return json.dumps(r.json(), indent=2)
 
 
-@tool()
+@tool(category="hooks")
 async def rka_get_brain_notifications(
     since: str | None = None,
     include_cleared: bool = False,
@@ -1192,7 +1289,7 @@ async def rka_get_brain_notifications(
         return json.dumps(r.json(), indent=2)
 
 
-@tool()
+@tool(category="hooks")
 async def rka_clear_brain_notifications(ids: list[str], *, project_id: str) -> str:
     """Mark a list of brain_notifications as cleared (read).
 
@@ -1205,7 +1302,7 @@ async def rka_clear_brain_notifications(ids: list[str], *, project_id: str) -> s
         return json.dumps(r.json(), indent=2)
 
 
-@tool()
+@tool(category="maintenance")
 async def rka_bulk_update(
     updates: list[dict],
     *,
@@ -1271,7 +1368,7 @@ async def rka_bulk_update(
 # Mission Lifecycle
 # ============================================================
 
-@tool()
+@tool(category="mission")
 async def rka_create_mission(
     phase: str,
     objective: str,
@@ -1342,7 +1439,7 @@ async def rka_create_mission(
         return "\n".join(lines)
 
 
-@tool()
+@tool(category="mission")
 async def rka_get_mission(id: str | None = None, *, project_id: str) -> str:
     """Get a mission. Returns the active mission if no ID given.
 
@@ -1364,7 +1461,7 @@ async def rka_get_mission(id: str | None = None, *, project_id: str) -> str:
         return "No active or pending mission."
 
 
-@tool()
+@tool(category="mission")
 async def rka_update_mission_status(
     id: str,
     status: MissionStatusLiteral,
@@ -1389,7 +1486,7 @@ async def rka_update_mission_status(
         return f"Mission {id} → {status}"
 
 
-@tool()
+@tool(category="mission")
 async def rka_update_mission(
     id: str,
     phase: str | None = None,
@@ -1454,7 +1551,7 @@ async def rka_update_mission(
         return f"Updated mission {id} fields={','.join(changed)}"
 
 
-@tool()
+@tool(category="mission")
 async def rka_submit_report(
     mission_id: str,
     summary: str | None = None,
@@ -1540,7 +1637,7 @@ async def rka_submit_report(
         return f"Report submitted for mission {mission_id}"
 
 
-@tool()
+@tool(category="mission")
 async def rka_get_report(mission_id: str | None = None, *, project_id: str) -> str:
     """Get mission report. Defaults to latest complete mission.
 
@@ -1569,7 +1666,7 @@ async def rka_get_report(mission_id: str | None = None, *, project_id: str) -> s
 # Checkpoints
 # ============================================================
 
-@tool()
+@tool(category="checkpoint")
 async def rka_submit_checkpoint(
     mission_id: str,
     type: CheckpointTypeLiteral,
@@ -1632,7 +1729,7 @@ async def rka_submit_checkpoint(
         return f"Checkpoint {d['id']} created ({type}, {'blocking' if blocking else 'non-blocking'})"
 
 
-@tool()
+@tool(tier="always_on", category="checkpoint")
 async def rka_get_checkpoints(status: str = "open", *, project_id: str) -> str:
     """Get checkpoints. Defaults to open checkpoints.
 
@@ -1671,7 +1768,7 @@ async def rka_get_checkpoints(status: str = "open", *, project_id: str) -> str:
         return "\n".join(lines)
 
 
-@tool()
+@tool(tier="always_on", category="checkpoint")
 async def rka_resolve_checkpoint(
     id: str,
     resolution: str,
@@ -1700,7 +1797,7 @@ async def rka_resolve_checkpoint(
         return f"Checkpoint {id} resolved by {resolved_by}"
 
 
-@tool()
+@tool(category="checkpoint")
 async def rka_create_gate(
     mission_id: str,
     gate_type: str,
@@ -1759,7 +1856,7 @@ async def rka_create_gate(
     return "\n".join(lines)
 
 
-@tool()
+@tool(category="checkpoint")
 async def rka_evaluate_gate(
     gate_id: str,
     verdict: str,
@@ -1840,7 +1937,7 @@ async def rka_evaluate_gate(
 # Retrieval & Search
 # ============================================================
 
-@tool()
+@tool(tier="always_on", category="core")
 async def rka_search(
     query: str,
     entity_types: list[str] | None = None,
@@ -1902,7 +1999,7 @@ async def rka_search(
         return "\n".join(lines) + degraded_line + backlog_line
 
 
-@tool()
+@tool(tier="always_on", category="core")
 async def rka_get(
     id: str,
     *,
@@ -1956,7 +2053,7 @@ async def rka_get(
         return json.dumps(data, indent=2, default=str)
 
 
-@tool()
+@tool(category="decision")
 async def rka_get_decision_tree(
     root_id: str | None = None,
     phase: str | None = None,
@@ -2009,7 +2106,7 @@ async def rka_get_decision_tree(
         return "\n".join(output) if output else "No decisions found."
 
 
-@tool()
+@tool(category="literature")
 async def rka_get_literature(
     status: str | None = None,
     query: str | None = None,
@@ -2046,7 +2143,7 @@ async def rka_get_literature(
         return "\n".join(lines)
 
 
-@tool()
+@tool(category="journal")
 async def rka_get_journal(
     type: str | None = None,
     phase: str | None = None,
@@ -2097,7 +2194,7 @@ async def rka_get_journal(
 # Project Selection
 # ============================================================
 
-@tool()
+@tool(category="core")
 async def rka_list_projects() -> str:
     """List all available projects.
 
@@ -2125,7 +2222,7 @@ async def rka_list_projects() -> str:
     return "\n".join(lines)
 
 
-@tool()
+@tool(category="core")
 async def rka_set_project(project_id: str) -> str:
     """**DEPRECATED in v2.6.** This tool no longer sets server-side state.
 
@@ -2183,7 +2280,7 @@ async def rka_set_project(project_id: str) -> str:
     )
 
 
-@tool()
+@tool(category="core")
 async def rka_create_project(
     name: str,
     description: str | None = None,
@@ -2217,7 +2314,7 @@ async def rka_create_project(
 # Project State
 # ============================================================
 
-@tool()
+@tool(tier="always_on", category="core")
 async def rka_get_status(*, project_id: str) -> str:
     """Get full project state: phase, active mission, open checkpoints, metrics."""
     async with _client(project_id) as c:
@@ -2296,7 +2393,7 @@ async def rka_get_status(*, project_id: str) -> str:
         return "\n".join(lines)
 
 
-@tool()
+@tool(category="core")
 async def rka_update_status(
     current_phase: str | None = None,
     summary: str | None = None,
@@ -2348,7 +2445,7 @@ async def rka_update_status(
 # Academic / Import Tools
 # ============================================================
 
-@tool()
+@tool(category="literature")
 async def rka_import_bibtex(
     bibtex: str,
     default_status: str = "to_read",
@@ -2387,7 +2484,7 @@ async def rka_import_bibtex(
         return "\n".join(lines)
 
 
-@tool()
+@tool(category="literature")
 async def rka_enrich_doi(lit_id: str, *, project_id: str) -> str:
     """Enrich a literature entry by looking up its DOI via CrossRef.
 
@@ -2406,7 +2503,7 @@ async def rka_enrich_doi(lit_id: str, *, project_id: str) -> str:
         return f"No updates needed for {lit_id}"
 
 
-@tool()
+@tool(category="graph")
 async def rka_export_mermaid(
     phase: str | None = None,
     active_only: bool = False,
@@ -2433,7 +2530,7 @@ async def rka_export_mermaid(
         return data.get("mermaid", "graph TD\n    empty[No decisions yet]")
 
 
-@tool()
+@tool(category="workspace")
 async def rka_batch_import(
     entries: list[dict],
     actor: str = "import",
@@ -2463,7 +2560,7 @@ async def rka_batch_import(
         return "\n".join(lines)
 
 
-@tool()
+@tool(category="workspace")
 async def rka_ingest_document(
     content: str,
     source: IngestSourceLiteral = "brain",
@@ -2525,7 +2622,7 @@ async def rka_ingest_document(
 # Export
 # ============================================================
 
-@tool()
+@tool(category="session")
 async def rka_export(format: str = "markdown", scope: str = "state", *, project_id: str) -> str:
     """Export research data.
 
@@ -2571,7 +2668,7 @@ async def rka_export(format: str = "markdown", scope: str = "state", *, project_
 # Phase 2: Context, Summarization, Eviction
 # ============================================================
 
-@tool()
+@tool(tier="always_on", category="core")
 async def rka_get_context(
     topic: str | None = None,
     phase: str | None = None,
@@ -2624,7 +2721,7 @@ async def rka_get_context(
         return "\n".join(lines)
 
 
-@tool()
+@tool(category="session")
 async def rka_summarize(
     topic: str | None = None,
     phase: str | None = None,
@@ -2652,7 +2749,7 @@ async def rka_summarize(
         )
 
 
-@tool()
+@tool(category="maintenance")
 async def rka_eviction_sweep(dry_run: bool = True, *, project_id: str) -> str:
     """Propose entries for archival based on staleness rules.
 
@@ -2681,7 +2778,7 @@ async def rka_eviction_sweep(dry_run: bool = True, *, project_id: str) -> str:
 # Academic Search (Semantic Scholar + arXiv)
 # ============================================================
 
-@tool()
+@tool(category="literature")
 async def rka_search_semantic_scholar(
     query: str,
     limit: int = 10,
@@ -2774,7 +2871,7 @@ async def rka_search_semantic_scholar(
     return "\n".join(lines)
 
 
-@tool()
+@tool(category="literature")
 async def rka_search_arxiv(
     query: str,
     limit: int = 10,
@@ -2879,7 +2976,7 @@ def _xml_text(xml: str, tag: str) -> str:
 # ============================================================
 
 
-@tool()
+@tool(category="workspace")
 async def rka_scan_workspace_tree(
     folder_path: str,
     max_depth: int = 2,
@@ -3005,7 +3102,7 @@ async def rka_scan_workspace_tree(
     return "\n".join(output_lines)
 
 
-@tool()
+@tool(category="workspace")
 async def rka_scan_workspace(
     folder_path: str,
     ignore_patterns: list[str] | None = None,
@@ -3225,7 +3322,7 @@ async def rka_scan_workspace(
     return "\n".join(lines)
 
 
-@tool()
+@tool(category="workspace")
 async def rka_bootstrap_workspace(
     folder_path: str,
     phase: str | None = None,
@@ -3481,7 +3578,7 @@ async def rka_bootstrap_workspace(
     return "\n".join(lines)
 
 
-@tool()
+@tool(category="workspace")
 async def rka_review_bootstrap(scan_id: str, *, project_id: str) -> str:
     """Review a completed bootstrap for reorganization.
 
@@ -3536,7 +3633,7 @@ async def rka_review_bootstrap(scan_id: str, *, project_id: str) -> str:
 # Graph & Research Map
 # ============================================================
 
-@tool()
+@tool(category="graph")
 async def rka_get_graph(
     include_types: str | None = None,
     phase: str | None = None,
@@ -3573,7 +3670,7 @@ async def rka_get_graph(
         )
 
 
-@tool()
+@tool(category="graph")
 async def rka_get_ego_graph(entity_id: str, depth: int = 1, *, project_id: str) -> str:
     """Get the neighborhood subgraph around a specific entity.
 
@@ -3598,7 +3695,7 @@ async def rka_get_ego_graph(entity_id: str, depth: int = 1, *, project_id: str) 
 
 
 
-@tool()
+@tool(category="graph")
 async def rka_graph_stats(*, project_id: str) -> str:
     """Get knowledge graph statistics: entity counts, edge counts by type."""
     async with _client(project_id) as c:
@@ -3619,7 +3716,7 @@ async def rka_graph_stats(*, project_id: str) -> str:
 # Summaries & QA (NotebookLM-style)
 # ============================================================
 
-@tool()
+@tool(category="session")
 async def rka_generate_summary(
     scope_type: str = "project",
     scope_id: str | None = None,
@@ -3665,7 +3762,7 @@ async def rka_generate_summary(
         return "\n".join(lines)
 
 
-@tool()
+@tool(category="session")
 async def rka_ask(
     question: str,
     session_id: str | None = None,
@@ -3716,7 +3813,7 @@ async def rka_ask(
 # Session State
 # ============================================================
 
-@tool()
+@tool(category="session")
 async def rka_session_digest(*, project_id: str) -> str:
     """Get a compact summary of the current MCP session.
 
@@ -3785,7 +3882,7 @@ async def rka_session_digest(*, project_id: str) -> str:
     return "\n".join(lines)
 
 
-@tool()
+@tool(category="session")
 async def rka_reset_session() -> str:
     """Reset MCP session tracking state without restarting the MCP server.
 
@@ -3799,7 +3896,7 @@ async def rka_reset_session() -> str:
     return "Session state reset. Tool-call counter, entity log, and session_start fired-markers cleared."
 
 
-@tool()
+@tool(category="session")
 async def rka_generate_claude_md(
     role: str = "executor",
     *,
@@ -3826,7 +3923,7 @@ async def rka_generate_claude_md(
 # v2.0: Research Map, Claims, Provenance, Review Queue
 # ============================================================
 
-@tool()
+@tool(category="claims")
 async def rka_list_clusters(
     research_question_id: str | None = None,
     confidence: str | None = None,
@@ -3870,7 +3967,7 @@ async def rka_list_clusters(
     return "\n".join(lines)
 
 
-@tool()
+@tool(tier="always_on", category="claims")
 async def rka_get_research_map(*, project_id: str) -> str:
     """Get the three-level research map: Research Questions → Evidence Clusters → Claims.
 
@@ -3926,7 +4023,7 @@ async def rka_get_research_map(*, project_id: str) -> str:
     return "\n".join(lines)
 
 
-@tool()
+@tool(category="claims")
 async def rka_get_claims(
     source_entry_id: str | None = None,
     cluster_id: str | None = None,
@@ -3979,7 +4076,7 @@ async def rka_get_claims(
     return "\n".join(lines)
 
 
-@tool()
+@tool(category="claims")
 async def rka_extract_claims(
     entry_id: str,
     claims: list[dict],
@@ -4055,7 +4152,7 @@ async def rka_extract_claims(
     return "\n".join(lines)
 
 
-@tool()
+@tool(category="claims")
 async def rka_create_cluster(
     label: str,
     research_question_id: str | None = None,
@@ -4117,7 +4214,7 @@ async def rka_create_cluster(
     return ", ".join(parts)
 
 
-@tool()
+@tool(category="claims")
 async def rka_assign_claims_to_cluster(
     cluster_id: str,
     claim_ids: list[str],
@@ -4150,7 +4247,7 @@ async def rka_assign_claims_to_cluster(
     return f"Assigned {len([r for r in results if 'assigned' in r])}/{len(claim_ids)} claims to cluster {cluster_id}:\n" + "\n".join(results)
 
 
-@tool()
+@tool(category="decision")
 async def rka_supersede_decision(
     old_decision_id: str,
     question: str,
@@ -4197,7 +4294,7 @@ async def rka_supersede_decision(
     return json.dumps(result, indent=2, default=str)
 
 
-@tool()
+@tool(category="claims")
 async def rka_trace_provenance(
     entity_id: str,
     direction: str = "both",
@@ -4243,7 +4340,7 @@ async def rka_trace_provenance(
     return "\n".join(lines)
 
 
-@tool()
+@tool(category="claims")
 async def rka_multi_hop_retrieval(
     query: str,
     seeds: list[str] | None = None,
@@ -4317,7 +4414,7 @@ async def rka_multi_hop_retrieval(
     return "\n".join(lines)
 
 
-@tool()
+@tool(category="claims")
 async def rka_get_review_queue(
     status: str = "pending",
     limit: int = 20,
@@ -4350,7 +4447,7 @@ async def rka_get_review_queue(
     return "\n".join(lines)
 
 
-@tool()
+@tool(category="claims")
 async def rka_review_cluster(
     cluster_id: str,
     confidence: str,
@@ -4404,7 +4501,7 @@ async def rka_review_cluster(
     return ", ".join(parts)
 
 
-@tool()
+@tool(category="claims")
 async def rka_review_claims(
     claim_ids: list[str],
     action: str = "approve",
@@ -4439,7 +4536,7 @@ async def rka_review_claims(
     return "\n".join(results)
 
 
-@tool()
+@tool(category="claims")
 async def rka_resolve_contradiction(
     cluster_id: str,
     resolution: str,
@@ -4487,7 +4584,7 @@ async def rka_resolve_contradiction(
 # ============================================================
 
 
-@tool()
+@tool(category="session")
 async def rka_get_changelog(
     since: str,
     limit: int = 50,
@@ -4536,7 +4633,7 @@ async def rka_get_changelog(
     return "\n".join(lines)
 
 
-@tool()
+@tool(category="claims")
 async def rka_assemble_evidence(
     research_question_id: str,
     format: str = "progress_report",
@@ -4564,7 +4661,7 @@ async def rka_assemble_evidence(
     return data["content"]
 
 
-@tool()
+@tool(category="claims")
 async def rka_split_cluster(
     source_id: str,
     new_clusters: list[dict],
@@ -4596,7 +4693,7 @@ async def rka_split_cluster(
     return "\n".join(lines)
 
 
-@tool()
+@tool(category="claims")
 async def rka_merge_clusters(
     source_ids: list[str],
     target_label: str,
@@ -4635,7 +4732,7 @@ async def rka_merge_clusters(
     return "\n".join(lines)
 
 
-@tool()
+@tool(category="literature")
 async def rka_process_paper(
     lit_id: str,
     annotations: list[dict],
@@ -4686,7 +4783,7 @@ async def rka_process_paper(
     return "\n".join(lines)
 
 
-@tool()
+@tool(category="claims")
 async def rka_advance_rq(
     rq_id: str,
     status: str,
@@ -4732,7 +4829,7 @@ async def rka_advance_rq(
     return "\n".join(lines)
 
 
-@tool()
+@tool(category="maintenance")
 async def rka_check_integrity(*, project_id: str) -> str:
     """Verify knowledge base integrity — check for orphaned edges, missing references, and count mismatches.
 
@@ -4768,7 +4865,7 @@ async def rka_check_integrity(*, project_id: str) -> str:
 # ============================================================
 
 
-@tool()
+@tool(category="maintenance")
 async def rka_flag_stale(
     entity_id: str,
     reason: str,
@@ -4804,7 +4901,7 @@ async def rka_flag_stale(
     return "\n".join(lines)
 
 
-@tool()
+@tool(category="maintenance")
 async def rka_check_freshness(
     days_threshold: int = 30,
     *,
@@ -4842,7 +4939,7 @@ async def rka_check_freshness(
     return "\n".join(lines)
 
 
-@tool()
+@tool(category="maintenance")
 async def rka_detect_contradictions(
     entity_id: str,
     similarity_threshold: float = 0.7,
@@ -4889,7 +4986,7 @@ async def rka_detect_contradictions(
 # ============================================================
 
 
-@tool()
+@tool(tier="always_on", category="maintenance")
 async def rka_get_pending_maintenance(*, project_id: str) -> str:
     """Detect knowledge base gaps that need attention. Pure SQL — no LLM needed.
 
@@ -4944,7 +5041,7 @@ async def rka_get_pending_maintenance(*, project_id: str) -> str:
 # Phase 1+2 strict bookkeeper invariant returns after Phase 3 merges.
 
 
-@tool()
+@tool(category="manuscript")
 async def rka_register_manuscript(
     venue: str,
     title: str,
@@ -4978,7 +5075,7 @@ async def rka_register_manuscript(
     return json.dumps(data, indent=2)
 
 
-@tool()
+@tool(category="manuscript")
 async def rka_get_manuscript(manuscript_id: str, *, project_id: str) -> str:
     """Read a manuscript manifest by id.
 
@@ -4996,7 +5093,7 @@ async def rka_get_manuscript(manuscript_id: str, *, project_id: str) -> str:
     return json.dumps(data, indent=2)
 
 
-@tool()
+@tool(category="literature")
 async def rka_validate_reference(
     manuscript_id: str,
     doi: str | None = None,
@@ -5042,6 +5139,244 @@ async def rka_validate_reference(
         _raise_with_detail(r)
         data = r.json()
     return json.dumps(data, indent=2)
+
+
+# ============================================================
+# v2.6.3 — Navigator tools (dynamic tool surface)
+# ============================================================
+# Three always-on tools that operate on `_TOOL_REGISTRY`:
+#   - rka_load_tools : register deferred tools on demand + fire listChanged
+#   - rka_list_tools : browse the full catalog by category / keyword
+#   - rka_help       : per-tool signature + docstring
+#
+# The MCP `tools.listChanged: true` capability is advertised via the
+# `_run_stdio_async_with_list_changed` patch immediately below the prompts
+# block, which threads NotificationOptions(tools_changed=True) into
+# create_initialization_options().
+
+from mcp.server.fastmcp import Context as _MCPContext
+
+
+@tool(tier=_TIER_ALWAYS_ON, category="navigator")
+async def rka_load_tools(names: list[str], ctx: _MCPContext) -> str:
+    """Activate deferred RKA tools by name (dynamic tool surface, v2.6.3).
+
+    RKA's MCP server publishes ~12 always-on tools at session start; the
+    remaining ~79 are deferred to stay under the practical tool-surface
+    cap of typical MCP clients (~30-50 tools). Call this navigator to
+    bring deferred tools into the active surface, then call them
+    normally.
+
+    Names are the canonical UNPREFIXED rka_* form (e.g. `rka_add_literature`).
+    In Claude Code plugin mode the harness presents the tool as
+    `mcp__plugin_rka_rka__rka_add_literature`; the harness handles namespace
+    translation — you still pass the bare name here.
+
+    Behavior:
+      - Already-active tools are skipped (idempotent).
+      - Unknown names are returned in `unknown` with no error.
+      - On success, the server emits `notifications/tools/list_changed`
+        which both Claude Desktop and Claude Code honor; their tool
+        surfaces refresh within ~1 round-trip and the newly-loaded tools
+        become callable.
+
+    Args:
+        names: list of canonical rka_* tool names to load.
+
+    Returns:
+        JSON: `{loaded: [...], already_active: [...], unknown: [...]}`.
+
+    See also: `rka_list_tools` (browse), `rka_help` (single-tool detail).
+    """
+    loaded: list[str] = []
+    already: list[str] = []
+    unknown: list[str] = []
+    for raw in names or []:
+        name = (raw or "").strip()
+        if not name:
+            continue
+        rec = _TOOL_REGISTRY.get(name)
+        if rec is None:
+            unknown.append(name)
+            continue
+        if rec["registered"]:
+            already.append(name)
+            continue
+        # Defer to FastMCP's tool manager — same path the @mcp.tool()
+        # decorator uses at module-import; the wrapper's @wraps(func)
+        # preserved the inner function's signature + annotations, so
+        # the resulting inputSchema matches what an always-on tool of
+        # the same shape would have rendered.
+        mcp._tool_manager.add_tool(rec["fn"], name=name)
+        rec["registered"] = True
+        loaded.append(name)
+    # Fire the MCP-protocol-level notification iff anything actually
+    # changed. The MCP spec says clients SHOULD refetch tools/list on
+    # receipt; both Claude Desktop and Claude Code do.
+    if loaded:
+        try:
+            await ctx.session.send_tool_list_changed()
+        except Exception:
+            # Failure to notify shouldn't reverse the registration —
+            # the next time the client calls tools/list (e.g. on the
+            # next initialization or by manual refresh) it will see the
+            # full surface.
+            pass
+    return json.dumps(
+        {"loaded": loaded, "already_active": already, "unknown": unknown},
+        indent=2,
+    )
+
+
+@tool(tier=_TIER_ALWAYS_ON, category="navigator")
+async def rka_list_tools(
+    category: str | None = None,
+    query: str | None = None,
+    tier: str | None = None,
+) -> str:
+    """Browse the rka tool catalog — active + deferred, filterable.
+
+    Use this to discover which RKA tools exist, what category they're
+    in, and whether they're currently loaded. Combine with
+    `rka_load_tools` to bring deferred tools online.
+
+    Args:
+        category: optional category filter — one of:
+            core | literature | journal | decision | mission |
+            checkpoint | claims | graph | workspace | hooks |
+            maintenance | session | manuscript | navigator | general.
+        query: optional substring match against name + summary
+            (case-insensitive). For finding tools when you know what
+            you want to do but not the exact name.
+        tier: optional `always_on` or `deferred` filter.
+
+    Returns:
+        JSON: `{categories: {<cat>: [{name, tier, summary, registered}, ...]}}`.
+        Tools are grouped by category for readability.
+    """
+    q = (query or "").lower().strip()
+    cat = (category or "").strip().lower() or None
+    tier_filter = (tier or "").strip().lower() or None
+    groups: dict[str, list[dict]] = {}
+    for name, rec in sorted(_TOOL_REGISTRY.items()):
+        if cat and rec["category"] != cat:
+            continue
+        if tier_filter and rec["tier"] != tier_filter:
+            continue
+        if q and q not in name.lower() and q not in rec["summary"].lower():
+            continue
+        groups.setdefault(rec["category"], []).append({
+            "name": name,
+            "tier": rec["tier"],
+            "summary": rec["summary"],
+            "registered": rec["registered"],
+        })
+    return json.dumps(
+        {
+            "total_tools": len(_TOOL_REGISTRY),
+            "filtered_count": sum(len(v) for v in groups.values()),
+            "categories": groups,
+        },
+        indent=2,
+    )
+
+
+@tool(tier=_TIER_ALWAYS_ON, category="navigator")
+async def rka_help(name: str) -> str:
+    """Render full documentation for one rka tool by canonical name.
+
+    Works whether the tool is currently active or deferred. Use this to
+    inspect a tool's signature + docstring before calling
+    `rka_load_tools` to bring it online.
+
+    Args:
+        name: canonical rka_* tool name (e.g. `rka_add_literature`).
+
+    Returns:
+        JSON: `{name, tier, category, signature, summary, docstring, registered}`.
+        Returns `{error: "unknown_tool", name}` if the tool does not exist.
+    """
+    rec = _TOOL_REGISTRY.get((name or "").strip())
+    if rec is None:
+        return json.dumps({"error": "unknown_tool", "name": name}, indent=2)
+    return json.dumps(
+        {
+            "name": name,
+            "tier": rec["tier"],
+            "category": rec["category"],
+            "signature": rec["signature"],
+            "summary": rec["summary"],
+            "docstring": rec["docstring"],
+            "registered": rec["registered"],
+        },
+        indent=2,
+    )
+
+
+# ============================================================
+# v2.6.3 — listChanged capability wiring
+# ============================================================
+# FastMCP's default run_stdio_async / run_streamable_http_async pass
+# `notification_options=None` to create_initialization_options, which
+# defaults to NotificationOptions(False, False, False) — meaning the
+# server advertises `tools.listChanged: false` in the initialize
+# response handshake. Both Claude Desktop and Claude Code respect that
+# flag and won't re-fetch tools/list on receipt of a list-changed
+# notification.
+#
+# We re-bind both run-* methods to pass NotificationOptions(
+# tools_changed=True), preserving the rest of the body verbatim. The
+# patch is at module load so importing tests that use the FastMCP
+# instance see the same behavior as the production stdio entry point.
+
+from mcp.server.lowlevel.server import NotificationOptions as _NotificationOptions
+from mcp.server.stdio import stdio_server as _stdio_server
+
+
+async def _run_stdio_async_with_list_changed(self) -> None:
+    """v2.6.3 — same body as FastMCP.run_stdio_async, but advertises
+    tools.listChanged=true via NotificationOptions."""
+    async with _stdio_server() as (read_stream, write_stream):
+        await self._mcp_server.run(
+            read_stream,
+            write_stream,
+            self._mcp_server.create_initialization_options(
+                notification_options=_NotificationOptions(tools_changed=True),
+            ),
+        )
+
+
+mcp.run_stdio_async = _run_stdio_async_with_list_changed.__get__(mcp, type(mcp))
+
+
+# Patch the Streamable-HTTP path the same way for parity. The default
+# FastMCP body uses an internal Starlette app; the create_initialization
+# options call is inside the request handler at
+# mcp.server.streamable_http_manager. We override the FastMCP-level
+# accessor `create_initialization_options` itself so EVERY transport
+# that ultimately calls into it picks up tools_changed=True.
+
+_orig_create_init = mcp._mcp_server.create_initialization_options
+
+
+def _create_init_with_list_changed(notification_options=None, experimental_capabilities=None):
+    """Force tools_changed=True regardless of caller (covers run_streamable_http_async,
+    run_sse_async, and any future transport). If the caller supplied its own
+    NotificationOptions, OR in tools_changed=True non-destructively."""
+    if notification_options is None:
+        notification_options = _NotificationOptions(tools_changed=True)
+    else:
+        # Preserve whatever the caller asked for on prompts/resources;
+        # force tools_changed True for v2.6.3.
+        notification_options = _NotificationOptions(
+            prompts_changed=getattr(notification_options, "prompts_changed", False),
+            resources_changed=getattr(notification_options, "resources_changed", False),
+            tools_changed=True,
+        )
+    return _orig_create_init(notification_options, experimental_capabilities)
+
+
+mcp._mcp_server.create_initialization_options = _create_init_with_list_changed
 
 
 # ============================================================
