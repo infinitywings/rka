@@ -3,6 +3,155 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [2.7.0a2] — 2026-06-02 (alpha patch — alwaysLoad _meta + rka_query trigger phrases + rka_record_literature fixes from PR-4 A/B empirical findings)
+
+**Empirical patch on top of v2.7.0a1.** A 5-test PI A/B against the
+v2.7.0a1 verb surface (workflow `whvuxrvvj`'s output, run live in
+PI cockpit on 2026-06-02) produced:
+
+- **T1** (`rka_query` for "what's the project status") — verb surfaced
+  and was chosen ✅
+- **T2** (`rka_query` for "what's blocked, render the research map")
+  — verb did NOT surface; ToolSearch promoted the 4 specific legacy
+  reads (`rka_get_status`, `rka_get_checkpoints`,
+  `rka_get_pending_maintenance`, `rka_get_research_map`) instead.
+  Empirical signal: umbrella verbs lose to specific legacy tools when
+  prompt vocabulary semantically matches the legacy tool NAMES rather
+  than the verb's trigger phrases. ❌
+- **T3** (`rka_record_decision` for "record this decision") — verb
+  surfaced via Claude Code's `tool_search` mechanism; cockpit
+  correctly identified `question` (not `content`) as primary body
+  field; provenance discipline preserved. ✅ Architectural reveal:
+  Claude Code uses a built-in client-side `tool_search` meta-tool,
+  parallel to our server-side `rka_load_tools`. Confirms workflow
+  `w86p5bxrp`'s Finding #2 — `_meta["anthropic/alwaysLoad"]` is
+  the documented server-side hint that bypasses ToolSearch.
+- **T4** (`rka_record_literature` for "find recent papers") —
+  verb surfaced ✅; cockpit caught three real bugs via schema
+  introspection: `import_top_n` field missing from impl,
+  `add_to_library` boolean instead; `year` semantics ambiguous
+  (exact vs since); docstring "Five+ modes" drift.
+- **T5** (`rka_review` god-verb test) — INCONCLUSIVE: review queue
+  was empty so no write was needed; cockpit correctly avoided
+  fabricating a review action.
+
+### Changed — five fixes batched
+
+**Fix 1: `_meta["anthropic/alwaysLoad"]: true` on 20 always-on tools**
+(decision D1 = Option A, Anthropic-documented). Extended the
+`@tool()` decorator in `rka/mcp/server.py` to accept
+`always_load: bool | None = None`. None default infers True from
+`tier="always_on"`, False from `tier="deferred"`. The wiring threads
+through to `mcp.tool(meta={"anthropic/alwaysLoad": True})(...)` at
+registration time. **This is the load-bearing fix**: Claude Code v2.1.121+
+respects the hint and unconditionally surfaces tagged tools every
+turn, bypassing the per-turn ToolSearch relevance filter that
+caused T2's failure.
+
+Verified via FastMCP probe: `mcp._tool_manager.list_tools()[i].meta`
+returns `{"anthropic/alwaysLoad": True}` for each of the 20 always-on
+tools; missing for the 79 deferred legacy tools.
+
+**Fix 2: `rka_query` description trigger phrases expanded** (T2
+falsification). The original description listed 5 trigger phrases
+("what's the status", "search for", "show me decisions", "list
+literature", "fetch entity"). v2.7.0a2 adds the T2 vocabulary:
+"what's blocked", "needs attention", "what's broken", "open
+checkpoints", "pending maintenance", "needs ratification",
+"research map", "render the map", "decision tree", "ego graph",
+"trace provenance", "multi-hop", "claims", "clusters", "review
+queue". Description length 1139 chars (was ~480) — over Anthropic's
+guidance, but ToolSearch ranking benefits should outweigh the
+slight description-bloat cost. Watch and tune.
+
+**Fix 3: `import_top_n` + `add_to_library` compose** (decision D2 = Option C,
+Hybrid). The cockpit's R5 critique was correct that the original
+4-mode design's "import top N" concept couldn't be expressed.
+v2.7.0a2 adds `import_top_n: int | None = None` as a search-mode-only
+ceiling parameter, composed with `add_to_library: bool` as the gate.
+- `add_to_library=False` (default) → search/display only, no import,
+  `import_top_n` ignored.
+- `add_to_library=True` + `import_top_n=None` → import all returned
+  (current default behavior, backwards-compatible).
+- `add_to_library=True` + `import_top_n=N` → import only the first N.
+
+Implementation in `rka/mcp/server.py`: legacy
+`rka_search_semantic_scholar` and `rka_search_arxiv` get the same
+kwarg + slice the import loop. The verb `rka_record_literature`
+threads it through `dispatch_record_literature`. New tests in
+`tests/test_mcp/test_v270_verb_dispatch.py` cover the three modes.
+
+**Fix 4: `year` → `year_min` rename with deprecated `year` alias**
+(decision D3 = Option A). Backend evidence (`rka/services/literature.py:99-120`,
+`rka/api/routes/literature.py:25-34`, `rka_search_semantic_scholar`
+at `rka/mcp/server.py:2823`) confirms the canonical filter shape
+is `year_min` / `year_max` (≥, ≤). The verb's existing `year`
+kwarg overloaded paper-year (default-add mode) AND filter-year
+(search modes), which was the source of T4's confusion. v2.7.0a2
+renames to `year_min`; `year` is preserved as a deprecated alias
+that maps to `year_min` for one release. Backwards-compatible.
+
+**Fix 5: docstring "Five+ modes" → "Several modes"** (cosmetic).
+The original docstring claimed "Five+ modes" but the design doc
+said "4 modes" — neither was right (the docstring actually listed
+8 sub-modes via bullets). Normalized to "Several modes" to avoid
+false-precision drift. Documentation-only.
+
+### Tests (7 new, all passing)
+
+`tests/test_mcp/test_v270a2_always_load_meta.py`:
+- `test_every_always_on_tool_has_always_load_meta` — pins the
+  load-bearing invariant: all 20 always-on tools carry the meta hint.
+- `test_deferred_tools_do_not_have_always_load_meta` — pins the
+  inverse: deferred tools must not be pinned (defeats the design).
+- `test_always_load_survives_tools_list_response` — wire-protocol
+  contract check via FastMCP serialization.
+- `test_rka_query_description_contains_t2_trigger_phrases` —
+  asserts T2-falsified vocabulary is in the description.
+- `test_rka_record_literature_decision_2_compliance` — `import_top_n`
+  + `add_to_library` parameters present with correct types.
+- `test_rka_record_literature_decision_3_compliance` — `year_min`
+  parameter present; `year` accepted as deprecated alias.
+- `test_registry_exposes_always_load_for_audit` —
+  `_TOOL_REGISTRY[name]["always_load"]` reflects the registration
+  for introspection by `rka_list_tools`.
+
+Plus 3 new tests in `tests/test_mcp/test_v270_verb_dispatch.py`
+covering the `import_top_n` semantics.
+
+Total MCP suite: **370 passing** (122 v2.6.x baseline + 233 v2.7.0a1
++ 15 v2.7.0a2). Full repo: **1242 tests passing**.
+
+### Forward validation
+
+After deploy (binary reinstall + Docker rebuild), the PI re-runs
+the T2 prompt in a **fresh** Claude Code/Desktop conversation:
+
+> *"What's blocked right now? What needs my attention? And show me
+> the research map."*
+
+**Go criterion**: `rka_query` surfaces (whether ToolSearch picks it
+or alwaysLoad forces it). If yes, the architecture is validated and
+PR-2 (legacy demotion to deferred) becomes the next step. If no,
+alwaysLoad isn't enough by itself and we need either (a) more
+aggressive trigger-phrase tuning or (b) per-role MCP server split
+(Design C deferred from the original v2.7.0 design synthesis).
+
+### Bookkeeper invariant
+
+Intact — all changes are rka-side. `git diff main -- rka/` is
+nonzero on this commit because this IS a main-side release;
+agentic absorbs via the standard `git merge origin/main`.
+
+### Related
+
+- Workflow `whvuxrvvj` (v2.7.0a1 PR-0 + PR-1 implementation)
+- Workflow `wg73pl28m` (v2.7.0a2 batch fixes — this release)
+- Workflow `w86p5bxrp` Finding #2 (Anthropic-documented
+  `_meta["anthropic/alwaysLoad"]` mechanism)
+- PR-4 A/B test (live PI conversation, 2026-06-02): T1+T3+T4 PASS,
+  T2 FAIL (motivates the alwaysLoad fix), T5 INCONCLUSIVE
+
 ## [2.7.0a1] — 2026-06-02 (alpha — Intent-grouped verb surface: PR-0 enum consolidation + PR-1 8 verbs additive; 91 legacy stays callable)
 
 **FUNDAMENTAL REDESIGN — alpha release.** The v2.6.3-v2.6.6 arc

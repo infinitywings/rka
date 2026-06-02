@@ -378,7 +378,7 @@ async def test_dispatch_record_literature_default_title_routes_to_add(
         project_id="prj_test",
         title="A Paper",
         bibtex=None, search_query=None, search_source=None,
-        doi=None, authors=None, year=None, venue=None,
+        doi=None, authors=None, year_min=None, venue=None,
         status="to_read", abstract=None, url=None, tags=None,
         related_decisions=None, action=None,
         lit_id=None, manuscript_id=None, zotero_key=None,
@@ -397,7 +397,7 @@ async def test_dispatch_record_literature_bibtex_routes_to_import(
         title=None,
         bibtex="@article{foo,title={Bar}}",
         search_query=None, search_source=None,
-        doi=None, authors=None, year=None, venue=None,
+        doi=None, authors=None, year_min=None, venue=None,
         status="to_read", abstract=None, url=None, tags=None,
         related_decisions=None, action=None,
         lit_id=None, manuscript_id=None, zotero_key=None,
@@ -416,7 +416,7 @@ async def test_dispatch_record_literature_search_s2(
         title=None, bibtex=None,
         search_query="transformer paper",
         search_source="semantic_scholar",
-        doi=None, authors=None, year=None, venue=None,
+        doi=None, authors=None, year_min=None, venue=None,
         status="to_read", abstract=None, url=None, tags=None,
         related_decisions=None, action=None,
         lit_id=None, manuscript_id=None, zotero_key=None,
@@ -435,7 +435,7 @@ async def test_dispatch_record_literature_action_explicit_wins(
         project_id="prj_test",
         title="ignored title",
         bibtex=None, search_query=None, search_source=None,
-        doi=None, authors=None, year=None, venue=None,
+        doi=None, authors=None, year_min=None, venue=None,
         status="to_read", abstract=None, url=None, tags=None,
         related_decisions=None,
         action="link_zotero",
@@ -456,7 +456,7 @@ async def test_dispatch_record_literature_missing_required_field(
     out = await verb_dispatch.dispatch_record_literature(
         project_id="prj_test",
         title=None, bibtex=None, search_query=None, search_source=None,
-        doi=None, authors=None, year=None, venue=None,
+        doi=None, authors=None, year_min=None, venue=None,
         status="to_read", abstract=None, url=None, tags=None,
         related_decisions=None, action=None,
         lit_id=None, manuscript_id=None, zotero_key=None,
@@ -466,6 +466,194 @@ async def test_dispatch_record_literature_missing_required_field(
     parsed = json.loads(out)
     assert parsed["error"] == "missing_field"
     assert recorder.calls == []
+
+
+# ---------------------------------------------------------------------------
+# v2.7.0a2 — Decision 2: import_top_n threads to search legacy tools.
+# ---------------------------------------------------------------------------
+
+
+async def test_dispatch_record_literature_import_top_n_threaded_to_s2(
+    recorder: _Recorder,
+) -> None:
+    """import_top_n flows through to rka_search_semantic_scholar so the
+    legacy tool can cap the import slice (Decision 2 / Option C)."""
+    await verb_dispatch.dispatch_record_literature(
+        project_id="prj_test",
+        title=None, bibtex=None,
+        search_query="transformer",
+        search_source="semantic_scholar",
+        doi=None, authors=None, year_min=None, venue=None,
+        status="to_read", abstract=None, url=None, tags=None,
+        related_decisions=None, action=None,
+        lit_id=None, manuscript_id=None, zotero_key=None,
+        pdf_path=None, annotations=None, summary=None,
+        add_to_library=True,
+        import_top_n=3,
+        limit=10,
+    )
+    calls = {t: kw for t, kw in recorder.calls}
+    assert "rka_search_semantic_scholar" in calls
+    kw = calls["rka_search_semantic_scholar"]
+    assert kw["import_top_n"] == 3
+    assert kw["add_to_library"] is True
+
+
+async def test_dispatch_record_literature_import_top_n_threaded_to_arxiv(
+    recorder: _Recorder,
+) -> None:
+    """import_top_n flows through to rka_search_arxiv on arxiv mode."""
+    await verb_dispatch.dispatch_record_literature(
+        project_id="prj_test",
+        title=None, bibtex=None,
+        search_query="transformer",
+        search_source="arxiv",
+        doi=None, authors=None, year_min=None, venue=None,
+        status="to_read", abstract=None, url=None, tags=None,
+        related_decisions=None, action=None,
+        lit_id=None, manuscript_id=None, zotero_key=None,
+        pdf_path=None, annotations=None, summary=None,
+        add_to_library=True,
+        import_top_n=5,
+        limit=10,
+    )
+    calls = {t: kw for t, kw in recorder.calls}
+    assert "rka_search_arxiv" in calls
+    assert calls["rka_search_arxiv"]["import_top_n"] == 5
+
+
+async def test_dispatch_record_literature_import_top_n_none_default(
+    recorder: _Recorder,
+) -> None:
+    """Without import_top_n, the legacy tool receives None — preserving
+    the pre-v2.7.0a2 'import all returned' default."""
+    await verb_dispatch.dispatch_record_literature(
+        project_id="prj_test",
+        title=None, bibtex=None,
+        search_query="t",
+        search_source="semantic_scholar",
+        doi=None, authors=None, year_min=None, venue=None,
+        status="to_read", abstract=None, url=None, tags=None,
+        related_decisions=None, action=None,
+        lit_id=None, manuscript_id=None, zotero_key=None,
+        pdf_path=None, annotations=None, summary=None,
+        add_to_library=True, limit=10,
+    )
+    calls = {t: kw for t, kw in recorder.calls}
+    assert calls["rka_search_semantic_scholar"]["import_top_n"] is None
+
+
+# ---------------------------------------------------------------------------
+# v2.7.0a2 — Decision 3: year → year_min deprecation alias.
+# ---------------------------------------------------------------------------
+
+
+async def test_dispatch_record_literature_year_min_threaded_to_s2(
+    recorder: _Recorder,
+) -> None:
+    """year_min flows through to rka_search_semantic_scholar — fixing
+    the T4-surfaced silent-drop bug (Decision 3 / Option A)."""
+    await verb_dispatch.dispatch_record_literature(
+        project_id="prj_test",
+        title=None, bibtex=None,
+        search_query="t",
+        search_source="semantic_scholar",
+        doi=None, authors=None, year_min=2023, venue=None,
+        status="to_read", abstract=None, url=None, tags=None,
+        related_decisions=None, action=None,
+        lit_id=None, manuscript_id=None, zotero_key=None,
+        pdf_path=None, annotations=None, summary=None,
+        add_to_library=False, limit=10,
+    )
+    calls = {t: kw for t, kw in recorder.calls}
+    assert calls["rka_search_semantic_scholar"]["year_min"] == 2023
+
+
+async def test_dispatch_record_literature_year_min_threaded_to_arxiv(
+    recorder: _Recorder,
+) -> None:
+    """year_min flows through to rka_search_arxiv."""
+    await verb_dispatch.dispatch_record_literature(
+        project_id="prj_test",
+        title=None, bibtex=None,
+        search_query="t",
+        search_source="arxiv",
+        doi=None, authors=None, year_min=2024, venue=None,
+        status="to_read", abstract=None, url=None, tags=None,
+        related_decisions=None, action=None,
+        lit_id=None, manuscript_id=None, zotero_key=None,
+        pdf_path=None, annotations=None, summary=None,
+        add_to_library=False, limit=10,
+    )
+    calls = {t: kw for t, kw in recorder.calls}
+    assert calls["rka_search_arxiv"]["year_min"] == 2024
+
+
+async def test_dispatch_record_literature_legacy_year_alias_backfills_year_min(
+    recorder: _Recorder,
+) -> None:
+    """Decision 3 backwards-compat: callers passing the deprecated
+    `year=` still get year_min populated for one release."""
+    await verb_dispatch.dispatch_record_literature(
+        project_id="prj_test",
+        title=None, bibtex=None,
+        search_query="t",
+        search_source="semantic_scholar",
+        doi=None, authors=None, year_min=None, venue=None,
+        status="to_read", abstract=None, url=None, tags=None,
+        related_decisions=None, action=None,
+        lit_id=None, manuscript_id=None, zotero_key=None,
+        pdf_path=None, annotations=None, summary=None,
+        add_to_library=False, limit=10,
+        year=2022,
+    )
+    calls = {t: kw for t, kw in recorder.calls}
+    assert calls["rka_search_semantic_scholar"]["year_min"] == 2022
+
+
+async def test_dispatch_record_literature_year_and_year_min_conflict_rejected(
+    recorder: _Recorder,
+) -> None:
+    """Decision 3: passing BOTH year (deprecated) AND year_min raises
+    conflicting_args so callers don't silently drop the wrong one."""
+    out = await verb_dispatch.dispatch_record_literature(
+        project_id="prj_test",
+        title=None, bibtex=None,
+        search_query="t",
+        search_source="semantic_scholar",
+        doi=None, authors=None, year_min=2023, venue=None,
+        status="to_read", abstract=None, url=None, tags=None,
+        related_decisions=None, action=None,
+        lit_id=None, manuscript_id=None, zotero_key=None,
+        pdf_path=None, annotations=None, summary=None,
+        add_to_library=False, limit=10,
+        year=2022,
+    )
+    parsed = json.loads(out)
+    assert parsed["error"] == "conflicting_args"
+    assert recorder.calls == []
+
+
+async def test_dispatch_record_literature_default_add_uses_year_min_as_pub_year(
+    recorder: _Recorder,
+) -> None:
+    """On default-add mode (title-based), year_min populates the
+    paper's publication year (single-paper year is the floor of its
+    own year set)."""
+    await verb_dispatch.dispatch_record_literature(
+        project_id="prj_test",
+        title="A Paper",
+        bibtex=None, search_query=None, search_source=None,
+        doi=None, authors=None, year_min=2023, venue=None,
+        status="to_read", abstract=None, url=None, tags=None,
+        related_decisions=None, action=None,
+        lit_id=None, manuscript_id=None, zotero_key=None,
+        pdf_path=None, annotations=None, summary=None,
+        add_to_library=False, limit=10,
+    )
+    calls = {t: kw for t, kw in recorder.calls}
+    assert "rka_add_literature" in calls
+    assert calls["rka_add_literature"]["year"] == 2023
 
 
 # ---------------------------------------------------------------------------

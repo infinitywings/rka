@@ -100,7 +100,7 @@ async def dispatch_record_literature(
     search_source: str | None,
     doi: str | None,
     authors: list[str] | None,
-    year: int | None,
+    year_min: int | None,
     venue: str | None,
     status: str,
     abstract: str | None,
@@ -116,6 +116,8 @@ async def dispatch_record_literature(
     summary: str | None,
     add_to_library: bool,
     limit: int,
+    import_top_n: int | None = None,
+    year: int | None = None,
 ) -> str:
     """Route to one of the literature sub-modes by kwarg presence + action.
 
@@ -128,7 +130,28 @@ async def dispatch_record_literature(
       6. action='process_paper' (lit_id + annotations)
       7. action='validate_reference' (manuscript_id + doi or title)
       8. Default: explicit-create via title
+
+    Phase v2.7.0a2 enum/alias resolution:
+      - `year` is the deprecated alias of `year_min` (one-release deprecation
+        window per Decision 3 / Option A). Supplying both is an error.
+      - `import_top_n` caps the import slice on search modes when
+        add_to_library=True (None = import all returned).
     """
+    # ------------------------------------------------------------------
+    # v2.7.0a2 Decision 3: year → year_min deprecation alias.
+    # If only legacy `year` is set, back-fill year_min. If BOTH are set,
+    # reject as ambiguous so callers don't silently drop the wrong one.
+    # ------------------------------------------------------------------
+    if year is not None and year_min is not None:
+        return _err(
+            "conflicting_args",
+            "rka_record_literature: pass only year_min — "
+            "year is the deprecated alias (one-release deprecation; "
+            "removal scheduled v2.8)",
+        )
+    if year is not None and year_min is None:
+        year_min = year
+
     # Explicit action wins
     if action == "link_zotero":
         if not lit_id:
@@ -172,7 +195,9 @@ async def dispatch_record_literature(
         return await _legacy("rka_search_semantic_scholar")(
             query=q,
             limit=limit or 10,
+            year_min=year_min,
             add_to_library=add_to_library,
+            import_top_n=import_top_n,
             project_id=project_id,
         )
 
@@ -186,7 +211,9 @@ async def dispatch_record_literature(
         return await _legacy("rka_search_arxiv")(
             query=q,
             limit=limit or 10,
+            year_min=year_min,
             add_to_library=add_to_library,
+            import_top_n=import_top_n,
             project_id=project_id,
         )
 
@@ -228,7 +255,12 @@ async def dispatch_record_literature(
     return await _legacy("rka_add_literature")(
         title=title or f"(DOI: {doi})",
         authors=authors,
-        year=year,
+        # On default-add (one-paper mode) the year-min is also the paper's
+        # publication year — a single-element set's floor equals the
+        # element. The rka_add_literature legacy tool's contract is
+        # unchanged (still takes `year` for the paper's pub year), so the
+        # bookkeeper invariant on rka/ services is preserved.
+        year=year_min,
         venue=venue,
         doi=doi,
         url=url,
