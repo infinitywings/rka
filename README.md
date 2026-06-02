@@ -506,11 +506,13 @@ If the LLM ever omits `project_id`, the tool raises `TypeError: rka_X() missing 
 
 To find a project id, run `rka_list_projects()` once in any session, or check `http://localhost:9712` in the dashboard URL bar.
 
+**The navigator architecture (v2.6.3+).** Since v2.6.3 the rka MCP server ships **12 always-on tools** (status, context, pending maintenance, checkpoints, research map, search, get, add-note, resolve-checkpoint, plus the navigator triad `rka_load_tools` / `rka_list_tools` / `rka_help`). The remaining ~79 tools — including `rka_list_projects`, `rka_add_decision`, `rka_create_mission`, `rka_get_journal`, `rka_get_report`, and every other project-scoped lifecycle tool — are **deferred**: present on the server but not advertised until a client registers them via `rka_load_tools(names=[...])`. Browse the catalog with `rka_list_tools(category=...)`; inspect a single tool with `rka_help(name=...)`. Both Claude Desktop and Claude Code honor MCP's `notifications/tools/list_changed` event, so a freshly-loaded tool becomes callable mid-session without a reconnect. The Brain / Executor / PI skills shipped under `rka/skills/` know about this and will load the tools they need at session start.
+
 **Step 2d — Verify.** In each app, ask:
 
 > "List my RKA projects"
 
-Each Claude should call `rka_list_projects()` and return a list (empty on a fresh install).
+Each Claude should first load the tool — `rka_load_tools(names=["rka_list_projects"])` — and then call `rka_list_projects()` and return a list (empty on a fresh install).
 
 **Step 2e — Load the role skill** (recommended each new session). MCP **prompts** ship with the binary; they teach Claude the session-start protocol, attribution discipline, and provenance rules.
 
