@@ -108,6 +108,34 @@ _CONTEXT7_TOOLS: tuple[str, ...] = (
     "resolve-library-id",
 )
 
+# Zotero MCP server — research-library full-text + metadata reads. Added
+# conditionally in _build_mcp_servers_config when `zotero-mcp` is on PATH
+# AND credentials (api_key + library_id) are available either in the
+# daemon's env or in the per-project .rka/.env merged via _RealSDKClient.
+# Without this server in the subprocess MCP config, the Executor's
+# in-container Zotero calls (for FTR full-text retrieval during D3
+# grounding, etc.) fall back to no_match — the "cockpit ≠ run env" gap
+# that surfaced empirically during the hyperscaler-auditing D3 pre-flight
+# audit on 2026-06-03.
+_ZOTERO_SERVER_NAME = "zotero"
+_ZOTERO_TOOLS: tuple[str, ...] = (
+    "zotero_search_items",
+    "zotero_advanced_search",
+    "zotero_get_collections",
+    "zotero_get_collection_items",
+    "zotero_get_item_children",
+    "zotero_get_item_fulltext",
+    "zotero_get_item_metadata",
+    "zotero_get_annotations",
+    "zotero_get_notes",
+    "zotero_search_by_tag",
+    "zotero_semantic_search",
+    "zotero_search_database_status",
+    "zotero_get_recent",
+    "zotero_get_tags",
+    "zotero_create_note",
+)
+
 # Parent-side write-tool registry organized by CAPABILITY (Phase 2.14 —
 # capability-categories WRITE_TOOLS replacement). Each tool belongs to
 # exactly one capability bucket. WRITE_TOOLS is derived from this mapping
@@ -231,14 +259,24 @@ _BUILTIN_FILESYSTEM_TOOLS: tuple[str, ...] = (
 )
 
 
-def _all_allowed_subprocess_tools(include_context7: bool) -> list[str]:
+def _all_allowed_subprocess_tools(
+    include_context7: bool, include_zotero: bool = False
+) -> list[str]:
     """Compose the full `allowed_tools` list across every MCP server the
     subprocess is configured to talk to plus the built-in filesystem tools
     the Executor needs to actually do mission work. Lives separately from
-    READ_TOOLS so the legacy single-server interface stays back-compat."""
+    READ_TOOLS so the legacy single-server interface stays back-compat.
+
+    v0.6.8: ``include_zotero`` gate added so the Zotero MCP tools surface
+    in the Executor's allowed-tools list only when the Zotero server is
+    actually wired into the subprocess MCP config — otherwise the LLM
+    sees tool names it can't actually call.
+    """
     tools = _prefixed_tools(READ_TOOLS)  # rka MCP
     if include_context7:
         tools.extend(_prefixed_tools(_CONTEXT7_TOOLS, server=_CONTEXT7_SERVER_NAME))
+    if include_zotero:
+        tools.extend(_prefixed_tools(_ZOTERO_TOOLS, server=_ZOTERO_SERVER_NAME))
     tools.extend(_BUILTIN_FILESYSTEM_TOOLS)
     return tools
 
@@ -250,8 +288,84 @@ def _find_rka_mcp_binary() -> str | None:
     return shutil.which("rka")
 
 
+def _find_zotero_mcp_binary() -> str | None:
+    """Locate the local `zotero-mcp` stdio binary on PATH.
+
+    v0.6.8: discovered at SDK-call time (mirrors `_find_rka_mcp_binary`).
+    Override via ``ZOTERO_MCP_BINARY`` env when the daemon container's PATH
+    doesn't resolve a globally-installed binary. Returns None when neither
+    PATH nor the env override yields a binary — the caller then skips
+    wiring zotero into the subprocess MCP config (the Executor sees no
+    zotero_* tools and degrades gracefully to no-zotero behavior, the
+    pre-v0.6.8 default).
+    """
+    return shutil.which("zotero-mcp") or os.environ.get("ZOTERO_MCP_BINARY")
+
+
+def _build_zotero_server_if_configured(
+    env: dict[str, str] | None = None,
+) -> dict | None:
+    """Return the Zotero stdio MCP server config dict, or None if creds /
+    binary unavailable.
+
+    v0.6.8 (hyperscaler-auditing D3 pre-flight audit, 2026-06-03):
+    the orchestrator's subprocess was previously hard-coded to {rka, context7}
+    as its MCP server set, so any project needing Zotero literature lookups
+    during mission execution had its Executor degrade silently. This helper
+    adds zotero conditionally based on three signals:
+
+      1. The ``zotero-mcp`` stdio binary is discoverable (PATH or
+         ``ZOTERO_MCP_BINARY`` env override).
+      2. ``ZOTERO_API_KEY`` is set in the supplied env (or os.environ
+         fallback if env is None).
+      3. ``ZOTERO_LIBRARY_ID`` is set in the supplied env.
+
+    All three must be present. ``ZOTERO_LIBRARY_TYPE`` defaults to ``user``
+    when unset (mirrors zotero_linker._env_config). ``ZOTERO_LOCAL`` is
+    pinned to ``"false"`` so the subprocess uses the Web API path — the
+    daemon container has no Zotero.app desktop install.
+
+    The env block on the returned McpStdioServerConfig dict REPLACES (does
+    NOT merge with) the parent process env when the subprocess is spawned
+    by claude-agent-sdk. So we explicitly enumerate every Zotero env var
+    the zotero-mcp child needs to authenticate.
+
+    Pass ``env`` (the merged daemon + project env) to read project-local
+    creds that arrived via ``_merge_project_env_file``. When env is None,
+    falls back to ``os.environ`` for backward compat.
+    """
+    binary = _find_zotero_mcp_binary()
+    if not binary:
+        return None
+
+    source = env if env is not None else dict(os.environ)
+    api_key = (source.get("ZOTERO_API_KEY") or "").strip()
+    library_id = (source.get("ZOTERO_LIBRARY_ID") or "").strip()
+    if not api_key or not library_id:
+        return None
+
+    library_type = (source.get("ZOTERO_LIBRARY_TYPE") or "user").strip()
+    if library_type not in ("user", "group"):
+        library_type = "user"
+
+    return {
+        "type": "stdio",
+        "command": binary,
+        "args": ["serve"],
+        "env": {
+            "ZOTERO_API_KEY": api_key,
+            "ZOTERO_LIBRARY_ID": library_id,
+            "ZOTERO_LIBRARY_TYPE": library_type,
+            "ZOTERO_LOCAL": "false",
+        },
+    }
+
+
 def _build_mcp_servers_config(
-    rka_binary: str | None, project_id: str | None = None
+    rka_binary: str | None,
+    project_id: str | None = None,
+    *,
+    env: dict[str, str] | None = None,
 ) -> dict:
     """Build the McpStdioServerConfig dict for the subprocess.
 
@@ -314,6 +428,16 @@ def _build_mcp_servers_config(
             "command": npx,
             "args": ["-y", "@upstash/context7-mcp@latest"],
         }
+
+    # v0.6.8: zotero — additive research-library full-text + metadata surface.
+    # Only wired when zotero-mcp is on PATH AND creds are configured (in the
+    # supplied env dict or os.environ as a fallback). Closes the "cockpit
+    # has zotero but the orchestrator's Executor subprocess doesn't" gap
+    # surfaced empirically during the hyperscaler-auditing D3 pre-flight
+    # audit on 2026-06-03.
+    zotero_server = _build_zotero_server_if_configured(env=env)
+    if zotero_server is not None:
+        config[_ZOTERO_SERVER_NAME] = zotero_server
 
     return config
 
@@ -463,6 +587,114 @@ def _scrubbed_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k not in _ENV_VARS_TO_SCRUB}
 
 
+def _parse_dotenv_lines(text: str) -> dict[str, str]:
+    """Parse a flat KEY=VALUE .env file body. No interpolation.
+
+    Mirrors the Phase-O bootstrap convention (orchestrator/.env.example
+    et al.): one assignment per line; ``#`` comments; surrounding single
+    or double quotes stripped; values with embedded ``=`` keep everything
+    after the first ``=``. Blank lines + malformed lines silently skipped.
+
+    Kept deliberately simple — full python-dotenv-style interpolation
+    would be a footgun (env files routinely reference variables defined
+    elsewhere in the file, but we expand against a snapshot we don't
+    fully know, so the result would be surprising). The Phase-O bootstrap
+    discipline is explicit: each KEY=VALUE stands alone.
+    """
+    out: dict[str, str] = {}
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip()
+        # Strip matching surrounding quotes (preserve quote-mismatched).
+        if (
+            len(value) >= 2
+            and value[0] == value[-1]
+            and value[0] in ('"', "'")
+        ):
+            value = value[1:-1]
+        out[key] = value
+    return out
+
+
+def _merge_project_env_file(
+    env: dict[str, str], workspace_path: str | None
+) -> dict[str, str]:
+    """v0.6.8: merge ``<workspace_path>/.rka/.env`` into env.
+
+    Returns a NEW dict (does not mutate input). Project values WIN over
+    inherited (env). Three guards:
+
+      1. If ``workspace_path`` is falsy → return env unchanged.
+      2. If the .env file is missing or unreadable → return env unchanged
+         (log a debug-level message; never raise — a missing file is the
+         normal case for projects that don't use per-project creds).
+      3. Keys in ``_ENV_VARS_TO_SCRUB`` are silently dropped from the
+         merged result. The auth-scrub invariant ``_scrubbed_env``
+         enforces against os.environ must also hold against project
+         files — a malicious or misconfigured ``.rka/.env`` can NOT
+         re-introduce ``ANTHROPIC_API_KEY`` and re-route subprocess
+         auth onto a billable API key.
+
+    Surfaced by the cockpit's hyperscaler-auditing D3 pre-flight audit
+    on 2026-06-03: the orchestrator container bind-mounts the project
+    workspace per the Phase D2 design, but ``.rka/.env`` was never
+    loaded — so per-project API keys (DEEPSEEK, SEC_EDGAR, FRED, WRDS,
+    etc.) declared in the documented per-project cred home never
+    reached the Executor subprocess. The cockpit could see them via its
+    own MCP setup; the run env couldn't. Same "cockpit ≠ run env" trap
+    as the Zotero MCP gap.
+    """
+    if not workspace_path:
+        return env
+    from pathlib import Path
+
+    env_path = Path(workspace_path) / ".rka" / ".env"
+    if not env_path.exists():
+        return env
+    try:
+        body = env_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        logger.debug("could not read %s: %s", env_path, exc)
+        return env
+
+    parsed = _parse_dotenv_lines(body)
+    if not parsed:
+        return env
+
+    merged = dict(env)
+    scrubbed = 0
+    added = 0
+    overrode = 0
+    for key, value in parsed.items():
+        if key in _ENV_VARS_TO_SCRUB:
+            scrubbed += 1
+            continue
+        if key in merged:
+            overrode += 1
+        else:
+            added += 1
+        merged[key] = value
+
+    # Log keys touched (NOT values — keys are non-sensitive, values are
+    # creds and never get logged from this helper).
+    logger.info(
+        "merged .rka/.env from %s: %d added, %d overrode, %d scrubbed",
+        workspace_path,
+        added,
+        overrode,
+        scrubbed,
+    )
+    return merged
+
+
 # ---------------------------------------------------------------------------
 # Phase G2 — FS Actuator can_use_tool hook
 # ---------------------------------------------------------------------------
@@ -590,7 +822,18 @@ class _RealSDKClient:
         # (As of v2.6: the env-var threading is dead; project_id is now
         # threaded per-call by the Brain/Executor LLM. See nodes/brain.py
         # BRAIN_SYSTEM + nodes/executor.py EXECUTOR_SYSTEM prompts.)
-        self._env = env if env is not None else _scrubbed_env()
+        #
+        # v0.6.8: when `env` is None AND `workspace_path` is supplied, merge
+        # ``<workspace>/.rka/.env`` over the scrubbed os.environ snapshot.
+        # The Phase D2 bind-mount design assumed per-project creds would
+        # reach the subprocess via the bind-mounted workspace, but the
+        # actual env-loading step was never wired — this closes the
+        # documented-but-unwired path. Explicit `env=` callers (tests)
+        # still pass a fully-materialized env unchanged.
+        if env is None:
+            env = _scrubbed_env()
+            env = _merge_project_env_file(env, workspace_path)
+        self._env = env
         self._project_id = project_id
         # Phase G2: workspace_path drives the `can_use_tool` hook's
         # workspace-escape detection. When None, falls back to
@@ -640,10 +883,18 @@ class _RealSDKClient:
         # Phase 2.9 T1: `project_id` threads through to McpStdioServerConfig.env
         # so the subprocess inherits the parent's project context.
         rka_binary = _find_rka_mcp_binary()
-        mcp_servers = _build_mcp_servers_config(rka_binary, project_id=self._project_id)
+        # v0.6.8: pass self._env so _build_zotero_server_if_configured can
+        # read project-local creds that arrived via _merge_project_env_file
+        # (e.g. project's .rka/.env declared ZOTERO_API_KEY but the daemon
+        # container's env doesn't). Without env=, Zotero would only wire
+        # when creds were in the daemon's own env block.
+        mcp_servers = _build_mcp_servers_config(
+            rka_binary, project_id=self._project_id, env=self._env
+        )
 
         if mcp_servers:
             include_context7 = _CONTEXT7_SERVER_NAME in mcp_servers
+            include_zotero = _ZOTERO_SERVER_NAME in mcp_servers
             # Phase G2: install the FS-Actuator can_use_tool hook so
             # destructive Bash/Write/Edit invocations from the subprocess
             # are intercepted in the parent process and routed per the
@@ -656,10 +907,13 @@ class _RealSDKClient:
                 env=self._env,
                 mcp_servers=mcp_servers,
                 # Only servers in our config are loaded; no host MCP config bleed.
-                # With Phase-A expansion, our config can include both `rka` and
-                # `context7` — both are PI-ratified for the Brain subprocess.
+                # With Phase-A expansion, our config can include `rka`,
+                # `context7`, and (v0.6.8) `zotero` — all are PI-ratified
+                # for the Brain/Executor subprocess via the manifest.
                 strict_mcp_config=True,
-                allowed_tools=_all_allowed_subprocess_tools(include_context7),
+                allowed_tools=_all_allowed_subprocess_tools(
+                    include_context7, include_zotero=include_zotero
+                ),
                 disallowed_tools=_prefixed_tools(WRITE_TOOLS),
                 permission_mode="dontAsk",   # deny anything off-allowlist silently
                 can_use_tool=_build_fs_actuator_hook(
@@ -789,6 +1043,13 @@ __all__ = [
     "_build_mcp_servers_config",
     "_all_allowed_subprocess_tools",
     "_build_fs_actuator_hook",  # Phase G2
+    # v0.6.8 — Zotero MCP wiring + .rka/.env propagation
+    "_find_zotero_mcp_binary",
+    "_build_zotero_server_if_configured",
+    "_parse_dotenv_lines",
+    "_merge_project_env_file",
+    "_ZOTERO_SERVER_NAME",
+    "_ZOTERO_TOOLS",
     "Capability",  # Phase 2.14 — capability categories
     "ALL_CAPABILITIES",
     "TOOL_CAPABILITIES",

@@ -71,7 +71,7 @@ name = "rka-orchestrator"
 # section teaching each role about the navigator architecture and
 # how to call rka_load_tools when a deferred tool is needed,
 # (c) bumps the READ_TOOLS lock-test from 14 to 17.
-version = "0.6.7"
+version = "0.6.8"
 description = "RKA + LangGraph orchestrator (Phase A → Phase-X² polish; agentic branch)"
 readme = "README.md"
 requires-python = ">=3.11"
