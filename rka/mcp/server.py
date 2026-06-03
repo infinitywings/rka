@@ -145,6 +145,23 @@ def _read_skill(path: str) -> str:
     except FileNotFoundError:
         return f"Skill file not found: {path}"
 
+
+def _live_prompt_banner(role: str) -> str:
+    """Prepend a stale-vs-live diagnostic banner to MCP prompt returns.
+
+    v2.7.0.3: when an LLM session has a stale uploaded copy of a SKILL.md
+    and re-fetches via the MCP prompt, the live response can look
+    structurally similar to the uploaded copy. The banner gives the LLM
+    a line-1 marker so it can confidently prefer the live source.
+    """
+    return (
+        "# Live MCP prompt — sourced from "
+        f"rka/skills/{role}/SKILL.md at HEAD (server v2.7.0.3)\n"
+        "# If this text differs from a copy you uploaded earlier,\n"
+        "# your local copy is stale — trust this one.\n"
+        "\n---\n\n"
+    )
+
 RKA_INSTRUCTIONS = """\
 Research Knowledge Agent (RKA) is a structured research knowledge base shared by the
 Brain, Executor, and PI. It stores journal entries, decisions, literature, missions,
@@ -5374,12 +5391,16 @@ from mcp.server.fastmcp import Context as _MCPContext
 
 @tool(tier=_TIER_ALWAYS_ON, category="navigator")
 async def rka_load_tools(names: list[str], ctx: _MCPContext) -> str:
-    """Activate deferred RKA tools by name (dynamic tool surface, v2.6.3).
+    """Activate deferred RKA tools by name (dynamic tool surface, v2.7.0+).
 
-    RKA's MCP server publishes ~12 always-on tools at session start; the
-    remaining ~79 are deferred to stay under the practical tool-surface
-    cap of typical MCP clients (~30-50 tools). Call this navigator to
-    bring deferred tools into the active surface, then call them
+    RKA's MCP server publishes 5 always-on tools at session start (3
+    dispatch — rka_query + rka_execute + rka_describe — and 2 escape
+    hatches — rka_load_tools + rka_help). 91 legacy tools + 8 v2.7.0a2
+    verbs are tier='deferred', callable via rka_load_tools(names=[...]).
+    Setting RKA_LEGACY_TOOLS=1 in env restores the v2.7.0a2 surface
+    (20 always-on tools) for callers that depend on per-tool dispatch
+    granularity (e.g. orchestrator subprocesses). Call this navigator
+    to bring deferred tools into the active surface, then call them
     normally.
 
     Names are the canonical UNPREFIXED rka_* form (e.g. `rka_add_literature`).
@@ -6993,25 +7014,25 @@ async def _rka_execute_legacy_impl(
 @mcp.prompt()
 def brain_skill() -> str:
     """Full Brain workflow guide — strategy, decisions, provenance, claim extraction, research map, gates."""
-    return _read_skill("brain/SKILL.md")
+    return _live_prompt_banner("brain") + _read_skill("brain/SKILL.md")
 
 
 @mcp.prompt()
 def executor_skill() -> str:
     """Full Executor workflow guide — missions, backbrief, recording, escalation, reports."""
-    return _read_skill("executor/SKILL.md")
+    return _live_prompt_banner("executor") + _read_skill("executor/SKILL.md")
 
 
 @mcp.prompt()
 def pi_skill() -> str:
     """PI quick reference — project status, research map, checkpoint resolution."""
-    return _read_skill("pi/SKILL.md")
+    return _live_prompt_banner("pi") + _read_skill("pi/SKILL.md")
 
 
 @mcp.prompt()
 def brain_orientation() -> str:
     """Orientation guide for the Brain (Claude Desktop) — strategic AI role in RKA workflow."""
-    return """\
+    return _live_prompt_banner("brain") + """\
 # Brain Orientation — Research Knowledge Agent (RKA)
 
 You are the **Brain**: the strategic AI layer in an RKA-powered research project.
@@ -7159,7 +7180,7 @@ Before closing a conversation:
 @mcp.prompt()
 def executor_orientation() -> str:
     """Orientation guide for the Executor (Claude Code) — implementation AI role in RKA workflow."""
-    return """\
+    return _live_prompt_banner("executor") + """\
 # Executor Orientation — Research Knowledge Agent (RKA)
 
 You are the **Executor**: the implementation AI in an RKA-powered research project.

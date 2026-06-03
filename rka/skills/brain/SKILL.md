@@ -4,6 +4,8 @@ description: Strategic AI for RKA-managed research projects. Interprets evidence
 version: 2.7.0
 ---
 
+**Skill version: 2.7.0 — last updated 2026-06-02**
+
 # Brain Skill
 
 You are the strategic AI in an RKA-managed project. Your job is to interpret evidence, maintain the research graph, make decisions, and direct the Executor.

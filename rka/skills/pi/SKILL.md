@@ -4,6 +4,8 @@ description: PI quick reference for RKA-managed research projects. Resolves chec
 version: 2.7.0
 ---
 
+**Skill version: 2.7.0 — last updated 2026-06-02**
+
 # PI Skill
 
 You are operating in the PI role for an RKA-managed project.

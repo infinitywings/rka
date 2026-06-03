@@ -476,3 +476,305 @@ def test_link_result_to_dict_omits_none():
     r = ZL.LinkResult(zotero_item_key="X", matched_by="doi")
     d = r.to_dict()
     assert d == {"zotero_item_key": "X", "matched_by": "doi"}
+
+
+# ---------------------------------------------------------------------------
+# v2.7.0.3 Bug 4: Strategy 6 — standalone attachment / webpage title fuzzy
+# ---------------------------------------------------------------------------
+#
+# Per PI bug report 2026-06-03: gray literature (sector reports, working
+# papers) that lives in Zotero only as a standalone attachment + webpage
+# (no parent bibliographic item) must be matchable by title fuzzy.
+# Strategy 6 NEVER auto-links — always returns weak_match_needs_confirmation
+# so the PI ratifies via an explicit zotero_key call.
+
+
+class _Strategy6Client:
+    """FakeClient that distinguishes Strategy 5 (no itemType filter) from
+    Strategy 6 (itemType=attachment||webpage). Returns scripted items per
+    branch so tests can prove Strategy 6 fires only when Strategy 5 fails.
+    """
+
+    def __init__(
+        self,
+        *,
+        strategy_5_items=None,
+        strategy_6_items=None,
+        record_calls=None,
+    ):
+        self.strategy_5_items = strategy_5_items or []
+        self.strategy_6_items = strategy_6_items or []
+        self.record_calls = record_calls if record_calls is not None else []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def get(self, url, params=None, **kw):
+        params = params or {}
+        self.record_calls.append((url, dict(params)))
+        item_type = params.get("itemType")
+        if item_type and ("attachment" in item_type or "webpage" in item_type):
+            return FakeResponse(200, self.strategy_6_items)
+        return FakeResponse(200, self.strategy_5_items)
+
+
+def _strategy6_env(monkeypatch):
+    monkeypatch.setenv("ZOTERO_API_KEY", "test")
+    monkeypatch.setenv("ZOTERO_LIBRARY_ID", "1234567")
+    monkeypatch.setenv("ZOTERO_LIBRARY_TYPE", "user")
+    monkeypatch.setattr(ZL, "_persisted_config", lambda: None)
+
+
+def test_strategy_6_standalone_attachment_matching_title_returns_weak_match(monkeypatch):
+    """Strategy 6 finds a standalone attachment (no parentItem) whose title
+    fuzzy-matches the lit title and returns weak_match_needs_confirmation
+    with the attachment key in candidates."""
+    _strategy6_env(monkeypatch)
+    # Strategy 5 finds nothing (empty list); Strategy 6 finds one match.
+    strategy_6_items = [{
+        "data": {
+            "key": "B3KWJ9IK",
+            "itemType": "attachment",
+            "title": "Hidden Leverage in Cloud Service Commitments",
+            # No parentItem -> standalone attachment.
+        }
+    }]
+    client = _Strategy6Client(strategy_6_items=strategy_6_items)
+    with _mock_httpx(lambda: client):
+        result = ZL.link_literature(
+            title="Hidden Leverage in Cloud Service Commitments",
+        )
+    assert result.zotero_item_key is None
+    assert result.reason == "weak_match_needs_confirmation"
+    assert result.candidates
+    assert result.candidates[0]["key"] == "B3KWJ9IK"
+    assert result.candidates[0]["similarity"] >= 0.85
+    assert result.candidates[0]["item_type"] == "attachment"
+
+
+def test_strategy_6_attachment_with_parentitem_is_skipped(monkeypatch):
+    """An attachment that already has a parentItem is a CHILD of a
+    bibliographic record — Strategy 5 would have matched the parent if
+    titles aligned. Skip such candidates to avoid redundant linking."""
+    _strategy6_env(monkeypatch)
+    strategy_6_items = [{
+        "data": {
+            "key": "CHILD123",
+            "itemType": "attachment",
+            "title": "Hidden Leverage in Cloud Service Commitments",
+            "parentItem": "PARENTABC",  # bound to a parent -> skip
+        }
+    }]
+    client = _Strategy6Client(strategy_6_items=strategy_6_items)
+    with _mock_httpx(lambda: client):
+        result = ZL.link_literature(
+            title="Hidden Leverage in Cloud Service Commitments",
+        )
+    # Child attachment filtered out; nothing else to match.
+    assert result.zotero_item_key is None
+    assert result.reason == "no_match"
+
+
+def test_strategy_6_garbage_filename_is_skipped(monkeypatch):
+    """An attachment whose title is detritus (untitled.pdf, document.pdf,
+    scan, etc.) is filtered before similarity scoring."""
+    _strategy6_env(monkeypatch)
+    # Several garbage titles + nothing else: all stopword-filtered.
+    strategy_6_items = [
+        {"data": {"key": "JUNK1", "itemType": "attachment", "title": "untitled.pdf"}},
+        {"data": {"key": "JUNK2", "itemType": "attachment", "title": "document"}},
+        {"data": {"key": "JUNK3", "itemType": "attachment", "title": "scan"}},
+    ]
+    client = _Strategy6Client(strategy_6_items=strategy_6_items)
+    with _mock_httpx(lambda: client):
+        result = ZL.link_literature(
+            title="Hidden Leverage in Cloud Service Commitments",
+        )
+    assert result.zotero_item_key is None
+    assert result.reason == "no_match"
+
+
+def test_strategy_6_explicit_key_still_wins(monkeypatch):
+    """When zotero_key is supplied, the explicit-key path returns
+    immediately and Strategy 6 (and all fuzzy strategies) NEVER fire,
+    even if a standalone attachment would have matched."""
+    _strategy6_env(monkeypatch)
+
+    search_calls: list = []
+
+    class _Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url, params=None, **kw):
+            if "/items/" in url and (params is None or "q" not in params):
+                return FakeResponse(200, {"key": "EXPLICITKEY"})
+            search_calls.append((url, dict(params or {})))
+            return FakeResponse(200, [])
+
+    import httpx
+    with patch.object(httpx, "Client", _Client):
+        result = ZL.link_literature(
+            title="Hidden Leverage in Cloud Service Commitments",
+            zotero_key="EXPLICITKEY",
+        )
+
+    assert result.zotero_item_key == "EXPLICITKEY"
+    assert result.matched_by == "explicit_key"
+    # No fuzzy / attachment searches happened.
+    assert search_calls == []
+
+
+def test_strategy_6_only_fires_after_strategy_5_no_match(monkeypatch):
+    """When Strategy 5 finds a strong match, Strategy 6 does NOT fire
+    (the itemType=attachment||webpage search is never issued)."""
+    _strategy6_env(monkeypatch)
+    # Strategy 5 has a perfect bibliographic match.
+    strategy_5_items = [{
+        "data": {
+            "key": "STRONG55",
+            "itemType": "journalArticle",
+            "title": "Hidden Leverage in Cloud Service Commitments",
+            "creators": [{"firstName": "John", "lastName": "Smith"}],
+            "date": "2024",
+        }
+    }]
+    # If Strategy 6 fires, the test will see this attachment in candidates;
+    # if it does NOT fire, Strategy 5's matched_by='title_author_year' wins.
+    strategy_6_items = [{
+        "data": {
+            "key": "TRAP666",
+            "itemType": "attachment",
+            "title": "Hidden Leverage in Cloud Service Commitments",
+        }
+    }]
+    client = _Strategy6Client(
+        strategy_5_items=strategy_5_items,
+        strategy_6_items=strategy_6_items,
+    )
+    with _mock_httpx(lambda: client):
+        result = ZL.link_literature(
+            title="Hidden Leverage in Cloud Service Commitments",
+            authors=["John Smith"],
+            year=2024,
+        )
+    assert result.zotero_item_key == "STRONG55"
+    assert result.matched_by == "title_author_year"
+    # Confirm: no attachment-typed search was issued.
+    attachment_searches = [
+        (u, p) for (u, p) in client.record_calls
+        if p.get("itemType") and "attachment" in p["itemType"]
+    ]
+    assert attachment_searches == []
+
+
+def test_strategy_6_short_title_floor_skips_search(monkeypatch):
+    """If the normalized lit title is <= 5 chars, Strategy 6 is skipped
+    entirely (no itemType=attachment search is issued)."""
+    _strategy6_env(monkeypatch)
+    client = _Strategy6Client()
+    with _mock_httpx(lambda: client):
+        # "memo" normalized is 4 chars -> below the 5-char floor.
+        result = ZL.link_literature(title="memo")
+    assert result.zotero_item_key is None
+    assert result.reason == "no_match"
+    # No attachment-typed search call was made.
+    attachment_searches = [
+        (u, p) for (u, p) in client.record_calls
+        if p.get("itemType") and "attachment" in p["itemType"]
+    ]
+    assert attachment_searches == []
+
+
+def test_strategy_6_below_weak_floor_returns_no_match(monkeypatch):
+    """A candidate with similarity < 0.65 contributes nothing and the
+    linker returns no_match rather than weak_match_needs_confirmation."""
+    _strategy6_env(monkeypatch)
+    # Lit title and attachment title share at most 1 token in 5 -> low Jaccard.
+    strategy_6_items = [{
+        "data": {
+            "key": "WEAKWEAK",
+            "itemType": "attachment",
+            "title": "Completely unrelated working paper on macroeconomics",
+        }
+    }]
+    client = _Strategy6Client(strategy_6_items=strategy_6_items)
+    with _mock_httpx(lambda: client):
+        result = ZL.link_literature(
+            title="Hidden Leverage in Cloud Service Commitments",
+        )
+    assert result.zotero_item_key is None
+    assert result.reason == "no_match"
+
+
+def test_strategy_6_webpage_item_type_also_matched(monkeypatch):
+    """Per PI bug report, the gray-lit case included a WEBPAGE alongside
+    the attachment. Webpages are also queried by Strategy 6 (the
+    itemType=attachment||webpage boolean filter) and returned in
+    candidates with item_type='webpage'."""
+    _strategy6_env(monkeypatch)
+    strategy_6_items = [{
+        "data": {
+            "key": "WEBPAGE1",
+            "itemType": "webpage",
+            "title": "Hidden Leverage in Cloud Service Commitments",
+            "url": "https://www.moodys.com/research/abc",
+        }
+    }]
+    client = _Strategy6Client(strategy_6_items=strategy_6_items)
+    with _mock_httpx(lambda: client):
+        result = ZL.link_literature(
+            title="Hidden Leverage in Cloud Service Commitments",
+        )
+    assert result.zotero_item_key is None
+    assert result.reason == "weak_match_needs_confirmation"
+    assert result.candidates
+    assert result.candidates[0]["key"] == "WEBPAGE1"
+    assert result.candidates[0]["item_type"] == "webpage"
+
+
+def test_strategy_6_does_not_interfere_with_doi_strategy(monkeypatch):
+    """Strategy 1 (DOI) success short-circuits — Strategy 6 never runs
+    and the itemType=attachment||webpage search is never issued."""
+    _strategy6_env(monkeypatch)
+    strategy_5_items = [{
+        "data": {"key": "DOIWINS", "DOI": "10.1234/abc", "title": "Paper"}
+    }]
+    client = _Strategy6Client(strategy_5_items=strategy_5_items)
+    with _mock_httpx(lambda: client):
+        result = ZL.link_literature(title="x", doi="10.1234/abc")
+    assert result.zotero_item_key == "DOIWINS"
+    assert result.matched_by == "doi"
+    attachment_searches = [
+        (u, p) for (u, p) in client.record_calls
+        if p.get("itemType") and "attachment" in p["itemType"]
+    ]
+    assert attachment_searches == []
+
+
+def test_strategy_6_caps_candidates_at_five(monkeypatch):
+    """When more than 5 attachment candidates pass the floor, Strategy 6
+    returns the top 5 by similarity descending."""
+    _strategy6_env(monkeypatch)
+    base_title = "Hidden Leverage in Cloud Service Commitments"
+    # 7 candidates with similar-enough titles to pass the 0.65 floor.
+    strategy_6_items = [
+        {"data": {"key": f"KEY{i}", "itemType": "attachment",
+                  "title": f"Hidden Leverage in Cloud Service Commitments rev {i}"}}
+        for i in range(7)
+    ]
+    client = _Strategy6Client(strategy_6_items=strategy_6_items)
+    with _mock_httpx(lambda: client):
+        result = ZL.link_literature(title=base_title)
+    assert result.zotero_item_key is None
+    assert result.reason == "weak_match_needs_confirmation"
+    assert len(result.candidates) == 5

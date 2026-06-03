@@ -1,11 +1,14 @@
 """Zotero linker — resolve an RKA literature entry to its Zotero item key.
 
-Tries five matching strategies in order of confidence:
+Tries six matching strategies in order of confidence:
   1. DOI
   2. arXiv ID (extracted from URL or DOI prefix)
   3. URL (for working papers, preprints, blog posts)
   4. ISBN (for books)
   5. Title + first author + year (fuzzy fallback)
+  6. Standalone attachment / webpage title fuzzy match (v2.7.0.3 gray-lit
+     path — NEVER auto-links; always returns weak_match_needs_confirmation
+     for PI ratification via explicit zotero_key).
 
 Stops at the first hit. Returns the match method so the caller can
 record an audit trail.
@@ -158,13 +161,31 @@ def _extract_isbn(*texts: Optional[str]) -> Optional[str]:
     return None
 
 
-def _zotero_search(client, base: str, query: str, qmode: str = "everything") -> list[dict]:
-    """Single-page Zotero items search. Returns the list of item dicts."""
+def _zotero_search(
+    client,
+    base: str,
+    query: str,
+    qmode: str = "everything",
+    item_type: Optional[str] = None,
+) -> list[dict]:
+    """Single-page Zotero items search. Returns the list of item dicts.
+
+    v2.7.0.3 (Bug 4): the optional ``item_type`` kwarg is forwarded to
+    Zotero's ``itemType`` URL param. Supports the boolean ``||`` (OR) and
+    ``-`` (NOT) syntax documented in the Zotero Web API v3 reference,
+    e.g. ``item_type="attachment || webpage"`` (Strategy 6's filter).
+    Omitted when None so the surface for Strategies 1-5 is unchanged.
+    """
+    params: dict[str, Any] = {
+        "q": query,
+        "qmode": qmode,
+        "limit": 25,
+        "format": "json",
+    }
+    if item_type is not None:
+        params["itemType"] = item_type
     try:
-        r = client.get(
-            f"{base}/items",
-            params={"q": query, "qmode": qmode, "limit": 25, "format": "json"},
-        )
+        r = client.get(f"{base}/items", params=params)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Zotero items search failed for q=%r: %s", query, exc)
         return []
@@ -174,6 +195,51 @@ def _zotero_search(client, base: str, query: str, qmode: str = "everything") -> 
         return r.json() or []
     except Exception:  # noqa: BLE001
         return []
+
+
+# ---- v2.7.0.3 Strategy 6 false-positive guards ----
+#
+# Per PI bug report 2026-06-03: gray literature (sector reports, working
+# papers, standalone PDFs) often appears in Zotero only as attachments
+# with auto-generated filenames. We must avoid matching these "detritus"
+# titles against any lit row whose own title shares 1-2 generic tokens.
+#
+# _ATTACHMENT_TITLE_STOPWORDS: filenames that recur across Zotero auto-
+# imports when no metadata was extracted from the PDF. A candidate whose
+# normalized title (a) equals a stopword exactly, OR (b) is <=2 tokens
+# AND any token is in the set, is skipped before similarity scoring.
+_ATTACHMENT_TITLE_STOPWORDS = frozenset({
+    "untitled",
+    "document",
+    "pdf",
+    "doc",
+    "file",
+    "attachment",
+    "scan",
+    "image",
+    "snapshot",
+    "fulltext",
+    "full text",
+    "manuscript",
+})
+
+
+def _is_stopword_title(normalized_title: str) -> bool:
+    """True if a normalized title looks like Zotero auto-generated detritus.
+
+    v2.7.0.3 Strategy 6 guard. The check is intentionally narrow — we
+    only filter titles that are short AND contain a stopword token.
+    Real paper titles with 4+ tokens almost never trip this even if they
+    happen to mention "document" or "manuscript" in passing.
+    """
+    if not normalized_title:
+        return True
+    if normalized_title in _ATTACHMENT_TITLE_STOPWORDS:
+        return True
+    tokens = normalized_title.split()
+    if len(tokens) <= 2 and any(t in _ATTACHMENT_TITLE_STOPWORDS for t in tokens):
+        return True
+    return False
 
 
 def _normalize_doi(doi: Optional[str]) -> Optional[str]:
@@ -241,6 +307,16 @@ def link_literature(
     """Try to find a Zotero item matching this literature entry.
 
     Returns a LinkResult. zotero_item_key is None if no confident match.
+
+    v2.7.0.3 (Bug 4 fix, per PI bug report 2026-06-03): when Strategies
+    1-5 produce no_match, Strategy 6 searches Zotero for standalone
+    attachments + webpages whose title fuzzy-matches the lit title and
+    returns weak_match_needs_confirmation candidates the PI can ratify
+    via an explicit ``zotero_key`` call. Targets gray literature (sector
+    reports, working papers) that exists only as PDF attachments without
+    parent bibliographic items. NEVER auto-links — attachment titles
+    are noisy (filenames like 'untitled.pdf') so PI confirmation is
+    required.
 
     v2.7.0.2 (Bug 3 fix): when ``zotero_key`` is supplied, validate it
     exists in the configured library via direct GET on /items/<key>, then
@@ -409,6 +485,97 @@ def link_literature(
                         candidates=[best[1]],
                         reason="weak_match_needs_confirmation",
                     )
+
+            # ---- Strategy 6: standalone attachment + webpage title fuzzy (v2.7.0.3) ----
+            #
+            # Per PI bug report 2026-06-03 (lit_01KSNPS7G… Moody's sector
+            # report case): gray literature (sector reports, working papers,
+            # standalone PDFs without parent bibliographic items) has no
+            # DOI / arXiv ID / ISBN / URL anchor, AND no parent record for
+            # Strategy 5's title_author_year heuristic to land on. The PI's
+            # Zotero library represents such items as standalone attachments
+            # (itemType=attachment, no parentItem) or webpages
+            # (itemType=webpage). Strategy 6 searches those item types by
+            # title and returns weak_match_needs_confirmation candidates
+            # for PI ratification via an explicit zotero_key call.
+            #
+            # NEVER auto-link an attachment — the lack of bibliographic
+            # corroboration (no author / year / venue we can verify against)
+            # makes it too risky. The 0.85 strong-similarity threshold gates
+            # inclusion in the candidate set; it does NOT auto-link. The
+            # 0.65 weak floor filters noise (filename overlaps with a real
+            # title at 0.4-0.6 Jaccard are common false positives).
+            #
+            # Threshold rationale:
+            #   - Strategy 5 auto-links at score >= 0.95 (similarity alone
+            #     can reach 1.0; author + year corroboration adds 0.35 of
+            #     headroom) — bibliographic corroboration justifies auto-link.
+            #   - Strategy 6 has ONLY title similarity (no author / no year
+            #     for attachments; webpages may carry a date but we skip it
+            #     for symmetry / simplicity) — even 0.85 is not enough to
+            #     auto-link, so we surface ALL above-floor matches for the PI.
+            #   - 0.65 weak floor: empirically filters 1-token filename hits
+            #     while admitting real titles with 4+ tokens of overlap.
+            #
+            # False-positive mitigations (three layers):
+            #   1. Title length floor: skip Strategy 6 entirely if the
+            #      normalized lit title is <= 5 chars (short queries like
+            #      'memo' / 'q4' produce spurious Jaccard hits).
+            #   2. Stopword filter: skip candidate attachments whose title
+            #      matches _ATTACHMENT_TITLE_STOPWORDS detritus patterns
+            #      (untitled.pdf, document.pdf, scan, etc.).
+            #   3. Parent-item filter: skip attachment candidates whose
+            #      data.parentItem is truthy — these are CHILDREN of a
+            #      bibliographic parent that Strategy 5 would already have
+            #      matched if the parent's title aligned.
+            if title and title.strip():
+                normalized_lit_title = _norm_text(title)
+                if len(normalized_lit_title) > 5:
+                    attachment_items = _zotero_search(
+                        client,
+                        base,
+                        title.strip(),
+                        qmode="title",
+                        item_type="attachment || webpage",
+                    )
+                    attachment_candidates: list[dict] = []
+                    for it in attachment_items:
+                        data = it.get("data", {})
+                        item_type = (data.get("itemType") or "").lower()
+                        # Mitigation #3: skip child attachments (bound to
+                        # a bibliographic parent Strategy 5 would have hit).
+                        # Webpages have no parent concept so the check is
+                        # only meaningful for attachments.
+                        if item_type == "attachment" and data.get("parentItem"):
+                            continue
+                        item_title = data.get("title") or ""
+                        normalized_item_title = _norm_text(item_title)
+                        # Mitigation #2: skip detritus filenames.
+                        if _is_stopword_title(normalized_item_title):
+                            continue
+                        sim = _title_similarity(title, item_title)
+                        # 0.65 weak floor — below this, contribute nothing.
+                        if sim < 0.65:
+                            continue
+                        attachment_candidates.append({
+                            "key": data.get("key"),
+                            "title": item_title,
+                            "item_type": item_type,
+                            "similarity": round(sim, 3),
+                        })
+                    if attachment_candidates:
+                        # Sort by similarity desc, cap at top 5.
+                        # NEVER auto-link — even sim >= 0.85 returns as
+                        # weak_match_needs_confirmation per PI directive
+                        # (attachment titles lack the bibliographic
+                        # corroboration that would justify auto-linking).
+                        return LinkResult(
+                            candidates=sorted(
+                                attachment_candidates,
+                                key=lambda c: -c["similarity"],
+                            )[:5],
+                            reason="weak_match_needs_confirmation",
+                        )
 
             return LinkResult(reason="no_match")
     except Exception as exc:  # noqa: BLE001
