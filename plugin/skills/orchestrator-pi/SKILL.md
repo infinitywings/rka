@@ -52,6 +52,29 @@ orchestrator MCP — if `orchestrator_*` tools aren't available, the
 user is installed from main and should switch to agentic to access
 the orchestration capability.
 
+## Cockpit choice (Code default; Desktop for Phase O O1/O2)
+
+**Default cockpit: Claude Code.** This skill is optimized for Claude
+Code — `AskUserQuestion` (used at every interrupt response, including
+the TWO-TAP `pi_decision_select` ratification gate) is a Code built-in;
+`CLAUDE.md` auto-loads; `--resume` makes multi-day mission supervision
+durable; and `_meta["anthropic/alwaysLoad"]: true` is honored so the 5
+always-on rka MCP tools plus the 16 always-on orchestrator tools surface
+at session start. Empirically on 2026-06-02 / 2026-06-03, Claude
+Desktop's RATS retrieval surfaced only 3 of 5 always-on rka tools and 1
+of 16 orchestrator tools — the autonomy-licensing gate needs
+deterministic surfacing.
+
+**Reserve Claude Desktop for two Phase O onboarding steps**:
+`pi_idea_capture` (drag-and-drop PDF/DOCX/proposal ingest) and
+`pi_deepresearch_prompt` (Desktop's native multi-source Research
+feature). The daemon is client-agnostic and `workflow_thread_id` is
+the durable handle across cockpits, so handing a run between Code
+and Desktop is a configuration switch, not a re-architecture. For
+the full workflow-by-workflow recommendation, the capability
+comparison, and the 5-skill loading guide, see `USAGE_GUIDE.md →
+Cockpit reference` (in the rka repo root).
+
 ## Session start
 
 When the PI says they want to drive an orchestrator workflow:
@@ -134,8 +157,15 @@ PI knows there's more. (Multi-page rendering is a Phase B affordance
 
 ## Dispatching the PI's response
 
-**Always use `AskUserQuestion`** to present the response choice — this
-guarantees a human-typed answer rather than your inference.
+**Always use a structured choice prompt** — this guarantees a human-typed
+answer rather than your inference. In Claude Code (the default cockpit
+for this skill) call `AskUserQuestion`; in Claude Desktop (no
+`AskUserQuestion` equivalent) render a numbered Markdown choice list and
+refuse to dispatch until the PI types the literal label (Accept / Reject
+/ Correct, or Yes / No on second tap). The goal is identical in both
+cockpits: never infer authorization from hedged or partial replies. See
+`USAGE_GUIDE.md → Cockpit reference` (rka repo root) for why Code is
+the recommended cockpit for these gates.
 
 ### For pi_greenlight or pi_acceptance (one-tap):
 
@@ -165,17 +195,27 @@ dispatches them as RKA writes via the parent-side WRITE_TOOLS surface
 rka_submit_checkpoint, rka_submit_report, rka_create_mission,
 rka_bulk_update). These are real, irreversible writes.
 
-**Always perform a TWO-TAP confirmation before accepting:**
+**Always perform a TWO-TAP confirmation before accepting.** The
+TWO-TAP invariant is cockpit-agnostic — the set-identity Accept/Reject/Correct
+choice on tap 1, then Yes/No authorization on tap 2. Only the prompt
+rendering mechanism differs: in Claude Code use `AskUserQuestion` for
+both taps; in Claude Desktop render each tap as an explicit numbered
+Markdown prompt and require the PI to type the literal authorization
+label ("Accept all", then "Yes, authorize") before calling
+`orchestrator_accept`. Never infer authorization from hedged or partial
+replies — this is the privileged write-authorization gate.
 
 1. First tap — render the proposed actions clearly. Number them.
-   Quote each action's content verbatim. Then `AskUserQuestion`:
+   Quote each action's content verbatim. Then `AskUserQuestion`
+   (Code) / numbered Markdown prompt (Desktop):
    - Accept all (proceed to confirm)
    - Reject (escalate)
    - Correct (redirect)
 2. Second tap (only if PI picked "Accept all" in step 1):
    `AskUserQuestion("Authorize all {N} RKA writes? This is the
    ratification gate that commits proposed_actions to RKA.", [Yes,
-   No])`. Only on "Yes" → `orchestrator_accept(interrupt_id)`.
+   No])` in Code, or the equivalent Markdown prompt in Desktop. Only
+   on "Yes" → `orchestrator_accept(interrupt_id)`.
 
 This matches the RKA PI discipline from the `rka-pi` skill: "Record PI
 guidance with exact attribution; require provenance for major decisions."
@@ -183,8 +223,9 @@ guidance with exact attribution; require provenance for major decisions."
 ## Never auto-respond
 
 You MUST NOT call `orchestrator_accept`, `orchestrator_reject`, or
-`orchestrator_correct` without an explicit human pick via
-`AskUserQuestion` (or a verbatim direction the PI typed). If the PI's
+`orchestrator_correct` without an explicit human pick — via
+`AskUserQuestion` in Claude Code, or a verbatim typed label
+(Accept / Reject / Correct / Yes / No) in Claude Desktop. If the PI's
 intent is ambiguous, ask in chat — don't guess.
 
 ## After the response
@@ -471,10 +512,15 @@ target_venue / open_assumptions / ingested_sources). Use
 - Reject → `orchestrator_reject(...)` (loops back to capture_idea)
 - Correct → `orchestrator_correct(..., response_text=<redirect>)`
 
-**pi_deepresearch_prompt** — **async-pause**. Tell the PI explicitly:
-*"The orchestrator will park here indefinitely. Close Claude Desktop,
-do your literature scan over hours or days, then come back and ask me
-to check the orchestrator inbox."* The payload's
+**pi_deepresearch_prompt** — **async-pause**. This is one of the two
+Phase O steps where Claude Desktop is the recommended cockpit (Desktop's
+native multi-source Deep Research feature). If the PI is currently in
+Claude Code, ask them to switch to Desktop for this step — the run state
+travels via `workflow_thread_id` (see Cockpit choice section above).
+Tell the PI explicitly: *"The orchestrator will park here indefinitely.
+Switch to Claude Desktop and run your literature scan over hours or days
+via Desktop's Deep Research feature, then come back to either cockpit and
+ask me to check the orchestrator inbox."* The payload's
 `minimum_paper_floor` defaults to 5; below that, the workflow proceeds
 but surfaces a soft warning notification on next render.
 
