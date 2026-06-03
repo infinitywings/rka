@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 ZoteroMatchMethod = Literal[
-    "doi", "arxiv_id", "url", "isbn", "title_author_year", "manual"
+    "doi", "arxiv_id", "url", "isbn", "title_author_year", "manual", "explicit_key"
 ]
 
 
