@@ -27,6 +27,8 @@ This guide walks PIs (researchers) through the full setup and research workflow,
 > | **PI** | You, the human researcher | Supervises both, ratifies decisions |
 >
 > All three share one memory — RKA — so context survives across sessions.
+>
+> **Note (2026-06-03):** the role split above is unchanged, but the **human-PI cockpit seat** has shifted. The recommendation is now **Claude Code as the primary PI cockpit**, with Claude Desktop reserved for two Phase O onboarding steps. See [Cockpit reference](#cockpit-reference) below for the rationale and workflow-by-workflow guidance.
 
 ---
 
@@ -43,6 +45,7 @@ This guide walks PIs (researchers) through the full setup and research workflow,
   - [Step 6. Verify everything works](#step-6-verify-everything-works)
   - [Step 7. Load the Brain skill in Claude Desktop](#step-7-load-the-brain-skill-in-claude-desktop)
   - [Step 8. Load the Executor skill in Claude Code](#step-8-load-the-executor-skill-in-claude-code)
+- [Cockpit reference](#cockpit-reference)
 - [Starting Your First Session](#starting-your-first-session)
   - [What Happens at Session Start](#what-happens-at-session-start)
 - [The Research Lifecycle](#the-research-lifecycle)
@@ -110,6 +113,8 @@ Install these before running through Setup. Click the links to download.
 ---
 
 ## Setup — step by step
+
+> Before configuring both clients, skim the [Cockpit reference](#cockpit-reference) below to understand which client to use as your primary cockpit. The setup steps still install both apps; the cockpit choice is about where you spend the PI seat day-to-day.
 
 ### Step 1. Install Docker Desktop
 
@@ -273,6 +278,81 @@ Claude will call the `executor_skill` MCP prompt. The Executor skill covers:
 - Scope discipline (no out-of-scope changes; raise a checkpoint instead)
 
 > **Tip — pin a project-level CLAUDE.md.** For repos where the Executor will work often, run `rka_query(operation="generate_claude_md", role="executor", project_id="prj_…")` from the Brain. It auto-writes a project-specific CLAUDE.md that Claude Code reads on every session, so the Executor starts with the right context even before the skill is loaded.
+
+---
+
+## Cockpit reference
+
+Brain and Executor remain distinct roles, but for the **human-PI cockpit seat** (the surface where you supervise, ratify, and respond to parked interrupts) the recommendation as of 2026-06-03 is **Claude Code as the primary cockpit, Claude Desktop reserved for two specific Phase O onboarding steps**.
+
+### Default cockpit choice (Claude Code)
+
+The recommendation rests on a single load-bearing empirical fact. The rka MCP server emits the Anthropic-documented `_meta["anthropic/alwaysLoad"]: true` hint on all 5 always-on dispatch tools (`rka/mcp/server.py:485-513`), and on all 16 always-on orchestrator tools. Claude Code honors the hint — the tagged tools bypass per-turn retrieval filtering and surface deterministically at session start. Claude Desktop applies an opaque Retrieval-Augmented Tool Selection (RATS) filter that **ignores `alwaysLoad`** (`docs/v2.6.x-v2.7.0-tool-surface-arc.md:136-150`, `CHANGELOG.md:27-29` v2.7.0a2: "Empirically NO-OP on Claude Desktop"). Three closed-without-fix GitHub issues against `anthropics/claude-code` corroborate the divergence.
+
+On 2026-06-02 / 2026-06-03 the pathology reproduced in production. The Desktop cockpit was running v2.7.0 with all 5 always-on rka tools tagged `alwaysLoad`, yet Desktop's RATS filter retrieved only 3 of them at session start (`rka_query`, `rka_describe`, `rka_load_tools` visible; `rka_execute` and `rka_help` silently dropped). The same filter degraded the orchestrator surface to 1 of 16 always-on tools. The PI had to type a trigger phrase ("I want to use `rka_execute`…") to force RATS to re-rank. Claude Code would have surfaced the full 5+16 set immediately.
+
+Code is therefore the right default for everything that depends on deterministic tool surfacing: orchestrator inbox polling, the TWO-TAP autonomy-licensing gate at `pi_decision_select`, every other `pi_*` ratification gate, multi-day mission runs (`--resume` + JSONL audit), engineering on RKA itself (CLAUDE.md auto-load, slash commands), and `CLAUDE.md` + `MEMORY.md` continuity across sessions. The orchestrator daemon is client-agnostic (FastAPI surface at `README.md:32` + `rka/mcp/server.py:385`) and `workflow_thread_id` is the durable handle, so handing a run between Code and Desktop is a configuration switch, not a re-architecture. Migration cost ≈ 30–60 min; zero rollback risk because the Desktop config stays in place.
+
+### When to use Claude Desktop
+
+Two Phase O onboarding steps are deliberately retained on Desktop because they exploit chat-app affordances Code does not match:
+
+- **Phase O O1 `pi_idea_capture`** — drag-and-drop ingest of the PI's proposal/PDF/DOCX. Desktop's native file-upload surface is the path of least resistance.
+- **Phase O O2 `pi_deepresearch_prompt`** — Desktop's built-in multi-source Deep Research feature. Phase O was designed around it; until Code ships an equivalent, this step lives on Desktop.
+
+### Code vs Desktop — capability comparison
+
+| Dimension | Claude Code | Claude Desktop |
+|---|---|---|
+| `_meta["anthropic/alwaysLoad"]: true` (alwaysLoad hint) | Honored — tagged tools surface every turn | **Ignored** — empirically NO-OP (2026-06-03: 3-of-5 always-on rka tools surfaced, 1-of-16 orchestrator) |
+| Per-turn tool filtering | `tool_search` is opt-in; `alwaysLoad` bypasses it | Opaque RATS filter ranks tools by similarity + history + cardinality; no bypass |
+| `notifications/tools/list_changed` (runtime surface refresh) | Honored | Not honored empirically (falsified the v2.6.3 navigator pattern) |
+| `AskUserQuestion` (structured choice prompts; required by orchestrator-pi skill, including TWO-TAP gate) | Native | No equivalent; fall back to numbered Markdown choice with verbatim-label reply |
+| `CLAUDE.md` + auto-memory auto-load at session start | Yes (root + user-scope; `MEMORY.md` accumulates) | No equivalent; context re-loaded manually |
+| Session resume (`--resume` + JSONL audit log) | Yes — multi-day runs are recoverable | No equivalent; conversations restart fresh |
+| Slash commands (`/orchestrator-*`, `/rka-*`) | Native | Renders as prompts only |
+| Drag-and-drop PDF/DOCX ingest | CLI-first; less ergonomic | Native chat-app file ingest — path of least resistance for Phase O O1 |
+| Native multi-source Deep Research | Not present | Built-in — Phase O O2 was designed around it |
+| Orchestrator daemon compatibility | Daemon subprocess uses `RKA_LEGACY_TOOLS=1` (`claude-agent-sdk` is Code-equivalent) | Cockpit drives daemon over MCP; daemon does not run inside Desktop |
+
+### Workflow-by-workflow recommendation
+
+| Workflow | Cockpit | Rationale |
+|---|---|---|
+| Steady-state orchestrator supervision (`orchestrator_inbox` polling, terminal-state review) | **Code** | Deterministic always-on surfacing of `orchestrator_*` tools via `alwaysLoad` |
+| `pi_greenlight` / `pi_acceptance` ratification | **Code** | `AskUserQuestion` is native; alwaysLoad keeps `orchestrator_accept` / `reject` / `correct` visible |
+| `pi_decision_select` TWO-TAP autonomy gate | **Code** | TWO-TAP requires deterministic dispatch-tool surfacing every turn; Desktop's RATS is unsafe at this gate |
+| `pi_scope_ratify` / `pi_plan_ratify` / `pi_phase_entry_ack` | **Code** | Same `AskUserQuestion` + alwaysLoad reasoning |
+| Engineering on RKA itself (rka/, orchestrator/, web UI edits) | **Code** | `CLAUDE.md` auto-load, slash commands, `--resume` |
+| Multi-day mission supervision | **Code** | `--resume` + JSONL transcript = durable session continuity |
+| RKA writes via `/orchestrator-*` and `/rka-*` slash commands | **Code** | Slash menu is Code-native |
+| CLAUDE.md + auto-memory editing | **Code** | Auto-loaded; no Desktop equivalent |
+| Phase O O1 — `pi_idea_capture` (drag-drop PDF/DOCX/proposal) | **Desktop** | Native file-upload surface |
+| Phase O O2 — `pi_deepresearch_prompt` (multi-source Research) | **Desktop** | Desktop's native Deep Research feature |
+
+### The 5 rka MCP prompts — when to load which
+
+The rka MCP server exposes 5 prompts via `@mcp.prompt()` handlers at `rka/mcp/server.py:6974-7265`. They appear in Claude Desktop's `+` menu under "Add from rka" and in Claude Code's `/` slash menu under `rka`. Three are full skill files; two are shorter inline orientation fallbacks.
+
+| Prompt | Source | Audience | When to load | Cockpit fit |
+|---|---|---|---|---|
+| `brain_skill` | `rka/skills/brain/SKILL.md` (289 lines, authoritative) | Brain-LLM (strategic) | Session start when a Claude session is taking the Brain role; before drafting a Confirmation Brief / Research Protocol / multi-choice decision; before reviewing Executor Backbriefs | Client-agnostic content; loads in Code or Desktop |
+| `executor_skill` | `rka/skills/executor/SKILL.md` (188 lines, authoritative) | Executor-LLM (implementation) | On mission pickup; before producing a Backbrief or mission report; at session start for any Executor (including the daemon subprocess) | Code-leaning — workflows assume Bash/Read/Write/Edit/Grep/Glob native to Code |
+| `pi_skill` | `rka/skills/pi/SKILL.md` (70 lines, lightweight) | The LLM helping the human PI supervise | Any PI cockpit session — checkpoint review, banking verbatim PI guidance, project-status / research-map inspection. Optimized for Code (auto-load + slash commands) but works in both | **Code** (primary) |
+| `brain_orientation` | Inline string in `server.py:6992-7137` (~145 lines) | Brain-LLM, fallback for clients without Agent Skills | When the full `brain_skill` cannot be loaded (legacy/minimal MCP clients); as a token-efficient refresher for an already-oriented Brain | Either cockpit; explicitly defers to `brain_skill` where supported |
+| `executor_orientation` | Inline string in `server.py:7140-7265` (~125 lines) | Executor-LLM, fallback for clients without Agent Skills | When the full `executor_skill` cannot be loaded; as a token-efficient refresher; NOT loaded inside the daemon subprocess (which already injects `EXECUTOR_SYSTEM`) | Either cockpit; explicitly defers to `executor_skill` where supported |
+
+Quick rule: load a `*_skill` whenever the cockpit supports Agent Skills (both Code and Desktop do). The `*_orientation` prompts are the legacy/minimal-client fallback and the short refresh option. Do not load both Brain and Executor skills in the same session — they teach distinct roles and mixing them bloats context and blurs the role boundary.
+
+### Cross-session pattern
+
+Because the orchestrator daemon is client-agnostic and `workflow_thread_id` is the durable cross-cockpit handle, a typical Phase O run can hand off cleanly between cockpits:
+
+1. **Start in Code.** `/orchestrator-onboard prj_…` from Claude Code. The first parked interrupt (`pi_onboarding_topic` or `pi_idea_capture`) appears; the workflow_thread_id is minted.
+2. **Hand off to Desktop for O1 + O2.** Open Claude Desktop; ask "check orchestrator inbox" — Desktop's `orchestrator_inbox()` lists the same parked interrupt because the daemon shares state. Drag the PDF/proposal into Desktop for `pi_idea_capture`; later, use Desktop's Deep Research feature for `pi_deepresearch_prompt`.
+3. **Return to Code for O3–O5 + the H-step mission queue handoff.** Reopen Code, ask "check orchestrator inbox" or run `orchestrator_get_run(<workflow_thread_id>)`. Code surfaces the next parked interrupt; steady-state supervision resumes with `--resume` durability and CLAUDE.md auto-load.
+
+The Desktop config stays installed alongside Code's. No state migration; the `workflow_thread_id` makes the handoff a configuration switch, not a re-architecture.
 
 ---
 
