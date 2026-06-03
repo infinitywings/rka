@@ -486,7 +486,7 @@ The first call returns a JSON array (initially empty). The log grep confirms the
 
 > create rka project named smoke-test
 
-**Expected:** Claude calls `rka_create_project(name="smoke-test")` and reports:
+**Expected:** Claude calls `rka_execute(args={"operation": "create_project", "name": "smoke-test"})` and reports:
 
 ```
 Created project **smoke-test** (`prj_01K…`).
@@ -528,8 +528,8 @@ The canonical first-session pattern. Substitute the actual `prj_01K…` ID from 
 
 Claude loads the `brain_skill` MCP prompt (which expands to `rka/skills/brain/SKILL.md`). Per the skill's Session-Start protocol, it will:
 1. Pin `project_id` for the whole conversation.
-2. Call `rka_get_status(project_id="prj_…")` (may 404 on brand-new projects until you set state).
-3. Call `rka_get_changelog`, `rka_get_pending_maintenance`, `rka_get_research_map`.
+2. Call `rka_query(args={"operation": "status", "project_id": "prj_…"})` (may 404 on brand-new projects until you set state).
+3. Call `rka_query(args={"operation": "get_changelog", "project_id": "prj_…"})`, `rka_query(args={"operation": "get_pending_maintenance", "project_id": "prj_…"})`, `rka_query(args={"operation": "get_research_map", "project_id": "prj_…"})`.
 
 **Step 7.2 — Initialize project state:**
 
@@ -539,25 +539,25 @@ Claude loads the `brain_skill` MCP prompt (which expands to `rka/skills/brain/SK
 
 > Note that we want to prove the journal + decision + mission round-trip works.
 
-Claude calls `rka_add_note(type="directive", source="pi", verbatim_input="...", project_id="prj_…")`. The `verbatim_input` field is **load-bearing** — the PI's exact wording is ground truth.
+Claude calls `rka_execute(args={"operation": "record_note", "project_id": "prj_…", "type": "directive", "source": "pi", "verbatim_input": "...", ...})`. The `verbatim_input` field is **load-bearing** — the PI's exact wording is ground truth.
 
 **Step 7.4 — Record a decision linking back to the journal:**
 
 > Decide we will execute one happy-path mission to confirm round-trip.
 
-Claude calls `rka_add_decision(..., related_journal=["jrn_01K…"], project_id="prj_…")`. **`related_journal` is the documented provenance convention** — the maintenance scanner (`rka_get_pending_maintenance`) flags decisions missing it as a hygiene gap. The decisions service does **not** hard-reject the write if it's absent (`rka/services/decisions.py` stores it as a JSON list and only writes entity_links when present), but the Brain skill prompt enforces it and you should treat it as required for any decision you intend to keep.
+Claude calls `rka_execute(args={"operation": "record_decision", "project_id": "prj_…", "related_journal": ["jrn_01K…"], ...})`. **`related_journal` is the documented provenance convention** — the maintenance scanner (operation `get_pending_maintenance`) flags decisions missing it as a hygiene gap. The decisions service does **not** hard-reject the write if it's absent (`rka/services/decisions.py` stores it as a JSON list and only writes entity_links when present), but the Brain skill prompt enforces it and you should treat it as required for any decision you intend to keep.
 
 **Step 7.5 — Create a mission linked to the decision:**
 
 > Create the verification mission.
 
-Claude calls `rka_create_mission(..., motivated_by_decision="dec_01K…", project_id="prj_…")`. Same shape as the previous step: **`motivated_by_decision` is the documented provenance convention** — flagged by the maintenance scanner when missing, enforced by the skill prompt, not a hard schema constraint at the service layer (`rka/services/missions.py` writes the link conditionally on `if data.motivated_by_decision`).
+Claude calls `rka_execute(args={"operation": "create_mission", "project_id": "prj_…", "motivated_by_decision": "dec_01K…", ...})`. Same shape as the previous step: **`motivated_by_decision` is the documented provenance convention** — flagged by the maintenance scanner when missing, enforced by the skill prompt, not a hard schema constraint at the service layer (`rka/services/missions.py` writes the link conditionally on `if data.motivated_by_decision`).
 
 **Step 7.6 — Hand off to Executor:**
 
 > Load the Executor skill and pick up `mis_01K…`.
 
-Executor reads the mission, reads the decision, activates the mission (`pending → active`), executes, then calls `rka_submit_report(mission_id="mis_01K…", summary="...", project_id="prj_…")` which transitions it to `complete`.
+Executor reads the mission, reads the decision, activates the mission (`pending → active`), executes, then calls `rka_execute(args={"operation": "submit_report", "project_id": "prj_…", "mission_id": "mis_01K…", "summary": "...", ...})` which transitions it to `complete`.
 
 **Step 7.7 — PI verifies in the web UI.** Missions tab shows `mis_01K…` as `complete`. Decisions tab shows `dec_01K…` linked to `jrn_01K…`. Research Map shows the project's first node.
 

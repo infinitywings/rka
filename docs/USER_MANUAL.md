@@ -269,19 +269,19 @@ To find your project id: run `rka_list_projects()` in any Claude session, or ope
 RKA supports multiple isolated projects. When you first start RKA, a default project exists. To create a new one:
 
 - **Via web dashboard:** Click the **+** button next to the project selector in the sidebar.
-- **Via MCP:** Brain calls `rka_create_project(name="IoT Security Analysis", description="Systematic review of CPS vulnerabilities")`
+- **Via MCP:** Brain calls `rka_execute(args={"operation": "create_project", "name": "IoT Security Analysis", "description": "Systematic review of CPS vulnerabilities"})`
 
 ### 6.2 — Switching Projects
 
 - **Via web dashboard:** Use the project dropdown in the sidebar.
-- **Via MCP:** Brain calls `rka_list_projects()` then `rka_set_project(id)`.
+- **Via MCP:** Brain calls `rka_query(args={"operation": "list_projects"})` then pins the chosen `project_id` for the rest of the conversation. (Pre-v2.6 `rka_set_project` is a deprecated no-op; `project_id` is now passed as a required field on every operation.)
 
 ### 6.3 — Project Lifecycle
 
 | Action | How |
 |--------|-----|
-| Create | Web UI **+** button or `rka_create_project()` |
-| Switch | Web UI dropdown or `rka_set_project()` |
+| Create | Web UI **+** button or `rka_execute(args={"operation": "create_project", ...})` |
+| Switch | Web UI dropdown or pin `project_id` at conversation start and thread it on every operation |
 | Export | `GET /api/projects/export` — downloads a `.rka-pack.zip` |
 | Import | `POST /api/projects/import` — uploads a pack into a new project |
 | Delete | Web UI trash icon with confirmation dialog (recommends export first) |
@@ -460,7 +460,7 @@ Use the web dashboard or have the Brain call `rka_create_project()`. Give it a d
 
 The Brain creates research questions as decisions with `kind="research_question"`. These become the top-level nodes in the Research Map and organize everything below.
 
-**Example:** `rka_add_decision(question="Does protocol-specific feature engineering improve IDS detection?", kind="research_question", phase="exploration", decided_by="brain")`
+**Example:** `rka_execute(args={"operation": "record_decision", "project_id": "prj_01...", "question": "Does protocol-specific feature engineering improve IDS detection?", "kind": "research_question", "phase": "exploration", "decided_by": "brain"})`
 
 ### Step 3: Add Initial Literature
 
@@ -537,6 +537,8 @@ The Brain processes up to 10 maintenance items per session, prioritized by impor
 # Part V — Reference
 
 ## Chapter 16: MCP Tools Quick Reference
+
+> **v2.7.0 dispatch translation.** The legacy tool names below (`rka_add_note`, `rka_add_decision`, `rka_create_mission`, `rka_get_status`, `rka_search`, etc.) are synonyms for `rka_query(args={"operation": ...})` / `rka_execute(args={"operation": ...})` under the v2.7.0+ typed-arg surface. The discipline (`source="pi"` + `verbatim_input`, `related_journal=[...]` on decisions, `motivated_by_decision=...` on missions, `project_id` on every call) is unchanged — only the call shape changes. See `rka_describe(operation="<name>")` for per-operation signatures, or `rka_describe(operation="")` for the operation index. The `rka_set_project` row is now a deprecated no-op (v2.6 removed it); pin `project_id` at conversation start and thread it on every operation. Pre-v2.4 `rka_ask` / `rka_generate_summary` rows are historical and no longer first-class.
 
 ### Knowledge Management
 

@@ -1,8 +1,20 @@
-# RKA Usage Guide — Setting Up Claude Desktop + Claude Code as Brain & Executor (v2.3)
+# RKA Usage Guide — Setting Up Claude Desktop + Claude Code as Brain & Executor (v2.7.0)
 
 This guide walks PIs (researchers) through the full setup and research workflow, from a fresh laptop to producing research outputs with Brain (strategy) and Executor (implementation) actors.
 
-> **Tool surface (v2.6.3+).** The rka MCP server ships a **navigator architecture**: 12 always-on tools at startup (status, context, pending maintenance, checkpoints, research map, search, get, add-note, resolve-checkpoint, plus the navigator triad `rka_load_tools` / `rka_list_tools` / `rka_help`); ~79 tools — including `rka_list_projects`, `rka_add_decision`, `rka_create_mission`, `rka_get_journal`, `rka_get_report` — are **deferred** and must be registered via `rka_load_tools(names=[...])` before the LLM can call them. Browse the catalog with `rka_list_tools(category=...)`; inspect a single tool with `rka_help(name=...)`. Both Claude Desktop and Claude Code honor `notifications/tools/list_changed`, so newly-loaded tools become callable mid-session. The Brain / Executor / PI skills bundled with RKA know about this and will load the tools they need at session start; this guide notes a few places below where the user prompt has to nudge Claude to load a specific deferred tool.
+> **Tool surface (v2.7.0+).** The rka MCP server ships a **discriminated-union dispatch architecture** — 5 always-on tools at startup:
+>
+> | Tool | Purpose |
+> |---|---|
+> | `rka_query` | Dispatcher for **38 read operations** (`get_status`, `list_projects`, `search`, `get_research_map`, `get_journal`, `get_report`, `get_context`, …). Call with `operation="…"` plus the operation's typed args. |
+> | `rka_execute` | Dispatcher for **49 write/lifecycle operations** (`record_note`, `record_decision`, `create_mission`, `submit_report`, `submit_checkpoint`, …). |
+> | `rka_describe` | Introspect operation schemas. `rka_describe("")` returns the operation index (<250 tokens); `rka_describe("record_decision")` returns the full typed schema with required fields, enums, and provenance constraints. |
+> | `rka_load_tools` | Escape hatch — surface deferred legacy tools (the v2.6.x 91-tool surface and the v2.7.0a2 verb surface live at `tier=deferred`). |
+> | `rka_help` | Escape hatch — list available operations or describe a single one (alias for `rka_describe`). |
+>
+> Every operation is backed by a typed Pydantic model — **87 models total** in `rka/mcp/operation_args.py`. FastMCP renders them as `oneOf` branches with per-branch enum and required-field enforcement. Brain hallucinations like `confidence='confirmed'` or `submit_checkpoint(content=…)` (instead of `description=`) are rejected at the inputSchema layer **before the LLM can ship the call** — that's the no-compromise empirical proof that landed v2.7.0 on 2026-06-02. See `docs/v2.6.x-v2.7.0-tool-surface-arc.md` for the full narrative.
+>
+> Set `RKA_LEGACY_TOOLS=1` to restore the pre-v2.7.0 surface (91 legacy tools + 8 v2.7.0a2 verbs always-on). The orchestrator daemon's subprocess does this to preserve per-tool dispatch granularity for the TWO-TAP autonomy-contract gate at `pi_decision_select`; ordinary PI sessions should leave it unset.
 
 > ### ⚠️ This guide requires the **Claude Desktop** native app — **NOT** the [claude.ai](https://claude.ai) website.
 >
@@ -160,17 +172,14 @@ If `~/.local/bin` is not on your `PATH`, either add it (e.g. in `~/.zshrc`: `exp
    - **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
    - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
    - **Linux:** `~/.config/Claude/claude_desktop_config.json`
-3. Add (or merge into) the following. **Replace `<your-username>` with your actual username** — the path must be absolute, not `~`. Set `RKA_PROJECT` to your primary project's id so every fresh session starts in that project (see "Pin your default project" below):
+3. Add (or merge into) the following. **Replace `<your-username>` with your actual username** — the path must be absolute, not `~`:
 
    ```json
    {
      "mcpServers": {
        "rka": {
          "command": "/Users/<your-username>/.local/bin/rka",
-         "args": ["mcp"],
-         "env": {
-           "RKA_PROJECT": "prj_01ABC..."
-         }
+         "args": ["mcp"]
        }
      }
    }
@@ -181,13 +190,13 @@ If `~/.local/bin` is not on your `PATH`, either add it (e.g. in `~/.zshrc`: `exp
 
 You should now see RKA tools available in any new conversation.
 
-**Pin your default project (highly recommended).** With `RKA_PROJECT=<project_id>` set in the MCP `env` block above, both the MCP `_session.project_id` AND the API-side fallback resolve to that project on every fresh session. Without it, MCP subprocesses default to `proj_default`, and writes silently land there if Brain or Executor doesn't call `rka_set_project()` first. To find your project id: open `http://localhost:9712`, switch to the project you want, and copy the id from the URL — or run `rka_list_projects()` once in a Claude session.
+**State the project at the start of each session (v2.6+).** v2.6 removed the `RKA_PROJECT` env-var "default project" mechanism — it reintroduced the silent-default failure mode that v2.6 explicitly eliminates. Instead, name the project in the opening line of every conversation: *"I'm working on prj_01KSMW9R…"* (or *"on the IoT broker scalability project"* — the LLM resolves the slug via `rka_query(operation="list_projects")`). The LLM retains it in working memory and passes `project_id="prj_…"` on every `rka_query` / `rka_execute` call. If `project_id` is omitted, the dispatcher rejects the call at the inputSchema layer rather than silently writing to `proj_default`. To find your project id: open `http://localhost:9712`, switch to the project you want, and copy the id from the URL — or run `rka_query(operation="list_projects")` once in a Claude session.
 
 ### Step 5. Configure Claude Code (Executor)
 
 Claude Code uses the same MCP binary. There are two common ways to register it:
 
-**Option A — VS Code extension (graphical):** Open VS Code → Claude Code panel → click the gear → **MCP Servers** → **Add Server**. Use the same JSON shape as Step 4 (including the `env.RKA_PROJECT` field).
+**Option A — VS Code extension (graphical):** Open VS Code → Claude Code panel → click the gear → **MCP Servers** → **Add Server**. Use the same JSON shape as Step 4.
 
 **Option B — Per-project config file (recommended for teams):** Create `.claude/mcp.json` in your repo root with:
 
@@ -196,10 +205,7 @@ Claude Code uses the same MCP binary. There are two common ways to register it:
   "mcpServers": {
     "rka": {
       "command": "/Users/<your-username>/.local/bin/rka",
-      "args": ["mcp"],
-      "env": {
-        "RKA_PROJECT": "prj_01ABC..."
-      }
+      "args": ["mcp"]
     }
   }
 }
@@ -215,13 +221,13 @@ If you're using the Claude Code CLI instead of the extension, the equivalent con
 
 > List my RKA projects.
 
-`rka_list_projects` is one of the ~79 **deferred** tools (see the navigator note at the top of this guide), so Claude will first call `rka_load_tools(names=["rka_list_projects"])` to register it, then call `rka_list_projects()` and return a list (an empty list is fine on a fresh install). If Claude can't find the tool, prompt: *"Use rka_load_tools to register rka_list_projects first."* The Brain skill (Step 7 below) primes this on every session start.
+On the v2.7.0 dispatch surface, `list_projects` is an always-on operation under `rka_query`. Claude should call `rka_query(operation="list_projects")` and return a list (an empty list is fine on a fresh install). No load-tools dance is required — the dispatcher is on the wire from the first turn.
 
 **In Claude Code** (Executor), open any project and ask:
 
 > Check the RKA status.
 
-Claude should call `rka_get_status()` and return the current project state.
+Claude should call `rka_query(operation="get_status", project_id="prj_…")` and return the current project state. The first time this lands without a `project_id` you'll see a dispatcher validation error — that's by design (see "State the project at the start of each session" above).
 
 If either fails:
 - ✓ Is Docker running? `docker compose ps` should show `rka-server (healthy)`.
@@ -266,7 +272,7 @@ Claude will call the `executor_skill` MCP prompt. The Executor skill covers:
 - Mission-report format (summary / findings / anomalies / questions)
 - Scope discipline (no out-of-scope changes; raise a checkpoint instead)
 
-> **Tip — pin a project-level CLAUDE.md.** For repos where the Executor will work often, run `rka_generate_claude_md()` from the Brain. It auto-writes a project-specific CLAUDE.md that Claude Code reads on every session, so the Executor starts with the right context even before the skill is loaded.
+> **Tip — pin a project-level CLAUDE.md.** For repos where the Executor will work often, run `rka_query(operation="generate_claude_md", role="executor", project_id="prj_…")` from the Brain. It auto-writes a project-specific CLAUDE.md that Claude Code reads on every session, so the Executor starts with the right context even before the skill is loaded.
 
 ---
 
@@ -276,9 +282,9 @@ Claude will call the `executor_skill` MCP prompt. The Executor skill covers:
 
 When you start a conversation with the Brain, it should automatically:
 
-1. **Check what changed** — `rka_get_changelog(since="yesterday")` shows new entries, decisions, claims, and missions since your last session
-2. **Load the research map** — `rka_get_research_map()` shows your research questions, evidence clusters, and claim counts
-3. **Process maintenance** — `rka_get_pending_maintenance()` detects provenance gaps. The Brain silently fixes up to 10 items (adding missing links, tags, or claim extractions)
+1. **Check what changed** — `rka_query(operation="get_changelog", since="yesterday", project_id="prj_…")` shows new entries, decisions, claims, and missions since your last session
+2. **Load the research map** — `rka_query(operation="get_research_map", project_id="prj_…")` shows your research questions, evidence clusters, and claim counts
+3. **Process maintenance** — `rka_query(operation="get_pending_maintenance", project_id="prj_…")` detects provenance gaps. The Brain silently fixes up to 10 items (adding missing links, tags, or claim extractions)
 4. **Greet you** with a summary of where things stand
 
 You don't need to tell Claude to do this — the skill guide instructs it to.
@@ -302,12 +308,14 @@ You don't need to tell Claude to do this — the skill guide instructs it to.
 2. After you confirm, the Brain **records your direction** with proper attribution:
 
    ```
-   rka_add_note(
+   rka_execute(
+     operation="record_note",
      content="Brain analysis: PI directed study of MQTT broker scalability...",
      source="pi",
      verbatim_input="I want to study whether horizontal sharding can solve MQTT broker scalability problems under high device density.",
      type="directive",
-     tags=["research-protocol", "gate-0"]
+     tags=["research-protocol", "gate-0"],
+     project_id="prj_…"
    )
    ```
 
@@ -316,11 +324,14 @@ You don't need to tell Claude to do this — the skill guide instructs it to.
 3. The Brain **creates research questions** as decision nodes:
 
    ```
-   rka_add_decision(
+   rka_execute(
+     operation="record_decision",
      question="At what device density does MQTT broker performance degrade beyond 5% packet loss?",
      kind="research_question",
      decided_by="pi",
-     assumptions=["Network latency negligible in lab", "Devices publish at 1 msg/sec"]
+     related_journal=["jrn_…"],
+     assumptions=["Network latency negligible in lab", "Devices publish at 1 msg/sec"],
+     project_id="prj_…"
    )
    ```
 
@@ -333,19 +344,27 @@ You don't need to tell Claude to do this — the skill guide instructs it to.
 The Brain records the paper and processes your reading annotations:
 
 ```
-rka_add_literature(title="MQTT Broker Performance Under Stress", authors=["Smith, J.", "Lee, K."], year=2024)
+rka_execute(
+  operation="record_literature",
+  title="MQTT Broker Performance Under Stress",
+  authors=["Smith, J.", "Lee, K."],
+  year=2024,
+  project_id="prj_…"
+)
 
-rka_process_paper(
+rka_execute(
+  operation="process_paper",
   lit_id="lit_01...",
   summary="Benchmarks MQTT brokers at scale. Key finding: 12% packet loss above 400 devices.",
   annotations=[
-    {passage: "Table 3: 12% packet loss at 400 devices", note: "Threshold lower than expected",
-     claim_type: "evidence", confidence: 0.85, cluster_id: "ecl_01..."}
-  ]
+    {"passage": "Table 3: 12% packet loss at 400 devices", "note": "Threshold lower than expected",
+     "claim_type": "evidence", "confidence": "high", "cluster_id": "ecl_01..."}
+  ],
+  project_id="prj_…"
 )
 ```
 
-`rka_process_paper` does three things in one call:
+`process_paper` does three things in one call:
 - Creates a journal entry with your reading notes
 - Extracts structured claims from each annotation
 - Assigns claims to evidence clusters
@@ -353,7 +372,12 @@ rka_process_paper(
 **The Brain creates evidence clusters** to organize related claims:
 
 ```
-rka_create_cluster(label="Broker Performance Thresholds", research_question_id="dec_01...")
+rka_execute(
+  operation="create_cluster",
+  label="Broker Performance Thresholds",
+  research_question_id="dec_01...",
+  project_id="prj_…"
+)
 ```
 
 As you discuss more papers and findings, the Brain extracts claims and assigns them to clusters. The Research Map grows organically.
@@ -367,7 +391,8 @@ When there's implementation work to do (experiments, code, data collection), the
 The Brain creates a mission with a structured handoff:
 
 ```
-rka_create_mission(
+rka_execute(
+  operation="create_mission",
   objective="Run stress test to verify packet loss measurements at 400 devices",
   tasks=[
     {"description": "Replicate Smith & Lee setup (Mosquitto 2.0, 4-core, QoS 1)"},
@@ -375,7 +400,8 @@ rka_create_mission(
     {"description": "Compare results with published 12% figure"}
   ],
   context="INTENT: Verify published packet loss threshold...\nBACKGROUND: Smith & Lee report 12%...\nCONSTRAINTS: Do not modify broker config...\nASSUMPTIONS: 1. Network latency negligible...\nVERIFICATION: Mean packet loss with 95% CI",
-  motivated_by_decision="dec_01..."
+  motivated_by_decision="dec_01...",
+  project_id="prj_…"
 )
 ```
 
@@ -389,11 +415,11 @@ See [Working With Claude Code (Executor)](#working-with-claude-code-executor) fo
 
 After the Executor completes work and submits a report, the Brain:
 
-1. **Reviews the report** — `rka_get_report(mission_id="mis_01...")`
-2. **Checks for contradictions** — `rka_detect_contradictions(entity_id="clm_01...")`
-3. **Flags stale evidence** — `rka_flag_stale(entity_id="clm_01...", reason="Contradicted by our experiment")`
-4. **Writes cluster syntheses** — `rka_review_cluster(cluster_id="ecl_01...", synthesis="Our 5-trial experiment shows 8.2% mean packet loss...")`
-5. **Advances research questions** — `rka_advance_rq(rq_id="dec_01...", status="partially_answered", conclusion="Threshold identified at ~400 devices")`
+1. **Reviews the report** — `rka_query(operation="get_report", mission_id="mis_01...", project_id="prj_…")`
+2. **Checks for contradictions** — `rka_query(operation="detect_contradictions", entity_id="clm_01...", project_id="prj_…")`
+3. **Flags stale evidence** — `rka_execute(operation="flag_stale", entity_id="clm_01...", reason="Contradicted by our experiment", project_id="prj_…")`
+4. **Writes cluster syntheses** — `rka_execute(operation="review_cluster", cluster_id="ecl_01...", synthesis="Our 5-trial experiment shows 8.2% mean packet loss...", project_id="prj_…")`
+5. **Advances research questions** — `rka_execute(operation="advance_rq", rq_id="dec_01...", status="partially_answered", conclusion="Threshold identified at ~400 devices", project_id="prj_…")`
 
 ### Phase 5: Produce Research Outputs
 
@@ -404,7 +430,12 @@ When you need a draft for a paper section, literature review, or progress report
 The Brain calls:
 
 ```
-rka_assemble_evidence(research_question_id="dec_01...", format="progress_report")
+rka_query(
+  operation="assemble_evidence",
+  research_question_id="dec_01...",
+  format="progress_report",
+  project_id="prj_…"
+)
 ```
 
 This produces a structured markdown document pulling together:
@@ -435,7 +466,7 @@ or if you have a specific mission ID:
 > "Work on mission mis_01KP4DB5PZF7YXYRPV2AGQJSE6"
 
 The Executor will:
-1. Call `rka_get_mission()` to load the mission details
+1. Call `rka_query(operation="get_mission", project_id="prj_…")` to load the mission details
 2. Read the `motivated_by_decision` to understand WHY the work exists
 3. Read all context links (journal entries, decisions, literature)
 4. Load the Executor skill for workflow guidance
@@ -458,13 +489,13 @@ During execution, the Executor raises **checkpoints** when it hits problems:
 - **Scope expansion** — "Fixing this requires changes outside the stated scope"
 - **Contradictory results** — "Our measurements don't match the expected values"
 
-Checkpoints appear in Claude Desktop via `rka_get_checkpoints(status="open")`. You and the Brain resolve them:
+Checkpoints appear in Claude Desktop via `rka_query(operation="get_checkpoints", status="open", project_id="prj_…")`. You and the Brain resolve them:
 
 > "The Executor flagged that network latency isn't negligible. Tell it to re-run with simulated latency."
 
 ### Mission Reports
 
-When the Executor finishes, it submits a report via `rka_submit_report()` with:
+When the Executor finishes, it submits a report via `rka_execute(operation="submit_report", ...)` with:
 - **Summary**: What was done and what was found
 - **Findings**: Key results
 - **Anomalies**: Unexpected observations
@@ -494,23 +525,27 @@ Gates are formal go/no-go checkpoints at critical transitions. They prevent comp
 The Brain creates a Gate 1:
 
 ```
-rka_create_gate(
+rka_execute(
+  operation="create_gate",
   mission_id="mis_01...",
   gate_type="plan_validation",
   deliverables=["Executor Backbrief journal entry"],
   pass_criteria=["Plan addresses all tasks", "Assumptions are consistent"],
-  assumptions_to_verify=["Network latency is negligible"]
+  assumptions_to_verify=["Network latency is negligible"],
+  project_id="prj_…"
 )
 ```
 
 After the Executor submits its Backbrief, the Brain evaluates:
 
 ```
-rka_evaluate_gate(
+rka_execute(
+  operation="evaluate_gate",
   gate_id="chk_01...",
   verdict="go",
   notes="Plan is aligned. Proceed.",
-  assumption_status={"Network latency is negligible": "validated"}
+  assumption_status={"Network latency is negligible": "validated"},
+  project_id="prj_…"
 )
 ```
 
@@ -546,8 +581,8 @@ RKA tracks whether evidence is still current. As new findings arrive, old claims
 
 ### How Staleness Works
 
-1. **Detection**: The Brain runs `rka_check_freshness()` to find aging claims, superseded sources, and clusters with stale evidence
-2. **Flagging**: `rka_flag_stale(entity_id, reason, propagate=true)` marks a claim as stale
+1. **Detection**: The Brain runs `rka_query(operation="check_freshness", project_id="prj_…")` to find aging claims, superseded sources, and clusters with stale evidence
+2. **Flagging**: `rka_execute(operation="flag_stale", entity_id, reason, propagate=true, project_id="prj_…")` marks a claim as stale
 3. **Propagation**: When `propagate=true`, staleness cascades:
    - Stale claim → if >50% of claims in a cluster are stale → cluster flagged
    - Stale cluster → decisions citing it are flagged
@@ -558,7 +593,7 @@ RKA tracks whether evidence is still current. As new findings arrive, old claims
 When new evidence conflicts with existing claims:
 
 ```
-rka_detect_contradictions(entity_id="clm_01...")
+rka_query(operation="detect_contradictions", entity_id="clm_01...", project_id="prj_…")
 ```
 
 Returns semantically similar claims that may conflict. The Brain reviews and decides:
@@ -600,11 +635,13 @@ RKA supports multiple isolated research projects in the same database.
 
 > "Create a new RKA project called 'IoT Broker Scalability'"
 
+The LLM calls `rka_execute(operation="create_project", name="IoT Broker Scalability", ...)` and gets back the new `prj_…` id.
+
 **Switch between projects:**
 
-> "Switch to the IoT Broker Scalability project"
+> "We're now working on the IoT Broker Scalability project (prj_01ABC...)"
 
-All tool calls operate on the active project. **Brain and Executor must verify the active project at session start with `rka_get_status()`** — the MCP `_session.project_id` is per-process and ephemeral, so previous-session state is gone on every fresh subprocess. Without verification, writes silently land in `proj_default`. Set `RKA_PROJECT=<project_id>` in your MCP config (see Step 4) to make this default automatic.
+There is no "switch" command in v2.6+ — `rka_set_project` was a deprecated no-op as of v2.6 and is `tier=deferred` on the v2.7.0 dispatch surface. Project scoping is per-call: every `rka_query` / `rka_execute` operation takes `project_id` as a kwarg and the LLM threads it from conversation memory. If the LLM omits `project_id`, the dispatcher rejects the call at the inputSchema layer — replacing the pre-v2.6 silent-write-to-`proj_default` failure mode with a hard error.
 
 ---
 
@@ -616,7 +653,7 @@ Knowledge packs are portable snapshots of a project — all data in a single `.r
 
 **From the web dashboard**: Dashboard → Export Pack
 
-**From MCP**: `rka_export()` (or `GET /api/projects/export`)
+**From MCP**: `rka_query(operation="export", project_id="prj_…")` (or `GET /api/projects/export`)
 
 The pack includes schema version metadata and table counts. The categorized table registry ensures no tables are silently dropped during export.
 
@@ -636,10 +673,10 @@ After import, RKA automatically runs an integrity check and reports any issues (
 
 Before upgrading RKA to a new version:
 1. Export all projects as knowledge packs
-2. Run `rka_check_integrity()` to verify current state
+2. Run `rka_query(operation="check_integrity", project_id="prj_…")` to verify current state
 3. Upgrade and rebuild Docker
 4. Verify the migration ran cleanly
-5. Run `rka_check_integrity()` again
+5. Run `rka_query(operation="check_integrity", project_id="prj_…")` again
 
 ---
 
@@ -717,7 +754,7 @@ Then restart Claude Desktop and reload the VS Code window.
 
 ### "Knowledge pack export fails"
 
-Run `rka_check_integrity()` to check for issues. Common causes:
+Run `rka_query(operation="check_integrity", project_id="prj_…")` to check for issues. Common causes:
 - Tables missing from the registry (shows as explicit error naming the table)
 - Orphaned edges (the integrity check reports these)
 
@@ -745,7 +782,7 @@ If the build fails on macOS with errors about `._*` files (AppleDouble metadata 
 | "Create a mission for the Executor to..." | Creates mission with structured handoff |
 | "Review the Executor's report" | Reads report, checks findings, marks mission complete |
 | "Show me the research map" | Displays RQs → clusters → claims hierarchy |
-| "What changed since yesterday?" | Runs `rka_get_changelog(since="yesterday")` |
+| "What changed since yesterday?" | Runs `rka_query(operation="get_changelog", since="yesterday", project_id="prj_…")` |
 | "Give me a progress report on RQ1" | Assembles evidence as structured markdown |
 | "Check for stale evidence" | Runs freshness scan, flags outdated claims |
 
@@ -902,10 +939,10 @@ The PI's Claude Desktop session has **three superimposed capability layers** whe
 | Layer | Tools | Purpose |
 |---|---|---|
 | **Orchestrator (agentic)** | `orchestrator_run_start`, `orchestrator_onboard_start`, `orchestrator_inbox`, `orchestrator_accept`, ... | Drive structured LangGraph workflows |
-| **RKA core (main)** | `rka_search_arxiv`, `rka_search_semantic_scholar`, `rka_enrich_doi`, `rka_add_literature`, `rka_ingest_document`, ... | Ad-hoc literature work, journal entries, claims |
+| **RKA core (main)** | `rka_query` / `rka_execute` dispatchers — operations include `search_arxiv`, `search_semantic_scholar`, `enrich_doi`, `record_literature`, `ingest_document`, … | Ad-hoc literature work, journal entries, claims |
 | **Claude Desktop native** | Web search, Deep Research (Max tier), Projects, Artifacts | Open-ended exploration |
 
-Practical pattern: use Claude Desktop's Deep Research for broad exploration. When you find a paper worth keeping, call `rka_enrich_doi(doi=...)` directly to land it in the RKA project's knowledge base. When the exploration coalesces into a defined mission, `orchestrator_run_start` invokes the structured workflow — the Brain reads everything you ad-hoc-ingested as context.
+Practical pattern: use Claude Desktop's Deep Research for broad exploration. When you find a paper worth keeping, call `rka_execute(operation="enrich_doi", doi="...", project_id="prj_…")` directly to land it in the RKA project's knowledge base. When the exploration coalesces into a defined mission, `orchestrator_run_start` invokes the structured workflow — the Brain reads everything you ad-hoc-ingested as context.
 
 ### Inspecting workflow state
 
@@ -917,12 +954,12 @@ Practical pattern: use Claude Desktop's Deep Research for broad exploration. Whe
 | Project's manifest | `orchestrator_get_manifest(project_id)` |
 | Cancel a run | `orchestrator_cancel(workflow_thread_id)` |
 
-Run artifacts in RKA are recoverable via `rka_get_journal(tags=[<workflow_thread_id>])` — every write during the workflow auto-tags the thread ID.
+Run artifacts in RKA are recoverable via `rka_query(operation="get_journal", tags=[<workflow_thread_id>], project_id="prj_…")` — every write during the workflow auto-tags the thread ID.
 
 ### Cross-references
 
 - `orchestrator/README.md` — orchestrator package reference + phase history
-- `orchestrator/docs/phase-d-onboarding-design.md` — Phase D MVP design
+- `docs/archive/2026-q2/orchestrator/phase-d-onboarding-design.md` — Phase D MVP design (archived; superseded by Phase O)
 - `orchestrator/docs/phase-o-project-onboarding-design.md` — Phase O full-workflow design (next implementation phase)
 - `plugin/skills/orchestrator-pi/SKILL.md` — PI cockpit rendering + TWO-TAP rules
 - `CLAUDE.md` (root, agentic-branch section) — agent operating instructions for orchestrator work

@@ -2,7 +2,7 @@
 
 > **How to read this guide**
 > - **Humans**: read top-to-bottom; quick install path is in §3 below.
-> - **Claude Code**: this is the authoritative reference for any user request like *"install RKA"*, *"set up RKA for Claude Desktop"*, or *"finish my RKA setup"*. The procedural steps in §6 and §7 are written for you to execute when invoked.
+> - **Claude Code**: this is the authoritative reference for any user request like *"install RKA"*, *"set up RKA for Claude Desktop"*, or *"finish my RKA setup"*. The procedural steps in §6, §7 (diagnosis), and §11 (orchestrator install — agentic branch only) are written for you to execute when invoked. Main-branch users can stop at §10.
 
 ---
 
@@ -11,9 +11,23 @@
 | Surface | What you'll have |
 |---|---|
 | **RKA backend** | FastAPI + worker + SQLite + FTS5 + sqlite-vec running in Docker on `localhost:9712`. Web dashboard at the same URL. |
-| **Claude Code (Executor)** | Full plugin: 4 role skills (`rka:rka-brain`, `rka:rka-executor`, `rka:rka-pi`, `rka:rka-writer`), 6 slash commands (`/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`, `/rka-setup-claude-desktop`, `/rka-start-manuscript`), a SessionStart hook that pings the backend on every new session, and the full `mcp__plugin_rka_rka__*` tool surface (~89 tools). |
+| **Claude Code (Executor)** | Full plugin: 4 role skills (`rka:rka-brain`, `rka:rka-executor`, `rka:rka-pi`, `rka:rka-writer`), 6 slash commands (`/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`, `/rka-setup-claude-desktop`, `/rka-start-manuscript`), a SessionStart hook that pings the backend on every new session, and the v2.7.0 dispatch surface — 3 always-on tools (`rka_query`, `rka_execute`, `rka_describe`) routing to 87 typed Pydantic operations, plus 2 escape hatches (`rka_load_tools` to register legacy aliases on demand, `rka_help` as a `rka_describe` alias). Legacy 91-tool surface available via `RKA_LEGACY_TOOLS=1` for backwards compat. |
 | **Writer (manuscript drafting)** | The `rka:rka-writer` skill drafts venue-targeted manuscripts (CHI, EMNLP, NeurIPS, USENIX, IEEE-SP, OSDI, Nature seed venues). Bootstrap a per-manuscript workspace via `/rka-start-manuscript` (creates `.mcp.json`, `main.tex`, `refs.bib`, `.planning/` directory). Reference-validation MCP server (`rka-writer-tools`) wraps Crossref + OpenAlex + Semantic Scholar + arXiv + SerpAPI; install separately via `uv tool install '.[writer-tools]'` (see §3.6). |
 | **Claude Desktop (Brain)** | `mcp__rka__*` tool surface via the `mcpServers.rka` entry in `claude_desktop_config.json`. Wrapper-based config gives you version-checking + auto-pin to your active project. Skills and slash commands are Claude Code only (Claude Desktop's plugin format is separate). |
+
+### 1.1 Tool surface (v2.7.0)
+
+In Claude Desktop and Claude Code, you'll see **5 always-on `rka` tools** at session start:
+
+| Tool | Role | Operations behind it |
+|---|---|---|
+| `rka_query` | Read dispatch (the "search/list/get" entry point) | 38 read operations |
+| `rka_execute` | Write dispatch (the "add/update/create/submit" entry point) | 49 write operations |
+| `rka_describe` | Schema lookup + examples for any operation | — |
+| `rka_load_tools` | Escape hatch: register legacy tool aliases for the rest of the session | — |
+| `rka_help` | Alias for `rka_describe` (mnemonic surface) | — |
+
+The 87 typed Pydantic operations under `rka_query` / `rka_execute` carry per-branch enum and required-field enforcement at the **FastMCP schema layer**, so the LLM cannot emit invalid values — the tool surface itself rejects pre-dispatch. Legacy 91-tool surface (one MCP tool per operation, the pre-v2.7.0 layout) is available via `RKA_LEGACY_TOOLS=1` for backwards-compat use cases (notably the orchestrator daemon subprocess, which has not yet been ported to `rka_execute(operation=…)`).
 
 ---
 
@@ -25,7 +39,7 @@
 | 2 | **Claude Desktop** (the native app) | Hosts the Brain (strategy + synthesis) | [claude.ai/download](https://claude.ai/download) — macOS / Windows. **Windows note**: install via Microsoft Store OR standalone `.exe`; both write the config to `%APPDATA%\Claude\`, so this guide works either way. |
 | 3 | **VSCode** | Hosts the Claude Code extension | [code.visualstudio.com](https://code.visualstudio.com/) — macOS / Windows / Linux |
 | 4 | **Claude Code extension for VSCode** | Hosts the Executor | VSCode → Extensions → search `Claude Code` → install. Or: `code --install-extension anthropic.claude-code` from a terminal. |
-| 5 | **Python 3** | Required for the cross-platform wrapper script that proxies between Claude and the Docker backend | macOS: ships by default. Windows: [python.org/downloads](https://www.python.org/downloads/) — **check the "Add Python to PATH" box during install**. Linux: `apt install python3` / `dnf install python3`. Verify with `python3 --version` (or `python --version` on Windows). |
+| 5 | **Python 3** | Required for the cross-platform wrapper script that proxies between Claude and the Docker backend | macOS: ships with Xcode Command Line Tools — run `xcode-select --install` if `python3 --version` fails on a fresh machine (or `brew install python3`). Windows: [python.org/downloads](https://www.python.org/downloads/) — **check the "Add Python to PATH" box during install**. Linux: `apt install python3` / `dnf install python3`. Verify with `python3 --version` (or `python --version` on Windows). |
 | 6 | **git** | Clones the RKA repo for the Docker compose file | macOS/Linux: built in or via package manager. Windows: [git-scm.com/downloads](https://git-scm.com/downloads). |
 | 7 | **Zotero desktop + Connector** *(recommended)* | Persistent literature library — the AI reads paper full text from here. Zotero Connector captures papers via your institution's authenticated browser session, so the AI inherits your access without you sharing credentials. | Desktop: [zotero.org/download](https://www.zotero.org/download/) (or `brew install --cask zotero`). Connector: [zotero.org/download/connectors](https://www.zotero.org/download/connectors) (Chrome / Safari / Firefox / Edge). |
 
@@ -56,9 +70,15 @@ The plugin handles most of the work. Follow these five steps in order.
 
 ### Step 1 — Start the RKA backend
 
-Open a terminal in the directory where you want the RKA repo:
+**Pre-check**: Docker Desktop must be running before `docker compose up -d` will work. Confirm with `docker info` (non-zero exit means Docker isn't running — launch Docker Desktop and wait until the whale icon says "running", then retry).
+
+**Precondition (cwd guidance)**: pick a parent directory (e.g., `~/Code` on macOS/Linux, `%USERPROFILE%\Code` on Windows) and `cd` into it before cloning. The repo will land at `<parent>/rka`. The absolute path `<parent>/rka` will be used as the marketplace path in Step 2 — **record it now**. Without this, an agent running these commands in CI from an unstated cwd will clone wherever the process happens to start.
 
 ```bash
+# Example: pick a parent dir and cd into it first
+mkdir -p ~/Code && cd ~/Code              # macOS/Linux
+# Windows (PowerShell): New-Item -ItemType Directory -Force "$env:USERPROFILE\Code" | Set-Location
+
 git clone https://github.com/infinitywings/rka.git
 cd rka
 docker compose up -d
@@ -68,16 +88,24 @@ Wait ~1 minute. Verify:
 
 ```bash
 curl http://localhost:9712/api/health
-# Expect: {"status":"ok","version":"2.5.x", ...}
+# Expect: {"status":"ok","version":"2.7.0", ...}
 ```
 
 Open http://localhost:9712 in your browser to confirm the dashboard loads.
+
+**Success signal**: `curl` returns JSON with `"version":"2.7.0"` AND `http://localhost:9712` renders the dashboard HTML.
+
+**Recovery**: if curl returns non-zero or non-2xx, run `docker compose ps` to confirm both `rka-server` and `rka-worker` are up. If a container is restarting, run `docker compose logs --tail=20 rka` and surface the output. If the worker is `OOMKilled`, bump Docker Desktop's Resources → Memory ceiling to ≥6 GB (per the operational note in CLAUDE.md) and re-up.
 
 > **What this does**: starts two containers (`rka-server` for the API + web UI, `rka-worker` for background jobs). Data is persisted in a Docker volume named `rka-data`. To stop: `docker compose down`. To stop AND wipe data: `docker compose down -v` (don't do this unless you mean it).
 
 ### Step 2 — Add the local RKA marketplace in Claude Code
 
-The marketplace lives inside the cloned RKA repo (at `.claude-plugin/marketplace.json`). In any Claude Code chat window (in VSCode), run:
+The marketplace lives inside the cloned RKA repo (at `.claude-plugin/marketplace.json`).
+
+**Pre-check**: `ls <path>/.claude-plugin/marketplace.json` must succeed. If the file is missing, the path is wrong or the user didn't clone the right repo — surface a clear error before invoking `/plugin`.
+
+In any Claude Code chat window (in VSCode), run:
 
 ```
 /plugin marketplace add /absolute/path/to/your/cloned/rka
@@ -85,13 +113,19 @@ The marketplace lives inside the cloned RKA repo (at `.claude-plugin/marketplace
 
 Replace `/absolute/path/to/your/cloned/rka` with the actual path where you cloned the repo in Step 1 (e.g., `/Users/<you>/Code/rka` on macOS, `C:\Users\<you>\Code\rka` on Windows). Use the absolute path, not `~`.
 
+**Success signal**: Claude Code prints "Marketplace 'rka' added" (or equivalent confirmation).
+
 ### Step 3 — Install the plugin
 
 ```
 /plugin install rka@rka
 ```
 
-Wait for the install to complete (~5–10 seconds). On success, `/plugin list` should show `rka@rka` as installed.
+Wait for the install to complete (~5–10 seconds).
+
+**Post-check**: run `/plugin list` and string-match against `rka@rka`. If absent, surface the install log and stop.
+
+**Success signal**: `/plugin list` output contains `rka@rka`.
 
 ### Step 4 — Have Claude Code set up Claude Desktop too
 
@@ -115,6 +149,8 @@ The plugin's `rka-pi` skill teaches Claude Code how to:
 
 If anything fails at any step, the original config is restored from the backup automatically. No silent overwrites.
 
+**Success signal**: Claude Code prints `✅ Claude Desktop config updated. The RKA MCP server entry is in place at <config_path>.` After Step 5's full quit + reopen, a fresh Claude Desktop chat will list the 5 v2.7.0 dispatch tools (`rka_query`, `rka_execute`, `rka_describe`, `rka_load_tools`, `rka_help`).
+
 ### Step 4.5 (optional) — Install Writer reference-validation tooling
 
 The `rka:rka-writer` skill drafts manuscripts; the reference-validation pipeline (Crossref + OpenAlex + Semantic Scholar + arXiv + SerpAPI lookups) runs in a separate MCP server called `rka-writer-tools`, registered per-manuscript-workspace by the `/rka-start-manuscript` slash command. To make the `rka-writer-tools` binary available on `PATH` (required before `cd <manuscript-dir> && claude`):
@@ -126,9 +162,13 @@ UV_CACHE_DIR=/tmp/uv-cache uv tool install --force --reinstall '.[writer-tools]'
 
 This installs the `writer-tools` optional dependency group (habanero + pyalex + semanticscholar + arxiv + serpapi + manubot). Skip this step if you don't plan to use the Writer skill. The Writer SKILL.md itself activates without this binary — only the reference-validation MCP tools require it.
 
+**Post-check**: verify with `command -v rka-writer-tools` (macOS/Linux) or `where rka-writer-tools` (Windows). If missing, the install failed silently — re-run with `--reinstall`.
+
+**Success signal**: `command -v rka-writer-tools` prints a path under `~/.local/bin/` (or equivalent).
+
 ### Step 5 — Fully quit and reopen Claude Desktop
 
-The Claude Desktop MCP loader reads its config at startup, so the config change won't apply until you do a full quit + reopen.
+The Claude Desktop MCP loader reads its config at startup, so the config change won't apply until you do a full quit + reopen. On macOS this means **Cmd+Q** (the red close button only minimizes — it does NOT quit, and the MCP loader will not re-read the config).
 
 | OS | Quit |
 |---|---|
@@ -140,7 +180,9 @@ Open a fresh chat in Claude Desktop. Ask:
 
 > List my RKA projects.
 
-Brain should call `rka_list_projects` and return the list (empty on a fresh install). If you also see a SessionStart hook line like `✅ RKA reachable at http://localhost:9712 (version 2.5.x, default project ...)` at session start in Claude Code, you're done.
+Brain should call `rka_query(operation="list_projects")` (v2.7.0 dispatch) and return the list (empty on a fresh install). If you also see a SessionStart hook line like `✅ RKA reachable at http://localhost:9712 (version 2.7.0, default project ...)` at session start in Claude Code, you're done. The `version 2.7.0` substring is the agent's confirmation that the hook handshake succeeded.
+
+**Success signal**: SessionStart hook line contains `version 2.7.0` AND Brain returns a project list (empty or otherwise) without error.
 
 ---
 
@@ -170,10 +212,10 @@ After Step 5, run these checks:
 
 ### In Claude Code
 
-1. `/help` should list six `rka:rka` slash commands: `/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`, `/rka-setup-claude-desktop`, `/rka-start-manuscript`.
+1. `/help` should list six `rka:rka` slash commands. String-match each of: `/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`, `/rka-setup-claude-desktop`, `/rka-start-manuscript`. All six must be present.
 2. `/context` should show four `rka:rka-*` skills available (`rka-brain`, `rka-executor`, `rka-pi`, `rka-writer`).
 3. Run `/rka-status`. Expected output: project name, phase, focus, open checkpoints (or "none").
-4. New chat sessions should start with an automatic line: `✅ RKA reachable at http://localhost:9712 (version 2.5.x, default project ...)`.
+4. New chat sessions should start with an automatic line. **Expected stdout snippet**: `✅ RKA reachable at http://localhost:9712 (version 2.7.0, default project ...)`.
 
 ### In Claude Desktop
 
@@ -181,7 +223,9 @@ Ask in any new chat:
 
 > What RKA tools do you have access to?
 
-Brain should respond with a list including `rka_list_projects`, `rka_get_status`, `rka_add_note`, etc. (~90 tools).
+Brain should list **5 always-on tools (3 dispatch + 2 escape hatches)**: `rka_query`, `rka_execute`, `rka_describe`, plus `rka_load_tools` and `rka_help` as navigator escape hatches. This matches the §1.1 surface count exactly. Confirm by asking: *"Call `rka_describe` with an empty string"* — Brain should return the 87-operation index.
+
+If you instead see a long list of legacy tool names (e.g., `list_projects`, `get_status`, `add_note`, etc. — surfaced as one MCP tool each), your Brain is running with `RKA_LEGACY_TOOLS=1` (orchestrator daemon mode). For the user-facing Claude Desktop session, unset this env var and restart.
 
 ### Backend
 
@@ -190,7 +234,7 @@ docker compose ps
 # Expect both rka-server and rka-worker as "Up" / "healthy"
 
 curl http://localhost:9712/api/health
-# Expect {"status":"ok","version":"2.5.x", ...}
+# Expect {"status":"ok","version":"2.7.0", ...}
 ```
 
 ---
@@ -201,28 +245,81 @@ When the user invokes `/rka-setup-claude-desktop` (or asks something like "set u
 
 ### 6.1 — Detect the OS and resolve paths
 
+> **Variable-plumbing note** for agent executors: §6.1 (this section), §6.3, §6.5, and §6.6 are designed to be executed as a **single Python process** — the names `config_path`, `integration_path`, `bridge_path`, and `backup` are defined once and reused. If you run §6.1 as a Python block and §6.5 as a separate bash block, the bash block will see an unbound `$config_path`. Either: **(a)** concatenate §6.1 + §6.3 + §6.5 + §6.6 into one Python script (recommended), OR **(b)** export the resolved Path values to env vars (`os.environ['CONFIG_PATH'] = str(config_path); os.environ['BRIDGE_PATH'] = str(bridge_path); os.environ['BACKUP'] = str(backup)`) and reference them as `"$CONFIG_PATH"` / `"$BRIDGE_PATH"` / `"$BACKUP"` in the bash variants. The Python concatenation path is fewer moving parts; the env-var path is for agents who want to keep bash + Python blocks separate.
+
 ```python
-import sys, os
+import sys, os, shutil
 from pathlib import Path
+
+
+def _python_launcher() -> str:
+    """Resolve the python3 launcher the user has on PATH (py / python / python3).
+
+    Used everywhere this guide invokes Python from a wrapper config (Claude
+    Desktop's mcpServers entry, the §6.2 health probe, etc.) so Windows users
+    without a `python3` shim on PATH still resolve to a working interpreter.
+    """
+    for name in ("python3", "py", "python"):
+        if shutil.which(name):
+            return name
+    # Fallback to the current interpreter if nothing is on PATH (last resort).
+    return sys.executable
+
 
 if sys.platform == "darwin":
     config_path = Path.home() / "Library/Application Support/Claude/claude_desktop_config.json"
     integration_path = Path.home() / "Library/Application Support/RKA/integration.json"
 elif sys.platform == "win32":
+    # %APPDATA% may resolve to a path containing spaces (e.g.,
+    # "C:\Users\First Last\AppData\Roaming"); pathlib handles this
+    # transparently. Avoid shell-quoting; use the Path object directly.
     config_path = Path(os.environ["APPDATA"]) / "Claude" / "claude_desktop_config.json"
     integration_path = Path(os.environ["APPDATA"]) / "RKA" / "integration.json"
 else:
     config_path = Path.home() / ".config/Claude/claude_desktop_config.json"
     integration_path = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "RKA" / "integration.json"
+
+# Post-check: parent directory must exist and be writable
+config_path.parent.mkdir(parents=True, exist_ok=True)
+assert os.access(config_path.parent, os.W_OK), f"Cannot write to {config_path.parent}"
+
+# Export for downstream bash blocks (only needed if you split §6.1 from §6.5/§6.6).
+os.environ["CONFIG_PATH"] = str(config_path)
+os.environ["INTEGRATION_PATH"] = str(integration_path)
+print(f"CONFIG_PATH={config_path}")
+print(f"INTEGRATION_PATH={integration_path}")
 ```
+
+**Failure modes**: if `os.environ["APPDATA"]` raises `KeyError` on Windows, the user is running from an environment without standard Windows env vars (e.g., MSYS / Cygwin / WSL) — surface the error and ask the user to run Claude Code from a normal PowerShell or cmd terminal.
 
 ### 6.2 — Verify the RKA backend is reachable
 
+Use the `_python_launcher()` helper defined in §6.1 to resolve the right Python invocation on the host (Windows users without `python3` on PATH will get `py` or `python`):
+
 ```bash
-curl -sf http://localhost:9712/api/health
+# macOS/Linux — python3 is usually on PATH
+curl -sf http://localhost:9712/api/health | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='ok' and d['version'].startswith('2.7.'), d; print('healthy')"
 ```
 
-If non-zero exit: stop and tell user to run `docker compose up -d` from their RKA repo, then try again.
+```powershell
+# Windows (PowerShell) — uses the `py` launcher (most common) with a python fallback
+$json = curl.exe -sf http://localhost:9712/api/health
+$py = (Get-Command py -ErrorAction SilentlyContinue) ?? (Get-Command python -ErrorAction SilentlyContinue) ?? (Get-Command python3 -ErrorAction SilentlyContinue)
+$json | & $py.Source -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='ok' and d['version'].startswith('2.7.'), d; print('healthy')"
+```
+
+Or, fully cross-platform from inside a single Python process (recommended when running the §6 sequence as one script — this is the same `_python_launcher()` semantics the wrapper config will use):
+
+```python
+import json, urllib.request
+d = json.loads(urllib.request.urlopen("http://localhost:9712/api/health", timeout=5).read())
+assert d["status"] == "ok" and d["version"].startswith("2.7."), d
+print("healthy")
+```
+
+**Success signal**: stdout prints `healthy`.
+
+**Failure modes**: if non-zero exit, the user needs to run `docker compose up -d` from their RKA repo, then retry. If the backend is up but reports a pre-2.7 version, halt and tell the user to upgrade (`git pull && docker compose up -d --build`).
 
 ### 6.3 — Locate the plugin's wrapper script
 
@@ -231,10 +328,27 @@ The wrapper lives at `${CLAUDE_PLUGIN_ROOT}/bin/rka-mcp-bridge.py` where `CLAUDE
 To find it programmatically:
 
 ```bash
+# macOS / Linux
 find ~/.claude/plugins/cache/rka/rka -name "rka-mcp-bridge.py" | sort | tail -1
 ```
 
-(macOS/Linux. On Windows: `dir /s /b %USERPROFILE%\.claude\plugins\cache\rka\rka\*rka-mcp-bridge.py`.)
+```powershell
+# Windows (PowerShell)
+Get-ChildItem -Path "$env:USERPROFILE\.claude\plugins\cache\rka\rka" -Filter rka-mcp-bridge.py -Recurse | Sort-Object FullName | Select-Object -Last 1 -ExpandProperty FullName
+```
+
+Cross-platform Python fallback (works everywhere Python is on PATH — and this is the form §6.6 reuses, so prefer this path):
+
+```python
+import os
+from pathlib import Path
+root = Path.home() / ".claude" / "plugins" / "cache" / "rka" / "rka"
+bridge_path = sorted(root.rglob("rka-mcp-bridge.py"))[-1]  # last = newest version
+os.environ["BRIDGE_PATH"] = str(bridge_path)  # export for downstream bash variants
+print(bridge_path)
+```
+
+**Failure modes**: if `sorted(...)[-1]` raises `IndexError`, the plugin install didn't land — re-run `/plugin install rka@rka`.
 
 ### 6.4 — `integration.json` is optional in v1.0
 
@@ -244,12 +358,14 @@ If the user does want to pin a default project (recommended once the user knows 
 
 ```json
 {
-  "version": "2.5.10",
+  "version": "2.7.0",
   "binary_path": "/Users/<you>/.local/bin/rka",
   "default_project_id": "prj_01ABC...",
   "api_endpoint_url": "http://localhost:9712"
 }
 ```
+
+(The `version` field is `integration.json`'s own schema version — not the backend's.)
 
 Get the project id by listing projects via the API:
 
@@ -257,38 +373,144 @@ Get the project id by listing projects via the API:
 curl -s http://localhost:9712/api/projects | python3 -c "import sys,json; [print(f\"{p['id']}: {p['name']}\") for p in json.load(sys.stdin)]"
 ```
 
-`integration.json` is the design surface RKA.app v2.4 will write at startup; for now the plugin treats it as optional metadata.
+`integration.json` is a forward-compatible metadata file used by a future native-app distribution. The plugin treats it as optional in v2.7.0; the wrapper falls back to a PATH-lookup of the rka binary if missing.
 
 ### 6.5 — Back up the existing Claude Desktop config
 
+> **Variable plumbing**: this section reads `$CONFIG_PATH` (exported by §6.1). If you ran §6.1 in a separate Python process and lost the env, re-export from the printed `CONFIG_PATH=...` line. The bash block below reads `$CONFIG_PATH` (not `$config_path` — bash and Python use different namespaces). The integrated-Python alternative is at the bottom of this section.
+
 ```bash
-cp "$config_path" "${config_path}.backup-$(date +%Y%m%d-%H%M%S)"
+# Reads CONFIG_PATH exported by §6.1's Python block.
+# Capture the backup path as a variable for reuse in §6.9 recovery.
+backup="${CONFIG_PATH}.backup-$(date +%Y%m%d-%H%M%S)"
+export BACKUP="$backup"          # propagate to §6.9
+if [ -f "$CONFIG_PATH" ]; then
+    cp "$CONFIG_PATH" "$backup"
+else
+    mkdir -p "$(dirname "$CONFIG_PATH")"
+fi
 ```
 
-If the file doesn't exist yet, skip this step but ensure the parent directory exists.
+Windows (PowerShell) equivalent:
 
-### 6.6 — Atomically merge the `mcpServers.rka` entry
-
-Read the existing config (start with `{"mcpServers": {}}` if missing/empty/malformed), set `mcpServers.rka` to:
-
-```json
-{
-  "command": "python3",
-  "args": ["<absolute-path-to-rka-mcp-bridge.py>"]
+```powershell
+$backup = "$env:CONFIG_PATH.backup-$(Get-Date -Format yyyyMMdd-HHmmss)"
+$env:BACKUP = $backup
+if (Test-Path $env:CONFIG_PATH) {
+    Copy-Item $env:CONFIG_PATH $backup
+} else {
+    New-Item -ItemType Directory -Force -Path (Split-Path $env:CONFIG_PATH) | Out-Null
 }
 ```
 
-(Windows: `"command": "py", "args": ["-3", "<path>"]` if `python3` isn't on PATH.)
+Pure-Python alternative (use when running §6.1–§6.6 as one script — keeps the `config_path` Path object in scope):
 
-**Critical**: preserve any other entries already in `mcpServers`. Never overwrite the file blindly. If the existing JSON is malformed, abort with an error pointing at the backup; do NOT replace malformed JSON with parseable JSON silently.
+```python
+import os, shutil
+from datetime import datetime
 
-Write atomically: write to `<path>.tmp` then rename to `<path>`. Re-read the result to verify it parses.
+backup = config_path.with_suffix(config_path.suffix + f".backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
+if config_path.exists():
+    shutil.copy2(config_path, backup)
+else:
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+os.environ["BACKUP"] = str(backup)  # for downstream bash variants
+```
+
+**Failure modes**: if `cp` fails (read-only volume / no permission), halt and surface the path. Do NOT proceed to §6.6 without a backup-or-empty-parent guarantee.
+
+### 6.6 — Atomically merge the `mcpServers.rka` entry
+
+> **Variable plumbing**: this block reuses `config_path` (§6.1), `bridge_path` (§6.3), and `_python_launcher()` (§6.1). To run as a standalone script, concatenate §6.1 + §6.3 + this block — the names stay in scope. If you split blocks across processes, the block below also accepts `os.environ['CONFIG_PATH']` and `os.environ['BRIDGE_PATH']` as a fallback.
+
+Use the following Python block. It reads the existing config (or starts empty), runs the conflict detection from §6.7 inline, writes atomically via tmp+rename, and re-reads to verify. The launcher (`py` / `python` / `python3`) is resolved at runtime by `_python_launcher()` from §6.1 — no hard-coded `sys.platform == 'win32'` branch.
+
+```python
+import json
+import os
+import sys
+from pathlib import Path
+
+# Fallback: if running as a separate process, re-hydrate from env vars
+# exported by §6.1 and §6.3.
+config_path = config_path if "config_path" in globals() else Path(os.environ["CONFIG_PATH"])
+bridge_path = bridge_path if "bridge_path" in globals() else Path(os.environ["BRIDGE_PATH"])
+
+# 1. Read existing config (or start empty if missing).
+try:
+    if config_path.exists() and config_path.stat().st_size > 0:
+        existing = json.loads(config_path.read_text())
+        if not isinstance(existing, dict):
+            raise ValueError("config root is not a dict")
+    else:
+        existing = {}
+except (json.JSONDecodeError, ValueError) as e:
+    # Abort: surface the malformed JSON; do NOT silently replace.
+    raise SystemExit(
+        f"Existing config is malformed at {config_path} — refusing to overwrite. "
+        f"Manually fix or restore from the backup written in §6.5. Error: {e}"
+    )
+
+existing.setdefault("mcpServers", {})
+
+# 2. Build the rka entry — resolve the launcher at runtime so Windows
+# users with `py` (and no `python3` shim) still get a working command.
+# _python_launcher() is defined in §6.1; it returns the first of
+# python3 / py / python found on PATH.
+launcher = _python_launcher() if "_python_launcher" in globals() else (
+    # Inline fallback if §6.1 wasn't sourced into this process.
+    next(
+        (n for n in ("python3", "py", "python") if __import__("shutil").which(n)),
+        sys.executable,
+    )
+)
+if launcher == "py":
+    # `py` is the Windows Python launcher; `-3` selects Python 3.
+    rka_entry = {"command": "py", "args": ["-3", str(bridge_path)]}
+else:
+    rka_entry = {"command": launcher, "args": [str(bridge_path)]}
+
+# 3. Conflict detection (§6.7 inline).
+existing_rka = existing["mcpServers"].get("rka")
+if existing_rka is not None:
+    if existing_rka == rka_entry:
+        print("rka MCP server entry is already correctly configured. No changes needed.")
+        sys.exit(0)
+    else:
+        print(f"Existing rka entry differs:\n  {existing_rka}\nProposed:\n  {rka_entry}")
+        confirm = input("Replace? (y/N): ").strip().lower()
+        if confirm != "y":
+            print("Aborted by user.")
+            sys.exit(1)
+
+# 4. Apply the merge.
+existing["mcpServers"]["rka"] = rka_entry
+
+# 5. Atomic write: tmp + rename.
+tmp = config_path.with_suffix(config_path.suffix + ".tmp")
+tmp.write_text(json.dumps(existing, indent=2))
+tmp.replace(config_path)
+
+# 6. Re-read to verify.
+verified = json.loads(config_path.read_text())
+assert verified["mcpServers"]["rka"] == rka_entry, "post-write verification failed"
+print(f"✅ Wrote rka MCP entry to {config_path}")
+```
+
+Launcher-resolution semantics (codified above in `_python_launcher()` from §6.1): the helper checks PATH for `python3`, `py`, then `python` in that order and returns the first match. On Windows the `py` launcher is preferred when `python3` is absent (`py -3 <bridge>`); on macOS/Linux `python3` is almost always present. No `sys.platform` branching needed at the call site — the helper handles all three OSes uniformly.
+
+**Critical**: preserve any other entries already in `mcpServers`. Never overwrite the file blindly. If the existing JSON is malformed, abort with the parser error pointing at the backup; do NOT replace malformed JSON with parseable JSON silently.
+
+**Failure modes**: if the Python block raises `JSONDecodeError`, abort and tell the user to manually fix or restore from the §6.5 backup — surface the line/column of the parse error. If `tmp.replace(config_path)` fails (e.g., permission denied), the original file is intact and the backup is untouched — surface the error and stop.
 
 ### 6.7 — Conflict detection
 
-If `mcpServers.rka` already exists in the config, check whether it points at the wrapper or somewhere else:
-- If it already points at the wrapper: no action; tell user it's already configured.
-- If it points elsewhere (different command/args): show user the existing entry, ask whether to replace, and abort if no explicit confirmation.
+(Inlined into §6.6 above as the third step of the merge block.) Detection rules:
+
+- If `mcpServers.rka` already exactly equals the proposed entry: no-op exit.
+- If `mcpServers.rka` exists with different `command` / `args`: prompt for explicit `y` confirmation; abort otherwise.
+
+Equality is exact dict-equality (`==`) — the wrapper's normal form is `{"command": "python3"|"py", "args": [<bridge_path>]}`. Drift from that shape is treated as a user-managed entry and respected.
 
 ### 6.8 — Tell the user what to do next
 
@@ -296,14 +518,29 @@ Output a clear message:
 
 > ✅ Claude Desktop config updated. The RKA MCP server entry is in place at `<config_path>`. Backup of the original is at `<config_path>.backup-...`.
 >
-> **Now fully quit Claude Desktop** (Cmd+Q on macOS / right-click tray icon → Quit on Windows) and reopen it. Open a fresh chat and ask: *"List my RKA projects."* Claude should call `rka_list_projects` and return the list.
+> **Now fully quit Claude Desktop** (Cmd+Q on macOS / right-click tray icon → Quit on Windows) and reopen it. Open a fresh chat and ask: *"Show me the available RKA projects."* Brain should call `rka_query(operation="list_projects")` (the v2.7.0 dispatch surface — there is no separate `rka_list_projects` MCP tool any more; the operation lives behind `rka_query`) and return the list, empty on a fresh install.
 
 ### 6.9 — On any failure: restore from backup
 
-If any step from 6.4 onward fails, restore the backup:
+If any step from 6.4 onward fails, restore the backup captured in §6.5 (`$BACKUP` is the exact path exported there — reuse it directly, do NOT glob). The bash uses `$BACKUP` / `$CONFIG_PATH` (the env-var names exported by §6.1 and §6.5); the Python alternative uses the `backup` / `config_path` Path objects in scope:
 
 ```bash
-cp "${config_path}.backup-..." "$config_path"
+if [ -f "$BACKUP" ]; then
+    cp "$BACKUP" "$CONFIG_PATH"
+    echo "Restored $CONFIG_PATH from $BACKUP"
+else
+    echo "No backup at $BACKUP — original config did not exist." >&2
+fi
+```
+
+```python
+# Pure-Python alternative (use when running §6.1–§6.9 as one script).
+import shutil
+if backup.exists():
+    shutil.copy2(backup, config_path)
+    print(f"Restored {config_path} from {backup}")
+else:
+    print(f"No backup at {backup} — original config did not exist.")
 ```
 
 Then surface the error clearly. Never leave the user's config in a partially-written state.
@@ -373,6 +610,10 @@ Replace `<your-username>` with your actual macOS username (Windows: use `C:\\Use
 
 **v2.6+ project discipline (no env var).** Pre-v2.6 the config included an `env.RKA_PROJECT` entry to pin a default project. That was removed in v2.6 because it reintroduced the silent-default failure mode that v2.6 explicitly eliminates: every project-scoped tool now requires `project_id` as a kwarg, and the LLM threads the project from its conversation context. At the start of every conversation, state which project you're working on (e.g., *"I'm working on prj_01KSMW9R…"* or *"the hyperscaler-auditing project"*) — the LLM keeps it in working memory and passes it on every tool call.
 
+**v2.7.0 schema enforcement.** In v2.7.0 the args object is a discriminated Pydantic union — missing `project_id` on a scoped operation now surfaces as a `ValidationError` from FastMCP **before** the call reaches the service layer. Per-branch enum + required-field enforcement (defined in `orchestrator/rka_enums.py` mirror + the per-operation Pydantic models) means wrong values (e.g., `confidence='confirmed'`) are also rejected pre-dispatch with a structured error pointing at the offending field. See §1.1 for the user-facing tool surface this enforcement sits behind.
+
+After restart, Brain will see exactly 5 always-on tools (3 dispatch + 2 escape hatches): `rka_query`, `rka_execute`, `rka_describe`, plus `rka_load_tools` and `rka_help` (alias for `rka_describe`). This is normal — the 87 underlying operations are dispatched through them.
+
 Fully quit + reopen Claude Desktop.
 
 ### 8.4 — Configure Claude Code manually
@@ -391,9 +632,9 @@ Same JSON shape, in `.claude/mcp.json` (per-project) or `~/.claude/settings.json
 | `curl http://localhost:9712/api/health` fails | Container started but unhealthy | `docker compose logs -f rka` to see what's wrong; usually port 9712 conflict — change in `docker-compose.yml` |
 | `/plugin marketplace add /path/to/rka` fails | Path is wrong, or `.claude-plugin/marketplace.json` doesn't exist at that path | Verify with `ls /path/to/rka/.claude-plugin/marketplace.json`. Use the absolute path, not `~`. |
 | `/plugin install rka@rka` fails after marketplace add | Marketplace file present but plugin source missing | Check the repo's marketplace.json — `source` field must point at a valid path inside the repo |
-| RKA tools missing in Claude Desktop | Config not saved, or app not fully quit | Verify config at the path in §4 contains the `rka` entry; Cmd+Q fully (not red-X close); reopen |
+| `rka_query` / `rka_execute` / `rka_describe` absent from Brain's tool list (Claude Desktop) | Config not saved, or app not fully quit | Verify config at the path in §4 contains the `rka` entry; Cmd+Q fully (not red-X close); reopen. If you see the legacy tools (`rka_list_projects`, `rka_get_status`, etc.) instead, your Brain is running with `RKA_LEGACY_TOOLS=1` (orchestrator daemon mode) — unset and restart. |
 | RKA tools missing in Claude Code | Plugin not installed, or VSCode window not reloaded | `/plugin list` to verify; reload window with Cmd+Shift+P → "Developer: Reload Window" |
-| All RKA writes land in `proj_default` | LLM forgot to pass `project_id` on a write call (v2.6+ requires it as a kwarg) | The tool should have raised `TypeError: rka_X() missing 1 required keyword-only argument: 'project_id'`. If you see writes silently landing in `proj_default`, you may be on a pre-v2.6 install — upgrade. If on v2.6+, ask the LLM at conversation start to pin `project_id` and thread it through every call. |
+| All RKA writes land in `proj_default` | LLM forgot to pass `project_id` on a write call (v2.6+ requires it as a kwarg) | In v2.7.0+ the error surface is a Pydantic `ValidationError` (`Field required: project_id for operation X`) raised by FastMCP at schema-validate time, not a `TypeError`. If you see writes silently landing in `proj_default`, you are on a pre-v2.6 install — upgrade. If on v2.7.0+, ask the LLM at conversation start to pin `project_id` and thread it through every call. |
 | SessionStart hook says "RKA NOT reachable" | Docker stopped or wrong API URL | Run `docker compose up -d`; check `integration.json`'s `api_endpoint_url` |
 | Wrapper says "version incompatible" | RKA backend version doesn't match the plugin's compatibility range | Either upgrade RKA backend (`git pull && docker compose up -d --build` from the repo) or downgrade the plugin to a matching version |
 
@@ -432,21 +673,9 @@ Same JSON shape, in `.claude/mcp.json` (per-project) or `~/.claude/settings.json
 
 ---
 
-## Appendix: file inventory after a successful install
+## 11. Agentic distribution — Orchestrator (optional, agentic branch only)
 
-| Location | What |
-|---|---|
-| `<your-clone-dir>/rka/` | The cloned RKA source repo (only docker-compose.yml is needed at runtime; rest is for development) |
-| Docker volume `rka-data` (managed by Docker Desktop) | The SQLite database `/data/rka.db` and any project artifacts |
-| `~/.claude/plugins/cache/rka/rka/<version>/` (macOS/Linux) or `%USERPROFILE%\.claude\plugins\cache\rka\rka\<version>\` (Windows) | The installed plugin: skills, commands, hooks, wrapper script |
-| `~/Library/Application Support/RKA/integration.json` (macOS) or `%APPDATA%\RKA\integration.json` (Windows) | Plugin-written config telling the wrapper which RKA backend to bridge to |
-| `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows) | Claude Desktop's MCP config with the `rka` entry; backups of any prior version live alongside it as `*.backup-YYYYMMDD-HHMMSS` |
-| `~/.claude/plugins/installed_plugins.json` | Claude Code's registry of installed plugins (includes `rka@rka` entry after install) |
-| `~/.claude/plugins/known_marketplaces.json` | Claude Code's registry of marketplace sources (includes the `infinitywings/rka` GitHub source after `/plugin marketplace add`) |
-
----
-
-## 7. Agentic distribution — Orchestrator (optional, agentic branch only)
+> Main-branch users can stop at §10. This section is for users on the `agentic` long-lived fork.
 
 If you're on the `agentic` branch, you also have access to the **RKA Orchestrator** — a LangGraph-driven Brain⇄Executor⇄PI workflow engine with a Claude-Code-native PI surface (no stdin terminal needed). This is **optional** — the core main-branch RKA setup above works without it. If you only need the knowledge base + Brain in Claude Desktop + Executor in Claude Code, skip this section.
 
@@ -458,23 +687,33 @@ Install the orchestrator if you want to:
 - Use the **onboarding wizard** to set up per-project tool manifests + credential validation (Phase D MVP)
 - Reuse the same MCP entries in Claude Desktop for both ad-hoc work AND structured workflows
 
-### Step 7.1 — Switch to the agentic branch
+### Step 11.1 — Switch to the agentic branch
 
 ```bash
 cd <your-clone-dir>/rka
 git checkout agentic
 ```
 
-### Step 7.2 — Install the orchestrator package + MCP binary
+**Post-check**: `git rev-parse --abbrev-ref HEAD` must equal `agentic`. If not, halt and surface the actual branch — §11 requires the agentic branch.
+
+### Step 11.2 — Install the orchestrator package + MCP binary
+
+`uv tool install` produces the runtime binary but does **NOT** install dev dependencies (pytest, fakes, LangGraph test fixtures); the `pytest -q` line below requires them. Run the two install commands explicitly — the binary-install gives you the production MCP entry point on PATH; the editable dev-install adds the `[dev]` extras needed by the test suite.
 
 ```bash
 cd orchestrator
-uv tool install --force .   # produces ~/.local/bin/rka-orchestrator-mcp
-                            # (or: pip install -e ".[dev]")
-pytest -q                    # 494 tests; verifies the install
+uv tool install --force .                            # produces ~/.local/bin/rka-orchestrator-mcp (binary only)
+uv pip install -e ".[dev]"                           # adds dev deps for pytest (pytest, anyio, fakes, …)
+pytest -q                                            # optional: 1100+ tests; verifies the install
 ```
 
-### Step 7.3 — Mint a Claude Max OAuth token
+If you skip the `uv pip install -e ".[dev]"` line, the `pytest -q` invocation will fail with `ModuleNotFoundError` (pytest itself, or the LangGraph test fixtures). The `pytest -q` step is OPTIONAL — only needed if you want to verify the install end-to-end. The orchestrator MCP binary works either way.
+
+> **macOS AppleDouble note** (per CLAUDE.md): if you cloned the repo onto an external drive or a synced folder (Dropbox / OneDrive / iCloud), `uv tool install` may fail on `._requires.txt`. Install from a `/tmp` clone instead — `/tmp` is on a stock APFS volume that doesn't have the xattr quirk. See CLAUDE.md "macOS AppleDouble Quirks" for the exact workaround.
+
+**Post-check**: `command -v rka-orchestrator-mcp` (macOS/Linux) or `where rka-orchestrator-mcp` (Windows) prints a path. If absent, check `uv tool list` for partial-install state and re-run with `--reinstall`.
+
+### Step 11.3 — Mint a Claude Max OAuth token
 
 In a **separate terminal** (NOT inside any Claude Code or Desktop session — the token is sensitive):
 
@@ -482,7 +721,7 @@ In a **separate terminal** (NOT inside any Claude Code or Desktop session — th
 claude setup-token           # opens browser flow; outputs a long-lived token
 ```
 
-### Step 7.4 — Drop the token in a gitignored env file
+### Step 11.4 — Drop the token in a gitignored env file
 
 ```bash
 nano orchestrator/.env
@@ -494,13 +733,31 @@ CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
 # Optional — richer tool surface for the Brain subprocess:
 SEMANTIC_SCHOLAR_API_KEY=...
 SERPAPI_KEY=...
+# Required while the orchestrator daemon's Brain⇄Executor subprocess has
+# not yet been ported to v2.7.0 dispatch (rka_execute(operation=…)).
+# Tracked in v2.7.0+agentic.X. Until then the daemon container needs the
+# legacy 20-tool baseline:
+RKA_LEGACY_TOOLS=1
 ```
 
 ```bash
+# macOS / Linux: POSIX file mode bit 600 (rw owner, no group/other).
 chmod 600 orchestrator/.env
 ```
 
-### Step 7.5 — Bring up the orchestrator service
+```powershell
+# Windows (PowerShell): no chmod equivalent; use icacls to break inheritance
+# and grant the current user full control, denying everyone else by default.
+icacls orchestrator\.env /inheritance:r /grant:r "$($env:USERNAME):F"
+```
+
+The file holds a long-lived OAuth token and (optionally) API keys — it must not be readable by other accounts on the same machine. The macOS/Linux mode 600 grants read/write to owner only; the Windows icacls invocation removes inherited ACLs and grants only the current user full access.
+
+**Post-check**: verify with `stat -f %A orchestrator/.env` (macOS) / `stat -c %a orchestrator/.env` (Linux). Expect `600`. On Windows, verify with `icacls orchestrator\.env` — output should show only the current user with `(F)` (full control) and no Everyone / Users entries. If the value differs, re-run the platform-appropriate command above. Confirm the token is present with `grep -c "^CLAUDE_CODE_OAUTH_TOKEN=" orchestrator/.env` (expect `1`; on Windows use `Select-String -Pattern '^CLAUDE_CODE_OAUTH_TOKEN=' orchestrator\.env | Measure-Object -Line` and expect `Lines: 1`).
+
+### Step 11.5 — Bring up the orchestrator service
+
+**Pre-check**: `git rev-parse --abbrev-ref HEAD` must equal `agentic` (per Step 11.1).
 
 The Compose overlay adds a third container (`rka-orchestrator`) alongside `rka-server` and `rka-worker` without modifying the root `docker-compose.yml`:
 
@@ -520,9 +777,23 @@ docker compose -f docker-compose.yml -f orchestrator/docker-compose.yml ps
 # Should show 3 services healthy: rka-server, rka-worker, rka-orchestrator
 ```
 
-### Step 7.6 — Register the orchestrator MCP in Claude Desktop
+**Recovery**: if `curl http://localhost:9713/health` fails or `docker compose ps` shows `rka-orchestrator` unhealthy, run:
 
-Add a second entry to `claude_desktop_config.json` (alongside the existing `rka` entry):
+```bash
+docker inspect rka-orchestrator --format '{{.RestartCount}} restarts; OOMKilled={{.State.OOMKilled}}'
+```
+
+If `OOMKilled=true`, bump Docker Desktop's Resources → Memory ceiling to ≥6 GB and re-up. (Per the operational note in CLAUDE.md: the FastEmbed model alone is ~250 MB; the full stack benefits from 8 GB.)
+
+### Step 11.6 — Register the orchestrator MCP in Claude Desktop
+
+> **IMPORTANT — do not clobber the wrapper-based `rka` entry from §6.** If you followed §3 + §6 (the recommended path), you already have an `mcpServers.rka` entry pointing at the wrapper script (`bin/rka-mcp-bridge.py`). Keep it untouched. This step adds ONLY the new `mcpServers.rka-orchestrator` entry. If you copy the JSON block below verbatim into your config, you will replace the wrapper-based `rka` entry with the `docker exec` form — that works but loses the version-checking + auto-pin behaviour the wrapper provides. The example below is correct *for users who never ran §6* (agentic distribution from scratch, no plugin install); the §6-path user should ADD only the `rka-orchestrator` key.
+
+> **Note on `RKA_LEGACY_TOOLS=1`**: the user-facing `rka` MCP entry below exposes v2.7.0 dispatch tools (5 always-on — 3 dispatch + 2 escape hatches). The orchestrator daemon container reads `RKA_LEGACY_TOOLS=1` from `orchestrator/.env` (set externally by you in Step 11.4) and propagates it to the daemon's Brain⇄Executor subprocess via the container's env block so that subprocess still sees the v2.7.0a2 baseline (legacy 20 tools). End-users do not need to set this in Claude Desktop — the env var lives in `orchestrator/.env`, not the Desktop config.
+
+For agent executors merging this entry programmatically: read the existing `claude_desktop_config.json`, parse, set `mcpServers.rka-orchestrator` ONLY (do not touch `mcpServers.rka`), write back atomically (same tmp+rename pattern as §6.6).
+
+The JSON below shows the *result* of a from-scratch install (no §6 done previously); the §6-path user's result will have BOTH `rka` (wrapper) AND `rka-orchestrator` keys side-by-side:
 
 ```json
 {
@@ -541,7 +812,7 @@ Add a second entry to `claude_desktop_config.json` (alongside the existing `rka`
 
 Substitute your actual username. Fully quit and reopen Claude Desktop.
 
-### Step 7.7 — Verify in Claude Desktop / Claude Code
+### Step 11.7 — Verify in Claude Desktop / Claude Code
 
 ```
 [You:]
@@ -554,7 +825,7 @@ Substitute your actual username. Fully quit and reopen Claude Desktop.
 
 If you also see `orchestrator_run_start`, `orchestrator_inbox`, `orchestrator_onboard_start`, `orchestrator_get_manifest`, etc. in your tool list, the orchestrator MCP is wired correctly.
 
-### 7.8 — Day-one use
+### Step 11.8 — Day-one use
 
 ```
 [You:]
@@ -565,13 +836,19 @@ or
 
 See [`USAGE_GUIDE.md`](USAGE_GUIDE.md#agentic-distribution--orchestrator-workflows) for the full agentic-distribution workflow walkthrough including the TWO-TAP discipline at `pi_decision_select` (the privileged write-authorization gate).
 
+### Workspace bind mount — `HOST_WORKSPACE_ROOT`
+
+For non-`$HOME` workspace roots (external drives, `/Volumes/...`, etc.), set `HOST_WORKSPACE_ROOT` in the **repo-root `.env`** (i.e., `<your-clone-dir>/rka/.env`), **NOT** in `orchestrator/.env`. Docker Compose reads `.env` from the directory of the first `-f` file (the repo root) for YAML `${VAR}` interpolation; the `env_file:` directive only populates env vars inside the running container and does not feed interpolation.
+
+If you put `HOST_WORKSPACE_ROOT` in `orchestrator/.env`, the bind mount falls back to `${HOME}` and the workspace appears empty inside the container — a silent failure.
+
 ### Where orchestrator state lives
 
 | | |
 |---|---|
 | Docker volume `orchestrator-data` | `/data/orchestrator.db` (parked-interrupt queue + workflow_runs) + `/data/orchestrator-saver.db` (LangGraph checkpointer) |
-| `orchestrator/.env` (gitignored) | `CLAUDE_CODE_OAUTH_TOKEN` and optional API keys propagated to the subprocess |
-| `~/.claude/` (mounted read-only) | Host's Claude credentials directory for the SDK subprocess to read |
+| `orchestrator/.env` (gitignored, mode 0600) | `CLAUDE_CODE_OAUTH_TOKEN`, optional API keys, and `RKA_LEGACY_TOOLS=1` propagated to the subprocess |
+| `<your-clone-dir>/rka/.env` (gitignored, repo-root) | `HOST_WORKSPACE_ROOT` for non-`$HOME` workspace roots — fed to Compose YAML `${VAR}` interpolation for the workspace bind mount |
 | `~/.claude.json` (mounted read-only) | Host's Claude CLI global config |
 | `~/rka-projects/{project_id}/` (Phase D MVP convention) | Per-project `tools.json` + `.env` template after onboarding |
 
@@ -583,3 +860,22 @@ See [`USAGE_GUIDE.md`](USAGE_GUIDE.md#agentic-distribution--orchestrator-workflo
 docker compose -f docker-compose.yml -f orchestrator/docker-compose.yml down
 # (Leaves the orchestrator-data volume; add -v to delete it.)
 ```
+
+---
+
+## Appendix: file inventory after a successful install
+
+| Location | What |
+|---|---|
+| `<your-clone-dir>/rka/` | The cloned RKA source repo (only docker-compose.yml is needed at runtime; rest is for development) |
+| Docker volume `rka-data` (managed by Docker Desktop) | The SQLite database `/data/rka.db` and any project artifacts |
+| `~/.claude/plugins/cache/rka/rka/<version>/` (macOS/Linux) or `%USERPROFILE%\.claude\plugins\cache\rka\rka\<version>\` (Windows) | The installed plugin: skills, commands, hooks, wrapper script |
+| `~/Library/Application Support/RKA/integration.json` (macOS) or `%APPDATA%\RKA\integration.json` (Windows) | Plugin-written config telling the wrapper which RKA backend to bridge to |
+| `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows) | Claude Desktop's MCP config with the `rka` entry; backups of any prior version live alongside it as `*.backup-YYYYMMDD-HHMMSS` |
+| `~/.claude/plugins/installed_plugins.json` | Claude Code's registry of installed plugins (includes `rka@rka` entry after install) |
+| `~/.claude/plugins/known_marketplaces.json` | Claude Code's registry of marketplace sources (includes the `infinitywings/rka` GitHub source after `/plugin marketplace add`) |
+| Docker volume `orchestrator-data` *(agentic only)* | `/data/orchestrator.db` (parked-interrupt queue + workflow_runs) and `/data/orchestrator-saver.db` (LangGraph checkpointer) |
+| `<your-clone-dir>/rka/orchestrator/.env` *(agentic only, mode 0600)* | `CLAUDE_CODE_OAUTH_TOKEN`, `RKA_LEGACY_TOOLS=1`, and optional API keys |
+| `<your-clone-dir>/rka/.env` *(agentic only, optional)* | `HOST_WORKSPACE_ROOT` for non-`$HOME` workspace bind mount (see §11 Workspace bind mount) |
+| `~/.claude.json` *(agentic only, mounted read-only into container)* | Host's Claude CLI global config consumed by the orchestrator daemon's SDK subprocess |
+| [`docs/v2.6.x-v2.7.0-tool-surface-arc.md`](docs/v2.6.x-v2.7.0-tool-surface-arc.md) | Canonical narrative of the v2.6 → v2.7.0 tool-surface migration (project_id discipline → dispatch + 87 typed Pydantic operations) |

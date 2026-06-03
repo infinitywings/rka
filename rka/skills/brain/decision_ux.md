@@ -2,6 +2,8 @@
 
 Supplementary reference for the multi-choice decision UX, plus the Confirmation Brief template. Load when the Brain needs to present structured options to the PI or confirm intent before significant work.
 
+> **v2.7.0 dispatch translation.** Legacy tool names below (`rka_add_decision`, `rka_update_decision`, `rka_present_decision`, etc.) are synonyms for `rka_execute(args={"operation": "<verb>", "project_id": <pinned>, ...})` under the v2.7.0+ typed-arg surface. See `SKILL.md` § "Tool Surface" for the full mapping; canonical signatures via `rka_describe(operation="<name>")`.
+
 Authoritative source: `dec_01KPE2RKT838TJXDYT7W23K26B` (multi-choice decision spec, v2.2). Literature grounding: `lit_01KPE2N5386DSKYQTD5XZ22MQ4` (Sharma sycophancy), `lit_01KPE2NCCXAV23N7SSQVN1Z5JG` (Huber decoy), `lit_01KPE2NKXH8ZM0XPYP4GMBQGWK` (Chernev choice overload), `lit_01KPE2P2BHT37ZVNSSDSXM0XTX` (Buccinca cognitive forcing), `lit_01KPE2PAXE72EAE9EHNBBAQ1KV` (Ma calibrated trust), `lit_01KPE2PKEZRJB0D3KAY83J4DHG` (Klein RPDM). Substrate: migrations 017 (`decision_options` table) + 018 (`calibration_outcomes`).
 
 ---
