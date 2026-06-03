@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from typing import Any
 
@@ -27,6 +28,16 @@ logger = logging.getLogger(__name__)
 
 _NOMIC_PREFIX_MODELS = ("nomic-ai/nomic-embed-text",)
 
+# v2.7.0.1: bound onnxruntime intra-op parallelism. The default behavior
+# (intra_op_num_threads = CPU count) spawns N threads per inference, each
+# allocating its own memory arena. On a 10-core Apple Silicon under Docker,
+# this hit unbounded growth — peak rose 7.17→7.87 GiB when the ceiling went
+# 7.75→9.21 GiB, signature of "consume whatever you give it". Capping at
+# 2 keeps the working set bounded with acceptable per-call latency for the
+# background worker. Override via RKA_EMBEDDING_THREADS env or the
+# `threads=` constructor kwarg.
+_DEFAULT_THREADS = 2
+
 
 def _needs_nomic_prefix(model_name: str) -> bool:
     return any(model_name.startswith(p) for p in _NOMIC_PREFIX_MODELS)
@@ -40,6 +51,8 @@ class FastEmbedBackend:
         model_name: str = "nomic-ai/nomic-embed-text-v1.5",
         *,
         dim: int | None = None,
+        threads: int | None = None,
+        cache_dir: str | None = None,
     ) -> None:
         self._model_name = model_name
         self._model: Any = None
@@ -49,6 +62,18 @@ class FastEmbedBackend:
         # cross-checks via reconcile_dim and raises on real drift.
         self._dim: int = 768 if dim is None else dim
         self._uses_prefix = _needs_nomic_prefix(model_name)
+        # v2.7.0.1: bound onnxruntime threading. Param > env > default.
+        if threads is None:
+            env_threads = os.getenv("RKA_EMBEDDING_THREADS")
+            threads = int(env_threads) if env_threads else _DEFAULT_THREADS
+        self._threads = max(1, threads)
+        # v2.7.0.1: persistent model cache. When unset, fastembed defaults to
+        # ~/.cache/fastembed which doesn't survive container recreate, causing
+        # repeated 130MB downloads (and HF rate-limiting under load). Setting
+        # cache_dir to a volume-mounted path eliminates this.
+        if cache_dir is None:
+            cache_dir = os.getenv("RKA_EMBEDDING_CACHE_DIR") or None
+        self._cache_dir = cache_dir
 
     @property
     def dim(self) -> int:
@@ -62,11 +87,21 @@ class FastEmbedBackend:
         if self._model is None:
             from fastembed import TextEmbedding
 
+            kwargs: dict[str, Any] = {
+                "model_name": self._model_name,
+                "threads": self._threads,
+            }
+            if self._cache_dir:
+                kwargs["cache_dir"] = self._cache_dir
+
             logger.info(
-                "Loading FastEmbed model: %s (first load downloads ~130MB)",
+                "Loading FastEmbed model: %s (threads=%d, cache_dir=%s; "
+                "first uncached load downloads ~130MB)",
                 self._model_name,
+                self._threads,
+                self._cache_dir or "<fastembed default>",
             )
-            self._model = TextEmbedding(model_name=self._model_name)
+            self._model = TextEmbedding(**kwargs)
         return self._model
 
     def _prefix(self, text: str, *, is_query: bool) -> str:

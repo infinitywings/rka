@@ -56,7 +56,14 @@ ENV RKA_DB_PATH=/data/rka.db \
     RKA_HOST=0.0.0.0 \
     RKA_PORT=9712 \
     RKA_LLM_ENABLED=false \
-    RKA_SQLITE_VEC_PATH=/usr/local/lib/vec0.so
+    RKA_SQLITE_VEC_PATH=/usr/local/lib/vec0.so \
+    # v2.7.0.1: bound onnxruntime parallelism + persist FastEmbed cache.
+    # These defaults are safe for any caller (Docker run, compose, direct).
+    # Compose interpolation in docker-compose.yml can override RKA_EMBEDDING_THREADS.
+    OMP_NUM_THREADS=2 \
+    TOKENIZERS_PARALLELISM=false \
+    RKA_EMBEDDING_THREADS=2 \
+    RKA_EMBEDDING_CACHE_DIR=/data/fastembed_cache
 
 EXPOSE 9712
 

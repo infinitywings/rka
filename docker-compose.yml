@@ -69,6 +69,26 @@ services:
       # within noise, so backward-compat wins by tie-break). Operator
       # override via RKA_CTX_RECENCY_SHAPE_N preserved.
       RKA_CTX_RECENCY_SHAPE_N: "${RKA_CTX_RECENCY_SHAPE_N:-1}"
+      # v2.7.0.1: bound onnxruntime threading + persist FastEmbed model
+      # cache. Without these, onnxruntime spawns intra_op_num_threads ==
+      # container CPU count and each thread allocates its own arena;
+      # under load the worker OOM-loops (peak 7.87 GiB on a 9.21 GiB
+      # ceiling, signature of unbounded growth). Cap is belt-and-suspenders:
+      # OMP_NUM_THREADS is the env onnxruntime reads; RKA_EMBEDDING_THREADS
+      # is the explicit kwarg passed to TextEmbedding(threads=...).
+      # RKA_EMBEDDING_CACHE_DIR moves the ~130MB model cache onto the
+      # rka-data volume so container recreate doesn't re-download (which
+      # was hitting HF rate-limits during the OOM-restart loop).
+      OMP_NUM_THREADS: "2"
+      TOKENIZERS_PARALLELISM: "false"
+      RKA_EMBEDDING_THREADS: "${RKA_EMBEDDING_THREADS:-2}"
+      RKA_EMBEDDING_CACHE_DIR: "/data/fastembed_cache"
+    # v2.7.0.1: bound container RAM. App-level thread cap should make this
+    # never fire; if it does, container OOM-kills cleanly with
+    # OOMKilled=true (proper signal) rather than the silent SIGKILL we
+    # saw before. Override via env: RKA_SERVER_MEM_LIMIT=8g for fat
+    # corpora that need more headroom.
+    mem_limit: ${RKA_SERVER_MEM_LIMIT:-2g}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -104,6 +124,16 @@ services:
       # within noise, so backward-compat wins by tie-break). Operator
       # override via RKA_CTX_RECENCY_SHAPE_N preserved.
       RKA_CTX_RECENCY_SHAPE_N: "${RKA_CTX_RECENCY_SHAPE_N:-1}"
+      # v2.7.0.1: see rka service above. The worker is the bigger memory
+      # consumer (continuous embedding queue drain) so the cap matters
+      # most here.
+      OMP_NUM_THREADS: "2"
+      TOKENIZERS_PARALLELISM: "false"
+      RKA_EMBEDDING_THREADS: "${RKA_EMBEDDING_THREADS:-2}"
+      RKA_EMBEDDING_CACHE_DIR: "/data/fastembed_cache"
+    # v2.7.0.1: bound container RAM. Override via RKA_WORKER_MEM_LIMIT=8g
+    # for projects with large embedding queues.
+    mem_limit: ${RKA_WORKER_MEM_LIMIT:-4g}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

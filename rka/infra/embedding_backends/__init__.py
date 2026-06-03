@@ -57,6 +57,8 @@ def make_backend(config: dict[str, Any]) -> EmbeddingBackend:
         return FastEmbedBackend(
             model_name=sub.get("model_name", "nomic-ai/nomic-embed-text-v1.5"),
             dim=sub.get("dim"),
+            threads=sub.get("threads"),
+            cache_dir=sub.get("cache_dir"),
         )
     if backend_kind == "openai_compat":
         from rka.infra.embedding_backends.openai_compat import OpenAICompatBackend
