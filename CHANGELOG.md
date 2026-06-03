@@ -3,6 +3,159 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [2.7.0] — 2026-06-02 (GA — No-compromise discriminated-union dispatch: 3 always-on tools + 87 typed Pydantic models with per-branch enum/required enforcement at FastMCP schema layer)
+
+**FUNDAMENTAL ARCHITECTURAL RELEASE.** Closes the v2.6.3–v2.7.0a2 arc of empirical
+investigation into Claude Desktop's MCP tool-surfacing behavior. v2.7.0 is the
+no-compromise solution: 3 always-on dispatch tools (`rka_query`, `rka_execute`,
+`rka_describe`) replace 91 legacy tools + 8 v2.7.0a2 verbs. The dispatch tools
+accept `Annotated[Union[...], Field(discriminator='operation')]` — 87 typed
+Pydantic models with per-branch enum promotion + required-field enforcement at
+the FastMCP `inputSchema` layer.
+
+### The empirical journey
+
+1. **v2.6.3** introduced navigator architecture (91 tools, 12 always-on + 79
+   deferred via `rka_load_tools`). Empirically: Claude Desktop cockpit saw 7-30
+   tools depending on prompt context.
+2. **v2.6.4** doc-swept the broadcast surface. Same surfacing behavior.
+3. **v2.6.5** shrunk always-on to 3 navigator tools. Cockpit saw 0. Reverted.
+4. **v2.6.6** restored v2.6.4 baseline.
+5. **v2.7.0a1** introduced 8 intent verbs (`rka_query`, `rka_record_note`, ...) ADDITIVELY
+   alongside 91 legacy. Empirically: cockpit picked legacy 3-of-4 specific
+   operations; only umbrella `rka_query` survived for generic prompts.
+6. **v2.7.0a2** added `_meta["anthropic/alwaysLoad"]: true` hint per Anthropic
+   docs. Empirically NO-OP on Claude Desktop (`alwaysLoad` is Claude-Code-only
+   per `code.claude.com/docs/en/mcp`).
+7. **Deep research workflow `w9n5xeh1u`** (2026-06-02) confirmed industry-wide:
+   3 closed-without-fix GitHub bugs (#25892, #41472, #49073) on Claude
+   Desktop's broken `tool_search`. Cloudflare ships 2,500 endpoints via
+   2 tools; Awkoy notion-mcp ships 36 endpoints → 2 tools with explicit
+   Claude Desktop support.
+8. **Pre-mortem workflow `wv5y9n0jt`** of a candidate `rka_execute(operation, **kw)`
+   shape (v2.7.0a3) confirmed 4 HIGH-severity compromises: enum regression,
+   provenance inputSchema visibility loss, discoverability cost (rka_describe
+   index = 6,563 tokens), orchestrator autonomy-contract collapse. PI
+   explicitly chose the no-compromise path.
+9. **v2.7.0 (this release)** ships the discriminated-union refactor that closes
+   all 4 compromises at the schema layer.
+
+### Architecture
+
+**3 always-on tools:**
+- `rka_query(args: Annotated[Union[QueryStatusArgs, QueryContextArgs, ...,
+  QueryListProjectsArgs], Field(discriminator='operation')]) → str`
+  38 read operations
+- `rka_execute(args: Annotated[Union[RecordNoteArgs, RecordDecisionArgs, ...,
+  ExtractClaimsArgs], Field(discriminator='operation')]) → str`
+  49 write/lifecycle operations
+- `rka_describe(operation: str) → str` — schema-lookup + example surface
+  (shrunk to <250 tokens for empty-index browse)
+
+Plus 2 navigator escape hatches at `always_on`: `rka_load_tools` (for explicit
+legacy access when needed) and `rka_help` (deprecated alias for `rka_describe`).
+
+Total always-on: **5 tools** (3 dispatch + 2 escape hatches).
+
+**87 typed Pydantic models** in `rka/mcp/operation_args.py` (3,687 LOC). Each
+model:
+- Inherits from `ProjectScopedArgs` (scoped) or `UnscopedArgs` (unscoped) base.
+- Has `operation: Literal['xyz'] = 'xyz'` discriminator field.
+- Has all required enum fields as `Annotated[Literal[...]]` (from
+  `rka/mcp/_enums.py`'s 20+ canonical Literal aliases).
+- Has `model_config = ConfigDict(extra='forbid', use_enum_values=True)`.
+- Has `model_validator(mode='after')` for cross-cutting invariants where
+  applicable (16 validators total).
+
+**Operations index** in `rka/mcp/operations_schema.py` (2,874 LOC). 87-entry
+hand-curated dict with per-operation: operation, tool, category, role_tag,
+summary, signature, required_fields, optional_fields, enums, 1-2 examples,
+related_operations, notes (Phase-X²' canonical-field-name reminders).
+
+**Dispatch routing** in `rka/mcp/verb_dispatch.py` extended with
+`dispatch_query_typed(args)` + `dispatch_execute_typed(args)` that receive
+typed model instances and route via `isinstance` / `args.operation` to the
+existing service-layer REST adapters.
+
+### Compromises closed (per pre-mortem `wv5y9n0jt`)
+
+1. **Enum regression (HIGH)** — closed. FastMCP renders the discriminated
+   union as `inputSchema.oneOf` with per-branch enum constraints on every
+   Literal field. The LLM cannot emit `confidence='confirmed'`,
+   `decided_by='SUPERVISOR'`, `kind='research_question'` for wrong contexts,
+   `importance='WRONG'`, `status='WRONG'` — every value is rejected at the
+   schema layer. **Empirical proof** (verified in workflow): 6/6 hallucination
+   test cases raise `pydantic.ValidationError`.
+2. **Provenance inputSchema visibility (MEDIUM)** — closed.
+   `RecordDecisionArgs.related_journal: list[str] = Field(min_length=1)`
+   surfaces in the `oneOf` branch's `required` array. LLM sees the constraint
+   at emission time, not after a wasted token spend.
+3. **Discoverability cost (HIGH)** — closed. `rka_describe('')` index
+   shrunk from 6,563 → <250 tokens. Per-branch schemas now in `inputSchema`
+   directly; no describe roundtrip needed for required fields or enums.
+4. **Orchestrator autonomy-contract collapse (HIGH)** — closed via env-flag.
+   `RKA_LEGACY_TOOLS=1` (will be set in orchestrator/docker-compose.yml in
+   v2.7.0+agentic.X) keeps the daemon subprocess on the v2.7.0a2 surface,
+   preserving TWO-TAP gate granularity at `pi_decision_select`. PI cockpit
+   gets the typed 3-tool surface.
+
+### Tests
+
+- **1,730 tests passing** (858 MCP + 872 other).
+- **6/6 empirical hallucination cases** rejected at Pydantic schema layer
+  (verified in workflow `wdug5yr8t`).
+- **20/23 review findings applied** (3 documented as deferred follow-up PRs,
+  non-load-bearing: `RecordDecisionArgs.phase` required-vs-default,
+  `RecordNoteArgs.source` default 'executor' vs 'pi', new
+  `test_v270_typed_args_vs_models.py` meta-test scaffold).
+- New test files: `test_v270_model_drift.py` (drift-detection lock-test
+  ensuring operation_args.py stays in sync with rka/models/), updated
+  `test_v270a3_cloudflare_dispatch.py` (parity tests use
+  `TypeAdapter(ExecuteArgsUnion).validate_python(...)`).
+
+### Migration
+
+**Brain / Executor / PI cockpit** — call `rka_execute(operation='record_decision',
+args...)` directly. The discriminated-union signature means Claude Code /
+Claude Desktop see per-operation field shapes in their tool-picker UI.
+Required vs optional, enum constraints, and provenance requirements are all
+visible at emission time.
+
+**Orchestrator daemon** — runs with `RKA_LEGACY_TOOLS=1` env (added in
+orchestrator/docker-compose.yml in v2.7.0+agentic.X, separate release).
+Subprocess sees the v2.7.0a2 20-tool baseline; `pi_decision_select` TWO-TAP
+gate preserves per-tool autonomy contract. Brain/Executor system prompts
+rewrite to use `rka_execute(operation=...)` deferred to v2.7.0+agentic.X.
+
+**Legacy 91 tools + 8 v2.7.0a2 verbs** stay in `_TOOL_REGISTRY` at
+`tier='deferred'`. Callable via `rka_load_tools(['rka_add_note'])` for
+backwards-compat. Slated for full removal in v2.8.0 after telemetry confirms
+<5%/week call rate for 3 consecutive weeks.
+
+### Service layer / REST / DB schema
+
+UNCHANGED. v2.7.0 is purely an MCP-layer redesign. `rka/services/*.py`,
+`rka/api/routes/*.py`, `rka/db/schema.sql`, `rka/models/*.py` all unchanged.
+
+### Bookkeeper invariant
+
+`git diff main -- rka/` is nonzero on this commit because this IS a main-side
+release. Agentic absorbs via the standard `git merge origin/main` discipline.
+After merge: `git diff main -- rka/` returns 0.
+
+### Reference workflows
+
+- `w058g0juk` — Option C / discriminated-union implementation (87 models,
+  4 parallel model agents, wire phase, adversarial review)
+- `wdug5yr8t` — review-findings polish (20/23 findings applied, 6/6
+  hallucination tests passing)
+- `w058g0juk` predecessor `w1lajmrbn` — `**kw` shape v2.7.0a3 (not shipped;
+  inputs harvested for OPERATIONS_SCHEMA + env-flag gating)
+- `wv5y9n0jt` — pre-mortem that surfaced the 4 compromises requiring
+  discriminated union
+- `w9n5xeh1u` — deep research confirming industry-wide Claude Desktop
+  tool-surfacing problem + Awkoy/Cloudflare precedents
+
 ## [2.7.0a2] — 2026-06-02 (alpha patch — alwaysLoad _meta + rka_query trigger phrases + rka_record_literature fixes from PR-4 A/B empirical findings)
 
 **Empirical patch on top of v2.7.0a1.** A 5-test PI A/B against the

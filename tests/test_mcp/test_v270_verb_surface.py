@@ -107,23 +107,36 @@ def test_verb_registered_as_always_on(verb: str) -> None:
 
 @pytest.mark.parametrize("verb", V270_VERBS)
 def test_verb_category_is_verb(verb: str) -> None:
-    """Every v2.7.0 verb has category='verb' so rka_list_tools(category='verb')
-    returns exactly the 8 verbs."""
+    """Every v2.7.0a2 verb has category='verb' so rka_list_tools(category='verb')
+    returns the 7 remaining verbs (rka_query promoted to category='dispatch'
+    in v2.7.0a3)."""
     rec = _verb_record(verb)
-    assert rec["category"] == "verb", (
-        f"verb {verb!r} category={rec['category']!r}, expected 'verb' "
-        f"for clean rka_list_tools(category='verb') filtering"
-    )
+    # v2.7.0a3: rka_query is repurposed as a 'dispatch' tool (the read
+    # half of the 3-tool dispatch surface). Other 7 verbs stay 'verb'.
+    if verb == "rka_query":
+        assert rec["category"] == "dispatch", (
+            f"verb {verb!r} category={rec['category']!r}, expected "
+            f"'dispatch' in v2.7.0a3+ (rka_query is the read half of the "
+            f"3-tool surface)"
+        )
+    else:
+        assert rec["category"] == "verb", (
+            f"verb {verb!r} category={rec['category']!r}, expected 'verb' "
+            f"for clean rka_list_tools(category='verb') filtering"
+        )
 
 
 def test_exactly_eight_verbs_under_verb_category() -> None:
-    """No more, no fewer — additive PR-1 ships exactly 8 verbs."""
+    """v2.7.0a3 — rka_query promoted to 'dispatch' category. The other
+    7 v2.7.0a2 verbs remain under category='verb'."""
     verbs = sorted(
         n for n, r in _TOOL_REGISTRY.items()
         if r.get("category") == "verb"
     )
-    assert verbs == sorted(V270_VERBS), (
-        f"v2.7.0 verb-category drift: got {verbs}, expected {sorted(V270_VERBS)}"
+    expected = sorted(set(V270_VERBS) - {"rka_query"})
+    assert verbs == expected, (
+        f"v2.7.0a3 verb-category drift: got {verbs}, expected {expected} "
+        f"(rka_query moved to category='dispatch' in v2.7.0a3)"
     )
 
 
@@ -133,24 +146,31 @@ def test_exactly_eight_verbs_under_verb_category() -> None:
 
 
 def test_always_on_count_is_twenty() -> None:
-    """The PR-1 always-on tier is 12 legacy + 8 verbs = 20. This count
-    is below the practical client cap (~25) and lets PR-2 demote
-    legacy without changing total."""
+    """The PR-1 + v2.7.0a3 always-on tier (under RKA_LEGACY_TOOLS=1)
+    is 12 legacy + 8 verbs + 2 v2.7.0a3 dispatch tools
+    (rka_execute + rka_describe) = 22. The conftest sets the env var
+    so this counts the LEGACY-ENABLED mode. v2.7.0a3 default mode
+    (env unset) collapses to 5 tools and is tested separately in
+    test_v270a3_dispatch_surface.py.
+    """
     always_on = sorted(
         n for n, r in _TOOL_REGISTRY.items()
         if r["tier"] == _TIER_ALWAYS_ON
     )
-    assert len(always_on) == 20, (
+    assert len(always_on) == 22, (
         f"always-on tier count = {len(always_on)} "
-        f"(expected 12 legacy + 8 verbs = 20). Members: {always_on}"
+        f"(expected 12 legacy + 8 verbs + 2 v2.7.0a3 dispatch = 22). "
+        f"Members: {always_on}"
     )
 
 
 def test_always_on_membership_exact() -> None:
-    """The exact always-on member set is the 12 PR-1-preserved legacy
-    tools plus the 8 v2.7.0 verbs. Any drift here means a tool was
-    silently moved between tiers."""
-    expected = set(LEGACY_ALWAYS_ON) | set(V270_VERBS)
+    """The exact always-on member set under RKA_LEGACY_TOOLS=1 is the
+    12 PR-1-preserved legacy tools plus the 8 v2.7.0a2 verbs plus
+    the 2 v2.7.0a3 dispatch tools (rka_execute + rka_describe). Any
+    drift here means a tool was silently moved between tiers."""
+    v270a3_dispatch = {"rka_execute", "rka_describe"}
+    expected = set(LEGACY_ALWAYS_ON) | set(V270_VERBS) | v270a3_dispatch
     actual = {
         n for n, r in _TOOL_REGISTRY.items() if r["tier"] == _TIER_ALWAYS_ON
     }
@@ -285,7 +305,17 @@ def test_verb_signature_recorded() -> None:
         assert sig.startswith("("), (
             f"verb {verb!r} signature looks malformed: {sig!r}"
         )
-        # Every project-scoped verb has project_id in the signature.
+        # v2.7.0 (Phase 3): rka_query now takes a typed
+        # ``QueryArgsUnion`` Pydantic union as its sole parameter;
+        # project_id lives INSIDE each branch's per-operation model.
+        # The signature contract is checked at the model layer
+        # (drift-test) rather than the verb signature string.
+        if verb == "rka_query":
+            assert "args" in sig, (
+                f"verb {verb!r} signature missing typed-args param: {sig}"
+            )
+            continue
+        # Every other project-scoped verb has project_id in the signature.
         # Only rka_session is unscoped; even so it carries an optional
         # project_id kwarg for its export/digest/generate_claude_md
         # actions.

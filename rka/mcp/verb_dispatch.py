@@ -1631,6 +1631,560 @@ async def dispatch_session(
 
 
 # ---------------------------------------------------------------------------
+# v2.7.0a3 — rka_execute dispatch (the unified write/lifecycle surface)
+# ---------------------------------------------------------------------------
+#
+# Routes ~47 write/lifecycle operations to the appropriate existing
+# dispatcher above (or to a legacy @tool function for ops that aren't
+# already covered by one of the 8 v2.7.0a2 verbs). The goal: one
+# always-on tool for ALL writes, with an Annotated[Literal] operation
+# discriminator that puts the full enum in the LLM's inputSchema.
+#
+# Categorization (decision 1 taxonomy):
+#
+#   record_*      — notes / decisions / literature / ingest / import
+#   update_*      — entity updates (note / decision / literature / status)
+#                   + bulk_update + supersede_decision
+#   create_*      — missions / projects / clusters / gates
+#   submit_*      — checkpoint submission, report submission
+#   resolve_*     — checkpoint resolution, contradiction resolution
+#   present_/     — present_decision (TWO-TAP), record_pi_selection,
+#   record_*        record_outcome
+#   review_*      — review_claims, review_cluster
+#   extract_*     — extract_claims
+#   assign_*/     — claim cluster operations
+#   split_*/
+#   merge_*
+#   hook_*        — hook add/enable/disable/delete + notifications_clear
+#   workspace_*   — bootstrap_workspace + scan_workspace
+#   flag_*/       — staleness flagging + eviction sweep
+#   eviction_*
+#   session       — reset_session (UNSCOPED)
+#
+# Per Decision 4: project_id is REQUIRED on every project-scoped op
+# (top-level kwarg-only). The 3 unscoped operations (create_project,
+# reset_session, and the diagnostic health/list_projects which live on
+# rka_query) do not require project_id. The validator emits a uniform
+# `missing_field` error matching the v2.6 contract.
+
+# Operations that are unscoped (no project_id required).
+_EXECUTE_UNSCOPED_OPS = frozenset({
+    "create_project",
+    "reset_session",
+})
+
+# Canonical set of execute operations — single source of truth, mirrors
+# the ExecuteOpLit Literal in server.py. Drift between this set and the
+# Literal is checked by tests in tests/test_mcp.
+EXECUTE_OPERATIONS = (
+    # record / ingest / import
+    "record_note", "record_decision", "record_literature",
+    "ingest_document", "import_bibtex", "batch_import",
+    "register_manuscript",
+    # update
+    "update_note", "update_decision", "update_literature",
+    "update_status", "bulk_update", "supersede_decision",
+    # decision lifecycle (PI ratification + calibration)
+    "record_pi_selection", "record_outcome",
+    # literature lifecycle
+    "enrich_doi", "link_literature_to_zotero",
+    "process_paper", "validate_reference",
+    # mission lifecycle
+    "create_mission", "update_mission", "update_mission_status",
+    "submit_report", "advance_rq",
+    # checkpoint / gate lifecycle
+    "submit_checkpoint", "resolve_checkpoint", "create_gate",
+    "evaluate_gate", "present_decision",
+    # claims / clusters
+    "extract_claims", "create_cluster", "assign_claims_to_cluster",
+    "split_cluster", "merge_clusters", "review_claims", "review_cluster",
+    "resolve_contradiction",
+    # hooks / notifications
+    "hook_add", "hook_enable", "hook_disable", "hook_delete",
+    "brain_notifications_clear",
+    # workspace
+    "bootstrap_workspace", "scan_workspace",
+    # maintenance
+    "flag_stale", "eviction_sweep",
+    # session / project
+    "create_project", "reset_session", "session_digest",
+)
+
+
+async def dispatch_execute(
+    operation: str,
+    *,
+    project_id: str | None,
+    source: str = "executor",
+    confidence: str = "hypothesis",
+    importance: str = "normal",
+    verbatim_input: str | None = None,
+    provenance: dict[str, Any] | None = None,
+    tags: list[str] | None = None,
+    phase: str | None = None,
+    **kw: Any,
+) -> str:
+    """v2.7.0a3 unified write/lifecycle dispatcher.
+
+    Routes `operation` to the appropriate sub-dispatcher / legacy tool
+    while preserving Phase-X²' provenance discipline (related_journal,
+    motivated_by_decision, verbatim_input when source='pi').
+
+    Sub-dispatcher routing:
+      - record_note, ingest_document  → dispatch_record_note
+      - record_decision, supersede_decision → dispatch_record_decision
+        (supersede_decision also reachable via dispatch_review for
+        back-compat with the v2.7.0a2 surface).
+      - record_literature, ingest_document, import_bibtex, enrich_doi,
+        link_literature_to_zotero, process_paper, validate_reference
+            → dispatch_record_literature
+      - create_mission, update_mission, update_mission_status,
+        submit_report, advance_rq → dispatch_mission
+      - submit_checkpoint, resolve_checkpoint, create_gate,
+        evaluate_gate, present_decision, record_pi_selection,
+        record_outcome → dispatch_checkpoint
+      - extract_claims, create_cluster, assign_claims_to_cluster,
+        split_cluster, merge_clusters, review_claims, review_cluster,
+        resolve_contradiction, hook_*, brain_notifications_clear,
+        bootstrap_workspace, scan_workspace (via legacy direct call),
+        flag_stale, eviction_sweep, batch_import, register_manuscript,
+        update_note, update_decision, update_literature, update_status,
+        bulk_update → dispatch_review
+      - create_project, reset_session → dispatch_session
+    """
+    op = operation
+    if op not in EXECUTE_OPERATIONS:
+        valid = sorted(EXECUTE_OPERATIONS)
+        return _err(
+            "invalid_operation",
+            f"rka_execute: unknown operation {op!r}",
+            valid_operations=valid,
+        )
+
+    # project_id enforcement on all but the unscoped operations.
+    if op not in _EXECUTE_UNSCOPED_OPS and not project_id:
+        return _err(
+            "missing_field",
+            f"rka_execute(operation={op!r}) requires project_id "
+            "(every project-scoped write needs explicit project pinning "
+            "in v2.6+).",
+        )
+
+    # --- record_note / ingest_document ---
+    if op in ("record_note", "ingest_document"):
+        content = kw.get("content")
+        if not content:
+            return _err(
+                "missing_field",
+                f"rka_execute(operation={op!r}) requires `content`",
+            )
+        sub_action = "ingest_document" if op == "ingest_document" else "create"
+        return await dispatch_record_note(
+            content=content,
+            project_id=project_id,  # type: ignore[arg-type]
+            source=source,
+            type=kw.get("type", "note"),
+            confidence=confidence,
+            importance=importance,
+            verbatim_input=verbatim_input,
+            phase=phase,
+            tags=tags,
+            provenance=provenance,
+            action=sub_action,
+            default_type=kw.get("default_type"),
+            split_by_headings=kw.get("split_by_headings"),
+        )
+
+    # --- record_decision (also handles supersede_decision in record form) ---
+    if op == "record_decision":
+        question = kw.get("question")
+        chosen = kw.get("chosen")
+        rationale = kw.get("rationale")
+        if not question or not chosen or not rationale:
+            return _err(
+                "missing_field",
+                "rka_execute(operation='record_decision') requires "
+                "question + chosen + rationale",
+            )
+        decided_by = kw.get("decided_by") or "brain"
+        return await dispatch_record_decision(
+            question=question,
+            chosen=chosen,
+            rationale=rationale,
+            project_id=project_id,  # type: ignore[arg-type]
+            decided_by=decided_by,
+            kind=kw.get("kind", "decision"),
+            phase=phase or "",
+            related_journal=kw.get("related_journal"),
+            supersedes_decision_id=kw.get("supersedes_decision_id"),
+            options=kw.get("options"),
+            related_literature=kw.get("related_literature"),
+            parent_id=kw.get("parent_id"),
+            assumptions=kw.get("assumptions"),
+            importance=importance,
+            justified_by=kw.get("justified_by"),
+            provenance=provenance,
+        )
+
+    # --- supersede_decision (via review dispatcher) ---
+    if op == "supersede_decision":
+        payload = {
+            "old_decision_id": kw.get("old_decision_id"),
+            "question": kw.get("question"),
+            "chosen": kw.get("chosen"),
+            "rationale": kw.get("rationale"),
+            "decided_by": kw.get("decided_by", "brain"),
+            "phase": phase or kw.get("phase", ""),
+            "kind": kw.get("kind", "decision"),
+        }
+        return await dispatch_review(
+            "supersede_decision",
+            project_id=project_id,  # type: ignore[arg-type]
+            payload=payload,
+        )
+
+    # --- record_literature + literature-action ops ---
+    if op in (
+        "record_literature", "import_bibtex", "enrich_doi",
+        "link_literature_to_zotero", "process_paper", "validate_reference",
+    ):
+        # Map our v2.7.0a3 op name to the action= sub-mode that
+        # dispatch_record_literature understands.
+        action_map = {
+            "record_literature": None,  # explicit-create / search / default
+            "import_bibtex": "import_bibtex",
+            "enrich_doi": "enrich_doi",
+            "link_literature_to_zotero": "link_zotero",
+            "process_paper": "process_paper",
+            "validate_reference": "validate_reference",
+        }
+        return await dispatch_record_literature(
+            project_id=project_id,  # type: ignore[arg-type]
+            title=kw.get("title"),
+            bibtex=kw.get("bibtex"),
+            search_query=kw.get("search_query"),
+            search_source=kw.get("search_source"),
+            doi=kw.get("doi"),
+            authors=kw.get("authors"),
+            year_min=kw.get("year_min"),
+            venue=kw.get("venue"),
+            status=kw.get("status", "to_read"),
+            abstract=kw.get("abstract"),
+            url=kw.get("url"),
+            tags=tags,
+            related_decisions=kw.get("related_decisions"),
+            action=action_map[op] or kw.get("action"),
+            lit_id=kw.get("lit_id") or kw.get("id"),
+            manuscript_id=kw.get("manuscript_id"),
+            zotero_key=kw.get("zotero_key"),
+            pdf_path=kw.get("pdf_path"),
+            annotations=kw.get("annotations"),
+            summary=kw.get("summary"),
+            add_to_library=kw.get("add_to_library", False),
+            import_top_n=kw.get("import_top_n"),
+            limit=kw.get("limit", 10),
+            year=kw.get("year"),
+        )
+
+    # --- mission ops ---
+    if op in (
+        "create_mission", "update_mission", "update_mission_status",
+        "submit_report", "advance_rq",
+    ):
+        action_map = {
+            "create_mission": "create",
+            "update_mission": "update",
+            "update_mission_status": "update_status",
+            "submit_report": "submit_report",
+            "advance_rq": "advance_rq",
+        }
+        # Compose kwargs that dispatch_mission expects via **kw.
+        mission_kw = {
+            "mission_id": kw.get("mission_id") or kw.get("id"),
+            "rq_id": kw.get("rq_id"),
+            "objective": kw.get("objective"),
+            "phase": phase or kw.get("phase"),
+            "tasks": kw.get("tasks"),
+            "context": kw.get("context"),
+            "acceptance_criteria": kw.get("acceptance_criteria"),
+            "scope_boundaries": kw.get("scope_boundaries"),
+            "checkpoint_triggers": kw.get("checkpoint_triggers"),
+            "depends_on": kw.get("depends_on"),
+            "parent_mission_id": kw.get("parent_mission_id"),
+            "motivated_by_decision": kw.get("motivated_by_decision"),
+            "provenance": provenance,
+            "tags": tags,
+            "status": kw.get("status"),
+            "summary": kw.get("summary"),
+            "content": kw.get("content"),
+            "findings": kw.get("findings", ""),
+            "anomalies": kw.get("anomalies", ""),
+            "questions": kw.get("questions", ""),
+            "codebase_state": kw.get("codebase_state", ""),
+            "recommended_next": kw.get("recommended_next", ""),
+            "conclusion": kw.get("conclusion"),
+            "evidence_cluster_ids": kw.get("evidence_cluster_ids"),
+        }
+        return await dispatch_mission(
+            action_map[op],
+            project_id=project_id,  # type: ignore[arg-type]
+            **mission_kw,
+        )
+
+    # --- checkpoint / gate / decision-ratification ops ---
+    if op in (
+        "submit_checkpoint", "resolve_checkpoint", "create_gate",
+        "evaluate_gate", "present_decision", "record_pi_selection",
+        "record_outcome",
+    ):
+        action_map = {
+            "submit_checkpoint": "submit",
+            "resolve_checkpoint": "resolve",
+            "create_gate": "create_gate",
+            "evaluate_gate": "evaluate_gate",
+            "present_decision": "present_decision",
+            "record_pi_selection": "pi_select",
+            "record_outcome": "record_outcome",
+        }
+        chk_kw = {
+            "id": kw.get("id") or kw.get("checkpoint_id"),
+            "mission_id": kw.get("mission_id"),
+            "decision_id": kw.get("decision_id"),
+            "gate_id": kw.get("gate_id"),
+            "type": kw.get("type"),
+            "description": kw.get("description"),
+            "content": kw.get("content"),
+            "task_reference": kw.get("task_reference"),
+            "context": kw.get("context"),
+            "options": kw.get("options"),
+            "recommendation": kw.get("recommendation"),
+            "blocking": kw.get("blocking", True),
+            "resolution": kw.get("resolution"),
+            "resolved_by": kw.get("resolved_by"),
+            "rationale": kw.get("rationale"),
+            "create_decision": kw.get("create_decision", False),
+            "gate_type": kw.get("gate_type"),
+            "deliverables": kw.get("deliverables"),
+            "pass_criteria": kw.get("pass_criteria"),
+            "assumptions_to_verify": kw.get("assumptions_to_verify"),
+            "verdict": kw.get("verdict"),
+            "notes": kw.get("notes"),
+            "assumption_status": kw.get("assumption_status"),
+            "confirmation_brief": kw.get("confirmation_brief"),
+            "pi_preference": kw.get("pi_preference"),
+            "selected_option_id": kw.get("selected_option_id"),
+            "override_rationale": kw.get("override_rationale"),
+            "outcome": kw.get("outcome"),
+            "outcome_details": kw.get("outcome_details"),
+            "lessons": kw.get("lessons"),
+            "recorded_by": kw.get("recorded_by", "pi"),
+        }
+        return await dispatch_checkpoint(
+            action_map[op],
+            project_id=project_id,  # type: ignore[arg-type]
+            **chk_kw,
+        )
+
+    # --- review-style ops (updates / hooks / claims / clusters /
+    # workspace / maintenance / manuscript) ---
+    _REVIEW_OP_MAP = {
+        "update_note": "note_update",
+        "update_decision": "decision_update",
+        "update_literature": "literature_update",
+        "update_status": "status_update",
+        "bulk_update": "bulk_update",
+        "batch_import": "batch_import",
+        "hook_add": "hook_add",
+        "hook_enable": "hook_enable",
+        "hook_disable": "hook_disable",
+        "hook_delete": "hook_delete",
+        "brain_notifications_clear": "brain_notifications_clear",
+        "extract_claims": "extract_claims",
+        "review_claims": "claims",
+        "review_cluster": "cluster",
+        "create_cluster": "cluster_create",
+        "assign_claims_to_cluster": "cluster_assign",
+        "split_cluster": "cluster_split",
+        "merge_clusters": "cluster_merge",
+        "resolve_contradiction": "contradiction",
+        "flag_stale": "flag_stale",
+        "eviction_sweep": "eviction_sweep",
+        "bootstrap_workspace": "bootstrap_workspace",
+        "register_manuscript": "manuscript_register",
+    }
+    if op in _REVIEW_OP_MAP:
+        payload = dict(kw)
+        # Always thread the operation-common kwargs into the payload
+        # when they're not already present — preserves the existing
+        # dispatch_review payload semantics.
+        for k, v in (
+            ("source", source),
+            ("confidence", confidence),
+            ("importance", importance),
+            ("verbatim_input", verbatim_input),
+            ("phase", phase),
+            ("tags", tags),
+        ):
+            payload.setdefault(k, v)
+        return await dispatch_review(
+            _REVIEW_OP_MAP[op],
+            project_id=project_id,  # type: ignore[arg-type]
+            payload=payload,
+        )
+
+    # --- scan_workspace (direct legacy call; not part of dispatch_review's
+    # surface because the legacy tool is `rka_scan_workspace` not
+    # `rka_review_*`) ---
+    if op == "scan_workspace":
+        folder_path = kw.get("folder_path")
+        if not folder_path:
+            return _err(
+                "missing_field",
+                "rka_execute(operation='scan_workspace') requires folder_path",
+            )
+        return await _legacy("rka_scan_workspace")(
+            folder_path=folder_path,
+            ignore_patterns=kw.get("ignore_patterns"),
+            max_file_size_mb=kw.get("max_file_size_mb", 50.0),
+            use_llm=kw.get("use_llm", True),
+            project_id=project_id,  # type: ignore[arg-type]
+        )
+
+    # --- session ops (UNSCOPED) ---
+    if op == "create_project":
+        name = kw.get("name")
+        if not name:
+            return _err(
+                "missing_field",
+                "rka_execute(operation='create_project') requires `name`",
+            )
+        return await dispatch_session(
+            "create_project",
+            name=name,
+            description=kw.get("description"),
+        )
+
+    if op == "reset_session":
+        return await dispatch_session("reset")
+
+    if op == "session_digest":
+        return await dispatch_session("digest", project_id=project_id)
+
+    # If we reached here a route is missing — should never happen if
+    # EXECUTE_OPERATIONS and the routing branches stay in sync.
+    return _err(
+        "unhandled_operation",
+        f"rka_execute: operation {op!r} listed but not wired",
+    )
+
+
+# ---------------------------------------------------------------------------
+# v2.7.0 typed-arg dispatchers (discriminated union)
+# ---------------------------------------------------------------------------
+#
+# The typed dispatchers receive a Pydantic model instance whose union
+# membership has already been validated by FastMCP. Routing inspects
+# ``args.operation`` and delegates to the existing untyped sub-dispatchers,
+# extracting per-operation kwargs from the typed instance via
+# ``args.model_dump(exclude={'operation', 'project_id'}, exclude_none=False)``.
+#
+# Design:
+#   - The typed-arg layer is the PRIMARY enum/required-field catch (FastMCP
+#     surfaces the JSON Schema ``oneOf`` to the LLM, so a bad enum is
+#     rejected pre-dispatch).
+#   - The legacy untyped sub-dispatchers are kept as defense-in-depth and
+#     as the legacy entry points reachable via ``RKA_LEGACY_TOOLS=1``.
+#   - Phase-X²' alias resolution (description/content, summary/content)
+#     is handled at the sub-dispatcher layer where it already lived.
+
+
+async def dispatch_query_typed(args: "BaseModel") -> str:  # type: ignore[name-defined]  # noqa: F821
+    """v2.7.0 typed-query dispatch.
+
+    Args:
+        args: A Pydantic model instance from ``QueryArgsUnion``. The
+              caller (``rka_query`` in server.py) takes the model from
+              FastMCP's parsed inputSchema; the model's ``operation``
+              field is the discriminator.
+
+    Returns: JSON string from the underlying REST adapter.
+    """
+    # Lazy-import operation_args to avoid module-cycle at startup. The
+    # underlying classes are only used for ``isinstance`` narrowing
+    # signals in tests — runtime code reads ``args.operation`` only.
+    op = args.operation  # type: ignore[attr-defined]
+    pid = getattr(args, "project_id", None)
+
+    # Unscoped reads — list_projects + health.
+    if op == "list_projects":
+        return await dispatch_session("list_projects")
+    if op == "health":
+        return await dispatch_session("health")
+
+    if not pid:
+        return _err(
+            "missing_field",
+            f"rka_query(operation={op!r}) requires project_id",
+        )
+
+    # Most reads route through dispatch_query(scope=...) which uses
+    # the same set of identifiers as the typed operation field. We
+    # extract the per-op kwargs from the model dump.
+    kw_all = args.model_dump(exclude_none=True)
+    kw_all.pop("operation", None)
+    kw_all.pop("project_id", None)
+
+    return await dispatch_query(
+        op,
+        project_id=pid,
+        id=kw_all.get("id"),
+        query=kw_all.get("query"),
+        limit=kw_all.get("limit"),
+        filters=kw_all.get("filters"),
+        options=kw_all.get("options"),
+    )
+
+
+async def dispatch_execute_typed(args: "BaseModel") -> str:  # type: ignore[name-defined]  # noqa: F821
+    """v2.7.0 typed-execute dispatch.
+
+    Args:
+        args: A Pydantic model instance from ``ExecuteArgsUnion``.
+
+    Routing:
+        Reads ``args.operation`` as the discriminator and dumps the model
+        body via ``model_dump(exclude_none=True)``. The Phase-X²' alias
+        rules (description/content, summary/content) are then resolved
+        and the legacy untyped ``dispatch_execute`` is invoked with the
+        flattened kwargs. This keeps the sub-dispatcher topology
+        unchanged; only the contract surface (FastMCP signature) is new.
+    """
+    op = args.operation  # type: ignore[attr-defined]
+    pid = getattr(args, "project_id", None)
+
+    # ``model_dump`` returns a plain dict; ``exclude_none=True`` strips
+    # None defaults so downstream ``kw.get(...)`` calls behave the same
+    # as the legacy raw-kwarg surface.
+    kw_all = args.model_dump(exclude_none=True)
+    kw_all.pop("operation", None)
+    kw_all.pop("project_id", None)
+
+    # Lift the v2.7.0a3 ``operation-common`` kwargs out of the dump and
+    # pass them as explicit named arguments. dispatch_execute signs them
+    # at the top of its signature.
+    common_keys = ("source", "confidence", "importance",
+                   "verbatim_input", "provenance", "tags", "phase")
+    common_kw = {k: kw_all.pop(k) for k in common_keys if k in kw_all}
+
+    return await dispatch_execute(
+        op,
+        project_id=pid,
+        **common_kw,
+        **kw_all,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Module-level exports
 # ---------------------------------------------------------------------------
 
@@ -1650,6 +2204,7 @@ __all__ = [
     "VERBS",
     "_QUERY_DISPATCH",
     "_SESSION_ACTIONS",
+    "EXECUTE_OPERATIONS",
     "dispatch_query",
     "dispatch_record_note",
     "dispatch_record_decision",
@@ -1658,4 +2213,8 @@ __all__ = [
     "dispatch_checkpoint",
     "dispatch_review",
     "dispatch_session",
+    "dispatch_execute",
+    # v2.7.0 typed dispatchers
+    "dispatch_query_typed",
+    "dispatch_execute_typed",
 ]

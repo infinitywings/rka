@@ -104,6 +104,15 @@ _UNSCOPED_TOOLS_ALLOWLIST: frozenset[str] = frozenset({
     # explicitly check + require project_id at the per-action handler. The
     # function signature reflects this with `project_id: str | None = None`.
     "rka_session",
+    # v2.7.0a3 — rka_query dispatches between scoped (most reads) and
+    # unscoped (list_projects, health) operations. The signature is
+    # `project_id: str | None = None` and the body raises a structured
+    # error when project_id is missing on a scoped operation. The
+    # unscoped operations call `_client()` with no argument.
+    "rka_query",
+    # v2.7.0a3 — rka_describe is fully UNSCOPED (no project_id at all);
+    # it returns operation schemas without touching any REST endpoint.
+    "rka_describe",
 })
 
 

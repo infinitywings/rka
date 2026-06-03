@@ -327,6 +327,43 @@ def _record_entity(entity_type: str, entity_id: str, summary: str) -> None:
 _TIER_ALWAYS_ON = "always_on"
 _TIER_DEFERRED = "deferred"
 
+
+# ---------------------------------------------------------------------------
+# v2.7.0a3 — Legacy-tool gating (Cloudflare 2-tool dispatch pattern)
+# ---------------------------------------------------------------------------
+# Per v2.7.0a3 Decision 4: when RKA_LEGACY_TOOLS is unset (default),
+# legacy tools (categories OTHER than the new 'verb' / 'navigator' / 'dispatch'
+# buckets) are demoted to tier='deferred' regardless of their declared tier.
+# This collapses the always-on surface to the 3-tool dispatch surface
+# (rka_query + rka_execute + rka_describe) plus the 4-tool always-on
+# navigator escape hatch (rka_load_tools).
+#
+# RKA_LEGACY_TOOLS=1 restores the v2.7.0a2 surface (12 legacy baseline at
+# always_on + 8 v2.7.0 verbs at always_on + 3 navigator at always_on = 23).
+# Note: in 'legacy enabled' mode the v2.7.0a3 dispatch tools also remain
+# always-on, so the count is higher than v2.7.0a2's 20 baseline.
+#
+# The flag is read at module import time — flipping it post-import has no
+# effect because @tool() runs once at import. For tests that need to flip
+# the flag, reimport rka.mcp.server via importlib.reload.
+_LEGACY_TOOLS_ENABLED = os.environ.get("RKA_LEGACY_TOOLS", "0") == "1"
+
+# Categories that are NEVER subject to legacy demotion in v2.7.0a3
+# default mode. These cover the v2.7.0a3 dispatch surface ('dispatch')
+# and the navigator tools that act as the escape hatch into the legacy
+# 91 ('navigator'). The 8 v2.7.0a2 'verb' category tools are demoted
+# to tier='deferred' in default mode per Decision 4 (deprecation
+# in-place; removal in v2.8.0). Individual navigator tools may also
+# be demoted via _DEMOTED_NAVIGATORS below.
+_NON_LEGACY_CATEGORIES = frozenset({"dispatch", "navigator"})
+
+# v2.7.0a3 Decision 5 — specific navigator tools demoted to deferred
+# even though they're in the 'navigator' category. rka_load_tools is
+# preserved at always_on (legitimate escape hatch); rka_list_tools
+# loses always-on (rka_describe(category=...) subsumes its browsing).
+# rka_help is kept as a deprecated alias for rka_describe.
+_DEMOTED_NAVIGATORS = frozenset({"rka_list_tools"})
+
 # Registry of EVERY rka_* tool — both always-on and deferred. Populated by
 # the @tool() decorator at module import. Used by:
 #   - rka_load_tools to look up a deferred function by name and register it
@@ -379,11 +416,31 @@ def tool(
     explicitly overrides the tier-inferred default. The hint surfaces
     in the MCP tool descriptor's `_meta` field; Claude Code v2.1.121+
     recognises it. Older clients ignore the opaque metadata.
+
+    v2.7.0a3 — Legacy-tool gating: when ``RKA_LEGACY_TOOLS`` env var is
+    unset (the default), any tool whose ``category`` is NOT in the
+    ``_NON_LEGACY_CATEGORIES`` set (verb / navigator / dispatch) is
+    demoted from tier='always_on' to tier='deferred' regardless of the
+    caller's declared tier. ``always_load`` is also coerced to False
+    so the demoted tool doesn't carry the alwaysLoad hint. Setting
+    ``RKA_LEGACY_TOOLS=1`` restores the v2.7.0a2 baseline (legacy 12 at
+    always_on, 79 at deferred).
     """
 
-    # Resolve always_load default from tier when caller didn't override.
-    if always_load is None:
-        always_load = tier == _TIER_ALWAYS_ON
+    # v2.7.0a3 — Apply legacy-tool gating BEFORE always_load defaulting
+    # so the alwaysLoad hint follows the resolved tier. The decorator
+    # demotes by function name (for specific navigator demotions per
+    # Decision 5) in addition to the category-based bulk demotion.
+    def _resolve_tier(fn_name: str, declared_tier: str) -> str:
+        """v2.7.0a3 tier resolution: demote legacy categories + named
+        deprecations when RKA_LEGACY_TOOLS env flag unset."""
+        if _LEGACY_TOOLS_ENABLED or declared_tier != _TIER_ALWAYS_ON:
+            return declared_tier
+        if fn_name in _DEMOTED_NAVIGATORS:
+            return _TIER_DEFERRED
+        if category not in _NON_LEGACY_CATEGORIES:
+            return _TIER_DEFERRED
+        return declared_tier
 
     def decorator(func):
         import inspect as _inspect
@@ -399,24 +456,45 @@ def tool(
             return result
 
         name = func.__name__
+        # v2.7.0a3 — Resolve effective tier (env-flag + name + category
+        # gating). The original `tier` may be overridden DOWN to deferred
+        # for legacy tools when RKA_LEGACY_TOOLS != "1".
+        effective_tier = _resolve_tier(name, tier)
+        # Resolve always_load default from the EFFECTIVE tier when the
+        # caller didn't override. (v2.7.0a2 inferred from declared tier;
+        # v2.7.0a3 must infer from the env-flag-resolved effective tier
+        # so demoted tools don't carry the alwaysLoad hint into ToolSearch
+        # ranking.)
+        if always_load is None:
+            nonlocal_always_load = effective_tier == _TIER_ALWAYS_ON
+        else:
+            nonlocal_always_load = always_load
+        if effective_tier == _TIER_DEFERRED:
+            # Defensive: even if an explicit always_load=True was passed,
+            # demoted tools must not pin themselves into ToolSearch's
+            # Always-Available pool — that would defeat the v2.7.0a3
+            # design.
+            nonlocal_always_load = False
         try:
             sig_str = str(_inspect.signature(func))
         except (TypeError, ValueError):  # pragma: no cover
             sig_str = "(...)"
         _TOOL_REGISTRY[name] = {
             "fn": wrapper,
-            "tier": tier,
+            "tier": effective_tier,
             "category": category,
             "summary": _summarize_doc(func.__doc__),
             "signature": sig_str,
             "docstring": (func.__doc__ or "").strip(),
             "registered": False,
-            "always_load": always_load,
+            "always_load": bool(nonlocal_always_load),
         }
-        if tier == _TIER_ALWAYS_ON:
+        if effective_tier == _TIER_ALWAYS_ON:
             # v2.7.0a2 — pin always-on tools into Claude Code's per-turn
             # toolset via the Anthropic-namespaced `_meta` hint.
-            meta = {"anthropic/alwaysLoad": True} if always_load else None
+            meta = (
+                {"anthropic/alwaysLoad": True} if nonlocal_always_load else None
+            )
             if meta is not None:
                 registered = mcp.tool(meta=meta)(wrapper)
             else:
@@ -5511,10 +5589,21 @@ from typing import Literal as _Literal
 # Discriminator literals — kept inline (vs an _enums.py addition) so the
 # verb-surface is self-contained and reviewable in one place.
 
-# rka_query scope set — 29 read scopes per the semantic-mapping table.
-# Covers every read-side legacy tool plus the session-level get_status /
-# get_research_map / get_context that the orchestrator's minimal session
-# start uses.
+# rka_query operation set — full ~37 read operations per v2.7.0a3
+# Decision 1 taxonomy. Covers every read-side legacy tool plus the
+# session-level get_status / get_research_map / get_context that the
+# orchestrator's minimal session start uses.
+#
+# v2.7.0a3 additions over the v2.7.0/a1 surface:
+#   - `list_projects` — promoted from rka_session(action='list_projects')
+#     so project discovery is reachable from the read verb directly.
+#   - `health` — promoted from rka_session(action='health') so liveness
+#     probing is reachable from the read verb directly.
+#
+# Naming note: the discriminator parameter is `operation` in v2.7.0a3
+# (was `scope` in a1/a2; a backwards-compat alias is retained on the
+# call site to avoid breaking existing callers during the migration
+# window — see rka_query signature).
 QueryScopeLit = _Literal[
     "status", "context", "search", "entity", "journal", "literature",
     "mission", "report", "checkpoints", "decision_tree", "calibration_metrics",
@@ -5524,6 +5613,8 @@ QueryScopeLit = _Literal[
     "summarize", "generate_summary", "evidence", "freshness", "contradictions",
     "integrity", "pending_maintenance", "changelog", "bootstrap_review",
     "workspace_tree", "workspace_scan",
+    # v2.7.0a3 additions
+    "list_projects", "health",
 ]
 
 # rka_session action set — unscoped/meta operations.
@@ -5555,40 +5646,179 @@ async def _query_post(project_id: str | None, path: str, body: dict | None = Non
         return json.dumps(r.json(), indent=2)
 
 
-@tool(tier=_TIER_ALWAYS_ON, category="verb")
-async def rka_query(
-    scope: Annotated[QueryScopeLit, Field(description="What to read.")],
+# v2.7.0 — Pydantic discriminated-union import. This is the canonical
+# typed-arg surface for rka_query / rka_execute. The legacy untyped
+# bodies of these verbs are preserved below as ``_rka_query_legacy_impl``
+# and ``_rka_execute_legacy_impl`` for callers reachable via the
+# ``RKA_LEGACY_TOOLS=1`` opt-in surface; the active @tool() decorators
+# bind to the typed wrappers.
+from rka.mcp.operation_args import (  # noqa: E402  (post-helper-import)
+    ExecuteArgsUnion as _ExecuteArgsUnion,
+    QueryArgsUnion as _QueryArgsUnion,
+)
+from rka.mcp.verb_dispatch import (  # noqa: E402, F811
+    dispatch_execute_typed as _dispatch_execute_typed,
+    dispatch_query_typed as _dispatch_query_typed,
+)
+
+
+@tool(tier=_TIER_ALWAYS_ON, category="dispatch", always_load=True)
+async def rka_query(args: _QueryArgsUnion) -> str:
+    """[ANY] READ from the project knowledge base. ALL reads flow through this verb.
+
+    v2.7.0 NO-COMPROMISE typed-arg surface. The ``args`` parameter is a
+    Pydantic discriminated union (keyed by ``operation``) covering all
+    38 read operations. FastMCP renders the union as JSON Schema
+    ``oneOf`` with per-branch enum + required-field arrays, so the
+    LLM cannot emit an invalid operation, missing required field, or
+    out-of-set enum value — the tool surface itself rejects pre-dispatch.
+
+    Trigger phrases: "what's the status", "what's blocked", "search for",
+    "show me decisions", "list literature", "fetch entity", "context",
+    "research map", "decision tree", "ego graph", "trace provenance",
+    "multi-hop", "claims", "clusters", "review queue", "open
+    checkpoints", "pending maintenance", "list projects", "health check".
+
+    Args:
+        args: One of the typed ``Query*Args`` models from
+              ``rka.mcp.operation_args``. The model's ``operation`` field
+              is the discriminator. Project-scoped operations require
+              ``project_id``; the only unscoped reads are
+              ``list_projects`` and ``health``.
+
+    Returns:
+        JSON-string payload from the underlying REST endpoint, or a
+        structured error JSON for the few legacy cases that emit one.
+
+    NOTE: discoverability — call ``rka_describe('')`` for the
+    operation-name index (now <250 tokens per Phase 3 mitigation
+    of v2.7.0 compromise #3) or ``rka_describe('<op_name>')`` for
+    full per-operation schema + examples.
+    """
+    return await _dispatch_query_typed(args)
+
+
+# Legacy untyped rka_query body preserved as a fallback callable for the
+# ``RKA_LEGACY_TOOLS=1`` opt-in path.
+async def _rka_query_legacy_impl(
+    operation: Annotated[
+        QueryScopeLit,
+        Field(
+            description=(
+                "Read operation discriminator. Pick the one that matches "
+                "what you want to read (status / context / search / entity "
+                "/ journal / literature / mission / report / checkpoints / "
+                "decision_tree / research_map / review_queue / claims / "
+                "clusters / graph / ego_graph / provenance / multi_hop / "
+                "summarize / evidence / pending_maintenance / freshness / "
+                "contradictions / integrity / hooks / hook_executions / "
+                "brain_notifications / calibration_metrics / changelog / "
+                "workspace_tree / workspace_scan / bootstrap_review / "
+                "manuscript / list_projects / health)."
+            )
+        ),
+    ] = None,  # type: ignore[assignment]
     *,
-    project_id: str,
+    project_id: str | None = None,
     id: str | None = None,
     query: str | None = None,
     limit: int = 20,
     filters: dict | None = None,
     options: dict | None = None,
+    scope: str | None = None,  # v2.7.0a3 back-compat: legacy `scope` alias
 ) -> str:
-    """[ANY] READ from the project knowledge base. ALL read scopes flow through this verb.
+    """[ANY] READ from the project knowledge base. ALL reads flow through this verb.
+
+    This is one of the 3 always-on verbs in the v2.7.0a3 surface:
+      - rka_query   — ALL READS (this tool).
+      - rka_execute — ALL WRITES and lifecycle transitions.
+      - rka_describe — schema lookup for any operation before calling.
 
     Trigger phrases: "what's the status", "what's blocked", "what needs
-    attention", "what's broken", "search for", "show me decisions",
-    "list literature", "fetch entity", "context", "research map",
-    "render the map", "decision tree", "ego graph", "trace provenance",
-    "multi-hop", "claims", "clusters", "review queue", "open checkpoints",
-    "pending maintenance", "needs ratification".
+    attention", "search for", "show me decisions", "list literature",
+    "fetch entity", "context", "research map", "render the map",
+    "decision tree", "ego graph", "trace provenance", "multi-hop",
+    "claims", "clusters", "review queue", "open checkpoints",
+    "pending maintenance", "needs ratification", "list projects",
+    "health check".
+
+    If you're unsure which operation to use or what kwargs to pass,
+    call `rka_describe(operation="...")` first for the full schema +
+    examples.
 
     Args:
-        scope: One of the 29 read scopes (status, context, search, entity, ...).
-        project_id: Project ID (prj_...). REQUIRED.
+        operation: One of ~37 read operations (status, context, search,
+            entity, journal, literature, mission, report, checkpoints,
+            decision_tree, calibration_metrics, hooks, hook_executions,
+            brain_notifications, research_map, review_queue, clusters,
+            claims, manuscript, graph, ego_graph, graph_stats,
+            graph_mermaid, provenance, multi_hop, summarize,
+            generate_summary, evidence, freshness, contradictions,
+            integrity, pending_maintenance, changelog, bootstrap_review,
+            workspace_tree, workspace_scan, list_projects, health).
+        project_id: Project ID (prj_...). REQUIRED for project-scoped
+            operations (most of them); UNSCOPED for list_projects and
+            health.
         id: Entity ID — required for entity / ego_graph / provenance /
             evidence / manuscript / report / decision_tree (root) /
             bootstrap_review (scan_id) / mission (omit for current).
         query: Free-text query — required for search / multi_hop /
-            generate_summary scopes.
-        limit: Cap on result count for list-mode scopes.
-        filters: Scope-specific filter dict (e.g. {"entity_types": ["decision"]},
-            {"status": "open"}, {"phase": "design"}).
-        options: Reserved for scope-specific options (e.g. depth, format).
+            generate_summary operations.
+        limit: Cap on result count for list-mode operations.
+        filters: Operation-specific filter dict (e.g. {"entity_types":
+            ["decision"]}, {"status": "open"}, {"phase": "design"}).
+        options: Reserved for operation-specific options (e.g. depth,
+            format).
+        scope: DEPRECATED v2.7.0a3 alias for `operation`. Accepted for
+            one release window; removal scheduled in v2.8.0.
     """
-    s = scope
+    # v2.7.0a3 back-compat: legacy `scope` kwarg routes to the new
+    # `operation` parameter. The alias is documented as deprecated;
+    # supplying both is rejected as ambiguous.
+    if scope is not None and operation is not None and scope != operation:
+        return json.dumps({
+            "error": "conflicting_args",
+            "message": (
+                "rka_query received both `operation` and `scope` with "
+                "different values. `scope` is the deprecated v2.7.0a2 "
+                "alias; pass only `operation`."
+            ),
+        }, indent=2)
+    if operation is None and scope is not None:
+        operation = scope  # type: ignore[assignment]
+    if operation is None:
+        return json.dumps({
+            "error": "missing_field",
+            "message": "rka_query requires `operation` (one of the read operations).",
+        }, indent=2)
+    s = operation
+    # UNSCOPED operations — no project_id needed.
+    if s == "list_projects":
+        async with _client() as c:
+            r = await c.get("/api/projects")
+            _raise_with_detail(r)
+            return json.dumps(r.json(), indent=2)
+    if s == "health":
+        try:
+            async with _client() as c:
+                r = await c.get("/api/projects")
+                ok = r.is_success
+        except Exception as exc:
+            return json.dumps(
+                {"ok": False, "api_url": API_URL, "error": str(exc)},
+                indent=2,
+            )
+        return json.dumps({"ok": ok, "api_url": API_URL}, indent=2)
+    # All other operations are project-scoped; project_id is required.
+    if not project_id:
+        return json.dumps({
+            "error": "missing_field",
+            "message": (
+                f"rka_query(operation={s!r}) requires `project_id` "
+                "(every project-scoped read needs explicit project pinning "
+                "in v2.6+)."
+            ),
+        }, indent=2)
     f = filters or {}
     if s == "status":
         return await _query_get(project_id, "/api/status")
@@ -5752,6 +5982,7 @@ async def rka_query(
         }
         return await _query_post(project_id, "/api/workspace/scan", body)
     return json.dumps({"error": f"rka_query: unknown scope '{s}'"}, indent=2)
+
 
 
 @tool(tier=_TIER_ALWAYS_ON, category="verb")
@@ -6123,6 +6354,8 @@ from rka.mcp.verb_dispatch import (
     dispatch_mission as _dispatch_mission,
     dispatch_checkpoint as _dispatch_checkpoint,
     dispatch_review as _dispatch_review,
+    dispatch_execute as _dispatch_execute,
+    EXECUTE_OPERATIONS as _EXECUTE_OPERATIONS,
 )
 
 from rka.mcp._enums import LitStatusLit as _LitStatusLit
@@ -6530,6 +6763,189 @@ async def rka_review(
     """
     return await _dispatch_review(
         target, project_id=project_id, payload=payload
+    )
+
+
+# ============================================================
+# v2.7.0a3 — rka_describe (schema-lookup verb)
+# ============================================================
+# Companion to rka_query (reads) and rka_execute (writes). The LLM is
+# expected to call rka_describe BEFORE invoking rka_query or rka_execute
+# on an unfamiliar operation so it knows the exact parameter shape,
+# enum values, required/optional fields, and any provenance
+# requirements. Schema sourced from rka/mcp/operations_schema.py.
+
+from rka.mcp.operations_schema import (
+    dispatch_describe as _dispatch_describe,
+    OPERATIONS_SCHEMA as _OPERATIONS_SCHEMA,
+)
+
+
+@tool(tier=_TIER_ALWAYS_ON, category="dispatch", always_load=True)
+async def rka_describe(operation: str = "") -> str:
+    """[ANY] LOOKUP the parameter shape and examples for any rka operation.
+
+    Call BEFORE invoking rka_query or rka_execute on an unfamiliar
+    operation. Returns: required fields, optional fields, enum values,
+    examples, related operations.
+
+    Trigger phrases: "how do I", "what arguments", "what fields",
+    "schema for", "examples of", "describe operation", "what does X
+    require", "what's the shape of", "tell me about the operation".
+
+    Modes:
+      - operation='<name>'   -> full schema (signature, required/optional
+                                fields, enum value sets, 1-2 examples,
+                                related_operations, role_tag, notes).
+      - operation=''         -> operations index grouped by tool
+                                (rka_query / rka_execute) and category;
+                                use this when you want to BROWSE.
+      - unknown operation    -> {error: 'unknown_operation', did_you_mean: [...]}.
+
+    Args:
+        operation: Canonical operation name (the value you would pass
+            to rka_query(operation=...) or rka_execute(operation=...)).
+            Pass '' to list every known operation.
+
+    Returns:
+        JSON. For a known operation: {operation, tool, category,
+        summary, signature, required_fields, optional_fields, enums,
+        examples, related_operations, role_tag, notes}. For an unknown
+        name: {error, operation, did_you_mean, hint}. For empty: the
+        operations index.
+    """
+    return await _dispatch_describe(operation)
+
+
+# ============================================================
+# v2.7.0a3 — rka_execute (the unified WRITE/lifecycle verb)
+# ============================================================
+# Companion to rka_query (reads) and rka_describe (schema lookup).
+#
+# This verb collapses the entire write/lifecycle surface (~47
+# operations) behind one Annotated[Literal] discriminator so the LLM
+# sees the full enum in its inputSchema. Dispatch lives in
+# rka/mcp/verb_dispatch.py::dispatch_execute, which routes to the
+# existing v2.7.0a2 sub-dispatchers (record_note, record_decision,
+# mission, checkpoint, review, record_literature, session) without
+# duplicating REST-call code. Service layer + REST + DB schema are
+# UNCHANGED.
+#
+# Per Decision 2 (hybrid kwarg shape):
+#   - operation: Annotated[Literal[...]] discriminator at the top
+#     of the signature so FastMCP renders the full enum into the
+#     LLM's tool definition (pre-emission catch).
+#   - project_id: top-level kwarg-only, REQUIRED for all
+#     project-scoped ops; UNSCOPED for create_project + reset_session.
+#   - source / confidence / importance / verbatim_input / provenance /
+#     tags / phase: named common kwargs at top level so the
+#     Annotated[Literal] enum promotion survives for the load-bearing
+#     ones (source, confidence, importance) and the orchestrator's
+#     X-RKA-Project header threading + Phase-X²' validation chain
+#     continue working unchanged.
+#   - All operation-specific extras flow through **kw and are
+#     validated by the existing rka_enums.py infrastructure on the
+#     orchestrator side + the per-op `_err("missing_field", ...)`
+#     guards on the dispatcher side.
+
+# Build the Execute operation Literal from the canonical tuple in
+# verb_dispatch. This keeps a single source of truth.
+ExecuteOpLit = _Literal[tuple(_EXECUTE_OPERATIONS)]  # type: ignore[valid-type]
+
+
+@tool(tier=_TIER_ALWAYS_ON, category="dispatch", always_load=True)
+async def rka_execute(args: _ExecuteArgsUnion) -> str:
+    """[BRAIN/EXECUTOR/PI] WRITE / lifecycle operations on RKA. ALL writes flow through this verb.
+
+    v2.7.0 NO-COMPROMISE typed-arg surface. The ``args`` parameter is a
+    Pydantic discriminated union (keyed by ``operation``) covering all
+    49 write/lifecycle operations. FastMCP renders the union as JSON
+    Schema ``oneOf`` with per-branch ``required`` arrays + per-branch
+    ``enum`` constraints on every Literal-typed field. The LLM CANNOT
+    emit ``confidence='confirmed'``, ``decided_by='SUPERVISOR'``,
+    ``kind='research_question'`` as a free-form decision, or any other
+    out-of-set enum value — the tool surface itself rejects pre-dispatch
+    (closes v2.7.0 pre-mortem compromise #1).
+
+    Cross-cutting validators (closes pre-mortem compromise #4 at the
+    per-operation level): ``RecordDecisionArgs`` enforces
+    ``related_journal`` non-empty; ``CreateMissionArgs`` enforces
+    ``motivated_by_decision``; ``RecordNoteArgs`` enforces
+    ``verbatim_input`` when ``source='pi'``; alias-collision rules on
+    ``SubmitCheckpointArgs`` (description/content) and
+    ``SubmitReportArgs`` (summary/content) raise pre-dispatch.
+
+    Trigger phrases: "record a note", "log a finding", "save the
+    decision", "ratify the choice", "create a mission", "submit a
+    checkpoint", "raise a checkpoint", "resolve checkpoint", "create a
+    gate", "supersede dec_...", "import bibtex", "enrich DOI",
+    "extract claims", "create cluster", "merge clusters",
+    "resolve contradiction", "flag stale", "evict knowledge",
+    "scan workspace", "bootstrap workspace", "create project",
+    "reset session", "register manuscript", "update mission status",
+    "submit report", "advance RQ", "record PI selection",
+    "record outcome", "present decision", "add hook", "enable hook",
+    "clear notifications".
+
+    Args:
+        args: One of the typed ``*Args`` models from
+              ``rka.mcp.operation_args`` (e.g. ``RecordDecisionArgs``,
+              ``CreateMissionArgs``, ``SubmitCheckpointArgs``,
+              ``UpdateNoteArgs``, ...). The model's ``operation`` field
+              is the discriminator. Project-scoped operations require
+              ``project_id``; the only unscoped writes are
+              ``create_project`` and ``reset_session``.
+
+    Returns:
+        JSON-string response from the underlying REST endpoint, or a
+        structured error JSON.
+
+    NOTE: discoverability — call ``rka_describe('')`` for the
+    operation-name index (now <250 tokens per Phase 3 mitigation
+    of v2.7.0 compromise #3) or ``rka_describe('<op_name>')`` for
+    full per-operation schema + examples.
+    """
+    return await _dispatch_execute_typed(args)
+
+
+# Legacy untyped rka_execute body preserved as a fallback callable for
+# ``RKA_LEGACY_TOOLS=1`` opt-in.
+async def _rka_execute_legacy_impl(
+    operation: Annotated[
+        ExecuteOpLit,
+        Field(
+            description=(
+                "Write/lifecycle operation discriminator (legacy surface)."
+            )
+        ),
+    ],
+    *,
+    project_id: str | None = None,
+    source: SourceLiteral = "executor",
+    confidence: ConfidenceLiteral = "hypothesis",
+    importance: ImportanceLiteral = "normal",
+    verbatim_input: str | None = None,
+    provenance: dict | None = None,
+    tags: list[str] | None = None,
+    phase: str | None = None,
+    **kw,
+) -> str:
+    """Legacy untyped rka_execute body — preserved for RKA_LEGACY_TOOLS=1
+    callers and a small number of unit tests that probe the **kw
+    signature shape directly. The canonical v2.7.0 surface is the typed
+    ``rka_execute(args: ExecuteArgsUnion)`` above.
+    """
+    return await _dispatch_execute(
+        operation,
+        project_id=project_id,
+        source=source,
+        confidence=confidence,
+        importance=importance,
+        verbatim_input=verbatim_input,
+        provenance=provenance,
+        tags=tags,
+        phase=phase,
+        **kw,
     )
 
 
