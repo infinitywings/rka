@@ -10,24 +10,56 @@ You are the PI's cockpit for the RKA orchestrator. The orchestrator
 runs Brain ⇄ Executor ⇄ PI workflows against RKA missions as a
 LangGraph. At three points the graph parks for PI input:
 
-## Tool Surface note (v2.6.3+)
+## Tool Surface note (v2.7.0+)
 
 The rka MCP server (separate from this orchestrator MCP server) ships
-a **navigator architecture**: 12 always-on rka tools at startup; ~79
-deferred. Most cockpit work in this skill uses the
-`orchestrator_*` tools (`orchestrator_health`,
-`orchestrator_inbox`, `orchestrator_run_start`, `orchestrator_accept`,
-etc.) — those are NOT affected by the navigator and remain directly
-callable. If the PI asks you to inspect RKA directly during a
-parked interrupt (e.g. "show me dec_01XYZ", "list pending
-missions"), and the rka tool you need is deferred (e.g.
-`rka_get`, `rka_get_journal`, `rka_get_decision_tree`), first call
-`rka_load_tools(names=[...])` on the rka MCP server before invoking
-it. `rka_add_note` is always-on; `rka_add_decision`,
-`rka_update_note`, `rka_create_mission`, `rka_submit_checkpoint`,
-`rka_submit_report`, and `rka_bulk_update` are deferred. (Inside the
-orchestrator workflow itself, the daemon's SDK subprocess loads its
-own tool set — you don't manage that from the cockpit.)
+a **discriminated-union dispatch architecture** as of v2.7.0:
+**3 always-on dispatch tools** — `rka_query` (read operations),
+`rka_execute` (write/lifecycle operations), `rka_describe` (schema
+lookup) — **plus 2 escape hatches** (`rka_load_tools` and `rka_help`,
+the latter now a deprecated alias of `rka_describe`). All 87 RKA
+operations live as discriminated-union branches under `rka_execute` /
+`rka_query`; per-branch enum + required-field constraints are
+enforced at the FastMCP inputSchema layer (so e.g.
+`confidence='confirmed'` is rejected BEFORE the call goes out). See
+`/Volumes/base/workspace/rka/docs/v2.6.x-v2.7.0-tool-surface-arc.md`
+for the full v2.6.3 → v2.7.0 architectural arc.
+
+Most cockpit work in this skill uses the `orchestrator_*` tools
+(`orchestrator_health`, `orchestrator_inbox`, `orchestrator_run_start`,
+`orchestrator_accept`, etc.) — those are this MCP server's own surface
+and are unaffected by the RKA-side v2.7.0 redesign. If the PI asks you
+to inspect RKA directly during a parked interrupt (e.g. "show me
+dec_01XYZ", "list pending missions"), call via the dispatch surface:
+
+- `rka_query(operation='get', entity_id='dec_01XYZ', project_id='prj_...')`
+- `rka_query(operation='get_journal', project_id='prj_...', limit=20)`
+- `rka_query(operation='get_decision_tree', project_id='prj_...')`
+
+If the PI specifically asks to bank PI guidance verbatim during a
+session, use:
+
+- `rka_execute(operation='record_note', content='...', source='pi',
+  verbatim_input='<exact PI words>', project_id='prj_...')`
+
+`rka_describe(operation='record_note')` will show you the exact
+required + optional fields for any operation; `rka_describe('')`
+(empty string) lists all available operations at low token cost.
+
+**Orchestrator subprocess compatibility note.** Inside the
+orchestrator workflow itself, the daemon's SDK subprocess (Brain /
+Executor LLM) deliberately runs against the v2.7.0a2 legacy verb
+surface via `RKA_LEGACY_TOOLS=1` set in
+`orchestrator/docker-compose.yml`. This preserves the parent-side
+TWO-TAP gate granularity at `pi_decision_select` — per-operation
+WRITE_TOOLS allowlist and the `proposed_actions → ratified_actions`
+dispatch contract are anchored to individual tool names like
+`rka_add_decision`, `rka_create_mission`, etc., NOT to a single
+`rka_execute(operation=...)` call. The full re-anchoring to the
+discriminated-union surface (and corresponding Brain / Executor
+prompt rewrites) lands in a separate `v2.7.0+agentic.X` release;
+until then, the cockpit sees v2.7.0 but the daemon subprocess sees
+the v2.7.0a2 verb surface.
 
 1. **pi_greenlight** — approve the Confirmation Brief before execution starts
 2. **pi_decision_select** — ratify a set of Brain-drafted actions (this gate authorizes RKA writes)
@@ -230,7 +262,11 @@ run picks it up.
 dispatches them as RKA writes via WRITE_TOOLS (rka_add_note,
 rka_add_decision, rka_update_note, rka_submit_checkpoint,
 rka_submit_report, rka_create_mission, rka_bulk_update). These are
-real, irreversible writes.
+real, irreversible writes. (Per the v2.7.0 surface-change note above,
+the orchestrator daemon's subprocess runs against the v2.7.0a2 verb
+surface via `RKA_LEGACY_TOOLS=1`, so these per-tool WRITE_TOOLS names
+remain authoritative for the autonomy contract until the next
+`v2.7.0+agentic.X` release rewires them to the dispatch surface.)
 
 **Always perform a TWO-TAP confirmation before accepting:**
 

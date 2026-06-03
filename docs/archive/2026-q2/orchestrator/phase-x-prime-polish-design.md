@@ -1,5 +1,26 @@
 # Phase-X²' Polish — Schema-Divergence Validation Chain
 
+> **Status update (2026-06-02): the structural fix arrived as v2.7.0
+> GA.** This design doc landed as `agentic` PR2 (2.6.0+agentic.2) +
+> `main` PRs (v2.6.1 / v2.6.2) per
+> [v2.6.x-roadmap.md](./v2.6.x-roadmap.md). It was an additive
+> patch series targeting the field-NAME layer of the navigator
+> architecture. The deeper investigation that followed surfaced
+> that Claude Desktop's tool_search is unreliable (3 unfixed GitHub
+> bugs) and that Anthropic's recommended pattern for the 91-tool
+> surface is intent-grouping with a discriminated union. v2.7.0
+> ships exactly that: 3 always-on dispatch tools (`rka_query` /
+> `rka_execute` / `rka_describe`) with 87 typed Pydantic operation
+> models enforcing per-branch enum + required-field constraints
+> at the FastMCP inputSchema layer — so the field-NAME gap this
+> doc closes via runtime ErrorRecord is now closed structurally
+> at the schema layer (oneOf branch `required: [...]` array). The
+> agentic-side ErrorRecord plumbing remains useful because the
+> orchestrator subprocess still runs on the v2.7.0a2 verb surface
+> via `RKA_LEGACY_TOOLS=1` to preserve TWO-TAP gate granularity.
+> See [/docs/v2.6.x-v2.7.0-tool-surface-arc.md](../../docs/v2.6.x-v2.7.0-tool-surface-arc.md)
+> for the full narrative.
+
 > **See also: Phase-X² (In-Run Redraft Channel) — sibling fix at the
 > field-VALUE layer.** Phase-X² (CLAUDE.md "Phase-X² polish —
 > validation-chain hardening") closed the validator gap at the

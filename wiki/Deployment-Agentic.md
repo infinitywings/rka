@@ -631,7 +631,7 @@ R2    Walk pi_* interrupts (TWO-TAP on pi_decision_select)                      
 
 Explicit non-goals:
 
-- **Gap 4c ephemeral sandbox.** Firecracker / microVM per-mission isolation is designed in `orchestrator/docs/gap-4c-ephemeral-sandbox-design.md`; current build uses the long-running `rka-orchestrator` container only.
+- **Gap 4c ephemeral sandbox.** Firecracker / microVM per-mission isolation is designed in `docs/archive/2026-q2/orchestrator/gap-4c-ephemeral-sandbox-design.md` (archived); current build uses the long-running `rka-orchestrator` container only.
 - **Multi-operator deployments.** Concurrent PIs, multi-tenant authz, SIEM forwarding, HA failover — out of scope. The Gap 5 Docker-secrets path (`ORCHESTRATOR_OAUTH_SECRET_PATH`) rotates credentials without `.env` edits but assumes a single PI.
 - **Linux (bare-metal Docker Engine).** Mostly works with three caveats: pass `--build-arg ORCH_UID=$(id -u) --build-arg ORCH_GID=$(id -g)`; no AppleDouble; no Full Disk Access.
 - **Cloud / remote daemon.** Doable via port-forward + `ORCHESTRATOR_API_URL`, but no auth-at-the-edge story is shipped.

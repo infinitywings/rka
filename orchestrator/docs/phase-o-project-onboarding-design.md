@@ -577,6 +577,111 @@ Phase O does NOT depend on:
 
 ## Cross-link
 
-See [[phase-d-onboarding-design]] for the Phase D MVP that becomes O5.
+See [`../../docs/archive/2026-q2/orchestrator/phase-d-onboarding-design.md`](../../docs/archive/2026-q2/orchestrator/phase-d-onboarding-design.md)
+for the archived Phase D MVP design that becomes O5 (folded ratification
+history inlined in the appendix below).
 See [[project-branch-model]] for the agentic-vs-main relationship that
 makes this all Phase O scope land on agentic only.
+
+## Appendix: Phase D ratified-design-question history (folded from phase-d-onboarding-design.md, archived 2026-06-02)
+
+The Phase D onboarding wizard was designed and PI-ratified before being
+implemented as Phase D MVP (now O5 in this Phase O design). The five
+design questions Q1-Q5 were resolved in a single session and bound the
+implementation scope; their rationale is preserved here so Phase O can
+build on them without re-litigating.
+
+| Question | Choice |
+|---|---|
+| Q1 — Onboarding lifecycle | **Hybrid**: baseline manifest is frozen after initial onboarding; missions may request extension tools mid-stream via `pi_extend_toolkit` interrupt. Each ratified write records the active tool-set version (baseline hash + extensions) so reproduction can recreate the exact tool surface. |
+| Q2 — Missing-credential handling | **Criticality-aware**. Each secret declares `criticality: required \| recommended \| optional`. `required` missing → escalate via checkpoint (PI must provide or downgrade); `recommended` → escalate once at session start; `optional` → skip with journal note. Brain proposes tier during `research_toolkit_node`; PI ratifies. |
+| Q3 — Curated registry | **Yes, small (~10-15 entries)**. Ship `orchestrator/data/tool_registry.yaml` with canonical always-on (rka, context7, fs-mcp, git-mcp) + domain shortlists (finance: sec-edgar; bio: ncbi; legal: westlaw; ml-systems: hf, wandb). Brain consults registry FIRST (high-confidence priors), then web-searches for gaps. |
+| Q4 — Auth patterns supported | **API key only in Phase D MVP** (~80% of MCP servers). Manifest schema designed extensibly (`auth_type: "api_key"` initially; `oauth_token`, `oauth_browser`, `keychain`, `service_account` added in Phase D2). |
+| Q5 — Onboarding audit in RKA | **Yes — summary journal entry with manifest hash**. One-paragraph summary entry (`source=system`, `tags=[orchestrator, onboarding, baseline]`) referencing the manifest file path + sha256. Extensions trigger new entries with `supersedes` linkage. File remains the source of truth for execution; journal entry is the audit snapshot. |
+
+### Concrete impact on the build (preserved verbatim from Phase D design)
+
+**Q1 (hybrid lifecycle)** changes the manifest schema:
+
+```jsonc
+{
+  "project_id": "prj_01...",
+  "manifest_version": "baseline_v1",       // baseline | extension_v2 | ...
+  "supersedes": null,                      // or a previous manifest hash for extensions
+  "tools": [ ... ],
+  // ...
+}
+```
+
+And adds a new interrupt type `pi_extend_toolkit` (used by missions that
+discover they need a new tool mid-stream).
+
+**Q2 (criticality)** changes the per-secret schema:
+
+```jsonc
+"secrets": [
+  {
+    "name": "SEC_EDGAR_API_KEY",
+    "auth_type": "api_key",
+    "criticality": "required",           // required | recommended | optional
+    "probe_url": "https://...",
+    "probe_header": "X-API-Key"
+  }
+]
+```
+
+And adds dispatcher logic: at session start, check all required+recommended
+secrets are present and probed; escalate accordingly.
+
+**Q3 (small registry)** adds a new data file:
+
+```
+orchestrator/data/tool_registry.yaml
+```
+
+Seeded with ~10-15 entries. Loaded at `research_toolkit_node` startup;
+results combine with SerpAPI results before being scored and presented
+to PI.
+
+**Q4 (api_key only MVP)** simplifies the credential UX to a single flow
+(paste-into-`.env` + probe). The `auth_type` field is in the schema from
+day one so future patterns can land without breaking changes.
+
+**Q5 (audit entry)** adds one call at onboarding completion:
+
+```python
+mcp.rka_add_note(
+    content=summary_text,
+    source="system",
+    type="note",
+    tags=["orchestrator", "onboarding", "baseline"],
+    related_decisions=[onboarding_decision_id],
+)
+```
+
+For extensions, the new entry's `supersedes` field points to the previous
+baseline's journal id.
+
+### Phase D security invariants (carry forward into Phase O credential flows)
+
+- Token values never appear in any RKA journal entry.
+- Token values never appear in the orchestrator daemon's logs.
+- Token values never appear in the Claude Code transcript (the PI's
+  assistant only sees key names + validation results).
+- The `.env` file is `chmod 600` on creation.
+- The `~/rka-projects/{project_id}/` directory has perms `0700`.
+
+Phase O re-locates these artifacts under `~/Research/{project-slug}/.rka/`
+per the workspace consolidation in this design, but the file-permission
+and never-log-secrets invariants carry through unchanged.
+
+### Original Phase D build order (for reference; O5 collapses these into the Phase O timeline)
+
+The Phase D design enumerated 8 sub-tasks (D1-D8) summing to ~7.25 days of
+implementation. D1 (schema), D2 (workspace dir + manifest IO), D3 (research
+toolkit node + SerpAPI augmentation), D4 (credential UX), D5 (subgraph
+wiring + MCP tools), D6 (pi_extend_toolkit mid-stream extensions), D7
+(audit-entry integration), D8 (skill update + integration tests). D3b
+(SerpAPI augmentation) and D6 (pi_extend_toolkit) remain on the Deferred
+follow-ups list in repo CLAUDE.md; the other D-stages shipped as Phase D
+MVP and are now folded into Phase O as the O5 step.

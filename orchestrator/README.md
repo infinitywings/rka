@@ -243,12 +243,10 @@ orchestrator/
 │       └── schema.sql         # workflow_runs + parked_interrupts
 ├── tests/                     # 494 tests
 ├── docs/
-│   ├── operational-rollout-v1..v6.md  # historical Phase A rollouts
-│   ├── phase-2-9-subprocess-context.md
-│   ├── phase-2-11-investigation.md
-│   ├── phase-d-onboarding-design.md   # Phase D MVP design
-│   ├── phase-o-project-onboarding-design.md  # Phase O full-workflow design
-│   └── skill-prompt-deltas.md
+│   ├── deployment-from-scratch.md      # redirect stub → wiki/Deployment-Agentic.md
+│   └── phase-o-project-onboarding-design.md  # Phase O full-workflow design
+│                                       # (archived Phase A + Phase D + memo history under
+│                                       #  ../docs/archive/2026-q2/orchestrator/)
 ├── scripts/
 │   ├── driver.py              # Legacy stdin driver (still supported for headless runs)
 │   └── pilot_t12.py
@@ -262,7 +260,14 @@ orchestrator/
 
 - Phase 1 mission: `mis_01KRKG9K1SSDZNDH90K2Z7ZM92`
 - Phase 1 decision: `dec_01KRKE6ERDPQTFQS6ZGY9A3CK0`
-- Skill-prompt deltas (17 ratified additions, Phase 2.5): [`docs/skill-prompt-deltas.md`](docs/skill-prompt-deltas.md)
+- Phase A operational-rollout chronicle (Phase 2.4 → 2.14 retry chain): [`../docs/archive/2026-q2/orchestrator/phase-a-rollout/PHASE-A-CHRONICLE.md`](../docs/archive/2026-q2/orchestrator/phase-a-rollout/PHASE-A-CHRONICLE.md)
+- Skill-prompt deltas (17 ratified additions, Phase 2.5): [`../docs/archive/2026-q2/orchestrator/skill-prompt-deltas.md`](../docs/archive/2026-q2/orchestrator/skill-prompt-deltas.md)
+- Phase D MVP design (folded into Phase O appendix): [`../docs/archive/2026-q2/orchestrator/phase-d-onboarding-design.md`](../docs/archive/2026-q2/orchestrator/phase-d-onboarding-design.md)
+- v2.6.x design memos (synthesized into `docs/v2.6.x-v2.7.0-tool-surface-arc.md`):
+  [`cross-run-correction-channel.md`](../docs/archive/2026-q2/orchestrator/cross-run-correction-channel.md) ·
+  [`v2.6.x-roadmap.md`](../docs/archive/2026-q2/orchestrator/v2.6.x-roadmap.md) ·
+  [`phase-x-prime-polish-design.md`](../docs/archive/2026-q2/orchestrator/phase-x-prime-polish-design.md) ·
+  [`gap-4c-ephemeral-sandbox-design.md`](../docs/archive/2026-q2/orchestrator/gap-4c-ephemeral-sandbox-design.md)
 
 ## Cross-references
 
