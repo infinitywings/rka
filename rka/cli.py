@@ -17,6 +17,12 @@ def main():
     pass
 
 
+# Register the cred-vault subcommand group (Phase 1 — local-first creds).
+from rka.cli_cred import cred as _cred_group  # noqa: E402
+
+main.add_command(_cred_group)
+
+
 @main.command()
 @click.argument("name")
 @click.option("--description", "-d", default=None, help="Project description")
