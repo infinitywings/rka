@@ -85,11 +85,14 @@ def test_every_always_on_tool_has_always_load_meta() -> None:
         n for n, r in _TOOL_REGISTRY.items()
         if r["tier"] == _TIER_ALWAYS_ON
     )
-    # Sanity-check the population matches Decision 1's pin (12 + 8 = 20).
-    assert len(always_on_names) == 20, (
-        f"always-on tier count = {len(always_on_names)}, expected 20 "
-        f"(12 legacy baseline + 8 v2.7.0 verbs). Drift means a tool moved "
-        f"tiers — re-audit alwaysLoad on every change."
+    # Sanity-check the population matches Decision 1's pin under
+    # RKA_LEGACY_TOOLS=1 (the conftest default): 12 baseline + 8
+    # v2.7.0a2 verbs + 2 v2.7.0a3 dispatch tools = 22.
+    assert len(always_on_names) == 22, (
+        f"always-on tier count = {len(always_on_names)}, expected 22 "
+        f"(12 legacy baseline + 8 v2.7.0a2 verbs + 2 v2.7.0a3 dispatch). "
+        f"Drift means a tool moved tiers — re-audit alwaysLoad on every "
+        f"change."
     )
 
     missing_hint: list[str] = []

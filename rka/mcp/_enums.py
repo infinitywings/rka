@@ -92,6 +92,17 @@ DecisionKindLit = Literal[
     "research_question", "design_choice", "decision", "operational",
 ]
 
+# Decision lifecycle status — ``rka/db/schema.sql`` CHECK on
+# ``decisions.status`` (line 41) AND ``rka/models/decision.py``
+# ``DecisionCreate.status`` / ``DecisionUpdate.status``. Canonical set
+# is {active, abandoned, superseded, merged, revisit}; bare ``str`` on
+# the typed-args surface lets Brain hallucinate values that fall the DB
+# CHECK constraint at INSERT time (HTTP 500). Phase-X²' polish promotes
+# this to a Literal alias so the typed-args layer rejects pre-dispatch.
+DecisionStatusLit = Literal[
+    "active", "abandoned", "superseded", "merged", "revisit",
+]
+
 
 # ---------------------------------------------------------------------------
 # Literature (rka_record_literature / rka_add_literature / rka_update_literature)
@@ -126,6 +137,21 @@ MissionStatusLit = Literal[
 # verb surface accepts the Pydantic-level set.
 ChkTypeLit = Literal[
     "decision", "clarification", "inspection", "gate",
+]
+
+# Checkpoint resolver — ``rka/db/schema.sql`` CHECK on
+# ``checkpoints.resolved_by`` (schema line 156 + migration 015 line 15)
+# AND ``rka/models/checkpoint.py`` ``CheckpointResolve.resolved_by`` —
+# narrower than ``DecidedByLit`` (which includes 'executor'). DB rejects
+# 'executor' at INSERT time. Phase-X²' polish: separate alias so the
+# typed-args surface rejects ``resolved_by='executor'`` pre-dispatch.
+CheckpointResolvedByLit = Literal["pi", "brain"]
+
+# Journal entry lifecycle status — ``rka/db/schema.sql`` migration 009
+# line 24 CHECK on ``journal.status`` AND ``rka/models/journal.py``
+# ``JournalEntryCreate.status`` / ``JournalEntryUpdate.status``.
+JournalStatusLit = Literal[
+    "draft", "active", "superseded", "retracted",
 ]
 
 # Validation-gate subtype — string-set validated in
@@ -178,6 +204,13 @@ RQStatusLit = Literal[
 # ``Outcome`` (matches the ``calibration_outcomes`` CHECK constraint).
 OutcomeLit = Literal["succeeded", "failed", "mixed", "unresolved"]
 
+# Actor recording a calibration outcome — ``rka/models/calibration.py``
+# ``CalibrationOutcomeCreate.recorded_by`` is currently bare ``str`` with
+# no DB CHECK (calibration_outcomes schema has no constraint). Phase-X²'
+# polish constrains the typed-args surface to the canonical actor set
+# (matches the wider CLAUDE.md actor vocabulary minus the rare ones).
+RecordedByLit = Literal["pi", "brain", "executor", "system"]
+
 
 # ---------------------------------------------------------------------------
 # Staleness (rka_review target='stale')
@@ -197,3 +230,36 @@ StalenessLit = Literal["yellow", "red"]
 # ``'import'`` for batch-import workflows (mirrors
 # ``rka/db/schema.sql`` ``literature.added_by`` CHECK set).
 IngestSourceLit = Literal["brain", "executor", "pi", "import", "web_ui"]
+
+
+# ---------------------------------------------------------------------------
+# Claim review (rka_execute operation='review_claims')
+# ---------------------------------------------------------------------------
+
+# Action verb for the review-claims operation. String-set validated in
+# ``rka/services/researcher_tools.py::review_claims``. Promoted from the
+# inlined ``OPERATIONS_SCHEMA['review_claims']['enums']['review_action']``
+# in v2.7.0 so the typed-args module + orchestrator-side mirror have a
+# single source of truth.
+ReviewActionLit = Literal["approve", "reject", "adjust"]
+
+
+# ---------------------------------------------------------------------------
+# Batch-import actor (rka_execute operation='batch_import')
+# ---------------------------------------------------------------------------
+
+# Actor-of-record for the bulk-import endpoint. Widens ``SourceLit`` with
+# ``'system'`` + ``'import'`` per the legacy ``rka_batch_import`` tool;
+# CLAUDE.md notes that ``'import'`` is auto-normalized to ``'system'`` at
+# the service layer.
+BatchImportActorLit = Literal["brain", "executor", "pi", "system", "import"]
+
+
+# ---------------------------------------------------------------------------
+# Hook creator (rka_execute operation='hook_add')
+# ---------------------------------------------------------------------------
+
+# Actor-of-record for hook creation. Matches the legacy
+# ``rka_add_hook(created_by=...)`` set: pi (the typical operator),
+# brain, executor (rare), system (programmatic).
+HookCreatedByLit = Literal["pi", "brain", "executor", "system"]

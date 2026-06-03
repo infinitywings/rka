@@ -105,18 +105,18 @@ def test_registry_contains_all_rka_tools():
 
 
 def test_always_on_tier_membership():
-    """The always-on layer is the documented Minimal Session Start +
-    universal retrieval + most-frequent writes + 3 navigator tools +
-    8 v2.7.0-alpha intent verbs.
+    """The always-on layer (under RKA_LEGACY_TOOLS=1) is the documented
+    Minimal Session Start + universal retrieval + most-frequent writes
+    + 3 navigator tools + 8 v2.7.0a2 intent verbs + 2 v2.7.0a3
+    dispatch tools = 22 total.
+
+    The conftest in this directory sets RKA_LEGACY_TOOLS=1 so this
+    test exercises the legacy-enabled mode. The v2.7.0a3 default
+    mode (env unset) collapses to 5 always-on tools and is tested
+    separately in test_v270a3_dispatch_surface.py.
 
     This is the load-bearing list — if a tool moves between tiers it
     will surface here so the change is deliberate, not silent.
-
-    v2.7.0-alpha added 8 intent verbs (rka_query, rka_record_note,
-    rka_record_decision, rka_record_literature, rka_mission,
-    rka_checkpoint, rka_review, rka_session) at tier=always_on
-    ADDITIVELY — the 12 legacy always-on tools stay in place pending
-    the PR-2 demotion in a separate release.
     """
     expected_always_on = {
         # v2.6.4 baseline — Minimal Session Start
@@ -135,7 +135,7 @@ def test_always_on_tier_membership():
         "rka_load_tools",
         "rka_list_tools",
         "rka_help",
-        # v2.7.0-alpha — 8 intent verbs (additive; PR-1)
+        # v2.7.0a2 — 8 intent verbs (additive; PR-1)
         "rka_query",
         "rka_record_note",
         "rka_record_decision",
@@ -144,6 +144,9 @@ def test_always_on_tier_membership():
         "rka_checkpoint",
         "rka_review",
         "rka_session",
+        # v2.7.0a3 — 2 new dispatch tools (rka_query already counted above)
+        "rka_execute",
+        "rka_describe",
     }
     actual_always_on = {
         n for n, r in _TOOL_REGISTRY.items() if r["tier"] == _TIER_ALWAYS_ON
@@ -160,10 +163,9 @@ def test_deferred_tier_size_within_cap():
     care about the count vs the always-on count so future refactors
     don't leak tools into either tier silently.
 
-    v2.7.0-alpha — always-on is 20 (12 v2.6.4 baseline + 8 intent verbs).
-    Deferred remains the 79+ legacy tools that haven't been promoted.
-    PR-2 (separate release) will demote the 12 legacy baseline once
-    A/B testing confirms the 8 verbs survive ToolSearch end-to-end.
+    v2.7.0a3 + RKA_LEGACY_TOOLS=1 — always-on is 22 (12 v2.6.4
+    baseline + 8 intent verbs + 2 v2.7.0a3 dispatch tools).
+    Deferred is 79+ legacy tools that haven't been promoted.
     """
     always_on = [
         n for n, r in _TOOL_REGISTRY.items() if r["tier"] == _TIER_ALWAYS_ON
@@ -171,7 +173,7 @@ def test_deferred_tier_size_within_cap():
     deferred = [
         n for n, r in _TOOL_REGISTRY.items() if r["tier"] == _TIER_DEFERRED
     ]
-    assert len(always_on) == 20
+    assert len(always_on) == 22
     assert len(deferred) >= 79  # 79 original deferred tools; never < this
     assert set(always_on).isdisjoint(set(deferred))
 
@@ -277,7 +279,7 @@ async def test_list_tools_tier_filter():
     for cat, tools in result["categories"].items():
         for t in tools:
             assert t["tier"] == "always_on"
-    assert len(flat) == 20  # always-on layer size (v2.7.0-alpha: 12 legacy baseline + 8 intent verbs)
+    assert len(flat) == 22  # always-on layer (RKA_LEGACY_TOOLS=1): 12 legacy baseline + 8 v2.7.0a2 verbs + 2 v2.7.0a3 dispatch tools
 
 
 @pytest.mark.asyncio

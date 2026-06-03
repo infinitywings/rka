@@ -260,16 +260,26 @@ async def test_parity_get_status_query_status(captured_calls):
     switch_to(leg)
     await mcp_mod.rka_get_status(project_id="prj_t")
     switch_to(ver)
-    await mcp_mod.rka_query(scope="status", project_id="prj_t")
+    # v2.7.0 Phase 3: typed-args surface.
+    from pydantic import TypeAdapter
+    from rka.mcp.operation_args import QueryArgsUnion
+    adapter = TypeAdapter(QueryArgsUnion)
+    typed_args = adapter.validate_python(
+        {"operation": "status", "project_id": "prj_t"}
+    )
+    await mcp_mod.rka_query(typed_args)
 
-    # Legacy aggregates; verb is the thin reader. Both must call /api/status.
+    # v2.7.0 Phase 3: rka_query(operation='status') now routes through
+    # the typed-args dispatcher into the legacy rka_get_status tool
+    # (single source of truth for the status aggregator). Both must
+    # call /api/status; the aggregator's other GETs are tolerated.
     leg_paths = [r["path"] for r in leg.requests]
     ver_paths = [r["path"] for r in ver.requests]
     assert "/api/status" in leg_paths, (
         f"legacy rka_get_status didn't hit /api/status: {leg_paths}"
     )
-    assert ver_paths == ["/api/status"], (
-        f"rka_query(scope='status') expected to hit only /api/status; "
+    assert "/api/status" in ver_paths, (
+        f"rka_query(operation='status') expected to hit /api/status; "
         f"got: {ver_paths}"
     )
 
@@ -301,10 +311,15 @@ async def test_parity_search_query_search(captured_calls):
         query="needle", limit=5, project_id="prj_t",
     )
     switch_to(ver)
-    await mcp_mod.rka_query(
-        scope="search", query="needle", limit=5,
-        project_id="prj_t",
-    )
+    # v2.7.0 Phase 3: typed-args surface.
+    from pydantic import TypeAdapter
+    from rka.mcp.operation_args import QueryArgsUnion
+    adapter = TypeAdapter(QueryArgsUnion)
+    typed_args = adapter.validate_python({
+        "operation": "search", "query": "needle", "limit": 5,
+        "project_id": "prj_t",
+    })
+    await mcp_mod.rka_query(typed_args)
 
     # Both legacy and verb hit /api/search at least once.
     leg_search = [r for r in leg.requests if r["path"] == "/api/search"]

@@ -48,17 +48,30 @@ def _params(name: str) -> dict[str, Any]:
 def _enum_for(name: str, param: str) -> list[str]:
     """Extract the JSON-schema enum array for a parameter.
 
-    Handles two shapes:
+    Handles three shapes:
       - Direct: {"properties": {"action": {"enum": [...], "type": "string"}}}
       - Nullable (Optional[Literal]): the schema renders as
         {"anyOf": [{"enum": [...], "type": "string"}, {"type": "null"}]}.
+      - v2.7.0 typed-arg discriminated union: the verb's only top-level
+        param is ``args`` (a Pydantic Union); the per-branch ``operation``
+        Literal values are in the union's ``discriminator.mapping`` keys
+        OR collected from each branch's ``$defs/<branch>/properties/<param>``.
     """
-    props = _params(name).get("properties", {}) or {}
+    params = _params(name)
+    props = params.get("properties", {}) or {}
     prop = props.get(param)
-    assert prop is not None, (
-        f"parameter {param!r} missing on verb {name!r}; "
-        f"properties: {sorted(props)}"
-    )
+    if prop is None:
+        # v2.7.0 typed-arg case: union under ``args`` parameter.
+        if "args" in props and param == "operation":
+            args_prop = props["args"]
+            disc = args_prop.get("discriminator", {})
+            mapping = disc.get("mapping", {})
+            if mapping:
+                return sorted(mapping.keys())
+        pytest.fail(
+            f"parameter {param!r} missing on verb {name!r}; "
+            f"properties: {sorted(props)}"
+        )
     if "enum" in prop:
         return list(prop["enum"])
     # nullable / anyOf-wrapped
@@ -91,26 +104,29 @@ _REQUIRED_QUERY_SCOPES = (
 
 
 def test_rka_query_scope_promoted_to_enum() -> None:
-    enum_vals = _enum_for("rka_query", "scope")
-    assert enum_vals, "rka_query.scope has empty enum"
+    # v2.7.0a3 — discriminator parameter renamed from `scope` to
+    # `operation`. The Literal set and enum-promotion semantics are
+    # preserved.
+    enum_vals = _enum_for("rka_query", "operation")
+    assert enum_vals, "rka_query.operation has empty enum"
 
 
 @pytest.mark.parametrize("scope", _REQUIRED_QUERY_SCOPES)
 def test_rka_query_scope_includes(scope: str) -> None:
     """Every documented read scope must be in the rendered enum so the
     LLM doesn't have to guess from the docstring."""
-    enum_vals = _enum_for("rka_query", "scope")
+    enum_vals = _enum_for("rka_query", "operation")
     assert scope in enum_vals, (
-        f"rka_query.scope missing {scope!r}; got {sorted(enum_vals)}"
+        f"rka_query.operation missing {scope!r}; got {sorted(enum_vals)}"
     )
 
 
 def test_rka_query_scope_has_at_least_29_entries() -> None:
     """Design spec: 29 read scopes. The actual surface has more (some
     aliases were added) — we floor at 29."""
-    enum_vals = _enum_for("rka_query", "scope")
+    enum_vals = _enum_for("rka_query", "operation")
     assert len(enum_vals) >= 29, (
-        f"rka_query.scope has only {len(enum_vals)} entries; "
+        f"rka_query.operation has only {len(enum_vals)} entries; "
         f"design floor is 29"
     )
 
@@ -309,7 +325,10 @@ def test_rka_record_decision_kind_enum() -> None:
 @pytest.mark.parametrize(
     "verb,disc",
     [
-        ("rka_query", "scope"),
+        # v2.7.0a3: rka_query discriminator renamed scope → operation
+        # (scope retained as a deprecated alias on the signature; it's
+        # optional so not in required[]).
+        ("rka_query", "operation"),
         ("rka_mission", "action"),
         ("rka_checkpoint", "action"),
         ("rka_review", "target"),
@@ -321,6 +340,34 @@ def test_verb_discriminator_is_required(verb: str, disc: str) -> None:
     callers can't omit them (silent default would lead to wrong-mode
     dispatch)."""
     required = _params(verb).get("required", []) or []
+    # v2.7.0a3: rka_query.operation is optional (carries a backwards-
+    # compat None default for callers using the deprecated `scope`
+    # alias). The body raises an error if neither is supplied.
+    # v2.7.0 (Phase 3): rka_query is the typed-args discriminated-union
+    # surface; the discriminator lives inside the ``args`` Pydantic model
+    # rather than at the top level. The discriminator-mapping carries
+    # the per-branch operation values.
+    if verb == "rka_query":
+        params = _params(verb)
+        props = params.get("properties", {}) or {}
+        if "args" in props:
+            # Typed-args surface: discriminator inside args.
+            disc_map = (
+                props["args"].get("discriminator", {}).get("mapping", {})
+            )
+            assert disc_map, (
+                f"verb {verb!r} args discriminator missing mapping; "
+                f"got: {props['args']!r}"
+            )
+            # args itself is required.
+            assert "args" in (params.get("required") or []), (
+                f"verb {verb!r} args param must be required (typed-args surface)."
+            )
+            return
+        assert "operation" in props, (
+            f"verb {verb!r} missing operation property: {sorted(props)}"
+        )
+        return
     assert disc in required, (
         f"verb {verb!r} discriminator {disc!r} not in required: "
         f"{required}"
@@ -329,9 +376,15 @@ def test_verb_discriminator_is_required(verb: str, disc: str) -> None:
 
 def test_project_id_required_on_scoped_verbs() -> None:
     """All project-scoped verbs require project_id (kwarg-only); the
-    v2.6 contract from main is preserved at the verb tier."""
+    v2.6 contract from main is preserved at the verb tier.
+
+    v2.7.0a3 — rka_query's project_id is now Optional with a None
+    default (because list_projects / health operations are unscoped
+    within rka_query). The verb body raises a missing_field error
+    when project_id is needed but unset.
+    """
     scoped = (
-        "rka_query", "rka_record_note", "rka_record_decision",
+        "rka_record_note", "rka_record_decision",
         "rka_record_literature", "rka_mission", "rka_checkpoint",
         "rka_review",
     )
