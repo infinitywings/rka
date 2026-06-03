@@ -2,6 +2,8 @@
 
 Supplementary reference for the Brain skill. Load when you need the full three-actor model, the complete provenance vocabulary, or the research-map structure in detail. The top-level `SKILL.md` links here instead of duplicating.
 
+> **v2.7.0 dispatch translation.** Legacy tool names cited in this file (`rka_trace_provenance`, `rka_extract_claims`, `rka_detect_contradictions`, `rka_resolve_contradiction`, `rka_resolve_checkpoint`, `rka_get_research_map`, `rka_get_pending_maintenance`, `rka_flag_stale`) are synonyms for `rka_query` / `rka_execute` operations under the v2.7.0+ typed-arg surface. Architecture and provenance semantics are unchanged across the v2.6 → v2.7.0 arc — only the MCP call shape evolved.
+
 ---
 
 ## The Three-Actor Model

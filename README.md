@@ -27,6 +27,21 @@ RKA gives your research project a brain that doesn't forget between sessions. It
 
 Built for CS/IoT/CPS security research at UNC Charlotte.
 
+> ### 🌿 You're on the `agentic` branch
+>
+> This branch adds the **RKA Orchestrator** on top of the main-branch RKA core — a LangGraph-driven Brain⇄Executor⇄PI workflow engine with a Claude-Code-native PI surface. The PI drives mission and onboarding workflows from any Claude Code or Claude Desktop session via MCP tools, not stdin terminals.
+>
+> | | What it adds |
+> |---|---|
+> | **Mission subgraph** | 16-node Brain⇄Executor⇄PI loop with TWO-TAP ratification at `pi_decision_select` |
+> | **Onboarding subgraph** | Phase D MVP — per-project tool-discovery wizard producing `tools.json` + `.env` |
+> | **Plugin extensions** | `rka-orchestrator-mcp` (12 tools), `orchestrator-pi` skill, 5 slash commands (`/orchestrator-start`, `/orchestrator-inbox`, `/orchestrator-status`, `/orchestrator-onboard`, `/orchestrator-manifest`) |
+> | **Phase O design** | Full project-onboarding wizard (idea capture → Deep Research → plan synthesis → autonomous mission queue) — design committed, ~13.5-day implementation deferred |
+>
+> See [`orchestrator/README.md`](orchestrator/README.md) for the package overview, [`USAGE_GUIDE.md`](USAGE_GUIDE.md#agentic-distribution--orchestrator-workflows) for the user-facing how-to, and the design docs under [`orchestrator/docs/`](orchestrator/docs/).
+>
+> The agentic branch is a permanent sibling of main, not a feature branch — main never absorbs orchestrator code; agentic periodically absorbs main's core updates via deliberate merges. **Bookkeeper invariant**: `git diff origin/main -- rka/` returns empty on agentic.
+
 ## Paper
 
 A working draft describing RKA's architecture, design principles, and evaluation is available as a PDF: **[RKA-paper.pdf](docs/paper/RKA-paper.pdf)** — *Framing Is Human: Researcher–Brain–Executor Architecture for AI-Assisted Research*.
@@ -124,29 +139,29 @@ graph LR
 
 ## What you can do with RKA
 
-**Record and organize:**
+**Record and organize (v2.7.0 dispatch surface):**
 
 ```
-Brain:    rka_add_note(content="12% packet loss above 400 connections", type="note", project_id="prj_…")
-          rka_add_decision(question="Use horizontal sharding", related_journal=["jrn_…"], project_id="prj_…")
-          rka_create_mission(objective="Test sharding", motivated_by_decision="dec_…", project_id="prj_…")
+Brain:    rka_execute(operation="record_note", content="12% packet loss above 400 connections", type="note", project_id="prj_…")
+          rka_execute(operation="record_decision", question="Use horizontal sharding", related_journal=["jrn_…"], project_id="prj_…")
+          rka_execute(operation="create_mission", objective="Test sharding", motivated_by_decision="dec_…", project_id="prj_…")
 
-Executor: rka_add_note(content="Ran 500-connection stress test", type="log", project_id="prj_…")
-          rka_submit_report(mission_id="mis_…", summary="…", findings="Sharding reduced loss to 2%", project_id="prj_…")
-          rka_submit_checkpoint(mission_id="mis_…", type="decision", description="Need PI input on replication factor", project_id="prj_…")
+Executor: rka_execute(operation="record_note", content="Ran 500-connection stress test", type="log", project_id="prj_…")
+          rka_execute(operation="submit_report", mission_id="mis_…", summary="…", findings="Sharding reduced loss to 2%", project_id="prj_…")
+          rka_execute(operation="submit_checkpoint", mission_id="mis_…", type="decision", description="Need PI input on replication factor", project_id="prj_…")
 ```
 
-**Note (v2.6+):** every project-scoped tool requires `project_id` as a kwarg. There is no "active project" session state — the LLM keeps the project_id in conversation memory and threads it on every call. See `rka/skills/{brain,executor,pi}/SKILL.md` for the discipline.
+**Note (v2.7.0+):** every project-scoped operation requires `project_id` as a kwarg. There is no "active project" session state — the LLM keeps the project_id in conversation memory and threads it on every call. See `rka/skills/{brain,executor,pi}/SKILL.md` for the discipline.
 
-**Navigate and search:**
+**Navigate and search (v2.7.0 dispatch surface):**
 
 ```
-rka_get_research_map()         → Three-level view: RQs → clusters → claims
-rka_trace_provenance(id)       → Literature → decision → mission → finding → claim
-rka_get_review_queue()         → Items flagged for Brain's deep reasoning
-rka_search("MQTT scalability") → Entries, decisions, literature, claims
-rka_get_context(topic="...")   → Importance-ranked context package
-rka_multi_hop_retrieval(query="...")  → Query-anchored ranked subgraph
+rka_query(operation="get_research_map", project_id="prj_…")         → Three-level view: RQs → clusters → claims
+rka_query(operation="trace_provenance", entity_id="…", project_id="prj_…") → Literature → decision → mission → finding → claim
+rka_query(operation="get_review_queue", project_id="prj_…")         → Items flagged for Brain's deep reasoning
+rka_query(operation="search", query="MQTT scalability", project_id="prj_…") → Entries, decisions, literature, claims
+rka_query(operation="get_context", topic="…", project_id="prj_…")   → Importance-ranked context package
+rka_query(operation="multi_hop_retrieval", query="…", project_id="prj_…")  → Query-anchored ranked subgraph
 ```
 
 ---
@@ -216,7 +231,7 @@ graph TD
     end
 
     subgraph "RKA Server"
-        MCP["MCP Server — 75+ tools"]
+        MCP["MCP Server — 5 always-on dispatch tools (87 typed operations)"]
         API["REST API — FastAPI"]
         SVC["Service Layer — shared logic"]
         DB["SQLite + FTS5 + sqlite-vec"]
@@ -313,7 +328,7 @@ Research Map
   Research Questions --> Clusters --> Claims
 ```
 
-`rka_get_pending_maintenance()` detects entries needing distillation and other provenance gaps. The Brain processes these at session start using `rka_extract_claims`, `rka_create_cluster`, and `rka_assign_claims_to_cluster`.
+`rka_query(operation="get_pending_maintenance", project_id="prj_…")` detects entries needing distillation and other provenance gaps. The Brain processes these at session start using `rka_execute(operation="extract_claims", …)`, `rka_execute(operation="create_cluster", …)`, and `rka_execute(operation="assign_claims_to_cluster", …)`.
 
 ### ULID-Based IDs
 
@@ -498,21 +513,23 @@ Reload the VS Code window: **Cmd+Shift+P** (macOS) / **Ctrl+Shift+P** (Windows/L
 
 If you use the Claude Code CLI rather than the VS Code extension, the same config goes in `~/.claude/settings.json` under `mcpServers`.
 
-**Pinning the project (v2.6+).** v2.6 removed the `RKA_PROJECT` env-var "default project" mechanism — it reintroduced the silent-default failure mode that v2.6 explicitly eliminates. Every project-scoped rka_* tool now requires `project_id` as a kwarg, and the LLM keeps the project_id in conversation memory and threads it on every call. The discipline:
+**Pinning the project (v2.6+).** v2.6 removed the `RKA_PROJECT` env-var "default project" mechanism — it reintroduced the silent-default failure mode that v2.6 explicitly eliminates. Every project-scoped operation now requires `project_id` as a kwarg, and the LLM keeps the project_id in conversation memory and threads it on every call. The discipline:
 
-> At the start of every conversation, state the project: *"I'm working on prj_01KSMW9R…"* (or *"on the hyperscaler-auditing project"* — the LLM resolves the slug via `rka_list_projects()`). The LLM retains it in working memory and passes `project_id="prj_…"` to every rka_* tool call.
+> At the start of every conversation, state the project: *"I'm working on prj_01KSMW9R…"* (or *"on the hyperscaler-auditing project"* — the LLM resolves the slug via `rka_query(operation="list_projects")`). The LLM retains it in working memory and passes `project_id="prj_…"` to every rka_* operation.
 
-If the LLM ever omits `project_id`, the tool raises `TypeError: rka_X() missing 1 required keyword-only argument: 'project_id'` — by design. That replaces the pre-v2.6 silent writes to `proj_default`.
+If the LLM ever omits `project_id`, the dispatch validator rejects the call at the inputSchema layer with a missing-field error — by design. That replaces the pre-v2.6 silent writes to `proj_default`.
 
-To find a project id, run `rka_list_projects()` once in any session, or check `http://localhost:9712` in the dashboard URL bar.
+To find a project id, run `rka_query(operation="list_projects")` once in any session, or check `http://localhost:9712` in the dashboard URL bar.
 
-**The navigator architecture (v2.6.3+).** Since v2.6.3 the rka MCP server ships **12 always-on tools** (status, context, pending maintenance, checkpoints, research map, search, get, add-note, resolve-checkpoint, plus the navigator triad `rka_load_tools` / `rka_list_tools` / `rka_help`). The remaining ~79 tools — including `rka_list_projects`, `rka_add_decision`, `rka_create_mission`, `rka_get_journal`, `rka_get_report`, and every other project-scoped lifecycle tool — are **deferred**: present on the server but not advertised until a client registers them via `rka_load_tools(names=[...])`. Browse the catalog with `rka_list_tools(category=...)`; inspect a single tool with `rka_help(name=...)`. Both Claude Desktop and Claude Code honor MCP's `notifications/tools/list_changed` event, so a freshly-loaded tool becomes callable mid-session without a reconnect. The Brain / Executor / PI skills shipped under `rka/skills/` know about this and will load the tools they need at session start.
+**The v2.7.0 dispatch architecture.** The rka MCP server ships **5 always-on tools**: 3 dispatch tools (`rka_query` for 38 read operations, `rka_execute` for 49 write/lifecycle operations, `rka_describe` to introspect operation schemas) plus 2 escape hatches (`rka_load_tools` and `rka_help`) that surface the 91 legacy tools + 8 v2.7.0a2 verbs at tier=deferred for backward compatibility. Every operation is backed by a typed Pydantic model — **87 models total** — with per-branch enum and required-field enforcement at the FastMCP schema layer. This makes Brain-hallucination classes (e.g. `confidence='confirmed'` or `rka_submit_checkpoint(content=…)` instead of `description=`) structurally impossible at the wire layer: the schema rejects them before the LLM can ship a call. See `docs/v2.6.x-v2.7.0-tool-surface-arc.md` for the canonical narrative of how the architecture landed.
+
+The legacy navigator surface (v2.6.3 — 12 always-on + ~79 deferred + `rka_load_tools`/`rka_list_tools`/`rka_help` triad) is preserved via `RKA_LEGACY_TOOLS=1`. The orchestrator subprocess sets this flag in its Compose overlay to preserve per-tool dispatch granularity for the TWO-TAP autonomy-contract gate at `pi_decision_select`; PI sessions should leave it unset and use the dispatch surface.
 
 **Step 2d — Verify.** In each app, ask:
 
 > "List my RKA projects"
 
-Each Claude should first load the tool — `rka_load_tools(names=["rka_list_projects"])` — and then call `rka_list_projects()` and return a list (empty on a fresh install).
+Each Claude should call `rka_query(operation="list_projects")` and return a list (empty on a fresh install). On the v2.7.0 surface, `list_projects` is part of the always-on `rka_query` dispatcher — no load-tools dance required.
 
 **Step 2e — Load the role skill** (recommended each new session). MCP **prompts** ship with the binary; they teach Claude the session-start protocol, attribution discipline, and provenance rules.
 
@@ -572,24 +589,24 @@ The MCP server instructions tell Claude to load the appropriate skill prompt at 
 
 ### Key Workflows
 
-**Brain session start (v2.6+):**
+**Brain session start (v2.7.0):**
 
 1. Pin `project_id` from the conversation context (ask the PI if it's not stated)
-2. `rka_get_changelog(project_id="prj_…", since="yesterday")` → `rka_get_research_map(project_id="prj_…")`
+2. `rka_query(operation="get_changelog", since="yesterday", project_id="prj_…")` → `rka_query(operation="get_research_map", project_id="prj_…")`
 3. Process up to 10 maintenance items silently
 4. Greet the user
 
 **Executor mission pickup:**
 
-1. `rka_get_mission()` → read `motivated_by_decision` → read context links
+1. `rka_query(operation="get_mission", project_id="prj_…")` → read `motivated_by_decision` → read context links
 2. Present a Backbrief (plan summary, assumptions, risks)
 3. Wait for Brain approval before starting
 
 **Validation gates (go/no-go checkpoints):**
 
-1. `rka_create_gate(mission_id, gate_type, deliverables, pass_criteria)`
+1. `rka_execute(operation="create_gate", mission_id, gate_type, deliverables, pass_criteria, project_id="prj_…")`
 2. Work proceeds → deliverables created
-3. `rka_evaluate_gate(gate_id, verdict, notes, assumption_status)`
+3. `rka_execute(operation="evaluate_gate", gate_id, verdict, notes, assumption_status, project_id="prj_…")`
 4. If assumptions invalidated → staleness cascades through the knowledge graph
 
 ---
@@ -598,7 +615,7 @@ The MCP server instructions tell Claude to load the appropriate skill prompt at 
 
 Multi-project management is available through both MCP and REST:
 
-- **MCP tools**: `rka_list_projects` lists all projects. `rka_create_project` creates a new project. `rka_set_project` is a deprecated no-op in v2.6+ (kept for backward-compat); pass `project_id` to every project-scoped tool call explicitly instead.
+- **MCP operations**: `rka_query(operation="list_projects")` lists all projects. `rka_execute(operation="create_project", ...)` creates a new project. The legacy `rka_set_project` tool was a deprecated no-op as of v2.6; on the v2.7.0 dispatch surface it is `tier=deferred` (callable only via `rka_load_tools`). Pass `project_id` to every project-scoped operation explicitly instead.
 - **REST API and web dashboard**: Project-aware. The dashboard stores the active project locally and injects `X-RKA-Project` on API requests automatically.
 - **Knowledge packs**: Export the active project with `GET /api/projects/export`. Import a previously exported pack with `POST /api/projects/import`. Import creates a separate project, remaps project-scoped entity IDs, and rewrites internal references.
 - **Workspace bootstrap**: CLI bootstrap commands target the current database/default project. For project-specific bootstrap in a multi-project database, use `POST /api/workspace/scan` and `POST /api/workspace/ingest` with `X-RKA-Project`.
@@ -738,17 +755,36 @@ The v2.4 context engine has no tunable env vars — ranking is SQL-time importan
 
 ## MCP Tools Reference
 
-All tools are prefixed with `rka_` and available through the MCP stdio interface. The MCP server is defined in `rka/mcp/server.py`.
+### v2.7.0 dispatch surface (default)
+
+The MCP server is defined in `rka/mcp/server.py`. As of v2.7.0 it ships **5 always-on tools**:
+
+| Tool             | Purpose                                                                                                                |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `rka_query`      | Dispatcher for **38 read operations** (`get_status`, `search`, `get_research_map`, `list_projects`, `get_context`, …) — call with `operation="…"` plus the operation's typed args. |
+| `rka_execute`    | Dispatcher for **49 write/lifecycle operations** (`record_note`, `record_decision`, `create_mission`, `submit_report`, `submit_checkpoint`, …) — call with `operation="…"` plus typed args. |
+| `rka_describe`   | Introspect operation schemas. `rka_describe("")` returns the index (<250 tokens); `rka_describe("record_decision")` returns the full Pydantic schema with required fields, enums, and provenance constraints. |
+| `rka_load_tools` | Escape hatch — surface deferred legacy tools by name (rare; preserved for backward-compatibility).                     |
+| `rka_help`       | Escape hatch — list available operations or describe a single one (alias for `rka_describe`).                          |
+
+Every operation is backed by a typed Pydantic model. **87 models live in `rka/mcp/operation_args.py`**, all unioned under `discriminator='operation'` so FastMCP renders the inputSchema as `oneOf` — each branch carries its own enum constraints (`confidence: Literal["high", "medium", "low"]`, `type: Literal["note", "log", "directive"]`, etc.) and `min_length=1` on required provenance fields (`related_journal` on `record_decision`, `motivated_by_decision` on `create_mission`, …). Brain hallucinations like `confidence='confirmed'` or `submit_checkpoint(content=…)` (instead of `description=`) are rejected at the inputSchema layer before the call ships.
+
+The pre-v2.7.0 91-tool surface (every individual `rka_add_note`, `rka_get_status`, `rka_submit_report`, …) is preserved at `tier=deferred` and callable via `rka_load_tools(names=[…])`. The v2.7.0a2 verb surface (8 intent verbs) is also deferred. **Set `RKA_LEGACY_TOOLS=1`** to restore the v2.7.0a2 verb-plus-legacy surface as always-on — the orchestrator daemon's subprocess does this to preserve per-tool dispatch granularity for the TWO-TAP autonomy-contract gate.
+
+Below: the operation catalog grouped semantically. Operation names map to the `operation` field of `rka_query` / `rka_execute`. For the canonical end-to-end narrative of how this architecture replaced the v2.6.3 navigator (12 always-on + ~79 deferred), see `docs/v2.6.x-v2.7.0-tool-surface-arc.md`.
 
 ### Project
 
-| Tool                   | Purpose                                                       |
-| ---------------------- | ------------------------------------------------------------- |
-| `rka_list_projects`  | List all projects with name, description, and ID (unscoped — no project_id needed) |
-| `rka_create_project` | Create a new project (unscoped — returns the new project_id)  |
-| `rka_set_project`    | **Deprecated no-op (v2.6+).** Validates that a project exists; does NOT change subsequent tool behavior. Pass `project_id` on every call instead. |
-| `rka_get_status`     | Get current project state (phase, summary, blockers, metrics) |
-| `rka_update_status`  | Update project state                                          |
+| Operation          | Dispatcher    | Purpose                                                       |
+| ------------------ | ------------- | ------------------------------------------------------------- |
+| `list_projects`    | `rka_query`   | List all projects with name, description, and ID (unscoped — no project_id needed) |
+| `create_project`   | `rka_execute` | Create a new project (unscoped — returns the new project_id)  |
+| `get_status`       | `rka_query`   | Get current project state (phase, summary, blockers, metrics) |
+| `update_status`    | `rka_execute` | Update project state                                          |
+
+> **Deprecated** — `rka_set_project` was a no-op as of v2.6 (the per-process session-state mechanism it managed was removed); on the v2.7.0 dispatch surface it lives at `tier=deferred` and is callable only via `rka_load_tools`. Pass `project_id` on every operation call instead.
+
+> **Legacy mapping** — the v2.6.x tool name for each operation is the operation name prefixed with `rka_` (e.g. `record_decision` → `rka_add_decision`, `get_research_map` → `rka_get_research_map`, `submit_checkpoint` → `rka_submit_checkpoint`). The reference tables below use operation names; if you have a v2.6.x snippet, map the tool name back to the operation by stripping `rka_` and (for write tools) translating `add_` → `record_` where appropriate. `rka_describe("")` is the authoritative index.
 
 ### Notes
 
@@ -1306,7 +1342,7 @@ All knowledge enrichment is handled by the Brain (Claude Desktop) during normal 
 - Assigns evidence clusters to research questions
 - Repairs missing provenance links
 
-**Maintenance manifest:** `rka_get_pending_maintenance()` detects all provenance gaps with pure SQL queries. The Brain processes up to 10 items per session at startup.
+**Maintenance manifest:** `rka_query(operation="get_pending_maintenance", project_id="prj_…")` detects all provenance gaps with pure SQL queries. The Brain processes up to 10 items per session at startup.
 
 ### Review Queue
 

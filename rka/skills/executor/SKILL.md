@@ -1,7 +1,7 @@
 ---
 name: rka-executor
 description: Implementation AI for RKA-managed research projects. Executes missions, runs experiments, modifies code, collects evidence, and reports with provenance. Load on mission pickup or when producing a Backbrief / report.
-version: 2.3.2
+version: 2.7.0
 ---
 
 # Executor Skill
@@ -10,15 +10,75 @@ You are the implementation AI in an RKA-managed project. Your job is to execute 
 
 Your counterparts: the **Brain** (`skills/brain/SKILL.md`) handles strategy. The **PI** (human researcher) supervises both.
 
-## Tool Surface (v2.6.3+)
+## Tool Surface (v2.7.0+) — No-Compromise Typed-Arg Dispatch
 
-Since v2.6.3 the rka MCP server ships a **navigator architecture**: 12 always-on tools at startup (`rka_get_status`, `rka_get_context`, `rka_get_pending_maintenance`, `rka_get_checkpoints`, `rka_get_research_map`, `rka_search`, `rka_get`, `rka_add_note`, `rka_resolve_checkpoint`, and the navigator triad `rka_load_tools` / `rka_list_tools` / `rka_help`). The remaining ~79 tools (`rka_get_mission`, `rka_submit_checkpoint`, `rka_submit_report`, `rka_get_journal`, `rka_create_mission`, etc.) are **deferred** and must be registered before use:
+The rka MCP server ships a **discriminated-union dispatch surface**. Five tools are always-on; everything else is reached through them:
 
-1. `rka_load_tools(names=["rka_get_mission", "rka_submit_checkpoint", "rka_submit_report"])` — registers the tools and fires `notifications/tools/list_changed`. Idempotent. Do this once at session start with the batch of tools you expect to use.
-2. `rka_list_tools(category=..., query=..., tier=...)` — browse the catalog.
-3. `rka_help(name="rka_submit_report")` — render the signature + docstring for any tool, active or deferred.
+| Always-on tool | Purpose |
+|---|---|
+| `rka_query(args)` | All 38 read operations (mission lookup, status, context, checkpoints, journal, reports, search, etc.) |
+| `rka_execute(args)` | All 49 write/lifecycle operations (notes, checkpoints, reports, mission status updates, document ingest, claim extraction, etc.) |
+| `rka_describe(operation)` | Schema lookup + worked example; `rka_describe('')` returns the <250-token index |
+| `rka_load_tools(names)` | Escape hatch — brings deferred legacy tools online when you specifically need backwards-compat access |
+| `rka_help(topic)` | Deprecated alias for `rka_describe` |
 
-When a workflow step below says "call `rka_get_mission(...)`" or "submit via `rka_submit_report(...)`", first ensure the tool is loaded.
+`args` is a **typed Pydantic model** discriminated by `operation`. FastMCP renders the 87-model union as `inputSchema.oneOf` with per-branch enum + required-field constraints. The schema layer rejects wrong enum values, missing required fields, and missing provenance BEFORE the call is dispatched.
+
+> **Orchestrator subprocess note.** When this Executor instance is the LangGraph orchestrator's `claude-agent-sdk` subprocess (daemon under `orchestrator/docker-compose.yml`), it runs with `RKA_LEGACY_TOOLS=1`, so the 91 legacy tools + 8 v2.7.0a2 intent verbs are surfaced and the 3 dispatch tools are deferred. This preserves the parent-side TWO-TAP autonomy contract at `pi_decision_select` (per-tool ratification granularity in `WRITE_TOOLS`). Cockpit Executor sessions (Claude Desktop / Claude Code talking directly to the PI) see the typed dispatch surface described above.
+
+### Worked examples
+
+```python
+# Read: mission lookup at pickup time
+rka_query(args={"operation": "get_mission",
+                "project_id": "prj_01...",
+                "id": "mis_01..."})
+
+# Read: load project context
+rka_query(args={"operation": "get_context",
+                "project_id": "prj_01...",
+                "topic": "edge gateway throughput"})
+
+# Read: open checkpoints
+rka_query(args={"operation": "get_checkpoints",
+                "project_id": "prj_01...",
+                "status": "open"})
+
+# Write: a finding tied to the active mission
+rka_execute(args={"operation": "record_note",
+                  "project_id": "prj_01...",
+                  "content": "Reproduced 12% packet-loss at 5kHz publish rate",
+                  "type": "note",
+                  "source": "executor",
+                  "related_mission": "mis_01...",
+                  "related_decisions": ["dec_01..."]})
+
+# Write: raise a checkpoint when scope is ambiguous
+rka_execute(args={"operation": "submit_checkpoint",
+                  "project_id": "prj_01...",
+                  "type": "clarification",
+                  "title": "Acceptance criterion #3 ambiguous",
+                  "description": "Mission says \"acceptable latency\" but the bound isn't set..."})
+
+# Write: submit a mission report at completion
+rka_execute(args={"operation": "submit_report",
+                  "project_id": "prj_01...",
+                  "mission_id": "mis_01...",
+                  "summary": "...", "findings": "...", "anomalies": "...",
+                  "questions": "...", "codebase_state": "...",
+                  "recommended_next": "..."})
+
+# Write: flip mission lifecycle
+rka_execute(args={"operation": "update_mission_status",
+                  "project_id": "prj_01...",
+                  "id": "mis_01...", "status": "complete"})
+
+# Schema lookup
+rka_describe(operation="submit_checkpoint")
+rka_describe(operation="")  # <250-token index of all operations
+```
+
+The typed-arg surface obviates `rka_load_tools` for normal Executor work; only use it for explicit legacy access. When a workflow below references a legacy tool name like `rka_submit_report`, treat it as a synonym for `rka_execute(args={"operation": "submit_report", ...})` — the mapping is in `rka_describe('')`.
 
 ## Supplementary references (load on demand)
 
@@ -29,20 +89,20 @@ When a workflow step below says "call `rka_get_mission(...)`" or "submit via `rk
 
 ## Session Start
 
-1. **Pin the project for the whole conversation.** v2.6+: every project-scoped rka_* tool takes `project_id` as a required kwarg-only parameter — there is NO "active project" session state on the MCP server. When you receive a mission, the mission id implies a project; ask the Brain or PI to confirm the `project_id` if it's not in the mission spec, or call `rka_list_projects()` and verify. Then pass `project_id="prj_…"` on every subsequent rka_* call. Omitting `project_id` raises `TypeError: rka_X() missing 1 required keyword-only argument: 'project_id'` — by design; this replaces the pre-v2.6 silent-fallback-to-`proj_default` failure mode. **Discipline: keep the project_id in working memory; thread it on every call.** `rka_set_project` still exists as a deprecated no-op (validates the ID, emits a deprecation notice — does NOT change subsequent tool behavior). The `RKA_PROJECT` env var was removed in v2.6.
-2. `rka_get_status(project_id=<pinned>)` — phase + focus.
-3. `rka_get_context(project_id=<pinned>)` to load project state.
-4. `rka_get_mission(project_id=<pinned>)` to pick up the active or pending mission.
-5. `rka_get_checkpoints(project_id=<pinned>, status="open")` to see blockers that may affect execution.
+1. **Pin the project for the whole conversation.** v2.6+: every project-scoped operation requires `project_id` in `args`. There is NO "active project" session state on the MCP server. When you receive a mission, the mission id implies a project; ask the Brain or PI to confirm the `project_id` if it's not in the mission spec, or call `rka_query(args={"operation": "list_projects"})` and verify. Then thread `"project_id": "prj_..."` on every subsequent `rka_query` / `rka_execute` call. Omitting `project_id` is caught at the inputSchema layer as a missing required field — by design; this replaces the pre-v2.6 silent-fallback-to-`proj_default` failure mode. **Discipline: keep the project_id in working memory; thread it on every call.** The `RKA_PROJECT` env var was removed in v2.6.
+2. `rka_query(args={"operation": "status", "project_id": <pinned>})` — phase + focus.
+3. `rka_query(args={"operation": "get_context", "project_id": <pinned>})` to load project state.
+4. `rka_query(args={"operation": "get_mission", "project_id": <pinned>})` to pick up the active or pending mission.
+5. `rka_query(args={"operation": "get_checkpoints", "project_id": <pinned>, "status": "open"})` to see blockers that may affect execution.
 
 ## Mission Pickup Protocol
 
 When you receive a mission:
 
-1. Read the mission with `rka_get_mission(id="mis_...")`.
-2. Read `motivated_by_decision` — `rka_get(id="dec_...")` — to understand WHY this work exists.
+1. Read the mission with `rka_query(args={"operation": "get_mission", "project_id": <pinned>, "id": "mis_..."})`.
+2. Read `motivated_by_decision` — `rka_query(args={"operation": "get", "project_id": <pinned>, "id": "dec_..."})` — to understand WHY this work exists.
 3. Read context links — related journal entries, literature, decisions listed in the mission context.
-4. Call `rka_get_context(topic="<mission objective>")` for relevant prior knowledge.
+4. Call `rka_query(args={"operation": "get_context", "project_id": <pinned>, "topic": "<mission objective>"})` for relevant prior knowledge.
 5. If significant work: present a Backbrief (see below). If trivial: just do it.
 
 ## Backbrief — Confirm Your Plan
@@ -61,12 +121,12 @@ Record as a journal note with `tags=["backbrief"]` and WAIT for Brain approval. 
 
 ## Core Responsibilities
 
-- Record findings + analysis with `rka_add_note(type="note", source="executor")`.
-- Record procedural steps with `rka_add_note(type="log", source="executor")`.
+- Record findings + analysis with `rka_execute(args={"operation": "record_note", "type": "note", "source": "executor", ...})`.
+- Record procedural steps with `rka_execute(args={"operation": "record_note", "type": "log", "source": "executor", ...})`.
 - Always set `related_mission` when the work belongs to a mission.
 - Add `related_decisions=[...]` when a finding bears on an active decision.
-- Raise a checkpoint (`rka_submit_checkpoint`) when strategy, ambiguity, or risk exceeds execution authority.
-- Submit a mission report (`rka_submit_report`) when the assigned work is complete.
+- Raise a checkpoint via `rka_execute(args={"operation": "submit_checkpoint", ...})` when strategy, ambiguity, or risk exceeds execution authority.
+- Submit a mission report via `rka_execute(args={"operation": "submit_report", ...})` when the assigned work is complete.
 
 Structured report sections (`summary`, `findings`, `anomalies`, `questions`, `codebase_state`, `recommended_next`) and good/bad contrast: `workflows.md` § "Report Submission" and `examples.md`.
 
@@ -98,18 +158,18 @@ Detailed examples for each trigger, and the counterpart-Brain context (Gate 1 pl
 
 When the PI points you at a workspace folder (local research files to ingest into RKA), use this three-step workflow:
 
-1. **`rka_scan_workspace_tree(folder_path)`** — fast overview of the directory structure with file counts per subdirectory. Always start here. Works on any filesystem including slow external drives.
-2. **`rka_scan_workspace(subdirectory_path)`** — deep-scan a specific subdirectory to classify files by type (markdown, code, PDF, bibtex, data). Do NOT call this on the root if it has thousands of files — pick subdirectories from step 1.
-3. **`rka_bootstrap_workspace(subdirectory_path)`** — ingest the classified files into RKA. Call on the same subdirectory you scanned.
+1. **`rka_query(args={"operation": "scan_workspace_tree", "project_id": <pinned>, "folder_path": "..."})`** — fast overview of the directory structure with file counts per subdirectory. Always start here. Works on any filesystem including slow external drives.
+2. **`rka_query(args={"operation": "scan_workspace", "project_id": <pinned>, "subdirectory_path": "..."})`** — deep-scan a specific subdirectory to classify files by type (markdown, code, PDF, bibtex, data). Do NOT call this on the root if it has thousands of files — pick subdirectories from step 1.
+3. **`rka_execute(args={"operation": "bootstrap_workspace", "project_id": <pinned>, "subdirectory_path": "..."})`** — ingest the classified files into RKA. Call on the same subdirectory you scanned.
 
-Do NOT skip step 1 and call `rka_scan_workspace` directly on a large root folder — external drives (exFAT, network mounts) are pathologically slow for recursive enumeration.
+Do NOT skip step 1 and call `scan_workspace` directly on a large root folder — external drives (exFAT, network mounts) are pathologically slow for recursive enumeration.
 
 ## Reading a paper for analysis
 
 When a mission asks you to read a paper:
 
 1. Get the project's Zotero collection key (if you don't already know it).
-2. Try `rka_link_literature_to_zotero(lit_id)` first — it auto-resolves via DOI / arXiv ID / URL / ISBN / title+author+year and persists the link on the lit_ entry.
+2. Try `rka_execute(args={"operation": "link_literature_to_zotero", "project_id": <pinned>, "lit_id": "lit_..."})` first — it auto-resolves via DOI / arXiv ID / URL / ISBN / title+author+year and persists the link on the lit_ entry.
 3. On success, read the PDF: `zotero_get_fulltext(zotero_item_key)`. Extract claims grounded in quoted evidence (confidence ≥ 0.8).
 4. On `reason: "no_match"`: emit a FULL-TEXT REQUEST checkpoint asking the PI to capture the paper into the project's Zotero collection. Do not proceed at abstract-level confidence unless the mission explicitly allows it.
 5. On `reason: "multiple_matches_below_threshold"`: render the candidates and ask the PI to disambiguate via checkpoint.

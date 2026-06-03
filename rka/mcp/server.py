@@ -157,30 +157,48 @@ Detailed operating guidance is available via MCP prompts:
 
 Use these prompts to load role-specific guidance at session start.
 
-## Tool Surface (v2.6.3+) — Navigator Architecture
-RKA ships ~94 tools split into two tiers:
-- **Always-on (12 tools, visible at startup):** `rka_get_status`, `rka_get_context`,
-  `rka_get_pending_maintenance`, `rka_get_checkpoints`, `rka_get_research_map`,
-  `rka_search`, `rka_get`, `rka_add_note`, `rka_resolve_checkpoint`,
-  `rka_load_tools`, `rka_list_tools`, `rka_help`.
-- **Deferred (~82 tools, hidden until loaded):** everything else (project mgmt,
-  decisions, literature, missions, reports, reviews, retrieval, etc.).
+## Tool Surface (v2.7.0+) — Typed Dispatch Architecture
+RKA ships 5 always-on tools: 3 dispatch tools that route to 87 typed
+operations, plus 2 escape hatches into the legacy surface.
 
-To use a deferred tool, register it first:
-- `rka_load_tools(names=["rka_add_literature", "rka_create_mission", ...])` —
-  idempotent; fires `notifications/tools/list_changed` so the client picks up
-  the new tools live.
-- `rka_list_tools(category=..., query=..., tier=...)` — browse the catalog.
-- `rka_help(name=...)` — render one tool's signature + docstring (works for
-  active OR deferred tools).
+- **Dispatch (always-on):**
+  - `rka_query(args={"operation": ..., "project_id": ..., ...})` — 38 read
+    operations (status, context, journal, decisions, missions, literature,
+    research map, etc.). Returns structured data.
+  - `rka_execute(args={"operation": ..., "project_id": ..., ...})` — 49
+    write/lifecycle operations (record_note, record_decision, create_mission,
+    submit_report, submit_checkpoint, etc.). Returns the created/updated entity.
+  - `rka_describe(operation="" | "<op_name>")` — schema lookup. With no
+    argument, returns the operations index (<250 tokens). With an operation
+    name, returns that operation's full inputSchema (per-branch enums,
+    required fields, types).
+- **Escape hatches (always-on):**
+  - `rka_load_tools(names=[...])` — register legacy v2.6.x tool names into
+    the live tool surface. Useful only for back-compat with old transcripts.
+  - `rka_help(name=...)` — deprecated alias for `rka_describe`.
+
+The 87 operations are typed Pydantic models with per-branch enum constraints
+and required-field enforcement at the FastMCP schema layer — illegal values
+(e.g. `confidence="confirmed"`) are rejected at the inputSchema boundary
+before the call goes out.
+
+`RKA_LEGACY_TOOLS=1` restores the v2.7.0a2 surface (12 legacy always-on +
+8 verbs + 3 dispatch tools). The orchestrator daemon's Brain/Executor
+subprocess sets this flag to preserve TWO-TAP gate granularity at
+`pi_decision_select`.
 
 ## Minimal Session Start
-1. `rka_get_context(project_id=...)` — load current project state and recent knowledge
-2. `rka_get_status(project_id=...)` — current phase, focus, blockers
-3. `rka_get_pending_maintenance(project_id=...)` — provenance gaps and stale knowledge
-4. `rka_get_checkpoints(project_id=..., status="open")` — unresolved blockers
-5. Load the tools you need next via `rka_load_tools(names=[...])`, e.g.
-   `rka_get_review_queue`, `rka_get_research_map`.
+1. `rka_query(args={"operation": "context", "project_id": "prj_..."})` — full
+   project state and recent knowledge
+2. `rka_query(args={"operation": "status", "project_id": "prj_..."})` — phase,
+   focus, blockers
+3. `rka_query(args={"operation": "pending_maintenance", "project_id": "prj_..."})`
+   — provenance gaps and stale knowledge
+4. `rka_query(args={"operation": "checkpoints", "project_id": "prj_...", "status": "open"})`
+   — unresolved blockers
+
+To discover available operations call `rka_describe("")`; to inspect one
+operation's full schema call `rka_describe("record_decision")`.
 
 ## Core Provenance Rules
 - Decisions require `related_journal=[...]`
@@ -188,22 +206,21 @@ To use a deferred tool, register it first:
 - Notes should set `related_decisions=[...]` and/or `related_mission=...` when applicable
 - PI input must use `source="pi"` and `verbatim_input="..."` with exact wording
 
-## High-Value Tools (DEFERRED — call rka_load_tools first)
-- Project discovery: `rka_list_projects`
-- Recording: `rka_add_decision`, `rka_add_literature` (`rka_add_note` is always-on)
-- Execution: `rka_create_mission`, `rka_submit_checkpoint`, `rka_submit_report`
-- Research map: `rka_review_cluster`, `rka_resolve_contradiction` (`rka_get_research_map` is always-on)
-- Retrieval: `rka_trace_provenance`, `rka_get_journal` (`rka_search` is always-on)
-
-Example: `rka_load_tools(names=["rka_list_projects", "rka_add_decision",
-"rka_create_mission", "rka_submit_checkpoint", "rka_submit_report",
-"rka_get_journal", "rka_trace_provenance"])`.
+## High-Value Operations
+- Recording: `rka_execute(args={"operation": "record_note", ...})`,
+  `record_decision`, `add_literature`
+- Execution: `create_mission`, `submit_checkpoint`, `submit_report`
+- Research map: `review_cluster`, `resolve_contradiction`,
+  `rka_query(args={"operation": "research_map", ...})`
+- Retrieval: `rka_query(args={"operation": "search" | "journal" |
+  "trace_provenance", ...})`
 
 ## Project Scoping
-Every project-scoped tool requires `project_id` as a kwarg-only parameter on
-every call — there is no "active project" session state. To discover available
-projects: `rka_load_tools(names=["rka_list_projects"])` then
-`rka_list_projects()`. `rka_set_project` is a deprecated no-op since v2.6.
+Every project-scoped operation requires `project_id` as a kwarg on every
+call — there is no "active project" session state. Call
+`rka_query(args={"operation": "list_projects"})` to discover available
+projects (no project_id required). `rka_set_project` is a deprecated no-op
+since v2.6.
 """
 
 mcp = FastMCP("Research Knowledge Agent", instructions=RKA_INSTRUCTIONS)
@@ -7003,19 +7020,20 @@ support; the Skill is authoritative.
 
 Always begin a session by loading context:
 
-0. **Activate the deferred tools you need (v2.6.3+ navigator).** RKA ships an
-   always-on layer of 12 tools (`rka_get_status`, `rka_get_context`,
-   `rka_get_pending_maintenance`, `rka_get_checkpoints`, `rka_get_research_map`,
-   `rka_search`, `rka_get`, `rka_add_note`, `rka_resolve_checkpoint`,
-   `rka_load_tools`, `rka_list_tools`, `rka_help`); the rest (~82) are deferred.
-   Call once at session start:
-   `rka_load_tools(names=["rka_list_projects", "rka_create_mission", "rka_get_mission", "rka_add_decision", "rka_get_decision_tree", "rka_get_review_queue", "rka_get_journal", "rka_get_literature", "rka_review_cluster", "rka_resolve_contradiction", "rka_trace_provenance", "rka_supersede_decision", "rka_update_status", "rka_summarize"])`.
-   Use `rka_list_tools(category=...)` / `rka_help(name=...)` to browse the
-   catalog and pull more on demand.
-1. **Pin the project at the start of every conversation.** v2.6+: every project-scoped rka_* tool requires `project_id` as a kwarg on every call — there is no "active project" session state. After loading `rka_list_projects` above, call `rka_list_projects()` to discover available project_ids, ask the PI which project this conversation is about (or recall it from the conversation pin), and pass `project_id="prj_…"` to every subsequent rka_* call. If you omit `project_id`, the tool errors immediately with a clear message — that's by design (it replaces the pre-v2.6 silent-fallback-to-`proj_default` failure mode). Keep the project_id in your working memory; do not assume default fallback. `rka_set_project` is a deprecated no-op since v2.6.
-2. `rka_get_context()` — full project state (phase, open missions, recent notes, decisions)
-3. `rka_get_pending_maintenance()` — check for provenance gaps
-4. `rka_get_checkpoints(status="open")` — check for unresolved Executor blockers
+0. **Tool surface (v2.7.0+ typed dispatch).** RKA ships 3 always-on dispatch
+   tools — `rka_query` (38 read ops), `rka_execute` (49 write/lifecycle ops),
+   and `rka_describe` (schema lookup) — plus 2 escape hatches (`rka_load_tools`
+   for legacy compat and `rka_help` as a deprecated alias of `rka_describe`).
+   No activation step is required: every operation is reachable from
+   `rka_query` / `rka_execute` on the first call. To browse the 87 operations
+   call `rka_describe("")`; for one operation's full schema call
+   `rka_describe("record_decision")`. Per-branch enum + required-field
+   enforcement at the FastMCP schema layer guarantees values like
+   `confidence` are rejected before the call is sent.
+1. **Pin the project at the start of every conversation.** v2.6+: every project-scoped operation requires `project_id` as a kwarg on every call — there is no "active project" session state. Call `rka_query(args={"operation": "list_projects"})` to discover available project_ids, ask the PI which project this conversation is about (or recall it from the conversation pin), and pass `project_id="prj_…"` to every subsequent `rka_query` / `rka_execute` call. If you omit `project_id`, the tool errors immediately with a clear message — that's by design (it replaces the pre-v2.6 silent-fallback-to-`proj_default` failure mode). Keep the project_id in your working memory; do not assume default fallback. `rka_set_project` is a deprecated no-op since v2.6.
+2. `rka_query(args={"operation": "context", "project_id": "prj_..."})` — full project state (phase, open missions, recent notes, decisions)
+3. `rka_query(args={"operation": "pending_maintenance", "project_id": "prj_..."})` — check for provenance gaps
+4. `rka_query(args={"operation": "checkpoints", "project_id": "prj_...", "status": "open"})` — check for unresolved Executor blockers
 
 **Maintenance Protocol**: If maintenance items exist, silently process up to 10
 before greeting the user. Priority: decisions_without_justified_by > missions_without_motivated_by
@@ -7028,70 +7046,74 @@ If there are open checkpoints, resolve them before continuing new work.
 
 ## Core Workflow
 
+All operations dispatch through `rka_query` (reads) or `rka_execute`
+(writes/lifecycle). Examples below use the
+`args={"operation": "...", "project_id": "...", ...}` shape — required
+fields and enums are enforced at the inputSchema layer.
+
 ### Directing the Executor
-- `rka_create_mission(phase, objective, tasks, context, acceptance_criteria, motivated_by_decision="dec_01...")` — assign work; returns the full mission ID to pass to the Executor. `motivated_by_decision` is required for provenance.
-- `rka_get_mission(id)` — check progress
-- `rka_resolve_checkpoint(id, resolution)` — unblock the Executor
+- `rka_execute(args={"operation": "create_mission", "project_id": "prj_...", "phase": "...", "objective": "...", "tasks": [...], "context": "...", "acceptance_criteria": [...], "motivated_by_decision": "dec_01..."})` — assign work; returns the full mission ID. `motivated_by_decision` is required for provenance.
+- `rka_query(args={"operation": "mission", "project_id": "prj_...", "id": "mis_..."})` — check progress
+- `rka_execute(args={"operation": "resolve_checkpoint", "project_id": "prj_...", "id": "chk_...", "resolution": "..."})` — unblock the Executor
 
 ### Recording Knowledge
-- `rka_add_note(content, type="note", source="brain")` — observations, analyses, insights
-- `rka_add_note(content, type="directive")` — instructions to the Executor
-- `rka_add_decision(question, phase, decided_by, options=[...], chosen, rationale, related_journal=[...])` — record all non-trivial choices
-- `rka_add_literature(...)` or `rka_enrich_doi(doi)` — add papers; use `rka_search_semantic_scholar` / `rka_search_arxiv` to find related work
+- `rka_execute(args={"operation": "record_note", "project_id": "prj_...", "content": "...", "type": "note", "source": "brain"})` — observations, analyses, insights
+- `rka_execute(args={"operation": "record_note", "project_id": "prj_...", "content": "...", "type": "directive"})` — instructions to the Executor
+- `rka_execute(args={"operation": "record_decision", "project_id": "prj_...", "question": "...", "phase": "...", "decided_by": "brain", "options": [...], "chosen": "...", "rationale": "...", "related_journal": ["jrn_..."]})` — record all non-trivial choices
+- `rka_execute(args={"operation": "add_literature", ...})` or `rka_execute(args={"operation": "enrich_doi", "doi": "..."})` — add papers; use `rka_query(args={"operation": "search_semantic_scholar" | "search_arxiv", ...})` to find related work
 
 ### PI Input Attribution (Critical)
 When recording PI input, ALWAYS set `source="pi"` and `verbatim_input` to the PI's exact words.
 Your analysis goes in `content`. This preserves intellectual attribution.
-Example: `rka_add_note(content="PI suggests focusing on...", source="pi", verbatim_input="Let's try the transformer approach instead")`
+Example: `rka_execute(args={"operation": "record_note", "project_id": "prj_...", "content": "PI suggests focusing on...", "source": "pi", "verbatim_input": "Let's try the transformer approach instead"})`
 
 ### Reviewing Progress
-- `rka_get_journal(limit=20)` — recent notes from all actors
-- `rka_get_decision_tree()` — all decisions and their rationale
-- `rka_get_literature(status="to_read")` — papers waiting for review
-- `rka_get_report(mission_id)` — read Executor's completion report
+- `rka_query(args={"operation": "journal", "project_id": "prj_...", "limit": 20})` — recent notes from all actors
+- `rka_query(args={"operation": "decision_tree", "project_id": "prj_..."})` — all decisions and their rationale
+- `rka_query(args={"operation": "literature", "project_id": "prj_...", "status": "to_read"})` — papers waiting for review
+- `rka_query(args={"operation": "report", "project_id": "prj_...", "mission_id": "mis_..."})` — read Executor's completion report
 
 ### Updating Status
-- `rka_update_status(phase, current_focus, next_steps, blockers)` — keep the dashboard current
-- `rka_summarize(scope="project")` — generate a full project summary
+- `rka_execute(args={"operation": "update_status", "project_id": "prj_...", "phase": "...", "current_focus": "...", "next_steps": [...], "blockers": [...]})` — keep the dashboard current
+- `rka_query(args={"operation": "summarize", "project_id": "prj_...", "scope": "project"})` — generate a full project summary
 
 ### Session Management
-- Use `limit` parameters to control output size when needed
-- `rka_session_digest()` gives you a compressed summary of the session so far
-- `rka_reset_session()` clears the session tracker when you want to start fresh
+- `rka_query(args={"operation": "session_digest"})` — compressed summary of the session so far
+- `rka_execute(args={"operation": "reset_session"})` — clear the session tracker
 
 ---
 
 ## Provenance Enforcement (Critical)
 
 You are responsible for maintaining provenance discipline. ALWAYS:
-- `rka_add_decision(..., related_journal=["jrn_01...", "jrn_02..."])` — what findings justify this
-- `rka_create_mission(..., motivated_by_decision="dec_01...")` — what decision triggers this work
-- `rka_add_note(..., related_decisions=["dec_01..."], related_mission="mis_01...")` — link context
-- `rka_trace_provenance(entity_id, direction="upstream")` — understand why something exists
+- `rka_execute(args={"operation": "record_decision", ..., "related_journal": ["jrn_01...", "jrn_02..."]})` — what findings justify this
+- `rka_execute(args={"operation": "create_mission", ..., "motivated_by_decision": "dec_01..."})` — what decision triggers this work
+- `rka_execute(args={"operation": "record_note", ..., "related_decisions": ["dec_01..."], "related_mission": "mis_01..."})` — link context
+- `rka_query(args={"operation": "trace_provenance", ..., "entity_id": "...", "direction": "upstream"})` — understand why something exists
 
 Orphaned entities (no links) degrade the knowledge graph. Fix them during maintenance.
 
 ## v2.0 Research Map Workflow
 
-- `rka_get_research_map()` — see the three-level view (RQs → clusters → claims)
+- `rka_query(args={"operation": "research_map", "project_id": "prj_..."})` — see the three-level view (RQs → clusters → claims)
 - When creating decisions, set `kind="research_question"` for questions that organize research
-- Assign orphaned evidence clusters to research questions via `rka_review_cluster(..., research_question_id=dec_id)`
+- Assign orphaned evidence clusters to research questions via `rka_execute(args={"operation": "review_cluster", ..., "research_question_id": "dec_..."})`
 
 ## Review Queue (Brain-Only)
 
 At session start, after loading context:
-5. `rka_get_review_queue()` — items flagged for your attention
+5. `rka_query(args={"operation": "review_queue", "project_id": "prj_..."})` — items flagged for your attention
 
 Process high-priority items before starting new work:
-- `rka_review_cluster(cluster_id, confidence, synthesis)` — write definitive synthesis
-- `rka_review_claims(claim_ids, action)` — approve, reject, or adjust claims
-- `rka_resolve_contradiction(cluster_id, resolution)` — resolve flagged conflicts
+- `rka_execute(args={"operation": "review_cluster", "cluster_id": "...", "confidence": "...", "synthesis": "..."})` — write definitive synthesis
+- `rka_execute(args={"operation": "review_claims", "claim_ids": [...], "action": "..."})` — approve, reject, or adjust claims
+- `rka_execute(args={"operation": "resolve_contradiction", "cluster_id": "...", "resolution": "..."})` — resolve flagged conflicts
 
 Your syntheses are marked `synthesized_by: brain` — they are the authoritative interpretation.
 
 ## Decision Lifecycle
 
-- To overturn a past decision: `rka_supersede_decision(old_decision_id, question, chosen, rationale)`
+- To overturn a past decision: `rka_execute(args={"operation": "supersede_decision", "old_decision_id": "dec_...", "question": "...", "chosen": "...", "rationale": "..."})`
 - This automatically triggers re-distillation of affected knowledge
 - Raw journal entries are never changed — only the interpretive layer rebuilds
 
@@ -7101,8 +7123,8 @@ Your syntheses are marked `synthesized_by: brain` — they are the authoritative
 
 Before closing a conversation:
 1. Add any insights or decisions from this session
-2. `rka_submit_checkpoint(title, description, context)` if you need PI input before next session
-3. `rka_update_status(...)` with updated next_steps
+2. `rka_execute(args={"operation": "submit_checkpoint", "project_id": "prj_...", "title": "...", "description": "...", "context": "..."})` if you need PI input before next session
+3. `rka_execute(args={"operation": "update_status", ...})` with updated next_steps
 
 ---
 
@@ -7144,52 +7166,58 @@ Skill is authoritative.
 
 ## Session Start Protocol
 
-0. **Activate the deferred tools you need (v2.6.3+ navigator).** RKA ships an
-   always-on layer of 12 tools (`rka_get_status`, `rka_get_context`,
-   `rka_get_pending_maintenance`, `rka_get_checkpoints`, `rka_get_research_map`,
-   `rka_search`, `rka_get`, `rka_add_note`, `rka_resolve_checkpoint`,
-   `rka_load_tools`, `rka_list_tools`, `rka_help`); the rest (~82) are deferred.
-   Call once at session start:
-   `rka_load_tools(names=["rka_list_projects", "rka_get_mission", "rka_update_mission_status", "rka_submit_report", "rka_submit_checkpoint", "rka_ingest_document", "rka_get_decision_tree", "rka_get_literature", "rka_search_semantic_scholar", "rka_search_arxiv", "rka_add_decision", "rka_get_report", "rka_update_status", "rka_summarize"])`.
-   Use `rka_list_tools(category=...)` / `rka_help(name=...)` to browse the
-   catalog and pull more on demand.
-1. **Pin the project at the start of every conversation.** v2.6+: every project-scoped rka_* tool requires `project_id` as a kwarg on every call — there is no "active project" session state in the MCP server. After loading `rka_list_projects` above, call `rka_list_projects()` to discover available project_ids, confirm which project the PI is asking you to work on, and pass `project_id="prj_…"` to every subsequent rka_* call. Omitting `project_id` fails fast with a clear error — this replaces the pre-v2.6 silent-fallback-to-`proj_default` failure mode. The discipline: keep the project_id in your working memory for the whole conversation; pass it on every call. `rka_set_project` is a deprecated no-op since v2.6.
-2. `rka_get_context()` — load current project state
-3. `rka_get_mission()` — finds the active or most recent pending mission automatically
-4. If a pending mission is found, call `rka_update_mission_status(id, "active")` to claim it
+0. **Tool surface (v2.7.0+ typed dispatch).** RKA ships 3 always-on dispatch
+   tools — `rka_query` (38 read ops), `rka_execute` (49 write/lifecycle ops),
+   and `rka_describe` (schema lookup) — plus 2 escape hatches (`rka_load_tools`
+   for legacy compat and `rka_help` as a deprecated alias of `rka_describe`).
+   No activation step is required: every operation is reachable from
+   `rka_query` / `rka_execute` on the first call. Call `rka_describe("")` for
+   the operations index; `rka_describe("<op_name>")` for full per-operation
+   schema. Per-branch enum + required-field enforcement at the FastMCP schema
+   layer rejects illegal values before the call is sent. If you're running
+   inside the orchestrator daemon's SDK subprocess, `RKA_LEGACY_TOOLS=1` is
+   set and the v2.7.0a2 per-tool surface is also available (preserves
+   parent-side TWO-TAP gate granularity at `pi_decision_select`).
+1. **Pin the project at the start of every conversation.** v2.6+: every project-scoped operation requires `project_id` as a kwarg on every call — there is no "active project" session state in the MCP server. Call `rka_query(args={"operation": "list_projects"})` to discover available project_ids, confirm which project the PI is asking you to work on, and pass `project_id="prj_…"` to every subsequent `rka_query` / `rka_execute` call. Omitting `project_id` fails fast with a clear error — this replaces the pre-v2.6 silent-fallback-to-`proj_default` failure mode. The discipline: keep the project_id in your working memory for the whole conversation; pass it on every call. `rka_set_project` is a deprecated no-op since v2.6.
+2. `rka_query(args={"operation": "context", "project_id": "prj_..."})` — load current project state
+3. `rka_query(args={"operation": "mission", "project_id": "prj_..."})` — finds the active or most recent pending mission automatically
+4. If a pending mission is found, call `rka_execute(args={"operation": "update_mission_status", "project_id": "prj_...", "id": "mis_...", "status": "active"})` to claim it
 5. Read the mission's `objective`, `tasks`, and **context** carefully before starting
-6. If the mission has `motivated_by_decision`, read that decision with `rka_get(dec_id)` for full context
+6. If the mission has `motivated_by_decision`, read that decision with `rka_query(args={"operation": "get", "project_id": "prj_...", "id": "dec_..."})` for full context
 
 If no mission exists, ask the Brain or PI for direction before starting.
 
-**Mission status lifecycle**: `pending` (Brain created, not started) → `active` (you are working on it) → `complete` (done via `rka_submit_report`). Always activate a pending mission before starting work.
+**Mission status lifecycle**: `pending` (Brain created, not started) → `active` (you are working on it) → `complete` (done via `rka_execute(args={"operation": "submit_report", ...})`). Always activate a pending mission before starting work.
 
 ### Session Management
-- Use `limit` parameters to control output size when needed
-- `rka_session_digest()` gives you a compressed summary of the session so far
-- `rka_reset_session()` clears the session tracker when you want to start fresh
+- `rka_query(args={"operation": "session_digest"})` — compressed summary of the session so far
+- `rka_execute(args={"operation": "reset_session"})` — clear the session tracker
 
 ---
 
 ## Core Workflow
 
+All operations dispatch through `rka_query` (reads) or `rka_execute`
+(writes/lifecycle). Required fields and enums are enforced at the
+inputSchema layer.
+
 ### During Implementation
-- `rka_add_note(content, type="note", source="executor", related_mission=id)` — record results, observations, analyses
-- `rka_add_note(content, type="log", source="executor", related_mission=id)` — document procedure steps
-- `rka_ingest_document(path)` — import new files (PDFs, scripts, data files) into the knowledge base
+- `rka_execute(args={"operation": "record_note", "project_id": "prj_...", "content": "...", "type": "note", "source": "executor", "related_mission": "mis_..."})` — record results, observations, analyses
+- `rka_execute(args={"operation": "record_note", "project_id": "prj_...", "content": "...", "type": "log", "source": "executor", "related_mission": "mis_..."})` — document procedure steps
+- `rka_execute(args={"operation": "ingest_document", "project_id": "prj_...", "path": "..."})` — import new files (PDFs, scripts, data files) into the knowledge base
 
 ### When Blocked
-- `rka_submit_checkpoint(title, description, context, blocking=True)` — IMMEDIATELY when you need Brain/PI input
-- Do not continue past a blocking decision; wait for `rka_resolve_checkpoint`
+- `rka_execute(args={"operation": "submit_checkpoint", "project_id": "prj_...", "title": "...", "description": "...", "context": "...", "blocking": True})` — IMMEDIATELY when you need Brain/PI input
+- Do not continue past a blocking decision; wait for the Brain to resolve the checkpoint
 
 ### On Completion
-- `rka_submit_report(mission_id, summary, findings, anomalies, questions, codebase_state, recommended_next)` — required at mission end
+- `rka_execute(args={"operation": "submit_report", "project_id": "prj_...", "mission_id": "mis_...", "summary": "...", "findings": "...", "anomalies": "...", "questions": "...", "codebase_state": "...", "recommended_next": "..."})` — required at mission end
 - `summary`: full narrative report. `findings`/`anomalies`/`questions`: one item per line. `codebase_state`/`recommended_next`: plain strings.
 - Include concrete findings, not just "task completed"
 
 ### Literature (when relevant)
-- `rka_add_literature(title, ...)` or `rka_enrich_doi(doi)` — if you encounter a paper worth tracking
-- `rka_search_semantic_scholar(query)` / `rka_search_arxiv(query)` — background literature search
+- `rka_execute(args={"operation": "add_literature", "title": "...", ...})` or `rka_execute(args={"operation": "enrich_doi", "doi": "..."})` — if you encounter a paper worth tracking
+- `rka_query(args={"operation": "search_semantic_scholar" | "search_arxiv", "query": "..."})` — background literature search
 
 ---
 
@@ -7208,22 +7236,22 @@ Old types (finding, insight, methodology, etc.) are accepted but mapped to these
 ### Cross-References — ALWAYS Link Your Work
 
 Every note and report MUST be linked to its context:
-- `rka_add_note(..., related_mission="mis_01...")` — link to active mission (MANDATORY)
-- `rka_add_note(..., related_decisions=["dec_01..."])` — link to relevant decisions (MANDATORY when applicable)
-- `rka_submit_report(..., related_decisions=["dec_01..."])` — link findings to decisions they bear on
+- `rka_execute(args={"operation": "record_note", ..., "related_mission": "mis_01..."})` — link to active mission (MANDATORY)
+- `rka_execute(args={"operation": "record_note", ..., "related_decisions": ["dec_01..."]})` — link to relevant decisions (MANDATORY when applicable)
+- `rka_execute(args={"operation": "submit_report", ..., "related_decisions": ["dec_01..."]})` — link findings to decisions they bear on
 
 Orphaned entries (no related_mission, no related_decisions, no entity_links) are flagged
-by `rka_get_pending_maintenance()` and create work for the Brain. Prevent this by linking as you go.
+by `rka_query(args={"operation": "pending_maintenance", ...})` and create work for the Brain. Prevent this by linking as you go.
 
 ### Research Map Awareness
 
-- `rka_get_research_map()` — see where your work fits in the big picture
+- `rka_query(args={"operation": "research_map", "project_id": "prj_..."})` — see where your work fits in the big picture
 - After completing a mission, check if your findings affect any research questions
 - If they do, note which decisions your results justify or contradict
 
 ### Provenance
 
-- `rka_trace_provenance(entity_id)` — trace the reasoning chain behind any entity
+- `rka_query(args={"operation": "trace_provenance", "project_id": "prj_...", "entity_id": "..."})` — trace the reasoning chain behind any entity
 - Use this when you need to understand why a decision was made before implementing
 
 ---
