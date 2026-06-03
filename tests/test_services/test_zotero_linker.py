@@ -70,8 +70,13 @@ def _mock_httpx(client_factory):
 
 
 def test_returns_not_configured_when_env_missing(monkeypatch):
+    """When env vars are empty AND no persisted config exists at /data,
+    linker reports zotero_not_configured (pre-v2.7.0.2 behavior preserved)."""
     monkeypatch.delenv("ZOTERO_API_KEY", raising=False)
     monkeypatch.delenv("ZOTERO_LIBRARY_ID", raising=False)
+    # v2.7.0.2: explicitly stub the persisted-file fallback so this test
+    # passes regardless of whether the host has /data/zotero_config.json.
+    monkeypatch.setattr(ZL, "_persisted_config", lambda: None)
     result = ZL.link_literature(title="x", doi="10.1/abc")
     assert result.zotero_item_key is None
     assert result.reason == "zotero_not_configured"
@@ -79,10 +84,206 @@ def test_returns_not_configured_when_env_missing(monkeypatch):
 
 def test_is_configured_reflects_env(monkeypatch):
     monkeypatch.delenv("ZOTERO_API_KEY", raising=False)
+    monkeypatch.setattr(ZL, "_persisted_config", lambda: None)
     assert ZL.is_configured() is False
     monkeypatch.setenv("ZOTERO_API_KEY", "k")
     monkeypatch.setenv("ZOTERO_LIBRARY_ID", "1")
     assert ZL.is_configured() is True
+
+
+# ---------------------------------------------------------------------------
+# v2.7.0.2 Bug 1: persisted-config fallback
+# ---------------------------------------------------------------------------
+
+
+def test_persisted_config_fallback_when_env_empty(monkeypatch, tmp_path):
+    """v2.7.0.2: when env is empty but /data/zotero_config.json has creds,
+    the linker uses the file. Pre-fix it returned zotero_not_configured."""
+    from rka.services.zotero_config import ZoteroConfig, ZoteroConfigService
+
+    monkeypatch.delenv("ZOTERO_API_KEY", raising=False)
+    monkeypatch.delenv("ZOTERO_LIBRARY_ID", raising=False)
+
+    # Write a real persisted config to a tmp /data
+    svc = ZoteroConfigService(config_dir=tmp_path)
+    svc.save_config(
+        ZoteroConfig(api_key="file-key", library_id="9646912", library_type="user"),
+        actor="pi",
+    )
+    # Patch ZoteroConfigService so _persisted_config() points at tmp_path
+    monkeypatch.setattr(
+        "rka.services.zotero_config.ZoteroConfigService",
+        lambda *args, **kwargs: ZoteroConfigService(config_dir=tmp_path),
+    )
+
+    cfg = ZL._resolve_config()
+    assert cfg is not None
+    api_key, library_id, library_type = cfg
+    assert api_key == "file-key"
+    assert library_id == "9646912"
+    assert library_type == "users"  # URL-plural form
+
+
+def test_env_wins_when_both_env_and_file_set(monkeypatch, tmp_path):
+    """When both env vars and the persisted file have creds, env wins (operator
+    override path preserved for one-off testing / eval-harness use)."""
+    from rka.services.zotero_config import ZoteroConfig, ZoteroConfigService
+
+    monkeypatch.setenv("ZOTERO_API_KEY", "env-key")
+    monkeypatch.setenv("ZOTERO_LIBRARY_ID", "env-lib")
+    monkeypatch.setenv("ZOTERO_LIBRARY_TYPE", "group")
+
+    svc = ZoteroConfigService(config_dir=tmp_path)
+    svc.save_config(
+        ZoteroConfig(api_key="file-key", library_id="file-lib", library_type="user"),
+        actor="pi",
+    )
+    monkeypatch.setattr(
+        "rka.services.zotero_config.ZoteroConfigService",
+        lambda *args, **kwargs: ZoteroConfigService(config_dir=tmp_path),
+    )
+
+    api_key, library_id, library_type = ZL._resolve_config()
+    assert api_key == "env-key"
+    assert library_id == "env-lib"
+    assert library_type == "groups"
+
+
+def test_persisted_config_handles_zotero_config_error_gracefully(monkeypatch):
+    """If the persisted file is corrupt, _persisted_config returns None
+    (logs warning) — caller falls through to zotero_not_configured rather
+    than raising out of the link path."""
+    monkeypatch.delenv("ZOTERO_API_KEY", raising=False)
+    monkeypatch.delenv("ZOTERO_LIBRARY_ID", raising=False)
+
+    from rka.services.zotero_config import ZoteroConfigError
+
+    def _broken_service(*args, **kwargs):
+        class _Broken:
+            def load_config(self):
+                raise ZoteroConfigError("corrupt file")
+        return _Broken()
+
+    monkeypatch.setattr(
+        "rka.services.zotero_config.ZoteroConfigService",
+        _broken_service,
+    )
+
+    result = ZL.link_literature(title="x", doi="10.1/abc")
+    assert result.zotero_item_key is None
+    assert result.reason == "zotero_not_configured"
+
+
+# ---------------------------------------------------------------------------
+# v2.7.0.2 Bug 3: explicit zotero_key override
+# ---------------------------------------------------------------------------
+
+
+def test_explicit_key_returns_explicit_key_match(monkeypatch):
+    """When zotero_key is supplied and the item exists, linker returns
+    immediately with matched_by='explicit_key' and confidence=1.0."""
+    monkeypatch.setenv("ZOTERO_API_KEY", "test")
+    monkeypatch.setenv("ZOTERO_LIBRARY_ID", "1234567")
+    monkeypatch.setattr(ZL, "_persisted_config", lambda: None)
+
+    class _Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url, params=None, **kw):
+            # ANY URL for items/<key> returns 200 (item exists)
+            assert "/items/ABC12345" in url
+            return FakeResponse(200, {"key": "ABC12345"})
+
+    import httpx
+    with patch.object(httpx, "Client", _Client):
+        result = ZL.link_literature(
+            title="anything",
+            doi="anything",
+            zotero_key="ABC12345",
+        )
+    assert result.zotero_item_key == "ABC12345"
+    assert result.matched_by == "explicit_key"
+    assert result.confidence == 1.0
+
+
+def test_explicit_key_not_found_returns_clean_reason(monkeypatch):
+    """When zotero_key is supplied but doesn't exist in the library,
+    return explicit_key_not_found: <key> and DON'T fall through to fuzzy."""
+    monkeypatch.setenv("ZOTERO_API_KEY", "test")
+    monkeypatch.setenv("ZOTERO_LIBRARY_ID", "1234567")
+    monkeypatch.setattr(ZL, "_persisted_config", lambda: None)
+
+    class _Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url, params=None, **kw):
+            return FakeResponse(404, {})
+
+    import httpx
+    with patch.object(httpx, "Client", _Client):
+        result = ZL.link_literature(
+            title="something",
+            doi="something",
+            zotero_key="DEADBEEF",
+        )
+    assert result.zotero_item_key is None
+    assert result.reason and result.reason.startswith("explicit_key_not_found")
+    assert "DEADBEEF" in result.reason
+
+
+def test_explicit_key_bypasses_fuzzy_matching(monkeypatch):
+    """When zotero_key is supplied, the five fuzzy strategies are NOT
+    called — even if they would otherwise find a match."""
+    monkeypatch.setenv("ZOTERO_API_KEY", "test")
+    monkeypatch.setenv("ZOTERO_LIBRARY_ID", "1234567")
+    monkeypatch.setattr(ZL, "_persisted_config", lambda: None)
+
+    search_calls = []
+
+    class _Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url, params=None, **kw):
+            if "/items/" in url and (params is None or "q" not in params):
+                # Direct item GET — the explicit-key path
+                return FakeResponse(200, {"key": "EXPLICITKEY"})
+            search_calls.append((url, params))
+            return FakeResponse(200, [{"data": {"key": "FUZZY", "DOI": "10.1/abc"}}])
+
+    import httpx
+    with patch.object(httpx, "Client", _Client):
+        result = ZL.link_literature(
+            title="x",
+            doi="10.1/abc",
+            zotero_key="EXPLICITKEY",
+        )
+
+    # Got the explicit key, not the fuzzy DOI match
+    assert result.zotero_item_key == "EXPLICITKEY"
+    assert result.matched_by == "explicit_key"
+    # And no fuzzy search calls were made
+    assert search_calls == []
 
 
 # ---------------------------------------------------------------------------

@@ -67,20 +67,73 @@ class LinkResult:
         return out
 
 
+def _normalize_library_type(library_type: str) -> str:
+    """Normalize 'user'/'users'/'group'/'groups' → URL-path plural."""
+    plural = library_type.rstrip("s") + "s"
+    if plural not in ("users", "groups"):
+        plural = "users"
+    return plural
+
+
 def _env_config() -> Optional[tuple[str, str, str]]:
+    """Read Zotero creds from env vars (operator override path).
+
+    v2.7.0.2: env vars still win over the persisted config file at
+    ``/data/zotero_config.json``. This preserves the one-off testing /
+    eval-harness pattern (``ZOTERO_API_KEY=... docker compose up``) while
+    the persistent path goes through ``ZoteroConfigService``.
+    """
     api_key = (os.environ.get("ZOTERO_API_KEY") or "").strip()
     library_id = (os.environ.get("ZOTERO_LIBRARY_ID") or "").strip()
     library_type = (os.environ.get("ZOTERO_LIBRARY_TYPE") or "user").strip().lower()
     if not api_key or not library_id:
         return None
-    library_type = library_type.rstrip("s") + "s"  # plural for URL path
-    if library_type not in ("users", "groups"):
-        library_type = "users"
-    return api_key, library_id, library_type
+    return api_key, library_id, _normalize_library_type(library_type)
+
+
+def _persisted_config() -> Optional[tuple[str, str, str]]:
+    """Read Zotero creds from `/data/zotero_config.json` (v2.7.0.2).
+
+    Returns the same (api_key, library_id, library_type-URL-plural) tuple
+    as `_env_config()`. Returns None when the file is missing OR the
+    persisted config is not fully populated (api_key + library_id both
+    non-empty). Failures in the file-read path log a warning but return
+    None so the caller falls through to `LinkResult(reason='zotero_not_configured')`
+    rather than raising.
+    """
+    try:
+        # Lazy import keeps zotero_linker importable without the service.
+        from rka.services.zotero_config import ZoteroConfigService
+    except ImportError:
+        return None
+    try:
+        cfg_svc = ZoteroConfigService()
+        cfg = cfg_svc.load_config()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("zotero_config load failed; treating as not-configured: %s", exc)
+        return None
+    if not cfg.is_configured():
+        return None
+    return (
+        cfg.api_key.strip(),
+        cfg.library_id.strip(),
+        _normalize_library_type(cfg.library_type),
+    )
+
+
+def _resolve_config() -> Optional[tuple[str, str, str]]:
+    """Resolve Zotero creds: env > /data/zotero_config.json > None.
+
+    v2.7.0.2: returns the first source that yields a fully-configured
+    triple. Env wins for operator-override paths (one-off testing,
+    eval-harness); the file is the persistent path the Web UI / REST API
+    writes to so the cred survives ``docker compose up -d --build``.
+    """
+    return _env_config() or _persisted_config()
 
 
 def is_configured() -> bool:
-    return _env_config() is not None
+    return _resolve_config() is not None
 
 
 def _extract_arxiv_id(*texts: Optional[str]) -> Optional[str]:
@@ -182,13 +235,28 @@ def link_literature(
     year: Optional[int] = None,
     doi: Optional[str] = None,
     url: Optional[str] = None,
+    zotero_key: Optional[str] = None,
     timeout: float = DEFAULT_TIMEOUT,
 ) -> LinkResult:
     """Try to find a Zotero item matching this literature entry.
 
     Returns a LinkResult. zotero_item_key is None if no confident match.
+
+    v2.7.0.2 (Bug 3 fix): when ``zotero_key`` is supplied, validate it
+    exists in the configured library via direct GET on /items/<key>, then
+    return the explicit-key result and bypass the five fuzzy-match
+    strategies. This is the manual override path for cases the matcher
+    can't anchor on — standalone PDF attachments, working papers without
+    bibliographic metadata, sector reports without DOIs.
+
+    v2.7.0.2 (Bug 1 fix): credential resolution falls back to
+    ``/data/zotero_config.json`` via ``ZoteroConfigService`` when env
+    vars are empty. Pre-fix this returned ``zotero_not_configured`` on
+    every container restart because the Docker images don't ship Zotero
+    env, leaving the linker permanently broken until the operator
+    re-sourced ``.env`` and ``--force-recreate``'d.
     """
-    cfg = _env_config()
+    cfg = _resolve_config()
     if cfg is None:
         return LinkResult(reason="zotero_not_configured")
 
@@ -202,9 +270,32 @@ def link_literature(
     headers = {
         "Zotero-API-Key": api_key,
         "Zotero-API-Version": "3",
-        "User-Agent": "rka/2.5",
+        "User-Agent": "rka/2.7",
     }
     base = f"{ZOTERO_API_BASE}/{library_type}/{library_id}"
+
+    # ---- Strategy 0: explicit zotero_key (v2.7.0.2 override path) ----
+    if zotero_key and zotero_key.strip():
+        key = zotero_key.strip()
+        try:
+            with httpx.Client(timeout=timeout, headers=headers) as client:
+                resp = client.get(f"{base}/items/{key}")
+            if resp.status_code == 200:
+                return LinkResult(
+                    zotero_item_key=key,
+                    matched_by="explicit_key",
+                    confidence=1.0,
+                )
+            if resp.status_code == 404:
+                return LinkResult(
+                    reason=f"explicit_key_not_found: {key}",
+                )
+            return LinkResult(
+                reason=f"explicit_key_probe_error: HTTP {resp.status_code}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Zotero explicit-key probe failed: %s", exc)
+            return LinkResult(reason=f"explicit_key_probe_error: {type(exc).__name__}")
 
     try:
         with httpx.Client(timeout=timeout, headers=headers) as client:

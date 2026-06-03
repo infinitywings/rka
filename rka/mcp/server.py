@@ -841,22 +841,38 @@ async def rka_update_literature(
 
 
 @tool(category="literature")
-async def rka_link_literature_to_zotero(id: str, *, project_id: str) -> dict:
+async def rka_link_literature_to_zotero(
+    id: str,
+    *,
+    project_id: str,
+    zotero_key: str | None = None,
+) -> dict:
     """Resolve a literature entry to its Zotero item key for full-text access.
 
-    Tries five strategies in order: DOI -> arXiv ID -> URL -> ISBN ->
-    title+author+year fuzzy match. On a confident match, the link is
-    persisted on the literature entry (zotero_item_key + zotero_match_method).
-    On weak / multiple matches, returns candidates for PI confirmation.
+    v2.7.0.2 (Bug 3): when ``zotero_key`` is supplied, the linker
+    validates that key exists in the configured library via a direct GET
+    on ``/items/<key>`` and persists it without running the five
+    fuzzy-match strategies. This is the manual-override path for cases
+    the matcher can't anchor on — standalone PDF attachments, working
+    papers without bibliographic metadata, sector reports without DOIs.
+
+    Default path (zotero_key omitted): tries five strategies in order:
+    DOI -> arXiv ID -> URL -> ISBN -> title+author+year fuzzy match. On
+    a confident match, the link is persisted (zotero_item_key +
+    zotero_match_method). On weak/multiple matches, returns candidates
+    for PI confirmation.
 
     Returns:
-      {"zotero_item_key": "ABC12345", "matched_by": "doi"}           — strong match, persisted
+      {"zotero_item_key": "ABC12345", "matched_by": "explicit_key",
+       "confidence": 1.0}                                              — explicit key, persisted
+      {"zotero_item_key": "ABC12345", "matched_by": "doi"}              — strong match, persisted
       {"zotero_item_key": "ABC12345", "matched_by": "title_author_year",
-       "confidence": 0.96}                                            — fuzzy but ratified
-      {"zotero_item_key": null, "reason": "no_match"}                 — paper not in library; emit FULL-TEXT REQUEST
+       "confidence": 0.96}                                              — fuzzy but ratified
+      {"zotero_item_key": null, "reason": "no_match"}                   — paper not in library; emit FULL-TEXT REQUEST
       {"zotero_item_key": null, "reason": "multiple_matches_below_threshold",
-       "candidates": [...]}                                           — ask PI to pick
-      {"zotero_item_key": null, "reason": "zotero_not_configured"}    — ZOTERO_API_KEY missing
+       "candidates": [...]}                                             — ask PI to pick
+      {"zotero_item_key": null, "reason": "explicit_key_not_found: KEY"} — supplied key doesn't exist
+      {"zotero_item_key": null, "reason": "zotero_not_configured"}      — creds missing
 
     Once linked, use the zotero MCP server's `zotero_get_fulltext(item_key=...)`
     tool to read the paper's full text for grounded claim extraction.
@@ -876,9 +892,12 @@ async def rka_link_literature_to_zotero(id: str, *, project_id: str) -> dict:
           resolves correctly. Empirical regression: introduced in
           commit 6e7a2d6 (Phase-3.4 zotero linker, 2026-05-28) which
           landed AFTER PR #32 (v2.6 contract) without the kwarg.
+        zotero_key: Optional explicit Zotero item key (8-char alnum).
+          When supplied, bypasses fuzzy matching.
     """
+    body = {"zotero_key": zotero_key} if zotero_key else None
     async with _client(project_id) as c:
-        r = await c.post(f"/api/literature/{id}/link_zotero")
+        r = await c.post(f"/api/literature/{id}/link_zotero", json=body)
         _raise_with_detail(r)
         return r.json()
 

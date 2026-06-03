@@ -2,13 +2,34 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from rka.models.literature import Literature, LiteratureCreate, LiteratureUpdate
 from rka.services.literature import LiteratureService
 from rka.api.deps import get_scoped_literature_service
 
 router = APIRouter()
+
+
+class LinkZoteroRequest(BaseModel):
+    """Optional request body for ``POST /api/literature/{lit_id}/link_zotero``.
+
+    v2.7.0.2 (Bug 3): when ``zotero_key`` is supplied, the linker
+    validates it exists in the library and persists it without running
+    the five fuzzy-match strategies. The override path for gray
+    literature / standalone PDF attachments / working papers without
+    bibliographic metadata. Pre-v2.7.0.2 there was no override at all.
+    """
+
+    zotero_key: str | None = Field(
+        default=None,
+        description=(
+            "Explicit Zotero item key (8-char alnum). When set, the linker "
+            "validates the item exists in the library and persists it without "
+            "fuzzy matching."
+        ),
+    )
 
 
 @router.post("/literature", response_model=Literature, status_code=201)
@@ -60,16 +81,23 @@ async def update_literature(
 @router.post("/literature/{lit_id}/link_zotero")
 async def link_literature_to_zotero(
     lit_id: str,
+    body: LinkZoteroRequest | None = Body(default=None),
     actor: str = "system",
     svc: LiteratureService = Depends(get_scoped_literature_service),
 ) -> dict:
-    """Resolve a literature entry to its Zotero item key via DOI / arXiv ID /
-    URL / ISBN / title-author-year fallback. Persists the link on success.
+    """Resolve a literature entry to its Zotero item key.
+
+    v2.7.0.2:
+      - If ``body.zotero_key`` is supplied, validate the key exists in the
+        library and persist it (override path; bypasses fuzzy matching).
+      - Otherwise, try DOI → arXiv ID → URL → ISBN → title-author-year.
 
     Returns:
-      {"zotero_item_key": "...", "matched_by": "doi"|"arxiv_id"|...}
+      {"zotero_item_key": "...", "matched_by": "explicit_key"|"doi"|"arxiv_id"|...}
       {"zotero_item_key": null, "reason": "no_match"|"multiple_matches_below_threshold"|
-       "weak_match_needs_confirmation"|"zotero_not_configured", "candidates": [...]}
+       "weak_match_needs_confirmation"|"zotero_not_configured"|
+       "explicit_key_not_found: ..."|"explicit_key_probe_error: ...",
+       "candidates": [...]}
     """
     import asyncio
     from rka.services.zotero_linker import link_literature
@@ -85,6 +113,7 @@ async def link_literature_to_zotero(
         year=lit.year,
         doi=lit.doi,
         url=lit.url,
+        zotero_key=body.zotero_key if body else None,
     )
 
     if result.zotero_item_key:

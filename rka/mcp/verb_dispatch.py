@@ -53,7 +53,10 @@ PHASE-X²' provenance enforcement (carried over from the orchestrator):
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def _registry() -> dict:
@@ -159,8 +162,13 @@ async def dispatch_record_literature(
                 "missing_field",
                 "action='link_zotero' requires lit_id",
             )
+        # v2.7.0.2 (Bug 3 fix): thread `zotero_key` through. Pre-fix the
+        # legacy tool didn't accept it; if supplied, it was silently
+        # dropped here and the linker ran fuzzy matching anyway. Now
+        # supplied keys bypass matching and validate via direct GET on
+        # /items/<key>.
         return await _legacy("rka_link_literature_to_zotero")(
-            id=lit_id, project_id=project_id
+            id=lit_id, project_id=project_id, zotero_key=zotero_key
         )
 
     if action == "import_bibtex" or (action is None and bibtex):
@@ -2098,6 +2106,45 @@ async def dispatch_execute(
 #     is handled at the sub-dispatcher layer where it already lived.
 
 
+def _coerce_result_to_str(result: Any) -> str:
+    """v2.7.0.2 (Bug 2 fix): JSON-stringify dict/list dispatch results.
+
+    The ``rka_execute`` and ``rka_query`` MCP wrappers declare ``result:
+    str`` in their outputSchema. Pre-v2.7.0.2, operations whose legacy
+    tool returned a dict (``link_literature_to_zotero``, ``enrich_doi``,
+    ``process_paper``, ``validate_reference``) tripped FastMCP's output
+    validator and surfaced as client-side errors — even though the
+    underlying DB writes had already landed. Programmatic callers saw
+    every dict-returning success as a failure and had to re-query the
+    entity to confirm.
+
+    This helper keeps the typed-arg contract (``result: str``) while
+    accommodating structured returns: anything that isn't already a
+    string gets ``json.dumps(...)``'d. Callers can ``json.loads(result)``
+    when the operation is known to return structured data; otherwise
+    they get a clean string suitable for direct display.
+
+    ``default=str`` handles datetime / Path / Decimal / UUID without
+    raising on otherwise-fine payloads (rare, but the underlying REST
+    layer can leak them).
+    """
+    if isinstance(result, str):
+        return result
+    if result is None:
+        return ""
+    try:
+        return json.dumps(result, indent=None, default=str, ensure_ascii=False)
+    except (TypeError, ValueError) as exc:
+        # Fall back to repr so we never raise out of the dispatch layer.
+        # An unrenderable payload is a bug worth surfacing as text, not
+        # as a Pydantic output-validation error after the write landed.
+        logger.warning(
+            "dispatch result coerce-to-str failed (%s); falling back to repr",
+            exc,
+        )
+        return repr(result)
+
+
 async def dispatch_query_typed(args: "BaseModel") -> str:  # type: ignore[name-defined]  # noqa: F821
     """v2.7.0 typed-query dispatch.
 
@@ -2107,7 +2154,9 @@ async def dispatch_query_typed(args: "BaseModel") -> str:  # type: ignore[name-d
               FastMCP's parsed inputSchema; the model's ``operation``
               field is the discriminator.
 
-    Returns: JSON string from the underlying REST adapter.
+    Returns: JSON string from the underlying REST adapter (v2.7.0.2:
+    dict/list returns are JSON-stringified via ``_coerce_result_to_str``
+    so they don't trip the ``rka_query`` outputSchema's ``str`` contract).
     """
     # Lazy-import operation_args to avoid module-cycle at startup. The
     # underlying classes are only used for ``isinstance`` narrowing
@@ -2117,9 +2166,9 @@ async def dispatch_query_typed(args: "BaseModel") -> str:  # type: ignore[name-d
 
     # Unscoped reads — list_projects + health.
     if op == "list_projects":
-        return await dispatch_session("list_projects")
+        return _coerce_result_to_str(await dispatch_session("list_projects"))
     if op == "health":
-        return await dispatch_session("health")
+        return _coerce_result_to_str(await dispatch_session("health"))
 
     if not pid:
         return _err(
@@ -2134,14 +2183,16 @@ async def dispatch_query_typed(args: "BaseModel") -> str:  # type: ignore[name-d
     kw_all.pop("operation", None)
     kw_all.pop("project_id", None)
 
-    return await dispatch_query(
-        op,
-        project_id=pid,
-        id=kw_all.get("id"),
-        query=kw_all.get("query"),
-        limit=kw_all.get("limit"),
-        filters=kw_all.get("filters"),
-        options=kw_all.get("options"),
+    return _coerce_result_to_str(
+        await dispatch_query(
+            op,
+            project_id=pid,
+            id=kw_all.get("id"),
+            query=kw_all.get("query"),
+            limit=kw_all.get("limit"),
+            filters=kw_all.get("filters"),
+            options=kw_all.get("options"),
+        )
     )
 
 
@@ -2176,11 +2227,13 @@ async def dispatch_execute_typed(args: "BaseModel") -> str:  # type: ignore[name
                    "verbatim_input", "provenance", "tags", "phase")
     common_kw = {k: kw_all.pop(k) for k in common_keys if k in kw_all}
 
-    return await dispatch_execute(
-        op,
-        project_id=pid,
-        **common_kw,
-        **kw_all,
+    return _coerce_result_to_str(
+        await dispatch_execute(
+            op,
+            project_id=pid,
+            **common_kw,
+            **kw_all,
+        )
     )
 
 

@@ -43,6 +43,7 @@ from rka.api.routes import (
     maintenance as maintenance_routes,
     researcher_tools as researcher_tools_routes,
     hooks as hooks_routes,
+    zotero_config as zotero_config_routes,
 )
 from rka.config import RKAConfig
 from rka.infra.database import Database
@@ -319,6 +320,10 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
     # Routes carry their own /api/config/... prefix internally; mount with
     # an empty prefix so the documented paths don't end up doubled.
     app.include_router(config_routes.router, tags=["config"])
+    # v2.7.0.2 Bug 1 fix: persistent Zotero config at /data/zotero_config.json
+    # so the linker survives `docker compose up -d --build` without re-sourcing
+    # env. Routes carry their own /api/config/zotero prefix.
+    app.include_router(zotero_config_routes.router, tags=["zotero-config"])
 
     @app.get("/api/health")
     async def health(request: Request):
