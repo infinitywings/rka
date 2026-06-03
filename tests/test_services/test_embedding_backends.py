@@ -338,6 +338,131 @@ def test_fastembed_backend_skips_prefix_for_non_nomic_model():
 
 
 # ---------------------------------------------------------------------------
+# v2.7.0.1: bounded threads + persistent cache_dir (OOM regression)
+#
+# Pre-v2.7.0.1, FastEmbedBackend constructed TextEmbedding(model_name=...) with
+# no threads or cache_dir, leaving onnxruntime to default intra_op_num_threads
+# to container CPU count (10 on Apple Silicon under Docker) and writing the
+# 130 MB model to an ephemeral cache that didn't survive container recreate.
+# Empirical signature (2026-06-03): peak worker memory rose 7.17 → 7.87 GiB
+# when the VM ceiling went 7.75 → 9.21 GiB — unbounded growth, not undersized
+# VM. The fix caps threads at 2 (configurable) and persists cache to /data.
+# ---------------------------------------------------------------------------
+
+
+def test_fastembed_default_threads_is_2(monkeypatch):
+    """OOM regression: default threads must be 2, not CPU count."""
+    monkeypatch.delenv("RKA_EMBEDDING_THREADS", raising=False)
+    b = FastEmbedBackend()
+    assert b._threads == 2
+
+
+def test_fastembed_threads_env_override(monkeypatch):
+    monkeypatch.setenv("RKA_EMBEDDING_THREADS", "4")
+    b = FastEmbedBackend()
+    assert b._threads == 4
+
+
+def test_fastembed_threads_param_overrides_env(monkeypatch):
+    monkeypatch.setenv("RKA_EMBEDDING_THREADS", "4")
+    b = FastEmbedBackend(threads=8)
+    assert b._threads == 8
+
+
+def test_fastembed_threads_zero_clamped_to_1():
+    """Defensive: zero/negative threads must clamp to 1 (zero would let
+    onnxruntime fall back to CPU-count, defeating the bound)."""
+    assert FastEmbedBackend(threads=0)._threads == 1
+    assert FastEmbedBackend(threads=-5)._threads == 1
+
+
+def test_fastembed_default_cache_dir_is_none(monkeypatch):
+    """When neither env nor param set, cache_dir stays None so fastembed
+    uses its default. (Tests + local dev shouldn't be forced onto /data.)"""
+    monkeypatch.delenv("RKA_EMBEDDING_CACHE_DIR", raising=False)
+    b = FastEmbedBackend()
+    assert b._cache_dir is None
+
+
+def test_fastembed_cache_dir_env_override(monkeypatch):
+    monkeypatch.setenv("RKA_EMBEDDING_CACHE_DIR", "/data/fastembed_cache")
+    b = FastEmbedBackend()
+    assert b._cache_dir == "/data/fastembed_cache"
+
+
+def test_fastembed_cache_dir_param_overrides_env(monkeypatch):
+    monkeypatch.setenv("RKA_EMBEDDING_CACHE_DIR", "/data/fastembed_cache")
+    b = FastEmbedBackend(cache_dir="/tmp/custom_cache")
+    assert b._cache_dir == "/tmp/custom_cache"
+
+
+def test_fastembed_textembedding_called_with_bounded_threads(monkeypatch):
+    """End-to-end: _get_model must pass threads= to TextEmbedding(). This
+    is the call the v2.7.0.1 fix actually changed — pre-fix it received
+    only model_name, leaving onnxruntime to default to CPU count."""
+    monkeypatch.setenv("RKA_EMBEDDING_THREADS", "2")
+    monkeypatch.delenv("RKA_EMBEDDING_CACHE_DIR", raising=False)
+    b = FastEmbedBackend()
+
+    captured: dict = {}
+
+    class _StubTextEmbedding:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    import sys
+    import types
+
+    stub_module = types.ModuleType("fastembed")
+    stub_module.TextEmbedding = _StubTextEmbedding
+    monkeypatch.setitem(sys.modules, "fastembed", stub_module)
+
+    b._get_model()
+    assert captured["threads"] == 2
+    assert captured["model_name"] == "nomic-ai/nomic-embed-text-v1.5"
+    # cache_dir omitted when not configured — fastembed falls back to its default
+    assert "cache_dir" not in captured
+
+
+def test_fastembed_textembedding_called_with_cache_dir_when_set(monkeypatch):
+    monkeypatch.setenv("RKA_EMBEDDING_CACHE_DIR", "/data/fastembed_cache")
+    b = FastEmbedBackend()
+
+    captured: dict = {}
+
+    class _StubTextEmbedding:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    import sys
+    import types
+
+    stub_module = types.ModuleType("fastembed")
+    stub_module.TextEmbedding = _StubTextEmbedding
+    monkeypatch.setitem(sys.modules, "fastembed", stub_module)
+
+    b._get_model()
+    assert captured["cache_dir"] == "/data/fastembed_cache"
+
+
+def test_make_backend_fastembed_threads_passthrough():
+    """Factory must forward threads + cache_dir from config dict."""
+    b = make_backend(
+        {
+            "backend": "fastembed",
+            "config": {
+                "model_name": "test-model",
+                "threads": 3,
+                "cache_dir": "/tmp/x",
+            },
+        }
+    )
+    assert isinstance(b, FastEmbedBackend)
+    assert b._threads == 3
+    assert b._cache_dir == "/tmp/x"
+
+
+# ---------------------------------------------------------------------------
 # Round-trip via factory + Protocol
 # ---------------------------------------------------------------------------
 
