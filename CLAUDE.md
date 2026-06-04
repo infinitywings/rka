@@ -25,6 +25,7 @@ When working here you are modifying the tool itself, not using it for research.
 - **API routes**: thin adapters only — no business logic, always delegate to service layer
 - **Tests**: `tests/` using pytest; run with `docker compose exec rka pytest`
 - **v2.7.0+ tool surface (MCP)**: 3 always-on dispatch tools (`rka_query` / `rka_execute` / `rka_describe`) + 2 escape hatches (`rka_load_tools` / `rka_help`) = 5 broadcast tools. 87 typed Pydantic operation models in `rka/mcp/operation_args.py` provide per-branch enum + required-field enforcement at the FastMCP `inputSchema` layer (`Union[Args1, …, Args87]` rendered as `oneOf` with `discriminator='operation'`). Operations split: 38 read (`rka_query`) + 49 write/lifecycle (`rka_execute`). 91 legacy tools + 8 v2.7.0a2 verbs remain at `tier='deferred'`, callable via `rka_load_tools`. Setting `RKA_LEGACY_TOOLS=1` in env restores the v2.7.0a2 surface (20 always-on tools) — used in `orchestrator/docker-compose.yml` to preserve TWO-TAP gate granularity at `pi_decision_select`. Full empirical arc + 4 pre-mortem compromises (all closed at schema layer) documented in [`docs/v2.6.x-v2.7.0-tool-surface-arc.md`](docs/v2.6.x-v2.7.0-tool-surface-arc.md) and `CHANGELOG.md` v2.7.0 entry.
+- **Credential management**: use `rka cred` subcommands (`init` / `set` / `get` / `env` / `propagate` / `check`) — vault lives at `~/.config/rka/creds.env` (XDG-compliant, mode 0600). Never commit creds to any repo or `.env` tracked by git. Full reference: [`docs/CRED_VAULT.md`](docs/CRED_VAULT.md).
 
 ## Running (Docker only)
 

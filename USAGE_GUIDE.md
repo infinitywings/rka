@@ -240,6 +240,8 @@ If either fails:
 - ✓ Did you fully quit-and-reopen Claude Desktop, or reload the VS Code window?
 - ✓ Is the path in the JSON config absolute (not `~/.local/bin/rka`)?
 
+> **Optional — manage MCP credentials with `rka cred init` (v2.7.0.4+).** If your projects use API-keyed MCP servers (Semantic Scholar, SerpAPI, Zotero, OpenAlex, etc.), `rka cred init` walks you through writing a single XDG-compliant vault at `~/.config/rka/creds.env` (mode 0600). Subcommands: `rka cred set <KEY>`, `rka cred env`, `rka cred check`, `rka cred propagate`. See [`docs/CRED_VAULT.md`](docs/CRED_VAULT.md) for the full reference. This replaces ad-hoc per-project `.env` files for shared credentials; per-project addons are supported but optional.
+
 ### Step 7. Load the Brain skill in Claude Desktop
 
 The MCP server ships **role skills** as MCP prompts: `brain_skill`, `executor_skill`, and `pi_skill`. These are detailed workflow guides (~450 lines for the Brain) that teach Claude the session-start protocol, PI-attribution discipline, provenance rules, and anti-patterns.

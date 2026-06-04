@@ -734,6 +734,8 @@ These CLI bootstrap commands target the current database/default project. In a m
 
 All settings use environment variables with the `RKA_` prefix. Place them in a `.env` file in your project directory.
 
+> **Credential management (v2.7.0.4+).** For API keys and secrets used by RKA and its integrations (e.g. `OPENAI_API_KEY`, `ZOTERO_API_KEY`, `SEMANTIC_SCHOLAR_API_KEY`), the recommended path is the new `rka cred` subcommand — `rka cred init` bootstraps a vault at `~/.config/rka/creds.env` (XDG-compliant, mode 0600). See [`docs/CRED_VAULT.md`](docs/CRED_VAULT.md) for the full reference; ad-hoc `.env` files in project directories still work for the `RKA_*` settings below.
+
 ### Core Settings
 
 | Variable            | Default                   | Description                |
