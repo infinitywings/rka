@@ -184,6 +184,18 @@ Brain should call `rka_query(operation="list_projects")` (v2.7.0 dispatch) and r
 
 **Success signal**: SessionStart hook line contains `version 2.7.0` AND Brain returns a project list (empty or otherwise) without error.
 
+### Step 5.5 — First-run credentials (`rka cred init`)
+
+With the backend up and the plugin wired, bootstrap the global credential vault before your first real session:
+
+```bash
+rka cred init          # creates ~/.config/rka/creds.env (mode 0600, XDG-compliant)
+rka cred set SEMANTIC_SCHOLAR_API_KEY ...   # plus ZOTERO_API_KEY, etc. from §2
+rka cred check         # verifies which keys are present + reachable
+```
+
+`rka cred env` prints export lines for shell sourcing; `rka cred propagate` syncs the vault into downstream consumers (Claude Desktop config, `orchestrator/.env`). Full reference: [`docs/CRED_VAULT.md`](docs/CRED_VAULT.md). The keys from §2 (Semantic Scholar, Zotero, Unpaywall email, optionally SerpAPI / CORE / Claude OAuth) all live here — going forward this is the recommended path instead of hand-editing `claude_desktop_config.json` env blocks.
+
 ---
 
 ## 4. Cross-platform reference
