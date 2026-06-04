@@ -33,7 +33,14 @@ class _FakeSDK:
         self.reply = reply
         self.calls: list[dict] = []
 
-    def complete(self, prompt: str, *, max_tokens: int = 4096, system: str | None = None) -> str:
+    def complete(
+        self,
+        prompt: str,
+        *,
+        max_tokens: int = 4096,
+        system: str | None = None,
+        timeout_s: float | None = None,  # Phase S4 — accepted, ignored
+    ) -> str:
         self.calls.append({"prompt": prompt, "system": system, "max_tokens": max_tokens})
         return self.reply
 

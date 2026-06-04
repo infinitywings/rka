@@ -20,7 +20,11 @@ import re
 from datetime import datetime, timezone
 
 from orchestrator.llm_client import (
+    SDK_TIMEOUT_BACKBRIEF_S,
+    SDK_TIMEOUT_DEFAULT_S,
+    SDK_TIMEOUT_TOOL_USE_S,
     SDKClient,
+    SDKTimeoutError,
     WRITE_TOOLS,
 )
 # Note: capability_of lookup is now inside `check_action_capability`
@@ -380,6 +384,38 @@ def _accrue_cost(state: ResearchWorkflowState, sdk: SDKClient) -> float:
     return prev + delta
 
 
+def _sdk_timeout_error_state(
+    *,
+    node_name: str,
+    current_phase: str,
+    timeout_s: float,
+    exc: SDKTimeoutError,
+) -> dict:
+    """Phase S4 — mirror of brain._sdk_timeout_error_state for Executor
+    nodes. Build the standard ErrorRecord + escalation routing for a
+    per-call LLM timeout.
+
+    Returned shape matches the cap-exceeded pattern used by
+    `confirmation_brief_redraft` (real ErrorRecord + escalation route);
+    `error_type='llm_call_timeout'` is the canonical label.
+    """
+    err: ErrorRecord = {
+        "node_name": node_name,
+        "error_type": "llm_call_timeout",
+        "detail": (
+            f"sdk.complete() exceeded {timeout_s:.0f}s budget in "
+            f"{node_name}: {exc}"
+        ),
+        "timestamp": _now_iso(),
+    }
+    return {
+        "current_phase": current_phase,
+        "current_node": node_name,
+        "next_node_override": "escalation_router",
+        "errors": [err],
+    }
+
+
 def _summarize_position(text: str, *, max_chars: int = 280) -> str:
     first_line = text.strip().split("\n", 1)[0]
     return first_line if len(first_line) <= max_chars else first_line[: max_chars - 1] + "…"
@@ -452,7 +488,19 @@ def backbrief_draft(
     # mission body so the upfront Backbrief is grounded in objective/tasks/AC.
     mission = mcp.rka_get_mission(id=mission_id) if mission_id else None
     prompt = _build_backbrief_prompt(state, mission)
-    backbrief_text = sdk.complete(prompt=prompt, system=EXECUTOR_SYSTEM)
+    try:
+        backbrief_text = sdk.complete(
+            prompt=prompt,
+            system=EXECUTOR_SYSTEM,
+            timeout_s=SDK_TIMEOUT_BACKBRIEF_S,
+        )
+    except SDKTimeoutError as exc:
+        return _sdk_timeout_error_state(
+            node_name="backbrief_draft",
+            current_phase="executor_backbrief",
+            timeout_s=SDK_TIMEOUT_BACKBRIEF_S,
+            exc=exc,
+        )
 
     note_id = mcp.rka_add_note(
         content=backbrief_text,
@@ -616,7 +664,19 @@ def mission_execute(
     # We still run (LangGraph topology owns control flow), but mark phase
     # accordingly so the router in T6 can pick it up.
     prompt = _build_mission_execute_prompt(state)
-    work_log = sdk.complete(prompt=prompt, system=EXECUTOR_SYSTEM)
+    try:
+        work_log = sdk.complete(
+            prompt=prompt,
+            system=EXECUTOR_SYSTEM,
+            timeout_s=SDK_TIMEOUT_TOOL_USE_S,
+        )
+    except SDKTimeoutError as exc:
+        return _sdk_timeout_error_state(
+            node_name="mission_execute",
+            current_phase="executor_execute",
+            timeout_s=SDK_TIMEOUT_TOOL_USE_S,
+            exc=exc,
+        )
 
     note_id = mcp.rka_add_note(
         content=work_log,
@@ -1582,7 +1642,19 @@ def submit_report(
     state: ResearchWorkflowState, sdk: SDKClient, mcp: MCPClient
 ) -> dict:
     prompt = _build_report_prompt(state)
-    report_text = sdk.complete(prompt=prompt, system=EXECUTOR_SYSTEM)
+    try:
+        report_text = sdk.complete(
+            prompt=prompt,
+            system=EXECUTOR_SYSTEM,
+            timeout_s=SDK_TIMEOUT_DEFAULT_S,
+        )
+    except SDKTimeoutError as exc:
+        return _sdk_timeout_error_state(
+            node_name="submit_report",
+            current_phase="executor_report",
+            timeout_s=SDK_TIMEOUT_DEFAULT_S,
+            exc=exc,
+        )
 
     mission_id = state.get("mission_id")
     # `mission_id` is required by rka_submit_report. If absent (shouldn't

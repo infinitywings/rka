@@ -1233,6 +1233,88 @@ roadmap
 §5 — PR2; root-cause workflow `wjyk2x82n` (2026-06-01);
 `orchestrator/pyproject.toml` 0.6.1 → 0.6.2.
 
+### Phase S4 — per-call LLM-timeout layer (silent in-segment stall fix)
+
+Empirical follow-up from the 2026-06-03 hyperscaler-auditing live test
+on `mis_01KT0HP12N51TXXKGKQ097RD1P` / thread `thr_19e8eebfb58ef007ac2`.
+PI cockpit observed a backbrief stall measured in minutes during the
+backbrief → confirmation_brief → acceptance transition; the run sat
+at `status='running'` with no parked interrupt, no terminal_state,
+no exception, until the Phase D2.6 segment-level watchdog eventually
+fired an opaque "no progress" escalation. Phase S4 closes the gap
+ONE LEVEL DOWN: per-call timeouts that surface a classified
+`llm_call_timeout` ErrorRecord BEFORE the segment ever finishes.
+
+**Architecture (Protocol-level seam).** The single point of injection
+is `SDKClient.complete()`. A new `timeout_s: float | None = None`
+kwarg propagates to `_RealSDKClient._async_complete`, which wraps the
+streaming-consumption loop in `asyncio.wait_for` and converts
+`asyncio.TimeoutError` to a new `SDKTimeoutError` at the Protocol
+boundary. Per-node constants live in `llm_client.py`:
+
+- `SDK_TIMEOUT_DEFAULT_S = 240.0` — plain LLM call (5 of 6 Brain
+  sites + `submit_report`).
+- `SDK_TIMEOUT_BACKBRIEF_S = 480.0` — `backbrief_draft` (does MCP
+  reads to research the mission body).
+- `SDK_TIMEOUT_TOOL_USE_S = 600.0` — `mission_execute` (iterates
+  tool-use turns; needs the largest budget).
+
+Defaults are GENEROUS (3-10× a typical call) so we only intercept
+genuine hangs, never slow legitimate calls.
+
+**Per-node wraps.** All 9 `sdk.complete()` call sites across
+`nodes/brain.py` (6: `strategy_node`, `confirmation_brief`,
+`decision_present`, `cluster_review`, `gate1_validation`,
+`final_synthesis`) and `nodes/executor.py` (3: `backbrief_draft`,
+`mission_execute`, `submit_report`) are now wrapped in a
+try/except SDKTimeoutError. On hit, the node returns a state update
+shaped identically to the Phase-X² `confirmation_brief_redraft`
+cap-exceeded pattern: real ErrorRecord with `error_type='llm_call_timeout'`
++ `next_node_override='escalation_router'`. The escalation_router
+sees a classified error rather than synthesizing an unclassified one.
+
+Helper `_sdk_timeout_error_state(...)` is duplicated across
+`nodes/brain.py` and `nodes/executor.py` (parallel implementations
+rather than a shared module — keeps the two node files independently
+reviewable, matches the existing `_now_iso`/`_artifact`/`_accrue_cost`
+parallel-helper convention).
+
+**Complementarity with Phase D2.6 watchdog.** The watchdog catches
+the OUTER class of stall — a segment that returns cleanly but did
+not advance (e.g. SDK subprocess pipe-wait deadlock detected only
+after the LangGraph segment finishes). Phase S4 catches the INNER
+class — a single hung LLM call inside that segment. Both layers
+remain in place: the watchdog is the final safety net for residual
+no-progress cases; S4 surfaces a specific classified cause when the
+hang is at a single LLM turn (which is the empirical 2026-06-03
+failure shape).
+
+**Coverage gates.** `test_sdk_timeouts.py` includes lock-tests that
+fail if a new `sdk.complete()` call site lands in either node file
+without a `try:` line within the prior 3 source lines. Future
+contributors cannot ship a new LLM call site that bypasses the
+timeout discipline.
+
+**Three-storage discipline preserved.** The new ErrorRecord lives in
+`state.errors` (LangGraph state); the timeout config lives in
+`llm_client.py`; nothing new in RKA. Bookkeeper invariant intact
+(`git diff main -- rka/` empty); grep-gate intact (no new
+`from rka`/`import rka` in orchestrator/).
+
+**Tests** (+18 net). `tests/test_sdk_timeouts.py` covers three layers:
+(1) Protocol contract — `timeout_s` kwarg + `SDKTimeoutError` class
+shape + constants ordering; (2) `asyncio.wait_for` integration —
+real `_RealSDKClient._async_complete` against a SimpleNamespace
+stub of `claude_agent_sdk` proving hung-stream-raises +
+fast-stream-returns + None-timeout-disabled paths; (3) per-node
+wraps — `_TimeoutSDK` fake raises `SDKTimeoutError`, all 9 nodes
+return the canonical error_state with the correct per-node budget.
+
+Full suite: 1296 passed, 2 skipped, 0 failures.
+
+Reference: empirical bug surfaced 2026-06-03 hyperscaler-auditing
+run; `orchestrator/pyproject.toml` 0.6.9 → 0.6.10.
+
 ### Deferred follow-ups
 
 Deferred from the Phase D2.1 review — non-blocking but should

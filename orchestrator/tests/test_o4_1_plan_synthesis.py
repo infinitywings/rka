@@ -337,7 +337,14 @@ class _SeqSDK:
         self.replies = list(replies)
         self.calls: list[dict] = []
 
-    def complete(self, prompt: str, *, max_tokens: int = 4096, system=None) -> str:
+    def complete(
+        self,
+        prompt: str,
+        *,
+        max_tokens: int = 4096,
+        system=None,
+        timeout_s: float | None = None,  # Phase S4 — accepted, ignored
+    ) -> str:
         self.calls.append({"prompt": prompt, "system": system})
         return self.replies.pop(0) if self.replies else ""
 

@@ -86,7 +86,25 @@ name = "rka-orchestrator"
 # section teaching each role about the navigator architecture and
 # how to call rka_load_tools when a deferred tool is needed,
 # (c) bumps the READ_TOOLS lock-test from 14 to 17.
-version = "0.6.9"
+# 0.6.9 → 0.6.10: Phase S4 — per-call LLM-timeout layer. Adds
+# `SDKTimeoutError` + `timeout_s` kwarg on `SDKClient.complete()`
+# (Protocol-level seam); wraps the real impl's streaming loop in
+# `asyncio.wait_for`; wires per-node constants
+# (SDK_TIMEOUT_DEFAULT_S=240s, SDK_TIMEOUT_BACKBRIEF_S=480s,
+# SDK_TIMEOUT_TOOL_USE_S=600s) into all 9 `sdk.complete()` call
+# sites in nodes/brain.py (6) + nodes/executor.py (3); on hit a
+# classified `llm_call_timeout` ErrorRecord routes through
+# `escalation_router`. Complementary to Phase D2.6 segment-level
+# watchdog: this layer catches a single hung LLM call BEFORE the
+# segment ever finishes, so the PI sees a specific cause rather
+# than the watchdog's opaque "no progress" escalation. Empirical
+# motivation: PI cockpit reported backbrief stall measured in
+# minutes during 2026-06-03 hyperscaler-auditing Run-5 (thr_19e8...).
+# +18 tests in test_sdk_timeouts.py covering Protocol contract,
+# asyncio.wait_for integration, per-node wraps (9 sites), and
+# coverage-gate lock-tests that fail if a new sdk.complete() call
+# site ships without the try/except.
+version = "0.6.10"
 description = "RKA + LangGraph orchestrator (Phase A → Phase-X² polish; agentic branch)"
 readme = "README.md"
 requires-python = ">=3.11"

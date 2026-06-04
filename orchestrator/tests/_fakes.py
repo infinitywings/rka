@@ -32,8 +32,16 @@ class FakeSDK:
         *,
         max_tokens: int = 4096,
         system: str | None = None,
+        timeout_s: float | None = None,  # Phase S4 — accepted, recorded, not enforced
     ) -> str:
-        self.calls.append({"prompt": prompt, "max_tokens": max_tokens, "system": system})
+        self.calls.append(
+            {
+                "prompt": prompt,
+                "max_tokens": max_tokens,
+                "system": system,
+                "timeout_s": timeout_s,
+            }
+        )
         self.last_call_cost_usd = self.canned_cost_usd
         return self.canned_reply
 

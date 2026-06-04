@@ -90,7 +90,7 @@ class ErrorRecord(TypedDict, total=False):
     """One escalation-class failure (caught + routed, not a Python exception)."""
 
     node_name: str
-    error_type: str  # "consensus_loop_exceeded" | "budget_exceeded" | "mcp_error" | ...
+    error_type: str  # "consensus_loop_exceeded" | "budget_exceeded" | "mcp_error" | "llm_call_timeout" | ...
     detail: str
     timestamp: str
 

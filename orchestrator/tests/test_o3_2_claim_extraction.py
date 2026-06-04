@@ -195,7 +195,14 @@ def test_claim_extraction_records_llm_failure_keeps_going():
         def __init__(self):
             self.calls = []
 
-        def complete(self, prompt: str, *, max_tokens: int = 4096, system=None) -> str:
+        def complete(
+            self,
+            prompt: str,
+            *,
+            max_tokens: int = 4096,
+            system=None,
+            timeout_s: float | None = None,  # Phase S4 — accepted, ignored
+        ) -> str:
             self.calls.append(prompt)
             if "jrn_bad" in prompt:
                 raise RuntimeError("Brain blew up")

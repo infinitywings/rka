@@ -22,7 +22,12 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
-from orchestrator.llm_client import SDKClient, WRITE_TOOLS
+from orchestrator.llm_client import (
+    SDK_TIMEOUT_DEFAULT_S,
+    SDKClient,
+    SDKTimeoutError,
+    WRITE_TOOLS,
+)
 from orchestrator.mcp_client import MCPClient
 from orchestrator.rka_enums import (
     RKA_CHECKPOINT_TYPES,
@@ -364,6 +369,39 @@ def _artifact(rka_id: str, entity_type: str, node_name: str) -> ArtifactRef:
     }
 
 
+def _sdk_timeout_error_state(
+    *,
+    node_name: str,
+    current_phase: str,
+    timeout_s: float,
+    exc: SDKTimeoutError,
+) -> dict:
+    """Phase S4 — build the standard ErrorRecord + escalation routing for a
+    per-call LLM timeout.
+
+    The returned state update is shaped identically to the cap-exceeded
+    pattern used by `confirmation_brief_redraft` (real ErrorRecord +
+    `next_node_override='escalation_router'`) so the escalation_router
+    sees a classified error rather than synthesizing an unclassified
+    one. `error_type='llm_call_timeout'` is the canonical label.
+    """
+    err: ErrorRecord = {
+        "node_name": node_name,
+        "error_type": "llm_call_timeout",
+        "detail": (
+            f"sdk.complete() exceeded {timeout_s:.0f}s budget in "
+            f"{node_name}: {exc}"
+        ),
+        "timestamp": _now_iso(),
+    }
+    return {
+        "current_phase": current_phase,
+        "current_node": node_name,
+        "next_node_override": "escalation_router",
+        "errors": [err],
+    }
+
+
 def _accrue_cost(state: ResearchWorkflowState, sdk: SDKClient) -> float:
     """Phase E4: return `state["usd_spent"] + sdk.last_call_cost_usd`.
 
@@ -697,7 +735,19 @@ def strategy_node(
     # _POSITION_FORMAT ensures real Claude's reply begins with a one-line
     # position summary (consumed by _summarize_position below). Phase 1's
     # PilotSDK happened to satisfy this naturally; real Claude needs the hint.
-    strategy_text = sdk.complete(prompt=prompt, system=_brain_system(_POSITION_FORMAT))
+    try:
+        strategy_text = sdk.complete(
+            prompt=prompt,
+            system=_brain_system(_POSITION_FORMAT),
+            timeout_s=SDK_TIMEOUT_DEFAULT_S,
+        )
+    except SDKTimeoutError as exc:
+        return _sdk_timeout_error_state(
+            node_name="strategy_node",
+            current_phase="brain_strategy",
+            timeout_s=SDK_TIMEOUT_DEFAULT_S,
+            exc=exc,
+        )
 
     note_id = mcp.rka_add_note(
         content=strategy_text,
@@ -849,7 +899,17 @@ def confirmation_brief(
     # body so the Confirmation Brief is grounded in objective/tasks/AC.
     mission = mcp.rka_get_mission(id=mission_id) if mission_id else None
     prompt = _build_confirmation_prompt(state, mission)
-    brief_text = sdk.complete(prompt=prompt, system=BRAIN_SYSTEM)
+    try:
+        brief_text = sdk.complete(
+            prompt=prompt, system=BRAIN_SYSTEM, timeout_s=SDK_TIMEOUT_DEFAULT_S
+        )
+    except SDKTimeoutError as exc:
+        return _sdk_timeout_error_state(
+            node_name="confirmation_brief",
+            current_phase="brain_confirmation",
+            timeout_s=SDK_TIMEOUT_DEFAULT_S,
+            exc=exc,
+        )
 
     note_id = mcp.rka_add_note(
         content=brief_text,
@@ -1150,7 +1210,17 @@ def decision_present(
 
     # Fall-through: existing strategic-meta-decision flow (Phase 2.7 design).
     prompt = _build_decision_prompt(state)
-    decision_draft = sdk.complete(prompt=prompt, system=BRAIN_SYSTEM)
+    try:
+        decision_draft = sdk.complete(
+            prompt=prompt, system=BRAIN_SYSTEM, timeout_s=SDK_TIMEOUT_DEFAULT_S
+        )
+    except SDKTimeoutError as exc:
+        return _sdk_timeout_error_state(
+            node_name="decision_present",
+            current_phase="brain_review",
+            timeout_s=SDK_TIMEOUT_DEFAULT_S,
+            exc=exc,
+        )
 
     # Draft is journaled (not yet a decision — decision creation happens
     # after PI selects an option, in pi_decision_select → finalization).
@@ -1200,7 +1270,17 @@ def cluster_review(
 ) -> dict:
     research_map = mcp.rka_get_research_map()
     prompt = _build_cluster_review_prompt(state, research_map)
-    review_text = sdk.complete(prompt=prompt, system=BRAIN_SYSTEM)
+    try:
+        review_text = sdk.complete(
+            prompt=prompt, system=BRAIN_SYSTEM, timeout_s=SDK_TIMEOUT_DEFAULT_S
+        )
+    except SDKTimeoutError as exc:
+        return _sdk_timeout_error_state(
+            node_name="cluster_review",
+            current_phase="brain_review",
+            timeout_s=SDK_TIMEOUT_DEFAULT_S,
+            exc=exc,
+        )
 
     note_id = mcp.rka_add_note(
         content=review_text,
@@ -1254,7 +1334,19 @@ def gate1_validation(
     # token verbatim; real Claude needs the explicit format requirement so
     # the verdict isn't mis-parsed as "redirected" and routed to
     # escalation_router (the v2.5.3+agentic-rc1 cascade failure).
-    verdict_text = sdk.complete(prompt=prompt, system=_brain_system(_GATE1_FORMAT))
+    try:
+        verdict_text = sdk.complete(
+            prompt=prompt,
+            system=_brain_system(_GATE1_FORMAT),
+            timeout_s=SDK_TIMEOUT_DEFAULT_S,
+        )
+    except SDKTimeoutError as exc:
+        return _sdk_timeout_error_state(
+            node_name="gate1_validation",
+            current_phase="brain_review",
+            timeout_s=SDK_TIMEOUT_DEFAULT_S,
+            exc=exc,
+        )
     verdict = _parse_gate1_verdict(verdict_text)
 
     note_id = mcp.rka_add_note(
@@ -1305,7 +1397,17 @@ def final_synthesis(
     state: ResearchWorkflowState, sdk: SDKClient, mcp: MCPClient
 ) -> dict:
     prompt = _build_final_synthesis_prompt(state)
-    synthesis_text = sdk.complete(prompt=prompt, system=BRAIN_SYSTEM)
+    try:
+        synthesis_text = sdk.complete(
+            prompt=prompt, system=BRAIN_SYSTEM, timeout_s=SDK_TIMEOUT_DEFAULT_S
+        )
+    except SDKTimeoutError as exc:
+        return _sdk_timeout_error_state(
+            node_name="final_synthesis",
+            current_phase="brain_synthesis",
+            timeout_s=SDK_TIMEOUT_DEFAULT_S,
+            exc=exc,
+        )
 
     # Journal the synthesis, then surface as a mission report.
     note_id = mcp.rka_add_note(

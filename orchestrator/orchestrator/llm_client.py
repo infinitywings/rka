@@ -442,6 +442,52 @@ def _build_mcp_servers_config(
     return config
 
 
+class SDKTimeoutError(Exception):
+    """Phase S4 — raised when a single `SDKClient.complete()` call
+    exceeds its per-call timeout budget.
+
+    Wraps `asyncio.TimeoutError` at the Protocol boundary so node code
+    catches a single exception type (vs `asyncio.TimeoutError` which is
+    asyncio-internal vocabulary and can be confused with other timeout
+    sources). Catching here also lets the SDK-side error message carry
+    the node name + budget for cleaner ErrorRecord.detail.
+
+    Distinct from the Phase D2.6 segment-level watchdog: that one fires
+    after the whole graph segment returns without advancing; this one
+    fires at a single LLM call. They are complementary — the per-call
+    timeout surfaces a classified error before the segment watchdog
+    needs to escalate an opaque "no progress" message.
+    """
+
+
+# Phase S4 — per-node SDK call timeouts (seconds).
+#
+# Empirically: PI cockpit reported a backbrief stall measured in
+# minutes during the 2026-06-03 hyperscaler-auditing live test
+# (Run-5 attempt N, thread thr_19e8eebfb58ef007ac2). Without per-call
+# bounds, a single hung SDK turn left the graph stuck at "running"
+# until the Phase D2.6 segment watchdog ran out of patience and
+# fired an unclassified escalation. With these bounds, a hung call
+# surfaces as a classified `llm_call_timeout` ErrorRecord and routes
+# through `escalation_router` with a clear cause.
+#
+# Tighter than the Phase D2.6 watchdog (which is segment-level + 1
+# retry); the watchdog still catches the residual cases where the
+# SDK returns cleanly but the graph didn't actually advance.
+#
+# Defaults chosen to be GENEROUS (3-10× a typical LLM call) so we
+# only intercept genuine hangs, not slow legitimate calls. Tune
+# downward only after empirical data shows the floors are too high.
+SDK_TIMEOUT_DEFAULT_S: float = 240.0
+"""Default per-call budget for LLM-only calls (no MCP tool use loop)."""
+
+SDK_TIMEOUT_BACKBRIEF_S: float = 480.0
+"""`backbrief_draft` performs MCP reads to research the mission; larger budget."""
+
+SDK_TIMEOUT_TOOL_USE_S: float = 600.0
+"""`mission_execute` iterates tool-use turns; largest budget."""
+
+
 class SDKClient(Protocol):
     """Synchronous wrapper around the Claude Agent SDK.
 
@@ -455,6 +501,10 @@ class SDKClient(Protocol):
     Nodes read this after `complete()` returns and add to
     `state["usd_spent"]` for workflow-level budget tracking. Fakes used
     in tests can default this to 0.0 (no real cost).
+
+    Phase S4: `timeout_s` (optional) bounds a single `complete()` call.
+    On expiry, raises `SDKTimeoutError`. None disables the bound (legacy
+    behavior — fakes default here so old tests still pass unchanged).
     """
 
     last_call_cost_usd: float
@@ -465,11 +515,18 @@ class SDKClient(Protocol):
         *,
         max_tokens: int = 4096,
         system: str | None = None,
+        timeout_s: float | None = None,
     ) -> str:
         """Issue a single LLM call. Returns the assistant's text reply.
 
         Implementations must reset `last_call_cost_usd` to 0.0 at the
         start of the call and populate it before returning.
+
+        When `timeout_s` is set, implementations must raise
+        `SDKTimeoutError` if the call has not completed within that
+        many seconds. The Protocol contract for `last_call_cost_usd`
+        on timeout is unspecified (the partial cost is best-effort);
+        callers should not depend on it after a timeout.
         """
         ...
 
@@ -867,10 +924,19 @@ class _RealSDKClient:
         *,
         max_tokens: int = 4096,  # noqa: ARG002 — Protocol-required; SDK manages tokens
         system: str | None = None,
+        timeout_s: float | None = None,
     ) -> str:
-        return asyncio.run(self._async_complete(prompt=prompt, system=system))
+        return asyncio.run(
+            self._async_complete(prompt=prompt, system=system, timeout_s=timeout_s)
+        )
 
-    async def _async_complete(self, *, prompt: str, system: str | None) -> str:
+    async def _async_complete(
+        self,
+        *,
+        prompt: str,
+        system: str | None,
+        timeout_s: float | None = None,
+    ) -> str:
         # Import here so the module can be imported in environments that
         # don't have claude-agent-sdk yet (e.g., a clean tooling env that
         # only needs the SDKClient Protocol for typing).
@@ -956,23 +1022,40 @@ class _RealSDKClient:
 
         prompt_input = _streaming_prompt() if mcp_servers else prompt
 
-        parts: list[str] = []
-        async for message in sdk.query(prompt=prompt_input, options=options):
-            if isinstance(message, sdk.AssistantMessage):
-                for block in message.content:
-                    text = getattr(block, "text", None)
-                    if text:
-                        parts.append(text)
-            elif isinstance(message, getattr(sdk, "ResultMessage", type(None))):
-                # Phase E4: SDK's terminal ResultMessage carries
-                # `total_cost_usd` (USD spent on this turn). Extract for
-                # workflow budget tracking. Some SDK versions / fake
-                # implementations may not have this field — degrade
-                # gracefully to 0.
-                cost = getattr(message, "total_cost_usd", None)
-                if isinstance(cost, (int, float)) and cost >= 0:
-                    self.last_call_cost_usd = float(cost)
-        return "".join(parts)
+        # Phase S4 — per-call timeout. `asyncio.wait_for` cancels the
+        # inner coroutine on expiry; the SDK's async generator + any
+        # in-flight subprocess pipe wait both unwind cleanly through
+        # standard asyncio cancellation. We accumulate `parts` inside
+        # the inner coroutine so a partial reply is discarded on
+        # timeout (the node sees `SDKTimeoutError` and routes to
+        # escalation; there is no "use what we got" semantics).
+        async def _consume_stream() -> str:
+            parts: list[str] = []
+            async for message in sdk.query(prompt=prompt_input, options=options):
+                if isinstance(message, sdk.AssistantMessage):
+                    for block in message.content:
+                        text = getattr(block, "text", None)
+                        if text:
+                            parts.append(text)
+                elif isinstance(message, getattr(sdk, "ResultMessage", type(None))):
+                    # Phase E4: SDK's terminal ResultMessage carries
+                    # `total_cost_usd` (USD spent on this turn). Extract for
+                    # workflow budget tracking. Some SDK versions / fake
+                    # implementations may not have this field — degrade
+                    # gracefully to 0.
+                    cost = getattr(message, "total_cost_usd", None)
+                    if isinstance(cost, (int, float)) and cost >= 0:
+                        self.last_call_cost_usd = float(cost)
+            return "".join(parts)
+
+        if timeout_s is None:
+            return await _consume_stream()
+        try:
+            return await asyncio.wait_for(_consume_stream(), timeout=timeout_s)
+        except asyncio.TimeoutError as exc:
+            raise SDKTimeoutError(
+                f"SDKClient.complete() exceeded {timeout_s:.0f}s budget"
+            ) from exc
 
 
 def make_sdk(

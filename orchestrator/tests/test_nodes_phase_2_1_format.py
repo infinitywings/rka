@@ -42,6 +42,7 @@ class _FakeSDK:
         *,
         max_tokens: int = 4096,
         system: str | None = None,
+        timeout_s: float | None = None,  # Phase S4 — accepted, ignored
     ) -> str:
         self.calls.append({"prompt": prompt, "max_tokens": max_tokens, "system": system})
         return self.canned_reply

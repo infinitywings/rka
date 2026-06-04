@@ -44,7 +44,14 @@ class _RecordingSDK:
     canned_reply: str = "strategic-meta-decision draft (should not appear)"
     calls: list[dict] = field(default_factory=list)
 
-    def complete(self, prompt: str, *, max_tokens: int = 4096, system: str | None = None) -> str:
+    def complete(
+        self,
+        prompt: str,
+        *,
+        max_tokens: int = 4096,
+        system: str | None = None,
+        timeout_s: float | None = None,  # Phase S4 — accepted, ignored
+    ) -> str:
         self.calls.append({"prompt": prompt, "max_tokens": max_tokens, "system": system})
         return self.canned_reply
 
