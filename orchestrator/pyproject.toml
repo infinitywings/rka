@@ -4,6 +4,21 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rka-orchestrator"
+# 0.6.8 → 0.6.9: D4 extraction-dependency injection. Adds the 8 pinned
+# Python packages the hyperscaler-auditing project's D4 extractor needs
+# at subprocess runtime (openai, pandas, edgartools, krippendorff, numpy,
+# duckdb, scikit-learn, wrds). Per the PI's ratified call on
+# 2026-06-03T22:Xz (dec_01KT85N294D1GSFQPPX7SVSB5G): pin v0.6.8 / 8989a79
+# as the functional base; everything in agentic since (cred-vault Phase
+# 1 absorption from main, commits 89e7dc1 / baf2402 / 569b9e9 / be693af)
+# is rka/* doc work that does NOT enter the orchestrator container build,
+# so the rebuilt image is functionally v0.6.8 + these 8 deps.
+# Empirical motivation: jrn_01KT7E55DQ2G3KG9AJ3ZZJGA33 finding #3 — the
+# Executor subprocess runs python in the rka-orchestrator container,
+# where the 8 packages all failed to import (container had only
+# langgraph/httpx/claude-agent-sdk). Host .venv was unusable because it
+# was macOS arm64 vs the Linux container. Installing into the image is
+# the canonical fix.
 # Bumped 0.1.0 → 0.6.0 at v2.6.0+agentic release to acknowledge
 # Phase A → Phase-X² polish maturation. The +agentic tag train is
 # the RKA-side anchor; this package version is an independent
@@ -71,7 +86,7 @@ name = "rka-orchestrator"
 # section teaching each role about the navigator architecture and
 # how to call rka_load_tools when a deferred tool is needed,
 # (c) bumps the READ_TOOLS lock-test from 14 to 17.
-version = "0.6.8"
+version = "0.6.9"
 description = "RKA + LangGraph orchestrator (Phase A → Phase-X² polish; agentic branch)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -92,6 +107,22 @@ dependencies = [
     # pattern-matching. Optional in spirit — if absent, classifier
     # falls back to pure-regex (the Phase G MVP behavior).
     "bashlex>=0.18",
+    # v0.6.9 — D4 extraction-dependency injection (hyperscaler-auditing).
+    # The 8 pinned packages from the PI's D2 chain
+    # (jrn_01KT6YDEJNXHTN3Z6V5SM34EHM, ratified at chk_01KT2D8VW...).
+    # openai >= 2: D4 extractor uses the v2 client (v1 has the
+    # DeepSeek-client break). edgartools >= 5: SEC EDGAR 10-K text
+    # retrieval. wrds: Wharton Research Data Services Python client
+    # for cross-source reconciliation. pandas/numpy/duckdb/sklearn/
+    # krippendorff: extraction + Phase-2 reliability-validation math.
+    "openai>=2.40,<3",
+    "pandas>=3.0,<4",
+    "edgartools>=5.35,<6",
+    "krippendorff>=0.8,<1",
+    "numpy>=2.4,<3",
+    "duckdb>=1.5,<2",
+    "scikit-learn>=1.9,<2",
+    "wrds>=3.1,<4",
 ]
 
 [project.optional-dependencies]
