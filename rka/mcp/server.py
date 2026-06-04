@@ -4488,6 +4488,14 @@ async def rka_supersede_decision(
     decided_by: str = "brain",
     phase: str = "",
     kind: str = "decision",
+    related_journal: list[str] | None = None,
+    related_literature: list[str] | None = None,
+    related_missions: list[str] | None = None,
+    parent_id: str | None = None,
+    options: list[dict] | None = None,
+    assumptions: list[str] | None = None,
+    tags: list[str] | None = None,
+    status: str | None = None,
     *,
     project_id: str,
 ) -> str:
@@ -4505,21 +4513,39 @@ async def rka_supersede_decision(
         decided_by: Actor making the decision (brain, executor, pi)
         phase: Research phase
         kind: Decision kind (decision, research_question, design_choice, operational)
+        related_journal/related_literature/related_missions/parent_id/options/
+        assumptions/tags/status: forwarded to the new decision so the supersede
+            path has parity with rka_add_decision (preserves provenance discipline
+            instead of silently dropping these fields).
     """
-    payload = {
-        "old_decision_id": old_decision_id,
-        "new_decision": {
-            "question": question,
-            "chosen": chosen,
-            "rationale": rationale,
-            "decided_by": decided_by,
-            "phase": phase,
-            "kind": kind,
-        },
+    # v2.7.0.5 — the FastAPI route at /api/decisions/{old}/supersede binds the
+    # JSON body to DecisionCreate(extra='forbid'), so the body MUST be a flat
+    # DecisionCreate-shaped dict (NOT wrapped in {old_decision_id, new_decision}).
+    # The old wrapped envelope returned 422 on every call; the old_decision_id
+    # stays in the URL path, never duplicated in the body.
+    body: dict = {
+        "question": question,
+        "chosen": chosen,
+        "rationale": rationale,
+        "decided_by": decided_by,
+        "phase": phase,
+        "kind": kind,
     }
-    # Call the supersede endpoint via the decisions API
+    for key, value in (
+        ("related_journal", related_journal),
+        ("related_literature", related_literature),
+        ("related_missions", related_missions),
+        ("parent_id", parent_id),
+        ("options", options),
+        ("assumptions", assumptions),
+        ("tags", tags),
+        ("status", status),
+    ):
+        if value is not None:
+            body[key] = value
+
     async with _client(project_id) as c:
-        r = await c.post(f"/api/decisions/{old_decision_id}/supersede", json=payload)
+        r = await c.post(f"/api/decisions/{old_decision_id}/supersede", json=body)
         _raise_with_detail(r)
     result = r.json()
     _record_entity("decision", result.get("id", "?"), f"Supersedes {old_decision_id}: {question[:60]}")
