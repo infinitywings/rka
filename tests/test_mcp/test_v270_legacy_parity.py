@@ -209,15 +209,24 @@ async def test_parity_add_decision_record_decision(captured_calls):
     L, V = leg.requests[0], ver.requests[0]
     assert L["method"] == V["method"] == "POST"
     assert L["path"] == V["path"] == "/api/decisions"
-    # The legacy + verb bodies share the same shape. The verb passes a
-    # few extra defaults (confidence='tested'), which is acceptable —
-    # we assert the load-bearing fields match.
+    # v2.7.0.6 — `confidence` is no longer forwarded by either side
+    # (DecisionCreate(extra='forbid') has no confidence field; it lives
+    # on journal entries). Both bodies must omit it; the parity test now
+    # asserts this explicitly.
     for k in ("question", "chosen", "rationale", "related_journal",
               "decided_by", "kind"):
         assert L["body"].get(k) == V["body"].get(k), (
             f"decision field {k!r} drift: "
             f"legacy={L['body'].get(k)!r} verb={V['body'].get(k)!r}"
         )
+    assert "confidence" not in L["body"], (
+        f"v2.7.0.6 — legacy rka_record_decision must not forward confidence; "
+        f"got body={L['body']}"
+    )
+    assert "confidence" not in V["body"], (
+        f"v2.7.0.6 — verb rka_record_decision (via dispatch) must not forward "
+        f"confidence; got body={V['body']}"
+    )
 
 
 # ---------------------------------------------------------------------------

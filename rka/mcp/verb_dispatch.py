@@ -857,6 +857,9 @@ async def dispatch_review(target: str, *, project_id: str, payload: dict[str, An
                     "missing_field",
                     f"supersede_decision payload requires {f}",
                 )
+        # v2.7.0.5 — forward related_journal (and any other provenance fields
+        # the caller may have supplied) to the adapter so the supersede path
+        # has the same provenance discipline as plain rka_record_decision.
         return await _legacy("rka_supersede_decision")(
             old_decision_id=p["old_decision_id"],
             question=p["question"],
@@ -865,6 +868,14 @@ async def dispatch_review(target: str, *, project_id: str, payload: dict[str, An
             decided_by=p.get("decided_by", "brain"),
             phase=p.get("phase", ""),
             kind=p.get("kind", "decision"),
+            related_journal=p.get("related_journal"),
+            related_literature=p.get("related_literature"),
+            related_missions=p.get("related_missions"),
+            parent_id=p.get("parent_id"),
+            options=p.get("options"),
+            assumptions=p.get("assumptions"),
+            tags=p.get("tags"),
+            status=p.get("status"),
             project_id=project_id,
         )
 
@@ -1413,11 +1424,14 @@ async def dispatch_record_decision(
     supersedes_decision_id: str | None = None,
     options: list[dict] | None = None,
     related_literature: list[str] | None = None,
+    related_missions: list[str] | None = None,
     parent_id: str | None = None,
     assumptions: list[str] | None = None,
     importance: str | None = None,
     justified_by: list[str] | None = None,
     provenance: dict[str, Any] | None = None,
+    tags: list[str] | None = None,
+    status: str | None = None,
 ) -> str:
     """[BRAIN/PI] Record a decision (create or supersede).
 
@@ -1452,6 +1466,13 @@ async def dispatch_record_decision(
     )
 
     if supersedes_decision_id:
+        # v2.7.0.5 — forward provenance + multi-choice metadata to the
+        # supersede adapter so the supersede path has parity with the plain
+        # rka_add_decision path below. Prior versions silently dropped
+        # related_journal / related_literature / related_missions / parent_id
+        # / options / assumptions / tags / status from the new decision's
+        # record, which broke provenance discipline for any decision that
+        # arrived through the typed-args layer.
         return await _legacy("rka_supersede_decision")(
             old_decision_id=supersedes_decision_id,
             question=question,
@@ -1460,6 +1481,14 @@ async def dispatch_record_decision(
             decided_by=decided_by,
             phase=phase,
             kind=kind,
+            related_journal=merged["related_journal"],
+            related_literature=merged["related_literature"],
+            related_missions=related_missions,
+            parent_id=merged["parent_id"],
+            options=options,
+            assumptions=assumptions,
+            tags=tags,
+            status=status,
             project_id=project_id,
         )
 
@@ -1822,16 +1851,22 @@ async def dispatch_execute(
             project_id=project_id,  # type: ignore[arg-type]
             decided_by=decided_by,
             kind=kw.get("kind", "decision"),
-            phase=phase or "",
+            # v2.7.0.6 — preserve None for the service-layer phase-inheritance
+            # path. Coercing to "" here hid the "Brain omitted phase" signal
+            # and made tree-by-phase queries skip the superseded row.
+            phase=phase,
             related_journal=kw.get("related_journal"),
             supersedes_decision_id=kw.get("supersedes_decision_id"),
             options=kw.get("options"),
             related_literature=kw.get("related_literature"),
+            related_missions=kw.get("related_missions"),
             parent_id=kw.get("parent_id"),
             assumptions=kw.get("assumptions"),
             importance=importance,
             justified_by=kw.get("justified_by"),
             provenance=provenance,
+            tags=kw.get("tags"),
+            status=kw.get("status"),
         )
 
     # --- supersede_decision (via review dispatcher) ---
@@ -1842,8 +1877,15 @@ async def dispatch_execute(
             "chosen": kw.get("chosen"),
             "rationale": kw.get("rationale"),
             "decided_by": kw.get("decided_by", "brain"),
-            "phase": phase or kw.get("phase", ""),
+            # v2.7.0.6 — None preserved so the service-layer inheritance fires;
+            # `phase or kw.get('phase', '')` used to coerce missing phase to "".
+            "phase": phase if phase is not None else kw.get("phase"),
             "kind": kw.get("kind", "decision"),
+            # v2.7.0.5 — SupersedeDecisionArgs enforces related_journal
+            # non-empty at the typed-args layer, but prior versions dropped
+            # it from the payload, so the supersede adapter never received
+            # it and the resulting decision was provenance-orphaned.
+            "related_journal": kw.get("related_journal"),
         }
         return await dispatch_review(
             "supersede_decision",

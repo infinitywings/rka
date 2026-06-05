@@ -352,6 +352,99 @@ async def test_dispatch_record_decision_supersede_routes_to_supersede(
     assert "rka_add_decision" not in tools
 
 
+async def test_dispatch_record_decision_supersede_forwards_all_provenance(
+    recorder: _Recorder,
+) -> None:
+    """v2.7.0.5 — when record_decision is dispatched with supersedes_decision_id
+    set, ALL provenance + multi-choice fields the typed-args layer exposed
+    must reach the rka_supersede_decision adapter. Prior versions silently
+    dropped related_literature / related_missions / parent_id / options /
+    assumptions / tags / status, leaving the replacement decision
+    provenance-orphaned even though the typed-args layer enforced
+    related_journal non-empty.
+    """
+    await verb_dispatch.dispatch_record_decision(
+        "Reframed Q?", "Option B", "switching",
+        project_id="prj_test",
+        decided_by="pi",
+        kind="design_choice",
+        phase="design",
+        related_journal=["jrn_evidence"],
+        supersedes_decision_id="dec_old",
+        options=[{"id": "o1", "label": "A"}, {"id": "o2", "label": "B"}],
+        related_literature=["lit_p1"],
+        related_missions=["mis_active"],
+        parent_id="dec_parent",
+        assumptions=["A1", "A2"],
+        tags=["t1"],
+        status="active",
+    )
+    # Find the captured supersede call.
+    supersede_calls = [
+        kw for tool, kw in recorder.calls if tool == "rka_supersede_decision"
+    ]
+    assert len(supersede_calls) == 1
+    kw = supersede_calls[0]
+    assert kw["old_decision_id"] == "dec_old"
+    assert kw["related_journal"] == ["jrn_evidence"]
+    assert kw["related_literature"] == ["lit_p1"]
+    assert kw["related_missions"] == ["mis_active"]
+    assert kw["parent_id"] == "dec_parent"
+    assert kw["options"] == [
+        {"id": "o1", "label": "A"},
+        {"id": "o2", "label": "B"},
+    ]
+    assert kw["assumptions"] == ["A1", "A2"]
+    assert kw["tags"] == ["t1"]
+    assert kw["status"] == "active"
+    assert kw["kind"] == "design_choice"
+    assert kw["phase"] == "design"
+    assert kw["decided_by"] == "pi"
+
+
+async def test_dispatch_review_supersede_decision_forwards_related_journal(
+    recorder: _Recorder,
+) -> None:
+    """v2.7.0.5 — the dispatch_review('supersede_decision', ...) entry point
+    must also forward related_journal + any other provenance fields the
+    caller supplied in the payload. SupersedeDecisionArgs enforces
+    related_journal non-empty at the typed-args layer, but prior versions
+    dropped it before reaching the adapter."""
+    payload = {
+        "old_decision_id": "dec_old",
+        "question": "Q",
+        "chosen": "C",
+        "rationale": "R",
+        "decided_by": "brain",
+        "phase": "design",
+        "kind": "decision",
+        "related_journal": ["jrn_required"],
+        "related_literature": ["lit_a"],
+        "related_missions": ["mis_x"],
+        "parent_id": "dec_parent",
+        "options": [{"id": "o1", "label": "A"}],
+        "assumptions": ["A1"],
+        "tags": ["tag1"],
+        "status": "active",
+    }
+    await verb_dispatch.dispatch_review(
+        "supersede_decision", project_id="prj_test", payload=payload
+    )
+    supersede_calls = [
+        kw for tool, kw in recorder.calls if tool == "rka_supersede_decision"
+    ]
+    assert len(supersede_calls) == 1
+    kw = supersede_calls[0]
+    assert kw["related_journal"] == ["jrn_required"]
+    assert kw["related_literature"] == ["lit_a"]
+    assert kw["related_missions"] == ["mis_x"]
+    assert kw["parent_id"] == "dec_parent"
+    assert kw["options"] == [{"id": "o1", "label": "A"}]
+    assert kw["assumptions"] == ["A1"]
+    assert kw["tags"] == ["tag1"]
+    assert kw["status"] == "active"
+
+
 async def test_dispatch_record_decision_create_routes_to_add(
     recorder: _Recorder,
 ) -> None:
