@@ -220,6 +220,69 @@ async def test_supersede_rejects_wrapped_envelope_with_422(
 
 
 @pytest.mark.asyncio
+async def test_supersede_accepts_empty_phase_and_inherits(
+    api_client: httpx.AsyncClient, old_decision_id: str
+):
+    """v2.7.0.6 — POST without `phase` returns 201 (not 422). The new
+    decision inherits the OLD decision's phase ('design')."""
+    new_jrn = await api_client.post(
+        "/api/notes",
+        json={"content": "evidence", "type": "note", "source": "brain"},
+        headers=HEADERS,
+    )
+    new_jrn_id = new_jrn.json()["id"]
+
+    r = await api_client.post(
+        f"/api/decisions/{old_decision_id}/supersede",
+        json={
+            "question": "Reframed (phase omitted)",
+            "decided_by": "brain",
+            "chosen": "B",
+            "rationale": "new evidence",
+            "related_journal": [new_jrn_id],
+            # phase intentionally omitted — DecisionSupersedeBody allows.
+        },
+        headers=HEADERS,
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["phase"] == "design", (
+        f"new decision should inherit phase='design' from old; got {body['phase']!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_plain_decision_create_still_requires_phase(
+    api_client: httpx.AsyncClient
+):
+    """Regression guard: POST /api/decisions (plain create, NOT supersede)
+    still requires phase. DecisionCreate(extra='forbid') with required
+    phase: str — should remain 422 on missing phase. Pins the
+    supersede-vs-plain boundary so the v2.7.0.6 DecisionSupersedeBody
+    relaxation doesn't leak into the plain-create path."""
+    jrn = await api_client.post(
+        "/api/notes",
+        json={"content": "x", "type": "note", "source": "brain"},
+        headers=HEADERS,
+    )
+    jrn_id = jrn.json()["id"]
+
+    r = await api_client.post(
+        "/api/decisions",
+        json={
+            "question": "Q?",
+            "decided_by": "brain",
+            "chosen": "A",
+            "rationale": "r",
+            "related_journal": [jrn_id],
+            # phase intentionally omitted — DecisionCreate must reject.
+        },
+        headers=HEADERS,
+    )
+    assert r.status_code == 422, r.text
+
+
+@pytest.mark.asyncio
 async def test_supersede_forwards_provenance_fields(
     api_client: httpx.AsyncClient, old_decision_id: str
 ):

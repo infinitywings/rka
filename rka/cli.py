@@ -693,5 +693,185 @@ def periodic_hooks(project_ids: tuple[str, ...]):
     asyncio.run(_run())
 
 
+# ---------------------------------------------------------------------------
+# admin subgroup (v2.7.0.6) — one-shot maintenance commands.
+#
+# These intentionally are NOT exposed via MCP: admin operations require
+# shell-level intent (per the v2.7.0.6 design ratification). The PI cockpit
+# cannot accidentally fire them through `rka_execute`.
+# ---------------------------------------------------------------------------
+
+
+@main.group()
+def admin():
+    """Admin/maintenance commands (CLI-only, not exposed via MCP)."""
+    pass
+
+
+@admin.command("list-orphan-supersedes")
+@click.option(
+    "--project", "project_id", required=True,
+    help="Project id (prj_...) to inspect.",
+)
+@click.option(
+    "--json", "json_output", is_flag=True,
+    help="Emit JSON instead of human-readable text.",
+)
+def admin_list_orphan_supersedes(project_id: str, json_output: bool):
+    """List decisions whose status='superseded' but superseded_by IS NULL.
+
+    These are the v2.7.0.4-era cockpit-workaround orphans: the PI flipped
+    the status manually but the atomic supersede side effects
+    (superseded_by FK, supersedes entity link, scope_version bump,
+    staleness cascade) never ran. Use the output to build the
+    `--map old_id=new_id` arguments for `rka admin repair-supersedes`.
+    """
+    import json as _json
+    from rka.config import RKAConfig
+    from rka.infra.database import Database
+    from rka.services.admin_repair import list_orphan_supersedes
+
+    config = RKAConfig()
+
+    async def _run():
+        db = Database(config.database_url)
+        await db.connect()
+        try:
+            return await list_orphan_supersedes(db, project_id)
+        finally:
+            await db.close()
+
+    rows = asyncio.run(_run())
+    if json_output:
+        click.echo(_json.dumps(rows, indent=2, default=str))
+        return
+    if not rows:
+        click.echo(f"No orphan supersedes in project {project_id}.")
+        return
+    click.echo(
+        f"=== {len(rows)} orphan superseded decisions in {project_id} ==="
+    )
+    for r in rows:
+        click.echo(
+            f"\n  {r['id']}"
+            f"\n    question:      {(r.get('question') or '')[:80]}"
+            f"\n    phase:         {r.get('phase') or '(empty)'}"
+            f"\n    decided_by:    {r.get('decided_by')}"
+            f"\n    chosen:        {(r.get('chosen') or '')[:60]}"
+            f"\n    scope_version: {r.get('scope_version')}"
+            f"\n    updated_at:    {r.get('updated_at')}"
+        )
+    click.echo(
+        "\nNext step: identify each orphan's replacement decision id and run"
+        f"\n  rka admin repair-supersedes --project={project_id} "
+        "--map=<old>=<new> [--map=...] [--apply]\n"
+        "(--apply is required to mutate; default is dry-run.)"
+    )
+
+
+@admin.command("repair-supersedes")
+@click.option(
+    "--project", "project_id", required=True,
+    help="Project id (prj_...) the orphan pairs live in.",
+)
+@click.option(
+    "--map", "mappings", multiple=True, required=True,
+    metavar="old_id=new_id",
+    help=(
+        "Pair to repair, formatted old_decision_id=new_decision_id. "
+        "Repeat the option for multiple pairs."
+    ),
+)
+@click.option(
+    "--apply", "do_apply", is_flag=True,
+    help=(
+        "Required for mutation. Without it, the command runs in dry-run "
+        "mode and prints the WOULD/ALREADY plan with NO DB writes."
+    ),
+)
+@click.option(
+    "--actor",
+    type=click.Choice(["pi", "brain", "executor", "system"]),
+    default="pi", show_default=True,
+    help="Actor recorded on the backfilled event + entity_links rows.",
+)
+@click.option(
+    "--json", "json_output", is_flag=True,
+    help="Emit JSON instead of human-readable text.",
+)
+def admin_repair_supersedes(
+    project_id: str,
+    mappings: tuple[str, ...],
+    do_apply: bool,
+    actor: str,
+    json_output: bool,
+):
+    """Backfill the missing supersede side effects for orphan decisions.
+
+    For each (old, new) pair the command replays the canonical supersede
+    sequence WITHOUT creating a new decision row (the new row already
+    exists from the cockpit workaround):
+
+      1. bump new.scope_version to old.scope_version + 1
+      2. set old.superseded_by = new.id
+      3. insert entity_links row (link_type='supersedes', new -> old)
+      4. cascade staleness on claims/clusters sourced from old-linked
+         journal entries
+      5. insert a re_distill_review row + emit decision_superseded event
+
+    Each pair is wrapped in its own transaction — a mid-pair failure
+    rolls back that pair without partial state. Idempotent: a re-run
+    that finds a pair already partially repaired shows ALREADY markers
+    for the already-satisfied steps.
+    """
+    from rka.config import RKAConfig
+    from rka.infra.database import Database
+    from rka.services.admin_repair import (
+        render_pair_reports,
+        repair_orphan_supersedes,
+    )
+
+    pairs: dict[str, str] = {}
+    for raw in mappings:
+        if "=" not in raw:
+            raise click.UsageError(
+                f"--map value {raw!r} must be old_id=new_id"
+            )
+        old_id, _, new_id = raw.partition("=")
+        old_id, new_id = old_id.strip(), new_id.strip()
+        if not old_id or not new_id:
+            raise click.UsageError(
+                f"--map value {raw!r} has an empty side"
+            )
+        if old_id in pairs:
+            raise click.UsageError(
+                f"old_decision_id {old_id!r} listed more than once in --map"
+            )
+        pairs[old_id] = new_id
+
+    config = RKAConfig()
+    dry_run = not do_apply
+
+    async def _run():
+        db = Database(config.database_url)
+        await db.connect()
+        try:
+            return await repair_orphan_supersedes(
+                db, project_id=project_id, mapping=pairs,
+                dry_run=dry_run, actor=actor,
+            )
+        finally:
+            await db.close()
+
+    reports = asyncio.run(_run())
+    click.echo(render_pair_reports(
+        reports, dry_run=dry_run, json_output=json_output,
+    ))
+    # Exit non-zero if any pair rolled back, so CI / scripts see the
+    # failure signal explicitly.
+    if any(r.rolled_back for r in reports):
+        raise SystemExit(1)
+
+
 if __name__ == "__main__":
     main()

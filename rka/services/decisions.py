@@ -7,7 +7,12 @@ from collections import defaultdict
 
 from rka.infra.ids import generate_id
 from rka.models.decision import (
-    Decision, DecisionCreate, DecisionUpdate, DecisionOption, DecisionTreeNode,
+    Decision,
+    DecisionCreate,
+    DecisionOption,
+    DecisionSupersedeBody,
+    DecisionTreeNode,
+    DecisionUpdate,
 )
 from rka.services.base import BaseService, _now
 from rka.services.jobs import JobQueue
@@ -217,7 +222,7 @@ class DecisionService(BaseService):
     async def supersede_decision(
         self,
         old_decision_id: str,
-        new_data: DecisionCreate,
+        new_data: DecisionCreate | DecisionSupersedeBody,
         actor: str = "brain",
     ) -> Decision:
         """Atomically supersede a decision and flag affected knowledge for Brain review.
@@ -230,10 +235,38 @@ class DecisionService(BaseService):
         6. Insert a review_queue row tagged 're_distill_review' so Brain re-extracts
            claims during maintenance. (Re-distillation is a Brain task; this is a
            bookkeeper.)
+
+        v2.7.0.6 — `phase` inheritance. When the incoming `new_data.phase`
+        is empty or None, inherit from the OLD decision's phase.
+        Semantic: supersede 'overturns the decision in its original phase
+        slot'. Callers crossing phases must supply `phase` explicitly.
+        Inheritance guard: if BOTH old.phase and new_data.phase are empty,
+        we raise ValueError pointing at `rka admin repair-supersedes` —
+        that admin command is the appropriate path for chains that pre-date
+        the inheritance landing.
         """
         old = await self.get(old_decision_id)
         if old is None:
             raise ValueError(f"Decision {old_decision_id} not found")
+
+        # v2.7.0.6 — phase inheritance. Branches on incoming data shape:
+        # DecisionSupersedeBody allows phase=None; DecisionCreate enforces
+        # `phase: str` so the only empty case there is "". Treat both as
+        # "Brain omitted phase".
+        incoming_phase = getattr(new_data, "phase", None) or ""
+        if not incoming_phase:
+            if not old.phase:
+                raise ValueError(
+                    f"Cannot supersede {old_decision_id}: both old.phase and "
+                    f"new_data.phase are empty. Supply an explicit phase, or "
+                    f"if this is a v2.7.0.4-era orphan, run "
+                    f"`rka admin repair-supersedes` instead."
+                )
+            new_data = new_data.model_copy(update={"phase": old.phase})
+        # Coerce DecisionSupersedeBody to DecisionCreate for self.create —
+        # `phase` is guaranteed non-empty by the block above.
+        if isinstance(new_data, DecisionSupersedeBody):
+            new_data = DecisionCreate(**new_data.model_dump())
 
         # Create new decision
         new_decision = await self.create(new_data, actor=actor)

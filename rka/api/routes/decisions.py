@@ -12,7 +12,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from rka.models.decision import Decision, DecisionCreate, DecisionUpdate, DecisionTreeNode
+from rka.models.decision import (
+    Decision,
+    DecisionCreate,
+    DecisionSupersedeBody,
+    DecisionTreeNode,
+    DecisionUpdate,
+)
 from rka.models.decision_option import (
     DecisionOption,
     DecisionOptionCreate,
@@ -89,14 +95,25 @@ async def update_decision(
 @router.post("/decisions/{dec_id}/supersede", response_model=Decision, status_code=201)
 async def supersede_decision(
     dec_id: str,
-    new_data: DecisionCreate,
+    new_data: DecisionSupersedeBody,
     svc: DecisionService = Depends(get_scoped_decision_service),
 ):
-    """Atomically supersede a decision and trigger re-distillation."""
+    """Atomically supersede a decision and trigger re-distillation.
+
+    v2.7.0.6 — body binds to `DecisionSupersedeBody` (phase optional)
+    instead of `DecisionCreate` (phase required). When phase is omitted
+    or empty, the service layer inherits it from the OLD decision.
+    """
     try:
         return await svc.supersede_decision(dec_id, new_data)
     except ValueError as e:
-        raise HTTPException(404, str(e))
+        # 422 for inheritance-guard failures (both phases empty);
+        # 404 for missing-decision; service raises ValueError for both.
+        # Heuristic on the message to distinguish.
+        msg = str(e)
+        if "not found" in msg:
+            raise HTTPException(404, msg)
+        raise HTTPException(422, msg)
 
 
 # ============================================================

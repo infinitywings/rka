@@ -1851,7 +1851,10 @@ async def dispatch_execute(
             project_id=project_id,  # type: ignore[arg-type]
             decided_by=decided_by,
             kind=kw.get("kind", "decision"),
-            phase=phase or "",
+            # v2.7.0.6 — preserve None for the service-layer phase-inheritance
+            # path. Coercing to "" here hid the "Brain omitted phase" signal
+            # and made tree-by-phase queries skip the superseded row.
+            phase=phase,
             related_journal=kw.get("related_journal"),
             supersedes_decision_id=kw.get("supersedes_decision_id"),
             options=kw.get("options"),
@@ -1874,7 +1877,9 @@ async def dispatch_execute(
             "chosen": kw.get("chosen"),
             "rationale": kw.get("rationale"),
             "decided_by": kw.get("decided_by", "brain"),
-            "phase": phase or kw.get("phase", ""),
+            # v2.7.0.6 — None preserved so the service-layer inheritance fires;
+            # `phase or kw.get('phase', '')` used to coerce missing phase to "".
+            "phase": phase if phase is not None else kw.get("phase"),
             "kind": kw.get("kind", "decision"),
             # v2.7.0.5 — SupersedeDecisionArgs enforces related_journal
             # non-empty at the typed-args layer, but prior versions dropped

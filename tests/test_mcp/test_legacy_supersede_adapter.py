@@ -215,3 +215,43 @@ async def test_supersede_url_contains_old_id_not_body(captured_requests):
     assert "dec_OLD_01KSAMPLE" not in json.dumps(req["body"]), (
         f"old_decision_id leaked into body: {req['body']}"
     )
+
+
+@pytest.mark.asyncio
+async def test_supersede_omits_phase_when_caller_passes_none(captured_requests):
+    """v2.7.0.6 — when phase is None (default), the adapter strips it from
+    the body so DecisionSupersedeBody's None default kicks in and the
+    service-layer inheritance from OLD applies. Pre-v2.7.0.6 the adapter
+    sent `phase=''` which bypassed inheritance and produced phase='' rows."""
+    await mcp_server.rka_supersede_decision(
+        old_decision_id="dec_old",
+        question="Q",
+        chosen="C",
+        rationale="R",
+        related_journal=["jrn_required"],
+        project_id="proj_default",
+        # phase intentionally omitted — should be absent from body.
+    )
+    supersede_reqs = [r for r in captured_requests if "/supersede" in r["path"]]
+    body = supersede_reqs[0]["body"]
+    assert "phase" not in body, (
+        f"v2.7.0.6 — phase=None caller MUST NOT send phase key (so service "
+        f"inheritance applies). Got body: {body}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_supersede_forwards_explicit_phase(captured_requests):
+    """When caller supplies phase explicitly, it forwards in the body."""
+    await mcp_server.rka_supersede_decision(
+        old_decision_id="dec_old",
+        question="Q",
+        chosen="C",
+        rationale="R",
+        phase="execution",
+        related_journal=["jrn_required"],
+        project_id="proj_default",
+    )
+    supersede_reqs = [r for r in captured_requests if "/supersede" in r["path"]]
+    body = supersede_reqs[0]["body"]
+    assert body["phase"] == "execution"

@@ -4486,7 +4486,7 @@ async def rka_supersede_decision(
     chosen: str,
     rationale: str,
     decided_by: str = "brain",
-    phase: str = "",
+    phase: str | None = None,
     kind: str = "decision",
     related_journal: list[str] | None = None,
     related_literature: list[str] | None = None,
@@ -4511,7 +4511,9 @@ async def rka_supersede_decision(
         chosen: New chosen option
         rationale: Why the old decision is being overturned
         decided_by: Actor making the decision (brain, executor, pi)
-        phase: Research phase
+        phase: Research phase. v2.7.0.6 — optional; when omitted, the
+            service layer inherits from the OLD decision's phase. Pass
+            an explicit value to cross phases.
         kind: Decision kind (decision, research_question, design_choice, operational)
         related_journal/related_literature/related_missions/parent_id/options/
         assumptions/tags/status: forwarded to the new decision so the supersede
@@ -4519,19 +4521,18 @@ async def rka_supersede_decision(
             instead of silently dropping these fields).
     """
     # v2.7.0.5 — the FastAPI route at /api/decisions/{old}/supersede binds the
-    # JSON body to DecisionCreate(extra='forbid'), so the body MUST be a flat
-    # DecisionCreate-shaped dict (NOT wrapped in {old_decision_id, new_decision}).
-    # The old wrapped envelope returned 422 on every call; the old_decision_id
-    # stays in the URL path, never duplicated in the body.
+    # JSON body to DecisionSupersedeBody (extra='forbid'). The body must be flat;
+    # old_decision_id stays in URL path only. Optional fields are stripped
+    # below so DecisionSupersedeBody's defaults / None handling kicks in.
     body: dict = {
         "question": question,
         "chosen": chosen,
         "rationale": rationale,
         "decided_by": decided_by,
-        "phase": phase,
         "kind": kind,
     }
     for key, value in (
+        ("phase", phase),
         ("related_journal", related_journal),
         ("related_literature", related_literature),
         ("related_missions", related_missions),
@@ -6180,13 +6181,27 @@ async def rka_record_decision(
         related_journal: Journal entry IDs justifying this decision. REQUIRED non-empty.
         options: Considered options [{label, description}, ...].
         supersedes_decision_id: Old decision this replaces (creates supersede link).
-        confidence: hypothesis | tested | verified | superseded | retracted.
+        confidence: ACCEPTED FOR BACK-COMPAT BUT NOT FORWARDED. `DecisionCreate`
+            has no `confidence` field (`extra='forbid'`); confidence is a journal
+            attribute, not a decision one. See `rka/models/journal.py` for the
+            real home of `ConfidenceLit`. Prior versions sent this in the body
+            and 422'd. v2.7.0.6 silently drops it to preserve back-compat with
+            old transcripts.
         tags: Free-form tag list.
         phase: Research phase override.
         parent_id: Parent decision ID for tree structure.
         related_literature: Literature IDs informing this decision.
         assumptions: Assumptions this decision rests on.
+
+    Note (v2.7.0.6): the `confidence` kwarg is accepted but NOT forwarded
+    to the API for the reasons above. Parity gap with
+    `dispatch_record_decision`: `related_missions` is also accepted upstream
+    but not forwarded here (signature does not declare it). Do not re-add
+    `confidence` to the body dicts — that was the v2.7.0.4 bug class
+    (extra_forbidden 422 on every call).
     """
+    # confidence is intentionally NOT used; see docstring note.
+    del confidence
     if not related_journal:
         return json.dumps({
             "error": "rka_record_decision requires `related_journal=[...]` "
@@ -6196,14 +6211,24 @@ async def rka_record_decision(
     # Supersede path: hit the supersede endpoint so the old decision's
     # status flips correctly + the supersede link materializes.
     if supersedes_decision_id:
-        body = _strip_none({
-            "question": question, "chosen": chosen, "rationale": rationale,
-            "decided_by": decided_by, "kind": kind, "phase": phase,
-            "options": options, "related_journal": related_journal,
-            "related_literature": related_literature, "tags": tags,
-            "assumptions": assumptions, "parent_id": parent_id,
-            "confidence": confidence,
-        })
+        body: dict = {
+            "question": question,
+            "chosen": chosen,
+            "rationale": rationale,
+            "decided_by": decided_by,
+            "kind": kind,
+            "related_journal": related_journal,
+        }
+        for key, value in (
+            ("phase", phase),
+            ("options", options),
+            ("related_literature", related_literature),
+            ("tags", tags),
+            ("assumptions", assumptions),
+            ("parent_id", parent_id),
+        ):
+            if value is not None:
+                body[key] = value
         async with _client(project_id) as c:
             r = await c.post(
                 f"/api/decisions/{supersedes_decision_id}/supersede", json=body
@@ -6215,14 +6240,24 @@ async def rka_record_decision(
                 f"Created decision {d['id']} (supersedes "
                 f"{supersedes_decision_id}): {d['question'][:80]}"
             )
-    body = _strip_none({
-        "question": question, "phase": phase, "decided_by": decided_by,
-        "options": options, "chosen": chosen, "rationale": rationale,
-        "parent_id": parent_id,
-        "related_literature": related_literature,
-        "related_journal": related_journal, "kind": kind,
-        "assumptions": assumptions, "tags": tags, "confidence": confidence,
-    })
+    body = {
+        "question": question,
+        "chosen": chosen,
+        "rationale": rationale,
+        "decided_by": decided_by,
+        "kind": kind,
+        "related_journal": related_journal,
+    }
+    for key, value in (
+        ("phase", phase),
+        ("options", options),
+        ("related_literature", related_literature),
+        ("tags", tags),
+        ("assumptions", assumptions),
+        ("parent_id", parent_id),
+    ):
+        if value is not None:
+            body[key] = value
     async with _client(project_id) as c:
         r = await c.post("/api/decisions", json=body)
         _raise_with_detail(r)
