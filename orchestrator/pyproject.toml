@@ -104,7 +104,28 @@ name = "rka-orchestrator"
 # asyncio.wait_for integration, per-node wraps (9 sites), and
 # coverage-gate lock-tests that fail if a new sdk.complete() call
 # site ships without the try/except.
-version = "0.6.10"
+# 0.6.10 → 0.6.11: sandbox hardening (single-user review Tier 2).
+# (a) fs_actuator — order-independent `rm` recursive+force detection.
+# The literal `rm\s+-rf` regex in both DENY and RATIFY tiers let
+# `rm -fr`, `rm -Rf`, `rm -r -f`, `rm -rfv`, `rm --recursive --force`
+# slip through BOTH tiers and auto-execute. New
+# `_rm_recursive_force_targets` parses flags in any order/grouping;
+# recursive+force on host-root/$HOME/~ → DENY, any recursive+force →
+# RATIFY. (b) llm_client — egress audit + control for WebFetch/
+# WebSearch. Previously auto-allowed with no inspection. Now the
+# can_use_tool hook audit-logs every egress, denies known telemetry
+# endpoints (notifications.WEBHOOK_BLOCKLIST floor), and honors an
+# opt-in strict allowlist (ORCHESTRATOR_EGRESS_ALLOWLIST) — default
+# stays open since the research workflow needs web access, and the
+# credential-exfil target is already removed by Phase E1
+# `_enforce_workspace_mount_safety` (daemon refuses to mount $HOME /
+# credential dirs). The review's "narrow the bind mount" item was
+# already satisfied by E1. +56 tests (test_fs_actuator_rm_flags.py +
+# egress cases in test_fs_actuator_hook.py). NOT included:
+# pi_decision_select correct→redraft — a privileged-autonomy-gate
+# design decision (redraft target + EC8 set-identity) deferred for
+# explicit PI input per the long-standing deferred-followup note.
+version = "0.6.11"
 description = "RKA + LangGraph orchestrator (Phase A → Phase-X² polish; agentic branch)"
 readme = "README.md"
 requires-python = ">=3.11"

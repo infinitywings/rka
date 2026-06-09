@@ -109,6 +109,58 @@ _RATIFY_BASH_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
+# --- Order-independent `rm` recursive+force detection (v0.6.11) ---
+# The literal `rm\s+-rf` regex in _DENY/_RATIFY only matched that exact
+# spelling, so `rm -fr`, `rm -Rf`, `rm -r -f`, `rm -rfv`, and
+# `rm --recursive --force` slipped through BOTH tiers and auto-executed.
+# This parser collects flags from every rm invocation regardless of order
+# or grouping and reports whether it is recursive AND force, plus its
+# non-flag target tokens.
+_RM_SENSITIVE_TARGETS = ("/", "~", "$HOME", "${HOME}")
+
+
+def _rm_recursive_force_targets(cmd: str) -> tuple[bool, list[str]]:
+    """For the first recursive+force `rm` invocation in `cmd`, return
+    `(True, target_tokens)`. Returns `(False, [])` if no rm invocation
+    combines a recursive flag (-r/-R/--recursive) with a force flag
+    (-f/--force)."""
+    for m in re.finditer(r"\brm\b([^\n;&|]*)", cmd):
+        recursive = force = False
+        targets: list[str] = []
+        for tok in m.group(1).split():
+            if tok == "--recursive":
+                recursive = True
+            elif tok == "--force":
+                force = True
+            elif tok == "--":
+                continue
+            elif tok.startswith("--"):
+                continue  # some other long flag
+            elif re.fullmatch(r"-[A-Za-z]+", tok):
+                chars = set(tok[1:])
+                if chars & {"r", "R"}:
+                    recursive = True
+                if "f" in chars:
+                    force = True
+            else:
+                targets.append(tok)
+        if recursive and force:
+            return (True, targets)
+    return (False, [])
+
+
+def _rm_targets_sensitive(targets: list[str]) -> bool:
+    """True if any rm target is a host-root / $HOME / `~` (the DENY-tier
+    catastrophe roots), in any of their common spellings."""
+    for t in targets:
+        t = t.strip().strip("\"'")
+        if t in _RM_SENSITIVE_TARGETS:
+            return True
+        if t.startswith(("~/", "$HOME/", "${HOME}/")):
+            return True
+    return False
+
+
 def is_destructive_bash(cmd: str) -> tuple[bool, str | None]:
     """Return `(matched, pattern_str)` if `cmd` contains a destructive
     pattern that requires PI ratification. The second element is the
@@ -118,6 +170,9 @@ def is_destructive_bash(cmd: str) -> tuple[bool, str | None]:
     bypass (variable-resolved `$RM` → `rm -rf …`), reconstructs a
     normalized command string and applies the regex patterns against
     THAT. Falls back to direct regex on parse failure.
+
+    v0.6.11 — any recursive+force `rm` (in any flag order/grouping)
+    requires ratification, not just the literal `rm -rf`.
     """
     if not isinstance(cmd, str):
         return (False, None)
@@ -127,6 +182,9 @@ def is_destructive_bash(cmd: str) -> tuple[bool, str | None]:
     for candidate in (cmd, ast_normalized):
         if candidate is None:
             continue
+        rf, _targets = _rm_recursive_force_targets(candidate)
+        if rf:
+            return (True, "rm recursive+force (any flag order)")
         for pat in _RATIFY_BASH_PATTERNS:
             if pat.search(candidate):
                 return (True, pat.pattern)
@@ -138,6 +196,10 @@ def is_denied_bash(cmd: str) -> tuple[bool, str | None]:
     (no PI override available — these are outright refused).
 
     Gap 4a — AST-aware: variable-resolved forms are matched too.
+
+    v0.6.11 — a recursive+force `rm` targeting `/`, `$HOME`, or `~`
+    (in any flag order/grouping) is DENY-tier, matching the original
+    `rm -rf /` intent but order-independent.
     """
     if not isinstance(cmd, str):
         return (False, None)
@@ -145,6 +207,9 @@ def is_denied_bash(cmd: str) -> tuple[bool, str | None]:
     for candidate in (cmd, ast_normalized):
         if candidate is None:
             continue
+        rf, targets = _rm_recursive_force_targets(candidate)
+        if rf and _rm_targets_sensitive(targets):
+            return (True, "rm recursive+force on host-root/$HOME/~ (any flag order)")
         for pat in _DENY_PATTERNS:
             if pat.search(candidate):
                 return (True, pat.pattern)

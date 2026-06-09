@@ -258,6 +258,13 @@ _BUILTIN_FILESYSTEM_TOOLS: tuple[str, ...] = (
     "WebSearch",
 )
 
+# v0.6.11 — egress tools the can_use_tool hook audits. The research
+# workflow legitimately needs open web access (papers, SEC filings), so
+# these are NOT hard-allowlisted by default; the hook audit-logs every
+# call and denies known telemetry endpoints. An operator can opt into a
+# strict deny-by-default allowlist via ORCHESTRATOR_EGRESS_ALLOWLIST.
+_EGRESS_TOOLS: tuple[str, ...] = ("WebFetch", "WebSearch")
+
 
 def _all_allowed_subprocess_tools(
     include_context7: bool, include_zotero: bool = False
@@ -806,6 +813,46 @@ def _build_fs_actuator_hook(workspace_path: str):
                     ),
                     interrupt=False,
                 )
+
+        # v0.6.11 — egress audit + control for WebFetch/WebSearch. Previously
+        # these fell straight through to the auto-allow below with no
+        # inspection and permission_mode='dontAsk'. The credential-exfil
+        # target is already removed by server._enforce_workspace_mount_safety
+        # (the daemon refuses to mount $HOME / credential dirs), and the
+        # research workflow needs open web access — so the default is NOT a
+        # hard allowlist. Instead:
+        #   (1) audit-log every egress so the PI has a trail,
+        #   (2) deny known telemetry/analytics endpoints (blocklist floor),
+        #   (3) honor an OPT-IN strict allowlist (ORCHESTRATOR_EGRESS_ALLOWLIST,
+        #       comma-separated domains) for security-conscious installs —
+        #       when set, only matching hosts are allowed (deny-by-default).
+        if tool_name in _EGRESS_TOOLS:
+            url = ""
+            if isinstance(tool_input, dict):
+                url = str(tool_input.get("url") or tool_input.get("query") or "")
+            logger.info("subprocess egress: %s %s", tool_name, url[:200])
+            low = url.lower()
+            try:
+                from orchestrator.notifications import WEBHOOK_BLOCKLIST
+                if any(host in low for host in WEBHOOK_BLOCKLIST):
+                    return sdk.PermissionResultDeny(
+                        message=f"egress to telemetry endpoint blocked: {url[:120]}",
+                        interrupt=False,
+                    )
+            except Exception:  # pragma: no cover — blocklist import is best-effort
+                pass
+            allowlist_raw = os.environ.get("ORCHESTRATOR_EGRESS_ALLOWLIST", "").strip()
+            if allowlist_raw:
+                allowed = [d.strip().lower() for d in allowlist_raw.split(",") if d.strip()]
+                if not any(d in low for d in allowed):
+                    return sdk.PermissionResultDeny(
+                        message=(
+                            f"egress denied: {url[:120]} is not in "
+                            f"ORCHESTRATOR_EGRESS_ALLOWLIST"
+                        ),
+                        interrupt=False,
+                    )
+            return sdk.PermissionResultAllow()
 
         # Non-mutating-FS tools auto-allowed — the MCP layer's
         # allowed_tools / disallowed_tools already constrain RKA writes.

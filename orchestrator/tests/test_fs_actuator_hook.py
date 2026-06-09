@@ -93,6 +93,80 @@ def test_hook_denies_destructive_bash_with_ratify_message(monkeypatch):
     assert "proposed_fs_actions" in result.message
 
 
+def test_hook_denies_rm_flag_reorder_bypass(monkeypatch):
+    """v0.6.11 — `rm -fr` (flag-reordered) must now be caught by the hook,
+    where previously it slipped through to auto-allow."""
+    _install_fake_sdk(monkeypatch)
+    from orchestrator import llm_client
+
+    hook = llm_client._build_fs_actuator_hook("/ws/proj")
+    for cmd in ("rm -fr /ws/proj/data", "rm -Rf build", "rm -r -f node_modules"):
+        result = asyncio.run(hook("Bash", {"command": cmd}, None))
+        assert result.behavior == "deny", f"{cmd!r} should be denied (ratify)"
+
+
+# ---------------------------------------------------------------------------
+# v0.6.11 — egress audit + control for WebFetch/WebSearch
+# ---------------------------------------------------------------------------
+
+
+def test_hook_allows_general_web_fetch(monkeypatch):
+    """Research workflow needs open fetch — a normal URL is allowed by
+    default (no allowlist set)."""
+    _install_fake_sdk(monkeypatch)
+    monkeypatch.delenv("ORCHESTRATOR_EGRESS_ALLOWLIST", raising=False)
+    from orchestrator import llm_client
+
+    hook = llm_client._build_fs_actuator_hook("/ws/proj")
+    result = asyncio.run(
+        hook("WebFetch", {"url": "https://arxiv.org/abs/2401.00001"}, None)
+    )
+    assert result.behavior == "allow"
+
+
+def test_hook_denies_telemetry_endpoint(monkeypatch):
+    """Known telemetry endpoints are denied (blocklist floor), even with no
+    allowlist configured."""
+    _install_fake_sdk(monkeypatch)
+    monkeypatch.delenv("ORCHESTRATOR_EGRESS_ALLOWLIST", raising=False)
+    from orchestrator import llm_client
+
+    hook = llm_client._build_fs_actuator_hook("/ws/proj")
+    result = asyncio.run(
+        hook("WebFetch", {"url": "https://api.segment.io/v1/track?x=secret"}, None)
+    )
+    assert result.behavior == "deny"
+    assert "telemetry" in result.message
+
+
+def test_hook_egress_allowlist_opt_in_denies_offlist(monkeypatch):
+    """When ORCHESTRATOR_EGRESS_ALLOWLIST is set, only matching hosts pass
+    (deny-by-default for security-conscious installs)."""
+    _install_fake_sdk(monkeypatch)
+    monkeypatch.setenv("ORCHESTRATOR_EGRESS_ALLOWLIST", "arxiv.org,sec.gov")
+    from orchestrator import llm_client
+
+    hook = llm_client._build_fs_actuator_hook("/ws/proj")
+    # On-list host allowed.
+    ok = asyncio.run(hook("WebFetch", {"url": "https://arxiv.org/abs/x"}, None))
+    assert ok.behavior == "allow"
+    # Off-list host denied.
+    no = asyncio.run(hook("WebFetch", {"url": "https://evil.example.com/exfil"}, None))
+    assert no.behavior == "deny"
+    assert "ORCHESTRATOR_EGRESS_ALLOWLIST" in no.message
+
+
+def test_hook_websearch_audited_and_allowed(monkeypatch):
+    """WebSearch (query, not url) is audited and allowed by default."""
+    _install_fake_sdk(monkeypatch)
+    monkeypatch.delenv("ORCHESTRATOR_EGRESS_ALLOWLIST", raising=False)
+    from orchestrator import llm_client
+
+    hook = llm_client._build_fs_actuator_hook("/ws/proj")
+    result = asyncio.run(hook("WebSearch", {"query": "hyperscaler lease commitments"}, None))
+    assert result.behavior == "allow"
+
+
 def test_hook_denies_denied_bash_with_no_override_message(monkeypatch):
     _install_fake_sdk(monkeypatch)
     from orchestrator import llm_client
