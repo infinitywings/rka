@@ -507,9 +507,20 @@ class BackfillService:
                                 embed_dim,
                             ],
                         )
-                    if cfg.post_embed_sql:
-                        await self._db.execute(cfg.post_embed_sql, [entity_id])
-                    status.processed += 1
+                        # v2.7.0.7 — `post_embed_sql` clears the entity's
+                        # pending flag (e.g. `UPDATE claims SET
+                        # embedding_pending = 0`). It MUST only run when a
+                        # vector was actually stored. Previously it ran
+                        # unconditionally, so a vec_available=False pass cleared
+                        # the pending flag with NO vector written, permanently
+                        # stranding the claim (no vector, no pending signal —
+                        # needs_reembed never picks it up again).
+                        if cfg.post_embed_sql:
+                            await self._db.execute(cfg.post_embed_sql, [entity_id])
+                        status.processed += 1
+                    # else: no vector written (sqlite-vec unavailable). Leave the
+                    # entity's pending signal intact and do NOT count it as
+                    # processed so backfill retries once vec is available again.
                 except Exception as exc:  # noqa: BLE001
                     # Per-row failure: leave any pending signal intact,
                     # log, continue.

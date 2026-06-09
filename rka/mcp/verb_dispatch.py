@@ -1327,6 +1327,11 @@ async def dispatch_record_note(
     # ingest_document mode kwargs:
     default_type: str | None = None,
     split_by_headings: bool | None = None,
+    # v2.7.0.7 — NoteCreate fields previously accepted by RecordNoteArgs but
+    # dropped before the POST.
+    summary: str | None = None,
+    status: str | None = None,
+    pinned: bool | None = None,
 ) -> str:
     """[ANY] Record a journal entry (create or ingest_document).
 
@@ -1396,6 +1401,9 @@ async def dispatch_record_note(
         confidence=confidence,
         importance=importance,
         tags=tags,
+        summary=summary,
+        status=status,
+        pinned=pinned,
         project_id=project_id,
     )
 
@@ -1504,6 +1512,11 @@ async def dispatch_record_decision(
         related_journal=merged["related_journal"],
         kind=kind,
         assumptions=assumptions,
+        # v2.7.0.7 — forward related_missions/tags/status on the create path
+        # for parity with the supersede path (which already forwards them).
+        related_missions=related_missions,
+        tags=tags,
+        status=status,
         project_id=project_id,
     )
 
@@ -1830,6 +1843,9 @@ async def dispatch_execute(
             action=sub_action,
             default_type=kw.get("default_type"),
             split_by_headings=kw.get("split_by_headings"),
+            summary=kw.get("summary"),
+            status=kw.get("status"),
+            pinned=kw.get("pinned"),
         )
 
     # --- record_decision (also handles supersede_decision in record form) ---

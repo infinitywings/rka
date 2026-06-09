@@ -665,6 +665,9 @@ async def rka_add_note(
     confidence: ConfidenceLiteral = "hypothesis",
     importance: ImportanceLiteral = "normal",
     tags: list[str] | None = None,
+    summary: str | None = None,
+    status: str | None = None,
+    pinned: bool | None = None,
     *,
     project_id: str,
 ) -> str:
@@ -683,7 +686,13 @@ async def rka_add_note(
         confidence: hypothesis | tested | verified | superseded | retracted
         importance: critical | high | normal | low
         tags: Optional tags for categorization (e.g. ["anomaly-detection", "methodology"])
+        summary: Optional short summary of the entry
+        status: draft | active | superseded | retracted (defaults to active)
+        pinned: Whether to pin the entry for quick access
     """
+    # v2.7.0.7 — summary/status/pinned now forwarded. NoteCreate accepts them
+    # but the adapter previously omitted them, so the RecordNoteArgs typed
+    # surface advertised fields that were silently dropped before the POST.
     async with _client(project_id) as c:
         body = {
             "content": content, "type": type, "source": source,
@@ -692,7 +701,8 @@ async def rka_add_note(
             "related_literature": related_literature,
             "related_mission": related_mission, "supersedes": supersedes,
             "confidence": confidence, "importance": importance,
-            "tags": tags,
+            "tags": tags, "summary": summary, "status": status,
+            "pinned": pinned,
         }
         r = await c.post("/api/notes", json={k: v for k, v in body.items() if v is not None})
         _raise_with_detail(r)
@@ -932,6 +942,9 @@ async def rka_add_decision(
     related_journal: list[str] | None = None,
     kind: DecisionKindLiteral = "decision",
     assumptions: list[str] | None = None,
+    related_missions: list[str] | None = None,
+    tags: list[str] | None = None,
+    status: str | None = None,
     *,
     project_id: str,
 ) -> str:
@@ -950,14 +963,21 @@ async def rka_add_decision(
         related_journal: Journal entry IDs that justify this decision (creates justified_by links)
         kind: research_question | design_choice | decision | operational
         assumptions: List of assumptions this decision rests on (stored as JSON)
+        related_missions: Mission IDs related to this decision
+        tags: Free-form tags
+        status: active | abandoned | superseded | merged | revisit
     """
+    # v2.7.0.7 — related_missions/tags/status are now forwarded (previously
+    # the create path silently dropped them while the supersede path kept
+    # them — an asymmetry that lost provenance + tags on plain creates).
     async with _client(project_id) as c:
         body = {
             "question": question, "phase": phase, "decided_by": decided_by,
             "options": options, "chosen": chosen, "rationale": rationale,
             "parent_id": parent_id, "related_literature": related_literature,
             "related_journal": related_journal, "kind": kind,
-            "assumptions": assumptions,
+            "assumptions": assumptions, "related_missions": related_missions,
+            "tags": tags, "status": status,
         }
         r = await c.post("/api/decisions", json={k: v for k, v in body.items() if v is not None})
         _raise_with_detail(r)

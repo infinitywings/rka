@@ -138,6 +138,25 @@ class ClaimService(BaseService):
             values,
         )
         await self.db.commit()
+
+        # v2.7.0.7 — re-sync derived indexes when the searchable/embeddable
+        # `content` field changed. Prior versions updated the claims row but
+        # never touched fts_claims or re-enqueued the embed job, so edited
+        # claims silently fell out of full-text + vector search (the sibling
+        # services — notes/decisions/literature/clusters — all re-sync here).
+        if "content" in dump:
+            await self._sync_fts("claim", claim_id, {"content": dump["content"]})
+            if self.embeddings:
+                queue = JobQueue(self.db)
+                await queue.enqueue(
+                    "claim_embed",
+                    project_id=self.project_id,
+                    entity_type="claim",
+                    entity_id=claim_id,
+                    dedupe_key=self._job_dedupe_key(claim_id, "embed"),
+                    priority=125,
+                )
+
         await self.audit("update", "claim", claim_id, "system", {"fields": list(dump.keys())})
         return await self.get(claim_id)
 
