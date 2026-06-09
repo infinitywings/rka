@@ -873,5 +873,70 @@ def admin_repair_supersedes(
         raise SystemExit(1)
 
 
+@admin.command("reindex")
+@click.option(
+    "--project", "project_id", default=None,
+    help="Only rebuild this project's rows. Omit to rebuild ALL projects.",
+)
+@click.option(
+    "--types", "types_csv", default=None,
+    help="Comma-separated entity types to rebuild "
+         "(journal,decision,literature,mission,claim,cluster). Default: all.",
+)
+@click.option(
+    "--json", "json_output", is_flag=True,
+    help="Emit JSON instead of human-readable text.",
+)
+def admin_reindex(project_id: str | None, types_csv: str | None, json_output: bool):
+    """Rebuild the FTS search indexes from their source tables.
+
+    Recovery path for search-index drift: the FTS5 indexes are maintained
+    in application code, so a write-path slip (a missing sync, a swallowed
+    failure, a partial import) can silently desync the index from the
+    source rows. This command rebuilds them deterministically. Safe to run
+    any time — it DELETEs and re-INSERTs FTS rows only (never touches source
+    data). Scope to one project with --project; otherwise rebuilds globally.
+    """
+    import json as _json
+    from rka.config import RKAConfig
+    from rka.infra.database import Database
+    from rka.services.reindex import reindex_fts
+
+    entity_types = (
+        [t.strip() for t in types_csv.split(",") if t.strip()] if types_csv else None
+    )
+    config = RKAConfig()
+
+    async def _run():
+        db = Database(config.database_url)
+        await db.connect()
+        try:
+            return await reindex_fts(db, project_id=project_id, entity_types=entity_types)
+        finally:
+            await db.close()
+
+    report = asyncio.run(_run())
+
+    if json_output:
+        click.echo(_json.dumps({
+            "results": report.results,
+            "failures": report.failures,
+            "total_reindexed": report.total_reindexed,
+            "ok": report.ok,
+        }, indent=2))
+    else:
+        scope = f"project {project_id}" if project_id else "ALL projects"
+        click.echo(f"=== rka admin reindex — FTS rebuild ({scope}) ===")
+        for etype, count in report.results.items():
+            click.echo(f"  [+] {etype}: {count} rows reindexed")
+        for etype, err in report.failures.items():
+            click.echo(f"  [!] {etype}: FAILED — {err}")
+        click.echo(f"Total: {report.total_reindexed} rows reindexed.")
+        if not report.ok:
+            click.echo("Some tables failed — see [!] lines above.")
+    if not report.ok:
+        raise SystemExit(1)
+
+
 if __name__ == "__main__":
     main()

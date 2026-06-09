@@ -1159,9 +1159,19 @@ class RecordDecisionArgs(ProjectScopedArgs):
         Field(default=None, description="Free-form tags."),
     ] = None
     phase: Annotated[
-        Optional[str],
-        Field(default=None, description="Project phase tag."),
-    ] = None
+        str,
+        Field(
+            description=(
+                "Project phase tag. REQUIRED — decisions are phase-scoped and "
+                "the REST DecisionCreate model requires it. v2.7.0.7 promoted "
+                "this from optional to required so a missing phase fails at the "
+                "typed-args boundary with a clear message instead of as an "
+                "opaque 422 at the API. (The dedicated `supersede_decision` "
+                "operation still allows omitting phase — it inherits the old "
+                "decision's phase.)"
+            ),
+        ),
+    ]
     parent_id: Annotated[
         Optional[str],
         Field(default=None, description="Parent decision ID (decision tree)."),

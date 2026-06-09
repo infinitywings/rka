@@ -166,6 +166,12 @@ class EmbeddingService:
         if embedding is None:
             embedding = await self.embed_document(text)
 
+        # v2.7.0.7 — the vec row and its metadata row must be written together
+        # or not at all. Previously the metadata INSERT ran unconditionally, so
+        # when sqlite-vec was unavailable the metadata row claimed "embedded at
+        # <model>/<dim>" with no actual vector — and `needs_reembed` then
+        # returned False forever, permanently stranding the entity out of vector
+        # search even after vec recovered. Gate both on the same condition.
         if self.db.vec_available and table:
             import struct
 
@@ -174,21 +180,20 @@ class EmbeddingService:
                 f"INSERT OR REPLACE INTO {table} (id, embedding) VALUES (?, ?)",
                 [entity_id, vec_blob],
             )
-
-        await self.db.execute(
-            """INSERT OR REPLACE INTO embedding_metadata
-               (project_id, entity_type, entity_id, content_hash, model_name, dimensions)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            [
-                project_id,
-                entity_type,
-                entity_id,
-                self.content_hash(text),
-                self.model_name,
-                self._backend.dim,
-            ],
-        )
-        await self.db.commit()
+            await self.db.execute(
+                """INSERT OR REPLACE INTO embedding_metadata
+                   (project_id, entity_type, entity_id, content_hash, model_name, dimensions)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                [
+                    project_id,
+                    entity_type,
+                    entity_id,
+                    self.content_hash(text),
+                    self.model_name,
+                    self._backend.dim,
+                ],
+            )
+            await self.db.commit()
 
     async def embed_and_store(
         self,

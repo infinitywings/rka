@@ -268,104 +268,139 @@ class DecisionService(BaseService):
         if isinstance(new_data, DecisionSupersedeBody):
             new_data = DecisionCreate(**new_data.model_dump())
 
-        # Create new decision
+        # Create new decision (commits the new decision as a normal active
+        # row). If the bookkeeping transaction below fails, the only
+        # crash-reachable state is "new active decision + untouched old" —
+        # clean and recoverable, never a half-applied supersede.
         new_decision = await self.create(new_data, actor=actor)
 
-        # Update new decision's scope_version. Advance updated_at so downstream
-        # readers (change feeds, staleness propagation) see the version bump.
-        # See mis_01KQMWG5DADXY6TB3CKYKJZ583.
+        # Validate the actor once, before the transaction, so an invalid actor
+        # raises cleanly rather than mid-transaction.
+        actor_v = self._validate_actor(actor)
+
+        # v2.7.0.7 — wrap ALL post-create supersede bookkeeping in ONE
+        # transaction so it is all-or-nothing. Previously this spanned five
+        # separate commit()s (scope bump + status flip / add_link / cascade /
+        # emit_event / review_queue), so a crash mid-sequence left the
+        # supersede half-applied (e.g. status flipped but no supersedes
+        # entity-link, or no staleness cascade). add_link() and emit_event()
+        # are inlined here (instead of called) because they commit internally,
+        # which would break the single transaction. SQLite DDL/DML inside an
+        # explicit BEGIN is transactional; ROLLBACK on any failure reverts the
+        # whole bookkeeping block.
         new_version = (old.scope_version or 1) + 1
-        await self.db.execute(
-            "UPDATE decisions SET scope_version = ?, updated_at = ? WHERE id = ? AND project_id = ?",
-            [new_version, _now(), new_decision.id, self.project_id],
-        )
+        now = _now()
+        link_id = generate_id("link")
+        event_id = generate_id("event")
 
-        # Mark old decision as superseded
-        await self.db.execute(
-            "UPDATE decisions SET status = 'superseded', superseded_by = ?, updated_at = ? WHERE id = ? AND project_id = ?",
-            [new_decision.id, _now(), old_decision_id, self.project_id],
-        )
-        await self.db.commit()
-
-        # Create supersedes entity link
-        await self.add_link(
-            "decision", new_decision.id, "supersedes", "decision", old_decision_id,
-            created_by=actor,
-        )
-
-        # Find journal entries linked to the old decision
-        linked_entries = await self.db.fetchall(
-            """SELECT source_id FROM entity_links
-               WHERE target_type = 'decision' AND target_id = ?
-                 AND link_type IN ('references', 'justified_by')""",
-            [old_decision_id],
-        )
-        # Also check related_decisions JSON field. Use json_each() for exact
-        # element-level matching — the previous `LIKE '%id%'` produced false
-        # positives when one decision's ID was a substring of another, and was
-        # vulnerable to JSON formatting drift. See mis_01KQMWG5DADXY6TB3CKYKJZ583.
-        json_linked = await self.db.fetchall(
-            """SELECT id FROM journal
-               WHERE project_id = ?
-                 AND related_decisions IS NOT NULL
-                 AND EXISTS (
-                     SELECT 1 FROM json_each(related_decisions) WHERE value = ?
-                 )""",
-            [self.project_id, old_decision_id],
-        )
-
-        affected_entry_ids = set()
-        for row in linked_entries:
-            affected_entry_ids.add(row["source_id"])
-        for row in json_linked:
-            affected_entry_ids.add(row["id"])
-
-        # Mark claims as stale and flag affected clusters for Brain review.
-        # Re-distillation is now a Brain task — no worker queue is enqueued here.
-        for entry_id in affected_entry_ids:
-            # Mark claims stale
+        await self.db.execute("BEGIN")
+        try:
+            # Scope-version bump on the new decision (drives change feeds +
+            # staleness propagation).
             await self.db.execute(
-                "UPDATE claims SET stale = 1, updated_at = ? WHERE source_entry_id = ? AND project_id = ?",
-                [_now(), entry_id, self.project_id],
+                "UPDATE decisions SET scope_version = ?, updated_at = ? "
+                "WHERE id = ? AND project_id = ?",
+                [new_version, now, new_decision.id, self.project_id],
             )
-            # Mark clusters containing those claims as needs_reprocessing
+            # Mark old decision superseded (+ FK to the new head). Both columns
+            # set in one UPDATE — the admin-repair orphan signature
+            # (status='superseded' AND superseded_by IS NULL) is therefore
+            # never crash-reachable from the live path.
             await self.db.execute(
-                """UPDATE evidence_clusters SET needs_reprocessing = 1, updated_at = ?
-                   WHERE id IN (
-                       SELECT DISTINCT ce.cluster_id FROM claim_edges ce
-                       JOIN claims c ON ce.source_claim_id = c.id
-                       WHERE c.source_entry_id = ? AND ce.relation = 'member_of'
-                   ) AND project_id = ?""",
-                [_now(), entry_id, self.project_id],
+                "UPDATE decisions SET status = 'superseded', superseded_by = ?, "
+                "updated_at = ? WHERE id = ? AND project_id = ?",
+                [new_decision.id, now, old_decision_id, self.project_id],
             )
-            # Note: re-distillation (claim re-extraction) is now a Brain task,
-            # not an automated LLM job. Claims are marked stale above; Brain
-            # reviews and re-extracts during maintenance sessions.
-        await self.db.commit()
-
-        await self.emit_event(
-            event_type="decision_superseded",
-            entity_type="decision",
-            entity_id=old_decision_id,
-            actor=actor,
-            summary=f"Decision superseded by {new_decision.id}: {new_data.question[:80]}",
-            details={"new_decision_id": new_decision.id, "affected_entries": len(affected_entry_ids)},
-        )
-
-        # Flag for review
-        if affected_entry_ids:
-            review_id = generate_id("review")
+            # supersedes entity-link (inlined add_link, INSERT OR IGNORE for
+            # idempotency).
             await self.db.execute(
-                """INSERT OR IGNORE INTO review_queue
-                   (id, item_type, item_id, flag, context, priority, project_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT OR IGNORE INTO entity_links
+                   (id, source_type, source_id, link_type, target_type, target_id,
+                    created_by, project_id)
+                   VALUES (?, 'decision', ?, 'supersedes', 'decision', ?, ?, ?)""",
+                [link_id, new_decision.id, old_decision_id, actor_v, self.project_id],
+            )
+
+            # Find journal entries linked to the old decision (reads; safe
+            # inside the txn). json_each() for exact element-level matching.
+            linked_entries = await self.db.fetchall(
+                """SELECT source_id FROM entity_links
+                   WHERE target_type = 'decision' AND target_id = ?
+                     AND link_type IN ('references', 'justified_by')
+                     AND project_id = ?""",
+                [old_decision_id, self.project_id],
+            )
+            json_linked = await self.db.fetchall(
+                """SELECT id FROM journal
+                   WHERE project_id = ?
+                     AND related_decisions IS NOT NULL
+                     AND EXISTS (
+                         SELECT 1 FROM json_each(related_decisions) WHERE value = ?
+                     )""",
+                [self.project_id, old_decision_id],
+            )
+            affected_entry_ids = {r["source_id"] for r in linked_entries} | {
+                r["id"] for r in json_linked
+            }
+
+            # Staleness cascade: mark claims stale + clusters needs_reprocessing.
+            for entry_id in affected_entry_ids:
+                await self.db.execute(
+                    "UPDATE claims SET stale = 1, updated_at = ? "
+                    "WHERE source_entry_id = ? AND project_id = ?",
+                    [now, entry_id, self.project_id],
+                )
+                await self.db.execute(
+                    """UPDATE evidence_clusters SET needs_reprocessing = 1, updated_at = ?
+                       WHERE id IN (
+                           SELECT DISTINCT ce.cluster_id FROM claim_edges ce
+                           JOIN claims c ON ce.source_claim_id = c.id
+                           WHERE c.source_entry_id = ? AND ce.relation = 'member_of'
+                       ) AND project_id = ?""",
+                    [now, entry_id, self.project_id],
+                )
+
+            # decision_superseded event (inlined emit_event).
+            await self.db.execute(
+                """INSERT INTO events
+                   (id, event_type, entity_type, entity_id, actor, summary,
+                    caused_by_event, caused_by_entity, phase, details, project_id)
+                   VALUES (?, 'decision_superseded', 'decision', ?, ?, ?, NULL, NULL, NULL, ?, ?)""",
                 [
-                    review_id, "decision", new_decision.id, "re_distill_review",
-                    json.dumps({"old_decision_id": old_decision_id, "affected_entries": list(affected_entry_ids)}),
-                    60, self.project_id,
+                    event_id, old_decision_id, actor_v,
+                    f"Decision superseded by {new_decision.id}: {new_data.question[:80]}",
+                    json.dumps({
+                        "new_decision_id": new_decision.id,
+                        "affected_entries": len(affected_entry_ids),
+                    }),
+                    self.project_id,
                 ],
             )
-            await self.db.commit()
+
+            # Flag for Brain re-distillation review.
+            if affected_entry_ids:
+                review_id = generate_id("review")
+                await self.db.execute(
+                    """INSERT OR IGNORE INTO review_queue
+                       (id, item_type, item_id, flag, context, priority, project_id)
+                       VALUES (?, 'decision', ?, 're_distill_review', ?, 60, ?)""",
+                    [
+                        review_id, new_decision.id,
+                        json.dumps({
+                            "old_decision_id": old_decision_id,
+                            "affected_entries": list(affected_entry_ids),
+                        }),
+                        self.project_id,
+                    ],
+                )
+
+            await self.db.execute("COMMIT")
+        except Exception:
+            try:
+                await self.db.execute("ROLLBACK")
+            except Exception:  # pragma: no cover
+                pass
+            raise
 
         return await self.get(new_decision.id)
 

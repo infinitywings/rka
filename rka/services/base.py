@@ -184,10 +184,27 @@ class BaseService:
     }
 
     async def _sync_fts(self, entity_type: str, entity_id: str, data: dict) -> None:
-        """Insert or update an entity's FTS5 index entry."""
+        """Insert or update an entity's FTS5 index entry.
+
+        Wrapped in a SAVEPOINT so a failure between the DELETE and the
+        INSERT cannot leave an orphaned DELETE pending — a later commit()
+        on the shared connection would otherwise make that DELETE
+        permanent, silently dropping the row from search. On failure we
+        ROLLBACK TO the savepoint (discarding only the FTS delete+insert,
+        preserving any prior work in the transaction) and log at WARNING
+        so the drift is visible. `rka admin reindex` repairs any row that
+        slips through.
+        """
         config = self._FTS_CONFIG.get(entity_type)
         if not config:
             return
+        # entity_type is constrained to _FTS_CONFIG keys (alnum), so the
+        # savepoint name is safe to interpolate.
+        savepoint = f"fts_sync_{entity_type}"
+        try:
+            await self.db.execute(f"SAVEPOINT {savepoint}")
+        except Exception:  # pragma: no cover — savepoint start should not fail
+            savepoint = ""
         try:
             # Delete existing entry
             await self.db.execute(
@@ -203,9 +220,21 @@ class BaseService:
                 f"INSERT INTO {config['table']} ({col_names}) VALUES ({placeholders})",
                 values,
             )
+            if savepoint:
+                await self.db.execute(f"RELEASE {savepoint}")
             await self.db.commit()
         except Exception as exc:
-            logger.debug("FTS5 sync failed for %s/%s: %s", entity_type, entity_id, exc)
+            if savepoint:
+                try:
+                    await self.db.execute(f"ROLLBACK TO {savepoint}")
+                    await self.db.execute(f"RELEASE {savepoint}")
+                except Exception:  # pragma: no cover
+                    pass
+            logger.warning(
+                "FTS5 sync failed for %s/%s: %s — search index NOT updated for "
+                "this entity; run `rka admin reindex` to repair.",
+                entity_type, entity_id, exc,
+            )
 
     # ---- Embedding sync ----
 

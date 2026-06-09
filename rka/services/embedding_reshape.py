@@ -143,13 +143,27 @@ async def reshape_vec_table(db: Any, table_name: str, *, dim: int) -> int:
         "reshape_vec_table: dropping %s (was dim=%s) and recreating at dim=%d",
         table_name, existing_dim, dim,
     )
-    await db.execute(f"DROP TABLE IF EXISTS {table_name}")
-    await db.execute(
-        f"CREATE VIRTUAL TABLE {table_name} USING vec0("
-        f"id TEXT PRIMARY KEY, embedding float[{dim}])"
-    )
-    await _mark_pending(db, table_name, entity_type, entity_table)
-    await db.commit()
+    # v2.7.0.7 — crash-safety. With sqlite3's default isolation_level='',
+    # a bare DROP TABLE runs in autocommit mode, so a crash between the DROP
+    # and the CREATE left the vec table permanently GONE (no backup, every
+    # entity stranded out of vector search). Wrap DROP+CREATE+mark-pending in
+    # one explicit transaction: SQLite DDL is transactional, so a crash before
+    # COMMIT rolls the DROP back and the old table survives intact.
+    await db.execute("BEGIN")
+    try:
+        await db.execute(f"DROP TABLE IF EXISTS {table_name}")
+        await db.execute(
+            f"CREATE VIRTUAL TABLE {table_name} USING vec0("
+            f"id TEXT PRIMARY KEY, embedding float[{dim}])"
+        )
+        await _mark_pending(db, table_name, entity_type, entity_table)
+        await db.execute("COMMIT")
+    except Exception:
+        try:
+            await db.execute("ROLLBACK")
+        except Exception:  # pragma: no cover
+            pass
+        raise
     return await _count_entity_rows(db, entity_table)
 
 
