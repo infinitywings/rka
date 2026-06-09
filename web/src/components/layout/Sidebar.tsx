@@ -141,8 +141,14 @@ export function Sidebar() {
           </Button>
         </div>
         <div className="mt-3 flex gap-1">
+          {/* min-w-0 lets the flex-1 trigger shrink below its intrinsic
+              content width. Without it, the SelectTrigger's default
+              min-width:auto keeps it at full content size, overflowing the
+              224px sidebar and pushing the shrink-0 New/Delete buttons
+              off-screen (unclickable) once the Delete button appears on a
+              non-default project. */}
           <Select value={projectId} onValueChange={setProjectId}>
-            <SelectTrigger className="h-9 flex-1 text-xs">
+            <SelectTrigger className="h-9 min-w-0 flex-1 text-xs">
               <SelectValue placeholder="Select project" />
             </SelectTrigger>
             <SelectContent>
