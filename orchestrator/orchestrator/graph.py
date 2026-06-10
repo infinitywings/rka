@@ -131,15 +131,34 @@ def _route_after_budget_or_consensus(state: dict) -> str:
 def _route_after_pi_decision(state: dict) -> str:
     # Phase 2.7 T3f: on accept, route through execute_ratified_actions first
     # so any PI-ratified WRITE_TOOLS proposed by mission_execute land in RKA
-    # before final_synthesis closes the run. On reject/escape, escalate
-    # directly (no writes to commit).
+    # before final_synthesis closes the run.
+    #
+    # v0.6.11: three-way distinction (mirrors _route_after_pi_greenlight):
+    #   correct (REDIRECT_SENTINEL token) → mission_redraft (NEW in-run loop:
+    #       Executor revises proposed_actions with the PI's correction, then
+    #       re-renders decision_present + re-parks for ratification). Was:
+    #       dead-ended at escalation_router, dropping the correction in-run.
+    #   accept → execute_ratified_actions (dispatch the ratified writes)
+    #   reject / other → escalation_router (hard reject)
+    #
+    # The sentinel short-circuit MUST stay at the TOP — prevents a PI
+    # correction containing "accept" (e.g. "do not accept this — redo") from
+    # bypassing the TWO-TAP gate via substring match.
     response = _latest_interrupt_response(state)
-    # Sentinel short-circuit — prevents a PI correction containing the word
-    # "accept" (e.g. "do not accept this — redo") from bypassing the
-    # TWO-TAP ratification gate via substring match.
     if is_redirect_token(response):
-        return "escalation_router"
+        return "mission_redraft"
     return "execute_ratified_actions" if "accept" in response else "escalation_router"
+
+
+def _route_after_mission_redraft(state: dict) -> str:
+    """v0.6.11: the mission_redraft node sets next_node_override=
+    'escalation_router' on cap-exceed / defensive escape (emitting a real
+    classified ErrorRecord first). Happy path re-renders the decision via
+    decision_present, which re-parks pi_decision_select for re-ratification.
+    """
+    if state.get("next_node_override") == "escalation_router":
+        return "escalation_router"
+    return "decision_present"
 
 
 def _route_after_execute_ratified_actions(state: dict) -> str:
@@ -236,6 +255,12 @@ def build_graph(
     # ---- 4 Executor nodes (Phase 2.7 T3e added execute_ratified_actions) ----
     sg.add_node("backbrief_draft", _bind(executor.backbrief_draft, sdk, mcp))
     sg.add_node("mission_execute", _bind(executor.mission_execute, sdk, mcp))
+    # v0.6.11 — in-run pi_decision_select redraft. On a `correct` at the
+    # decision gate, this node revises proposed_actions with the PI's
+    # correction (one LLM call; does NOT re-run mission_execute's work),
+    # then routes back to decision_present for re-ratification. Bounded by
+    # MAX_DECISION_REDRAFTS.
+    sg.add_node("mission_redraft", _bind(executor.mission_redraft, sdk, mcp))
     sg.add_node("submit_report", _bind(executor.submit_report, sdk, mcp))
     sg.add_node(
         "execute_ratified_actions",
@@ -343,6 +368,19 @@ def build_graph(
         _route_after_pi_decision,
         {
             "execute_ratified_actions": "execute_ratified_actions",
+            # v0.6.11 in-run decision redraft loop-back (correct action).
+            "mission_redraft": "mission_redraft",
+            "escalation_router": "escalation_router",
+        },
+    )
+    # v0.6.11 — mission_redraft revises proposed_actions then re-renders via
+    # decision_present (happy path) or escalates on cap-exceed / defensive
+    # escape (next_node_override set + real ErrorRecord emitted).
+    sg.add_conditional_edges(
+        "mission_redraft",
+        _route_after_mission_redraft,
+        {
+            "decision_present": "decision_present",
             "escalation_router": "escalation_router",
         },
     )
@@ -410,10 +448,12 @@ NODE_NAMES: tuple[str, ...] = (
     "cluster_review",
     "gate1_validation",
     "final_synthesis",
-    # Executor (5) — Phase 2.7 T3e added execute_ratified_actions;
-    # Gap 2 added execute_ratified_fs_actions (parallel FS dispatcher).
+    # Executor (6) — Phase 2.7 T3e added execute_ratified_actions;
+    # Gap 2 added execute_ratified_fs_actions (parallel FS dispatcher);
+    # v0.6.11 added mission_redraft (in-run pi_decision_select redraft).
     "backbrief_draft",
     "mission_execute",
+    "mission_redraft",
     "submit_report",
     "execute_ratified_actions",
     "execute_ratified_fs_actions",

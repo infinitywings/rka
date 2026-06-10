@@ -503,8 +503,10 @@ class TestCallSiteCoverage:
             and "exceeded" not in ln
             and "Executor node" not in ln
         ]
-        assert len(complete_call_lines) == 3, (
-            f"expected 3 sdk.complete() sites in executor.py, found "
+        # 4 sites: backbrief_draft, mission_execute, submit_report, and
+        # v0.6.11 mission_redraft — all must be wrapped.
+        assert len(complete_call_lines) == 4, (
+            f"expected 4 sdk.complete() sites in executor.py, found "
             f"{len(complete_call_lines)} at lines {[l+1 for l in complete_call_lines]}"
         )
         for ln_idx in complete_call_lines:

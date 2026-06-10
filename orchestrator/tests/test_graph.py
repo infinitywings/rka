@@ -64,15 +64,18 @@ def test_build_graph_registers_all_canonical_nodes(sdk, mcp, fake_interrupt):
         assert expected in nodes, f"node {expected} not registered"
 
 
-def test_node_names_tuple_has_exactly_eighteen():
+def test_node_names_tuple_has_exactly_nineteen():
     # Phase 2.7 T3e added `execute_ratified_actions` (16th node).
     # Gap 2 added `execute_ratified_fs_actions` (17th, parallel FS
     # dispatcher for PI-ratified Bash/Write/Edit).
     # Phase-X² added `confirmation_brief_redraft` (18th, in-run
     # pi_greenlight redirect state-mutator that owns the redraft
     # policy + bounded loop counter).
-    assert len(graph.NODE_NAMES) == 18
-    assert len(set(graph.NODE_NAMES)) == 18  # no dupes
+    # v0.6.11 added `mission_redraft` (19th, in-run pi_decision_select
+    # redraft — revises proposed_actions on a `correct` then re-renders
+    # decision_present for re-ratification, bounded by MAX_DECISION_REDRAFTS).
+    assert len(graph.NODE_NAMES) == 19
+    assert len(set(graph.NODE_NAMES)) == 19  # no dupes
 
 
 def test_execute_ratified_actions_is_in_node_names():

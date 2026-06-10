@@ -239,6 +239,13 @@ class ResearchWorkflowState(TypedDict, total=False):
     # correctly). Last-write-wins scalar, initialized to 0 in
     # make_initial_state.
     greenlight_redrafts: int
+    # v0.6.11 — sibling of greenlight_redrafts for the pi_decision_select
+    # gate. Incremented by mission_redraft each time the PI sends a
+    # 'correct' action at pi_decision_select. Capped at
+    # MAX_DECISION_REDRAFTS; on the (cap+1)th the node emits a real
+    # `decision_redraft_budget_exceeded` ErrorRecord and routes to
+    # escalation_router. Last-write-wins scalar, init 0.
+    decision_redrafts: int
 
     # Consensus
     brain_position: str
@@ -398,6 +405,7 @@ def make_initial_state(
         usd_spent=0.0,
         loop_iterations=0,
         greenlight_redrafts=0,
+        decision_redrafts=0,
         brain_position="",
         executor_position="",
         consensus_state="unresolved",
@@ -457,3 +465,9 @@ ALL_TERMINAL_STATES: frozenset[str] = frozenset(TerminalState.__args__)  # type:
 # risk that CLAUDE.md previously flagged as a deferred follow-up
 # ('loop_iterations declared but never written').
 MAX_GREENLIGHT_REDRAFTS: int = 3
+
+# v0.6.11 — bound on the pi_decision_select in-run redraft loop. On the
+# (cap+1)th 'correct' at the decision gate, mission_redraft emits a real
+# `decision_redraft_budget_exceeded` ErrorRecord and escalates so the PI
+# adjudicates rather than looping unbounded.
+MAX_DECISION_REDRAFTS: int = 3

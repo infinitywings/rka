@@ -539,7 +539,10 @@ def test_route_after_pi_greenlight_short_circuits_on_redirect_sentinel():
 def test_route_after_pi_decision_short_circuits_on_redirect_sentinel():
     """Adversarial: PI correction "do not accept this — redo the plan"
     must NOT route through execute_ratified_actions (which would dispatch
-    the WRITE_TOOLS the PI is rejecting)."""
+    the WRITE_TOOLS the PI is rejecting). v0.6.11 — a `correct` now routes
+    to the in-run redraft node (mission_redraft) rather than dead-ending at
+    escalation_router; the sentinel guard still prevents the "accept"
+    substring from smuggling through to execute_ratified_actions."""
     from orchestrator.graph import _route_after_pi_decision
     from orchestrator.response_tokens import REDIRECT_SENTINEL
 
@@ -548,7 +551,9 @@ def test_route_after_pi_decision_short_circuits_on_redirect_sentinel():
             {"response": REDIRECT_SENTINEL + "do not accept this — redo"}
         ]
     }
-    assert _route_after_pi_decision(state) == "escalation_router"
+    route = _route_after_pi_decision(state)
+    assert route == "mission_redraft"
+    assert route != "execute_ratified_actions"
 
     state_accept = {"interrupts": [{"response": "accept"}]}
     assert _route_after_pi_decision(state_accept) == "execute_ratified_actions"

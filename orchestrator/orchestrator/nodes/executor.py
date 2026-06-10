@@ -47,7 +47,13 @@ from orchestrator.rka_enums import (
     check_required_fields,  # Phase-X²' polish
     validate_action_args,  # Phase-X² polish
 )
-from orchestrator.state import ArtifactRef, ErrorRecord, ResearchWorkflowState
+from orchestrator.response_tokens import is_redirect_token
+from orchestrator.state import (
+    MAX_DECISION_REDRAFTS,
+    ArtifactRef,
+    ErrorRecord,
+    ResearchWorkflowState,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -696,6 +702,146 @@ def mission_execute(
         "executor_position": _summarize_position(work_log),
         "artifacts": [_artifact(note_id, "journal", "mission_execute")],
         "proposed_actions": proposed_actions,
+        "usd_spent": _accrue_cost(state, sdk),
+    }
+    if parse_error is not None:
+        update["errors"] = [parse_error]
+    return update
+
+
+# ---------------------------------------------------------------------------
+# 2b. mission_redraft — in-run pi_decision_select redraft channel (v0.6.11)
+# ---------------------------------------------------------------------------
+#
+# Sibling of brain.confirmation_brief_redraft, for the privileged TWO-TAP
+# autonomy gate (pi_decision_select). When the PI sends a `correct` action
+# on the proposed RKA writes, `_route_after_pi_decision` routes HERE
+# instead of dead-ending at escalation_router (which previously synthesized
+# an unclassified checkpoint and dropped the PI's correction in-run).
+#
+# Unlike confirmation_brief_redraft (a pure state-mutator that loops back
+# to an LLM node), this node makes ONE LLM call itself to REVISE the
+# proposed_actions given the PI's correction — it does NOT loop back to
+# mission_execute, because mission_execute re-runs the workspace work
+# (Bash/edits, side effects). We only want to regenerate the proposed RKA
+# writes. The revised proposed_actions then flow to decision_present →
+# pi_decision_select for re-ratification (EC8 set-identity holds: the PI
+# ratifies the NEW set at the re-parked gate).
+#
+# Bounded by MAX_DECISION_REDRAFTS. On cap/defensive escapes, emits a real
+# classified ErrorRecord and routes to escalation_router via
+# next_node_override.
+
+
+def _latest_decision_redirect_record(state: ResearchWorkflowState) -> dict | None:
+    """Most recent pi_decision_select interrupt whose response is a
+    REDIRECT_SENTINEL-prefixed token. Filtering by node_name is
+    load-bearing — interrupts is shared across all PI gates and a
+    redirect at a sibling gate must not leak into this loop."""
+    for record in reversed(state.get("interrupts", []) or []):
+        if not isinstance(record, dict):
+            continue
+        if record.get("node_name") != "pi_decision_select":
+            continue
+        if is_redirect_token(str(record.get("response", ""))):
+            return record
+    return None
+
+
+def _build_mission_redraft_prompt(state: ResearchWorkflowState, correction: str) -> str:
+    prior_actions = state.get("proposed_actions", []) or []
+    return (
+        "The PI reviewed the RKA write actions you proposed and asked for a "
+        "CORRECTION. Revise ONLY the proposed RKA writes to incorporate the "
+        "correction. Do NOT re-run any workspace work (no Bash/Write/Edit) — "
+        "the work is already done; you are only adjusting the proposed RKA "
+        "MCP writes that will be dispatched after PI ratification.\n\n"
+        f"PI correction (highest priority):\n{correction}\n\n"
+        f"Your prior work summary:\n{state.get('executor_position', '(none)')}\n\n"
+        f"Your prior proposed_actions:\n{json.dumps(prior_actions, indent=2)}\n\n"
+        "End your reply with the revised structured JSON block per the "
+        "EXECUTOR_SYSTEM 'Action proposals' directive: "
+        '`{"proposed_actions": [{...}, ...]}`. Emit `proposed_actions: []` '
+        "only if the correction means no writes should happen at all."
+    )
+
+
+def _decision_redraft_error_state(error_type: str, detail: str) -> dict:
+    err: ErrorRecord = {
+        "node_name": "mission_redraft",
+        "error_type": error_type,
+        "detail": detail,
+        "timestamp": _now_iso(),
+    }
+    return {
+        "current_phase": "executor_redraft",
+        "current_node": "mission_redraft",
+        "next_node_override": "escalation_router",
+        "errors": [err],
+    }
+
+
+def mission_redraft(
+    state: ResearchWorkflowState, sdk: SDKClient, mcp: MCPClient
+) -> dict:
+    """Revise proposed_actions in response to a pi_decision_select
+    `correct`, then route back to decision_present for re-ratification.
+    Bounded by MAX_DECISION_REDRAFTS."""
+    current_count = int(state.get("decision_redrafts", 0) or 0)
+
+    record = _latest_decision_redirect_record(state)
+    if record is None:
+        return _decision_redraft_error_state(
+            "decision_redirect_text_missing",
+            "Routed to mission_redraft but no pi_decision_select redirect "
+            "record found in state['interrupts'].",
+        )
+
+    # Reuse the Phase-X sanitizer (H1 delimiter-defang + H2 sentinel-strip)
+    # so in-run decision redirects share the same prompt-injection defenses
+    # as the greenlight path.
+    from orchestrator.nodes.brain import _sanitize_override_text
+
+    sanitized = _sanitize_override_text(record.get("response") or "").strip()
+    if not sanitized:
+        return _decision_redraft_error_state(
+            "decision_redirect_text_empty",
+            "PI redirect at pi_decision_select had no usable text after "
+            "REDIRECT_SENTINEL strip + delimiter defang.",
+        )
+
+    next_count = current_count + 1
+    if next_count > MAX_DECISION_REDRAFTS:
+        return _decision_redraft_error_state(
+            "decision_redraft_budget_exceeded",
+            f"PI requested decision redraft #{next_count} at "
+            f"pi_decision_select; cap is {MAX_DECISION_REDRAFTS}. Routing to "
+            "escalation_router so the PI can adjudicate.",
+        )
+
+    prompt = _build_mission_redraft_prompt(state, sanitized)
+    try:
+        reply = sdk.complete(
+            prompt=prompt, system=EXECUTOR_SYSTEM, timeout_s=SDK_TIMEOUT_TOOL_USE_S,
+        )
+    except SDKTimeoutError as exc:
+        return _sdk_timeout_error_state(
+            node_name="mission_redraft",
+            current_phase="executor_redraft",
+            timeout_s=SDK_TIMEOUT_TOOL_USE_S,
+            exc=exc,
+        )
+
+    new_actions, parse_error = _parse_proposed_actions(reply)
+
+    update: dict = {
+        "current_phase": "executor_redraft",
+        "current_node": "mission_redraft",
+        # Clear any stale override so the route helper sees a clean state.
+        "next_node_override": "",
+        # Last-write-wins replace — decision_present re-renders from these.
+        "proposed_actions": new_actions,
+        "decision_redrafts": next_count,
         "usd_spent": _accrue_cost(state, sdk),
     }
     if parse_error is not None:

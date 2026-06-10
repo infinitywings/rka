@@ -125,7 +125,25 @@ name = "rka-orchestrator"
 # pi_decision_select correct→redraft — a privileged-autonomy-gate
 # design decision (redraft target + EC8 set-identity) deferred for
 # explicit PI input per the long-standing deferred-followup note.
-version = "0.6.11"
+# 0.6.11 → 0.6.12: pi_decision_select in-run redraft (the deferred
+# 0.6.11 item, now that the PI ratified the re-strategize target).
+# On a `correct` at the pi_decision_select TWO-TAP gate, the run no
+# longer dead-ends at escalation_router (which synthesized an
+# unclassified checkpoint and dropped the correction in-run). New
+# `mission_redraft` node (executor.py) makes ONE LLM call to REVISE
+# proposed_actions incorporating the PI's correction — it does NOT
+# re-run mission_execute's workspace work (no re-doing Bash/edits) —
+# then routes back to decision_present, which re-renders the revised
+# actions and re-parks pi_decision_select for re-ratification. EC8
+# set-identity holds: the PI ratifies the NEW proposed set at the
+# re-parked gate. Bounded by MAX_DECISION_REDRAFTS=3; on cap /
+# defensive escape emits a real classified ErrorRecord and escalates.
+# `_route_after_pi_decision` rewired to three-way (correct→
+# mission_redraft, accept→execute_ratified_actions, reject→
+# escalation_router), sentinel short-circuit preserved at the top.
+# NODE_NAMES 18→19. +12 tests (test_mission_redraft.py); 3 lock-tests
+# updated. Full orchestrator suite: 1340 passed.
+version = "0.6.12"
 description = "RKA + LangGraph orchestrator (Phase A → Phase-X² polish; agentic branch)"
 readme = "README.md"
 requires-python = ">=3.11"
