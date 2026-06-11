@@ -376,3 +376,60 @@ class TestClusterServiceAnswersLinkHook:
             [cluster.id],
         )
         assert rows == [], "no link should be emitted when FK is NULL"
+
+
+class TestCollectReportContext:
+    """Tests for GraphService.collect_report_context (report-scoped retrieval)."""
+
+    @pytest_asyncio.fixture
+    async def search_svc(self, db: Database):
+        from rka.services.search import SearchService
+
+        await db.execute(
+            "INSERT INTO fts_journal (id, content, summary) VALUES (?, ?, ?)",
+            ["jrn_001", "Side-channel observation on IoT", "Side-channel observation"],
+        )
+        await db.commit()
+        return SearchService(db=db, embeddings=None)
+
+    async def test_seeds_carry_search_provenance(self, graph_svc, search_svc):
+        result = await graph_svc.collect_report_context(
+            "Report on the side-channel timing observations",
+            angle_queries=["side-channel"],
+            search_service=search_svc,
+        )
+        by_id = {n["id"]: n for n in result["nodes"]}
+        assert "jrn_001" in by_id
+        seed = by_id["jrn_001"]
+        assert seed["included_via"]["via"] == "search"
+        assert seed["depth"] == 0
+        assert result["seed_count"] >= 1
+
+    async def test_expansion_carries_link_provenance(self, graph_svc, search_svc):
+        result = await graph_svc.collect_report_context(
+            "Report on the side-channel timing observations",
+            angle_queries=["side-channel"],
+            max_depth=2,
+            search_service=search_svc,
+        )
+        by_id = {n["id"]: n for n in result["nodes"]}
+        # jrn_001 --references--> dec_001 and --cites--> lit_001 (fixture links)
+        assert "dec_001" in by_id and "lit_001" in by_id
+        assert by_id["dec_001"]["included_via"]["via"] == "link"
+        assert by_id["dec_001"]["included_via"]["from"] == "jrn_001"
+        assert by_id["dec_001"]["depth"] >= 1
+
+    async def test_seed_protection_under_tiny_cap(self, graph_svc, search_svc):
+        result = await graph_svc.collect_report_context(
+            "Report on the side-channel timing observations",
+            angle_queries=["side-channel"],
+            max_nodes=1,
+            search_service=search_svc,
+        )
+        ids = {n["id"] for n in result["nodes"]}
+        # Seeds survive even when the cap is smaller than the seed count.
+        assert "jrn_001" in ids
+
+    async def test_requires_search_service(self, graph_svc):
+        with pytest.raises(ValueError):
+            await graph_svc.collect_report_context("anything", search_service=None)

@@ -797,6 +797,57 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "notes": "Pass `filters.seeds=[...]` to override the query-based seeding.",
     },
 
+    "collect_report_context": {
+        "operation": "collect_report_context",
+        "tool": "rka_query",
+        "category": "graph",
+        "role_tag": "ANY",
+        "summary": (
+            "Collect the node set relevant to a report described in prose — "
+            "multi-angle search seeding + link-graph expansion with seed "
+            "protection and per-node inclusion provenance."
+        ),
+        "signature": (
+            "rka_query(operation='collect_report_context', *, project_id, "
+            "query, filters={'angle_queries', 'max_depth', 'max_nodes', "
+            "'seed_limit'})"
+        ),
+        "required_fields": ["project_id", "query"],
+        "optional_fields": ["filters"],
+        "enums": {},
+        "examples": [
+            {
+                "description": (
+                    "Assemble report context with angle decomposition "
+                    "(ALWAYS provide angle_queries — short 1-4 word queries "
+                    "from different angles of the description)."
+                ),
+                "call": {
+                    "operation": "collect_report_context",
+                    "project_id": "prj_01ABC...",
+                    "query": (
+                        "Report on how the embedding stack became pluggable: "
+                        "motivation, backends, config persistence, dimension "
+                        "fix, bugs found"
+                    ),
+                    "filters": {
+                        "angle_queries": [
+                            "pluggable embeddings", "fastembed",
+                            "embedding config", "dimension mismatch",
+                        ],
+                        "max_depth": 2, "max_nodes": 60,
+                    },
+                },
+            },
+        ],
+        "related_operations": ["multi_hop", "search", "ego_graph"],
+        "notes": (
+            "Each returned node carries `included_via` (angle query + rank, "
+            "or parent + link_type) so the bundle is auditable. Follow up: "
+            "verify borderline nodes by content, re-search thin dimensions."
+        ),
+    },
+
     "summarize": {
         "operation": "summarize",
         "tool": "rka_query",

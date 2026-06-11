@@ -928,6 +928,7 @@ _QUERY_DISPATCH: dict[str, str] = {
     # provenance / multi-hop
     "provenance": "rka_trace_provenance",
     "multi_hop": "rka_multi_hop_retrieval",
+    "collect_report_context": "rka_collect_report_context",
     "evidence": "rka_assemble_evidence",
 
     # session-flavored project-scoped reads
@@ -1029,6 +1030,22 @@ async def dispatch_query(
             max_depth=f.get("max_depth", 3),
             max_nodes=f.get("max_nodes", 50),
             edge_weights=f.get("edge_weights"),
+            project_id=project_id,
+        )
+
+    if scope == "collect_report_context":
+        if not query:
+            return _err(
+                "missing_field",
+                "rka_query(scope='collect_report_context'): query (the report "
+                "description) is required",
+            )
+        return await legacy(
+            description=query,
+            angle_queries=f.get("angle_queries"),
+            max_depth=f.get("max_depth", 2),
+            max_nodes=f.get("max_nodes", 60),
+            seed_limit=f.get("seed_limit", 8),
             project_id=project_id,
         )
 
