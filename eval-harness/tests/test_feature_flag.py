@@ -23,11 +23,16 @@ def _clear_env(monkeypatch):
     monkeypatch.delenv("RKA_FTS_QUERY_MODE", raising=False)
 
 
-def test_default_mode_is_or_space_joined():
-    # Default behavior with no env var: space-joined quoted tokens.
+def test_default_mode_is_or_joined():
+    # Default behavior with no env var: explicit OR-joined quoted tokens.
+    # Originally this test pinned space-joined output under the name
+    # "or_space_joined" — but FTS5's implicit operator for space-separated
+    # terms is AND, so the pre-fix production "or" mode was AND in
+    # practice (and Eval-v1's AND-vs-OR comparison never tested OR).
+    # The explicit OR separator restores the intended semantics.
     assert (
         SearchService._sanitize_fts_query("foo bar baz")
-        == '"foo" "bar" "baz"'
+        == '"foo" OR "bar" OR "baz"'
     )
 
 
@@ -35,7 +40,7 @@ def test_explicit_or_matches_default(monkeypatch):
     monkeypatch.setenv("RKA_FTS_QUERY_MODE", "or")
     assert (
         SearchService._sanitize_fts_query("foo bar baz")
-        == '"foo" "bar" "baz"'
+        == '"foo" OR "bar" OR "baz"'
     )
 
 
@@ -58,9 +63,9 @@ def test_case_insensitive_and(monkeypatch):
 
 def test_unknown_value_falls_back_to_or_silently(monkeypatch):
     # Safe-default behavior: an unrecognized mode does NOT raise; it
-    # preserves the pre-flag production semantics.
+    # falls back to the default OR semantics.
     monkeypatch.setenv("RKA_FTS_QUERY_MODE", "xor")
-    assert SearchService._sanitize_fts_query("foo bar") == '"foo" "bar"'
+    assert SearchService._sanitize_fts_query("foo bar") == '"foo" OR "bar"'
 
 
 def test_single_word_emits_no_separator_in_and_mode(monkeypatch):
