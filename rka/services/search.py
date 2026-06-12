@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import struct
 from dataclasses import dataclass
 
@@ -11,6 +12,11 @@ from rka.infra.embeddings import EmbeddingService
 from rka.services.artifacts import build_artifact_text, build_figure_text
 
 logger = logging.getLogger(__name__)
+
+
+def _tokens_remain(query: str) -> bool:
+    """True when a constraint-stripped query still carries content tokens."""
+    return bool(re.findall(r"[a-zA-Z0-9]{3,}", query))
 
 
 @dataclass
@@ -116,6 +122,90 @@ class SearchService:
     def with_project(self, project_id: str) -> "SearchService":
         return SearchService(db=self.db, embeddings=self.embeddings, project_id=project_id)
 
+    # Query-understanding patterns (eval-v3 theme E follow-up; Eval-v1
+    # Finding: temporal language and actor anchors fell back to literal FTS
+    # tokens and missed — "today" matched nothing, "PI directives" ignored
+    # the source column). Interpreted phrases are stripped from the FTS
+    # query and applied as metadata constraints on the candidates.
+    _TEMPORAL_PATTERNS = (
+        (re.compile(r"\btoday\b", re.I), "-1 day"),
+        (re.compile(r"\byesterday\b", re.I), "-2 days"),
+        (re.compile(r"\bthis week\b", re.I), "-7 days"),
+        (re.compile(r"\blast week\b", re.I), "-14 days"),
+        (re.compile(r"\bthis month\b", re.I), "-31 days"),
+        (re.compile(r"\brecent(?:ly)?\b", re.I), "-14 days"),
+    )
+    _ACTOR_PATTERNS = (
+        # (pattern, source filter, optional journal-type filter)
+        (re.compile(r"\bpi directives?\b", re.I), "pi", "directive"),
+        (re.compile(r"\b(?:from|by) the pi\b", re.I), "pi", None),
+        (re.compile(r"\bpi instructions?\b", re.I), "pi", "directive"),
+        (re.compile(r"\bexecutor (?:logs?|notes?|reports?)\b", re.I), "executor", None),
+        (re.compile(r"\bbrain (?:notes?|synthes\w+)\b", re.I), "brain", None),
+    )
+
+    @classmethod
+    def parse_query_constraints(cls, query: str) -> tuple[str, dict]:
+        """Interpret temporal/actor phrases as constraints; strip them from
+        the lexical query. Returns (stripped_query, constraints)."""
+        constraints: dict = {}
+        stripped = query
+        for pat, offset in cls._TEMPORAL_PATTERNS:
+            if pat.search(stripped):
+                # keep the WIDEST window if several phrases appear
+                cur = constraints.get("created_within")
+                if cur is None or int(offset.split()[0]) < int(cur.split()[0]):
+                    constraints["created_within"] = offset
+                stripped = pat.sub(" ", stripped)
+        for pat, source, jtype in cls._ACTOR_PATTERNS:
+            if pat.search(stripped):
+                constraints["source"] = source
+                if jtype:
+                    constraints["journal_type"] = jtype
+                stripped = pat.sub(" ", stripped)
+                break
+        return stripped.strip(), constraints
+
+    async def _apply_constraints(
+        self, hits: list[SearchHit], constraints: dict, limit: int
+    ) -> list[SearchHit]:
+        """Filter candidate hits by interpreted metadata constraints.
+
+        Constraint columns live on journal (source, type, created_at) and on
+        the other entity tables (created_at only); hits are batch-checked via
+        their source tables.
+        """
+        if not constraints or not hits:
+            return hits
+        keep_ids: set[str] = set()
+        by_type: dict[str, list[str]] = {}
+        for h in hits:
+            by_type.setdefault(h.entity_type, []).append(h.entity_id)
+        for etype, ids in by_type.items():
+            table = self.SOURCE_MAP.get(etype)
+            if not table:
+                continue
+            conds = ["id IN (%s)" % ",".join("?" for _ in ids), "project_id = ?"]
+            params: list = ids + [self.project_id]
+            if constraints.get("created_within"):
+                conds.append("created_at >= datetime('now', ?)")
+                params.append(constraints["created_within"])
+            if constraints.get("source"):
+                if etype == "journal":
+                    conds.append("source = ?")
+                    params.append(constraints["source"])
+                else:
+                    # actor anchors are journal-specific; drop other types
+                    continue
+            if constraints.get("journal_type") and etype == "journal":
+                conds.append("type = ?")
+                params.append(constraints["journal_type"])
+            rows = await self.db.fetchall(
+                f"SELECT id FROM {table} WHERE {' AND '.join(conds)}", params
+            )
+            keep_ids.update(r["id"] for r in rows)
+        return [h for h in hits if h.entity_id in keep_ids][:limit]
+
     async def search(
         self,
         query: str,
@@ -130,8 +220,62 @@ class SearchService:
           - No embeddings → keyword only
           - No FTS5 data → LIKE fallback
           - No sqlite-vec → keyword only
+
+        Temporal phrases ("today", "this week") and actor anchors ("PI
+        directives") are interpreted as metadata constraints rather than
+        searched as literal tokens (see parse_query_constraints).
         """
         types = entity_types or ["decision", "literature", "journal", "mission", "artifact", "figure", "claim", "cluster"]
+
+        stripped_query, constraints = self.parse_query_constraints(query)
+        if constraints:
+            # Actor-anchored queries are journal queries by construction.
+            if constraints.get("source") and entity_types is None:
+                types = ["journal"]
+            inner = stripped_query if _tokens_remain(stripped_query) else query
+            hits = await self._search_unconstrained(
+                inner, types, limit * 4, keyword_weight, semantic_weight
+            )
+            if not hits and constraints.get("source"):
+                # Pure-anchor query ("PI directives this week"): fall back to
+                # a metadata-only listing of matching journal entries.
+                hits = await self._metadata_only_journal(constraints, limit * 4)
+            return await self._apply_constraints(hits, constraints, limit)
+        return await self._search_unconstrained(
+            query, types, limit, keyword_weight, semantic_weight
+        )
+
+    async def _metadata_only_journal(self, constraints: dict, limit: int) -> list[SearchHit]:
+        conds = ["project_id = ?"]
+        params: list = [self.project_id]
+        if constraints.get("source"):
+            conds.append("source = ?")
+            params.append(constraints["source"])
+        if constraints.get("journal_type"):
+            conds.append("type = ?")
+            params.append(constraints["journal_type"])
+        if constraints.get("created_within"):
+            conds.append("created_at >= datetime('now', ?)")
+            params.append(constraints["created_within"])
+        rows = await self.db.fetchall(
+            f"SELECT * FROM journal WHERE {' AND '.join(conds)} "
+            f"ORDER BY created_at DESC LIMIT ?", params + [limit],
+        )
+        out: list[SearchHit] = []
+        for r in rows:
+            title, snippet = self._extract_title_snippet("journal", dict(r))
+            out.append(SearchHit(entity_type="journal", entity_id=r["id"],
+                                 title=title, snippet=snippet, score=0.0))
+        return out
+
+    async def _search_unconstrained(
+        self,
+        query: str,
+        types: list[str],
+        limit: int,
+        keyword_weight: float,
+        semantic_weight: float,
+    ) -> list[SearchHit]:
 
         # 1. FTS5 keyword search
         fts_results = await self._fts_search(query, types, limit * 2)

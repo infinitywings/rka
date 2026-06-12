@@ -929,6 +929,9 @@ _QUERY_DISPATCH: dict[str, str] = {
     "provenance": "rka_trace_provenance",
     "multi_hop": "rka_multi_hop_retrieval",
     "collect_report_context": "rka_collect_report_context",
+    "staleness_impact": "rka_staleness_impact",
+    "mission_guard": "rka_mission_guard",
+    "belief_as_of": "rka_belief_as_of",
     "evidence": "rka_assemble_evidence",
 
     # session-flavored project-scoped reads
@@ -1032,6 +1035,25 @@ async def dispatch_query(
             edge_weights=f.get("edge_weights"),
             project_id=project_id,
         )
+
+    if scope == "staleness_impact":
+        if not id:
+            return _err("missing_field",
+                        "rka_query(scope='staleness_impact'): id (entity) is required")
+        return await legacy(entity_id=id, max_depth=f.get("max_depth", 3),
+                            project_id=project_id)
+
+    if scope == "mission_guard":
+        if not id:
+            return _err("missing_field",
+                        "rka_query(scope='mission_guard'): id (mission) is required")
+        return await legacy(mission_id=id, project_id=project_id)
+
+    if scope == "belief_as_of":
+        if not query:
+            return _err("missing_field",
+                        "rka_query(scope='belief_as_of'): query (the ISO date) is required")
+        return await legacy(date=query, project_id=project_id)
 
     if scope == "collect_report_context":
         if not query:

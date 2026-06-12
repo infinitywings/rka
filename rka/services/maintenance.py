@@ -478,3 +478,116 @@ class MaintenanceService(BaseService):
             "fix_action": "Tag the relevant decision with 'gate' or revisit motivated_by_decision",
             "fix_calls_per_item": 1,
         }
+
+    # ------------------------------------------------------------------
+    # Research-health metrics (eval-v3 theme D, 2026-06-12)
+    # ------------------------------------------------------------------
+
+    async def research_health(self) -> dict[str, Any]:
+        """The paper's section-7.1 instruments, computed live.
+
+        Provenance coverage, research-debt trajectory (weekly), mission-cycle
+        stats, and the bookkeeping-overhead share of recorded actions. Pure
+        SQL over existing tables; descriptive, not gating.
+        """
+        pid = self.project_id
+
+        async def _one(sql: str, params: list[Any]) -> int:
+            row = await self.db.fetchone(sql, params)
+            return int(list(dict(row).values())[0] or 0) if row else 0
+
+        # --- provenance coverage ---
+        dec_total = await _one(
+            "SELECT COUNT(*) FROM decisions WHERE project_id = ? AND status != 'superseded'",
+            [pid])
+        dec_justified = await _one(
+            """SELECT COUNT(DISTINCT d.id) FROM decisions d
+               WHERE d.project_id = ? AND d.status != 'superseded' AND (
+                 (d.related_journal IS NOT NULL AND d.related_journal NOT IN ('[]',''))
+                 OR EXISTS (SELECT 1 FROM entity_links el WHERE el.project_id = d.project_id
+                            AND el.source_id = d.id AND el.link_type = 'justified_by'))""",
+            [pid])
+        mis_total = await _one(
+            "SELECT COUNT(*) FROM missions WHERE project_id = ?", [pid])
+        mis_motivated = await _one(
+            """SELECT COUNT(*) FROM missions m WHERE m.project_id = ?
+               AND (m.motivated_by_decision IS NOT NULL
+                    OR EXISTS (SELECT 1 FROM entity_links el WHERE el.project_id = m.project_id
+                               AND el.target_id = m.id AND el.link_type = 'motivated'))""",
+            [pid])
+        clm_total = await _one("SELECT COUNT(*) FROM claims WHERE project_id = ?", [pid])
+        clm_sourced = await _one(
+            "SELECT COUNT(*) FROM claims WHERE project_id = ? AND source_entry_id IS NOT NULL",
+            [pid])
+        sup_decisions = await _one(
+            "SELECT COUNT(*) FROM decisions WHERE project_id = ? AND status = 'superseded'",
+            [pid])
+        sup_orphans = await _one(
+            """SELECT COUNT(*) FROM decisions WHERE project_id = ?
+               AND status = 'superseded' AND superseded_by IS NULL""",
+            [pid])
+
+        # --- research-debt trajectory: per ISO week, decisions created vs covered ---
+        weekly = await self.db.fetchall(
+            """SELECT strftime('%Y-W%W', created_at) AS week,
+                      COUNT(*) AS created,
+                      SUM(CASE WHEN (related_journal IS NOT NULL
+                                     AND related_journal NOT IN ('[]','')) THEN 1 ELSE 0 END)
+                          AS covered
+               FROM decisions WHERE project_id = ?
+               GROUP BY week ORDER BY week DESC LIMIT 26""",
+            [pid])
+
+        # --- mission-cycle metrics ---
+        cycle = await self.db.fetchone(
+            """SELECT COUNT(*) AS completed,
+                      AVG(julianday(completed_at) - julianday(created_at)) AS avg_days,
+                      MAX(julianday(completed_at) - julianday(created_at)) AS max_days
+               FROM missions WHERE project_id = ? AND status = 'complete'
+                 AND completed_at IS NOT NULL""",
+            [pid])
+        chk = await self.db.fetchone(
+            """SELECT COUNT(*) AS total,
+                      SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) AS open
+               FROM checkpoints WHERE project_id = ?""",
+            [pid])
+
+        # --- bookkeeping overhead: write/read mix of recorded actions ---
+        audit_mix = await self.db.fetchall(
+            "SELECT action, COUNT(*) AS n FROM audit_log WHERE project_id = ? GROUP BY action",
+            [pid])
+        mix = {r["action"]: r["n"] for r in audit_mix}
+        writes = sum(v for k, v in mix.items() if k in ("create", "update", "delete"))
+        total_actions = sum(mix.values()) or 1
+
+        def _pct(n: int, d: int) -> float:
+            return round(100.0 * n / d, 1) if d else 0.0
+
+        return {
+            "provenance_coverage": {
+                "decisions_with_evidence_pct": _pct(dec_justified, dec_total),
+                "decisions": {"covered": dec_justified, "total": dec_total},
+                "missions_with_motivation_pct": _pct(mis_motivated, mis_total),
+                "missions": {"covered": mis_motivated, "total": mis_total},
+                "claims_with_source_pct": _pct(clm_sourced, clm_total),
+                "claims": {"covered": clm_sourced, "total": clm_total},
+                "supersede_chain_integrity": {
+                    "superseded_decisions": sup_decisions,
+                    "orphaned_pointers": sup_orphans,
+                },
+            },
+            "research_debt_trajectory_weekly": [dict(r) for r in weekly],
+            "mission_cycle": {
+                "completed": (cycle["completed"] if cycle else 0) or 0,
+                "avg_days_to_complete": round(cycle["avg_days"], 2)
+                    if cycle and cycle["avg_days"] else None,
+                "max_days_to_complete": round(cycle["max_days"], 2)
+                    if cycle and cycle["max_days"] else None,
+                "checkpoints_total": (chk["total"] if chk else 0) or 0,
+                "checkpoints_open": (chk["open"] if chk else 0) or 0,
+            },
+            "bookkeeping_overhead": {
+                "recorded_actions": dict(mix),
+                "write_share_pct": _pct(writes, total_actions),
+            },
+        }

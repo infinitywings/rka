@@ -36,3 +36,13 @@ async def get_maintenance_summary(
     count descending, top 3. Per dec_01KQQPER3XSSBACGZANFJCVQ66.
     """
     return await svc.get_backlog_summary()
+
+
+@router.get("/maintenance/research-health")
+async def research_health(
+    svc: MaintenanceService = Depends(_get_maintenance_service),
+):
+    """Live research-health metrics: provenance coverage, research-debt
+    trajectory, mission-cycle stats, bookkeeping-overhead share (the paper's
+    section-7.1 instruments, computed from the KB)."""
+    return await svc.research_health()
