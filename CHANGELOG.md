@@ -3,6 +3,106 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [2.8.0] — 2026-06-12 (Eval-v3 program — retrieval integrity, writer trustworthiness gates, KB-wide verification + temporal currency)
+
+The eval-v3 arc: a synthetic trap-corpus evaluation (planted supersede chains,
+a retraction, a contradiction, near-miss distractors; ground truth by
+construction) ran the full system end-to-end and drove three waves of fixes.
+Landed via PR #34 + PR #35.
+
+### Fixed — search semantics (BREAKING-IN-BEHAVIOR, high impact)
+
+- **`_sanitize_fts_query` "or" mode was AND all along.** FTS5's implicit
+  operator for space-separated terms is AND, not OR; any query over ~4 words
+  matched nothing, and the failure propagated to every search-seeded consumer
+  (`/api/context` topic path, `/api/graph/multi-hop`). Now joins with explicit
+  `OR` (bm25 ranks by match count). Retroactively explains Eval-v1's
+  AND-vs-OR null finding (the "OR" baseline was already AND); see
+  `eval-harness/or-semantics-addendum.md` for the re-measurement.
+- Request-framing stopwords stripped before FTS matching; all-stopword
+  queries fall through unstripped.
+- **Query understanding**: temporal phrases ("today", "this week") and actor
+  anchors ("PI directives", "executor logs") are interpreted as metadata
+  constraints instead of searched as literal tokens — closes the Eval-v1
+  retrieval-failure classes.
+
+### Added — retrieval & graph integrity
+
+- **`collect_report_context`** composite read (service + `POST
+  /api/graph/report-context` + MCP op): multi-angle search seeding +
+  provenance-weighted graph expansion with seed protection and per-node
+  `included_via` inclusion provenance. Measured 0.84 mean cohort recall in
+  one call vs 0.80 for a 30-59-call agent loop and 0.32 for one-shot
+  paragraph search (lexical-only environment; embeddings raise the floor).
+- **Supersession as graph edges** (migration 028): backfills `supersedes`
+  entity_links from journal/decision columns; `NoteService.create` writes the
+  edge; `DecisionService.update` rejects `status='superseded'` without a
+  successor (orphan-supersede guard).
+- **Tag-aware search**: query tokens match hyphen-delimited tag segments;
+  third RRF source (weight 0.25).
+- **Multi-hop seed protection**: seeds exempt from the `max_nodes` cap
+  (anchor_aware UNION pattern).
+- **Overview-bundle pinned tier**: explicitly pinned entries + PI directives
+  lead the session-start bundle and bypass the top-K cap, with an
+  unconditional pinned-candidates query.
+- **Knowledge-pack prose ID rewriting**: import re-keying now rewrites entity
+  IDs embedded in prose (rationale "Supersedes dec_…", journal content), not
+  just structured columns; integrity gate recognizes checkpoint endpoints.
+
+### Added — KB-wide verification + temporal currency (eval-v3 themes B/C/D)
+
+- `GraphService.staleness_impact` — downstream blast-radius of a stale entity
+  via dependent-direction links (`produced` excluded: raw observations are
+  immutable). `GET /api/graph/staleness-impact/{id}` + MCP `staleness_impact`.
+- `VerificationService` (new): `audit_link_support` (link presence ≠ content
+  support; lexical Phase-1, NLI Phase-2), `file_staleness_reviews`
+  (review-queue rows for dependents of stale roots; migration 029 adds
+  `stale_dependency` + `unsupported_link` flags), `mission_guard` (negative
+  knowledge at Executor pickup — retracted/superseded/contradicted entities
+  relevant to the objective), `belief_as_of` (knowledge state at a past date;
+  supersession transitions exact, retractions approximate).
+- `MaintenanceService.research_health` — the paper's §7.1 instruments live:
+  provenance coverage, weekly research-debt trajectory, mission-cycle stats,
+  bookkeeping write-share. `GET /api/maintenance/research-health`.
+- MCP surface: **91 typed operations** (42 read + 49 write).
+
+### Added — Writer trustworthiness gates (skill v2.3.2 → v2.4.0)
+
+- **`scripts/verify_provenance.py`** — the Iron Law enforced, not requested:
+  every `% provenance:` comment checked against the live KB for EXISTS
+  (fabrication), CURRENT (superseded/retracted/abandoned BLOCK, with
+  `superseded-ack`/`retracted-ack` escape tokens for design-evolution prose),
+  SUPPORTED (lexical; `--support-backend llm` adds an entailment judge via
+  litellm that tightens but never loosens), UNCONTESTED (contradicts edges
+  must be surfaced in prose).
+- **`scripts/verify_citations.py`** — every `\cite{key}` resolves case-exact
+  to a bibliography entry (BLOCK on unresolved/case-mismatch); feeds the
+  compile-and-fix loop.
+- New **Knowledge Currency** SKILL.md section (drafting rules for
+  superseded/retracted/contradicted entities); post-hoc citation guidance;
+  venue-aware ai-tic downgrades (`--venue`, ships IEEE-SP defaults) + fix for
+  the downgrade-verdict re-bucketing bug; `references/quality_review.md`
+  pre-submit PI checklist (explicitly not an LLM-reviewer autograder).
+
+### Added — synthetic regression harness
+
+- `eval-harness/synthetic/` + `tests/test_synthetic_harness.py`: the trap
+  corpus regenerated through an ASGI fixture each run; 9 tests covering the
+  failure classes this harness's ancestor caught live (FTS semantics,
+  missing supersedes edges, seed displacement, bundle pinning, FTS-hostile
+  inputs, contradiction surfacing, chain traversal).
+
+### Added — web dashboard
+
+- **Research Health** (`/health`) and **Report Context** (`/report-context`)
+  pages; `CurrencyBadge` (superseded/retracted) on Journal + Decisions;
+  Mission Guard panel on Missions; Belief-As-Of viewer on Timeline.
+
+### Migrations
+
+- 028 `supersedes_links_backfill` (idempotent backfill from columns)
+- 029 `review_queue_verification_flags` (table-swap; adds two flags)
+
 ## [2.7.0] — 2026-06-02 (GA — No-compromise discriminated-union dispatch: 3 always-on tools + 87 typed Pydantic models with per-branch enum/required enforcement at FastMCP schema layer)
 
 **FUNDAMENTAL ARCHITECTURAL RELEASE.** Closes the v2.6.3–v2.7.0a2 arc of empirical
