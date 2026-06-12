@@ -848,6 +848,93 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
     },
 
+    "staleness_impact": {
+        "operation": "staleness_impact",
+        "tool": "rka_query",
+        "category": "graph",
+        "role_tag": "ANY",
+        "summary": (
+            "Downstream blast-radius of a stale entity: everything whose "
+            "reasoning rests on it, via dependent-direction links."
+        ),
+        "signature": (
+            "rka_query(operation='staleness_impact', *, project_id, id, "
+            "filters={'max_depth': 3})"
+        ),
+        "required_fields": ["project_id", "id"],
+        "optional_fields": ["filters"],
+        "enums": {},
+        "examples": [
+            {
+                "description": "What rests on a decision about to be superseded?",
+                "call": {
+                    "operation": "staleness_impact",
+                    "project_id": "prj_01ABC...",
+                    "id": "dec_01ABC...",
+                },
+            },
+        ],
+        "related_operations": ["ego_graph", "multi_hop", "freshness"],
+        "notes": "Raw observations (produced links) are immutable and excluded.",
+    },
+
+    "mission_guard": {
+        "operation": "mission_guard",
+        "tool": "rka_query",
+        "category": "mission",
+        "role_tag": "EXECUTOR",
+        "summary": (
+            "Negative knowledge for mission pickup: retracted/superseded "
+            "findings and unresolved contradictions relevant to the objective."
+        ),
+        "signature": "rka_query(operation='mission_guard', *, project_id, id)",
+        "required_fields": ["project_id", "id"],
+        "optional_fields": [],
+        "enums": {},
+        "examples": [
+            {
+                "description": "Guard check at mission pickup.",
+                "call": {
+                    "operation": "mission_guard",
+                    "project_id": "prj_01ABC...",
+                    "id": "mis_01ABC...",
+                },
+            },
+        ],
+        "related_operations": ["mission", "context", "contradictions"],
+        "notes": "Call alongside mission context; warnings list approaches already falsified.",
+    },
+
+    "belief_as_of": {
+        "operation": "belief_as_of",
+        "tool": "rka_query",
+        "category": "graph",
+        "role_tag": "ANY",
+        "summary": (
+            "Reconstruct the believed-current decisions and journal at a past "
+            "date, plus what changed since."
+        ),
+        "signature": "rka_query(operation='belief_as_of', *, project_id, query='<ISO date>')",
+        "required_fields": ["project_id", "query"],
+        "optional_fields": [],
+        "enums": {},
+        "examples": [
+            {
+                "description": "What did we believe in mid-March?",
+                "call": {
+                    "operation": "belief_as_of",
+                    "project_id": "prj_01ABC...",
+                    "query": "2026-03-15",
+                },
+            },
+        ],
+        "related_operations": ["changelog", "staleness_impact"],
+        "notes": (
+            "Supersession transitions are exact (successor created_at); "
+            "retraction transitions are approximated by updated_at."
+        ),
+    },
+
     "summarize": {
         "operation": "summarize",
         "tool": "rka_query",

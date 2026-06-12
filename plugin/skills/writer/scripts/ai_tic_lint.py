@@ -195,6 +195,37 @@ def load_config(config_path: Optional[Path]) -> dict:
         return yaml.safe_load(fh) or {}
 
 
+def load_venue_config(venue: Optional[str]) -> dict:
+    """Load a venue-default ai-tic config from
+    references/venue_aitic_defaults/<venue>.yaml.
+
+    P5 recalibration: the lexical blocklist (well-sourced from Kobak 2025 /
+    Matsui 2025) over-flags terms that are domain-legitimate in some venues
+    (e.g. "enhance throughput", "comprehensive evaluation" in systems/security
+    writing); detector-style blocking carries a 61.3% false-positive rate on
+    non-native English (Liang 2023), so context-aware downgrades matter.
+    Venue defaults are merged UNDER the per-project config (project wins),
+    using the same enable/disable/downgrade verdicts as ai_tic_config.yaml.
+    """
+    if not venue:
+        return {}
+    if not _yaml_available:
+        return {}
+    base = Path(__file__).resolve().parent.parent / "references" / "venue_aitic_defaults"
+    path = base / f"{venue}.yaml"
+    if not path.exists():
+        return {}
+    with path.open("r", encoding="utf-8") as fh:
+        return yaml.safe_load(fh) or {}
+
+
+def merge_configs(venue_cfg: dict, project_cfg: dict) -> dict:
+    """Merge venue defaults under a project config. Project entries win."""
+    merged = dict(venue_cfg)
+    merged.update(project_cfg or {})
+    return merged
+
+
 def apply_config_to_term(term: str, default_tier: str, config: dict) -> Optional[str]:
     """Resolve the effective tier for a term given a per-project config.
 
@@ -468,8 +499,14 @@ def lint_file(path: Path, config: Optional[dict] = None) -> FileReport:
     )
 
     report.critical = find_lexical_hits(text, CRITICAL_PATTERNS, "CRITICAL", config=None)
-    report.high = find_lexical_hits(text, HIGH_PATTERNS, "HIGH", config=config)
-    report.medium = find_lexical_hits(text, MEDIUM_PATTERNS, "MEDIUM", config=config)
+    high_raw = find_lexical_hits(text, HIGH_PATTERNS, "HIGH", config=config)
+    medium_raw = find_lexical_hits(text, MEDIUM_PATTERNS, "MEDIUM", config=config)
+    # Re-bucket by EFFECTIVE tier: a config/venue `downgrade` relabels a HIGH
+    # hit to MEDIUM, so it must move to the medium bucket to actually lower the
+    # style score (HIGH weight 1.0 -> MEDIUM weight 0.3); `disable` already
+    # dropped the hit inside find_lexical_hits.
+    report.high = [h for h in high_raw if h.tier == "HIGH"]
+    report.medium = medium_raw + [h for h in high_raw if h.tier == "MEDIUM"]
     report.absolute_bans = find_em_dash(text) + find_bullet_violations(text)
 
     report.structural = [
@@ -507,11 +544,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("files", nargs="+", type=Path, help="Files to lint")
     parser.add_argument("--config", type=Path, default=None,
                         help="Path to ai_tic_config.yaml (per-project overrides)")
+    parser.add_argument("--venue", type=str, default=None,
+                        help="Venue id; loads references/venue_aitic_defaults/<venue>.yaml "
+                             "(merged under --config; project entries win)")
     parser.add_argument("--output", type=Path, default=None,
                         help="Write JSON report to file (default: stdout)")
     args = parser.parse_args(argv)
 
-    config = load_config(args.config)
+    config = merge_configs(load_venue_config(args.venue), load_config(args.config))
     reports = [lint_file(f, config=config) for f in args.files]
 
     output = {

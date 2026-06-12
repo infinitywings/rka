@@ -4770,6 +4770,112 @@ async def rka_collect_report_context(
 
 
 @tool(category="claims")
+async def rka_staleness_impact(
+    entity_id: str,
+    max_depth: int = 3,
+    *,
+    project_id: str,
+) -> str:
+    """Downstream blast-radius of a stale (or about-to-be-stale) entity.
+
+    Walks DEPENDENT-direction links only (justified_by, derived_from, cites,
+    answers, motivated, member_of, ...): everything whose reasoning rests on
+    this entity. Use before/after superseding a decision or retracting a
+    finding to see what else needs review. Raw observations (produced) are
+    immutable and excluded by design.
+    """
+    async with _client(project_id) as c:
+        r = await c.get(f"/api/graph/staleness-impact/{entity_id}",
+                        params={"max_depth": max_depth})
+        _raise_with_detail(r)
+    data = r.json()
+    lines = [
+        f"## Staleness impact of {entity_id} (status={data.get('root_status')})",
+        f"{len(data.get('impacted', []))} dependent entities within depth {max_depth}:",
+    ]
+    for n in data.get("impacted", []):
+        via = n.get("via", {})
+        lines.append(
+            f"  [d{n.get('depth')}|{n.get('type')}|{n.get('status')}] {n.get('id')} "
+            f"via {via.get('link_type')} from {via.get('from','')[-8:]} "
+            f"{(n.get('label') or '')[:70]}"
+        )
+    if not data.get("impacted"):
+        lines.append("  (no dependents found)")
+    return "\n".join(lines)
+
+
+@tool(category="missions")
+async def rka_mission_guard(
+    mission_id: str,
+    *,
+    project_id: str,
+) -> str:
+    """Negative knowledge relevant to a mission, for Executor pickup.
+
+    Surfaces retracted/superseded findings and unresolved contradictions
+    whose content overlaps the mission objective: approaches already
+    falsified or contested that the Executor must not repeat unknowingly.
+    Call this at mission pickup, alongside the mission context.
+    """
+    async with _client(project_id) as c:
+        r = await c.get(f"/api/missions/{mission_id}/guard")
+        _raise_with_detail(r)
+    data = r.json()
+    warnings = data.get("warnings", [])
+    lines = [f"## Mission guard for {mission_id}: {len(warnings)} warnings"]
+    for w in warnings:
+        lines.append(
+            f"  [{w.get('kind')}|rel={w.get('relevance')}] {w.get('id')}: "
+            f"{w.get('excerpt','')[:90]}"
+        )
+        lines.append(f"    -> {w.get('guidance')}")
+    if not warnings:
+        lines.append("  (no relevant negative knowledge found)")
+    return "\n".join(lines)
+
+
+@tool(category="claims")
+async def rka_belief_as_of(
+    date: str,
+    *,
+    project_id: str,
+) -> str:
+    """Reconstruct the believed-current knowledge state at a past date.
+
+    'What did we believe in March, and what changed since?' Supersession
+    transitions are exact (successor created_at); retraction transitions are
+    approximated by updated_at and marked approximate.
+
+    Args:
+        date: ISO date or timestamp, e.g. "2026-03-15".
+    """
+    async with _client(project_id) as c:
+        r = await c.get("/api/graph/as-of", params={"date": date})
+        _raise_with_detail(r)
+    data = r.json()
+    tc = data.get("then_current", {})
+    lines = [
+        f"## Belief state as of {data.get('as_of')}",
+        f"Then-current: {len(tc.get('decisions', []))} decisions, "
+        f"{tc.get('journal_count', 0)} journal entries.",
+        "### Then-current decisions:",
+    ]
+    for d in tc.get("decisions", [])[:30]:
+        lines.append(f"  {d['id']} {d['question'][:70]} -> {d['chosen'][:50]}")
+    changed = data.get("changed_since", [])
+    lines.append(f"### Changed since ({len(changed)}):")
+    for ch in changed[:30]:
+        approx = " (approx)" if ch.get("approximate") else ""
+        lines.append(
+            f"  {ch['id']} [{ch.get('type')}] was: {ch.get('was','')[:60]} "
+            f"-> changed {ch.get('changed_at','?')[:10]}{approx}"
+        )
+    lines.append(f"Note: {data.get('note','')}")
+    return "\n".join(lines)
+
+
+@tool(category="claims")
 async def rka_get_review_queue(
     status: str = "pending",
     limit: int = 20,
@@ -5790,7 +5896,7 @@ QueryScopeLit = _Literal[
     "hooks", "hook_executions", "brain_notifications", "research_map",
     "review_queue", "clusters", "claims", "manuscript", "graph",
     "ego_graph", "graph_stats", "graph_mermaid", "provenance", "multi_hop",
-    "collect_report_context",
+    "collect_report_context", "staleness_impact", "mission_guard", "belief_as_of",
     "summarize", "generate_summary", "evidence", "freshness", "contradictions",
     "integrity", "pending_maintenance", "changelog", "bootstrap_review",
     "workspace_tree", "workspace_scan",

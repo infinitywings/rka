@@ -567,6 +567,56 @@ class QueryCollectReportContextArgs(ProjectScopedArgs):
 # ---------------------------------------------------------------------------
 
 
+class QueryStalenessImpactArgs(ProjectScopedArgs):
+    """[ANY] Downstream blast-radius of a stale (or about-to-be-stale) entity.
+
+    Walks dependent-direction links only: everything whose reasoning rests
+    on the entity. Use before/after a supersede or retraction.
+    """
+
+    operation: Literal["staleness_impact"] = "staleness_impact"
+
+    id: Annotated[
+        str,
+        Field(description="Entity ID whose downstream impact to compute."),
+    ]
+    filters: Annotated[
+        Optional[dict[str, Any]],
+        Field(default=None, description="Optional filters: {'max_depth': 3}."),
+    ] = None
+
+
+class QueryMissionGuardArgs(ProjectScopedArgs):
+    """[EXECUTOR] Negative knowledge relevant to a mission at pickup.
+
+    Retracted/superseded findings and unresolved contradictions overlapping
+    the mission objective: approaches already falsified or contested. Call
+    alongside mission context at pickup.
+    """
+
+    operation: Literal["mission_guard"] = "mission_guard"
+
+    id: Annotated[
+        str,
+        Field(description="Mission ID to guard."),
+    ]
+
+
+class QueryBeliefAsOfArgs(ProjectScopedArgs):
+    """[ANY] Reconstruct the believed-current knowledge state at a past date.
+
+    'What did we believe in March, and what changed since?' Supersession
+    transitions are exact; retraction times are approximate (updated_at).
+    """
+
+    operation: Literal["belief_as_of"] = "belief_as_of"
+
+    query: Annotated[
+        str,
+        Field(description="ISO date or timestamp, e.g. '2026-03-15'."),
+    ]
+
+
 class QuerySummarizeArgs(ProjectScopedArgs):
     """[ANY] Topic-scoped summarization across the knowledge graph.
 
@@ -875,6 +925,9 @@ QueryArgsUnion = Annotated[
         QueryProvenanceArgs,
         QueryMultiHopArgs,
         QueryCollectReportContextArgs,
+        QueryStalenessImpactArgs,
+        QueryMissionGuardArgs,
+        QueryBeliefAsOfArgs,
         # Summarization
         QuerySummarizeArgs,
         QueryGenerateSummaryArgs,
@@ -3658,6 +3711,9 @@ __all__ = [
     "QueryProvenanceArgs",
     "QueryMultiHopArgs",
     "QueryCollectReportContextArgs",
+    "QueryStalenessImpactArgs",
+    "QueryMissionGuardArgs",
+    "QueryBeliefAsOfArgs",
     "QuerySummarizeArgs",
     "QueryGenerateSummaryArgs",
     "QueryEvidenceArgs",

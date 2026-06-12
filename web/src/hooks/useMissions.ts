@@ -20,6 +20,15 @@ export function useMission(id: string) {
   })
 }
 
+export function useMissionGuard(id: string) {
+  const projectId = useActiveProjectId()
+  return useQuery({
+    queryKey: ["mission-guard", projectId, id],
+    queryFn: () => api.getMissionGuard(id),
+    enabled: !!id,
+  })
+}
+
 export function useCreateMission() {
   const qc = useQueryClient()
   return useMutation({

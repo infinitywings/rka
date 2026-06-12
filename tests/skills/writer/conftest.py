@@ -58,6 +58,16 @@ def validate_references():
 
 
 @pytest.fixture
+def verify_provenance():
+    return _load_module("verify_provenance")
+
+
+@pytest.fixture
+def verify_citations():
+    return _load_module("verify_citations")
+
+
+@pytest.fixture
 def fetch_template():
     return _load_module("fetch_template")
 

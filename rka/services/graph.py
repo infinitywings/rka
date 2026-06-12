@@ -494,8 +494,24 @@ class GraphService:
 
             frontier = next_frontier
 
-        # Step 3: rank and cap
-        ranked_ids = sorted(scores.keys(), key=lambda nid: scores[nid], reverse=True)[:max_nodes]
+        # Step 3: rank and cap — with seed protection. Expansion neighbors
+        # can out-score seeds (e.g. contradicts edges at weight 1.1, or a
+        # node reached from several seeds), so a plain top-N cut can evict
+        # the directly-relevant seeds the traversal started from; eval-v3
+        # measured paragraph-seeded multi_hop scoring BELOW flat search for
+        # exactly this reason. Seeds are exempt from the cap (same
+        # anchor_aware UNION pattern as the context engine and
+        # collect_report_context); expansion nodes fill the remaining
+        # budget. Final order remains score-descending.
+        expansion_ranked = sorted(
+            (nid for nid in scores if nid not in seeds_set),
+            key=lambda nid: scores[nid], reverse=True,
+        )
+        budget = max(max_nodes - len(seeds_set), 0)
+        ranked_ids = sorted(
+            list(seeds_set) + expansion_ranked[:budget],
+            key=lambda nid: scores[nid], reverse=True,
+        )
         ranked_set = set(ranked_ids)
 
         # Hydrate node metadata
@@ -1114,3 +1130,174 @@ class GraphService:
         }
         prefix = entity_id.split("_")[0] if "_" in entity_id else ""
         return prefix_map.get(prefix, "unknown")
+
+    # ------------------------------------------------------------------
+    # Staleness blast-radius (eval-v3 theme B, 2026-06-12)
+    # ------------------------------------------------------------------
+
+    # Per-link-type dependency semantics: which endpoint EPISTEMICALLY
+    # DEPENDS on the other. When the depended-on side goes stale
+    # (superseded / retracted / abandoned), the dependent side is impacted.
+    # Direction values name the dependent endpoint of the stored edge.
+    #
+    # Deliberately excluded:
+    #   produced     -- raw observations are immutable; a mission's findings
+    #                   stand even if its motivating decision is overturned
+    #                   (paper section 5.2: raw layer immutable).
+    #   supersedes   -- the supersession relation itself, not a dependency.
+    #   contradicts  -- disagreement, not dependency.
+    _IMPACT_DEPENDENT: dict[str, str] = {
+        # dependent = source (source depends on target)
+        "derived_from": "source",   # claim depends on its source journal
+        "justified_by": "source",   # decision depends on its evidence
+        "cites": "source",          # journal depends on cited literature
+        "references": "source",     # weak contextual dependency
+        "answers": "source",        # cluster depends on its parent RQ
+        "builds_on": "source",
+        # dependent = target (target depends on source)
+        "informed_by": "target",    # decision depends on informing literature
+        "motivated": "target",      # mission depends on motivating decision
+        "supports": "target",
+        "evidence_for": "target",
+        "qualifies": "target",
+        # claim_edges relations
+        "member_of": "target",      # cluster depends on member claims
+    }
+
+    _STALE_STATUSES = ("superseded", "retracted", "abandoned")
+
+    async def _entity_status(self, eid: str, project_id: str) -> str | None:
+        """Lifecycle status for any entity id; None when the entity is absent.
+
+        journal carries lifecycle in `confidence`; decisions/missions in
+        `status`; claims/clusters in `staleness` (yellow/red treated as
+        stale-adjacent but NOT blast-radius roots).
+        """
+        etype = self._guess_type_from_id(eid)
+        spec = {
+            "journal": ("journal", "confidence"),
+            "decision": ("decisions", "status"),
+            "literature": ("literature", "status"),
+            "mission": ("missions", "status"),
+            "claim": ("claims", "staleness"),
+            "cluster": ("evidence_clusters", "staleness"),
+        }.get(etype)
+        if spec is None:
+            return None
+        table, col = spec
+        row = await self.db.fetchone(
+            f"SELECT {col} AS s FROM {table} WHERE id = ? AND {self._project_clause()}",
+            [eid, project_id],
+        )
+        return (row["s"] or "") if row else None
+
+    async def staleness_impact(
+        self,
+        entity_id: str,
+        *,
+        max_depth: int = 3,
+        project_id: str = "proj_default",
+    ) -> dict:
+        """Downstream blast-radius of a stale (or about-to-be-stale) entity.
+
+        BFS over entity_links + claim_edges following DEPENDENT direction
+        only (see _IMPACT_DEPENDENT): returns every entity whose reasoning
+        rests, directly or transitively, on `entity_id`. Built because the
+        freshness pass only covers the 1-hop claims-with-superseded-source
+        case; overturning a decision also impacts the missions it motivated,
+        the clusters answering it, and any manuscript manifest citing it.
+
+        Returns {root, root_status, impacted: [{id, type, label, status,
+        depth, via: {from, link_type}}], counts}.
+        """
+        root_status = await self._entity_status(entity_id, project_id)
+        impacted: dict[str, dict] = {}
+        frontier: set[str] = {entity_id}
+        seen: set[str] = {entity_id}
+
+        for depth in range(1, max_depth + 1):
+            if not frontier:
+                break
+            placeholders = ",".join("?" for _ in frontier)
+            frontier_list = list(frontier)
+            el_rows = await self.db.fetchall(
+                f"""SELECT source_id, link_type, target_id FROM entity_links
+                    WHERE {self._project_clause()}
+                      AND (source_id IN ({placeholders}) OR target_id IN ({placeholders}))""",
+                [project_id] + frontier_list + frontier_list,
+            )
+            ce_rows = await self.db.fetchall(
+                f"""SELECT source_claim_id, target_claim_id, cluster_id, relation
+                    FROM claim_edges
+                    WHERE {self._project_clause()} AND (
+                        source_claim_id IN ({placeholders})
+                        OR target_claim_id IN ({placeholders})
+                        OR cluster_id IN ({placeholders}))""",
+                [project_id] + frontier_list + frontier_list + frontier_list,
+            )
+
+            next_frontier: set[str] = set()
+
+            def _maybe_add(parent: str, child: str, link: str) -> None:
+                if parent not in seen or child in seen or not child:
+                    return
+                seen.add(child)
+                impacted[child] = {
+                    "id": child,
+                    "type": self._guess_type_from_id(child),
+                    "depth": depth,
+                    "via": {"from": parent, "link_type": link},
+                }
+                next_frontier.add(child)
+
+            for row in el_rows:
+                dep = self._IMPACT_DEPENDENT.get(row["link_type"])
+                if dep is None:
+                    continue
+                src, tgt = row["source_id"], row["target_id"]
+                if dep == "source":
+                    _maybe_add(tgt, src, row["link_type"])
+                else:
+                    _maybe_add(src, tgt, row["link_type"])
+
+            for row in ce_rows:
+                relation = row["relation"]
+                dep = self._IMPACT_DEPENDENT.get(relation)
+                if dep is None:
+                    continue
+                src = row["source_claim_id"]
+                tgt = row["cluster_id"] if relation == "member_of" else row["target_claim_id"]
+                if not src or not tgt:
+                    continue
+                if dep == "source":
+                    _maybe_add(tgt, src, relation)
+                else:
+                    _maybe_add(src, tgt, relation)
+
+            frontier = next_frontier
+
+        # Hydrate labels + statuses for the impacted set.
+        node_ids: dict[str, set[str]] = {}
+        for nid in impacted:
+            node_ids.setdefault(self._guess_type_from_id(nid), set()).add(nid)
+        nodes: dict[str, dict] = {}
+        await self._fill_missing_nodes(nodes, node_ids, project_id=project_id)
+        result = []
+        for nid, info in impacted.items():
+            meta = nodes.get(nid, {})
+            info["label"] = (meta.get("label") or "")[:120]
+            info["status"] = meta.get("status")
+            result.append(info)
+        result.sort(key=lambda x: (x["depth"], x["type"], x["id"]))
+
+        counts: dict[str, int] = {}
+        for info in result:
+            counts[info["type"]] = counts.get(info["type"], 0) + 1
+        return {
+            "root": entity_id,
+            "root_status": root_status,
+            "root_is_stale": (root_status or "").lower() in self._STALE_STATUSES,
+            "impacted": result,
+            "counts": counts,
+            "max_depth": max_depth,
+        }
