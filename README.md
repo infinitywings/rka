@@ -27,9 +27,9 @@ RKA gives your research project a brain that doesn't forget between sessions. It
 
 Built for CS/IoT/CPS security research at UNC Charlotte.
 
-> ### 🌿 Looking for the `agentic` branch?
+> ### 🌿 You're on the `agentic` branch
 >
-> This README describes the `main` (core) distribution. A permanent sibling branch, `agentic`, adds the **RKA Orchestrator** on top of the main-branch RKA core — a LangGraph-driven Brain⇄Executor⇄PI workflow engine with a Claude-Code-native PI surface. The PI drives mission and onboarding workflows from any Claude Code or Claude Desktop session via MCP tools, not stdin terminals.
+> This branch adds the **RKA Orchestrator** on top of the main-branch RKA core — a LangGraph-driven Brain⇄Executor⇄PI workflow engine with a Claude-Code-native PI surface. The PI drives mission and onboarding workflows from any Claude Code or Claude Desktop session via MCP tools, not stdin terminals.
 >
 > | | What it adds |
 > |---|---|
