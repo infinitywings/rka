@@ -41,6 +41,7 @@ from rka.api.routes import (
     review_queue as review_queue_routes,
     onboarding as onboarding_routes,
     maintenance as maintenance_routes,
+    verification as verification_routes,
     researcher_tools as researcher_tools_routes,
     hooks as hooks_routes,
     zotero_config as zotero_config_routes,
@@ -314,6 +315,7 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
     app.include_router(review_queue_routes.router, prefix="/api", tags=["review-queue"])
     app.include_router(onboarding_routes.router, prefix="/api", tags=["onboarding"])
     app.include_router(maintenance_routes.router, prefix="/api", tags=["maintenance"])
+    app.include_router(verification_routes.router, prefix="/api", tags=["verification"])
     app.include_router(researcher_tools_routes.router, prefix="/api", tags=["researcher-tools"])
     app.include_router(hooks_routes.router, prefix="/api", tags=["hooks"])
     # Mission D T3: pluggable embedding backend configuration.

@@ -6,7 +6,7 @@ This guide walks PIs (researchers) through the full setup and research workflow,
 >
 > | Tool | Purpose |
 > |---|---|
-> | `rka_query` | Dispatcher for **38 read operations** (`get_status`, `list_projects`, `search`, `get_research_map`, `get_journal`, `get_report`, `get_context`, …). Call with `operation="…"` plus the operation's typed args. |
+> | `rka_query` | Dispatcher for **42 read operations** (`get_status`, `list_projects`, `search`, `get_research_map`, `get_journal`, `get_report`, `get_context`, `collect_report_context`, `staleness_impact`, `mission_guard`, `belief_as_of`, …). Call with `operation="…"` plus the operation's typed args. |
 > | `rka_execute` | Dispatcher for **49 write/lifecycle operations** (`record_note`, `record_decision`, `create_mission`, `submit_report`, `submit_checkpoint`, …). |
 > | `rka_describe` | Introspect operation schemas. `rka_describe("")` returns the operation index (<250 tokens); `rka_describe("record_decision")` returns the full typed schema with required fields, enums, and provenance constraints. |
 > | `rka_load_tools` | Escape hatch — surface deferred legacy tools (the v2.6.x 91-tool surface and the v2.7.0a2 verb surface live at `tier=deferred`). |

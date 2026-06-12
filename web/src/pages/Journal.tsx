@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/select"
 import { StatusBadge } from "@/components/shared/StatusBadge"
 import { ConfidenceBadge } from "@/components/shared/ConfidenceBadge"
+import { CurrencyBadge } from "@/components/shared/CurrencyBadge"
 import { TagList } from "@/components/shared/TagList"
 import { Markdown } from "@/components/shared/Markdown"
 import { useNotes, useCreateNote, useNote } from "@/hooks/useNotes"
@@ -186,6 +187,7 @@ function JournalCard({
           <div className="flex items-center gap-2 mb-1.5">
             <StatusBadge status={entry.type} />
             <ConfidenceBadge confidence={entry.confidence} />
+            <CurrencyBadge status={entry.status} />
             <span className="text-[10px] text-muted-foreground">
               via {entry.source}
             </span>

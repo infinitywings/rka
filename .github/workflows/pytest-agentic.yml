@@ -1,0 +1,78 @@
+name: pytest-agentic
+
+# Agentic-branch CI. Kept as a SEPARATE workflow file (not a trigger added to
+# pytest.yml) on purpose: pytest.yml is synced byte-for-byte from main on every
+# deliberate main->agentic merge, so adding agentic triggers there would
+# conflict on every sync. This file exists only on agentic and runs both the
+# core suite AND the orchestrator suite (the agentic branch's distinguishing
+# surface, which main's pytest.yml does not cover).
+#
+# fetch-depth: 0 so the orchestrator bookkeeper/worker invariant tests can
+# `git diff main -- rka/` against a real main ref (they skip gracefully when
+# main is unreachable, but on this branch the invariant IS the point).
+
+on:
+  push:
+    branches: [agentic]
+  pull_request:
+    branches: [agentic]
+  workflow_dispatch:
+
+concurrency:
+  group: pytest-agentic-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: core suite (tests/)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install project with runtime + dev extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[llm,academic,workspace,dev]"
+
+      - name: Run core pytest
+        run: python -m pytest tests/ -q --tb=short
+
+  orchestrator:
+    name: orchestrator suite (orchestrator/tests/)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # full history so the bookkeeper/worker invariant tests can diff rka/
+          # against main (git diff main -- rka/ must be empty on this branch).
+          fetch-depth: 0
+
+      - name: Make main ref available for invariant tests
+        run: git fetch --no-tags origin main:main || true
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install core + orchestrator with dev extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[llm,academic,workspace,dev]"
+          pip install -e "./orchestrator[dev]"
+
+      - name: Run orchestrator pytest
+        working-directory: orchestrator
+        run: python -m pytest -q --tb=short

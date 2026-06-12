@@ -89,7 +89,11 @@ async def update_decision(
     dec = await svc.get(dec_id)
     if dec is None:
         raise HTTPException(404, f"Decision {dec_id} not found")
-    return await svc.update(dec_id, data, actor=actor)
+    try:
+        return await svc.update(dec_id, data, actor=actor)
+    except ValueError as e:
+        # Orphan-supersede guard: status='superseded' without a successor.
+        raise HTTPException(422, str(e))
 
 
 @router.post("/decisions/{dec_id}/supersede", response_model=Decision, status_code=201)

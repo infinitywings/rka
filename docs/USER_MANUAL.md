@@ -615,6 +615,8 @@ The web dashboard at `http://localhost:9712` provides a visual interface for bro
 | **Notebook** | `/notebook` | Q&A chat and summary generation |
 | **Audit Log** | `/audit` | System audit trail with action/entity/actor filters |
 | **Context Inspector** | `/context` | Generate and inspect context packages |
+| **Research Health** | `/health` | Provenance coverage, research-debt trajectory, mission-cycle stats, bookkeeping overhead; staleness-review + link-support audit actions |
+| **Report Context** | `/report-context` | Prose description + angle queries -> report-scoped node collection with per-node inclusion provenance |
 | **Settings** | `/settings` | API health, DB stats, LLM config, project settings |
 
 ### Dashboard Page

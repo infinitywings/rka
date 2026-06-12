@@ -174,6 +174,16 @@ When a mission asks you to read a paper:
 4. On `reason: "no_match"`: emit a FULL-TEXT REQUEST checkpoint asking the PI to capture the paper into the project's Zotero collection. Do not proceed at abstract-level confidence unless the mission explicitly allows it.
 5. On `reason: "multiple_matches_below_threshold"`: render the candidates and ask the PI to disambiguate via checkpoint.
 
+**Mission guard (negative knowledge).** At pickup, call `rka_query(operation='mission_guard', id=<mission_id>)` alongside the mission context. It lists retracted and superseded findings and unresolved contradictions relevant to the objective: approaches already falsified or contested. Do not repeat a falsified approach unknowingly; if a guard warning conflicts with your plan, address it in the Backbrief.
+
+---
+
+## Retrieving Context — Drive RKA, Don't One-Shot It
+
+When mission context is incomplete, retrieve iteratively: 3–5 short (1–4 word) angle queries via `search`, then expand the best hits through `ego_graph` / `multi_hop`; for prose-described scopes use `collect_report_context` with angle_queries. One-shot paragraph search measured 0.32 recall vs 0.80–1.00 for this loop (eval-v3). Verify load-bearing entities by fetching full content before acting on them.
+
+---
+
 ## Guardrails
 
 - Do not make strategic research decisions that belong to the Brain or PI.

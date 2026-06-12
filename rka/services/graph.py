@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rka.infra.database import Database
 from rka.infra.ids import generate_id
+
+if TYPE_CHECKING:
+    from rka.services.search import SearchService
 
 
 class GraphService:
@@ -491,8 +494,24 @@ class GraphService:
 
             frontier = next_frontier
 
-        # Step 3: rank and cap
-        ranked_ids = sorted(scores.keys(), key=lambda nid: scores[nid], reverse=True)[:max_nodes]
+        # Step 3: rank and cap — with seed protection. Expansion neighbors
+        # can out-score seeds (e.g. contradicts edges at weight 1.1, or a
+        # node reached from several seeds), so a plain top-N cut can evict
+        # the directly-relevant seeds the traversal started from; eval-v3
+        # measured paragraph-seeded multi_hop scoring BELOW flat search for
+        # exactly this reason. Seeds are exempt from the cap (same
+        # anchor_aware UNION pattern as the context engine and
+        # collect_report_context); expansion nodes fill the remaining
+        # budget. Final order remains score-descending.
+        expansion_ranked = sorted(
+            (nid for nid in scores if nid not in seeds_set),
+            key=lambda nid: scores[nid], reverse=True,
+        )
+        budget = max(max_nodes - len(seeds_set), 0)
+        ranked_ids = sorted(
+            list(seeds_set) + expansion_ranked[:budget],
+            key=lambda nid: scores[nid], reverse=True,
+        )
         ranked_set = set(ranked_ids)
 
         # Hydrate node metadata
@@ -518,6 +537,214 @@ class GraphService:
             "edges": result_edges,
             "query": query,
             "seeds": list(seeds),
+        }
+
+    # Stopwords stripped from a report description when no angle_queries are
+    # provided. Deliberately small: only request-framing vocabulary, not a
+    # general English list — domain terms must survive.
+    _REPORT_STOPWORDS: frozenset = frozenset(
+        "i want to write a report on about the and of in for with how its any "
+        "that were what came out it needed was along way which where when who "
+        "this these those they them their there is are be been being should "
+        "could would will can may might must have has had do does did".split()
+    )
+
+    async def collect_report_context(
+        self,
+        description: str,
+        *,
+        angle_queries: list[str] | None = None,
+        max_depth: int = 2,
+        max_nodes: int = 60,
+        seed_limit: int = 8,
+        edge_weights: dict[str, float] | None = None,
+        project_id: str = "proj_default",
+        search_service: "SearchService | None" = None,
+    ) -> dict:
+        """Assemble the node set relevant to a report described in prose.
+
+        Composite retrieval per the eval-v3 report-context findings: one-shot
+        paragraph search reached 0.32 mean cohort recall while an agent loop
+        (angle queries + graph expansion + verification) reached 0.80. This
+        operation runs that loop's mechanical core server-side:
+
+        1. Seed from EVERY angle query (caller-provided short queries; the
+           normalized description is always added as one more angle). Seed
+           score reflects best search rank across angles.
+        2. BFS-expand seeds through ``entity_links`` + ``claim_edges`` with
+           provenance-weighted edges (same weights as multi_hop_retrieval).
+        3. Seed protection: seeds are never displaced by expansion neighbors
+           (the anchor_aware UNION pattern from the context engine — without
+           it, paragraph-seeded multi_hop scored BELOW flat search).
+        4. Every returned node carries ``included_via`` — either the angle
+           query + rank that surfaced it, or the parent node + link type that
+           reached it — so the consumer (Writer, Brain) can audit the bundle.
+
+        Args:
+            description: The PI's prose description of the report scope.
+            angle_queries: Short (1–4 word) seed queries decomposing the
+                description into search angles. STRONGLY recommended — the
+                caller (an LLM) decomposes far better than stopword
+                stripping. When omitted, the description is keyword-
+                normalized and used as the only angle.
+            max_depth: BFS expansion depth (default 2; report scopes are
+                link-dense, depth 3 mostly adds noise).
+            max_nodes: Result cap (default 60). Seeds are exempt.
+            seed_limit: Search hits taken per angle query (default 8).
+            edge_weights: Per-relation overrides; falls back to
+                DEFAULT_EDGE_WEIGHTS.
+            project_id: Project scope.
+            search_service: Required — seeds always come from search.
+
+        Returns: {nodes: [{id, type, label, score, depth, included_via,
+                  tags}, ...], queries: [...], seed_count, expanded_count,
+                  truncated}
+        """
+        if search_service is None:
+            raise ValueError("collect_report_context requires a search_service")
+        weights = {**self.DEFAULT_EDGE_WEIGHTS, **(edge_weights or {})}
+
+        # Step 1: build the angle-query list. The normalized description is
+        # always appended as a recall backstop behind the caller's angles.
+        import re as _re
+
+        desc_terms = [
+            t for t in _re.findall(r"[a-zA-Z0-9][a-zA-Z0-9_-]+", description.lower())
+            if t not in self._REPORT_STOPWORDS and len(t) > 2
+        ]
+        queries: list[str] = []
+        for q in (angle_queries or []):
+            q = q.strip()
+            if q and q.lower() not in {x.lower() for x in queries}:
+                queries.append(q)
+        if desc_terms:
+            norm = " ".join(desc_terms)
+            if norm.lower() not in {x.lower() for x in queries}:
+                queries.append(norm)
+        if not queries:
+            return {"nodes": [], "queries": [], "seed_count": 0,
+                    "expanded_count": 0, "truncated": False}
+
+        # Step 2: seed from every angle. Seed score = best (highest) rank
+        # score across angles; rank 0 → 1.0, decaying to 0.5 at seed_limit.
+        scoped_search = search_service.with_project(project_id)
+        scores: dict[str, float] = {}
+        depths: dict[str, int] = {}
+        included_via: dict[str, dict] = {}
+        for q in queries:
+            hits = await scoped_search.search(q, limit=seed_limit)
+            for rank, h in enumerate(hits):
+                s = 1.0 - (rank / (2 * max(seed_limit, 1)))
+                if h.entity_id not in scores or s > scores[h.entity_id]:
+                    scores[h.entity_id] = s
+                    depths[h.entity_id] = 0
+                    included_via[h.entity_id] = {
+                        "via": "search", "query": q, "rank": rank,
+                    }
+        seeds_set = set(scores.keys())
+        if not seeds_set:
+            return {"nodes": [], "queries": queries, "seed_count": 0,
+                    "expanded_count": 0, "truncated": False}
+
+        # Step 3: BFS expansion (same edge sources as multi_hop_retrieval,
+        # plus inclusion-provenance tracking on every score improvement).
+        frontier: set[str] = set(seeds_set)
+        for hop in range(max_depth):
+            if not frontier or len(scores) >= max_nodes * 3:
+                break
+            placeholders = ",".join("?" for _ in frontier)
+            frontier_list = list(frontier)
+
+            el_rows = await self.db.fetchall(
+                f"""SELECT source_id, link_type, target_id
+                    FROM entity_links
+                    WHERE {self._project_clause()}
+                      AND (source_id IN ({placeholders}) OR target_id IN ({placeholders}))""",
+                [project_id] + frontier_list + frontier_list,
+            )
+            ce_rows = await self.db.fetchall(
+                f"""SELECT source_claim_id, target_claim_id, cluster_id, relation
+                    FROM claim_edges
+                    WHERE {self._project_clause()} AND (
+                        source_claim_id IN ({placeholders})
+                        OR target_claim_id IN ({placeholders})
+                        OR cluster_id IN ({placeholders}))""",
+                [project_id] + frontier_list + frontier_list + frontier_list,
+            )
+
+            next_frontier: set[str] = set()
+
+            def _propagate(src: str, tgt: str, link: str) -> None:
+                w = weights.get(link, 0.5)
+                for parent, child in ((src, tgt), (tgt, src)):
+                    parent_score = scores.get(parent)
+                    if parent_score is None:
+                        continue
+                    new_score = parent_score * w
+                    if child not in scores or new_score > scores[child]:
+                        # Seeds keep their search provenance + depth 0.
+                        if child in seeds_set:
+                            continue
+                        scores[child] = new_score
+                        depths[child] = hop + 1
+                        included_via[child] = {
+                            "via": "link", "from": parent, "link_type": link,
+                        }
+                        next_frontier.add(child)
+
+            for row in el_rows:
+                _propagate(row["source_id"], row["target_id"], row["link_type"])
+            for row in ce_rows:
+                src = row["source_claim_id"]
+                relation = row["relation"]
+                tgt = row["cluster_id"] if relation == "member_of" else row["target_claim_id"]
+                if src and tgt:
+                    _propagate(src, tgt, relation)
+
+            frontier = next_frontier
+
+        # Step 4: rank with seed protection — all seeds survive, expansion
+        # nodes fill the remaining budget by score.
+        expansion_ranked = sorted(
+            (nid for nid in scores if nid not in seeds_set),
+            key=lambda nid: scores[nid], reverse=True,
+        )
+        budget = max(max_nodes - len(seeds_set), 0)
+        truncated = len(expansion_ranked) > budget
+        kept = sorted(seeds_set, key=lambda nid: scores[nid], reverse=True) \
+            + expansion_ranked[:budget]
+
+        # Step 5: hydrate metadata + tags.
+        node_ids: dict[str, set[str]] = {}
+        for nid in kept:
+            node_ids.setdefault(self._guess_type_from_id(nid), set()).add(nid)
+        nodes: dict[str, dict] = {}
+        await self._fill_missing_nodes(nodes, node_ids, project_id=project_id)
+
+        tags_by_id: dict[str, list[str]] = {}
+        if kept:
+            placeholders = ",".join("?" for _ in kept)
+            for row in await self.db.fetchall(
+                f"SELECT entity_id, tag FROM tags WHERE entity_id IN ({placeholders})",
+                kept,
+            ):
+                tags_by_id.setdefault(row["entity_id"], []).append(row["tag"])
+
+        result_nodes = []
+        for nid in kept:
+            n = nodes.get(nid, {"id": nid, "type": self._guess_type_from_id(nid), "label": nid})
+            n["score"] = round(scores[nid], 4)
+            n["depth"] = depths[nid]
+            n["included_via"] = included_via[nid]
+            n["tags"] = tags_by_id.get(nid, [])
+            result_nodes.append(n)
+
+        return {
+            "nodes": result_nodes,
+            "queries": queries,
+            "seed_count": len(seeds_set),
+            "expanded_count": len(kept) - len(seeds_set),
+            "truncated": truncated,
         }
 
     # ------------------------------------------------------------------
@@ -903,3 +1130,174 @@ class GraphService:
         }
         prefix = entity_id.split("_")[0] if "_" in entity_id else ""
         return prefix_map.get(prefix, "unknown")
+
+    # ------------------------------------------------------------------
+    # Staleness blast-radius (eval-v3 theme B, 2026-06-12)
+    # ------------------------------------------------------------------
+
+    # Per-link-type dependency semantics: which endpoint EPISTEMICALLY
+    # DEPENDS on the other. When the depended-on side goes stale
+    # (superseded / retracted / abandoned), the dependent side is impacted.
+    # Direction values name the dependent endpoint of the stored edge.
+    #
+    # Deliberately excluded:
+    #   produced     -- raw observations are immutable; a mission's findings
+    #                   stand even if its motivating decision is overturned
+    #                   (paper section 5.2: raw layer immutable).
+    #   supersedes   -- the supersession relation itself, not a dependency.
+    #   contradicts  -- disagreement, not dependency.
+    _IMPACT_DEPENDENT: dict[str, str] = {
+        # dependent = source (source depends on target)
+        "derived_from": "source",   # claim depends on its source journal
+        "justified_by": "source",   # decision depends on its evidence
+        "cites": "source",          # journal depends on cited literature
+        "references": "source",     # weak contextual dependency
+        "answers": "source",        # cluster depends on its parent RQ
+        "builds_on": "source",
+        # dependent = target (target depends on source)
+        "informed_by": "target",    # decision depends on informing literature
+        "motivated": "target",      # mission depends on motivating decision
+        "supports": "target",
+        "evidence_for": "target",
+        "qualifies": "target",
+        # claim_edges relations
+        "member_of": "target",      # cluster depends on member claims
+    }
+
+    _STALE_STATUSES = ("superseded", "retracted", "abandoned")
+
+    async def _entity_status(self, eid: str, project_id: str) -> str | None:
+        """Lifecycle status for any entity id; None when the entity is absent.
+
+        journal carries lifecycle in `confidence`; decisions/missions in
+        `status`; claims/clusters in `staleness` (yellow/red treated as
+        stale-adjacent but NOT blast-radius roots).
+        """
+        etype = self._guess_type_from_id(eid)
+        spec = {
+            "journal": ("journal", "confidence"),
+            "decision": ("decisions", "status"),
+            "literature": ("literature", "status"),
+            "mission": ("missions", "status"),
+            "claim": ("claims", "staleness"),
+            "cluster": ("evidence_clusters", "staleness"),
+        }.get(etype)
+        if spec is None:
+            return None
+        table, col = spec
+        row = await self.db.fetchone(
+            f"SELECT {col} AS s FROM {table} WHERE id = ? AND {self._project_clause()}",
+            [eid, project_id],
+        )
+        return (row["s"] or "") if row else None
+
+    async def staleness_impact(
+        self,
+        entity_id: str,
+        *,
+        max_depth: int = 3,
+        project_id: str = "proj_default",
+    ) -> dict:
+        """Downstream blast-radius of a stale (or about-to-be-stale) entity.
+
+        BFS over entity_links + claim_edges following DEPENDENT direction
+        only (see _IMPACT_DEPENDENT): returns every entity whose reasoning
+        rests, directly or transitively, on `entity_id`. Built because the
+        freshness pass only covers the 1-hop claims-with-superseded-source
+        case; overturning a decision also impacts the missions it motivated,
+        the clusters answering it, and any manuscript manifest citing it.
+
+        Returns {root, root_status, impacted: [{id, type, label, status,
+        depth, via: {from, link_type}}], counts}.
+        """
+        root_status = await self._entity_status(entity_id, project_id)
+        impacted: dict[str, dict] = {}
+        frontier: set[str] = {entity_id}
+        seen: set[str] = {entity_id}
+
+        for depth in range(1, max_depth + 1):
+            if not frontier:
+                break
+            placeholders = ",".join("?" for _ in frontier)
+            frontier_list = list(frontier)
+            el_rows = await self.db.fetchall(
+                f"""SELECT source_id, link_type, target_id FROM entity_links
+                    WHERE {self._project_clause()}
+                      AND (source_id IN ({placeholders}) OR target_id IN ({placeholders}))""",
+                [project_id] + frontier_list + frontier_list,
+            )
+            ce_rows = await self.db.fetchall(
+                f"""SELECT source_claim_id, target_claim_id, cluster_id, relation
+                    FROM claim_edges
+                    WHERE {self._project_clause()} AND (
+                        source_claim_id IN ({placeholders})
+                        OR target_claim_id IN ({placeholders})
+                        OR cluster_id IN ({placeholders}))""",
+                [project_id] + frontier_list + frontier_list + frontier_list,
+            )
+
+            next_frontier: set[str] = set()
+
+            def _maybe_add(parent: str, child: str, link: str) -> None:
+                if parent not in seen or child in seen or not child:
+                    return
+                seen.add(child)
+                impacted[child] = {
+                    "id": child,
+                    "type": self._guess_type_from_id(child),
+                    "depth": depth,
+                    "via": {"from": parent, "link_type": link},
+                }
+                next_frontier.add(child)
+
+            for row in el_rows:
+                dep = self._IMPACT_DEPENDENT.get(row["link_type"])
+                if dep is None:
+                    continue
+                src, tgt = row["source_id"], row["target_id"]
+                if dep == "source":
+                    _maybe_add(tgt, src, row["link_type"])
+                else:
+                    _maybe_add(src, tgt, row["link_type"])
+
+            for row in ce_rows:
+                relation = row["relation"]
+                dep = self._IMPACT_DEPENDENT.get(relation)
+                if dep is None:
+                    continue
+                src = row["source_claim_id"]
+                tgt = row["cluster_id"] if relation == "member_of" else row["target_claim_id"]
+                if not src or not tgt:
+                    continue
+                if dep == "source":
+                    _maybe_add(tgt, src, relation)
+                else:
+                    _maybe_add(src, tgt, relation)
+
+            frontier = next_frontier
+
+        # Hydrate labels + statuses for the impacted set.
+        node_ids: dict[str, set[str]] = {}
+        for nid in impacted:
+            node_ids.setdefault(self._guess_type_from_id(nid), set()).add(nid)
+        nodes: dict[str, dict] = {}
+        await self._fill_missing_nodes(nodes, node_ids, project_id=project_id)
+        result = []
+        for nid, info in impacted.items():
+            meta = nodes.get(nid, {})
+            info["label"] = (meta.get("label") or "")[:120]
+            info["status"] = meta.get("status")
+            result.append(info)
+        result.sort(key=lambda x: (x["depth"], x["type"], x["id"]))
+
+        counts: dict[str, int] = {}
+        for info in result:
+            counts[info["type"]] = counts.get(info["type"], 0) + 1
+        return {
+            "root": entity_id,
+            "root_status": root_status,
+            "root_is_stale": (root_status or "").lower() in self._STALE_STATUSES,
+            "impacted": result,
+            "counts": counts,
+            "max_depth": max_depth,
+        }

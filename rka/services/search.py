@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import struct
 from dataclasses import dataclass
 
@@ -11,6 +12,11 @@ from rka.infra.embeddings import EmbeddingService
 from rka.services.artifacts import build_artifact_text, build_figure_text
 
 logger = logging.getLogger(__name__)
+
+
+def _tokens_remain(query: str) -> bool:
+    """True when a constraint-stripped query still carries content tokens."""
+    return bool(re.findall(r"[a-zA-Z0-9]{3,}", query))
 
 
 @dataclass
@@ -116,6 +122,90 @@ class SearchService:
     def with_project(self, project_id: str) -> "SearchService":
         return SearchService(db=self.db, embeddings=self.embeddings, project_id=project_id)
 
+    # Query-understanding patterns (eval-v3 theme E follow-up; Eval-v1
+    # Finding: temporal language and actor anchors fell back to literal FTS
+    # tokens and missed — "today" matched nothing, "PI directives" ignored
+    # the source column). Interpreted phrases are stripped from the FTS
+    # query and applied as metadata constraints on the candidates.
+    _TEMPORAL_PATTERNS = (
+        (re.compile(r"\btoday\b", re.I), "-1 day"),
+        (re.compile(r"\byesterday\b", re.I), "-2 days"),
+        (re.compile(r"\bthis week\b", re.I), "-7 days"),
+        (re.compile(r"\blast week\b", re.I), "-14 days"),
+        (re.compile(r"\bthis month\b", re.I), "-31 days"),
+        (re.compile(r"\brecent(?:ly)?\b", re.I), "-14 days"),
+    )
+    _ACTOR_PATTERNS = (
+        # (pattern, source filter, optional journal-type filter)
+        (re.compile(r"\bpi directives?\b", re.I), "pi", "directive"),
+        (re.compile(r"\b(?:from|by) the pi\b", re.I), "pi", None),
+        (re.compile(r"\bpi instructions?\b", re.I), "pi", "directive"),
+        (re.compile(r"\bexecutor (?:logs?|notes?|reports?)\b", re.I), "executor", None),
+        (re.compile(r"\bbrain (?:notes?|synthes\w+)\b", re.I), "brain", None),
+    )
+
+    @classmethod
+    def parse_query_constraints(cls, query: str) -> tuple[str, dict]:
+        """Interpret temporal/actor phrases as constraints; strip them from
+        the lexical query. Returns (stripped_query, constraints)."""
+        constraints: dict = {}
+        stripped = query
+        for pat, offset in cls._TEMPORAL_PATTERNS:
+            if pat.search(stripped):
+                # keep the WIDEST window if several phrases appear
+                cur = constraints.get("created_within")
+                if cur is None or int(offset.split()[0]) < int(cur.split()[0]):
+                    constraints["created_within"] = offset
+                stripped = pat.sub(" ", stripped)
+        for pat, source, jtype in cls._ACTOR_PATTERNS:
+            if pat.search(stripped):
+                constraints["source"] = source
+                if jtype:
+                    constraints["journal_type"] = jtype
+                stripped = pat.sub(" ", stripped)
+                break
+        return stripped.strip(), constraints
+
+    async def _apply_constraints(
+        self, hits: list[SearchHit], constraints: dict, limit: int
+    ) -> list[SearchHit]:
+        """Filter candidate hits by interpreted metadata constraints.
+
+        Constraint columns live on journal (source, type, created_at) and on
+        the other entity tables (created_at only); hits are batch-checked via
+        their source tables.
+        """
+        if not constraints or not hits:
+            return hits
+        keep_ids: set[str] = set()
+        by_type: dict[str, list[str]] = {}
+        for h in hits:
+            by_type.setdefault(h.entity_type, []).append(h.entity_id)
+        for etype, ids in by_type.items():
+            table = self.SOURCE_MAP.get(etype)
+            if not table:
+                continue
+            conds = ["id IN (%s)" % ",".join("?" for _ in ids), "project_id = ?"]
+            params: list = ids + [self.project_id]
+            if constraints.get("created_within"):
+                conds.append("created_at >= datetime('now', ?)")
+                params.append(constraints["created_within"])
+            if constraints.get("source"):
+                if etype == "journal":
+                    conds.append("source = ?")
+                    params.append(constraints["source"])
+                else:
+                    # actor anchors are journal-specific; drop other types
+                    continue
+            if constraints.get("journal_type") and etype == "journal":
+                conds.append("type = ?")
+                params.append(constraints["journal_type"])
+            rows = await self.db.fetchall(
+                f"SELECT id FROM {table} WHERE {' AND '.join(conds)}", params
+            )
+            keep_ids.update(r["id"] for r in rows)
+        return [h for h in hits if h.entity_id in keep_ids][:limit]
+
     async def search(
         self,
         query: str,
@@ -130,8 +220,62 @@ class SearchService:
           - No embeddings → keyword only
           - No FTS5 data → LIKE fallback
           - No sqlite-vec → keyword only
+
+        Temporal phrases ("today", "this week") and actor anchors ("PI
+        directives") are interpreted as metadata constraints rather than
+        searched as literal tokens (see parse_query_constraints).
         """
         types = entity_types or ["decision", "literature", "journal", "mission", "artifact", "figure", "claim", "cluster"]
+
+        stripped_query, constraints = self.parse_query_constraints(query)
+        if constraints:
+            # Actor-anchored queries are journal queries by construction.
+            if constraints.get("source") and entity_types is None:
+                types = ["journal"]
+            inner = stripped_query if _tokens_remain(stripped_query) else query
+            hits = await self._search_unconstrained(
+                inner, types, limit * 4, keyword_weight, semantic_weight
+            )
+            if not hits and constraints.get("source"):
+                # Pure-anchor query ("PI directives this week"): fall back to
+                # a metadata-only listing of matching journal entries.
+                hits = await self._metadata_only_journal(constraints, limit * 4)
+            return await self._apply_constraints(hits, constraints, limit)
+        return await self._search_unconstrained(
+            query, types, limit, keyword_weight, semantic_weight
+        )
+
+    async def _metadata_only_journal(self, constraints: dict, limit: int) -> list[SearchHit]:
+        conds = ["project_id = ?"]
+        params: list = [self.project_id]
+        if constraints.get("source"):
+            conds.append("source = ?")
+            params.append(constraints["source"])
+        if constraints.get("journal_type"):
+            conds.append("type = ?")
+            params.append(constraints["journal_type"])
+        if constraints.get("created_within"):
+            conds.append("created_at >= datetime('now', ?)")
+            params.append(constraints["created_within"])
+        rows = await self.db.fetchall(
+            f"SELECT * FROM journal WHERE {' AND '.join(conds)} "
+            f"ORDER BY created_at DESC LIMIT ?", params + [limit],
+        )
+        out: list[SearchHit] = []
+        for r in rows:
+            title, snippet = self._extract_title_snippet("journal", dict(r))
+            out.append(SearchHit(entity_type="journal", entity_id=r["id"],
+                                 title=title, snippet=snippet, score=0.0))
+        return out
+
+    async def _search_unconstrained(
+        self,
+        query: str,
+        types: list[str],
+        limit: int,
+        keyword_weight: float,
+        semantic_weight: float,
+    ) -> list[SearchHit]:
 
         # 1. FTS5 keyword search
         fts_results = await self._fts_search(query, types, limit * 2)
@@ -145,53 +289,76 @@ class SearchService:
             except Exception as exc:
                 logger.warning("Vector search failed, using keyword only: %s", exc)
 
-        # 3. Supplemental LIKE search for entity types without dedicated FTS tables.
+        # 3. Tag search — tags are capture-time relevance labels (assigned by
+        #    Brain/Executor/PI when the entity is written) and FTS cannot see
+        #    them; eval-v3 found most residual report-context misses were
+        #    reachable through one tag hop. Merged as a third RRF source.
+        tag_results = await self._tag_search(query, types, limit * 2)
+
+        # 4. Supplemental LIKE search for entity types without dedicated FTS tables.
         supplemental = await self._like_fallback(
             query,
             [etype for etype in types if etype not in self.FTS_MAP],
             limit,
         )
 
-        # 4. If both are empty, fall back to LIKE search
-        if not fts_results and not vec_results:
+        # 5. If all ranked sources are empty, fall back to LIKE search
+        if not fts_results and not vec_results and not tag_results:
             if supplemental:
                 return supplemental[:limit]
             return await self._like_fallback(query, types, limit)
 
-        # 5. If only one source has results, return that
-        if not vec_results:
-            return self._merge_ranked_hits(fts_results, supplemental)[:limit]
-        if not fts_results:
-            return self._merge_ranked_hits(vec_results, supplemental)[:limit]
-
-        # 6. Reciprocal Rank Fusion
-        fused = self._rrf_merge(fts_results, vec_results, keyword_weight, semantic_weight)
+        # 6. Reciprocal Rank Fusion across the non-empty ranked sources
+        fused = self._rrf_merge(
+            fts_results, vec_results, keyword_weight, semantic_weight,
+            tag_results=tag_results,
+        )
         return self._merge_ranked_hits(fused, supplemental)[:limit]
 
-    @staticmethod
-    def _sanitize_fts_query(query: str) -> str:
+    # Request-framing vocabulary stripped from natural-language queries
+    # before FTS matching. Deliberately small — only words that carry no
+    # retrieval signal in any research corpus; domain terms must survive.
+    _QUERY_STOPWORDS: frozenset = frozenset(
+        "a an the and or of to in on at for with about from into over is are "
+        "was were be been being do does did have has had can could should "
+        "would will may might must this that these those it its they them "
+        "their there i we you he she what which who whom whose why how when "
+        "where want need please show me find get tell us our your my his her "
+        "report write".split()
+    )
+
+    @classmethod
+    def _sanitize_fts_query(cls, query: str) -> str:
         """Convert a natural-language query to a safe FTS5 query.
 
-        Strategy: split into words, quote each individually, then join
-        per the `RKA_FTS_QUERY_MODE` env var:
+        Strategy: split into words, drop request-framing stopwords, quote
+        each remaining word individually, then join per the
+        `RKA_FTS_QUERY_MODE` env var:
 
-          - `or` (default): space-joined → FTS5 implicit OR semantics
-            (preserves pre-eval production behavior).
-          - `and`: explicit `AND` separator → FTS5 AND semantics
-            (Mission A revision-report fix candidate; tightens precision
-            at the cost of recall — see mis_01KRKJ9G20EM5XMA147JTKQCFF).
+          - `or` (default): explicit `OR` separator — bm25() ranks by
+            match count, so multi-word natural-language queries degrade
+            gracefully instead of failing closed. (FTS5's implicit
+            operator for space-separated terms is AND, not OR; the
+            pre-fix space-join made production 'or' mode behave as AND.)
+          - `and`: explicit `AND` separator — tightens precision at the
+            cost of recall (see mis_01KRKJ9G20EM5XMA147JTKQCFF).
 
-        Either way, quoting each word avoids issues with hyphens,
-        special characters, and FTS5 operators inside terms. Unknown
-        env values fall back silently to `or` (safe default).
+        Stopword stripping only applies when content words remain — an
+        all-stopword query falls through unstripped rather than matching
+        nothing. Quoting each word avoids issues with hyphens, special
+        characters, and FTS5 operators inside terms. Unknown env values
+        fall back silently to `or` (safe default).
         """
         import os
         import re
         words = re.findall(r"[a-zA-Z0-9]+", query)
         if not words:
             return query
+        content_words = [w for w in words if w.lower() not in cls._QUERY_STOPWORDS]
+        if content_words:
+            words = content_words
         mode = os.environ.get("RKA_FTS_QUERY_MODE", "or").strip().lower()
-        separator = " AND " if mode == "and" else " "
+        separator = " AND " if mode == "and" else " OR "
         return separator.join(f'"{w}"' for w in words)
 
     async def _fts_search(
@@ -303,6 +470,89 @@ class SearchService:
         results.sort(key=lambda h: h.vec_rank or 999)
         return results
 
+    async def _tag_search(
+        self,
+        query: str,
+        types: list[str],
+        limit: int,
+    ) -> list[SearchHit]:
+        """Match query tokens against capture-time tags.
+
+        Tags (e.g. ``eval-harness``, ``pluggable-embeddings``) are assigned
+        when entities are written and are not FTS-indexed, so they carry
+        relevance signal FTS cannot see. A query token matches a tag when it
+        equals the tag or one of its hyphen-delimited segments. Entities are
+        ranked by the number of distinct query tokens their tags match;
+        hydration through SOURCE_MAP applies project scoping.
+        """
+        import re
+
+        tokens = {
+            t.lower()
+            for t in re.findall(r"[a-zA-Z0-9]+", query)
+            if len(t) > 2 and t.lower() not in self._QUERY_STOPWORDS
+        }
+        if not tokens:
+            return []
+
+        matched: dict[tuple[str, str], set[str]] = {}
+        matched_tags: dict[tuple[str, str], set[str]] = {}
+        for tok in sorted(tokens)[:12]:
+            rows = await self.db.fetchall(
+                """SELECT tag, entity_type, entity_id FROM tags
+                   WHERE tag = ?
+                      OR tag LIKE ? || '-%'
+                      OR tag LIKE '%-' || ?
+                      OR tag LIKE '%-' || ? || '-%'""",
+                [tok, tok, tok, tok],
+            )
+            for r in rows:
+                if r["entity_type"] not in types:
+                    continue
+                key = (r["entity_type"], r["entity_id"])
+                matched.setdefault(key, set()).add(tok)
+                matched_tags.setdefault(key, set()).add(r["tag"])
+        if not matched:
+            return []
+
+        ranked = sorted(matched.items(), key=lambda kv: len(kv[1]), reverse=True)
+
+        # Hydrate (and project-filter) through the entities' source tables.
+        by_type: dict[str, list[str]] = {}
+        for (etype, eid), _ in ranked:
+            by_type.setdefault(etype, []).append(eid)
+        rows_by_id: dict[str, dict] = {}
+        for etype, ids in by_type.items():
+            table = self.SOURCE_MAP.get(etype)
+            if not table:
+                continue
+            placeholders = ",".join("?" for _ in ids)
+            for row in await self.db.fetchall(
+                f"SELECT * FROM {table} WHERE id IN ({placeholders}) AND project_id = ?",
+                ids + [self.project_id],
+            ):
+                rows_by_id[row["id"]] = dict(row)
+
+        hits: list[SearchHit] = []
+        for (etype, eid), toks in ranked:
+            row = rows_by_id.get(eid)
+            if row is None:
+                continue  # other project or stale tag
+            title, snippet = self._extract_title_snippet(etype, row)
+            tag_note = ", ".join(sorted(matched_tags[(etype, eid)])[:4])
+            hits.append(
+                SearchHit(
+                    entity_type=etype,
+                    entity_id=eid,
+                    title=title,
+                    snippet=f"[tags: {tag_note}] {snippet}"[:300],
+                    score=float(len(toks)),
+                )
+            )
+            if len(hits) >= limit:
+                break
+        return hits
+
     def _rrf_merge(
         self,
         fts_results: list[SearchHit],
@@ -310,10 +560,13 @@ class SearchService:
         keyword_weight: float,
         semantic_weight: float,
         k: int = 60,
+        tag_results: list[SearchHit] | None = None,
+        tag_weight: float = 0.25,
     ) -> list[SearchHit]:
         """Reciprocal Rank Fusion — merge ranked lists from different sources.
 
         RRF score = w_kw / (k + rank_fts) + w_sem / (k + rank_vec)
+                    [+ w_tag / (k + rank_tag) when tag hits are supplied]
         """
         # Build score maps
         scores: dict[str, float] = {}
@@ -327,6 +580,12 @@ class SearchService:
         for rank, hit in enumerate(vec_results):
             key = f"{hit.entity_type}:{hit.entity_id}"
             scores[key] = scores.get(key, 0.0) + semantic_weight / (k + rank + 1)
+            if key not in hits:
+                hits[key] = hit
+
+        for rank, hit in enumerate(tag_results or []):
+            key = f"{hit.entity_type}:{hit.entity_id}"
+            scores[key] = scores.get(key, 0.0) + tag_weight / (k + rank + 1)
             if key not in hits:
                 hits[key] = hit
 

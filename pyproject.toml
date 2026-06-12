@@ -1,6 +1,6 @@
 [project]
 name = "rka"
-version = "2.7.0.7"
+version = "2.8.0"
 description = "Research Knowledge Agent — MCP server + REST API for AI-assisted research orchestration"
 requires-python = ">=3.11"
 dependencies = [
@@ -65,7 +65,7 @@ build-backend = "setuptools.build_meta"
 include = ["rka*"]
 
 [tool.setuptools.package-data]
-rka = ["db/*.sql", "db/migrations/*.sql", "skills/*.md", "skills/**/*.md"]
+rka = ["db/*.sql", "db/migrations/*.sql", "skills/*.md", "skills/**/*.md", "skills/**/*.yaml", "skills/**/*.py"]
 
 [tool.ruff]
 line-length = 100

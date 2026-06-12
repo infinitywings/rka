@@ -178,7 +178,7 @@ rka_query(operation="multi_hop_retrieval", query="…", project_id="prj_…")  �
 | **Decision lifecycle**       | Overturn decisions with `rka_supersede_decision` — affected claims marked stale for Brain review                                                                                                                                                                                                                       |
 | **Hybrid search**            | FTS5 keyword + sqlite-vec embeddings + reciprocal rank fusion                                                                                                                                                                                                                                                             |
 | **Multi-project**            | Isolated project databases with MCP tools for switching                                                                                                                                                                                                                                                                   |
-| **Web dashboard**            | 12-page React UI: research map with filterable stats, decision tree, knowledge graph, markdown-rendered journal, expandable missions                                                                                                                                                                                      |
+| **Web dashboard**            | 14-page React UI: research map with filterable stats, decision tree, knowledge graph, markdown-rendered journal, expandable missions (with negative-knowledge guard), research health metrics, and a report-context builder                                                                                                                                                                                      |
 | **Onboarding**               | `rka_generate_claude_md` auto-generates project-specific CLAUDE.md from live DB state                                                                                                                                                                                                                                   |
 | **Skills plugin**            | Role-specific SKILL.md guides packaged as MCP prompts (Brain, Executor, PI) with worked examples and anti-patterns                                                                                                                                                                                                        |
 | **Knowledge freshness**      | Staleness detection and propagation through the dependency graph; contradiction detection via vector similarity                                                                                                                                                                                                           |
@@ -231,7 +231,7 @@ graph TD
     end
 
     subgraph "RKA Server"
-        MCP["MCP Server — 5 always-on dispatch tools (87 typed operations)"]
+        MCP["MCP Server — 5 always-on dispatch tools (91 typed operations)"]
         API["REST API — FastAPI"]
         SVC["Service Layer — shared logic"]
         DB["SQLite + FTS5 + sqlite-vec"]
@@ -525,7 +525,7 @@ If the LLM ever omits `project_id`, the dispatch validator rejects the call at t
 
 To find a project id, run `rka_query(operation="list_projects")` once in any session, or check `http://localhost:9712` in the dashboard URL bar.
 
-**The v2.7.0 dispatch architecture.** The rka MCP server ships **5 always-on tools**: 3 dispatch tools (`rka_query` for 38 read operations, `rka_execute` for 49 write/lifecycle operations, `rka_describe` to introspect operation schemas) plus 2 escape hatches (`rka_load_tools` and `rka_help`) that surface the 91 legacy tools + 8 v2.7.0a2 verbs at tier=deferred for backward compatibility. Every operation is backed by a typed Pydantic model — **87 models total** — with per-branch enum and required-field enforcement at the FastMCP schema layer. This makes Brain-hallucination classes (e.g. `confidence='confirmed'` or `rka_submit_checkpoint(content=…)` instead of `description=`) structurally impossible at the wire layer: the schema rejects them before the LLM can ship a call. See `docs/v2.6.x-v2.7.0-tool-surface-arc.md` for the canonical narrative of how the architecture landed.
+**The v2.7.0 dispatch architecture.** The rka MCP server ships **5 always-on tools**: 3 dispatch tools (`rka_query` for 42 read operations, `rka_execute` for 49 write/lifecycle operations, `rka_describe` to introspect operation schemas) plus 2 escape hatches (`rka_load_tools` and `rka_help`) that surface the 91 legacy tools + 8 v2.7.0a2 verbs at tier=deferred for backward compatibility. Every operation is backed by a typed Pydantic model — **91 models total** — with per-branch enum and required-field enforcement at the FastMCP schema layer. This makes Brain-hallucination classes (e.g. `confidence='confirmed'` or `rka_submit_checkpoint(content=…)` instead of `description=`) structurally impossible at the wire layer: the schema rejects them before the LLM can ship a call. See `docs/v2.6.x-v2.7.0-tool-surface-arc.md` for the canonical narrative of how the architecture landed.
 
 The legacy navigator surface (v2.6.3 — 12 always-on + ~79 deferred + `rka_load_tools`/`rka_list_tools`/`rka_help` triad) is preserved via `RKA_LEGACY_TOOLS=1`. The orchestrator subprocess sets this flag in its Compose overlay to preserve per-tool dispatch granularity for the TWO-TAP autonomy-contract gate at `pi_decision_select`; PI sessions should leave it unset and use the dispatch surface.
 
@@ -767,7 +767,7 @@ The MCP server is defined in `rka/mcp/server.py`. As of v2.7.0 it ships **5 alwa
 
 | Tool             | Purpose                                                                                                                |
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `rka_query`      | Dispatcher for **38 read operations** (`get_status`, `search`, `get_research_map`, `list_projects`, `get_context`, …) — call with `operation="…"` plus the operation's typed args. |
+| `rka_query`      | Dispatcher for **42 read operations** (`get_status`, `search`, `get_research_map`, `list_projects`, `get_context`, …) — call with `operation="…"` plus the operation's typed args. |
 | `rka_execute`    | Dispatcher for **49 write/lifecycle operations** (`record_note`, `record_decision`, `create_mission`, `submit_report`, `submit_checkpoint`, …) — call with `operation="…"` plus typed args. |
 | `rka_describe`   | Introspect operation schemas. `rka_describe("")` returns the index (<250 tokens); `rka_describe("record_decision")` returns the full Pydantic schema with required fields, enums, and provenance constraints. |
 | `rka_load_tools` | Escape hatch — surface deferred legacy tools by name (rare; preserved for backward-compatibility).                     |
@@ -1454,7 +1454,7 @@ rka/
 |   |   +-- api/                # Fetch client + TypeScript types
 |   |   +-- hooks/              # TanStack Query hooks
 |   |   +-- components/         # UI components (shadcn + layout + shared)
-|   |   +-- pages/              # Page components (12 pages)
+|   |   +-- pages/              # Page components (14 pages)
 |   |   +-- lib/                # Utilities
 |   +-- dist/                   # Production build (served by FastAPI)
 +-- tests/                      # Pytest test suite

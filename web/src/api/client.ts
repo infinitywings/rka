@@ -140,6 +140,14 @@ import type {
   KnowledgePackDownload,
   KnowledgePackImportResult,
   EvidenceClusterUpdateRequest,
+  StalenessImpact,
+  MissionGuard,
+  BeliefAsOf,
+  ResearchHealth,
+  ReportContextRequest,
+  ReportContextResult,
+  StalenessReviewFiling,
+  LinkSupportAudit,
 } from "./types"
 
 export const api = {
@@ -400,6 +408,23 @@ export const api = {
     return get<ReviewItemData[]>(`/review-queue${qs ? `?${qs}` : ""}`)
   },
   getReviewStats: () => get<Record<string, unknown>>("/review-queue/stats"),
+
+  // Verification & research health (eval-v3 themes B/C)
+  getStalenessImpact: (entityId: string, maxDepth?: number) =>
+    get<StalenessImpact>(
+      `/graph/staleness-impact/${entityId}${maxDepth ? `?max_depth=${maxDepth}` : ""}`,
+    ),
+  getMissionGuard: (missionId: string) =>
+    get<MissionGuard>(`/missions/${missionId}/guard`),
+  getBeliefAsOf: (date: string) =>
+    get<BeliefAsOf>(`/graph/as-of?date=${encodeURIComponent(date)}`),
+  getResearchHealth: () => get<ResearchHealth>("/maintenance/research-health"),
+  buildReportContext: (data: ReportContextRequest) =>
+    post<ReportContextResult>("/graph/report-context", data),
+  fileStalenessReviews: () =>
+    post<StalenessReviewFiling>("/verification/file-staleness-reviews"),
+  auditLinkSupport: (limit = 200) =>
+    get<LinkSupportAudit>(`/verification/link-support?limit=${limit}`),
 }
 
 export { ApiError }

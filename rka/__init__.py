@@ -1,3 +1,3 @@
 """Research Knowledge Agent — MCP server + REST API for AI-assisted research."""
 
-__version__ = "2.7.0.7"
+__version__ = "2.8.0"

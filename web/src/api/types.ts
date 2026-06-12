@@ -695,3 +695,162 @@ export interface ReviewItem {
   created_at: string | null
   resolved_at: string | null
 }
+
+// ---- Verification & Research Health (eval-v3 themes B/C) ----
+
+export interface StalenessImpactNode {
+  id: string
+  type: string
+  label: string
+  status: string | null
+  depth: number
+  via: { from: string; link_type: string }
+}
+
+export interface StalenessImpact {
+  root: string
+  root_status: string | null
+  root_is_stale: boolean
+  impacted: StalenessImpactNode[]
+  counts: Record<string, number>
+  max_depth: number
+}
+
+export type MissionGuardKind = "retracted" | "superseded" | "contradicted"
+
+export interface MissionGuardWarning {
+  id: string
+  kind: MissionGuardKind
+  relevance: number
+  excerpt: string
+  guidance: string
+  superseded_by?: string | null
+  contradicts?: string | null
+}
+
+export interface MissionGuard {
+  mission_id: string
+  warnings: MissionGuardWarning[]
+  checked: { stale_journal: number; contradictions: number }
+}
+
+export interface BeliefAsOfDecision {
+  id: string
+  question: string
+  chosen: string
+}
+
+export interface BeliefAsOfJournalEntry {
+  id: string
+  excerpt: string
+  confidence_now: string
+  approximate?: boolean
+}
+
+export interface BeliefChange {
+  id: string
+  type: string
+  was: string
+  changed_at: string | null
+  superseded_by?: string | null
+  change?: string
+  approximate?: boolean
+}
+
+export interface BeliefAsOf {
+  as_of: string
+  then_current: {
+    decisions: BeliefAsOfDecision[]
+    journal_count: number
+    journal: BeliefAsOfJournalEntry[]
+  }
+  changed_since: BeliefChange[]
+  note: string
+}
+
+export interface CoverageCounts {
+  covered: number
+  total: number
+}
+
+export interface ResearchHealth {
+  provenance_coverage: {
+    decisions_with_evidence_pct: number
+    decisions: CoverageCounts
+    missions_with_motivation_pct: number
+    missions: CoverageCounts
+    claims_with_source_pct: number
+    claims: CoverageCounts
+    supersede_chain_integrity: {
+      superseded_decisions: number
+      orphaned_pointers: number
+    }
+  }
+  research_debt_trajectory_weekly: Array<{
+    week: string
+    created: number
+    covered: number
+  }>
+  mission_cycle: {
+    completed: number
+    avg_days_to_complete: number | null
+    max_days_to_complete: number | null
+    checkpoints_total: number
+    checkpoints_open: number
+  }
+  bookkeeping_overhead: {
+    recorded_actions: Record<string, number>
+    write_share_pct: number
+  }
+}
+
+export interface ReportContextRequest {
+  description: string
+  angle_queries?: string[]
+  max_depth?: number
+  max_nodes?: number
+}
+
+export type ReportContextInclusion =
+  | { via: "search"; query: string; rank: number }
+  | { via: "link"; from: string; link_type: string }
+
+export interface ReportContextNode {
+  id: string
+  type: string
+  label: string
+  score: number
+  depth: number
+  included_via: ReportContextInclusion
+  tags: string[]
+  status?: string | null
+}
+
+export interface ReportContextResult {
+  nodes: ReportContextNode[]
+  queries: string[]
+  seed_count: number
+  expanded_count: number
+  truncated: boolean
+}
+
+export interface StalenessReviewFiling {
+  stale_roots: number
+  filed: number
+  items: Array<{ review_id: string; item_id: string; stale_root: string }>
+}
+
+export interface LinkSupportFinding {
+  item_type: string
+  item_id: string
+  label: string
+  support: number
+  detail: string
+}
+
+export interface LinkSupportAudit {
+  checked_decisions: number
+  checked_clusters: number
+  unsupported: LinkSupportFinding[]
+  method: string
+}

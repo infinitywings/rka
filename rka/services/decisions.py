@@ -157,6 +157,22 @@ class DecisionService(BaseService):
         dump = data.model_dump(exclude_none=True)
         tags = dump.pop("tags", None)
 
+        # Guard: a generic update may not flip status to 'superseded' without
+        # naming the successor — that creates the admin-repair orphan
+        # signature (status='superseded' AND superseded_by IS NULL) the
+        # atomic supersede path was built to prevent. Use supersede_decision
+        # (writes pointer + supersedes edge + staleness cascade atomically).
+        if dump.get("status") == "superseded" and not dump.get("superseded_by"):
+            existing = await self.get(dec_id)
+            if existing is None or not existing.superseded_by:
+                raise ValueError(
+                    f"Cannot set decision {dec_id} status='superseded' without a "
+                    f"successor: use supersede_decision (POST "
+                    f"/api/decisions/{dec_id}/supersede), which records "
+                    f"superseded_by, the supersedes graph edge, and the "
+                    f"staleness cascade atomically."
+                )
+
         updates = {}
         for field, value in dump.items():
             if field == "options":
