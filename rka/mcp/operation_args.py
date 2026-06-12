@@ -525,6 +525,43 @@ class QueryMultiHopArgs(ProjectScopedArgs):
     ] = None
 
 
+class QueryCollectReportContextArgs(ProjectScopedArgs):
+    """[ANY] Collect the node set relevant to a report described in prose.
+
+    Composite retrieval for the "I want to write a report about X"
+    workflow: seeds from every angle query, BFS-expands through the
+    typed link graph, protects seeds from cap displacement, and tags
+    every node with inclusion provenance (``included_via``).
+
+    ALWAYS provide ``filters.angle_queries`` — 3-5 short (1-4 word)
+    queries decomposing the description from different angles
+    (components, bugs/fixes, decisions, evaluations). Paragraph-only
+    seeding measured 0.32 mean cohort recall vs 0.80 for
+    angle-decomposed retrieval (eval-v3).
+    """
+
+    operation: Literal["collect_report_context"] = "collect_report_context"
+
+    query: Annotated[
+        str,
+        Field(description=(
+            "The report description — the PI's prose paragraph describing "
+            "what the report should cover."
+        )),
+    ]
+    filters: Annotated[
+        Optional[dict[str, Any]],
+        Field(
+            default=None,
+            description=(
+                "Optional filters: {'angle_queries': ['short query', ...], "
+                "'max_depth': 2, 'max_nodes': 60, 'seed_limit': 8}. "
+                "angle_queries is STRONGLY recommended."
+            ),
+        ),
+    ] = None
+
+
 # ---------------------------------------------------------------------------
 # Summarization
 # ---------------------------------------------------------------------------
@@ -837,6 +874,7 @@ QueryArgsUnion = Annotated[
         QueryGraphMermaidArgs,
         QueryProvenanceArgs,
         QueryMultiHopArgs,
+        QueryCollectReportContextArgs,
         # Summarization
         QuerySummarizeArgs,
         QueryGenerateSummaryArgs,
@@ -3619,6 +3657,7 @@ __all__ = [
     "QueryGraphMermaidArgs",
     "QueryProvenanceArgs",
     "QueryMultiHopArgs",
+    "QueryCollectReportContextArgs",
     "QuerySummarizeArgs",
     "QueryGenerateSummaryArgs",
     "QueryEvidenceArgs",

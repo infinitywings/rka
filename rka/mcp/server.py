@@ -4694,6 +4694,82 @@ async def rka_multi_hop_retrieval(
 
 
 @tool(category="claims")
+async def rka_collect_report_context(
+    description: str,
+    angle_queries: list[str] | None = None,
+    max_depth: int = 2,
+    max_nodes: int = 60,
+    seed_limit: int = 8,
+    *,
+    project_id: str,
+) -> str:
+    """Collect the knowledge-base node set relevant to a report described in prose.
+
+    Composite retrieval for the "I want to write a report about X" workflow:
+    seeds from EVERY angle query (short 1-4 word queries you derive from the
+    description — provide 3-5 of them, from different angles: components,
+    bugs/fixes, decisions, evaluations), BFS-expands through entity_links +
+    claim_edges with provenance-weighted edges, never lets expansion displace
+    seeds, and annotates every node with `included_via` (which query + rank
+    surfaced it, or which parent + link type reached it) so the bundle is
+    auditable.
+
+    ALWAYS pass angle_queries — eval-v3 measured 0.32 mean cohort recall for
+    paragraph-only seeding vs 0.80 for angle-decomposed agent retrieval. After
+    the call, verify borderline nodes by fetching their content, and run
+    follow-up searches for report dimensions that came back thin.
+
+    Args:
+        description: The PI's prose description of the report scope.
+        angle_queries: Short seed queries decomposing the description into
+            search angles. The keyword-normalized description is always
+            appended as one extra angle automatically.
+        max_depth: BFS expansion depth (default 2, capped at 4).
+        max_nodes: Result cap (default 60); seeds are exempt from the cap.
+        seed_limit: Search hits taken per angle query (default 8).
+    """
+    body: dict = {
+        "description": description,
+        "max_depth": max_depth,
+        "max_nodes": max_nodes,
+        "seed_limit": seed_limit,
+    }
+    if angle_queries is not None:
+        body["angle_queries"] = angle_queries
+
+    async with _client(project_id) as c:
+        r = await c.post("/api/graph/report-context", json=body)
+        _raise_with_detail(r)
+    data = r.json()
+    nodes = data.get("nodes", [])
+
+    lines = [
+        f"## Report context for: {description[:120]}",
+        f"Angle queries used: {', '.join(data.get('queries', []))}",
+        f"{data.get('seed_count', 0)} seeds + {data.get('expanded_count', 0)} link-expanded nodes"
+        + (" (expansion truncated by max_nodes)" if data.get("truncated") else ""),
+    ]
+    if not nodes:
+        lines.append("\n(empty result — add angle_queries with distinctive short keywords)")
+        return "\n".join(lines)
+
+    lines.append("\n### Nodes (score-ranked; seeds first):")
+    for n in nodes:
+        via = n.get("included_via", {})
+        if via.get("via") == "search":
+            via_s = f"search:{via.get('query', '')[:30]}#{via.get('rank')}"
+        else:
+            via_s = f"{via.get('link_type', '?')}←{via.get('from', '?')[-8:]}"
+        tags = ",".join(n.get("tags", [])[:4])
+        label = (n.get("label") or "")[:70]
+        lines.append(
+            f"  [{n.get('type', '?')}|s={n.get('score', 0.0):.2f}|{via_s}] "
+            f"{n.get('id', '?')} {label}" + (f" «{tags}»" if tags else "")
+        )
+    return "\n".join(lines)
+
+
+@tool(category="claims")
 async def rka_get_review_queue(
     status: str = "pending",
     limit: int = 20,
@@ -5714,6 +5790,7 @@ QueryScopeLit = _Literal[
     "hooks", "hook_executions", "brain_notifications", "research_map",
     "review_queue", "clusters", "claims", "manuscript", "graph",
     "ego_graph", "graph_stats", "graph_mermaid", "provenance", "multi_hop",
+    "collect_report_context",
     "summarize", "generate_summary", "evidence", "freshness", "contradictions",
     "integrity", "pending_maintenance", "changelog", "bootstrap_review",
     "workspace_tree", "workspace_scan",

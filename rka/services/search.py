@@ -191,7 +191,10 @@ class SearchService:
         if not words:
             return query
         mode = os.environ.get("RKA_FTS_QUERY_MODE", "or").strip().lower()
-        separator = " AND " if mode == "and" else " "
+        # FTS5's implicit operator for space-separated terms is AND, not OR.
+        # `or` mode must join with an explicit OR; bm25() then ranks by match
+        # count, which is the behavior the original design intended.
+        separator = " AND " if mode == "and" else " OR "
         return separator.join(f'"{w}"' for w in words)
 
     async def _fts_search(

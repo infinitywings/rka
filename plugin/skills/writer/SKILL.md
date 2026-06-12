@@ -70,6 +70,12 @@ Scripts invoked via `Bash` (under `scripts/`):
 
 ---
 
+## Evidence Collection for Sections
+
+When the PI describes a section or report scope in prose, do NOT rely on a single search. Call `rka_query(operation='collect_report_context', query=<the PI's description>, filters={'angle_queries': [3-5 short queries from different angles]})` to assemble the candidate node set: it unions multi-angle search seeds with provenance-weighted graph expansion and returns per-node `included_via` so every inclusion is auditable. Then verify borderline nodes by fetching their content, and re-search any report dimension that came back thin. Iterative retrieval measured 0.80 to 1.00 recall vs 0.32 for one-shot paragraph search (eval-v3). The full strategy lives in the Brain skill section "Retrieval Strategy" (drive RKA through several calls, never one-shot it).
+
+---
+
 ## Source Attribution
 
 Every assertion in prose connects to an upstream entity in RKA. Two mechanisms together carry the connection:
