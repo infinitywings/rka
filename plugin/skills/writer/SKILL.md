@@ -1,7 +1,7 @@
 ---
 name: rka-writer
 description: Manuscript-drafting AI for RKA-managed research projects. Runs as a Claude Code skill in VSCode per dec_01KS0AWYDV752AWQRF40CQBRFZ. Drafts but does not assert: every prose claim carries provenance to a lit_, jrn_, or dec_ entity in the research graph. Load when starting a manuscript session in a manuscripts/<project>/<venue>/ working directory, when picking up a revision mission from the Brain, or when reasoning about venue, references, layout, or anti-AI-tic enforcement.
-version: 2.3.2
+version: 2.4.0
 ---
 
 # Writer Skill
@@ -22,6 +22,7 @@ Iron Law: **draft but do not assert.** If you find yourself wanting to state a f
 - [`references/template_registry.md`](references/template_registry.md): LaTeX class registry with SHA-256 pins per venue.
 - [`references/latex_audit.md`](references/latex_audit.md): twelve-field layout checklist used by `scripts/layout_audit.py`.
 - [`references/examples.md`](references/examples.md): worked outline ratification and AI-tic catch examples.
+- [`references/quality_review.md`](references/quality_review.md): the pre-submit quality self-review checklist (rubric dimensions tied to RKA evidence; explicitly not an LLM-reviewer autograder).
 
 ---
 
@@ -60,7 +61,9 @@ MCP servers configured per workspace `.mcp.json`:
 
 Scripts invoked via `Bash` (under `scripts/`):
 
-`ai_tic_lint.py` runs lexical and structural detectors against drafts and emits `ai_tic_report.json`.
+`verify_provenance.py` checks every `% provenance:` comment against the live knowledge base (EXISTS / CURRENT / SUPPORTED / UNCONTESTED); BLOCK on a missing, superseded, or retracted citation. The gate behind the Iron Law and Knowledge Currency.
+`verify_citations.py` cross-checks every `\cite{key}` against the bibliography (case-exact); BLOCK on an unresolved or case-mismatched key. Feeds the compile-and-fix loop.
+`ai_tic_lint.py` runs lexical and structural detectors against drafts and emits `ai_tic_report.json`. Accepts `--venue <id>` to load venue-default term downgrades from `references/venue_aitic_defaults/`.
 `bridge_repetition_check.py` flags near-duplicate sentences across section boundaries.
 `render.sh` wraps latexmk for local PDF builds with engine selection via `LATEX_ENGINE`.
 `layout_audit.py` runs after a successful render and produces `audit.json` over twelve fields.
@@ -99,7 +102,25 @@ Every assertion in prose connects to an upstream entity in RKA. Two mechanisms t
 
 If a claim has no provenance anchor, raise it as a gap rather than confabulating support. The Brain decides whether to commission an evidence-gathering mission or whether the claim must be rephrased to what RKA already supports. This is the load-bearing constraint that separates Writer from generic LLM drafting.
 
+**The provenance comments are verified, not trusted.** Run `scripts/verify_provenance.py sections/*.tex --project <id>` before the Draft checkpoint. For every `% provenance:` comment it checks the cited entity against the live knowledge base: it EXISTS (catches fabrication), is CURRENT (not superseded/retracted/abandoned), SUPPORTS the claim, and is UNCONTESTED (or the draft surfaces the disagreement). MISSING / STALE / RETRACTED are BLOCK; the draft does not advance to the PI with an unverified citation. This converts the Iron Law from a request into an enforced invariant: eval-v3 (2026-06-12) showed a capable model handled a trap-laden corpus correctly by careful reading alone, but nothing in the system enforced it, and the literature is blunt that diligence fails at scale (LLMs miss retractions over half the time; "citation present" diverges from "citation supports the claim" ~50% of the time even for frontier models).
+
+**Cite post-hoc, not while drafting.** Draft the prose first, grounded in the evidence you collected, then attach and verify citations in a separate pass. Post-hoc citation measured 75%/42% coverage/correctness versus 37%/21% for cite-while-generating, with lower hallucination, and it keeps authoritative retrieval separate from prose revision.
+
 Full schema and worked anchoring example: [`references/architecture.md`](references/architecture.md) section "Manuscript Representation".
+
+---
+
+## Knowledge Currency
+
+The knowledge base is not a flat set of true facts. It contains **superseded** decisions and notes, **retracted** entries, and **unresolved contradictions** between claims. Drafting faithfully means representing the CURRENT state, not whatever the search happened to surface. This is the single failure mode generic LLM drafting handles worst (models exhibit a "nostalgia bias" toward older facts and degrade 6-31% when an outdated fact acts as a distractor), so the rules here are explicit and enforced by `scripts/verify_provenance.py`.
+
+**Before citing any `jrn_` or `dec_`, check its status.** Use `rka_query(operation='entity', id=...)` or the entity GET; `status=superseded|abandoned` (decisions) and `confidence=superseded|retracted` (journal) mean **do not assert from this entity.** For decisions, follow `superseded_by` to the current head and cite that instead. The `supersedes` graph edges (materialized as of the tier-1 retrieval work) let you traverse old to new directly.
+
+- **Superseded.** Assert the current fact. You MAY mention the superseded one only when explicitly narrating the design evolution ("we initially adopted X before revising to Y"); in that case the provenance comment must carry the `superseded-ack` token so the verifier permits it. An unacknowledged citation to a superseded entity is a BLOCK.
+- **Retracted.** Never assert a retracted claim as true. Cite the correction entity instead. A deliberate citation to a retracted entity (e.g. describing what was retracted and why) requires the `retracted-ack` token.
+- **Contradicted.** When a cited claim has a `contradicts` edge to another, do not silently pick one. Either surface the disagreement explicitly (cite both, attribute each), or report the resolution with its reasoning (which estimate holds and why the other does not). Citing one side of an unresolved contradiction without surfacing it is a WARN the PI must clear.
+
+This section is the guidance; `verify_provenance.py` is the gate. They are the same discipline at two layers.
 
 ---
 
@@ -201,6 +222,8 @@ Style score: `1 - (critical * 3 + high + 0.3 * medium) / total_sentences`. Secti
 
 The linter score is not the only gate. PI editorial judgment overrides the linter on a per-project basis through `ai_tic_config.yaml`, which maps each banned term to an enable, disable, or downgrade verdict and supports project-specific custom terms.
 
+**Lean on the structural detectors; treat the lexical list as venue-relative.** The lexical blocklist is well-sourced (Kobak 2025, Matsui 2025), but a few terms are register-legitimate in some venues ("enhance throughput", "comprehensive evaluation" in systems/security writing), and detector-style hard blocking is unreliable in general (61.3% false positives on non-native English). Pass `--venue <id>` to load venue-default downgrades from `references/venue_aitic_defaults/<venue>.yaml` (merged under the per-project config; project entries win). The goal is removing genuine tics to improve prose, never running an AI *detector* as a pass/fail authorship gate.
+
 Full tier table with rationales and replacement guidance: [`references/ai_tics.md`](references/ai_tics.md).
 
 ---
@@ -246,6 +269,8 @@ Phase 1 ships the registry stub for `acmart` and `acl-style-files` with SHA-256 
 
 The acceptance criterion is a clean compile with zero `Undefined control sequence`, zero `Reference ... undefined`, zero `Citation ... undefined`, and a layout audit that returns `PASS` or `WARN` on every field.
 
+**Compile-and-fix loop.** LLM LaTeX is unreliable on bibliographies (TeXpert reports ~15% accuracy on complex documents, logical errors dominating), and the silent failure is a `\cite{key}` that renders as `[?]`. Before and after each render, run `scripts/verify_citations.py --tex sections/*.tex --bib refs.bib`: every citation key must resolve case-exact to a bibliography entry; an unresolved or case-mismatched key is a BLOCK. Feed compile errors, `chktex` warnings, and `verify_citations.py` output back as the fix prompt, looping up to a small fixed cap. Compiler-feedback loops are an established reliability lever (they lift structured-generation compilability from ~44% to ~89% in the code-generation literature).
+
 `scripts/layout_audit.py` runs after render and produces `audit.json` over twelve fields with `PASS`, `WARN`, or `BLOCK` verdicts:
 
 `pages_over_limit` (BLOCK any non-zero); `undefined_citations` (BLOCK any); `undefined_refs` (BLOCK any); `missing_bib_keys` (BLOCK any); `question_mark_citations` (BLOCK any); `orphan_refs` (BLOCK any); `overfull_hboxes_over_10pt` (WARN); `overfull_vboxes` (WARN); `float_too_large` (WARN); `underfull_badness_over_5000` (WARN); `chktex_warnings_over_10` (WARN); `pages_equals_limit` (WARN).
@@ -281,7 +306,9 @@ Venue-aware overrides: per-venue `references/venue/<venue>.md` may carry stricte
 4. **DON'T** validate references against a single source. Cross-source confirmation is mandatory (Stage C).
 5. **DON'T** modify a venue class file in place. Create a wrapper class; preserve LPPL compliance.
 6. **DON'T** ignore the page-limit gate. Layout audit must PASS before submit; over-limit is a hard block.
-7. **DON'T** assert facts. Draft them and provenance them. Writer surfaces what RKA supports.
+7. **DON'T** assert facts. Draft them and provenance them. Writer surfaces what RKA supports. Run `verify_provenance.py` before the Draft checkpoint; a MISSING / STALE / RETRACTED citation is a BLOCK, not a warning.
+7a. **DON'T** cite a superseded, abandoned, or retracted entity as if current. Follow `superseded_by` to the head and cite that; use the `superseded-ack` / `retracted-ack` token only when deliberately narrating the change (see Knowledge Currency).
+7b. **DON'T** silently pick one side of a contradicted claim. Surface the disagreement or report the resolution with reasoning.
 8. **DON'T** scrape Google Scholar directly. SerpAPI as tertiary per `dec_01KS0AXXASJ5GXV7M0SS39Y066`; direct scraping is forbidden.
 9. **DON'T** grow new RKA orchestration. Bookkeeper invariant: Writer adds files only under `rka/skills/writer/` plus `tests/skills/writer/`.
 10. **DON'T** treat the lint score as the only gate. PI editorial judgment via `ai_tic_config.yaml` overrides on a per-project basis.
