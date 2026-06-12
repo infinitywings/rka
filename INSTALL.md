@@ -11,7 +11,7 @@
 | Surface | What you'll have |
 |---|---|
 | **RKA backend** | FastAPI + worker + SQLite + FTS5 + sqlite-vec running in Docker on `localhost:9712`. Web dashboard at the same URL. |
-| **Claude Code (Executor)** | Full plugin: 4 role skills (`rka:rka-brain`, `rka:rka-executor`, `rka:rka-pi`, `rka:rka-writer`), 6 slash commands (`/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`, `/rka-setup-claude-desktop`, `/rka-start-manuscript`), a SessionStart hook that pings the backend on every new session, and the v2.7.0 dispatch surface — 3 always-on tools (`rka_query`, `rka_execute`, `rka_describe`) routing to 87 typed Pydantic operations, plus 2 escape hatches (`rka_load_tools` to register legacy aliases on demand, `rka_help` as a `rka_describe` alias). Legacy 91-tool surface available via `RKA_LEGACY_TOOLS=1` for backwards compat. |
+| **Claude Code (Executor)** | Full plugin: 4 role skills (`rka:rka-brain`, `rka:rka-executor`, `rka:rka-pi`, `rka:rka-writer`), 6 slash commands (`/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`, `/rka-setup-claude-desktop`, `/rka-start-manuscript`), a SessionStart hook that pings the backend on every new session, and the v2.7.0 dispatch surface — 3 always-on tools (`rka_query`, `rka_execute`, `rka_describe`) routing to 91 typed Pydantic operations, plus 2 escape hatches (`rka_load_tools` to register legacy aliases on demand, `rka_help` as a `rka_describe` alias). Legacy 91-tool surface available via `RKA_LEGACY_TOOLS=1` for backwards compat. |
 | **Writer (manuscript drafting)** | The `rka:rka-writer` skill drafts venue-targeted manuscripts (CHI, EMNLP, NeurIPS, USENIX, IEEE-SP, OSDI, Nature seed venues). Bootstrap a per-manuscript workspace via `/rka-start-manuscript` (creates `.mcp.json`, `main.tex`, `refs.bib`, `.planning/` directory). Reference-validation MCP server (`rka-writer-tools`) wraps Crossref + OpenAlex + Semantic Scholar + arXiv + SerpAPI; install separately via `uv tool install '.[writer-tools]'` (see §3.6). |
 | **Claude Desktop (Brain)** | `mcp__rka__*` tool surface via the `mcpServers.rka` entry in `claude_desktop_config.json`. Wrapper-based config gives you version-checking + auto-pin to your active project. Skills and slash commands are Claude Code only (Claude Desktop's plugin format is separate). |
 
@@ -21,7 +21,7 @@ In Claude Desktop and Claude Code, you'll see **5 always-on `rka` tools** at ses
 
 | Tool | Role | Operations behind it |
 |---|---|---|
-| `rka_query` | Read dispatch (the "search/list/get" entry point) | 38 read operations |
+| `rka_query` | Read dispatch (the "search/list/get" entry point) | 42 read operations |
 | `rka_execute` | Write dispatch (the "add/update/create/submit" entry point) | 49 write operations |
 | `rka_describe` | Schema lookup + examples for any operation | — |
 | `rka_load_tools` | Escape hatch: register legacy tool aliases for the rest of the session | — |
