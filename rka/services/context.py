@@ -310,27 +310,42 @@ class ContextEngine:
         # overview queries use a weighted-sum that lifts recency from
         # tie-break to multiplicative term. PI-sourced entries get a small
         # lift within their importance band on either path.
+        pinned_ids: set[str] = set()
         if topic:
             candidates.sort(key=self._topic_sort_key)
         else:
             candidates.sort(key=self._overview_score, reverse=True)
+            # Pinned tier (eval-v3, 2026-06-11): on a live 185-entity corpus
+            # the weighted-sum buried two PI-critical directives at bundle
+            # positions #58/#60 — the v2.5.4 coefficient sweep already showed
+            # weights are not the lever, composition policy is. Entries that
+            # are pinned, critical-importance, or PI directives are lifted to
+            # the FRONT of the bundle (score order preserved within the tier)
+            # and are exempt from the top-K cap below.
+            pinned = [e for e in candidates if self._is_pinned_entry(e)]
+            if pinned:
+                pinned_ids = {e["id"] for e in pinned}
+                candidates = pinned + [
+                    e for e in candidates if e["id"] not in pinned_ids
+                ]
 
         # Phase-3.1 T2 (post-rank-merge, always-on): cap the bundle to
         # top-K by weighted-sum / search-relevance score. Entities surfaced
         # by anchor-aware tools (passed via ``anchor_aware_ids``) UNION
         # through the cap so the anchor-aware path's targeted retrieval is
-        # preserved regardless of K. The v2.5.4-D4 ``anchor_aware_present``
-        # gating has been removed — the policy is unconditional because
-        # the un-anchored backward-compat path left the efficiency floor
-        # structurally unreachable (corpus-refresh diagnosis).
+        # preserved regardless of K — and so does the pinned tier. The
+        # v2.5.4-D4 ``anchor_aware_present`` gating has been removed — the
+        # policy is unconditional because the un-anchored backward-compat
+        # path left the efficiency floor structurally unreachable
+        # (corpus-refresh diagnosis).
         k = _read_bundle_k()
         head = candidates[:k]
         head_ids = {e["id"] for e in head}
         extras: list[dict] = []
-        if anchor_aware_ids:
-            anchor_set = set(anchor_aware_ids)
+        union_ids = set(anchor_aware_ids or ()) | pinned_ids
+        if union_ids:
             for entry in candidates[k:]:
-                if entry["id"] in anchor_set and entry["id"] not in head_ids:
+                if entry["id"] in union_ids and entry["id"] not in head_ids:
                     extras.append(entry)
                     head_ids.add(entry["id"])
         candidates = head + extras
@@ -377,6 +392,23 @@ class ContextEngine:
         # Informational; no longer drives truncation.
         package.token_estimate = sum(self._estimate_tokens(t) for t in rendered)
         return package
+
+    @staticmethod
+    def _is_pinned_entry(entry: dict) -> bool:
+        """Overview-path pinned-tier membership.
+
+        Two signals only: the explicit ``pinned`` flag, and PI directives
+        (instructions, not findings — eval-v3 found two critical PI
+        directives buried at bundle positions #58/#60). Bare
+        ``importance='critical'`` is deliberately NOT in the tier:
+        dec_01KRSMMCS8MD7KQDBS0E2DVKBQ ratified that critical *findings*
+        compete through the weighted-sum (strict critical-dominance was
+        the pre-v2.5.3 bug), and only journal rows carry these columns —
+        ``.get`` keeps decisions/literature/missions out of the tier.
+        """
+        if entry.get("pinned"):
+            return True
+        return entry.get("source") == "pi" and entry.get("type") == "directive"
 
     @staticmethod
     def _importance_band_normalized(entry: dict) -> float:
@@ -539,6 +571,23 @@ class ContextEngine:
             params,
         )
         candidates.extend(rows)
+
+        # Pinned-tier candidates are fetched UNCONDITIONALLY — the
+        # importance/recency-ordered LIMIT above drops older
+        # normal-importance PI directives from the pool entirely, so the
+        # pinned-tier lift in get_context never sees them (eval-v3 live
+        # probe: 3 of 15 PI directives reached the pool). Dedup against the
+        # main query happens via the seen-id filter below.
+        seen_ids = {r["id"] for r in rows}
+        pinned_rows = await self.db.fetchall(
+            f"""SELECT *, 'journal' AS entity_type, {_IMPORTANCE_CASE} AS imp_rank
+                FROM journal j
+                WHERE project_id = ? AND confidence != 'superseded'
+                  AND (pinned = 1 OR (source = 'pi' AND type = 'directive'))
+                ORDER BY imp_rank DESC, created_at DESC LIMIT 30""",
+            [project_id],
+        )
+        candidates.extend(r for r in pinned_rows if r["id"] not in seen_ids)
 
         # Decisions: active, ranked by recency.
         params2: list = [project_id]

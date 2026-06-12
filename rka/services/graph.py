@@ -494,8 +494,24 @@ class GraphService:
 
             frontier = next_frontier
 
-        # Step 3: rank and cap
-        ranked_ids = sorted(scores.keys(), key=lambda nid: scores[nid], reverse=True)[:max_nodes]
+        # Step 3: rank and cap — with seed protection. Expansion neighbors
+        # can out-score seeds (e.g. contradicts edges at weight 1.1, or a
+        # node reached from several seeds), so a plain top-N cut can evict
+        # the directly-relevant seeds the traversal started from; eval-v3
+        # measured paragraph-seeded multi_hop scoring BELOW flat search for
+        # exactly this reason. Seeds are exempt from the cap (same
+        # anchor_aware UNION pattern as the context engine and
+        # collect_report_context); expansion nodes fill the remaining
+        # budget. Final order remains score-descending.
+        expansion_ranked = sorted(
+            (nid for nid in scores if nid not in seeds_set),
+            key=lambda nid: scores[nid], reverse=True,
+        )
+        budget = max(max_nodes - len(seeds_set), 0)
+        ranked_ids = sorted(
+            list(seeds_set) + expansion_ranked[:budget],
+            key=lambda nid: scores[nid], reverse=True,
+        )
         ranked_set = set(ranked_ids)
 
         # Hydrate node metadata

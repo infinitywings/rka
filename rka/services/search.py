@@ -145,55 +145,75 @@ class SearchService:
             except Exception as exc:
                 logger.warning("Vector search failed, using keyword only: %s", exc)
 
-        # 3. Supplemental LIKE search for entity types without dedicated FTS tables.
+        # 3. Tag search — tags are capture-time relevance labels (assigned by
+        #    Brain/Executor/PI when the entity is written) and FTS cannot see
+        #    them; eval-v3 found most residual report-context misses were
+        #    reachable through one tag hop. Merged as a third RRF source.
+        tag_results = await self._tag_search(query, types, limit * 2)
+
+        # 4. Supplemental LIKE search for entity types without dedicated FTS tables.
         supplemental = await self._like_fallback(
             query,
             [etype for etype in types if etype not in self.FTS_MAP],
             limit,
         )
 
-        # 4. If both are empty, fall back to LIKE search
-        if not fts_results and not vec_results:
+        # 5. If all ranked sources are empty, fall back to LIKE search
+        if not fts_results and not vec_results and not tag_results:
             if supplemental:
                 return supplemental[:limit]
             return await self._like_fallback(query, types, limit)
 
-        # 5. If only one source has results, return that
-        if not vec_results:
-            return self._merge_ranked_hits(fts_results, supplemental)[:limit]
-        if not fts_results:
-            return self._merge_ranked_hits(vec_results, supplemental)[:limit]
-
-        # 6. Reciprocal Rank Fusion
-        fused = self._rrf_merge(fts_results, vec_results, keyword_weight, semantic_weight)
+        # 6. Reciprocal Rank Fusion across the non-empty ranked sources
+        fused = self._rrf_merge(
+            fts_results, vec_results, keyword_weight, semantic_weight,
+            tag_results=tag_results,
+        )
         return self._merge_ranked_hits(fused, supplemental)[:limit]
 
-    @staticmethod
-    def _sanitize_fts_query(query: str) -> str:
+    # Request-framing vocabulary stripped from natural-language queries
+    # before FTS matching. Deliberately small — only words that carry no
+    # retrieval signal in any research corpus; domain terms must survive.
+    _QUERY_STOPWORDS: frozenset = frozenset(
+        "a an the and or of to in on at for with about from into over is are "
+        "was were be been being do does did have has had can could should "
+        "would will may might must this that these those it its they them "
+        "their there i we you he she what which who whom whose why how when "
+        "where want need please show me find get tell us our your my his her "
+        "report write".split()
+    )
+
+    @classmethod
+    def _sanitize_fts_query(cls, query: str) -> str:
         """Convert a natural-language query to a safe FTS5 query.
 
-        Strategy: split into words, quote each individually, then join
-        per the `RKA_FTS_QUERY_MODE` env var:
+        Strategy: split into words, drop request-framing stopwords, quote
+        each remaining word individually, then join per the
+        `RKA_FTS_QUERY_MODE` env var:
 
-          - `or` (default): space-joined → FTS5 implicit OR semantics
-            (preserves pre-eval production behavior).
-          - `and`: explicit `AND` separator → FTS5 AND semantics
-            (Mission A revision-report fix candidate; tightens precision
-            at the cost of recall — see mis_01KRKJ9G20EM5XMA147JTKQCFF).
+          - `or` (default): explicit `OR` separator — bm25() ranks by
+            match count, so multi-word natural-language queries degrade
+            gracefully instead of failing closed. (FTS5's implicit
+            operator for space-separated terms is AND, not OR; the
+            pre-fix space-join made production 'or' mode behave as AND.)
+          - `and`: explicit `AND` separator — tightens precision at the
+            cost of recall (see mis_01KRKJ9G20EM5XMA147JTKQCFF).
 
-        Either way, quoting each word avoids issues with hyphens,
-        special characters, and FTS5 operators inside terms. Unknown
-        env values fall back silently to `or` (safe default).
+        Stopword stripping only applies when content words remain — an
+        all-stopword query falls through unstripped rather than matching
+        nothing. Quoting each word avoids issues with hyphens, special
+        characters, and FTS5 operators inside terms. Unknown env values
+        fall back silently to `or` (safe default).
         """
         import os
         import re
         words = re.findall(r"[a-zA-Z0-9]+", query)
         if not words:
             return query
+        content_words = [w for w in words if w.lower() not in cls._QUERY_STOPWORDS]
+        if content_words:
+            words = content_words
         mode = os.environ.get("RKA_FTS_QUERY_MODE", "or").strip().lower()
-        # FTS5's implicit operator for space-separated terms is AND, not OR.
-        # `or` mode must join with an explicit OR; bm25() then ranks by match
-        # count, which is the behavior the original design intended.
         separator = " AND " if mode == "and" else " OR "
         return separator.join(f'"{w}"' for w in words)
 
@@ -306,6 +326,89 @@ class SearchService:
         results.sort(key=lambda h: h.vec_rank or 999)
         return results
 
+    async def _tag_search(
+        self,
+        query: str,
+        types: list[str],
+        limit: int,
+    ) -> list[SearchHit]:
+        """Match query tokens against capture-time tags.
+
+        Tags (e.g. ``eval-harness``, ``pluggable-embeddings``) are assigned
+        when entities are written and are not FTS-indexed, so they carry
+        relevance signal FTS cannot see. A query token matches a tag when it
+        equals the tag or one of its hyphen-delimited segments. Entities are
+        ranked by the number of distinct query tokens their tags match;
+        hydration through SOURCE_MAP applies project scoping.
+        """
+        import re
+
+        tokens = {
+            t.lower()
+            for t in re.findall(r"[a-zA-Z0-9]+", query)
+            if len(t) > 2 and t.lower() not in self._QUERY_STOPWORDS
+        }
+        if not tokens:
+            return []
+
+        matched: dict[tuple[str, str], set[str]] = {}
+        matched_tags: dict[tuple[str, str], set[str]] = {}
+        for tok in sorted(tokens)[:12]:
+            rows = await self.db.fetchall(
+                """SELECT tag, entity_type, entity_id FROM tags
+                   WHERE tag = ?
+                      OR tag LIKE ? || '-%'
+                      OR tag LIKE '%-' || ?
+                      OR tag LIKE '%-' || ? || '-%'""",
+                [tok, tok, tok, tok],
+            )
+            for r in rows:
+                if r["entity_type"] not in types:
+                    continue
+                key = (r["entity_type"], r["entity_id"])
+                matched.setdefault(key, set()).add(tok)
+                matched_tags.setdefault(key, set()).add(r["tag"])
+        if not matched:
+            return []
+
+        ranked = sorted(matched.items(), key=lambda kv: len(kv[1]), reverse=True)
+
+        # Hydrate (and project-filter) through the entities' source tables.
+        by_type: dict[str, list[str]] = {}
+        for (etype, eid), _ in ranked:
+            by_type.setdefault(etype, []).append(eid)
+        rows_by_id: dict[str, dict] = {}
+        for etype, ids in by_type.items():
+            table = self.SOURCE_MAP.get(etype)
+            if not table:
+                continue
+            placeholders = ",".join("?" for _ in ids)
+            for row in await self.db.fetchall(
+                f"SELECT * FROM {table} WHERE id IN ({placeholders}) AND project_id = ?",
+                ids + [self.project_id],
+            ):
+                rows_by_id[row["id"]] = dict(row)
+
+        hits: list[SearchHit] = []
+        for (etype, eid), toks in ranked:
+            row = rows_by_id.get(eid)
+            if row is None:
+                continue  # other project or stale tag
+            title, snippet = self._extract_title_snippet(etype, row)
+            tag_note = ", ".join(sorted(matched_tags[(etype, eid)])[:4])
+            hits.append(
+                SearchHit(
+                    entity_type=etype,
+                    entity_id=eid,
+                    title=title,
+                    snippet=f"[tags: {tag_note}] {snippet}"[:300],
+                    score=float(len(toks)),
+                )
+            )
+            if len(hits) >= limit:
+                break
+        return hits
+
     def _rrf_merge(
         self,
         fts_results: list[SearchHit],
@@ -313,10 +416,13 @@ class SearchService:
         keyword_weight: float,
         semantic_weight: float,
         k: int = 60,
+        tag_results: list[SearchHit] | None = None,
+        tag_weight: float = 0.25,
     ) -> list[SearchHit]:
         """Reciprocal Rank Fusion — merge ranked lists from different sources.
 
         RRF score = w_kw / (k + rank_fts) + w_sem / (k + rank_vec)
+                    [+ w_tag / (k + rank_tag) when tag hits are supplied]
         """
         # Build score maps
         scores: dict[str, float] = {}
@@ -330,6 +436,12 @@ class SearchService:
         for rank, hit in enumerate(vec_results):
             key = f"{hit.entity_type}:{hit.entity_id}"
             scores[key] = scores.get(key, 0.0) + semantic_weight / (k + rank + 1)
+            if key not in hits:
+                hits[key] = hit
+
+        for rank, hit in enumerate(tag_results or []):
+            key = f"{hit.entity_type}:{hit.entity_id}"
+            scores[key] = scores.get(key, 0.0) + tag_weight / (k + rank + 1)
             if key not in hits:
                 hits[key] = hit
 

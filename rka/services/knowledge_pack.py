@@ -219,6 +219,28 @@ _FK_COLUMNS: dict[str, set[str]] = {
     "qa_logs": {"session_id"},
     "figures": {"artifact_id"},
 }
+# Matches entity-ID-shaped tokens embedded in prose/JSON strings (lowercase
+# prefix + ULID-style Crockford-base32 tail). Deliberately permissive: a
+# match is only rewritten when it is a key in the pack's id_map, so false
+# positives pass through unchanged.
+_EMBEDDED_ID_RE = re.compile(r"\b[a-z][a-z_]{1,30}_[0-9A-HJKMNP-TV-Z]{16,32}\b")
+
+# Free-text columns scanned for embedded entity IDs during import re-keying
+# (rationale like "Supersedes dec_…", journal content citing other entries).
+# Registry-scoped on purpose: a blanket all-string pass would also rewrite
+# pack-internal lookup values such as artifact file paths, breaking
+# _restore_artifact_files' old-path -> archive mapping.
+_PROSE_TEXT_COLUMNS: dict[str, tuple[str, ...]] = {
+    "journal": ("content", "summary", "verbatim_input"),
+    "decisions": ("question", "rationale", "chosen", "abandonment_reason", "options"),
+    "missions": ("objective", "context", "tasks", "acceptance_criteria"),
+    "literature": ("abstract", "notes"),
+    "claims": ("content",),
+    "evidence_clusters": ("label", "synthesis"),
+    "checkpoints": ("description",),
+    "events": ("summary",),
+}
+
 _JSON_ID_COLUMNS = {
     "literature": ("related_decisions",),
     "decisions": ("related_missions", "related_literature", "related_journal"),
@@ -557,6 +579,20 @@ class KnowledgePackService(BaseService):
                     id_map=id_map,
                     source_project_id=source_project_id,
                     target_project_id=target_project_id,
+                )
+
+        # Final pass: rewrite entity IDs EMBEDDED IN PROSE (rationale text
+        # like "Supersedes dec_…", journal content citing other entries,
+        # option descriptions). The structured passes above only handle
+        # whole-value columns, so re-keying used to sever every textual
+        # reference — provenance rot through export/import (eval-v3,
+        # 2026-06-11). IDs absent from id_map are left untouched (they may
+        # legitimately reference entities outside the pack).
+        for column in _PROSE_TEXT_COLUMNS.get(table, ()):
+            value = remapped.get(column)
+            if isinstance(value, str) and value:
+                remapped[column] = _EMBEDDED_ID_RE.sub(
+                    lambda m: id_map.get(m.group(0), m.group(0)), value
                 )
 
         return remapped
@@ -899,6 +935,7 @@ class KnowledgePackService(BaseService):
                AND NOT EXISTS (SELECT 1 FROM missions m WHERE m.id = el.source_id)
                AND NOT EXISTS (SELECT 1 FROM claims c WHERE c.id = el.source_id)
                AND NOT EXISTS (SELECT 1 FROM evidence_clusters ec WHERE ec.id = el.source_id)
+               AND NOT EXISTS (SELECT 1 FROM checkpoints ck WHERE ck.id = el.source_id)
                LIMIT 50""",
             [pid],
         )
@@ -923,6 +960,7 @@ class KnowledgePackService(BaseService):
                AND NOT EXISTS (SELECT 1 FROM missions m WHERE m.id = el.target_id)
                AND NOT EXISTS (SELECT 1 FROM claims c WHERE c.id = el.target_id)
                AND NOT EXISTS (SELECT 1 FROM evidence_clusters ec WHERE ec.id = el.target_id)
+               AND NOT EXISTS (SELECT 1 FROM checkpoints ck WHERE ck.id = el.target_id)
                LIMIT 50""",
             [pid],
         )
