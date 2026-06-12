@@ -134,8 +134,57 @@ def support_score(claim: str, content: str):
     return len(ct & et) / len(ct), True
 
 
+# Phase-2 support backend: an entailment judge (claim, evidence) ->
+# True (supported) | False (unsupported) | None (abstain -> lexical fallback).
+# Wired to an LLM via make_llm_judge(); injectable for tests.
+Judge = Callable[[str, str], Optional[bool]]
+
+
+def make_llm_judge(model: Optional[str] = None) -> Optional[Judge]:
+    """Build an LLM entailment judge via litellm, or None when unavailable.
+
+    Model resolution: explicit arg > RKA_WRITER_JUDGE_MODEL > RKA_LLM_MODEL.
+    Judge errors abstain (return None) so the lexical heuristic remains the
+    floor; the LLM tightens, never loosens, the gate.
+    """
+    resolved = model or os.environ.get("RKA_WRITER_JUDGE_MODEL") \
+        or os.environ.get("RKA_LLM_MODEL")
+    if not resolved:
+        return None
+    try:
+        import litellm  # optional dependency ([llm] extra)
+    except ImportError:
+        return None
+
+    def judge(claim: str, evidence: str) -> Optional[bool]:
+        try:
+            resp = litellm.completion(
+                model=resolved,
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        "Does the EVIDENCE support the CLAIM? Answer with exactly "
+                        "one word: SUPPORTED or UNSUPPORTED.\n\n"
+                        f"CLAIM: {claim}\n\nEVIDENCE: {evidence}"
+                    ),
+                }],
+                temperature=0,
+                max_tokens=5,
+            )
+            verdict = (resp.choices[0].message.content or "").strip().upper()
+            if "UNSUPPORTED" in verdict:
+                return False
+            if "SUPPORTED" in verdict:
+                return True
+            return None
+        except Exception:
+            return None
+
+    return judge
+
+
 def audit_text(text: str, resolver: Resolver, *, support_threshold: float = _LOW_SUPPORT_THRESHOLD,
-               surfaced_terms: Optional[set] = None) -> FileReport:
+               surfaced_terms: Optional[set] = None, judge: Optional[Judge] = None) -> FileReport:
     """Audit provenance comments in `text`. `resolver` maps entity_id -> dict|None.
 
     `surfaced_terms` is the set of content-tokens appearing anywhere in the
@@ -186,6 +235,13 @@ def audit_text(text: str, resolver: Resolver, *, support_threshold: float = _LOW
             continue
 
         sup, scorable = support_score(claim, ent.get("content", ""))
+        judged: Optional[bool] = None
+        if judge is not None and claim.strip() and ent.get("content"):
+            judged = judge(claim, ent["content"])
+        if judged is True:
+            sup, scorable = 1.0, True
+        elif judged is False:
+            sup, scorable = 0.0, True
         sup_round = round(sup, 2) if sup is not None else None
         if ent.get("contradicted") and not draft_surfaces_disagreement:
             report.citations.append(CitationResult(eid, i + 1, "CONTRADICTED",
@@ -193,8 +249,9 @@ def audit_text(text: str, resolver: Resolver, *, support_threshold: float = _LOW
                 sup_round, ack))
         elif scorable and sup < support_threshold:
             report.citations.append(CitationResult(eid, i + 1, "LOW_SUPPORT",
-                f"claim shares only {sup:.0%} of content tokens with the cited entity "
-                "(advisory; NLI entailment is the Phase-2 check)",
+                ("entailment judge: evidence does not support the claim" if judged is False
+                 else f"claim shares only {sup:.0%} of content tokens with the cited entity "
+                      "(advisory; NLI entailment is the Phase-2 check)"),
                 sup_round, ack))
         else:
             note = "" if scorable else "support unscored (thin entity content; NLI Phase-2)"
@@ -292,6 +349,9 @@ def main(argv: Optional[list] = None) -> int:
     parser.add_argument("--project", default=os.environ.get("RKA_PROJECT"),
                         help="Project ID (or set RKA_PROJECT)")
     parser.add_argument("--support-threshold", type=float, default=_LOW_SUPPORT_THRESHOLD)
+    parser.add_argument("--support-backend", choices=("lexical", "llm"), default="lexical",
+                        help="llm: entailment judge via litellm (RKA_WRITER_JUDGE_MODEL "
+                             "or RKA_LLM_MODEL); judge errors fall back to lexical")
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args(argv)
 
@@ -307,7 +367,13 @@ def main(argv: Optional[list] = None) -> int:
         print(f"error: cannot reach RKA at {args.rka_url}: {e}", file=sys.stderr)
         return 3
 
-    reports = [audit_file(f, resolver, support_threshold=args.support_threshold)
+    judge = make_llm_judge() if args.support_backend == "llm" else None
+    if args.support_backend == "llm" and judge is None:
+        print("warning: --support-backend llm requested but no judge available "
+              "(set RKA_WRITER_JUDGE_MODEL and install the [llm] extra); "
+              "using lexical", file=sys.stderr)
+    reports = [audit_file(f, resolver, support_threshold=args.support_threshold,
+                          judge=judge)
                for f in args.files]
     output = {
         "version": "1.0",

@@ -106,3 +106,55 @@ def test_clearly_unrelated_citation_low_support(verify_provenance):
     rep = verify_provenance.audit_text(tex, _resolver(ents))
     assert rep.citations[0].verdict == "LOW_SUPPORT"
     assert rep.verdict == "WARN"
+
+
+class TestEntailmentJudge:
+    """Phase-2 support backend: injectable judge tightens the gate."""
+
+    def test_judge_unsupported_overrides_lexical_pass(self, verify_provenance):
+        # High lexical overlap, but the judge says the evidence does NOT
+        # support the claim (e.g. negation): judge verdict wins.
+        tex = (f"% provenance: {JID} supports the claim below\n"
+               "Per-fragment integrity codes reduce malicious fragment acceptance to zero.\n")
+        ents = {JID: {"type": "journal", "status": "verified",
+                      "content": "per-fragment integrity codes did NOT reduce malicious "
+                                 "fragment acceptance to zero in the follow-up replication run"}}
+        rep = verify_provenance.audit_text(
+            tex, _resolver(ents), judge=lambda c, e: False)
+        assert rep.citations[0].verdict == "LOW_SUPPORT"
+        assert "entailment judge" in rep.citations[0].detail
+
+    def test_judge_supported_overrides_lexical_low(self, verify_provenance):
+        # Paraphrase with near-zero token overlap: lexical would warn; the
+        # judge recognizes the entailment.
+        tex = (f"% provenance: {JID} supports the claim below\n"
+               "Energy depletion attacks are mitigated by capping refetch frequency.\n")
+        ents = {JID: {"type": "journal", "status": "verified",
+                      "content": "battery exhaustion drains the meter cell over forty one "
+                                 "days under hourly forced firmware redownload across fleet"}}
+        rep = verify_provenance.audit_text(
+            tex, _resolver(ents), judge=lambda c, e: True)
+        assert rep.citations[0].verdict == "OK"
+
+    def test_judge_abstain_falls_back_to_lexical(self, verify_provenance):
+        tex = (f"% provenance: {JID} supports the claim below\n"
+               "Quantum error correction thresholds depend on surface code distance.\n")
+        ents = {JID: {"type": "journal", "status": "verified",
+                      "content": "battery exhaustion drains the meter cell over forty one "
+                                 "days under hourly forced firmware redownload across fleet"}}
+        rep = verify_provenance.audit_text(
+            tex, _resolver(ents), judge=lambda c, e: None)
+        assert rep.citations[0].verdict == "LOW_SUPPORT"  # lexical floor holds
+
+    def test_judge_not_consulted_for_stale_entities(self, verify_provenance):
+        calls = []
+        tex = f"% provenance: {SID} supports the claim\nWe adopt Ed25519.\n"
+        ents = {SID: {"type": "decision", "status": "superseded", "content": "use Ed25519"}}
+        rep = verify_provenance.audit_text(
+            tex, _resolver(ents), judge=lambda c, e: calls.append(1) or True)
+        assert rep.citations[0].verdict == "STALE" and not calls
+
+    def test_make_llm_judge_none_without_model(self, verify_provenance, monkeypatch):
+        monkeypatch.delenv("RKA_WRITER_JUDGE_MODEL", raising=False)
+        monkeypatch.delenv("RKA_LLM_MODEL", raising=False)
+        assert verify_provenance.make_llm_judge() is None
