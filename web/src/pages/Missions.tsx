@@ -4,10 +4,10 @@ import { Badge } from "@/components/ui/badge"
 import { StatusBadge } from "@/components/shared/StatusBadge"
 import { TagList } from "@/components/shared/TagList"
 import { Markdown } from "@/components/shared/Markdown"
-import { useMissions } from "@/hooks/useMissions"
+import { useMissions, useMissionGuard } from "@/hooks/useMissions"
 import { useCheckpoints } from "@/hooks/useCheckpoints"
 import { formatDate } from "@/lib/utils"
-import { Rocket, CheckCircle2, Circle, AlertTriangle, Clock, ChevronDown, ChevronUp } from "lucide-react"
+import { Rocket, CheckCircle2, Circle, AlertTriangle, Clock, ChevronDown, ChevronUp, ShieldAlert } from "lucide-react"
 import type { Mission, Checkpoint } from "@/api/types"
 
 const taskIcons: Record<string, typeof Circle> = {
@@ -228,6 +228,9 @@ function MissionCard({
             </div>
           )}
 
+          {/* Guard — negative knowledge relevant to this mission */}
+          <MissionGuardSection missionId={mission.id} />
+
           {/* Report */}
           {mission.report && (
             <div className="rounded-md border bg-muted/30 p-3">
@@ -258,5 +261,60 @@ function MissionCard({
         </CardContent>
       )}
     </Card>
+  )
+}
+
+const guardKindColors: Record<string, string> = {
+  retracted: "bg-red-100 text-red-800 border-red-200",
+  superseded: "bg-amber-100 text-amber-800 border-amber-200",
+  contradicted: "bg-orange-100 text-orange-800 border-orange-200",
+}
+
+function MissionGuardSection({ missionId }: { missionId: string }) {
+  // Only mounted when the mission card is expanded, so the guard check is
+  // fetched lazily per selected mission.
+  const { data: guard, isLoading } = useMissionGuard(missionId)
+
+  return (
+    <div>
+      <h4 className="text-sm font-semibold mb-2 flex items-center gap-1">
+        <ShieldAlert className="h-3.5 w-3.5" />
+        Guard
+      </h4>
+      {isLoading ? (
+        <p className="text-xs text-muted-foreground">Checking negative knowledge...</p>
+      ) : !guard || guard.warnings.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No relevant negative knowledge.</p>
+      ) : (
+        <div className="space-y-1">
+          {guard.warnings.map((w) => (
+            <div key={`${w.id}-${w.kind}`} className="rounded border p-2 text-sm space-y-1">
+              <div className="flex items-center gap-2">
+                <Badge
+                  variant="outline"
+                  className={`text-[10px] font-medium ${guardKindColors[w.kind] ?? "bg-gray-100 text-gray-600"}`}
+                >
+                  {w.kind}
+                </Badge>
+                <span className="text-[10px] text-muted-foreground font-mono truncate">
+                  {w.id}
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground">{w.excerpt}</p>
+              <p className="text-xs">
+                <span className="font-medium">Guidance: </span>
+                {w.guidance}
+                {w.superseded_by && (
+                  <span className="text-muted-foreground font-mono"> ({w.superseded_by})</span>
+                )}
+                {w.contradicts && (
+                  <span className="text-muted-foreground font-mono"> (vs {w.contradicts})</span>
+                )}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }

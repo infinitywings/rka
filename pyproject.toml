@@ -65,7 +65,7 @@ build-backend = "setuptools.build_meta"
 include = ["rka*"]
 
 [tool.setuptools.package-data]
-rka = ["db/*.sql", "db/migrations/*.sql", "skills/*.md", "skills/**/*.md"]
+rka = ["db/*.sql", "db/migrations/*.sql", "skills/*.md", "skills/**/*.md", "skills/**/*.yaml", "skills/**/*.py"]
 
 [tool.ruff]
 line-length = 100

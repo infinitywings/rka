@@ -14,6 +14,9 @@ ReviewFlag = Literal[
     "re_distill_review",
     "cross_topic_link",
     "stale_theme",
+    # Migration 029 (eval-v3 theme-B verification categories):
+    "stale_dependency",
+    "unsupported_link",
 ]
 
 ReviewStatus = Literal["pending", "acknowledged", "resolved", "dismissed"]

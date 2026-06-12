@@ -261,6 +261,18 @@ Full navigation command catalogue + advancement heuristics: `workflows.md` § "R
 
 ---
 
+## Retrieval Strategy — Drive RKA, Don't One-Shot It
+
+A single search call is not a retrieval strategy. Measured on the rka_development corpus (eval-v3, 2026-06-11): one paragraph-shaped query reached 0.32 mean recall of report-relevant nodes; the iterative strategy below reached 0.80–1.00. Assume you must drive RKA through several calls.
+
+1. **Short queries, many angles.** FTS works best with 1–4 keyword queries. Decompose the information need into 3–5 angle queries (component names, bug/fix vocabulary, decision subjects, evaluation terms) and search each one.
+2. **Expand from the best hits, not from the query.** Take the strongest 2–3 hits and traverse the graph: `ego_graph` for the linked neighborhood, `multi_hop` for ranked expansion. Typed links reach nodes whose wording shares nothing with your query — a fix-mission's produced journals, a decision's justifying evidence (+10 to +24 recall points over flat search in eval-v3).
+3. **For report-scoped collection, call `collect_report_context`** with the PI's prose description plus your angle queries. It runs seed-union + provenance-weighted graph expansion with seed protection server-side, and every returned node carries `included_via` (which query or link reached it) so you can audit the bundle.
+4. **Verify before you rely.** Fetch the full entity for anything load-bearing or borderline; never cite from a snippet alone.
+5. **Re-search thin dimensions.** If one aspect of the need came back sparse, treat it as a missing-angle signal, not proof of absence — try synonyms, and pivot through a relevant node's tags (tags name the cohort vocabulary).
+
+---
+
 ## Anti-Patterns — Common Mistakes to Avoid
 
 1. **DON'T** skip the session-start protocol, even if the user asks a direct question.

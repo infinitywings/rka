@@ -81,6 +81,16 @@ class NoteService(BaseService):
             if data.related_mission:
                 await self.add_link("mission", data.related_mission, "produced", "journal", entry_id, created_by=source or "system")
 
+        # Materialize the supersession as a graph edge — traversal surfaces
+        # (ego_graph, multi_hop, collect_report_context) walk entity_links
+        # only and cannot see the supersedes/superseded_by columns.
+        # Migration 028 backfills historical rows.
+        if data.supersedes:
+            await self.add_link(
+                "journal", entry_id, "supersedes", "journal", data.supersedes,
+                created_by=source or "system",
+            )
+
         # Sync cheap deterministic FTS now; LLM enrichment + embedding are queued
         await self._sync_fts("journal", entry_id, {
             "content": data.content, "summary": "",

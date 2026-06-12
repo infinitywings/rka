@@ -17,6 +17,7 @@ import ELK from "elkjs/lib/elk.bundled.js"
 import { Badge } from "@/components/ui/badge"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { StatusBadge } from "@/components/shared/StatusBadge"
+import { CurrencyBadge } from "@/components/shared/CurrencyBadge"
 import { TagList } from "@/components/shared/TagList"
 import { useDecisionTree, useDecision } from "@/hooks/useDecisions"
 import type { DecisionTreeNode } from "@/api/types"
@@ -228,6 +229,7 @@ function DecisionDetailSheet({
           <div className="space-y-4 mt-4">
             <div>
               <StatusBadge status={decision.status} />
+              <CurrencyBadge status={decision.status} className="ml-2" />
               <Badge variant="outline" className="ml-2 text-xs">
                 {decision.phase}
               </Badge>

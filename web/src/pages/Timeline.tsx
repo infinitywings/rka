@@ -1,9 +1,11 @@
 import { useState } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useMutation } from "@tanstack/react-query"
 import { api } from "@/api/client"
 import type { Event } from "@/api/types"
-import { Card, CardContent } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import {
   Select,
   SelectContent,
@@ -11,7 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { ChevronDown, ChevronUp } from "lucide-react"
+import { ChevronDown, ChevronUp, History, Loader2 } from "lucide-react"
 
 const EVENT_TYPE_COLORS: Record<string, string> = {
   decision_created: "bg-blue-100 text-blue-800",
@@ -136,6 +138,8 @@ export default function Timeline() {
         </div>
       </div>
 
+      <AsOfViewer />
+
       {isLoading ? (
         <div className="space-y-4">
           {[1, 2, 3].map((i) => (
@@ -165,6 +169,137 @@ export default function Timeline() {
         </div>
       )}
     </div>
+  )
+}
+
+function AsOfViewer() {
+  const [date, setDate] = useState("")
+  const asOf = useMutation({
+    mutationFn: (d: string) => api.getBeliefAsOf(d),
+  })
+  const result = asOf.data
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm font-medium flex items-center gap-2">
+          <History className="h-4 w-4" />
+          Belief As-Of
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-center gap-2">
+          <Input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            className="h-8 text-xs w-[170px]"
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-2"
+            onClick={() => asOf.mutate(date)}
+            disabled={!date || asOf.isPending}
+          >
+            {asOf.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <History className="h-4 w-4" />}
+            View knowledge state
+          </Button>
+        </div>
+
+        {asOf.isError && (
+          <p className="text-sm text-red-600">
+            Error: {asOf.error instanceof Error ? asOf.error.message : "Failed to reconstruct state"}
+          </p>
+        )}
+
+        {result && (
+          <div className="space-y-4">
+            <p className="text-xs text-muted-foreground">
+              As of {result.as_of}: {result.then_current.decisions.length} believed-current
+              decision(s), {result.then_current.journal_count} journal entries
+            </p>
+
+            {/* Then-current decisions */}
+            {result.then_current.decisions.length > 0 && (
+              <div>
+                <h4 className="text-xs font-semibold mb-1 text-muted-foreground uppercase tracking-wide">
+                  Then-current decisions
+                </h4>
+                <div className="space-y-1">
+                  {result.then_current.decisions.map((d) => (
+                    <div key={d.id} className="rounded border p-2 text-sm">
+                      <span className="font-mono text-[10px] text-muted-foreground block">
+                        {d.id}
+                      </span>
+                      <span className="text-xs">
+                        {d.question}
+                        {d.chosen && (
+                          <span className="text-muted-foreground"> → {d.chosen}</span>
+                        )}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Changed since */}
+            <div>
+              <h4 className="text-xs font-semibold mb-1 text-muted-foreground uppercase tracking-wide">
+                Changed since
+              </h4>
+              {result.changed_since.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  None of the then-current beliefs have been overturned
+                </p>
+              ) : (
+                <div className="space-y-1">
+                  {result.changed_since.map((c) => (
+                    <div key={`${c.id}-${c.changed_at}`} className="rounded border p-2 text-sm">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Badge variant="secondary" className="text-[10px]">
+                          {c.type}
+                        </Badge>
+                        <Badge
+                          variant="outline"
+                          className="text-[10px] font-medium bg-amber-100 text-amber-800 border-amber-200"
+                        >
+                          {c.change ?? "superseded"}
+                        </Badge>
+                        {c.approximate && (
+                          <Badge variant="outline" className="text-[10px] text-muted-foreground">
+                            ~ approximate time
+                          </Badge>
+                        )}
+                        <span className="font-mono text-[10px] text-muted-foreground">
+                          {c.id}
+                        </span>
+                        {c.changed_at && (
+                          <span className="text-[10px] text-muted-foreground ml-auto">
+                            {formatTime(c.changed_at)}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        was: {c.was}
+                        {c.superseded_by && (
+                          <span className="font-mono"> → {c.superseded_by}</span>
+                        )}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <p className="text-[10px] text-muted-foreground italic border-l-2 pl-2">
+              {result.note}
+            </p>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   )
 }
 

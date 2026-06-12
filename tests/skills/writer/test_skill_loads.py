@@ -40,7 +40,7 @@ def test_frontmatter_has_name_description_version(skill_md_path: Path) -> None:
     assert end > 0, "SKILL.md frontmatter must close with --- delimiter"
     fm = text[4:end]
     assert re.search(r"^name:\s*rka-writer\s*$", fm, re.MULTILINE)
-    assert re.search(r"^version:\s*2\.3\.2\s*$", fm, re.MULTILINE)
+    assert re.search(r"^version:\s*2\.4\.0\s*$", fm, re.MULTILINE)
     assert re.search(r"^description:\s*\S", fm, re.MULTILINE)
 
 

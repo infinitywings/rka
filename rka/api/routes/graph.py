@@ -42,6 +42,23 @@ class MultiHopRequest(BaseModel):
     edge_weights: dict[str, float] | None = None
 
 
+class ReportContextRequest(BaseModel):
+    """Request for report-scoped context collection.
+
+    ``description`` is the PI's prose description of the report scope.
+    ``angle_queries`` are short (1–4 word) seed queries decomposing the
+    description into search angles — strongly recommended; the LLM caller
+    decomposes far better than server-side stopword stripping.
+    """
+
+    description: str = Field(min_length=3)
+    angle_queries: list[str] | None = None
+    max_depth: int = Field(default=2, ge=1, le=4)
+    max_nodes: int = Field(default=60, ge=1, le=500)
+    seed_limit: int = Field(default=8, ge=1, le=50)
+    edge_weights: dict[str, float] | None = None
+
+
 @router.get("/graph")
 async def get_full_graph(
     view: Literal["full", "condensed", "keynodes"] = Query(
@@ -130,6 +147,32 @@ async def multi_hop_retrieval(
         seeds=data.seeds,
         max_depth=data.max_depth,
         max_nodes=data.max_nodes,
+        edge_weights=data.edge_weights,
+        project_id=project_id,
+        search_service=search,
+    )
+
+
+@router.post("/graph/report-context")
+async def collect_report_context(
+    data: ReportContextRequest,
+    project_id: str = Depends(require_project),
+    svc: GraphService = Depends(get_graph_service),
+    search: SearchService = Depends(get_scoped_search_service),
+):
+    """Assemble the node set relevant to a report described in prose.
+
+    Composite retrieval: seeds from every angle query (plus the keyword-
+    normalized description), BFS-expands through entity_links/claim_edges
+    with provenance-weighted edges, protects seeds from cap displacement,
+    and annotates every node with ``included_via`` inclusion provenance.
+    """
+    return await svc.collect_report_context(
+        description=data.description,
+        angle_queries=data.angle_queries,
+        max_depth=data.max_depth,
+        max_nodes=data.max_nodes,
+        seed_limit=data.seed_limit,
         edge_weights=data.edge_weights,
         project_id=project_id,
         search_service=search,
