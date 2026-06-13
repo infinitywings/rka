@@ -954,3 +954,61 @@ def test_rka_submit_checkpoint_brain_data_dict_serializes_to_context():
     assert "T2" in ctx
     assert "T3" in ctx
     assert "llm_spend_usd" in ctx
+
+
+# ---------------------------------------------------------------------------
+# v2.8.0 KB-wide verification + temporal currency reads (eval-v3)
+# ---------------------------------------------------------------------------
+
+
+def test_rka_mission_guard_gets_guard_endpoint():
+    http = FakeHttp(canned=FakeResp(_json={"warnings": [{"kind": "retracted"}]}))
+    c = _client(http)
+    out = c.rka_mission_guard("mis_123")
+    call = http.calls[-1]
+    assert call["method"] == "GET" and call["path"] == "/api/missions/mis_123/guard"
+    assert out["warnings"][0]["kind"] == "retracted"
+
+
+def test_rka_collect_report_context_posts_description_and_angles():
+    http = FakeHttp(canned=FakeResp(_json={"nodes": [], "seed_count": 0}))
+    c = _client(http)
+    c.rka_collect_report_context("a report on X", angle_queries=["x", "y"], max_nodes=40)
+    call = http.calls[-1]
+    assert call["method"] == "POST" and call["path"] == "/api/graph/report-context"
+    assert call["json"]["description"] == "a report on X"
+    assert call["json"]["angle_queries"] == ["x", "y"]
+    assert call["json"]["max_nodes"] == 40
+
+
+def test_rka_collect_report_context_drops_none_angles():
+    http = FakeHttp(canned=FakeResp(_json={"nodes": []}))
+    c = _client(http)
+    c.rka_collect_report_context("desc")
+    assert "angle_queries" not in http.calls[-1]["json"]
+
+
+def test_rka_staleness_impact_gets_with_max_depth_param():
+    http = FakeHttp(canned=FakeResp(_json={"impacted": []}))
+    c = _client(http)
+    c.rka_staleness_impact("dec_9", max_depth=2)
+    call = http.calls[-1]
+    assert call["method"] == "GET"
+    assert call["path"] == "/api/graph/staleness-impact/dec_9"
+    assert call["params"] == {"max_depth": 2}
+
+
+def test_rka_belief_as_of_gets_with_date_param():
+    http = FakeHttp(canned=FakeResp(_json={"then_current": {"decisions": []}}))
+    c = _client(http)
+    c.rka_belief_as_of("2026-03-15")
+    call = http.calls[-1]
+    assert call["method"] == "GET" and call["path"] == "/api/graph/as-of"
+    assert call["params"] == {"date": "2026-03-15"}
+
+
+def test_v280_methods_on_protocol_surface():
+    c = _client()
+    for name in ("rka_collect_report_context", "rka_mission_guard",
+                 "rka_staleness_impact", "rka_belief_as_of"):
+        assert hasattr(c, name), f"RestMCPClient missing {name}"

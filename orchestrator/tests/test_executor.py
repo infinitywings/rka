@@ -1469,3 +1469,41 @@ def test_brain_system_and_executor_system_share_forbidden_lifecycle_tools():
         assert f in executor.EXECUTOR_SYSTEM, (
             f"EXECUTOR_SYSTEM missing forbidden tool {f!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# v2.8.0 mission_guard injection at backbrief pickup (eval-v3)
+# ---------------------------------------------------------------------------
+
+
+def test_backbrief_calls_mission_guard_with_mission_id():
+    from orchestrator.nodes import executor as ex
+    from tests._fakes import FakeMCP, FakeSDK
+
+    mcp = FakeMCP()
+    sdk = FakeSDK(canned_reply="Backbrief body")
+    state = {"mission_id": "mis_abc", "brain_strategy": "do the thing"}
+    ex.backbrief_draft(state, sdk, mcp)
+    guard_calls = [c for c in mcp.calls if c["op"] == "rka_mission_guard"]
+    assert guard_calls and guard_calls[0]["mission_id"] == "mis_abc"
+
+
+def test_backbrief_prompt_includes_guard_warnings():
+    from orchestrator.nodes import executor as ex
+
+    guard = {"warnings": [
+        {"kind": "retracted", "excerpt": "the wool carder identification was wrong",
+         "guidance": "retracted; do not rely on this finding"},
+        {"kind": "contradicted", "excerpt": "green roofs contribute little",
+         "guidance": "unresolved contradiction; verify before relying"},
+    ]}
+    prompt = ex._build_backbrief_prompt({"mission_id": "mis_x"}, None, guard)
+    assert "Negative knowledge" in prompt
+    assert "[retracted]" in prompt and "wool carder" in prompt
+    assert "[contradicted]" in prompt
+
+
+def test_backbrief_prompt_guard_none_shows_explicit_clean_line():
+    from orchestrator.nodes import executor as ex
+    prompt = ex._build_backbrief_prompt({"mission_id": "mis_x"}, None, None)
+    assert "(none —" in prompt or "(none -" in prompt

@@ -161,6 +161,16 @@ class MCPClient(Protocol):
     def rka_check_freshness(self, days_threshold: int = 30) -> dict[str, Any]: ...
     def rka_get_pending_maintenance(self) -> dict[str, Any]: ...
 
+    # v2.8.0 KB-wide verification + temporal currency reads (eval-v3).
+    # All READ-side; no auto-tagging.
+    def rka_collect_report_context(
+        self, description: str, *, angle_queries: list[str] | None = None,
+        max_nodes: int = 60,
+    ) -> dict[str, Any]: ...
+    def rka_mission_guard(self, mission_id: str) -> dict[str, Any]: ...
+    def rka_staleness_impact(self, entity_id: str, *, max_depth: int = 3) -> dict[str, Any]: ...
+    def rka_belief_as_of(self, date: str) -> dict[str, Any]: ...
+
     # Phase O O3.2 — claims surface (POST /api/claims). WRITE-side
     # (each claim is provenance for the plan that follows at O4).
     def rka_create_claim(
@@ -441,6 +451,38 @@ class RestMCPClient:
     def rka_get_pending_maintenance(self) -> dict:
         """GET /api/maintenance — flagged/pending maintenance items."""
         return self._request("GET", "/api/maintenance") or {}
+
+    # v2.8.0 KB-wide verification + temporal currency reads (eval-v3).
+    def rka_collect_report_context(
+        self, description: str, *, angle_queries: list[str] | None = None,
+        max_nodes: int = 60,
+    ) -> dict:
+        """POST /api/graph/report-context — multi-angle seed + provenance-
+        weighted graph expansion. Returns {nodes, queries, seed_count, ...}."""
+        body = _drop_none({
+            "description": description,
+            "angle_queries": angle_queries,
+            "max_nodes": max_nodes,
+        })
+        return self._request("POST", "/api/graph/report-context", json=body) or {}
+
+    def rka_mission_guard(self, mission_id: str) -> dict:
+        """GET /api/missions/{id}/guard — negative knowledge (retracted /
+        superseded / contradicted) relevant to a mission, for pickup."""
+        return self._request("GET", f"/api/missions/{mission_id}/guard") or {}
+
+    def rka_staleness_impact(self, entity_id: str, *, max_depth: int = 3) -> dict:
+        """GET /api/graph/staleness-impact/{id} — downstream blast-radius of a
+        stale entity (dependent-direction links only)."""
+        return self._request(
+            "GET", f"/api/graph/staleness-impact/{entity_id}",
+            params={"max_depth": max_depth},
+        ) or {}
+
+    def rka_belief_as_of(self, date: str) -> dict:
+        """GET /api/graph/as-of?date=ISO — believed-current knowledge state at
+        a past date, plus what changed since."""
+        return self._request("GET", "/api/graph/as-of", params={"date": date}) or {}
 
     # Phase O O3.2 — claims surface.
     def rka_create_claim(

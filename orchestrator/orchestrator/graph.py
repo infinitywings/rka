@@ -1,6 +1,6 @@
 """LangGraph topology + SqliteSaver checkpointer.
 
-Wires all 18 mission-graph nodes into a flat `StateGraph` keyed on
+Wires all 19 mission-graph nodes into a flat `StateGraph` keyed on
 `ResearchWorkflowState`. Phase 1 kept the topology single-thread +
 linear-with-escalation-shortcuts; Phase-X² (`confirmation_brief_redraft`)
 introduced the first cycle — a bounded back-edge for in-run pi_greenlight
@@ -10,7 +10,7 @@ Each node-callable is bound to its (sdk, mcp[, interrupt_fn]) dependencies
 via `functools.partial`, so the function LangGraph receives accepts only
 `(state,)` — keeping the engine-facing surface uniform.
 
-Topology (18 mission-graph nodes; 7 conditional branches):
+Topology (19 mission-graph nodes; 7 conditional branches; mission_redraft added v0.6.12):
 
   START
     → strategy_node
@@ -38,7 +38,11 @@ Topology (18 mission-graph nodes; 7 conditional branches):
     → pi_decision_select ── accept → execute_ratified_actions
                                        ── clean → execute_ratified_fs_actions
                                        └─ partial-dispatch → escalation_router
-                         └─ else  → escalation_router
+                         ├─ correct (sentinel) → mission_redraft (v0.6.12)
+                         │     (revises proposed_actions, loops back to
+                         │      decision_present; bounded MAX_DECISION_REDRAFTS=3)
+                         └─ reject/other → escalation_router
+    → mission_redraft   → decision_present   # v0.6.12 bounded back-edge
     → execute_ratified_fs_actions    # Gap 2 — parent-side FS dispatch
     → final_synthesis
     → pi_acceptance     → END

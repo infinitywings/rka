@@ -24,7 +24,7 @@ When working here you are modifying the tool itself, not using it for research.
 - **MCP prompts**: defined at end of `server.py` via `@mcp.prompt()`
 - **API routes**: thin adapters only — no business logic, always delegate to service layer
 - **Tests**: `tests/` using pytest; run with `docker compose exec rka pytest`
-- **v2.7.0+ tool surface (MCP)**: 3 always-on dispatch tools (`rka_query` / `rka_execute` / `rka_describe`) + 2 escape hatches (`rka_load_tools` / `rka_help`) = 5 broadcast tools. 91 typed Pydantic operation models in `rka/mcp/operation_args.py` provide per-branch enum + required-field enforcement at the FastMCP `inputSchema` layer (`Union[Args1, …, Args91]` rendered as `oneOf` with `discriminator='operation'`). Operations split: 42 read (`rka_query`, incl. v2.8.0 `collect_report_context` / `staleness_impact` / `mission_guard` / `belief_as_of`) + 49 write/lifecycle (`rka_execute`). 91 legacy tools + 8 v2.7.0a2 verbs remain at `tier='deferred'`, callable via `rka_load_tools`. Setting `RKA_LEGACY_TOOLS=1` in env restores the v2.7.0a2 surface (20 always-on tools) — used in `orchestrator/docker-compose.yml` (this branch) to preserve TWO-TAP gate granularity at `pi_decision_select`. Full empirical arc + 4 pre-mortem compromises (all closed at schema layer) documented in [`docs/v2.6.x-v2.7.0-tool-surface-arc.md`](docs/v2.6.x-v2.7.0-tool-surface-arc.md) and `CHANGELOG.md` v2.7.0 entry.
+- **v2.7.0+ tool surface (MCP)**: 3 always-on dispatch tools (`rka_query` / `rka_execute` / `rka_describe`) + 2 escape hatches (`rka_load_tools` / `rka_help`) = 5 broadcast tools. 91 typed Pydantic operation models in `rka/mcp/operation_args.py` provide per-branch enum + required-field enforcement at the FastMCP `inputSchema` layer (`Union[Args1, …, Args91]` rendered as `oneOf` with `discriminator='operation'`). Operations split: 42 read (`rka_query`, incl. v2.8.0 `collect_report_context` / `staleness_impact` / `mission_guard` / `belief_as_of`) + 49 write/lifecycle (`rka_execute`). 91 legacy tools + 8 v2.7.0a2 verbs remain at `tier='deferred'`, callable via `rka_load_tools`. Setting `RKA_LEGACY_TOOLS=1` in env restores the v2.7.0a2 surface (20 always-on tools). NOTE (eval-v3 architecture review): this is NOT currently set in `orchestrator/docker-compose.yml` — grep confirms zero occurrences; the SDK subprocess uses the default v2.7.0+ surface, and TWO-TAP granularity is enforced parent-side at `pi_decision_select` regardless of the subprocess tool surface. Full empirical arc + 4 pre-mortem compromises (all closed at schema layer) documented in [`docs/v2.6.x-v2.7.0-tool-surface-arc.md`](docs/v2.6.x-v2.7.0-tool-surface-arc.md) and `CHANGELOG.md` v2.7.0 entry.
 - **Credential management**: use `rka cred` subcommands (`init` / `set` / `get` / `env` / `propagate` / `check`) — vault lives at `~/.config/rka/creds.env` (XDG-compliant, mode 0600). Never commit creds to any repo or `.env` tracked by git. Full reference: [`docs/CRED_VAULT.md`](docs/CRED_VAULT.md).
 
 ## Running (Docker only)
@@ -84,7 +84,7 @@ After code changes to `rka/mcp/server.py` or other source files:
 - There is no local `.venv` — all server/worker processes run in Docker
 - `docker compose restart` does **not** reload service code — always use `docker compose up -d --build` for any change under `rka/`. Restart only suffices for migration-only changes (the migration runner queries `schema_migrations` on startup).
 - **Auto-mode push-to-main is gated**: when an Executor session runs in auto-mode (no per-tool-call confirmation), direct `git push origin main` is blocked by a safety classifier and requires explicit PI authorization in the transcript (a sentence like *"push to main"* or *"go ahead and push to main"*) to unblock. For any main-branch mission spec, the T5/release task should anticipate this and PI should plan to ratify the push step explicitly. The block is one-shot per push — after PI authorizes, the push proceeds and subsequent operations resume normal flow. Surfaced empirically during D4 mission (v2.5.4) per `dec_01KS0BVPCYK4CBG5TKKG1QK4HM` close-out.
-- **v2.7.0 dispatch surface (current MCP shape)**: only 5 tools broadcast on connect — 3 always-on dispatch (`rka_query` / `rka_execute` / `rka_describe`) + 2 escape hatches (`rka_load_tools` / `rka_help`). The legacy 91 tools + 8 v2.7.0a2 verbs are tier=`deferred`; load them on demand via `rka_load_tools(names=[…])`. To restore the v2.7.0a2 surface (20 always-on tools, e.g. for orchestrator subprocesses that depend on per-tool dispatch for autonomy-contract granularity), set `RKA_LEGACY_TOOLS=1` in env — already wired into `orchestrator/docker-compose.yml` on this branch. Enum hallucinations (e.g. `confidence='confirmed'`) and missing-required-field errors are caught at the `inputSchema` `oneOf` branch level — they fail BEFORE leaving the cockpit, not as 422s at the API. Empirical proof + 4 pre-mortem compromises closed: see [`docs/v2.6.x-v2.7.0-tool-surface-arc.md`](docs/v2.6.x-v2.7.0-tool-surface-arc.md). Pre-v2.7 docs may still teach the v2.6.3 "navigator architecture" (12 always-on + ~79 deferred) — that surface is superseded.
+- **v2.7.0 dispatch surface (current MCP shape)**: only 5 tools broadcast on connect — 3 always-on dispatch (`rka_query` / `rka_execute` / `rka_describe`) + 2 escape hatches (`rka_load_tools` / `rka_help`). The legacy 91 tools + 8 v2.7.0a2 verbs are tier=`deferred`; load them on demand via `rka_load_tools(names=[…])`. To restore the v2.7.0a2 surface (20 always-on tools, e.g. for orchestrator subprocesses that depend on per-tool dispatch for autonomy-contract granularity), set `RKA_LEGACY_TOOLS=1` in env. NOTE (eval-v3 architecture review): despite earlier notes here, `RKA_LEGACY_TOOLS=1` is NOT currently set in `orchestrator/docker-compose.yml` — grep confirms zero occurrences in the orchestrator tree; the SDK subprocess uses the default v2.7.0+ typed-dispatch surface. The orchestrator's parent-side WRITE_TOOLS dispatch is independent of which RKA tool surface the subprocess sees (it speaks raw REST via `RestMCPClient`), so the legacy pin is not required for autonomy-contract granularity. Set it explicitly if a future subprocess flow needs per-tool dispatch. Enum hallucinations (e.g. `confidence='confirmed'`) and missing-required-field errors are caught at the `inputSchema` `oneOf` branch level — they fail BEFORE leaving the cockpit, not as 422s at the API. Empirical proof + 4 pre-mortem compromises closed: see [`docs/v2.6.x-v2.7.0-tool-surface-arc.md`](docs/v2.6.x-v2.7.0-tool-surface-arc.md). Pre-v2.7 docs may still teach the v2.6.3 "navigator architecture" (12 always-on + ~79 deferred) — that surface is superseded.
 
 ## Embedding backend configuration (v2.4.0+)
 
@@ -1323,32 +1323,41 @@ land before the next major orchestrator pass:
 - **`pi_extend_toolkit`** is registered in the type literal +
   `_ACCEPT_TOKEN_BY_TYPE` + `_ONBOARDING_INTERRUPT_TYPES` but
   has no node and no graph wiring — half-built feature.
-- **`loop_iterations` / `usd_spent`** are read by `budget_check`
-  + `consensus_check` but never written by any node — the
-  MAX_LOOP_DEPTH and budget caps are unreachable. SDK token-cost
-  threading + per-node loop increment needed.
+- **`loop_iterations` / `usd_spent`** — **CLOSED (Phase E4 + consensus_check).**
+  `usd_spent` is now written via `_accrue_cost()` from every LLM-calling node
+  (`nodes/brain.py`, `nodes/executor.py`); `loop_iterations` is written by
+  `consensus_check` (`nodes/utility.py`). `budget_check` escalates on
+  `spent >= cap_usd` and `consensus_check` on `loops >= MAX_LOOP_DEPTH` — both
+  caps are reachable today. (Was: "read but never written → caps unreachable.")
 - **`Phase B bootstrap` writes `orchestrator/.env` inside the
   container** — host file is consumed via `env_file:` but not
   bind-mounted, so the bootstrap-emit-template and bootstrap-verify
   nodes write/read at `/app/orchestrator/.env` which the PI never
   sees. Needs either a bind mount or a path-translation strategy.
-- **`$HOME` bind-mount over-broad** — when `HOST_WORKSPACE_ROOT`
-  isn't set, the daemon RW-mounts the entire `$HOME` (including
-  `~/.ssh`, `~/.aws`). Workspace-scoped mount needs a refusal to
-  start with a `$HOME`-equivalent root.
-- **`WebFetch` / `WebSearch` un-policed** — granted to the
-  subprocess with `permission_mode='dontAsk'`. No egress allowlist.
+- **`$HOME` bind-mount over-broad** — **CLOSED.** `server.py` raises
+  `WorkspaceMountUnsafeError` at lifespan start when the effective mount
+  resolves to `/`, exactly `$HOME`, or an ancestor of
+  `~/.ssh`/`~/.aws`/`~/.gnupg`/`~/.config`; escape hatch
+  `ORCHESTRATOR_ALLOW_HOME_MOUNT=1`. The compose default
+  `HOST_WORKSPACE_ROOT: "${HOST_WORKSPACE_ROOT:-}"` empty-strings so the
+  in-container check trips on the container `$HOME` and refuses to start.
+- **`WebFetch` / `WebSearch`** — **PARTIALLY CLOSED (v0.6.11).** Granted to
+  the subprocess with `permission_mode='dontAsk'`, but each call is now
+  audited (`llm_client.py`), denied against a `WEBHOOK_BLOCKLIST` telemetry
+  floor, and honors an OPT-IN `ORCHESTRATOR_EGRESS_ALLOWLIST`. Default
+  posture is open-with-audit (research needs the web), not a hard allowlist —
+  promote to a default allowlist only if a real exfil case surfaces.
 - **Brain over-escalation risk** — Brain prompt now mentions FS
   tools but no per-call policy enforces read-only at the host FS;
   audit trail for any Brain-initiated Bash/Write would be valuable.
 - **Phase-X² sibling — `_route_after_pi_decision` dead-end** —
-  `pi_decision_select` `correct` routes to `escalation_router` which
-  synthesizes an unclassified checkpoint and terminates. Same shape
-  as the Phase-X² pi_greenlight bug, but the redraft target is the
-  TWO-TAP autonomy-licensing gate. Fix as separate PR for
-  autonomy-contract review; decide redraft target (`decision_present`
-  cheap re-render vs `strategy_node` full re-strategize) with
-  explicit EC8 set-identity check on the loop-back.
+  **CLOSED (v0.6.12 `mission_redraft`).** `pi_decision_select` `correct`
+  (REDIRECT_SENTINEL token) now routes to the new `mission_redraft` node,
+  which revises `proposed_actions` incorporating the PI redirect and loops
+  back to `decision_present` for re-ratification, bounded by
+  `MAX_DECISION_REDRAFTS=3`. The redraft target chosen was `decision_present`
+  (cheap re-render), not `strategy_node`. (Was: routed to `escalation_router`
+  → synthesized an unclassified checkpoint → terminated.)
 - **Phase-X² polish (from wrhahen1y adversarial review)** —
   non-blocking but worth a sweep: (a) `confirmation_brief_redraft`
   cap-exceeded return omits `greenlight_redrafts: next_count` (counter
