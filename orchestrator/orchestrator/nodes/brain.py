@@ -120,6 +120,14 @@ BRAIN_SYSTEM = (
     "applies to any rka_* in your `proposed_actions` JSON: each action's "
     "`args` must include `project_id`. The pre-v2.6 RKA_PROJECT env var "
     "passing was removed; do not rely on session defaults.\n\n"
+    # v2.8.0 (eval-v3) — report-scoped context assembly
+    "## Report-scoped context (collect_report_context)\n"
+    "When you need the knowledge relevant to a report, section, or themed "
+    "question, prefer ONE rka_collect_report_context call (pass the prose "
+    "description plus 3-5 short angle_queries) over many rka_get_context / "
+    "rka_search calls. It unions multi-angle search seeds with provenance-weighted "
+    "graph expansion and returns per-node inclusion provenance — measured 0.84 "
+    "cohort recall in one call vs 0.32 for one-shot paragraph search.\n\n"
     # v2.6.3 — RKA navigator architecture (always-on + deferred tiers)
     "## Tool surface (v2.6.3+)\n"
     "RKA's MCP server uses a NAVIGATOR architecture. At startup only "

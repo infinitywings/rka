@@ -135,6 +135,14 @@ EXECUTOR_SYSTEM = (
     "mission's task list, not the wrapper's planning structure. A wrapper "
     "Backbrief's T1-T7 are framework metadata describing what the PI/Brain did "
     "to PREPARE this run — they are not your work to re-do.\n\n"
+    # v2.8.0 (eval-v3) — negative knowledge at pickup
+    "## Negative knowledge (mission guard)\n"
+    "Your Backbrief prompt includes a 'Negative knowledge for this mission' "
+    "section, deterministically populated from rka_mission_guard: retracted, "
+    "superseded, or contested findings relevant to this objective. Treat it as "
+    "authoritative. Do NOT re-attempt an approach already falsified there. If a "
+    "warning conflicts with your plan, address it explicitly in your Assumptions "
+    "or Risks rather than silently proceeding.\n\n"
     # v2.6.3 — RKA navigator architecture (always-on + deferred tiers)
     "## Tool surface (v2.6.3+)\n"
     "RKA's MCP server uses a NAVIGATOR architecture. At startup only "
@@ -469,8 +477,26 @@ def _format_mission_body(mission: dict | None, *, task_char_cap: int = 240) -> s
 # ---------------------------------------------------------------------------
 
 
+def _format_mission_guard(guard: dict | None) -> str:
+    """Render mission_guard warnings (negative knowledge) for the Backbrief
+    prompt. Empty/absent → an explicit 'none' line so the LLM sees the check
+    ran. v2.8.0 (eval-v3): retracted / superseded / contradicted findings
+    relevant to the objective — the repeated-mistake failure mode, surfaced
+    deterministically by the parent rather than left to the LLM to query."""
+    warnings = (guard or {}).get("warnings") or []
+    if not warnings:
+        return "(none — no retracted/superseded/contradicted findings relevant to this objective)"
+    lines = []
+    for w in warnings[:10]:
+        kind = w.get("kind", "?")
+        excerpt = (w.get("excerpt") or "")[:160]
+        guidance = w.get("guidance") or ""
+        lines.append(f"  - [{kind}] {excerpt}  -> {guidance}")
+    return "\n".join(lines)
+
+
 def _build_backbrief_prompt(
-    state: ResearchWorkflowState, mission: dict | None
+    state: ResearchWorkflowState, mission: dict | None, guard: dict | None = None
 ) -> str:
     return (
         "Draft an upfront Backbrief for the mission. Cover:\n"
@@ -482,6 +508,10 @@ def _build_backbrief_prompt(
         f"Mission: {state.get('mission_id', '(unset)')}\n"
         f"Motivated-by decision: {state.get('motivated_by_decision_id', '(unset)')}\n"
         f"Mission body:\n{_format_mission_body(mission)}\n\n"
+        "Negative knowledge for this mission (already falsified or contested — "
+        "do NOT repeat these unknowingly; if any conflicts with your plan, address "
+        "it explicitly in your Assumptions or Risks):\n"
+        f"{_format_mission_guard(guard)}\n\n"
         f"Brain's strategy context:\n{state.get('brain_strategy', '(empty)')}\n"
     )
 
@@ -493,7 +523,11 @@ def backbrief_draft(
     # Phase 2.5 T5: same data-flow fix as brain.strategy_node — fetch the
     # mission body so the upfront Backbrief is grounded in objective/tasks/AC.
     mission = mcp.rka_get_mission(id=mission_id) if mission_id else None
-    prompt = _build_backbrief_prompt(state, mission)
+    # v2.8.0 (eval-v3): deterministically surface negative knowledge at pickup.
+    # Parent-side (not LLM-discretionary) so a falsified approach can't slip
+    # through just because the Executor didn't think to query for it.
+    guard = mcp.rka_mission_guard(mission_id) if mission_id else None
+    prompt = _build_backbrief_prompt(state, mission, guard)
     try:
         backbrief_text = sdk.complete(
             prompt=prompt,

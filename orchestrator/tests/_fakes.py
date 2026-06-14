@@ -75,6 +75,19 @@ class FakeMCP:
     pending_maintenance_response: dict = field(
         default_factory=lambda: {"items": []}
     )
+    # v2.8.0 verification + currency reads (eval-v3). Default empty/clean.
+    report_context_response: dict = field(
+        default_factory=lambda: {"nodes": [], "queries": [], "seed_count": 0}
+    )
+    mission_guard_response: dict = field(
+        default_factory=lambda: {"warnings": [], "checked": {}}
+    )
+    staleness_impact_response: dict = field(
+        default_factory=lambda: {"impacted": [], "counts": {}}
+    )
+    belief_as_of_response: dict = field(
+        default_factory=lambda: {"then_current": {"decisions": []}, "changed_since": []}
+    )
     # Phase O O3.2 — claims surface.
     claim_counter: int = 0
     claims_response: list = field(default_factory=list)
@@ -144,6 +157,27 @@ class FakeMCP:
     def rka_get_pending_maintenance(self) -> dict:
         self._record("rka_get_pending_maintenance")
         return self.pending_maintenance_response
+
+    # v2.8.0 verification + currency reads (eval-v3).
+    def rka_collect_report_context(
+        self, description: str, *, angle_queries: list | None = None,
+        max_nodes: int = 60,
+    ) -> dict:
+        self._record("rka_collect_report_context", description=description,
+                     angle_queries=angle_queries, max_nodes=max_nodes)
+        return self.report_context_response
+
+    def rka_mission_guard(self, mission_id: str) -> dict:
+        self._record("rka_mission_guard", mission_id=mission_id)
+        return self.mission_guard_response
+
+    def rka_staleness_impact(self, entity_id: str, *, max_depth: int = 3) -> dict:
+        self._record("rka_staleness_impact", entity_id=entity_id, max_depth=max_depth)
+        return self.staleness_impact_response
+
+    def rka_belief_as_of(self, date: str) -> dict:
+        self._record("rka_belief_as_of", date=date)
+        return self.belief_as_of_response
 
     # Phase O O3.2 — claims surface.
     def rka_create_claim(
