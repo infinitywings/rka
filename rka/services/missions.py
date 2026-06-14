@@ -38,8 +38,33 @@ class MissionService(BaseService):
         )
 
     async def create(self, data: MissionCreate, actor: str = "brain") -> Mission:
-        """Create a new mission."""
+        """Create a new mission.
+
+        Raises ValueError (mapped to HTTP 400 by the route) when
+        ``motivated_by_decision`` references a decision that does not exist in
+        this project. Validating up front turns what was an opaque
+        ``sqlite3.IntegrityError`` -> 500 (the FK constraint firing inside the
+        INSERT) into a clear client error. An empty/whitespace reference is
+        normalized to NULL ("no motivation") rather than attempting a doomed FK.
+        """
         mis_id = generate_id("mission")
+
+        # Normalize optional FK references: SQLite enforces a FK on any non-NULL
+        # value, so an empty string would trip the constraint. Treat blank as
+        # "unset".
+        motivated_by = (data.motivated_by_decision or "").strip() or None
+        depends_on = (data.depends_on or "").strip() or None
+
+        if motivated_by is not None:
+            dec = await self.db.fetchone(
+                "SELECT id FROM decisions WHERE id = ? AND project_id = ?",
+                [motivated_by, self.project_id],
+            )
+            if not dec:
+                raise ValueError(
+                    f"motivated_by_decision {motivated_by!r} not found in "
+                    f"project {self.project_id}"
+                )
 
         tasks_json = None
         if data.tasks:
@@ -55,16 +80,16 @@ class MissionService(BaseService):
                 mis_id, data.phase, data.objective, tasks_json,
                 data.context, data.acceptance_criteria,
                 data.scope_boundaries, data.checkpoint_triggers,
-                data.depends_on, data.motivated_by_decision,
+                depends_on, motivated_by,
                 self.project_id,
             ],
         )
         await self.db.commit()
 
         # Write entity_link for motivated_by_decision
-        if data.motivated_by_decision:
+        if motivated_by:
             await self.add_link(
-                "decision", data.motivated_by_decision,
+                "decision", motivated_by,
                 "motivated", "mission", mis_id,
                 created_by=actor,
             )
