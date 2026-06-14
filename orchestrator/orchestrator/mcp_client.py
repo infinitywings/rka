@@ -292,6 +292,21 @@ def _drop_none(d: dict) -> dict:
     return {k: v for k, v in d.items() if v is not None}
 
 
+# Entity id type-prefix -> REST collection segment. RKA has no generic
+# /api/entities/{id}; each type is fetched from its own route. (Prefixes per
+# rka/infra/ids.py; journal ids 'jrn_' are served by /api/notes.)
+_GET_ENDPOINT_BY_PREFIX = {
+    "jrn": "notes",
+    "dec": "decisions",
+    "mis": "missions",
+    "chk": "checkpoints",
+    "clm": "claims",
+    "lit": "literature",
+    "ecl": "clusters",
+    "top": "topics",
+}
+
+
 def _as_text_criteria(value: "list[str] | str | None") -> "str | None":
     """Coerce acceptance_criteria to the shape RKA's MissionCreate / MissionUpdate
     models accept (``str | None``).
@@ -449,7 +464,20 @@ class RestMCPClient:
         return self._request("POST", "/api/search", json=body) or []
 
     def rka_get(self, id: str) -> dict:
-        return self._request("GET", f"/api/entities/{id}") or {}
+        """GET an entity by id. RKA has no generic /api/entities/{id} route, so
+        dispatch by the id's type prefix to the per-type collection
+        (/api/notes, /api/decisions, /api/checkpoints, ...). The prior
+        /api/entities/{id} path did not exist, so it fell through to the SPA
+        catch-all and silently returned index.html instead of the entity —
+        surfaced against a live RKA (it's called from nodes/pi.py), masked by
+        FakeMCP. An unrecognized prefix now raises instead of returning HTML."""
+        prefix = id.split("_", 1)[0] if "_" in id else ""
+        endpoint = _GET_ENDPOINT_BY_PREFIX.get(prefix)
+        if endpoint is None:
+            raise ValueError(
+                f"rka_get: unrecognized id prefix {prefix!r} for id {id!r}"
+            )
+        return self._request("GET", f"/api/{endpoint}/{id}") or {}
 
     def rka_trace_provenance(self, id: str) -> dict:
         return self._request("GET", f"/api/provenance/{id}") or {}

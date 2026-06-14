@@ -425,6 +425,25 @@ def test_rka_ingest_document_raises_on_errors_only():
         c.rka_ingest_document("body", source="brain")
 
 
+def test_rka_get_dispatches_by_id_prefix():
+    # There is no /api/entities/{id}; the adapter must route by the id prefix to
+    # the per-type collection. (Hitting a bad path returns the SPA index.html.)
+    http = FakeHttp(canned=FakeResp(_json={"id": "x"}))
+    c = _client(http)
+    c.rka_get("jrn_abc")
+    c.rka_get("chk_abc")
+    c.rka_get("dec_abc")
+    assert [call["path"] for call in http.calls] == [
+        "/api/notes/jrn_abc", "/api/checkpoints/chk_abc", "/api/decisions/dec_abc",
+    ]
+
+
+def test_rka_get_unrecognized_prefix_raises_not_html():
+    c = _client()
+    with pytest.raises(ValueError, match="unrecognized id prefix"):
+        c.rka_get("zzz_abc")
+
+
 # ---------------------------------------------------------------------------
 # project_id propagation
 # ---------------------------------------------------------------------------
