@@ -983,11 +983,16 @@ class RestMCPClient:
         """
         if not id:
             raise ValueError("rka_update_mission_status requires a non-empty mission id")
+        # `report` is NOT a MissionUpdate field — RKA's MissionUpdate model is
+        # extra="forbid", and reports are filed via the dedicated
+        # POST /api/missions/{id}/report endpoint. Forwarding it in the PUT body
+        # 422s ("Extra inputs are not permitted"); surfaced against a live RKA,
+        # masked by FakeMCP. Route it to the report endpoint instead.
+        report = kw.get("report")
         body = _drop_none(
             {
                 "status": kw.get("status"),
                 "tasks": kw.get("tasks"),
-                "report": kw.get("report"),
                 "context": kw.get("context"),
                 "acceptance_criteria": _as_text_criteria(kw.get("acceptance_criteria")),
                 "scope_boundaries": kw.get("scope_boundaries"),
@@ -1001,7 +1006,12 @@ class RestMCPClient:
             }
         )
         result = self._request("PUT", f"/api/missions/{id}", json=body) or {}
-        return result.get("id") or id
+        out_id = result.get("id") or id
+        if report:
+            # File the report through the canonical endpoint so the kwarg works
+            # instead of 422ing.
+            self.rka_submit_report(mission_id=id, content=report)
+        return out_id
 
     def rka_ingest_document(self, content: str, **kw: Any) -> str:
         """POST /api/ingest/document — single-call structured document ingest.
@@ -1042,14 +1052,27 @@ class RestMCPClient:
             }
         )
         result = self._request("POST", "/api/ingest/document", json=body) or {}
-        # Endpoint returns either {"id": "..."} for single or
-        # {"ids": [...]} for split-by-headings. Take the first as the
-        # canonical artifact id for the dispatcher's ArtifactRef.
+        # /api/ingest/document returns
+        #   {"created": [{"id","type","heading","length"}, ...],
+        #    "errors": [{"section","error"}, ...], "total_sections": N}
+        # The prior code looked for {"id"}/{"ids"} — shapes the endpoint never
+        # returns — so it ALWAYS fell through to the sentinel, even on success.
+        # (Surfaced against a live RKA; masked by FakeMCP.) Parse created[].
+        created = result.get("created") or []
+        if created:
+            first = created[0]
+            return first.get("id", "") if isinstance(first, dict) else str(first)
+        # Nothing created — surface the per-section errors instead of a silent
+        # success-looking sentinel.
+        errors = result.get("errors") or []
+        if errors:
+            detail = errors[0].get("error") if isinstance(errors[0], dict) else str(errors[0])
+            raise ValueError(f"rka_ingest_document created no entries: {detail}")
+        # Back-compat: tolerate the legacy {"id"}/{"ids"} shapes if they ever return.
         if "id" in result:
             return result["id"]
-        if "ids" in result and result["ids"]:
+        if result.get("ids"):
             return result["ids"][0]
-        # Fall back to a synthetic marker the dispatcher can store.
         return "ingest_document_no_id_returned"
 
 

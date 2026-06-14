@@ -385,6 +385,46 @@ def test_rka_update_mission_status_coerces_acceptance_criteria_list():
     assert body["acceptance_criteria"] == "C1\nC2"
 
 
+def test_rka_update_mission_status_routes_report_to_report_endpoint():
+    # MissionUpdate is extra="forbid" and has no `report` field; forwarding it
+    # in the PUT body 422s. The adapter must route it to POST .../report.
+    http = FakeHttp(canned=FakeResp(_json={"id": "mis_x"}))
+    c = _client(http)
+    c.rka_update_mission_status("mis_x", status="complete", report="final report body")
+    put = http.calls[0]
+    assert put["method"] == "PUT" and put["path"] == "/api/missions/mis_x"
+    assert "report" not in put["json"]            # not in the MissionUpdate body
+    rep = http.calls[1]
+    assert rep["method"] == "POST" and rep["path"] == "/api/missions/mis_x/report"
+
+
+def test_rka_update_mission_status_no_report_endpoint_call_when_absent():
+    http = FakeHttp(canned=FakeResp(_json={"id": "mis_x"}))
+    c = _client(http)
+    c.rka_update_mission_status("mis_x", status="active")
+    assert len(http.calls) == 1                   # only the PUT, no report call
+
+
+def test_rka_ingest_document_parses_created_id():
+    # The endpoint returns {"created":[{"id":...}], "errors":[], "total_sections":N}
+    # — not {"id"}/{"ids"}. The adapter must read created[0].id.
+    http = FakeHttp(canned=FakeResp(_json={
+        "created": [{"id": "jrn_new", "type": "finding"}], "errors": [], "total_sections": 1,
+    }))
+    c = _client(http)
+    assert c.rka_ingest_document("a document body", source="brain") == "jrn_new"
+
+
+def test_rka_ingest_document_raises_on_errors_only():
+    http = FakeHttp(canned=FakeResp(_json={
+        "created": [], "errors": [{"section": "S1", "error": "source invalid"}],
+        "total_sections": 1,
+    }))
+    c = _client(http)
+    with pytest.raises(ValueError, match="created no entries"):
+        c.rka_ingest_document("body", source="brain")
+
+
 # ---------------------------------------------------------------------------
 # project_id propagation
 # ---------------------------------------------------------------------------
