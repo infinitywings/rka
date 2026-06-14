@@ -9,7 +9,15 @@ bookkeeper invariant safe (no rka/ changes, no ``import rka``). Components:
                      runs are reproducible and gradeable.
   - run_record.py  — the per-run artifact schema (one JSON per orchestrator run)
                      that the graders consume.
+  - subject.py     — the sealed research-subject spec + ground-truth effect
+                     model (CoT × GSM8K, with a planted size×depth interaction).
+  - experiment.py  — deterministic surprising-experiment harness: synthesizes
+                     results from the sealed effect model and classifies whether
+                     they contradict the naive hypothesis (the pivot trigger).
+  - graders.py     — three-axis scorers (capability / reliability / provenance);
+                     the provenance grader scores the claim-pivot AND its
+                     traceability.
 
-The subject spec, experiment harness, and grader suite land alongside these in
-later Phase-0 commits.
+The experiment harness + grader suite land alongside the oracle so the whole
+Phase-0 measurement loop is offline-testable before the live phases run.
 """
