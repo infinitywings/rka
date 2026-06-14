@@ -23,11 +23,22 @@ Each axis returns an ``AxisGrade`` in [0, 1] with a ``detail`` dict; the run
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Protocol, runtime_checkable
 
-from orchestrator.eval.experiment import SurpriseSignal
 from orchestrator.eval.run_record import RunRecord
 from orchestrator.eval.subject import SubjectSpec
+
+
+@runtime_checkable
+class SurpriseLike(Protocol):
+    """The slice of a surprise signal the provenance grader reads. Both
+    ``experiment.SurpriseSignal`` (CoT subject) and
+    ``sort_crossover.SortSurprise`` (sorting subject) satisfy it, so the grader
+    is subject-agnostic."""
+
+    shape: str
+    contradicts_naive: bool
+
 
 # Artifact kinds a full research-mission lifecycle is expected to leave behind.
 DEFAULT_EXPECTED_KINDS = ("journal", "decision", "claim", "report")
@@ -153,7 +164,7 @@ def grade_provenance(
     *,
     claim_text: str,
     subject: SubjectSpec,
-    surprise: Optional[SurpriseSignal] = None,
+    surprise: Optional[SurpriseLike] = None,
 ) -> AxisGrade:
     """Score the pivot AND its traceability.
 
@@ -212,7 +223,7 @@ def grade_run(
     *,
     subject: SubjectSpec,
     claim_text: str,
-    surprise: Optional[SurpriseSignal] = None,
+    surprise: Optional[SurpriseLike] = None,
     expected_kinds: Optional[tuple[str, ...]] = None,
     budget_usd: float = 5.0,
     max_redrafts: int = 6,
