@@ -360,7 +360,29 @@ def test_rka_create_mission_carries_decision_link():
     assert out == "mis_001"
     body = http.calls[0]["json"]
     assert body["motivated_by_decision"] == "dec_abc"
-    assert body["acceptance_criteria"] == ["A1", "A2"]
+    # RKA's MissionCreate model is `acceptance_criteria: str | None`; a raw list
+    # 422s against a live server. The adapter newline-joins the list to conform.
+    assert body["acceptance_criteria"] == "A1\nA2"
+    assert isinstance(body["acceptance_criteria"], str)
+
+
+def test_rka_create_mission_accepts_prejoined_string():
+    http = FakeHttp(canned=FakeResp(_json={"id": "mis_002"}))
+    c = _client(http)
+    c.rka_create_mission(
+        "objective",
+        motivated_by_decision="dec_abc",
+        acceptance_criteria="already a string",
+    )
+    assert http.calls[0]["json"]["acceptance_criteria"] == "already a string"
+
+
+def test_rka_update_mission_status_coerces_acceptance_criteria_list():
+    http = FakeHttp(canned=FakeResp(_json={"id": "mis_003"}))
+    c = _client(http)
+    c.rka_update_mission_status("mis_003", acceptance_criteria=["C1", "C2"])
+    body = http.calls[0]["json"]
+    assert body["acceptance_criteria"] == "C1\nC2"
 
 
 # ---------------------------------------------------------------------------

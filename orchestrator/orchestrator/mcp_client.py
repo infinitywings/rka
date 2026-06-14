@@ -34,7 +34,7 @@ field so the run's RKA artifacts can be recovered via
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Protocol
+from typing import Any, Protocol
 
 
 class CheckpointError(Exception):
@@ -290,6 +290,23 @@ def _merge_workflow_tag(
 def _drop_none(d: dict) -> dict:
     """Skip dict keys whose value is None — keeps REST bodies tidy."""
     return {k: v for k, v in d.items() if v is not None}
+
+
+def _as_text_criteria(value: "list[str] | str | None") -> "str | None":
+    """Coerce acceptance_criteria to the shape RKA's MissionCreate / MissionUpdate
+    models accept (``str | None``).
+
+    The orchestrator's callers (and the Brain proposed_actions convention)
+    express acceptance criteria as a list, but the RKA REST contract stores a
+    single freeform string. Sending the raw list 422s ("Input should be a valid
+    string") — a bug masked by FakeMCP (which records any shape) and surfaced
+    only against a live RKA. Join a list with newlines; pass a str through; keep
+    None as None so _drop_none can elide it on updates."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    return "\n".join(str(x) for x in value)
 
 
 class RestMCPClient:
@@ -791,10 +808,11 @@ class RestMCPClient:
         acceptance_criteria) continue to work — the new kwargs default
         to None and are dropped from the JSON body via _drop_none.
 
-        acceptance_criteria is passed as a list per the historical
-        Phase 2.7 convention; the server's MissionCreate model accepts
-        str | None so the list is currently rendered as a one-element
-        JSON array. (Not breaking anything that already shipped.)
+        acceptance_criteria is accepted as a list (the orchestrator /
+        Brain convention) but RKA's MissionCreate model is str | None;
+        _as_text_criteria newline-joins the list so the POST conforms to
+        the contract. Sending a raw list 422s ("Input should be a valid
+        string") — surfaced against a live RKA, masked by FakeMCP.
         """
         merged_tags = list(tags or [])
         if self.workflow_thread_id and self.workflow_thread_id not in merged_tags:
@@ -803,7 +821,7 @@ class RestMCPClient:
             {
                 "objective": objective,
                 "motivated_by_decision": motivated_by_decision,
-                "acceptance_criteria": list(acceptance_criteria),
+                "acceptance_criteria": _as_text_criteria(acceptance_criteria),
                 "phase": phase,
                 "scope_boundaries": scope_boundaries,
                 "depends_on": depends_on,
@@ -971,7 +989,7 @@ class RestMCPClient:
                 "tasks": kw.get("tasks"),
                 "report": kw.get("report"),
                 "context": kw.get("context"),
-                "acceptance_criteria": kw.get("acceptance_criteria"),
+                "acceptance_criteria": _as_text_criteria(kw.get("acceptance_criteria")),
                 "scope_boundaries": kw.get("scope_boundaries"),
                 "checkpoint_triggers": kw.get("checkpoint_triggers"),
                 "depends_on": kw.get("depends_on"),
