@@ -156,37 +156,63 @@ def _decision_text(d: dict) -> str:
     return " ".join(p for p in parts if isinstance(p, str) and p)
 
 
-def _extract_final_claim(final: dict, mcp, subject) -> tuple[str, list[dict]]:
-    """Best-effort: the run's final claim text + the fetched decision dicts.
+def _is_packet_decision(d: dict) -> bool:
+    """A `decision_present` RATIFICATION PACKET, not a substantive decision.
+    The orchestrator records the proposed-actions packet as a decision
+    (question='# Brain proposes N action(s)...', chosen=None, tags include
+    'pi-accepted') on every run. It is NOT the pivot decision — the pivot is the
+    `rka_add_decision` the packet PROPOSES, dispatched by execute_ratified_actions."""
+    q = (d.get("question") or "").strip().lower()
+    return q.startswith("# brain proposes") or q.startswith("brain proposes")
 
-    Pulls every ``decision``-kind artifact the run wrote, fetches each from RKA,
-    and returns the concatenated text of the decision that best matches the
-    sealed interaction vocabulary (falling back to all decisions, then to the
-    final-synthesis/report note text)."""
-    decisions: list[dict] = []
+
+def _extract_final_claim(final: dict, mcp, subject) -> tuple[str, list[dict]]:
+    """Return the run's final claim text + the fetched decision dicts, and
+    RELABEL ratification-packet decisions in-place so they don't inflate the
+    grader's capability/pivot_recorded.
+
+    Finding C (2026-06-15): grade_provenance credits pivot_recorded for ANY
+    'decision'-kind artifact, and the decision_present packet is always present
+    AND embeds the proposed claim text — so a run whose substantive pivot WRITE
+    failed could still score provenance 1.0 off the packet alone (observed with
+    the DeepSeek backend, where the cross-project guard sank the real write).
+    Here we fetch each decision artifact, relabel packets to entity_type
+    'decision_packet' (so from_final_state -> grade only counts SUBSTANTIVE
+    decisions), and source claim_text from the substantive pivot decision."""
+    substantive: list[dict] = []
+    fetched: list[dict] = []
     for a in final.get("artifacts", []) or []:
         kind = (a.get("entity_type") or a.get("kind") or "").lower()
         rid = a.get("rka_id") or a.get("id")
-        if kind == "decision" and rid:
-            try:
-                decisions.append(mcp.rka_get(id=rid))
-            except Exception:
-                pass
-    if decisions:
+        if kind != "decision" or not rid:
+            continue
+        try:
+            d = mcp.rka_get(id=rid)
+        except Exception:
+            continue
+        fetched.append(d)
+        if _is_packet_decision(d):
+            # relabel in-place so the grader does not treat the packet as the
+            # recorded pivot (closes the packet-inflation false-positive).
+            a["entity_type"] = "decision_packet"
+            a["kind"] = "decision_packet"
+        else:
+            substantive.append(d)
+    if substantive:
         req = [k.lower() for k in subject.required_claim_keywords]
         def score(d):
             t = _decision_text(d).lower()
             return sum(1 for k in req if k in t)
-        best = max(decisions, key=score)
-        if score(best) > 0:
-            return _decision_text(best), decisions
-        return " ".join(_decision_text(d) for d in decisions), decisions
-    # fallback: final report / synthesis text in state
+        best = max(substantive, key=score)
+        return _decision_text(best), fetched
+    # No substantive decision was recorded (only a packet, or none): claim_text
+    # falls back to report/synthesis text — and with packets relabeled, the
+    # grader's pivot_recorded is correctly False (no real pivot landed).
     for key in ("final_report_text", "final_synthesis", "synthesis"):
         v = final.get(key)
         if isinstance(v, str) and v:
-            return v, decisions
-    return "", decisions
+            return v, fetched
+    return "", fetched
 
 
 def main(argv: list[str] | None = None) -> int:
