@@ -562,10 +562,19 @@ def _default_sdk_factory(project_id: str, workspace_path: str = ""):
     Gap 1 fix: forwards workspace_path to make_sdk so the Phase G2
     can_use_tool hook can scope FS escape detection to the workflow's
     per-project workspace rather than HOST_WORKSPACE_ROOT.
+
+    Model selection: `ORCHESTRATOR_MODEL` env (e.g. "claude-opus-4-8") pins the
+    Brain/Executor model id on the SDK. Unset → the claude CLI's default model
+    (pre-existing behavior). Lets an operator (or the eval's daemon gold
+    cross-check) run the orchestrator on a specific subscription model without
+    a code change.
     """
+    import os
+
     from orchestrator.llm_client import make_sdk
 
-    return make_sdk(project_id=project_id, workspace_path=workspace_path)
+    model = os.environ.get("ORCHESTRATOR_MODEL", "").strip() or None
+    return make_sdk(project_id=project_id, workspace_path=workspace_path, model=model)
 
 
 def _default_mcp_factory(base_url: str):

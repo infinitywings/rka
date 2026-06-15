@@ -40,9 +40,33 @@ def test_budget_check_flags_overspend():
 
 
 def test_budget_check_respects_custom_cap():
-    # Run-specific cap can be tighter than the default.
-    update = utility.budget_check(_state(usd_spent=2.5, loop_iterations=0), cap_usd=2.0)
+    # Run-specific cap is seeded into STATE (the real graph mechanism — `_bind`
+    # does not pass the cap_usd param, so state["cap_usd"] is THE override
+    # surface and takes precedence over the param default). A tighter state
+    # cap escalates.
+    update = utility.budget_check(_state(usd_spent=2.5, loop_iterations=0, cap_usd=2.0))
     assert update["next_node_override"] == "escalation_router"
+
+
+def test_budget_check_state_cap_overrides_default():
+    """A per-run `cap_usd` seeded into state raises the cap above the default
+    constant, so an expensive-model run (e.g. Opus 4.8) is not escalated at
+    budget_check before reaching the pivot stage. Regression for the
+    2026-06-15 finding: usd_spent=5.18 >= cap=5.0 fired after mission_execute
+    and starved pi_decision_select."""
+    # $10 spent, default cap (5.0) would escalate — but state cap of $30 wins.
+    update = utility.budget_check(_state(usd_spent=10.0, loop_iterations=0, cap_usd=30.0))
+    assert update.get("next_node_override") is None
+    assert "errors" not in update
+
+
+def test_budget_check_state_cap_still_enforced():
+    """The state cap is a real bound, not a bypass: spending past it escalates,
+    and the error reports the effective (state) cap."""
+    update = utility.budget_check(_state(usd_spent=31.0, loop_iterations=0, cap_usd=30.0))
+    assert update["next_node_override"] == "escalation_router"
+    assert update["errors"][0]["error_type"] == "budget_exceeded"
+    assert "cap=30.0" in update["errors"][0]["detail"]
 
 
 def test_budget_check_flags_loop_overrun():

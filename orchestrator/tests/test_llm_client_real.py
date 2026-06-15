@@ -391,11 +391,17 @@ def test_complete_passes_write_tools_disallowlist_to_subprocess(
         client.complete("smoke", max_tokens=128, system=None)
 
     opts = captured[0]
-    expected_writes = _prefixed_tools(WRITE_TOOLS)
+    # Legacy WRITE_TOOLS names PLUS the v2.7.0+ write-dispatch verb
+    # `rka_execute` (the running RKA MCP server is v2.7.0+, where writes go
+    # through `rka_execute`; it is denied here so the subprocess cannot write
+    # via the dispatch surface either — Phase 2.7 Option C, belt-and-suspenders).
+    from orchestrator.llm_client import _V27_WRITE_DISPATCH_TOOLS
+    expected_writes = _prefixed_tools(WRITE_TOOLS) + _prefixed_tools(_V27_WRITE_DISPATCH_TOOLS)
     assert opts.disallowed_tools == expected_writes, (
         f"expected disallowed_tools={expected_writes!r}, "
         f"got {opts.disallowed_tools!r}"
     )
+    assert "mcp__rka__rka_execute" in opts.disallowed_tools
     # Sanity: writes must NOT also appear in allowed_tools (would be a
     # contradictory contract).
     for write_tool in expected_writes:
@@ -461,7 +467,11 @@ def test_phase_2_9_read_tools_includes_project_selectors():
     (rka_load_tools, rka_list_tools, rka_help) so the SDK subprocess
     can reach the 79 deferred RKA tools — without them the subprocess
     sees only the 12 always-on surface and cannot bring deferred
-    tools online. Total is now 17.
+    tools online. Total grew to 17.
+
+    v2.7.0 (typed-dispatch surface) added rka_query (read dispatch) +
+    rka_describe (schema), the always-on read tools on a v2.7.0+ RKA MCP
+    server. Without them the subprocess's reads are denied. Total is now 19.
     """
     assert "rka_list_projects" in READ_TOOLS, (
         "Phase 2.9 T2: rka_list_projects must be in READ_TOOLS so brain "
@@ -472,12 +482,24 @@ def test_phase_2_9_read_tools_includes_project_selectors():
         "Phase 2.9 T2: rka_set_project must be in READ_TOOLS so brain "
         "LLM can switch session project as recovery path"
     )
+    # v2.7.0+ typed-dispatch surface: the running RKA MCP server (v2.7.0+)
+    # exposes `rka_query` (read dispatch) + `rka_describe` (schema) as
+    # always-on; the legacy rka_get_* tools above are now deferred. Both must
+    # be in the subprocess allowlist or every Brain/Executor RKA READ is denied
+    # under permission_mode='dontAsk' (the subprocess calls rka_query, the real
+    # read path). The WRITE dispatch verb `rka_execute` is deliberately NOT in
+    # READ_TOOLS — it is on disallowed_tools instead (Phase 2.7 Option C).
+    assert "rka_query" in READ_TOOLS
+    assert "rka_describe" in READ_TOOLS
+    assert "rka_execute" not in READ_TOOLS
     # READ_TOOLS lineage: 9 (Phase 2.7) → 11 (Phase 2.9) → 14 (Phase-A
-    # external-API tools) → 17 (v2.6.4 navigator tools).
-    assert len(READ_TOOLS) == 17, (
-        f"READ_TOOLS should have exactly 17 entries (Phase 2.7's 9 + "
+    # external-API tools) → 17 (v2.6.4 navigator tools) → 19 (v2.7.0 read
+    # dispatch: rka_query + rka_describe).
+    assert len(READ_TOOLS) == 19, (
+        f"READ_TOOLS should have exactly 19 entries (Phase 2.7's 9 + "
         f"Phase 2.9's 2 project selectors + Phase-A's 3 external-API "
-        f"search tools + v2.6.4's 3 navigator tools); got {len(READ_TOOLS)}"
+        f"search tools + v2.6.4's 3 navigator tools + v2.7.0's rka_query + "
+        f"rka_describe); got {len(READ_TOOLS)}"
     )
 
 

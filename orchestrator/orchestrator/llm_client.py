@@ -95,7 +95,29 @@ READ_TOOLS: tuple[str, ...] = (
     "rka_load_tools",
     "rka_list_tools",
     "rka_help",
+    # v2.7.0+ typed-dispatch surface. The running RKA MCP server (v2.7.0+)
+    # ships `rka_query` (read ops) / `rka_execute` (write ops) / `rka_describe`
+    # (schema lookup) as the ALWAYS-ON tools; the legacy `rka_get_*` tools above
+    # are now tier='deferred'. Without `rka_query` + `rka_describe` in the
+    # subprocess allowlist, EVERY Brain/Executor RKA READ is denied under
+    # permission_mode='dontAsk' — the subprocess calls `rka_query` (the real
+    # read path) and gets a permission error, leaving the LLM blind to RKA
+    # state and forced to work off parent-injected context only. Empirically
+    # surfaced driving Opus 4.8 against an RKA v2.8.0 server (2026-06-15): the
+    # Brain/Executor journal notes reported "both rka_query calls returned
+    # permission errors." `rka_execute` (the WRITE dispatch) is deliberately
+    # EXCLUDED here and added to `disallowed_tools` below — Phase 2.7 Option C:
+    # RKA writes flow parent-side only, never from the subprocess.
+    "rka_query",
+    "rka_describe",
 )
+
+# v2.7.0+ write dispatch verb. Belt-and-suspenders denial (mirrors the legacy
+# WRITE_TOOLS entries on `disallowed_tools`): permission_mode='dontAsk' already
+# denies anything off the allowlist, but naming the write dispatch explicitly
+# keeps the Phase 2.7 Option C "no writes from the subprocess" invariant legible
+# and robust if an upstream SDK precedence change ever inverts allow/deny order.
+_V27_WRITE_DISPATCH_TOOLS: tuple[str, ...] = ("rka_execute",)
 
 # Context7 MCP server — external documentation lookup. Useful when the
 # Brain needs to verify it's reasoning about a library API correctly
@@ -918,6 +940,7 @@ class _RealSDKClient:
         env: dict[str, str] | None = None,
         project_id: str | None = None,
         workspace_path: str | None = None,
+        model: str | None = None,
     ) -> None:
         # Phase 2.9 T1: `project_id` propagates parent's project context to
         # the claude-agent-sdk subprocess's `rka mcp` stdio child via
@@ -946,6 +969,11 @@ class _RealSDKClient:
         # pass the project-specific workspace_path explicitly to get
         # per-project containment.
         self._workspace_path = workspace_path
+        # Optional explicit model id (e.g. "claude-opus-4-8"). None → the SDK /
+        # claude CLI default model. Threaded into ClaudeAgentOptions(model=...)
+        # so callers can pin a model (the orchestrator's Brain/Executor run on
+        # the PI's subscription model; the eval pins Opus 4.8 for reproducibility).
+        self._model = model
         # Phase E4: cost of the most recent complete() call in USD,
         # extracted from the SDK's ResultMessage. Nodes read this after
         # complete() and add to state["usd_spent"] for budget tracking.
@@ -1016,6 +1044,7 @@ class _RealSDKClient:
             # mutating-tool policy); RKA writes remain disallowed_tools
             # so they still flow through `proposed_actions` → PI ratify.
             options = sdk.ClaudeAgentOptions(
+                model=self._model,
                 system_prompt=system,
                 env=self._env,
                 mcp_servers=mcp_servers,
@@ -1027,7 +1056,8 @@ class _RealSDKClient:
                 allowed_tools=_all_allowed_subprocess_tools(
                     include_context7, include_zotero=include_zotero
                 ),
-                disallowed_tools=_prefixed_tools(WRITE_TOOLS),
+                disallowed_tools=_prefixed_tools(WRITE_TOOLS)
+                + _prefixed_tools(_V27_WRITE_DISPATCH_TOOLS),
                 permission_mode="dontAsk",   # deny anything off-allowlist silently
                 can_use_tool=_build_fs_actuator_hook(
                     self._resolve_workspace_path(),
@@ -1040,6 +1070,7 @@ class _RealSDKClient:
                 "cannot do work in this configuration."
             )
             options = sdk.ClaudeAgentOptions(
+                model=self._model,
                 system_prompt=system,
                 env=self._env,
                 allowed_tools=[],
@@ -1109,6 +1140,7 @@ def make_sdk(
     project_id: str | None = None,
     *,
     workspace_path: str | None = None,
+    model: str | None = None,
 ) -> SDKClient:
     """Construct the production SDK client.
 
@@ -1156,6 +1188,7 @@ def make_sdk(
         env=_scrubbed_env(),
         project_id=project_id,
         workspace_path=workspace_path,
+        model=model,
     )
 
 

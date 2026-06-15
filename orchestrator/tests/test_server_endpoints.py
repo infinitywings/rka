@@ -819,3 +819,48 @@ def test_get_run_response_shape_documents_live_state_field(setup):
     r = client.get(f"/runs/{tid}")
     assert r.status_code == 200
     assert "live_state" in r.json()
+
+
+# ---------------------------------------------------------------------------
+# _default_sdk_factory model pinning (eval: daemon gold cross-check on Opus 4.8)
+# ---------------------------------------------------------------------------
+
+
+def test_default_sdk_factory_pins_model_from_env(monkeypatch):
+    """ORCHESTRATOR_MODEL env pins the Brain/Executor model on the daemon's
+    SDK factory (so the daemon can run a specific subscription model)."""
+    import orchestrator.llm_client as llm
+    from orchestrator.server import _default_sdk_factory
+
+    captured: dict = {}
+
+    def fake_make_sdk(project_id=None, *, workspace_path=None, model=None):
+        captured["model"] = model
+        captured["project_id"] = project_id
+        captured["workspace_path"] = workspace_path
+        return object()
+
+    monkeypatch.setattr(llm, "make_sdk", fake_make_sdk)
+    monkeypatch.setenv("ORCHESTRATOR_MODEL", "claude-opus-4-8")
+    _default_sdk_factory("prj_x", "/ws")
+    assert captured["model"] == "claude-opus-4-8"
+    assert captured["project_id"] == "prj_x"
+    assert captured["workspace_path"] == "/ws"
+
+
+def test_default_sdk_factory_model_defaults_none(monkeypatch):
+    """Unset ORCHESTRATOR_MODEL → model=None (claude CLI default; pre-existing
+    behavior preserved)."""
+    import orchestrator.llm_client as llm
+    from orchestrator.server import _default_sdk_factory
+
+    captured: dict = {}
+
+    def fake_make_sdk(project_id=None, *, workspace_path=None, model=None):
+        captured["model"] = model
+        return object()
+
+    monkeypatch.setattr(llm, "make_sdk", fake_make_sdk)
+    monkeypatch.delenv("ORCHESTRATOR_MODEL", raising=False)
+    _default_sdk_factory("prj_x", "/ws")
+    assert captured["model"] is None

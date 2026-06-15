@@ -23,6 +23,44 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+# The mission/Phase-O graphs emit artifacts shaped
+# ``{rka_id, entity_type, node_name, timestamp}`` (see nodes/brain.py::_artifact
+# and nodes/executor.py::_artifact), but the grader suite reads ``kind`` / ``id``
+# / ``node``. Normalize at the from_final_state boundary so the documented
+# ``from_final_state(...) -> grade_run(...)`` flow scores capability on a real
+# run. Aliases are additive — hand-built ``{"kind": ...}`` artifacts (tests,
+# the offline smoke) pass through unchanged.
+_ARTIFACT_KIND_KEYS = ("kind", "entity_type")
+_ARTIFACT_ID_KEYS = ("id", "rka_id")
+_ARTIFACT_NODE_KEYS = ("node", "node_name")
+
+
+def _first_present(d: dict, keys: tuple[str, ...]) -> Any:
+    for k in keys:
+        v = d.get(k)
+        if v:
+            return v
+    return None
+
+
+def _normalize_artifact(a: Any) -> Any:
+    """Add canonical ``kind``/``id``/``node`` aliases to a graph artifact dict
+    without dropping the original ``entity_type``/``rka_id``/``node_name`` keys.
+    Non-dict entries pass through unchanged."""
+    if not isinstance(a, dict):
+        return a
+    out = dict(a)
+    for canonical, sources in (
+        ("kind", _ARTIFACT_KIND_KEYS),
+        ("id", _ARTIFACT_ID_KEYS),
+        ("node", _ARTIFACT_NODE_KEYS),
+    ):
+        if canonical not in out:
+            val = _first_present(a, sources)
+            if val is not None:
+                out[canonical] = val
+    return out
+
 
 @dataclass
 class RunRecord:
@@ -80,7 +118,7 @@ class RunRecord:
             project_id=final_state.get("project_id"),
             mission_id=final_state.get("mission_id"),
             terminal_state=final_state.get("terminal_state"),
-            artifacts=list(final_state.get("artifacts", []) or []),
+            artifacts=[_normalize_artifact(a) for a in (final_state.get("artifacts", []) or [])],
             greenlight_redrafts=int(final_state.get("greenlight_redrafts", 0) or 0),
             decision_redrafts=int(final_state.get("decision_redrafts", 0) or 0),
             errors=list(final_state.get("errors", []) or []),

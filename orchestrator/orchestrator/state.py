@@ -24,6 +24,8 @@ from __future__ import annotations
 import operator
 from typing import Annotated, Literal, TypedDict
 
+from orchestrator.budgets import DEFAULT_BUDGET_USD
+
 # ---------------------------------------------------------------------------
 # Workflow phase enumeration
 # ---------------------------------------------------------------------------
@@ -229,6 +231,13 @@ class ResearchWorkflowState(TypedDict, total=False):
 
     # Budget
     usd_spent: float
+    # Per-run hard cap (USD) read by budget_check. MUST be a declared channel:
+    # LangGraph drops undeclared keys seeded into the initial state, so an
+    # undeclared cap_usd silently falls back to budget_check's DEFAULT_BUDGET_USD
+    # (surfaced live 2026-06-15 — an Opus run capped at $5 mid-graph despite a
+    # seeded $40 cap). A caller (runner / eval driver) raises it for expensive
+    # models so the run reaches the decision/pivot stage.
+    cap_usd: float
     loop_iterations: int
     # Phase-X² (In-Run Redraft Channel): per-thread counter incremented
     # by confirmation_brief_redraft each time the PI sends a 'correct'
@@ -403,6 +412,7 @@ def make_initial_state(
         errors=[],
         notifications=[],
         usd_spent=0.0,
+        cap_usd=DEFAULT_BUDGET_USD,
         loop_iterations=0,
         greenlight_redrafts=0,
         decision_redrafts=0,

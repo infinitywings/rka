@@ -29,6 +29,7 @@ import json
 import pytest
 
 from orchestrator import graph
+from orchestrator.eval import graders
 from orchestrator.eval.pi_oracle import PIOracle, Rubric, Rule, happy_path_oracle
 from orchestrator.eval.run_record import RunRecord
 from orchestrator.runner import REDIRECT_SENTINEL
@@ -158,6 +159,54 @@ def test_run_record_from_final_state_round_trips(sdk, mcp):
     parsed = json.loads(rec.to_json())
     assert parsed["terminal_state"] == "complete"
     assert parsed["arc"] == "mission"
+
+
+def test_cap_usd_propagates_through_graph(sdk, mcp):
+    """Regression (2026-06-15): a per-run cap_usd seeded into the initial state
+    must SURVIVE the graph as a declared channel. LangGraph drops UNDECLARED
+    keys at entry, so before cap_usd was added to ResearchWorkflowState an
+    expensive run that seeded cap_usd=40 still capped at budget_check's 5.0
+    default mid-graph (never reaching the pivot). The budget_check UNIT test
+    passed because it called the node directly; only a full-graph invoke catches
+    the dropped-channel bug."""
+    ckpt = graph.open_checkpointer(None)
+    g = graph.build_graph(sdk=sdk, mcp=mcp, checkpointer=ckpt,
+                          interrupt_fn=happy_path_oracle())
+    initial = make_initial_state(
+        workflow_thread_id="thr_cap", mission_id="mis_cap",
+        motivated_by_decision_id="dec_cap", project_id="prj_cap")
+    initial["cap_usd"] = 42.0  # caller override (e.g. the eval driver for Opus)
+    final = g.invoke(initial, config={"configurable": {"thread_id": "thr_cap"}})
+    assert final["terminal_state"] == "complete"
+    assert final.get("cap_usd") == 42.0, (
+        "cap_usd must propagate as a declared state channel; got "
+        f"{final.get('cap_usd')!r} (undeclared keys are dropped by LangGraph)"
+    )
+
+
+def test_capability_grades_real_graph_artifacts(sdk, mcp):
+    """Regression: a RunRecord built from a REAL graph final_state must let
+    grade_capability see the produced artifact kinds.
+
+    The graph emits artifacts shaped {rka_id, entity_type, node_name} but the
+    grader reads `kind`; from_final_state must normalize entity_type->kind (and
+    rka_id->id, node_name->node) so the documented `from_final_state -> grade_run`
+    flow actually scores capability. Before the fix, capability was 0.0 on every
+    real run (artifacts present, present_kinds empty)."""
+    oracle = happy_path_oracle()
+    final = _run(sdk, mcp, oracle, thread="thr_eval_capability")
+    assert final["terminal_state"] == "complete"
+    assert final["artifacts"], "fake graph should still produce artifacts"
+
+    rec = RunRecord.from_final_state(
+        arc="mission", run_label="capability-regression", final_state=final,
+    )
+    # Normalized artifacts carry a `kind` (alias of entity_type) and `id`.
+    assert all("kind" in a for a in rec.artifacts)
+    assert all("id" in a for a in rec.artifacts)
+    cap = graders.grade_capability(rec)
+    assert cap.score > 0.0, f"capability should be > 0, got {cap.detail}"
+    assert "journal" in cap.detail["present_kinds"]
 
 
 def test_run_record_counts_interventions_from_oracle_log(sdk, mcp):
