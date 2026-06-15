@@ -34,7 +34,7 @@ field so the run's RKA artifacts can be recovered via
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Protocol
+from typing import Any, Protocol
 
 
 class CheckpointError(Exception):
@@ -292,6 +292,38 @@ def _drop_none(d: dict) -> dict:
     return {k: v for k, v in d.items() if v is not None}
 
 
+# Entity id type-prefix -> REST collection segment. RKA has no generic
+# /api/entities/{id}; each type is fetched from its own route. (Prefixes per
+# rka/infra/ids.py; journal ids 'jrn_' are served by /api/notes.)
+_GET_ENDPOINT_BY_PREFIX = {
+    "jrn": "notes",
+    "dec": "decisions",
+    "mis": "missions",
+    "chk": "checkpoints",
+    "clm": "claims",
+    "lit": "literature",
+    "ecl": "clusters",
+    "top": "topics",
+}
+
+
+def _as_text_criteria(value: "list[str] | str | None") -> "str | None":
+    """Coerce acceptance_criteria to the shape RKA's MissionCreate / MissionUpdate
+    models accept (``str | None``).
+
+    The orchestrator's callers (and the Brain proposed_actions convention)
+    express acceptance criteria as a list, but the RKA REST contract stores a
+    single freeform string. Sending the raw list 422s ("Input should be a valid
+    string") — a bug masked by FakeMCP (which records any shape) and surfaced
+    only against a live RKA. Join a list with newlines; pass a str through; keep
+    None as None so _drop_none can elide it on updates."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    return "\n".join(str(x) for x in value)
+
+
 class RestMCPClient:
     """HTTP-backed MCPClient implementation.
 
@@ -432,7 +464,20 @@ class RestMCPClient:
         return self._request("POST", "/api/search", json=body) or []
 
     def rka_get(self, id: str) -> dict:
-        return self._request("GET", f"/api/entities/{id}") or {}
+        """GET an entity by id. RKA has no generic /api/entities/{id} route, so
+        dispatch by the id's type prefix to the per-type collection
+        (/api/notes, /api/decisions, /api/checkpoints, ...). The prior
+        /api/entities/{id} path did not exist, so it fell through to the SPA
+        catch-all and silently returned index.html instead of the entity —
+        surfaced against a live RKA (it's called from nodes/pi.py), masked by
+        FakeMCP. An unrecognized prefix now raises instead of returning HTML."""
+        prefix = id.split("_", 1)[0] if "_" in id else ""
+        endpoint = _GET_ENDPOINT_BY_PREFIX.get(prefix)
+        if endpoint is None:
+            raise ValueError(
+                f"rka_get: unrecognized id prefix {prefix!r} for id {id!r}"
+            )
+        return self._request("GET", f"/api/{endpoint}/{id}") or {}
 
     def rka_trace_provenance(self, id: str) -> dict:
         return self._request("GET", f"/api/provenance/{id}") or {}
@@ -791,10 +836,11 @@ class RestMCPClient:
         acceptance_criteria) continue to work — the new kwargs default
         to None and are dropped from the JSON body via _drop_none.
 
-        acceptance_criteria is passed as a list per the historical
-        Phase 2.7 convention; the server's MissionCreate model accepts
-        str | None so the list is currently rendered as a one-element
-        JSON array. (Not breaking anything that already shipped.)
+        acceptance_criteria is accepted as a list (the orchestrator /
+        Brain convention) but RKA's MissionCreate model is str | None;
+        _as_text_criteria newline-joins the list so the POST conforms to
+        the contract. Sending a raw list 422s ("Input should be a valid
+        string") — surfaced against a live RKA, masked by FakeMCP.
         """
         merged_tags = list(tags or [])
         if self.workflow_thread_id and self.workflow_thread_id not in merged_tags:
@@ -803,7 +849,7 @@ class RestMCPClient:
             {
                 "objective": objective,
                 "motivated_by_decision": motivated_by_decision,
-                "acceptance_criteria": list(acceptance_criteria),
+                "acceptance_criteria": _as_text_criteria(acceptance_criteria),
                 "phase": phase,
                 "scope_boundaries": scope_boundaries,
                 "depends_on": depends_on,
@@ -965,13 +1011,18 @@ class RestMCPClient:
         """
         if not id:
             raise ValueError("rka_update_mission_status requires a non-empty mission id")
+        # `report` is NOT a MissionUpdate field — RKA's MissionUpdate model is
+        # extra="forbid", and reports are filed via the dedicated
+        # POST /api/missions/{id}/report endpoint. Forwarding it in the PUT body
+        # 422s ("Extra inputs are not permitted"); surfaced against a live RKA,
+        # masked by FakeMCP. Route it to the report endpoint instead.
+        report = kw.get("report")
         body = _drop_none(
             {
                 "status": kw.get("status"),
                 "tasks": kw.get("tasks"),
-                "report": kw.get("report"),
                 "context": kw.get("context"),
-                "acceptance_criteria": kw.get("acceptance_criteria"),
+                "acceptance_criteria": _as_text_criteria(kw.get("acceptance_criteria")),
                 "scope_boundaries": kw.get("scope_boundaries"),
                 "checkpoint_triggers": kw.get("checkpoint_triggers"),
                 "depends_on": kw.get("depends_on"),
@@ -983,7 +1034,12 @@ class RestMCPClient:
             }
         )
         result = self._request("PUT", f"/api/missions/{id}", json=body) or {}
-        return result.get("id") or id
+        out_id = result.get("id") or id
+        if report:
+            # File the report through the canonical endpoint so the kwarg works
+            # instead of 422ing.
+            self.rka_submit_report(mission_id=id, content=report)
+        return out_id
 
     def rka_ingest_document(self, content: str, **kw: Any) -> str:
         """POST /api/ingest/document — single-call structured document ingest.
@@ -1024,14 +1080,27 @@ class RestMCPClient:
             }
         )
         result = self._request("POST", "/api/ingest/document", json=body) or {}
-        # Endpoint returns either {"id": "..."} for single or
-        # {"ids": [...]} for split-by-headings. Take the first as the
-        # canonical artifact id for the dispatcher's ArtifactRef.
+        # /api/ingest/document returns
+        #   {"created": [{"id","type","heading","length"}, ...],
+        #    "errors": [{"section","error"}, ...], "total_sections": N}
+        # The prior code looked for {"id"}/{"ids"} — shapes the endpoint never
+        # returns — so it ALWAYS fell through to the sentinel, even on success.
+        # (Surfaced against a live RKA; masked by FakeMCP.) Parse created[].
+        created = result.get("created") or []
+        if created:
+            first = created[0]
+            return first.get("id", "") if isinstance(first, dict) else str(first)
+        # Nothing created — surface the per-section errors instead of a silent
+        # success-looking sentinel.
+        errors = result.get("errors") or []
+        if errors:
+            detail = errors[0].get("error") if isinstance(errors[0], dict) else str(errors[0])
+            raise ValueError(f"rka_ingest_document created no entries: {detail}")
+        # Back-compat: tolerate the legacy {"id"}/{"ids"} shapes if they ever return.
         if "id" in result:
             return result["id"]
-        if "ids" in result and result["ids"]:
+        if result.get("ids"):
             return result["ids"][0]
-        # Fall back to a synthetic marker the dispatcher can store.
         return "ingest_document_no_id_returned"
 
 

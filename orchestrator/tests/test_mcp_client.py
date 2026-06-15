@@ -360,7 +360,88 @@ def test_rka_create_mission_carries_decision_link():
     assert out == "mis_001"
     body = http.calls[0]["json"]
     assert body["motivated_by_decision"] == "dec_abc"
-    assert body["acceptance_criteria"] == ["A1", "A2"]
+    # RKA's MissionCreate model is `acceptance_criteria: str | None`; a raw list
+    # 422s against a live server. The adapter newline-joins the list to conform.
+    assert body["acceptance_criteria"] == "A1\nA2"
+    assert isinstance(body["acceptance_criteria"], str)
+
+
+def test_rka_create_mission_accepts_prejoined_string():
+    http = FakeHttp(canned=FakeResp(_json={"id": "mis_002"}))
+    c = _client(http)
+    c.rka_create_mission(
+        "objective",
+        motivated_by_decision="dec_abc",
+        acceptance_criteria="already a string",
+    )
+    assert http.calls[0]["json"]["acceptance_criteria"] == "already a string"
+
+
+def test_rka_update_mission_status_coerces_acceptance_criteria_list():
+    http = FakeHttp(canned=FakeResp(_json={"id": "mis_003"}))
+    c = _client(http)
+    c.rka_update_mission_status("mis_003", acceptance_criteria=["C1", "C2"])
+    body = http.calls[0]["json"]
+    assert body["acceptance_criteria"] == "C1\nC2"
+
+
+def test_rka_update_mission_status_routes_report_to_report_endpoint():
+    # MissionUpdate is extra="forbid" and has no `report` field; forwarding it
+    # in the PUT body 422s. The adapter must route it to POST .../report.
+    http = FakeHttp(canned=FakeResp(_json={"id": "mis_x"}))
+    c = _client(http)
+    c.rka_update_mission_status("mis_x", status="complete", report="final report body")
+    put = http.calls[0]
+    assert put["method"] == "PUT" and put["path"] == "/api/missions/mis_x"
+    assert "report" not in put["json"]            # not in the MissionUpdate body
+    rep = http.calls[1]
+    assert rep["method"] == "POST" and rep["path"] == "/api/missions/mis_x/report"
+
+
+def test_rka_update_mission_status_no_report_endpoint_call_when_absent():
+    http = FakeHttp(canned=FakeResp(_json={"id": "mis_x"}))
+    c = _client(http)
+    c.rka_update_mission_status("mis_x", status="active")
+    assert len(http.calls) == 1                   # only the PUT, no report call
+
+
+def test_rka_ingest_document_parses_created_id():
+    # The endpoint returns {"created":[{"id":...}], "errors":[], "total_sections":N}
+    # — not {"id"}/{"ids"}. The adapter must read created[0].id.
+    http = FakeHttp(canned=FakeResp(_json={
+        "created": [{"id": "jrn_new", "type": "finding"}], "errors": [], "total_sections": 1,
+    }))
+    c = _client(http)
+    assert c.rka_ingest_document("a document body", source="brain") == "jrn_new"
+
+
+def test_rka_ingest_document_raises_on_errors_only():
+    http = FakeHttp(canned=FakeResp(_json={
+        "created": [], "errors": [{"section": "S1", "error": "source invalid"}],
+        "total_sections": 1,
+    }))
+    c = _client(http)
+    with pytest.raises(ValueError, match="created no entries"):
+        c.rka_ingest_document("body", source="brain")
+
+
+def test_rka_get_dispatches_by_id_prefix():
+    # There is no /api/entities/{id}; the adapter must route by the id prefix to
+    # the per-type collection. (Hitting a bad path returns the SPA index.html.)
+    http = FakeHttp(canned=FakeResp(_json={"id": "x"}))
+    c = _client(http)
+    c.rka_get("jrn_abc")
+    c.rka_get("chk_abc")
+    c.rka_get("dec_abc")
+    assert [call["path"] for call in http.calls] == [
+        "/api/notes/jrn_abc", "/api/checkpoints/chk_abc", "/api/decisions/dec_abc",
+    ]
+
+
+def test_rka_get_unrecognized_prefix_raises_not_html():
+    c = _client()
+    with pytest.raises(ValueError, match="unrecognized id prefix"):
+        c.rka_get("zzz_abc")
 
 
 # ---------------------------------------------------------------------------
