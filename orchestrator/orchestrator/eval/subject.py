@@ -39,6 +39,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
+from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -119,12 +120,20 @@ class SubjectSpec:
     research_question: str
     naive_hypothesis: str          # the frame the agent starts from
     ground_truth_claim: str        # SEALED — the correct pivoted claim
-    effect: EffectModel
+    # ``effect`` is the CoT subject's synthetic data-generating process. Subjects
+    # whose experiment is a REAL computation (e.g. the sorting-crossover subject,
+    # which actually counts comparisons) leave it None and instead describe their
+    # sealed answer in ``sealed_extra``.
+    effect: Optional[EffectModel] = None
     literature_anchors: list[LiteratureAnchor] = field(default_factory=list)
 
     # grading vocabulary (sealed answer key for the claim graders)
     required_claim_keywords: list[str] = field(default_factory=list)
     forbidden_claim_keywords: list[str] = field(default_factory=list)
+
+    # subject-specific sealed ground truth for subjects that don't use ``effect``
+    # (e.g. the sorting crossover quadrant thresholds). Folded into the hash.
+    sealed_extra: dict = field(default_factory=dict)
 
     # --- the open (agent-visible) framing vs. the sealed answer ---
     def public_framing(self) -> dict:
@@ -141,10 +150,14 @@ class SubjectSpec:
 
     def _sealed_fields(self) -> dict:
         """The fields the agent must NOT see — hashed for integrity."""
-        e = self.effect
-        return {
+        sealed: dict = {
             "ground_truth_claim": self.ground_truth_claim,
-            "effect": {
+            "required_claim_keywords": sorted(self.required_claim_keywords),
+            "forbidden_claim_keywords": sorted(self.forbidden_claim_keywords),
+        }
+        if self.effect is not None:
+            e = self.effect
+            sealed["effect"] = {
                 "size_threshold_b": e.size_threshold_b,
                 "step_threshold": e.step_threshold,
                 "base_floor": e.base_floor,
@@ -154,10 +167,10 @@ class SubjectSpec:
                 "delta_large_single": e.delta_large_single,
                 "delta_small_multi": e.delta_small_multi,
                 "delta_small_single": e.delta_small_single,
-            },
-            "required_claim_keywords": sorted(self.required_claim_keywords),
-            "forbidden_claim_keywords": sorted(self.forbidden_claim_keywords),
-        }
+            }
+        if self.sealed_extra:
+            sealed["sealed_extra"] = self.sealed_extra
+        return sealed
 
     def ground_truth_hash(self) -> str:
         blob = json.dumps(self._sealed_fields(), sort_keys=True).encode("utf-8")
