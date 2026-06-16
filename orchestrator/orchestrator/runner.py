@@ -32,6 +32,7 @@ from orchestrator.llm_client import SDKClient
 from orchestrator.mcp_client import MCPClient
 from orchestrator.parked_store import ParkedStore, ResponseAction
 from orchestrator.response_tokens import REDIRECT_SENTINEL, is_redirect_token
+from orchestrator.budgets import DEFAULT_BUDGET_USD
 from orchestrator.state import make_initial_state
 
 logger = logging.getLogger(__name__)
@@ -445,11 +446,26 @@ class OrchestratorRunner:
         fall back to empty {} so the run still launches cleanly.
         """
         run_overrides: dict = {}
+        cap_usd: float = DEFAULT_BUDGET_USD
         run_row = self.store.get_run(workflow_thread_id)
         if run_row:
             raw = run_row.get("run_overrides")
             if isinstance(raw, dict):
                 run_overrides = raw
+            # Thread the run's budget_usd (orchestrator_run_start -> create_run
+            # -> workflow_runs.budget_usd) into the budget_check cap. Without
+            # this the budget_usd knob was a NO-OP: budget_check used the
+            # DEFAULT_BUDGET_USD constant, so an expensive (e.g. Opus 4.8) run
+            # escalated at budget_check BEFORE reaching the decision/pivot stage
+            # regardless of the budget_usd the PI requested. (Surfaced
+            # 2026-06-15 conducting the daemon gold cross-check; completes the
+            # state-configurable cap_usd channel.)
+            try:
+                rb = run_row.get("budget_usd")
+                if rb:
+                    cap_usd = float(rb)
+            except (TypeError, ValueError):
+                pass
         initial = make_initial_state(
             workflow_thread_id=workflow_thread_id,
             mission_id=mission_id,
@@ -458,6 +474,7 @@ class OrchestratorRunner:
             allowed_capabilities=allowed_capabilities,
             run_overrides=run_overrides,
         )
+        initial["cap_usd"] = cap_usd
         # Gap 1 fix: per-project workspace_path threads into make_sdk so the
         # Phase G2 can_use_tool hook can scope FS escape detection to THIS
         # project's workspace rather than the broader HOST_WORKSPACE_ROOT.
