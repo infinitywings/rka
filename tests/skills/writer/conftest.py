@@ -68,6 +68,11 @@ def verify_citations():
 
 
 @pytest.fixture
+def overclaim_lint():
+    return _load_module("overclaim_lint")
+
+
+@pytest.fixture
 def fetch_template():
     return _load_module("fetch_template")
 
