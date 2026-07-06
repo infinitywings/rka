@@ -3,6 +3,54 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [2.8.1] — 2026-07-06 (Docs & skills alignment + ChatGPT connector)
+
+A consistency release: every skill guide and user-facing doc now teaches the
+actual v2.7.0+ dispatch surface, RKA is reachable from ChatGPT as a first-class
+custom connector, and a real packaging gap is closed. No API or schema changes.
+
+### Added
+
+- **ChatGPT custom connector.** `RKA_SKILL_TOOLS=1` promotes the three skill
+  adapter tools (`rka_list_skills`, `rka_read_skill`, `rka_start_session`) to
+  always-on, giving ChatGPT an 8-tool surface (5 dispatch + 3 skills); the
+  default local stdio surface is unchanged (5 tools). New user guide
+  `docs/CHATGPT_CONNECTOR.md` (local HTTP MCP on `:9713` → OAuth reverse proxy
+  `scripts/rka_mcp_oauth_proxy.py` on `:9720` → ngrok HTTPS → ChatGPT "Server
+  URL" + OAuth; web UI stays private). Linked from README/INSTALL/USAGE_GUIDE/
+  USER_MANUAL.
+- **Regression guards** (`tests/test_skills_packaging.py`): `plugin/skills/`
+  must stay byte-identical to `rka/skills/`, and every skill file must be
+  covered by a `package-data` glob — so a fresh install on any machine stays
+  consistent.
+
+### Fixed
+
+- **Skills vs. tool surface (90 confirmed inconsistencies across 21 files).**
+  Legacy op-names inside `args={"operation": ...}` (e.g. `get_decision_tree`
+  → `decision_tree`), missing required fields in worked examples, invalid
+  enums, and `record_note` provenance links that must nest under
+  `provenance={}`. `rka/skills/` is the source of truth; `plugin/skills/`
+  mirrored byte-for-byte.
+- **Docs vs. tool surface (53 findings across README/INSTALL/USAGE_GUIDE/
+  USER_MANUAL).** Stale operation counts (87 → 91, 38 → 42 read), invalid
+  `get_*` operation names, wrong param names, missing-required-field examples,
+  and `RKA_LEGACY_TOOLS=1` misattributions (it restores the 20-tool v2.7.0a2
+  surface; the 91 operations are always reachable via dispatch). README
+  reference tables reconciled to real operation names. Served instruction
+  strings in `rka/mcp/server.py` corrected (87 → 91, 38 → 42).
+- **Packaging: 14 skill files were silently missing from the wheel.**
+  `[tool.setuptools.package-data]` globs didn't match dot-prefixed names, so
+  the Writer workspace-template (`main.tex`, `refs.bib`, `.planning/*.md`,
+  `.mcp.json`, `.latexmkrc`, `.gitkeep`, `render.sh`) never shipped on a fresh
+  `uv tool install`. Added explicit patterns; verified 0 missing.
+- **`INSTALL.md` reworked as an agent-executable runbook.** §0 execution
+  contract, a Step 0 scope question, explicit 🟡 ask-the-user gates (clone
+  location, API keys, ngrok authtoken, OAuth passphrase), a Step 6 ChatGPT
+  connector path, and version-agnostic health checks (the old `2.7.0`-pinned
+  assertions would have failed against a 2.8.x backend).
+- `rka/infra/database.py`: migration discovery skips AppleDouble `._*.sql`.
+
 ## [2.8.0] — 2026-06-12 (Eval-v3 program — retrieval integrity, writer trustworthiness gates, KB-wide verification + temporal currency)
 
 The eval-v3 arc: a synthetic trap-corpus evaluation (planted supersede chains,
