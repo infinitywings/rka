@@ -74,3 +74,43 @@ class TestEntryPoint:
         f = _write(tmp_path, "s.tex", "We report a partial improvement on one benchmark.")
         rc = overclaim_lint.main([str(f), "--output", str(tmp_path / "r.json")])
         assert rc == 0
+
+
+_EID = "jrn_01KS0AVZRDA0KPXK61MN9PV5DE"
+
+
+class TestConfidenceRanking:
+    def test_weak_confidence_backing_ranks_high(self, overclaim_lint, tmp_path: Path) -> None:
+        content = (
+            f"% provenance: {_EID} supports paragraph below\n"
+            "Our method guarantees correctness.\n"
+        )
+        f = _write(tmp_path, "s.tex", content)
+        rep = overclaim_lint.lint_file(f, resolver=lambda eid: {"confidence": "tested"})
+        hit = next(h for h in rep.hits if h.term.lower() == "guarantees")
+        assert hit.priority == "high"
+        assert hit.backing_entity == _EID
+        assert hit.backing_confidence == "tested"
+
+    def test_verified_confidence_backing_stays_normal(self, overclaim_lint, tmp_path: Path) -> None:
+        content = (
+            f"% provenance: {_EID} supports paragraph below\n"
+            "Our method guarantees correctness.\n"
+        )
+        f = _write(tmp_path, "s.tex", content)
+        rep = overclaim_lint.lint_file(f, resolver=lambda eid: {"confidence": "verified"})
+        hit = next(h for h in rep.hits if h.term.lower() == "guarantees")
+        assert hit.priority == "normal"
+
+    def test_no_provenance_comment_skips_resolver(self, overclaim_lint, tmp_path: Path) -> None:
+        f = _write(tmp_path, "s.tex", "Our method guarantees correctness.")
+        called = []
+
+        def resolver(eid):
+            called.append(eid)
+            return {"confidence": "tested"}
+
+        rep = overclaim_lint.lint_file(f, resolver=resolver)
+        hit = next(h for h in rep.hits if h.term.lower() == "guarantees")
+        assert hit.priority == "normal"
+        assert called == []
