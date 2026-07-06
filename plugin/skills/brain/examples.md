@@ -2,6 +2,8 @@
 
 Concrete examples for the discipline patterns in `SKILL.md`. Each example contrasts the WRONG shape with the CORRECT one so the right move is obvious at a glance.
 
+> **v2.7.0 dispatch translation.** Legacy tool names below (`rka_add_note`, `rka_add_decision`, `rka_create_mission`, `rka_search`, `rka_set_project`, etc.) are synonyms for `rka_execute(args={"operation": ...})` / `rka_query(args={"operation": ...})` under the v2.7.0+ typed-arg surface. The discipline (`source="pi"` + `verbatim_input`, `related_journal=[...]` on decisions, etc.) carries over verbatim — only the call shape changes. See `SKILL.md` for full mapping; `rka_describe(operation="<name>")` for per-operation signatures. The `rka_set_project` example below is now a deprecated no-op (v2.6 removed it); replace with stating the project_id at conversation start and threading it as `"project_id"` on every operation.
+
 ---
 
 ## PI Attribution — Preserving the PI's Voice
@@ -142,12 +144,17 @@ Decision is orphan. Three months later, "why SQLite?" has no answer in the graph
 
 **After:**
 ```python
-rka_add_decision(
-    question="Use PostgreSQL or SQLite?",
-    chosen="SQLite",
-    rationale="Simpler for local-first deployment.",
-    related_journal=["jrn_01...benchmarks", "jrn_01...deployment-survey"],
-)
+rka_execute(args={
+    "operation": "record_decision",
+    "project_id": "prj_01...",
+    "question": "Use PostgreSQL or SQLite?",
+    "chosen": "SQLite",
+    "rationale": "Simpler for local-first deployment.",
+    "decided_by": "brain",
+    "kind": "design_choice",
+    "phase": "design",
+    "related_journal": ["jrn_01...benchmarks", "jrn_01...deployment-survey"],
+})
 ```
 
 Now the decision has a reasoning chain. The maintenance manifest's `decisions_without_justified_by` count is one lower.
@@ -166,9 +173,24 @@ Three unrelated objectives merged. Can't cancel one without cancelling all; Exec
 
 **After:**
 ```python
-rka_create_mission(objective="Fix search bug: root-cause + fix + test", motivated_by_decision="dec_...", ...)
-rka_create_mission(objective="README accuracy pass", motivated_by_decision="dec_...", ...)
-rka_create_mission(objective="Audit test coverage; open issues for gaps", motivated_by_decision="dec_...", ...)
+rka_execute(args={
+    "operation": "create_mission",
+    "project_id": "prj_01...",
+    "objective": "Fix search bug: root-cause + fix + test",
+    "motivated_by_decision": "dec_...",
+})
+rka_execute(args={
+    "operation": "create_mission",
+    "project_id": "prj_01...",
+    "objective": "README accuracy pass",
+    "motivated_by_decision": "dec_...",
+})
+rka_execute(args={
+    "operation": "create_mission",
+    "project_id": "prj_01...",
+    "objective": "Audit test coverage; open issues for gaps",
+    "motivated_by_decision": "dec_...",
+})
 ```
 
 Three missions, three acceptance-criteria sets. Parallel-capable if the Executor is.
@@ -177,8 +199,10 @@ Three missions, three acceptance-criteria sets. Parallel-capable if the Executor
 
 **Before:**
 ```python
-rka_ask(query="What are the main findings on broker limits?")
-  → "The main findings are: 1) packet loss increases above 400 connections…"
+# [v2.4.0 removed rka_ask — generic LLM Q&A no longer first-class;
+#  the principle still stands: don't canonicalize disposable LLM
+#  output as decision rationale.]
+# Hypothetical disposable LLM summary: "The main findings are: 1) packet loss increases above 400 connections…"
 # Brain paraphrases the summary into a decision rationale.
 rka_add_decision(rationale="Findings show packet loss above 400…", ...)
 ```
@@ -188,14 +212,16 @@ The summary was disposable LLM output. Baking it into a decision rationale canon
 **After:**
 ```python
 # Brain reads the actual clusters + claims.
-rka_get(id="ecl_01...broker-limits")
+rka_query(args={"operation": "entity", "project_id": "prj_01...", "id": "ecl_01...broker-limits"})
 # Then writes rationale with citable claim IDs.
-rka_add_decision(
-    rationale="Cluster ecl_01...broker-limits shows packet loss above 400 connections "
-              "(clm_01..., clm_02...); sharding proposal is justified by…",
-    related_journal=[…],
-    ...,
-)
+rka_execute(args={
+    "operation": "record_decision",
+    "project_id": "prj_01...",
+    "rationale": "Cluster ecl_01...broker-limits shows packet loss above 400 connections "
+                 "(clm_01..., clm_02...); sharding proposal is justified by…",
+    "related_journal": ["jrn_01..."],
+    # ... other fields
+})
 ```
 
 Summaries are navigational aids. They are not knowledge.

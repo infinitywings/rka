@@ -65,7 +65,27 @@ build-backend = "setuptools.build_meta"
 include = ["rka*"]
 
 [tool.setuptools.package-data]
-rka = ["db/*.sql", "db/migrations/*.sql", "skills/*.md", "skills/**/*.md", "skills/**/*.yaml", "skills/**/*.py"]
+# NOTE: Python's glob does not match dot-prefixed names with wildcards, so
+# hidden files/dirs (.planning/, .latexmkrc, .mcp.json, .gitkeep) need explicit
+# patterns. tests/test_skills_packaging.py enforces full coverage.
+rka = [
+    "db/*.sql",
+    "db/migrations/*.sql",
+    "skills/*.md",
+    "skills/**/*.md",
+    "skills/**/*.yaml",
+    "skills/**/*.py",
+    "skills/**/*.tex",
+    "skills/**/*.bib",
+    "skills/**/*.sh",
+    "skills/**/.latexmkrc",
+    "skills/**/.mcp.json",
+    "skills/**/.gitkeep",
+    "skills/**/.planning/*.md",
+]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["._*", "**/._*", ".DS_Store", "**/.DS_Store"]
 
 [tool.ruff]
 line-length = 100

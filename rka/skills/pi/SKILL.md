@@ -17,13 +17,13 @@ The rka MCP server ships a **discriminated-union dispatch surface**. Five tools 
 
 | Always-on tool | Purpose |
 |---|---|
-| `rka_query(args)` | All 38 read operations |
+| `rka_query(args)` | All 42 read operations |
 | `rka_execute(args)` | All 49 write/lifecycle operations |
 | `rka_describe(operation)` | Schema lookup + worked example; `rka_describe('')` returns the <250-token index |
 | `rka_load_tools(names)` | Escape hatch for explicit legacy-tool access |
-| `rka_help(topic)` | Deprecated alias for `rka_describe` |
+| `rka_help(name)` | Full docs for one canonical `rka_*` tool name (active or deferred) — use before `rka_load_tools` |
 
-`args` is a **typed Pydantic model** discriminated by `operation`. 87 models in `rka/mcp/operation_args.py` render as `inputSchema.oneOf` with per-branch enum + required-field constraints. **This is the no-compromise empirical proof** observed in the 2026-06-02 cockpit session: when the PI said "go ahead and ship", the cockpit attempted `confidence='confirmed'`, **caught the hallucination itself before emitting**, and quoted the allowed set (`['low', 'medium', 'high', 'verified']`) verbatim from the inputSchema branch. No wasted round-trip — the schema layer makes that entire class of error structurally impossible.
+`args` is a **typed Pydantic model** discriminated by `operation`. 91 models in `rka/mcp/operation_args.py` render as `inputSchema.oneOf` with per-branch enum + required-field constraints. **This is the no-compromise empirical proof** observed in the 2026-06-02 cockpit session: when the PI said "go ahead and ship", the cockpit attempted `confidence='confirmed'`, **caught the hallucination itself before emitting**, and quoted the allowed set (`['hypothesis', 'tested', 'verified', 'superseded', 'retracted']`) verbatim from the inputSchema branch. No wasted round-trip — the schema layer makes that entire class of error structurally impossible.
 
 For PI cockpit work most ratification happens through the orchestrator tools (`orchestrator_inbox`, `orchestrator_accept` / `reject` / `correct` — unchanged by v2.7.0). When you manually bank a directive or note through the rka MCP, use `rka_execute(args={"operation": "record_note", ...})` etc.
 
@@ -40,13 +40,14 @@ rka_execute(args={"operation": "record_note",
                   "confidence": "verified"})
 
 # Review open blockers
-rka_query(args={"operation": "get_checkpoints",
-                "project_id": "prj_01...", "status": "open"})
+rka_query(args={"operation": "checkpoints",
+                "project_id": "prj_01...", "filters": {"status": "open"}})
 
 # Resolve a checkpoint
 rka_execute(args={"operation": "resolve_checkpoint",
                   "project_id": "prj_01...",
                   "id": "chk_01...",
+                  "resolved_by": "pi",
                   "resolution": "...", "create_decision": True})
 ```
 
@@ -54,9 +55,9 @@ rka_execute(args={"operation": "resolve_checkpoint",
 
 1. **Pin the project for the whole conversation.** v2.6+: every project-scoped operation requires `project_id` in `args`. State which project you're supervising (e.g., "we're working on prj_01KSMW9R…"). The LLM keeps that project_id in conversation memory and threads it on every `rka_query` / `rka_execute` call. There is no longer an "active project" the MCP server tracks — the pre-v2.6 silent-fallback-to-`proj_default` failure mode is gone. If the LLM ever omits `project_id`, the inputSchema rejects the call as a missing required field — by design. The `RKA_PROJECT` env var was removed in v2.6.
 2. `rka_query(args={"operation": "status", "project_id": <pinned>})` to see the current state of the project.
-3. `rka_query(args={"operation": "get_checkpoints", "project_id": <pinned>, "status": "open"})` to review pending decisions and blockers.
-4. `rka_query(args={"operation": "get_research_map", "project_id": <pinned>})` to inspect the evidence landscape.
-5. `rka_query(args={"operation": "get_mission", "project_id": <pinned>, "id": "mis_..."})` or `rka_query(args={"operation": "get_report", ...})` when reviewing current execution.
+3. `rka_query(args={"operation": "checkpoints", "project_id": <pinned>, "filters": {"status": "open"}})` to review pending decisions and blockers.
+4. `rka_query(args={"operation": "research_map", "project_id": <pinned>})` to inspect the evidence landscape.
+5. `rka_query(args={"operation": "mission", "project_id": <pinned>, "id": "mis_..."})` or `rka_query(args={"operation": "report", "project_id": <pinned>, "id": "mis_..."})` when reviewing current execution.
 
 ## Core Responsibilities
 

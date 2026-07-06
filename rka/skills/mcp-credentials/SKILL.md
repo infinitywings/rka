@@ -28,7 +28,7 @@ This skill walks you through:
 
 - [`walkthroughs/claude-oauth.md`](walkthroughs/claude-oauth.md) — `CLAUDE_CODE_OAUTH_TOKEN` for the RKA orchestrator daemon's claude-agent-sdk subprocess. Long-lived (~1 year). Mint via `claude setup-token` on the host.
 - [`walkthroughs/zotero.md`](walkthroughs/zotero.md) — `ZOTERO_API_KEY` + `ZOTERO_LIBRARY_ID` + `ZOTERO_LIBRARY_TYPE` for the zotero-mcp server. Per-user library, scope-restrictable.
-- [`walkthroughs/semantic-scholar.md`](walkthroughs/semantic-scholar.md) — `SEMANTIC_SCHOLAR_API_KEY` for the rka MCP server's `rka_search_semantic_scholar` tool. Raises the rate limit from 100 req/5min to 1 req/sec.
+- [`walkthroughs/semantic-scholar.md`](walkthroughs/semantic-scholar.md) — `SEMANTIC_SCHOLAR_API_KEY` for the rka MCP server's Semantic Scholar search backend (legacy tool `rka_search_semantic_scholar`, deferred on the v2.7.0+ surface — load via `rka_load_tools`; the `rka_record_literature` verb's `search_source='semantic_scholar'` mode delegates to the same code, so the key applies regardless of surface). Raises the rate limit from 100 req/5min to 1 req/sec.
 - [`walkthroughs/serpapi.md`](walkthroughs/serpapi.md) — `SERPAPI_KEY` for the rka MCP server's deep-research augmentation. 250 free searches/month.
 - [`walkthroughs/openalex.md`](walkthroughs/openalex.md) — `OPENALEX_MAILTO` (just an email, not a secret) for the OpenAlex polite-pool, granting a higher rate limit.
 

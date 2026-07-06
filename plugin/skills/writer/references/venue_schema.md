@@ -21,18 +21,19 @@ Consumed by:
 ## File layout
 
 ```
-rka/skills/writer/references/venue/
-├── _schema.md                    ← this file
-├── CHI.yaml                      ← machine spec (source of truth)
-├── CHI.md                        ← auto-generated narrative
-├── CHI.notes.md                  ← optional freeform tail
-├── NeurIPS.yaml
-├── NeurIPS.md
-├── ...
-└── proposals/
-    ├── NSF-PAPPG.yaml            ← universal NSF baseline
-    └── solicitations/
-        └── NSF-23-560.yaml       ← inherits NSF-PAPPG; deltas only
+rka/skills/writer/references/
+├── venue_schema.md                  ← this file (schema spec)
+└── venue/
+    ├── CHI.yaml                      ← machine spec (source of truth)
+    ├── CHI.md                        ← auto-generated narrative
+    ├── CHI.notes.md                  ← optional freeform tail
+    ├── NeurIPS.yaml
+    ├── NeurIPS.md
+    ├── ...
+    └── proposals/
+        ├── NSF-PAPPG.yaml            ← universal NSF baseline
+        └── solicitations/
+            └── NSF-23-560.yaml       ← inherits NSF-PAPPG; deltas only
 ```
 
 ## Schema (v1)
@@ -224,8 +225,10 @@ provenance:
    block at the bottom if it exists).
 3. Add the venue to `template_registry.md` if it needs a new
    LaTeX class/style not already covered.
-4. (Optional) Drop sample corpus tags via `rka_add_literature` so
-   future Brain runs have tone-calibration references.
+4. (Optional) Drop sample corpus tags via `rka_execute(args={"operation":
+   "record_literature", "project_id": "prj_...", "title": ..., "tags":
+   ["venue-sample:<id>"]})` so future Brain runs have tone-calibration
+   references.
 
 ## Versioning
 

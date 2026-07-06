@@ -36,12 +36,12 @@ Two invocation paths land in this skill (Phase 3 expansion per `dec_01KS2WPKMRVS
 
 ### Steps (both invocation paths)
 
-1. **`rka_get_status()` first.** Confirms the active project. If it returns `proj_default` or a project other than the one you intend, call `rka_list_projects()` then `rka_set_project(project_id)` to switch. The MCP `_session.project_id` is per-process and ephemeral; previous-session state does not carry over. Set `RKA_PROJECT=<project_id>` in `.mcp.json` env to make the active project automatic for this workspace.
+1. **Identify the project first.** Call `rka_query(args={"operation": "list_projects"})` to discover the project id (`prj_...`) matching your manuscript working directory. There is no active-project session state at the MCP layer: pass `project_id="prj_..."` explicitly on every subsequent `rka_query` / `rka_execute` call. Confirm the project with `rka_query(args={"operation": "status", "project_id": "prj_..."})`.
 2. **If mission-spawned (path b)**: read `mission_id` from env var `WRITER_MISSION_ID` or CLI arg. Call `rka_get_mission(id=mission_id)`; extract `tags` (look for `comment-class:<r>` and `manuscript:<id>` markers) and `context` (review comment text). If `comment-class` tag is absent OR `classify_comment(context)` returns `ambiguous=True`, escalate to PI via `rka_submit_checkpoint(type="clarification", description="Ambiguous comment class; PI to classify or supersede the mission.")` before invoking any handler. Otherwise dispatch directly to `scripts/revision_handler.py` per the comment-class hint; skip steps 3-6.
 3. `rka_get_changelog(since="<last writing session>")`: what changed in RKA since you last drafted on this project.
 4. `rka_get_research_map()`: structural overview of clusters and claims available to cite.
 5. Read `.planning/ACTIVE_WORKFLOW.md` if present. Resume the recorded `next_action`. If absent, infer phase from the working directory: no `OUTLINE.md` means start with the Venue checkpoint; outline present but no drafts in `sections/` means proceed to Table and figure planning.
-6. Verify `.mcp.json` lists the `rka` server (required) plus `rka-writer-tools` (Phase 2; required for Stage B-G validation). The Phase 3 optional tools `rka_get_manuscript`, `rka_validate_reference`, `rka_register_manuscript` are available on the core `rka` MCP server when `rka` is installed at v2.5.7+ (see Phase 3 docs).
+6. Verify `.mcp.json` lists the `rka` server (required) plus `rka-writer-tools` (Phase 2; required for Stage B-G validation). Manuscript reads and writes are available on the core `rka` server via the dispatch operations `manuscript` (`rka_query`), `validate_reference` and `register_manuscript` (`rka_execute`) when `rka` is installed at v2.5.7+; the legacy `rka_get_manuscript` / `rka_validate_reference` / `rka_register_manuscript` names are deferred on the v2.7.0+ surface and require `rka_load_tools` first (see Phase 3 docs).
 7. Greet the PI (path a) or surface the mission state (path b) with the inferred next checkpoint or handler dispatch.
 
 Full worked walkthrough: [`references/workflows.md`](references/workflows.md) section "Session Start".
@@ -49,6 +49,8 @@ Full worked walkthrough: [`references/workflows.md`](references/workflows.md) se
 ---
 
 ## Tool Surface
+
+> **v2.7.0 dispatch translation.** The legacy `rka_*` tool names used throughout this skill (`rka_get_status`, `rka_get_mission`, `rka_get_changelog`, `rka_get_research_map`, `rka_add_decision`, `rka_record_pi_selection`, `rka_submit_report`, `rka_get_literature`, `rka_create_mission`, `rka_get_manuscript`, etc.) are synonyms for the v2.7.0+ typed-arg surface: reads are `rka_query(args={"operation": ...})` and writes are `rka_execute(args={"operation": ...})` (e.g. `rka_get_status` -> operation `status`, `rka_add_decision` -> operation `record_decision`, `rka_create_mission` -> operation `create_mission`). Only `rka_query` / `rka_execute` / `rka_describe` / `rka_load_tools` / `rka_help` broadcast; the legacy names are deferred and must be registered via `rka_load_tools` first. The discipline (`project_id` on every call, `source="pi"` + `verbatim_input`, `related_journal=[...]` on decisions) carries over verbatim — only the call shape changes. See `rka_describe(operation="<name>")` for per-operation signatures.
 
 Native Claude Code tools you use directly: `Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob`, `WebSearch`, `WebFetch`. `Bash` is the workhorse here because manuscript work is fundamentally file-and-shell heavy (latexmk, chktex, biber, the custom audit scripts under `scripts/`).
 
@@ -75,7 +77,7 @@ Scripts invoked via `Bash` (under `scripts/`):
 
 ## Evidence Collection for Sections
 
-When the PI describes a section or report scope in prose, do NOT rely on a single search. Call `rka_query(operation='collect_report_context', query=<the PI's description>, filters={'angle_queries': [3-5 short queries from different angles]})` to assemble the candidate node set: it unions multi-angle search seeds with provenance-weighted graph expansion and returns per-node `included_via` so every inclusion is auditable. Then verify borderline nodes by fetching their content, and re-search any report dimension that came back thin. Iterative retrieval measured 0.80 to 1.00 recall vs 0.32 for one-shot paragraph search (eval-v3). The full strategy lives in the Brain skill section "Retrieval Strategy" (drive RKA through several calls, never one-shot it).
+When the PI describes a section or report scope in prose, do NOT rely on a single search. Call `rka_query(args={"operation": "collect_report_context", "project_id": "prj_...", "query": <the PI's description>, "filters": {"angle_queries": [3-5 short queries from different angles]}})` to assemble the candidate node set: it unions multi-angle search seeds with provenance-weighted graph expansion and returns per-node `included_via` so every inclusion is auditable. Then verify borderline nodes by fetching their content, and re-search any report dimension that came back thin. Iterative retrieval measured 0.80 to 1.00 recall vs 0.32 for one-shot paragraph search (eval-v3). The full strategy lives in the Brain skill section "Retrieval Strategy" (drive RKA through several calls, never one-shot it).
 
 ---
 
@@ -114,7 +116,7 @@ Full schema and worked anchoring example: [`references/architecture.md`](referen
 
 The knowledge base is not a flat set of true facts. It contains **superseded** decisions and notes, **retracted** entries, and **unresolved contradictions** between claims. Drafting faithfully means representing the CURRENT state, not whatever the search happened to surface. This is the single failure mode generic LLM drafting handles worst (models exhibit a "nostalgia bias" toward older facts and degrade 6-31% when an outdated fact acts as a distractor), so the rules here are explicit and enforced by `scripts/verify_provenance.py`.
 
-**Before citing any `jrn_` or `dec_`, check its status.** Use `rka_query(operation='entity', id=...)` or the entity GET; `status=superseded|abandoned` (decisions) and `confidence=superseded|retracted` (journal) mean **do not assert from this entity.** For decisions, follow `superseded_by` to the current head and cite that instead. The `supersedes` graph edges (materialized as of the tier-1 retrieval work) let you traverse old to new directly.
+**Before citing any `jrn_` or `dec_`, check its status.** Use `rka_query(args={"operation": "entity", "project_id": "prj_...", "id": ...})` or the entity GET; `status=superseded|abandoned` (decisions) and `confidence=superseded|retracted` (journal) mean **do not assert from this entity.** For decisions, follow `superseded_by` to the current head and cite that instead. The `supersedes` graph edges (materialized as of the tier-1 retrieval work) let you traverse old to new directly.
 
 - **Superseded.** Assert the current fact. You MAY mention the superseded one only when explicitly narrating the design evolution ("we initially adopted X before revising to Y"); in that case the provenance comment must carry the `superseded-ack` token so the verifier permits it. An unacknowledged citation to a superseded entity is a BLOCK.
 - **Retracted.** Never assert a retracted claim as true. Cite the correction entity instead. A deliberate citation to a retracted entity (e.g. describing what was retracted and why) requires the `retracted-ack` token.
@@ -288,7 +290,7 @@ When the PI returns review comments on a draft section, classify each comment in
 | R1 | Factual (sentence-level) | `handle_factual_r1`: re-validate cited reference via `validate_references.py` Stage B-G; draft factual correction on VERIFIED or surface alternative-candidate notes on HALLUCINATED/RETRACTED |
 | R2 | Style or AI-tic | `handle_style_r2`: re-run `ai_tic_lint.py` with strict mode; surface verdict (PASS/WARN/BLOCK); PI reviews residual violations |
 | R3 | Inconsistency (cross-section) | `handle_inconsistency_r3`: cross-section claim diff via `bridge_repetition_check.py` (ratio >= 0.7); high-similarity pairs flagged for reconciliation |
-| R4 | Logical gap or unsupported claim | `handle_logical_r4`: ESCALATE via `rka_create_mission(type="writer_evidence_gap", ...)` addressed to Brain; Writer waits for Brain's evidence-gap response |
+| R4 | Logical gap or unsupported claim | `handle_logical_r4`: ESCALATE by spawning a `writer_evidence_gap` mission via `rka_create_mission(objective="<evidence-gap objective>", motivated_by_decision="dec_...", tags=["writer_evidence_gap"], context="...")` addressed to Brain; Writer waits for Brain's evidence-gap response |
 
 **Classifier discipline**: `classify_comment(comment_text)` is heuristic-only (regex/keyword/structural patterns; no server-side LLM call). The Writer's Claude Code session IS the LLM-assisted reasoning layer that reviews (comment + heuristic result) before invoking any handler. When `classify_comment` returns `ambiguous=True`, the Writer escalates to PI before dispatching.
 

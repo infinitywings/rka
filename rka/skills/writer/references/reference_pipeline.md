@@ -11,7 +11,7 @@ The pipeline is structured as seven stages with explicit verdict statuses. A ref
 ## Stage A: Extraction
 
 Inputs:
-- `rka_get_literature(project_id=...)` to pull `lit_` entities for the project.
+- `rka_query(args={"operation": "literature", "project_id": "prj_..."})` to pull `lit_` entities for the project.
 - Anystyle parse of free-text references (if PI provides plain-text references rather than RKA-resident `lit_`).
 - Direct identifiers (DOI, arXiv, PubMed) extracted from text via regex.
 
@@ -19,7 +19,7 @@ Outputs:
 - A working set of candidate references in CSL-JSON form.
 - Each candidate carries `source_origin` (RKA-resident `lit_`, free-text parse, or direct identifier).
 
-Phase 1 status: **implemented**. `scripts/validate_references.py` Stage A converts CSL-JSON from `rka_get_literature` output to BibTeX via the `manubot` Python package if installed. Free-text anystyle parsing requires the anystyle Ruby gem and is a Phase 2 deliverable.
+Phase 1 status: **implemented**. `scripts/validate_references.py` Stage A converts CSL-JSON from `rka_query` `literature` output to BibTeX via the `manubot` Python package if installed. Free-text anystyle parsing requires the anystyle Ruby gem and is a Phase 2 deliverable.
 
 ## Stage B: Identifier resolution
 

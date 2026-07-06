@@ -136,6 +136,77 @@ IngestSourceLiteral = Annotated[
 
 # Skills are shipped as package data inside rka/skills/
 _SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
+SkillNameLiteral = Annotated[
+    Literal["brain", "executor", "pi", "writer", "mcp-credentials"],
+    Field(description="Packaged RKA skill name."),
+]
+
+_SKILL_ENTRYPOINTS: dict[str, dict[str, str]] = {
+    "brain": {
+        "path": "brain/SKILL.md",
+        "prompt": "brain_skill",
+        "role": "strategic Brain",
+        "recommended_for": "strategy, decisions, provenance, research-map maintenance",
+    },
+    "executor": {
+        "path": "executor/SKILL.md",
+        "prompt": "executor_skill",
+        "role": "implementation Executor",
+        "recommended_for": "mission pickup, experiments, implementation, backbriefs",
+    },
+    "pi": {
+        "path": "pi/SKILL.md",
+        "prompt": "pi_skill",
+        "role": "human PI",
+        "recommended_for": "supervision, checkpoint resolution, reviewing RKA state",
+    },
+    "writer": {
+        "path": "writer/SKILL.md",
+        "prompt": "",
+        "role": "manuscript Writer",
+        "recommended_for": "venue-aware manuscript drafting with provenance",
+    },
+    "mcp-credentials": {
+        "path": "mcp-credentials/SKILL.md",
+        "prompt": "",
+        "role": "credential setup assistant",
+        "recommended_for": "MCP credential setup and validation",
+    },
+}
+
+
+def _parse_skill_frontmatter(text: str) -> dict[str, str]:
+    """Parse the simple YAML-ish frontmatter used by packaged SKILL.md files."""
+    if not text.startswith("---"):
+        return {}
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        return {}
+    out: dict[str, str] = {}
+    for line in parts[1].splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        out[key.strip()] = value.strip().strip('"')
+    return out
+
+
+def _safe_skill_path(skill: str, relative_path: str | None = None) -> Path:
+    """Resolve a packaged skill file without allowing path traversal."""
+    entry = _SKILL_ENTRYPOINTS[skill]
+    rel = relative_path or entry["path"]
+    if relative_path is not None:
+        rel_path = Path(relative_path)
+        if rel_path.is_absolute() or ".." in rel_path.parts:
+            raise ValueError("skill reference must stay inside the selected skill directory")
+        rel = str(Path(skill) / rel_path)
+    candidate = (_SKILLS_DIR / rel).resolve()
+    root = _SKILLS_DIR.resolve()
+    if root not in candidate.parents and candidate != root:
+        raise ValueError("skill path escapes packaged skills directory")
+    if candidate.name.startswith("._") or any(part.startswith("._") for part in candidate.parts):
+        raise ValueError("AppleDouble metadata files are not readable skill assets")
+    return candidate
 
 
 def _read_skill(path: str) -> str:
@@ -162,6 +233,15 @@ def _live_prompt_banner(role: str) -> str:
         "\n---\n\n"
     )
 
+# ChatGPT connector deployments: RKA_SKILL_TOOLS=1 promotes the three skill
+# adapter tools (rka_list_skills / rka_read_skill / rka_start_session) to
+# always_on. ChatGPT custom connectors are tool-oriented and never call
+# rka_load_tools spontaneously, so deferred tools are invisible to them.
+# Local stdio clients (Claude Code / Claude Desktop / Codex) leave the flag
+# unset and keep the default 5-tool dispatch surface unchanged. Like
+# RKA_LEGACY_TOOLS, the flag is read at module import time.
+_SKILL_TOOLS_ALWAYS_ON = os.environ.get("RKA_SKILL_TOOLS", "0") == "1"
+
 RKA_INSTRUCTIONS = """\
 Research Knowledge Agent (RKA) is a structured research knowledge base shared by the
 Brain, Executor, and PI. It stores journal entries, decisions, literature, missions,
@@ -175,11 +255,11 @@ Detailed operating guidance is available via MCP prompts:
 Use these prompts to load role-specific guidance at session start.
 
 ## Tool Surface (v2.7.0+) — Typed Dispatch Architecture
-RKA ships 5 always-on tools: 3 dispatch tools that route to 87 typed
+RKA ships 5 always-on tools: 3 dispatch tools that route to 91 typed
 operations, plus 2 escape hatches into the legacy surface.
 
 - **Dispatch (always-on):**
-  - `rka_query(args={"operation": ..., "project_id": ..., ...})` — 38 read
+  - `rka_query(args={"operation": ..., "project_id": ..., ...})` — 42 read
     operations (status, context, journal, decisions, missions, literature,
     research map, etc.). Returns structured data.
   - `rka_execute(args={"operation": ..., "project_id": ..., ...})` — 49
@@ -194,7 +274,7 @@ operations, plus 2 escape hatches into the legacy surface.
     the live tool surface. Useful only for back-compat with old transcripts.
   - `rka_help(name=...)` — deprecated alias for `rka_describe`.
 
-The 87 operations are typed Pydantic models with per-branch enum constraints
+The 91 operations are typed Pydantic models with per-branch enum constraints
 and required-field enforcement at the FastMCP schema layer — illegal values
 (e.g. `confidence="confirmed"`) are rejected at the inputSchema boundary
 before the call goes out.
@@ -238,6 +318,22 @@ call — there is no "active project" session state. Call
 `rka_query(args={"operation": "list_projects"})` to discover available
 projects (no project_id required). `rka_set_project` is a deprecated no-op
 since v2.6.
+"""
+
+if _SKILL_TOOLS_ALWAYS_ON:
+    RKA_INSTRUCTIONS += """\
+
+## Skill Tools (ChatGPT connector mode — RKA_SKILL_TOOLS=1)
+Role skill guides are exposed as always-on tools in this deployment. At the
+START of every session, call:
+- `rka_start_session(role="pi" | "brain" | "executor", project_id=None)` —
+  returns the selected role's full skill guide plus a session checklist.
+Then follow the returned guide. Also available:
+- `rka_list_skills()` — list all packaged skill guides (brain, executor, pi,
+  writer, mcp-credentials).
+- `rka_read_skill(name, reference=None)` — read a skill guide or one of its
+  referenced files, e.g. rka_read_skill(name="writer",
+  reference="references/workflows.md").
 """
 
 mcp = FastMCP("Research Knowledge Agent", instructions=RKA_INSTRUCTIONS)
@@ -361,6 +457,10 @@ def _record_entity(entity_type: str, entity_id: str, summary: str) -> None:
 _TIER_ALWAYS_ON = "always_on"
 _TIER_DEFERRED = "deferred"
 
+# Effective tier for the ChatGPT skill adapter tools — always_on only when
+# RKA_SKILL_TOOLS=1 (see flag definition above RKA_INSTRUCTIONS).
+_SKILL_TOOL_TIER = _TIER_ALWAYS_ON if _SKILL_TOOLS_ALWAYS_ON else _TIER_DEFERRED
+
 
 # ---------------------------------------------------------------------------
 # v2.7.0a3 — Legacy-tool gating (Cloudflare 2-tool dispatch pattern)
@@ -472,6 +572,10 @@ def tool(
             return declared_tier
         if fn_name in _DEMOTED_NAVIGATORS:
             return _TIER_DEFERRED
+        if category == "skills" and _SKILL_TOOLS_ALWAYS_ON:
+            # ChatGPT connector mode — skill adapters declared always_on
+            # via _SKILL_TOOL_TIER are exempt from legacy demotion.
+            return declared_tier
         if category not in _NON_LEGACY_CATEGORIES:
             return _TIER_DEFERRED
         return declared_tier
@@ -5709,7 +5813,8 @@ async def rka_list_tools(
         category: optional category filter — one of:
             core | literature | journal | decision | mission |
             checkpoint | claims | graph | workspace | hooks |
-            maintenance | session | manuscript | navigator | general.
+            maintenance | session | manuscript | navigator | skills |
+            general.
         query: optional substring match against name + summary
             (case-insensitive). For finding tools when you know what
             you want to do but not the exact name.
@@ -5955,7 +6060,7 @@ async def rka_query(args: _QueryArgsUnion) -> str:
 
     v2.7.0 NO-COMPROMISE typed-arg surface. The ``args`` parameter is a
     Pydantic discriminated union (keyed by ``operation``) covering all
-    38 read operations. FastMCP renders the union as JSON Schema
+    42 read operations. FastMCP renders the union as JSON Schema
     ``oneOf`` with per-branch enum + required-field arrays, so the
     LLM cannot emit an invalid operation, missing required field, or
     out-of-set enum value — the tool surface itself rejects pre-dispatch.
@@ -7139,6 +7244,131 @@ async def rka_describe(operation: str = "") -> str:
 
 
 # ============================================================
+# ChatGPT connector skill adapters
+# ============================================================
+# Some MCP clients (Claude Desktop / Claude Code) expose MCP prompts directly,
+# so they can call brain_skill / executor_skill / pi_skill from the prompt
+# picker. ChatGPT custom connectors are primarily tool-oriented, so these
+# deferred tools expose the same packaged skill files through normal tool calls
+# without changing the default five-tool dispatch surface.
+
+
+@tool(tier=_SKILL_TOOL_TIER, category="skills")
+async def rka_list_skills() -> str:
+    """List packaged RKA skill guides available through the MCP connector.
+
+    Returns:
+        JSON array with name, description, version, role, prompt_name, and
+        recommended_for fields. Use rka_read_skill(name=...) to load one.
+    """
+    skills: list[dict[str, str]] = []
+    for name, entry in _SKILL_ENTRYPOINTS.items():
+        try:
+            text = _safe_skill_path(name).read_text(encoding="utf-8")
+        except OSError:
+            meta = {}
+        else:
+            meta = _parse_skill_frontmatter(text)
+        skills.append(
+            {
+                "name": name,
+                "skill_name": meta.get("name", name),
+                "version": meta.get("version", ""),
+                "description": meta.get("description", ""),
+                "role": entry["role"],
+                "recommended_for": entry["recommended_for"],
+                "prompt_name": entry["prompt"],
+            }
+        )
+    return json.dumps({"skills": skills}, indent=2)
+
+
+@tool(tier=_SKILL_TOOL_TIER, category="skills")
+async def rka_read_skill(
+    name: SkillNameLiteral,
+    reference: str | None = None,
+) -> str:
+    """Read a packaged RKA skill guide or one of its referenced files.
+
+    This is the tool-oriented equivalent of the MCP prompt entries
+    `brain_skill`, `executor_skill`, and `pi_skill`, intended for clients
+    such as ChatGPT connectors that do not expose MCP prompts prominently.
+
+    Args:
+        name: Skill package to read: brain, executor, pi, writer, or
+            mcp-credentials.
+        reference: Optional path inside that skill directory, such as
+            `workflows.md` for brain/executor or
+            `references/workflows.md` for writer. Omit to read SKILL.md.
+
+    Returns:
+        Markdown text for the requested skill file.
+    """
+    try:
+        path = _safe_skill_path(name, reference)
+        text = path.read_text(encoding="utf-8")
+    except (OSError, ValueError) as exc:
+        return json.dumps(
+            {
+                "error": "skill_file_unavailable",
+                "name": name,
+                "reference": reference,
+                "detail": str(exc),
+                "hint": "Call rka_list_skills() and then request a listed skill or a relative file referenced by that skill.",
+            },
+            indent=2,
+        )
+    rel = path.relative_to(_SKILLS_DIR.resolve())
+    banner_role = name if reference is None else f"{name}:{reference}"
+    return _live_prompt_banner(banner_role) + f"# Source: rka/skills/{rel}\n\n{text}"
+
+
+@tool(tier=_SKILL_TOOL_TIER, category="skills")
+async def rka_start_session(
+    role: SkillNameLiteral = "pi",
+    project_id: str | None = None,
+) -> str:
+    """Load RKA role guidance plus a concrete session-start checklist.
+
+    Use this at the start of a ChatGPT connector conversation. It returns the
+    chosen role skill and a short set of first calls to make through
+    rka_query/rka_execute. It does not mutate RKA state.
+
+    Args:
+        role: RKA role guide to load. Use `pi` for ChatGPT-as-PI cockpit,
+            `brain` for strategic analysis, `executor` for implementation,
+            or `writer` for manuscript drafting.
+        project_id: Optional project id to thread into the suggested calls.
+
+    Returns:
+        Markdown: role guidance followed by a session-start checklist.
+    """
+    skill_text = await rka_read_skill(role)
+    project_hint = project_id or "prj_..."
+    checklist = f"""
+
+---
+
+# ChatGPT Connector Session Checklist
+
+1. If you do not know the project id, call:
+   `rka_query(args={{"operation": "list_projects"}})`
+2. Pin the project id in the conversation. For this session use:
+   `{project_hint}`
+3. Load current context:
+   `rka_query(args={{"operation": "context", "project_id": "{project_hint}"}})`
+4. Check open blockers:
+   `rka_query(args={{"operation": "checkpoints", "project_id": "{project_hint}", "status": "open"}})`
+5. Check maintenance:
+   `rka_query(args={{"operation": "pending_maintenance", "project_id": "{project_hint}"}})`
+
+For unfamiliar operations, call `rka_describe(operation="<operation_name>")`
+before using `rka_query` or `rka_execute`.
+"""
+    return skill_text + checklist
+
+
+# ============================================================
 # v2.7.0a3 — rka_execute (the unified WRITE/lifecycle verb)
 # ============================================================
 # Companion to rka_query (reads) and rka_describe (schema lookup).
@@ -7325,11 +7555,11 @@ support; the Skill is authoritative.
 Always begin a session by loading context:
 
 0. **Tool surface (v2.7.0+ typed dispatch).** RKA ships 3 always-on dispatch
-   tools — `rka_query` (38 read ops), `rka_execute` (49 write/lifecycle ops),
+   tools — `rka_query` (42 read ops), `rka_execute` (49 write/lifecycle ops),
    and `rka_describe` (schema lookup) — plus 2 escape hatches (`rka_load_tools`
    for legacy compat and `rka_help` as a deprecated alias of `rka_describe`).
    No activation step is required: every operation is reachable from
-   `rka_query` / `rka_execute` on the first call. To browse the 87 operations
+   `rka_query` / `rka_execute` on the first call. To browse the 91 operations
    call `rka_describe("")`; for one operation's full schema call
    `rka_describe("record_decision")`. Per-branch enum + required-field
    enforcement at the FastMCP schema layer guarantees values like
@@ -7471,7 +7701,7 @@ Skill is authoritative.
 ## Session Start Protocol
 
 0. **Tool surface (v2.7.0+ typed dispatch).** RKA ships 3 always-on dispatch
-   tools — `rka_query` (38 read ops), `rka_execute` (49 write/lifecycle ops),
+   tools — `rka_query` (42 read ops), `rka_execute` (49 write/lifecycle ops),
    and `rka_describe` (schema lookup) — plus 2 escape hatches (`rka_load_tools`
    for legacy compat and `rka_help` as a deprecated alias of `rka_describe`).
    No activation step is required: every operation is reachable from

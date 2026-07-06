@@ -65,8 +65,13 @@ class Database:
         if not migrations_dir.exists():
             return 0
 
-        # Gather .sql files sorted by name
-        sql_files = sorted(f for f in migrations_dir.iterdir() if f.suffix == ".sql")
+        # Gather .sql files sorted by name. Ignore macOS AppleDouble/resource-fork
+        # sidecars that can appear on external or synced volumes.
+        sql_files = sorted(
+            f
+            for f in migrations_dir.iterdir()
+            if f.suffix == ".sql" and not f.name.startswith("._")
+        )
         if not sql_files:
             return 0
 

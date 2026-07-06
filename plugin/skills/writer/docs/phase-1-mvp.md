@@ -14,6 +14,21 @@ Mission: `mis_01KS0C3RP04XANCZAB3HTNAG0P`. Decisions:
 `dec_01KS12H9KT1T03DHX2Q6FKTXHH` (anti-AI-tic primary-source disposition,
 PATCH 2).
 
+> **v2.7.0 dispatch translation.** Legacy tool names in this document
+> (`rka_add_decision`, `rka_record_pi_selection`, `rka_add_literature`,
+> `rka_update_literature`, `rka_get_literature`, `rka_create_mission`, and the
+> Phase 3 `rka_get_manuscript` / `rka_register_manuscript` /
+> `rka_validate_reference`) are synonyms for `rka_execute(args={"operation":
+> ...})` (writes) and `rka_query(args={"operation": ...})` (reads) under the
+> v2.7.0+ typed-arg surface — e.g. `rka_add_decision` →
+> `rka_execute(args={"operation": "record_decision", ...})` and
+> `rka_get_literature` → `rka_query(args={"operation": "literature", ...})`.
+> The legacy names are deferred tools loadable via `rka_load_tools`; the
+> provenance discipline (`related_journal=[...]` and `phase` on decisions,
+> `motivated_by_decision` on missions, `project_id` on every call) carries
+> over unchanged. See `rka_describe(operation="<name>")` for per-operation
+> signatures.
+
 ## What shipped in Phase 1
 
 ### SKILL.md and references
@@ -112,8 +127,16 @@ on Python 3.13.8 with pytest 9.0.2.
   via `rka_create_mission`.
 - Brain mission integration: Brain spawns a Writer subagent on a
   Revision Mission.
-- Optional MCP tools `rka_get_manuscript`, `rka_validate_reference`,
-  `rka_register_manuscript` added to the existing `rka` server.
+- Optional MCP tools for manuscripts, added to the existing `rka` server.
+  (Now shipped, 2026-05-20. On the v2.7.0+ surface these are
+  `rka_query(args={"operation": "manuscript", "project_id": "prj_...", "id":
+  "msc_..."})`, `rka_execute(args={"operation": "register_manuscript",
+  "project_id": "prj_...", "venue": "...", "title": "..."})`, and
+  `rka_execute(args={"operation": "validate_reference", "project_id":
+  "prj_...", "manuscript_id": "msc_...", "doi": "..."})` — `validate_reference`
+  requires at least one of `doi`/`title`. The legacy names
+  `rka_get_manuscript` / `rka_register_manuscript` / `rka_validate_reference`
+  remain loadable via `rka_load_tools`.)
 
 ## How to use Phase 1 deliverables manually
 
@@ -135,12 +158,16 @@ Phase 1 supports manual assembly. Workflow:
    captured as `lit_` entries via `rka_add_literature`).
 2. `python3 scripts/validate_references.py --check` confirms manubot is
    on PATH (install via `pip install manubot` if not).
-3. For each `lit_` in scope, PI either confirms `validation_status` is
-   already `VERIFIED` from prior work, OR manually verifies the citation
-   against Crossref / OpenAlex / Semantic Scholar / arXiv and updates
-   via `rka_update_literature(id="lit_...", validation_status="VERIFIED")`.
-4. PI exports the verified set via `rka_get_literature(project_id=...)`,
-   saves as CSL-JSON, and runs Stage A:
+3. For each `lit_` in scope, PI either confirms the validation verdict is
+   already recorded as `VERIFIED` from prior work (there is no
+   `validation_status` field on a `lit_` entry — record the verdict in the
+   entry's `tags` or `notes`), OR manually verifies the citation against
+   Crossref / OpenAlex / Semantic Scholar / arXiv and updates via
+   `rka_execute(args={"operation": "update_literature", "project_id":
+   "prj_...", "id": "lit_...", "tags": ["validation:VERIFIED"]})`.
+4. PI exports the verified set via `rka_query(args={"operation":
+   "literature", "project_id": "prj_..."})`, saves as CSL-JSON, and runs
+   Stage A:
    ```
    python3 scripts/validate_references.py --csl-json verified.json --out refs.bib
    ```

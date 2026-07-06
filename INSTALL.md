@@ -11,7 +11,7 @@
 | Surface | What you'll have |
 |---|---|
 | **RKA backend** | FastAPI + worker + SQLite + FTS5 + sqlite-vec running in Docker on `localhost:9712`. Web dashboard at the same URL. |
-| **Claude Code (Executor)** | Full plugin: 4 role skills (`rka:rka-brain`, `rka:rka-executor`, `rka:rka-pi`, `rka:rka-writer`), 6 slash commands (`/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`, `/rka-setup-claude-desktop`, `/rka-start-manuscript`), a SessionStart hook that pings the backend on every new session, and the v2.7.0 dispatch surface — 3 always-on tools (`rka_query`, `rka_execute`, `rka_describe`) routing to 91 typed Pydantic operations, plus 2 escape hatches (`rka_load_tools` to register legacy aliases on demand, `rka_help` as a `rka_describe` alias). Legacy 91-tool surface available via `RKA_LEGACY_TOOLS=1` for backwards compat. |
+| **Claude Code (Executor)** | Full plugin: 4 role skills (`rka:rka-brain`, `rka:rka-executor`, `rka:rka-pi`, `rka:rka-writer`), 6 slash commands (`/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`, `/rka-setup-claude-desktop`, `/rka-start-manuscript`), a SessionStart hook that pings the backend on every new session, and the v2.7.0 dispatch surface — 3 always-on tools (`rka_query`, `rka_execute`, `rka_describe`) routing to 91 typed Pydantic operations, plus 2 escape hatches (`rka_load_tools` to register legacy aliases on demand, `rka_help` as a `rka_describe` alias). The 91 legacy per-tool aliases (one MCP tool per operation, the pre-v2.7.0 layout) load on demand via `rka_load_tools`; `RKA_LEGACY_TOOLS=1` restores the v2.7.0a2 20-tool always-on surface for backwards compat. |
 | **Writer (manuscript drafting)** | The `rka:rka-writer` skill drafts venue-targeted manuscripts (CHI, EMNLP, NeurIPS, USENIX, IEEE-SP, OSDI, Nature seed venues). Bootstrap a per-manuscript workspace via `/rka-start-manuscript` (creates `.mcp.json`, `main.tex`, `refs.bib`, `.planning/` directory). Reference-validation MCP server (`rka-writer-tools`) wraps Crossref + OpenAlex + Semantic Scholar + arXiv + SerpAPI; install separately via `uv tool install '.[writer-tools]'` (see §3.6). |
 | **Claude Desktop (Brain)** | `mcp__rka__*` tool surface via the `mcpServers.rka` entry in `claude_desktop_config.json`. Wrapper-based config gives you version-checking + auto-pin to your active project. Skills and slash commands are Claude Code only (Claude Desktop's plugin format is separate). |
 
@@ -27,7 +27,7 @@ In Claude Desktop and Claude Code, you'll see **5 always-on `rka` tools** at ses
 | `rka_load_tools` | Escape hatch: register legacy tool aliases for the rest of the session | — |
 | `rka_help` | Alias for `rka_describe` (mnemonic surface) | — |
 
-The 87 typed Pydantic operations under `rka_query` / `rka_execute` carry per-branch enum and required-field enforcement at the **FastMCP schema layer**, so the LLM cannot emit invalid values — the tool surface itself rejects pre-dispatch. Legacy 91-tool surface (one MCP tool per operation, the pre-v2.7.0 layout) is available via `RKA_LEGACY_TOOLS=1` for backwards-compat use cases (notably the orchestrator daemon subprocess, which has not yet been ported to `rka_execute(operation=…)`).
+The 91 typed Pydantic operations under `rka_query` / `rka_execute` carry per-branch enum and required-field enforcement at the **FastMCP schema layer**, so the LLM cannot emit invalid values — the tool surface itself rejects pre-dispatch. The 91 legacy per-tool aliases (one MCP tool per operation, the pre-v2.7.0 layout) are `tier=deferred` and load on demand via `rka_load_tools`; separately, `RKA_LEGACY_TOOLS=1` restores the v2.7.0a2 20-tool always-on surface for backwards-compat use cases (notably the orchestrator daemon subprocess, which has not yet been ported to `rka_execute(operation=…)`).
 
 ---
 
@@ -216,6 +216,10 @@ The plugin install copies its files to `~/.claude/plugins/cache/rka/rka/<version
 
 The wrapper reads `integration.json` to know which RKA instance to bridge to. By default, the plugin's setup writes one pointing at the Docker backend at `http://localhost:9712`. To override (e.g., for a remote RKA instance), edit `integration.json` directly.
 
+### Remote access: ChatGPT custom connector (optional)
+
+RKA can also be reached from ChatGPT as a custom MCP connector. The path: start the RKA HTTP MCP locally on `127.0.0.1:9713` with `RKA_SKILL_TOOLS=1` (which promotes 3 skill tools, giving ChatGPT an 8-tool surface — the 5 dispatch tools plus `rka_start_session`, `rka_list_skills`, `rka_read_skill`), put the OAuth reverse proxy (`scripts/rka_mcp_oauth_proxy.py`) in front of it on `127.0.0.1:9720`, and expose that over HTTPS with ngrok. In ChatGPT's connector settings choose **Server URL** = `https://<ngrok-host>/mcp` with **OAuth** authentication. Only the MCP server is tunneled — the web UI stays private, and your passphrase and API keys never leave your machine. Full step-by-step (with the exact env vars and validation calls) is in [`docs/CHATGPT_CONNECTOR.md`](docs/CHATGPT_CONNECTOR.md); never paste real secrets into a chat transcript.
+
 ---
 
 ## 5. Verifying the install
@@ -235,7 +239,7 @@ Ask in any new chat:
 
 > What RKA tools do you have access to?
 
-Brain should list **5 always-on tools (3 dispatch + 2 escape hatches)**: `rka_query`, `rka_execute`, `rka_describe`, plus `rka_load_tools` and `rka_help` as navigator escape hatches. This matches the §1.1 surface count exactly. Confirm by asking: *"Call `rka_describe` with an empty string"* — Brain should return the 87-operation index.
+Brain should list **5 always-on tools (3 dispatch + 2 escape hatches)**: `rka_query`, `rka_execute`, `rka_describe`, plus `rka_load_tools` and `rka_help` as navigator escape hatches. This matches the §1.1 surface count exactly. Confirm by asking: *"Call `rka_describe` with an empty string"* — Brain should return the 91-operation index.
 
 If you instead see a long list of legacy tool names (e.g., `list_projects`, `get_status`, `add_note`, etc. — surfaced as one MCP tool each), your Brain is running with `RKA_LEGACY_TOOLS=1` (orchestrator daemon mode). For the user-facing Claude Desktop session, unset this env var and restart.
 
@@ -573,7 +577,7 @@ When the user asks variants of *"set up RKA"*, *"finish RKA install"*, *"connect
 3. For "uninstall RKA" requests:
    - Run `/plugin uninstall rka@rka` in Claude Code.
    - Restore Claude Desktop's config from the most recent backup.
-   - Optionally: `docker compose down -v` to wipe the backend (warn user this destroys their RKA data — recommend a knowledge-pack export first via `rka_export`).
+   - Optionally: `docker compose down -v` to wipe the backend (warn user this destroys their RKA data — recommend a knowledge-pack export first via the project-scoped REST endpoint `GET /api/projects/export`, or the web dashboard's export control; see [USAGE_GUIDE.md](USAGE_GUIDE.md) for the pack import/export workflow. Note: `export` is not one of the 91 dispatch operations, so it is not directly callable from the default 5-tool surface).
 
 ---
 
@@ -624,7 +628,7 @@ Replace `<your-username>` with your actual macOS username (Windows: use `C:\\Use
 
 **v2.7.0 schema enforcement.** In v2.7.0 the args object is a discriminated Pydantic union — missing `project_id` on a scoped operation now surfaces as a `ValidationError` from FastMCP **before** the call reaches the service layer. Per-branch enum + required-field enforcement (defined in `orchestrator/rka_enums.py` mirror + the per-operation Pydantic models) means wrong values (e.g., `confidence='confirmed'`) are also rejected pre-dispatch with a structured error pointing at the offending field. See §1.1 for the user-facing tool surface this enforcement sits behind.
 
-After restart, Brain will see exactly 5 always-on tools (3 dispatch + 2 escape hatches): `rka_query`, `rka_execute`, `rka_describe`, plus `rka_load_tools` and `rka_help` (alias for `rka_describe`). This is normal — the 87 underlying operations are dispatched through them.
+After restart, Brain will see exactly 5 always-on tools (3 dispatch + 2 escape hatches): `rka_query`, `rka_execute`, `rka_describe`, plus `rka_load_tools` and `rka_help` (alias for `rka_describe`). This is normal — the 91 underlying operations are dispatched through them.
 
 Fully quit + reopen Claude Desktop.
 
@@ -890,4 +894,4 @@ docker compose -f docker-compose.yml -f orchestrator/docker-compose.yml down
 | `<your-clone-dir>/rka/orchestrator/.env` *(agentic only, mode 0600)* | `CLAUDE_CODE_OAUTH_TOKEN`, `RKA_LEGACY_TOOLS=1`, and optional API keys |
 | `<your-clone-dir>/rka/.env` *(agentic only, optional)* | `HOST_WORKSPACE_ROOT` for non-`$HOME` workspace bind mount (see §11 Workspace bind mount) |
 | `~/.claude.json` *(agentic only, mounted read-only into container)* | Host's Claude CLI global config consumed by the orchestrator daemon's SDK subprocess |
-| [`docs/v2.6.x-v2.7.0-tool-surface-arc.md`](docs/v2.6.x-v2.7.0-tool-surface-arc.md) | Canonical narrative of the v2.6 → v2.7.0 tool-surface migration (project_id discipline → dispatch + 87 typed Pydantic operations) |
+| [`docs/v2.6.x-v2.7.0-tool-surface-arc.md`](docs/v2.6.x-v2.7.0-tool-surface-arc.md) | Canonical narrative of the v2.6 → v2.7.0 tool-surface migration (project_id discipline → dispatch + 91 typed Pydantic operations) |

@@ -2,6 +2,28 @@
 
 Procedural reference for the Brain skill. Each section is a self-contained workflow loaded on demand when the top-level `SKILL.md` points here.
 
+> **v2.7.0 dispatch translation.** The legacy tool names used in this file (`rka_get_status`, `rka_add_decision`, `rka_create_mission`, `rka_extract_claims`, `rka_review_cluster`, etc.) are synonyms for `rka_query` / `rka_execute` operations under the v2.7.0+ typed-arg surface. Treat any `rka_X(arg=val, ...)` example as shorthand for the discriminated-union call, e.g.:
+>
+> | Legacy shorthand | v2.7.0 dispatch shape |
+> |---|---|
+> | `rka_get_status()` | `rka_query(args={"operation": "status", "project_id": <pinned>})` |
+> | `rka_get_changelog(since="...")` | `rka_query(args={"operation": "changelog", "project_id": <pinned>, "filters": {"since": "..."}})` |
+> | `rka_get_pending_maintenance()` | `rka_query(args={"operation": "pending_maintenance", "project_id": <pinned>})` |
+> | `rka_get_research_map()` | `rka_query(args={"operation": "research_map", "project_id": <pinned>})` |
+> | `rka_search(query="...")` | `rka_query(args={"operation": "search", "project_id": <pinned>, "query": "..."})` |
+> | `rka_add_note(...)` | `rka_execute(args={"operation": "record_note", "project_id": <pinned>, ...})` |
+> | `rka_add_decision(...)` | `rka_execute(args={"operation": "record_decision", "project_id": <pinned>, ...})` |
+> | `rka_update_decision(id=..., ...)` | `rka_execute(args={"operation": "update_decision", "project_id": <pinned>, "id": "...", ...})` |
+> | `rka_create_mission(...)` | `rka_execute(args={"operation": "create_mission", "project_id": <pinned>, ...})` |
+> | `rka_extract_claims(...)` | `rka_execute(args={"operation": "extract_claims", "project_id": <pinned>, ...})` |
+> | `rka_review_cluster(...)` | `rka_execute(args={"operation": "review_cluster", "project_id": <pinned>, ...})` |
+> | `rka_check_freshness()` | `rka_query(args={"operation": "freshness", "project_id": <pinned>})` |
+> | `rka_flag_stale(..., propagate=true)` | `rka_execute(args={"operation": "flag_stale", "project_id": <pinned>, "propagate": True, ...})` |
+> | `rka_detect_contradictions(...)` | `rka_query(args={"operation": "contradictions", "project_id": <pinned>, "id": "clm_..."})` |
+> | `rka_set_project(...)` | Deprecated no-op; `project_id` is now passed as a required field on every operation. |
+>
+> Full per-operation signature lookup: `rka_describe(operation="<name>")`. Index of operations: `rka_describe(operation="")`.
+
 ---
 
 ## Session Start — Full Walkthrough
@@ -18,7 +40,7 @@ Brain: rka_get_pending_maintenance()
   → 12 items: 3 decisions without justified_by, 2 unassigned clusters, 7 entries without tags
 Brain: [silently processes top-priority items, budget=10]
   - For each decision_without_justified_by: rka_update_decision(id, related_journal=[...])
-  - For each unassigned_cluster: rka_review_cluster(id, research_question_id=...)
+  - For each unassigned_cluster: rka_review_cluster(id, confidence=..., synthesis=..., research_question_id=...)  # review_cluster requires confidence + synthesis
 Brain: rka_get_research_map()
   → 5 RQs, 104 clusters, 549 claims
 Brain: "Hi! I've caught up on the project. The research map has 5 active research questions…"
@@ -72,7 +94,7 @@ rka_add_note(
     verbatim_input="[PI's original direction that initiated this protocol]",
     type="directive",
     tags=["research-protocol", "gate-0"],
-    related_decisions=["dec_..."],
+    provenance={"related_decisions": ["dec_..."]},
 )
 ```
 
@@ -98,16 +120,16 @@ Journal entries get distilled into structured claims during maintenance. This is
 Entry: *"The stress test showed 12% packet loss above 400 connections. We used MQTT with QoS 1."*
 
 Claims:
-1. type: `evidence`, content: `"12% packet loss above 400 connections"`, confidence: `0.8`.
-2. type: `method`, content: `"Stress test used MQTT with QoS 1"`, confidence: `0.95`.
+1. type: `evidence`, text: `"12% packet loss above 400 connections"`, confidence: `0.8`.
+2. type: `method`, text: `"Stress test used MQTT with QoS 1"`, confidence: `0.95`.
 
 ```python
 rka_extract_claims(
     entry_id="jrn_01...",
     claims=[
-        {"claim_type": "evidence", "content": "12% packet loss above 400 connections",
+        {"claim_type": "evidence", "text": "12% packet loss above 400 connections",
          "confidence": 0.8, "cluster_id": "ecl_01..."},
-        {"claim_type": "method", "content": "Stress test used MQTT with QoS 1",
+        {"claim_type": "method", "text": "Stress test used MQTT with QoS 1",
          "confidence": 0.95, "cluster_id": "ecl_01..."},
     ],
 )
@@ -280,10 +302,12 @@ rka_process_paper(
     lit_id="lit_01...",
     summary="This paper introduces a layered oracle architecture…",
     annotations=[
-        {"passage": "Table 3 shows 94% detection rate",
+        {"text": "Table 3 shows 94% detection rate",
+         "passage": "Table 3 shows 94% detection rate",
          "note": "Strong evidence for layered approach",
          "claim_type": "evidence", "confidence": 0.85, "cluster_id": "ecl_01..."},
-        {"passage": "The authors use Docker-in-Docker for isolation",
+        {"text": "The authors use Docker-in-Docker for isolation",
+         "passage": "The authors use Docker-in-Docker for isolation",
          "note": "Same approach we considered",
          "claim_type": "method", "confidence": 0.9},
     ],
@@ -349,11 +373,13 @@ Use `rka_detect_contradictions(entity_id="clm_01...")` to find similar claims th
 When creating decisions, record assumptions explicitly:
 
 ```python
-rka_add_decision(
-    question="Should we use MQTT for sensor data?",
-    ...,
-    assumptions=["Network latency <50ms", "Sensor count stays under 500"],
-)
+rka_execute(args={
+    "operation": "record_decision",
+    "project_id": "prj_01...",
+    "question": "Should we use MQTT for sensor data?",
+    "assumptions": ["Network latency <50ms", "Sensor count stays under 500"],
+    # ... other required fields (chosen, rationale, decided_by, kind, related_journal, phase)
+})
 ```
 
 Periodically review assumption health: are recorded assumptions still valid given new evidence?
@@ -469,7 +495,7 @@ Per `dec_01KPM1M58F0ARXCM0W0GZ476VD`: the `mcp_tool` handler logs intent (`sched
 
 After hooks fire on the first tool call per project per session, brain_notifications accumulate. Best practice: at session start, after `rka_get_pending_maintenance`, also call `rka_get_brain_notifications` and surface a digest to the PI. After acting on findings, call `rka_clear_brain_notifications(ids=[...])` to mark them as processed.
 
-`rka_set_project` clears the session-start fired marker for the new project, so re-setting refires.
+(Legacy note: pre-v2.6, calling `rka_set_project` cleared the session-start fired marker for the new project. v2.6 removed the per-process active-project concept; the fired-marker is now keyed off the `project_id` field passed on each operation.)
 
 ### Periodic hooks
 
