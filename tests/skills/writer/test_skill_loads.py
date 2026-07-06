@@ -1,6 +1,7 @@
-"""Test that SKILL.md loads correctly: frontmatter, 16 sections, references discoverable.
+"""Test that SKILL.md loads correctly: frontmatter, 17 sections, references discoverable.
 
-Per mis_01KS0C3RP04XANCZAB3HTNAG0P T4 acceptance criteria.
+Per mis_01KS0C3RP04XANCZAB3HTNAG0P T4 acceptance criteria. The "Pre-Submission
+Review" section (v2.5.0) sits between "Local Rendering" and "Revision Loop".
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ EXPECTED_SECTIONS = [
     "## Venue Tone",
     "## LaTeX Template Management",
     "## Local Rendering",
+    "## Pre-Submission Review",
     "## Revision Loop",
     "## Anti-Patterns",
     "## Related",
@@ -40,11 +42,11 @@ def test_frontmatter_has_name_description_version(skill_md_path: Path) -> None:
     assert end > 0, "SKILL.md frontmatter must close with --- delimiter"
     fm = text[4:end]
     assert re.search(r"^name:\s*rka-writer\s*$", fm, re.MULTILINE)
-    assert re.search(r"^version:\s*2\.4\.0\s*$", fm, re.MULTILINE)
+    assert re.search(r"^version:\s*2\.5\.0\s*$", fm, re.MULTILINE)
     assert re.search(r"^description:\s*\S", fm, re.MULTILINE)
 
 
-def test_all_16_sections_present_in_stable_order(skill_md_path: Path) -> None:
+def test_all_17_sections_present_in_stable_order(skill_md_path: Path) -> None:
     text = _read_skill(skill_md_path)
     last_pos = -1
     for section_header in EXPECTED_SECTIONS:
