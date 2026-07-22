@@ -1,0 +1,612 @@
+"""Offline contract tests for the RKA-backed manuscript claim spine.
+
+The claim spine is a derived Writer artifact. RKA remains canonical: a filled
+YAML cell is never evidence, a PI decision is ratification rather than
+empirical support, and every claim-level evidence record must resolve through
+its source record. These tests deliberately inject a resolver so they never
+contact a live RKA server or an external API.
+"""
+
+from __future__ import annotations
+
+import json
+from copy import deepcopy
+from pathlib import Path
+
+import pytest
+
+
+PROJECT_ID = "prj_01PPPPPPPPPPPPPPPPPPPPPPPP"
+MANUSCRIPT_ID = "jrn_01MMMMMMMMMMMMMMMMMMMMMMMM"
+DECISION_ID = "dec_01DDDDDDDDDDDDDDDDDDDDDDDD"
+EVIDENCE_CLAIM_ID = "clm_01AAAAAAAAAAAAAAAAAAAAAAAA"
+EVIDENCE_SOURCE_ID = "jrn_01EEEEEEEEEEEEEEEEEEEEEEEE"
+QUALIFIER_CLAIM_ID = "clm_01QQQQQQQQQQQQQQQQQQQQQQQQ"
+QUALIFIER_SOURCE_ID = "jrn_01LLLLLLLLLLLLLLLLLLLLLLLL"
+COUNTER_CLAIM_ID = "clm_01CCCCCCCCCCCCCCCCCCCCCCCC"
+COUNTER_SOURCE_ID = "jrn_01RRRRRRRRRRRRRRRRRRRRRRRR"
+SYNTHESIS_ID = "ecl_01SSSSSSSSSSSSSSSSSSSSSSSS"
+
+
+def _codes(report) -> set[str]:
+    return {finding.code for finding in report.findings}
+
+
+def _copy_entities(entities: dict[str, dict]) -> dict[str, dict]:
+    return deepcopy(entities)
+
+
+class TestLoadSpine:
+    def test_loads_valid_yaml_as_plain_dict(
+        self, claim_spine, claim_spine_fixture_dir: Path, claim_spine_data: dict
+    ) -> None:
+        loaded = claim_spine.load_spine(claim_spine_fixture_dir / "valid_spine.yaml")
+        assert isinstance(loaded, dict)
+        assert loaded == claim_spine_data
+        assert loaded["schema_version"] == "rka-claim-spine/v1"
+
+    def test_unsafe_yaml_tag_is_rejected(self, claim_spine, tmp_path: Path) -> None:
+        path = tmp_path / "unsafe.yaml"
+        path.write_text(
+            "schema_version: !!python/object/apply:os.system ['echo unsafe']\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError):
+            claim_spine.load_spine(path)
+
+    def test_non_mapping_document_is_rejected(self, claim_spine, tmp_path: Path) -> None:
+        path = tmp_path / "list.yaml"
+        path.write_text("- not\n- a\n- claim-spine\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="mapping|object|document"):
+            claim_spine.load_spine(path)
+
+
+class TestValidation:
+    def test_current_source_backed_ratified_claim_passes(
+        self, claim_spine, claim_spine_data, claim_spine_resolver
+    ) -> None:
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=claim_spine_resolver,
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "PASS"
+        assert not {f for f in report.findings if f.severity == "BLOCK"}
+
+    def test_resolver_absence_never_reports_pass(self, claim_spine, claim_spine_data) -> None:
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=None,
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "ERROR"
+        assert "RESOLVER_REQUIRED" in _codes(report)
+
+    def test_candidate_claim_cannot_authorize_drafting(
+        self, claim_spine, claim_spine_data, claim_spine_resolver
+    ) -> None:
+        data = deepcopy(claim_spine_data)
+        data["claims"][0]["status"] = "candidate"
+        data["claims"][0]["ratified_by"] = None
+        report = claim_spine.validate_spine(
+            data,
+            resolver=claim_spine_resolver,
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "BLOCK"
+        assert "RATIFICATION_REQUIRED" in _codes(report)
+
+    def test_unknown_schema_version_blocks(
+        self, claim_spine, claim_spine_data, claim_spine_resolver
+    ) -> None:
+        data = deepcopy(claim_spine_data)
+        data["schema_version"] = "rka-claim-spine/v99"
+        report = claim_spine.validate_spine(
+            data,
+            resolver=claim_spine_resolver,
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "BLOCK"
+        assert "UNSUPPORTED_SCHEMA" in _codes(report)
+
+    def test_duplicate_claim_ids_block(
+        self, claim_spine, claim_spine_data, claim_spine_resolver
+    ) -> None:
+        data = deepcopy(claim_spine_data)
+        data["claims"].append(deepcopy(data["claims"][0]))
+        report = claim_spine.validate_spine(
+            data,
+            resolver=claim_spine_resolver,
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "BLOCK"
+        assert "DUPLICATE_CLAIM_ID" in _codes(report)
+
+    def test_missing_entity_blocks(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities.pop(EVIDENCE_CLAIM_ID)
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "BLOCK"
+        assert "MISSING_ENTITY" in _codes(report)
+        assert any(f.entity_id == EVIDENCE_CLAIM_ID for f in report.findings)
+
+    def test_wrong_project_evidence_blocks(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[EVIDENCE_CLAIM_ID]["project_id"] = (
+            "prj_01XXXXXXXXXXXXXXXXXXXXXXXX"
+        )
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "BLOCK"
+        assert "WRONG_PROJECT" in _codes(report)
+
+    def test_stale_claim_blocks(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[EVIDENCE_CLAIM_ID]["stale"] = True
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "BLOCK"
+        assert "STALE_ENTITY" in _codes(report)
+
+    def test_current_claim_with_retracted_source_blocks(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        """The source chain matters; clm_.stale=False is not sufficient."""
+        entities = _copy_entities(claim_spine_entities)
+        entities[EVIDENCE_SOURCE_ID]["status"] = "retracted"
+        entities[EVIDENCE_SOURCE_ID]["confidence"] = "retracted"
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "BLOCK"
+        assert "STALE_SOURCE" in _codes(report)
+        assert any(f.entity_id == EVIDENCE_SOURCE_ID for f in report.findings)
+
+    def test_unverified_claim_cannot_support_ratified_empirical_claim(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[EVIDENCE_CLAIM_ID]["verified"] = False
+        entities[EVIDENCE_CLAIM_ID]["confidence"] = 0.45
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "BLOCK"
+        assert "UNVERIFIED_EVIDENCE" in _codes(report)
+
+    @pytest.mark.parametrize("bad_evidence_id", [DECISION_ID, SYNTHESIS_ID])
+    def test_decision_or_synthesis_alone_is_not_empirical_evidence(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_resolver,
+        bad_evidence_id: str,
+    ) -> None:
+        data = deepcopy(claim_spine_data)
+        data["claims"][0]["evidence_ids"] = [bad_evidence_id]
+        for unit in data["units"]:
+            unit["evidence_ids"] = [bad_evidence_id]
+        report = claim_spine.validate_spine(
+            data,
+            resolver=claim_spine_resolver,
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "BLOCK"
+        assert "INVALID_EVIDENCE_ROLE" in _codes(report)
+
+    def test_ratified_claim_requires_current_pi_decision(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[DECISION_ID]["status"] = "superseded"
+        entities[DECISION_ID]["superseded_by"] = (
+            "dec_01NNNNNNNNNNNNNNNNNNNNNNNN"
+        )
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "BLOCK"
+        assert "RATIFICATION_REQUIRED" in _codes(report)
+
+    def test_edit_after_ratification_requires_new_decision(
+        self, claim_spine, claim_spine_data, claim_spine_resolver
+    ) -> None:
+        data = deepcopy(claim_spine_data)
+        data["claims"][0]["text"] = (
+            "The method eliminates attacks under every threat model."
+        )
+        report = claim_spine.validate_spine(
+            data,
+            resolver=claim_spine_resolver,
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "BLOCK"
+        assert "RATIFICATION_MISMATCH" in _codes(report)
+
+    def test_unresolved_counterevidence_cannot_silently_support_strong_claim(
+        self, claim_spine, claim_spine_data, claim_spine_resolver
+    ) -> None:
+        data = deepcopy(claim_spine_data)
+        data["claims"][0]["counterevidence_ids"] = [COUNTER_CLAIM_ID]
+        report = claim_spine.validate_spine(
+            data,
+            resolver=claim_spine_resolver,
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "BLOCK"
+        assert "UNRESOLVED_CONTRADICTION" in _codes(report)
+        assert any(f.entity_id == COUNTER_CLAIM_ID for f in report.findings)
+
+    def test_fluent_text_without_evidence_still_blocks(
+        self, claim_spine, claim_spine_data, claim_spine_resolver
+    ) -> None:
+        data = deepcopy(claim_spine_data)
+        data["claims"][0]["evidence_ids"] = []
+        data["claims"][0]["allowed_wording"] = (
+            "The extensive and comprehensive experimental campaign establishes "
+            "the contribution with high confidence across realistic settings."
+        )
+        report = claim_spine.validate_spine(
+            data,
+            resolver=claim_spine_resolver,
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "BLOCK"
+        assert "EVIDENCE_REQUIRED" in _codes(report)
+
+    def test_empirical_claim_without_result_unit_blocks(
+        self, claim_spine, claim_spine_data, claim_spine_resolver
+    ) -> None:
+        data = deepcopy(claim_spine_data)
+        data["claims"][0]["manuscript_units"] = ["U-ABSTRACT-1"]
+        data["units"] = [u for u in data["units"] if u["kind"] != "result"]
+        report = claim_spine.validate_spine(
+            data,
+            resolver=claim_spine_resolver,
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "BLOCK"
+        assert "RESULT_COVERAGE_REQUIRED" in _codes(report)
+
+    def test_result_unit_without_contribution_is_orphaned(
+        self, claim_spine, claim_spine_data, claim_spine_resolver
+    ) -> None:
+        data = deepcopy(claim_spine_data)
+        result_unit = next(u for u in data["units"] if u["kind"] == "result")
+        result_unit["claim_ids"] = []
+        report = claim_spine.validate_spine(
+            data,
+            resolver=claim_spine_resolver,
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "BLOCK"
+        assert "ORPHAN_RESULT" in _codes(report)
+
+    @pytest.mark.parametrize("field", ["allowed_wording", "prohibited_wording"])
+    def test_claim_boundary_fields_are_required(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_resolver,
+        field: str,
+    ) -> None:
+        data = deepcopy(claim_spine_data)
+        data["claims"][0][field] = [] if field == "prohibited_wording" else ""
+        report = claim_spine.validate_spine(
+            data,
+            resolver=claim_spine_resolver,
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "BLOCK"
+        assert "CLAIM_BOUNDARY_REQUIRED" in _codes(report)
+
+
+class TestSnapshotAndCurrency:
+    def test_snapshot_is_deterministic_and_includes_terminal_sources(
+        self, claim_spine, claim_spine_data, claim_spine_resolver
+    ) -> None:
+        original = deepcopy(claim_spine_data)
+        first = claim_spine.build_snapshot(claim_spine_data, claim_spine_resolver)
+        second = claim_spine.build_snapshot(claim_spine_data, claim_spine_resolver)
+        assert first == second
+        assert claim_spine_data == original, "snapshot builder mutated the claim spine"
+        assert first["project_id"] == PROJECT_ID
+        assert {
+            MANUSCRIPT_ID,
+            DECISION_ID,
+            EVIDENCE_CLAIM_ID,
+            EVIDENCE_SOURCE_ID,
+            QUALIFIER_CLAIM_ID,
+            QUALIFIER_SOURCE_ID,
+        }.issubset(first["entities"])
+
+    def test_unchanged_snapshot_passes(
+        self, claim_spine, claim_spine_data, claim_spine_resolver
+    ) -> None:
+        data = deepcopy(claim_spine_data)
+        data["rka_snapshot"] = claim_spine.build_snapshot(data, claim_spine_resolver)
+        report = claim_spine.check_currency(data, claim_spine_resolver)
+        assert report.verdict == "PASS"
+        assert report.changed_entities == []
+        assert report.affected_claims == []
+        assert report.affected_units == []
+
+    def test_retracted_source_invalidates_only_dependent_claim_and_units(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        claim_spine_resolver,
+        make_claim_spine_resolver,
+    ) -> None:
+        data = deepcopy(claim_spine_data)
+        data["rka_snapshot"] = claim_spine.build_snapshot(data, claim_spine_resolver)
+
+        changed = _copy_entities(claim_spine_entities)
+        changed[EVIDENCE_SOURCE_ID]["status"] = "retracted"
+        changed[EVIDENCE_SOURCE_ID]["confidence"] = "retracted"
+        report = claim_spine.check_currency(
+            data,
+            make_claim_spine_resolver(changed),
+        )
+        assert report.verdict == "BLOCK"
+        assert EVIDENCE_SOURCE_ID in report.changed_entities
+        assert report.affected_claims == ["C1"]
+        assert set(report.affected_units) == {"U-ABSTRACT-1", "U-RESULTS-1"}
+
+    def test_current_content_change_requires_revalidation_without_rewriting_claim(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        claim_spine_resolver,
+        make_claim_spine_resolver,
+    ) -> None:
+        data = deepcopy(claim_spine_data)
+        data["rka_snapshot"] = claim_spine.build_snapshot(data, claim_spine_resolver)
+        licensed_before = data["claims"][0]["allowed_wording"]
+
+        changed = _copy_entities(claim_spine_entities)
+        changed[EVIDENCE_SOURCE_ID]["content"] += " A new platform C run was added."
+        report = claim_spine.check_currency(
+            data,
+            make_claim_spine_resolver(changed),
+        )
+        assert report.verdict in {"WARN", "BLOCK"}
+        assert EVIDENCE_SOURCE_ID in report.changed_entities
+        assert "C1" in report.affected_claims
+        assert data["claims"][0]["allowed_wording"] == licensed_before
+
+    def test_missing_snapshot_is_error_not_pass(
+        self, claim_spine, claim_spine_data, claim_spine_resolver
+    ) -> None:
+        report = claim_spine.check_currency(claim_spine_data, claim_spine_resolver)
+        assert report.verdict == "ERROR"
+
+
+class TestRendering:
+    EXPECTED = {
+        "contribution_contract": "CONTRIBUTION_CONTRACT.md",
+        "argument_spine": "ARGUMENT_SPINE.md",
+        "results_trace": "RESULTS_TRACE.md",
+    }
+
+    def test_render_views_writes_only_three_derived_markdown_files(
+        self, claim_spine, claim_spine_data, tmp_path: Path
+    ) -> None:
+        paths = claim_spine.render_views(claim_spine_data, tmp_path)
+        assert set(paths) == set(self.EXPECTED)
+        assert {p.name for p in paths.values()} == set(self.EXPECTED.values())
+        assert {p.name for p in tmp_path.iterdir()} == set(self.EXPECTED.values())
+        for key, expected_name in self.EXPECTED.items():
+            path = paths[key]
+            assert isinstance(path, Path)
+            assert path.name == expected_name
+            text = path.read_text(encoding="utf-8")
+            assert "generated" in text.lower()
+            assert "RKA" in text
+
+    def test_render_is_byte_deterministic_and_preserves_trace_ids(
+        self, claim_spine, claim_spine_data, tmp_path: Path
+    ) -> None:
+        left = claim_spine.render_views(claim_spine_data, tmp_path / "left")
+        right = claim_spine.render_views(claim_spine_data, tmp_path / "right")
+        for key in self.EXPECTED:
+            assert left[key].read_bytes() == right[key].read_bytes()
+
+        combined = "\n".join(path.read_text(encoding="utf-8") for path in left.values())
+        assert "C1" in combined
+        assert DECISION_ID in combined
+        assert EVIDENCE_CLAIM_ID in combined
+        assert "U-RESULTS-1" in combined
+        assert "universally attack-proof" in combined
+
+    def test_render_does_not_mutate_canonical_spine(
+        self, claim_spine, claim_spine_data, tmp_path: Path
+    ) -> None:
+        before = deepcopy(claim_spine_data)
+        claim_spine.render_views(claim_spine_data, tmp_path)
+        assert claim_spine_data == before
+
+
+class TestCli:
+    def test_render_subcommand_returns_zero(
+        self, claim_spine, claim_spine_fixture_dir: Path, tmp_path: Path
+    ) -> None:
+        rc = claim_spine.main([
+            "render",
+            str(claim_spine_fixture_dir / "valid_spine.yaml"),
+            "--output-dir",
+            str(tmp_path),
+        ])
+        assert rc == 0
+        assert (tmp_path / "CONTRIBUTION_CONTRACT.md").is_file()
+
+    def test_missing_input_returns_usage_error(self, claim_spine, tmp_path: Path) -> None:
+        rc = claim_spine.main([
+            "render",
+            str(tmp_path / "missing.yaml"),
+            "--output-dir",
+            str(tmp_path / "out"),
+        ])
+        assert rc == 3
+
+    def test_snapshot_resolver_failure_returns_error_code(
+        self,
+        claim_spine,
+        claim_spine_fixture_dir: Path,
+        monkeypatch,
+        tmp_path: Path,
+    ) -> None:
+        def failing_resolver(_entity_id: str):
+            raise RuntimeError("offline")
+
+        monkeypatch.setattr(
+            claim_spine,
+            "_rest_resolver",
+            lambda *_args, **_kwargs: failing_resolver,
+        )
+        output = tmp_path / "snapshot.yaml"
+        rc = claim_spine.main([
+            "snapshot",
+            str(claim_spine_fixture_dir / "valid_spine.yaml"),
+            "--rka-url",
+            "http://127.0.0.1:9712",
+            "--output",
+            str(output),
+        ])
+        assert rc == 3
+        assert not output.exists()
+
+
+class TestRestResolver:
+    def test_scopes_requests_and_restores_project_id(
+        self, claim_spine, monkeypatch
+    ) -> None:
+        captured = {}
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            @staticmethod
+            def read() -> bytes:
+                return b'{"id":"jrn_01EXAMPLE","status":"active"}'
+
+        def fake_urlopen(request, timeout):
+            captured["request"] = request
+            captured["timeout"] = timeout
+            return Response()
+
+        monkeypatch.setattr(claim_spine, "urlopen", fake_urlopen)
+        resolver = claim_spine._rest_resolver(
+            "http://127.0.0.1:9712",
+            timeout=4.0,
+            project_id=PROJECT_ID,
+        )
+        entity = resolver("jrn_01EXAMPLE")
+
+        headers = {
+            key.lower(): value for key, value in captured["request"].header_items()
+        }
+        assert headers["x-rka-project"] == PROJECT_ID
+        assert captured["timeout"] == 4.0
+        assert entity["project_id"] == PROJECT_ID
+
+
+class TestEntityPacketResolver:
+    def test_cli_validates_with_fresh_project_scoped_packet(
+        self,
+        claim_spine,
+        claim_spine_fixture_dir: Path,
+        claim_spine_entities: dict,
+        tmp_path: Path,
+    ) -> None:
+        packet = tmp_path / "entities.json"
+        packet.write_text(
+            json.dumps({"project_id": PROJECT_ID, "entities": claim_spine_entities}),
+            encoding="utf-8",
+        )
+        rc = claim_spine.main([
+            "validate",
+            str(claim_spine_fixture_dir / "valid_spine.yaml"),
+            "--entity-packet",
+            str(packet),
+            "--project",
+            PROJECT_ID,
+        ])
+        assert rc == 0
+
+    def test_packet_project_mismatch_fails_closed(
+        self,
+        claim_spine,
+        claim_spine_fixture_dir: Path,
+        claim_spine_entities: dict,
+        tmp_path: Path,
+    ) -> None:
+        packet = tmp_path / "wrong-project.json"
+        packet.write_text(
+            json.dumps(
+                {
+                    "project_id": "prj_01XXXXXXXXXXXXXXXXXXXXXXXX",
+                    "entities": claim_spine_entities,
+                }
+            ),
+            encoding="utf-8",
+        )
+        rc = claim_spine.main([
+            "validate",
+            str(claim_spine_fixture_dir / "valid_spine.yaml"),
+            "--entity-packet",
+            str(packet),
+        ])
+        assert rc == 3

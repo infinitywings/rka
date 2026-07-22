@@ -1,0 +1,42 @@
+schema_version: rka-claim-spine/v1
+project_id: prj_01PPPPPPPPPPPPPPPPPPPPPPPP
+manuscript_id: jrn_01MMMMMMMMMMMMMMMMMMMMMMMM
+generated_at: "2026-07-22T14:00:00Z"
+changelog_cursor: evt_01VVVVVVVVVVVVVVVVVVVVVVVV
+
+claims:
+  - claim_id: C1
+    text: Under threat models T1 and T2, the method reduces malicious update acceptance.
+    claim_type: empirical
+    status: ratified
+    ratified_by: dec_01DDDDDDDDDDDDDDDDDDDDDDDD
+    evidence_ids:
+      - clm_01AAAAAAAAAAAAAAAAAAAAAAAA
+    qualifier_ids:
+      - clm_01QQQQQQQQQQQQQQQQQQQQQQQQ
+    counterevidence_ids: []
+    allowed_wording: The method reduced malicious update acceptance under T1 and T2.
+    prohibited_wording:
+      - The method eliminates all attacks on every platform.
+    manuscript_units:
+      - U-ABSTRACT-1
+      - U-RESULTS-1
+
+units:
+  - unit_id: U-ABSTRACT-1
+    kind: abstract
+    location: sections/00-abstract.tex
+    claim_ids:
+      - C1
+    evidence_ids:
+      - clm_01AAAAAAAAAAAAAAAAAAAAAAAA
+  - unit_id: U-RESULTS-1
+    kind: result
+    location: sections/04-results.tex#result-t1-t2
+    claim_ids:
+      - C1
+    evidence_ids:
+      - clm_01AAAAAAAAAAAAAAAAAAAAAAAA
+    artifact: figures/detection-rate.pdf
+    allowed_interpretation: The measured reduction holds for T1 and T2 on platforms A and B.
+    prohibited_interpretation: The method is universally attack-proof.

@@ -1,0 +1,27 @@
+# RKA_CLAIM_SPINE.yaml
+#
+# Editable Writer projection from canonical RKA records to this manuscript.
+# The Markdown contribution/argument/results views are generated from this
+# file and must not be edited as sources of truth.
+
+schema_version: rka-claim-spine/v1
+project_id: REPLACE_WITH_PROJECT_ID
+manuscript_id: REPLACE_WITH_MANUSCRIPT_MANIFEST_ID
+generated_at: null
+changelog_cursor: null
+
+# Populate claims during the contribution substep of the Outline checkpoint.
+# Only status=ratified plus an active PI dec_ may pass the drafting gate.
+# For an empirical claim, evidence/qualifier/counterevidence ids name clm_
+# records that resolve to current terminal source records.
+claims: []
+
+# Add claim-sized manuscript units in manuscript order. Each empirical claim
+# requires a result unit; each major result unit must name a contribution.
+# Result units also carry artifact, allowed_interpretation, and
+# prohibited_interpretation fields.
+units: []
+
+# Generated after live validation. Do not hand-edit. Currency checking without
+# a usable snapshot returns ERROR, never PASS.
+rka_snapshot: null

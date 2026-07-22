@@ -38,6 +38,36 @@ rka_query(args={"operation": "research_map", "project_id": "prj_01KS..."})
 
 Structural overview of clusters and claims. Filter to clusters relevant to the manuscript's topic before quoting. The map is the source of truth for what evidence is available to cite.
 
+### Step 3a: claim-spine currency
+
+Read `.planning/RKA_CLAIM_SPINE.yaml` when it contains a manuscript id and at
+least one claim. Follow [`claim_spine.md`](claim_spine.md): resolve every
+dependency inside the explicit project, compare the stored `rka_snapshot` with
+the current records, and map any changed entity back to affected claims and
+manuscript units.
+
+In a plugin session, retrieve those records through the authenticated RKA MCP
+and create a fresh, temporary entity packet for `claim_spine.py
+--entity-packet`. Follow every claim to its `source_entry_id`. Do not commit or
+reuse the packet as evidence, and do not expose the local REST API merely to
+run validation.
+
+Do not repair a claim from a generated Markdown view. The YAML is the editable
+Writer projection; RKA remains canonical for the records it names. A changed
+entity marks dependent claims for revalidation but never rewrites PI-ratified
+wording automatically.
+
+Session-start outcomes:
+
+- `PASS`: dependencies are current; resume the recorded action.
+- `WARN`: show the affected claim/unit and the bounded issue before resuming.
+- `BLOCK`: stop the affected Outline, Draft, or Final Layout gate.
+- `ERROR`: resolver, parse, or snapshot state is unusable. Stop validation;
+  `ERROR` is never treated as `PASS`.
+
+An empty bootstrap spine is expected before contribution planning. It is not a
+validated contribution and cannot authorize substantive drafting.
+
 ### Step 4: state resume
 
 Read `.planning/ACTIVE_WORKFLOW.md`. Expected structure:
@@ -54,7 +84,8 @@ last_session: 2026-04-11
 If `ACTIVE_WORKFLOW.md` is absent, infer from the working directory:
 
 - `.planning/PRECIS.md` absent: phase = venue selection.
-- `PRECIS.md` present, `OUTLINE.md` absent: phase = outline.
+- `PRECIS.md` present, claim spine not ratified: phase = contribution and outline.
+- Claim spine ratified, `OUTLINE.md` absent: phase = outline completion.
 - `OUTLINE.md` present, `sections/` empty: phase = table and figure planning.
 - `sections/` populated: phase = drafting; next section is the first one with status `outlined` rather than `drafted`.
 - All sections drafted, no `audit.json`: phase = render and audit.
@@ -75,7 +106,10 @@ Phase 1 does not require `rka-writer-tools`. If absent, `scripts/validate_refere
 
 Greet the PI with the inferred state and the next action. Example:
 
-> Picked up the CHI manuscript at the start of drafting. Outline ratified 2026-04-12 (six sections). Last session ended after §2 Related Work was drafted. Next action: draft §3 Method, anchoring to clusters `ecl_01KQ...` and `ecl_01KQ...`. Ready when you are.
+> Picked up the CHI manuscript at the start of drafting. The Outline and claims
+> were ratified 2026-04-12; C1 and C2 remain current at the saved RKA cursor.
+> Last session ended after §2 Related Work. Next action: draft §3 Method from
+> units U-METHOD-1 through U-METHOD-3. Ready when you are.
 
 ## The Seven Sub-Procedures
 
@@ -101,20 +135,50 @@ Trigger: Venue ratified, no `OUTLINE.md` yet.
 
 Procedure:
 
-1. Read research map for the project; identify clusters and claims relevant to the manuscript topic.
-2. Generate three outline framings with PI preference stripped from context:
+1. Read the research map and assemble evidence from several short retrieval
+   angles. For each contribution candidate, resolve positive evidence,
+   qualifiers, counterevidence, terminal source records, current design
+   decisions, and relevant superseded choices that explain the design's
+   evolution. Superseded choices may inform lineage but are not current
+   support. An `ecl_` may guide discovery but does not count as terminal
+   empirical support; a `dec_` ratifies wording but does not prove it.
+2. Populate `.planning/RKA_CLAIM_SPINE.yaml` with candidate claim text,
+   source-backed evidence, allowed wording, prohibited wording, and planned
+   manuscript units. Leave claim status as `candidate` until the PI acts.
+3. Generate three bounded claim-and-outline framings with PI preference stripped from context:
    - Results-led: section ordering driven by the most novel finding.
    - Method-led: section ordering driven by the methodological contribution.
    - Motivation-led: section ordering driven by the problem framing.
-3. For each framing, draft a 5-to-8-section outline with one-sentence section purposes.
-4. Prune any framing dominated on scope-coverage, novelty-positioning, and venue-fit.
-5. Re-inject PI preference as opposing-critique; rank surviving framings.
-6. Present three (or fewer if pruned) options to the PI; one carries `is_recommended`.
-7. PI selects; record via `rka_record_pi_selection`.
+4. For each framing, show the exact contribution wording, its evidence path,
+   conditions, known counterevidence, missing evidence, and a 5-to-8-section
+   outline with one-sentence section purposes.
+5. Prune any framing dominated on evidence coverage, scope honesty,
+   novelty-positioning, and venue fit. Do not compute an aggregate paper score
+   or acceptance prediction.
+6. Re-inject PI preference as opposing-critique; rank surviving framings.
+7. Present three (or fewer if pruned) options to the PI; one carries
+   `is_recommended`. The PI may retain, narrow, or defer a claim and commission
+   an evidence-gap mission.
+8. Record the PI's selected framing via `rka_record_pi_selection`. As part of
+   the same Outline checkpoint, create one child claim-scope `dec_` per selected
+   contribution: set `chosen` to that claim's exact text, `decided_by: pi`, and
+   link it to the Outline decision and its evidence. Set the claim to
+   `status: ratified` and `ratified_by` to that claim-scope decision. This is
+   bookkeeping for the PI's explicit selection, not a seventh checkpoint. A
+   later material edit requires a new claim-scope decision that supersedes the
+   old one.
+9. Validate the spine, build its dependency snapshot, and render the read-only
+   `CONTRIBUTION_CONTRACT.md`, `ARGUMENT_SPINE.md`, and `RESULTS_TRACE.md` views.
+   A rendered file does not substitute for live validation.
 
-Output: Outline Decision (`dec_`), `.planning/OUTLINE.md`, `.planning/sketches/<section-id>.md` per section.
+Output: Outline Decision (`dec_`), one exact-wording claim-scope `dec_` per
+contribution with evidence provenance,
+`.planning/RKA_CLAIM_SPINE.yaml`, its three generated views,
+`.planning/OUTLINE.md`, and `.planning/sketches/<section-id>.md` per section.
 
-Iron Law: **no prose before outline ratification.** The `main.tex` stays skeleton-only.
+Iron Law: **no prose before claim and outline ratification.** The `main.tex`
+stays skeleton-only. Fluent planning text, a decision by itself, or a populated
+table does not satisfy the evidence requirement.
 
 ### 3. Table, figure, and chart planner
 
@@ -122,15 +186,26 @@ Trigger: Outline ratified, no `tables/` or `figures/` populated.
 
 Procedure:
 
-1. For each result-bearing section, generate three presentation framings:
+1. For each empirical claim in the ratified claim spine, create at least one
+   result unit with source-backed evidence, an artifact path, experimental or
+   threat-model conditions, an allowed interpretation, and a prohibited
+   interpretation. Every major result unit must name at least one contribution
+   claim; otherwise it is orphaned or explicitly exploratory.
+2. For each result-bearing section, generate three presentation framings:
    - Figure-heavy: visual emphasis, supporting tables.
    - Table-heavy: quantitative emphasis, illustrative figures.
    - Balanced.
-2. For each framing, propose specific tables (booktabs LaTeX), figures (Paper Banana prompt for diagrams; matplotlib + seaborn code for charts), and chart styling via venue presets (tueplots, SciencePlots).
-3. Paper Banana prompts are stored as `jrn_` entries tagged `figure-prompt` per `dec_01KS0BKJ5ZJKJ4R19GYAK3QN9D` Q6, with the manuscript manifest in `related_journal`.
-4. Present three options. PI selects.
+3. For each framing, propose specific tables (booktabs LaTeX), figures (Paper Banana prompt for diagrams; matplotlib + seaborn code for charts), and chart styling via venue presets (tueplots, SciencePlots).
+4. Paper Banana prompts are stored as `jrn_` entries tagged `figure-prompt` per `dec_01KS0BKJ5ZJKJ4R19GYAK3QN9D` Q6, with the manuscript manifest in `related_journal`.
+5. Present three options. PI selects.
+6. Update claim-spine unit locations and artifacts, revalidate bidirectional
+   claim/result coverage, refresh the snapshot, and regenerate
+   `RESULTS_TRACE.md`.
 
-Output: Table-Figure-Chart Plan Decision (`dec_`), `.planning/PLAN.md`, draft table .tex files, Paper Banana prompts as `jrn_`, chart skeleton .py files referencing `scripts/chart_render.py`.
+Output: Table-Figure-Chart Plan Decision (`dec_`), `.planning/PLAN.md`, updated
+claim-spine units and generated Results Trace, draft table .tex files, Paper
+Banana prompts as `jrn_`, and chart skeleton .py files referencing
+`scripts/chart_render.py`.
 
 ### 4. Reference validator
 
@@ -149,16 +224,24 @@ Output: `refs.bib` populated, per-reference validation verdict stored as a `vali
 
 ### 5. Section drafter
 
-Trigger: Outline ratified, Table-Figure-Chart Plan ratified, References set ratified. Next section's status is `outlined` (not yet `drafted`).
+Trigger: Claim and Outline wording ratified, claim-spine validation and currency
+checks do not block, Table-Figure-Chart Plan ratified, and References set
+ratified. Next section's status is `outlined` (not yet `drafted`).
 
 Procedure (OpenScholar evidence-first per `jrn_01KS0AVZRDA0KPXK61MN9PV5DE`):
 
 1. Dispatch a fresh subagent for the section (clean context window per `dispatching-parallel-agents` discipline).
-2. Subagent reads: section sketch, ratified outline, relevant clusters from research map, references in scope.
-3. Subagent drafts the section evidence-first: quote evidence first; build prose around the quote; place hidden provenance comments before each evidence-citation prose unit.
-4. Subagent self-audits before commit: runs `scripts/ai_tic_lint.py` on the section; iterates until style score reaches 0.85 or three iterations elapse.
-5. If three iterations fail, ESCALATE via the Revision Loop Class R2.
-6. Otherwise commit section to `sections/<section-id>.tex`, mark `drafted` in manifest, and surface to PI for the Draft section checkpoint.
+2. Subagent reads: section sketch, ratified outline, the relevant claim-spine
+   units, freshly resolved positive evidence and qualifiers, references in
+   scope, and the claim's prohibited wording. Generated views are explanatory;
+   resolution is against RKA.
+3. Subagent drafts the section evidence-first: quote evidence first; build prose around the quote; place hidden provenance comments before each evidence-citation prose unit. The draft must stay within each unit's allowed interpretation.
+4. Subagent checks that no new contribution appeared in prose and that each
+   empirical statement has role-appropriate terminal support. A decision or
+   evidence cluster alone is not support.
+5. Subagent self-audits before commit: runs `scripts/ai_tic_lint.py` on the section; iterates until style score reaches 0.85 or three iterations elapse.
+6. If three iterations fail, ESCALATE via the Revision Loop Class R2.
+7. Otherwise commit section to `sections/<section-id>.tex`, mark `drafted` in manifest, and surface to PI for the Draft section checkpoint.
 
 PI ratifies via the Draft section checkpoint (one of the six PI checkpoints). Three options: accept, revise (with PI comments), escalate.
 
@@ -171,7 +254,11 @@ Procedure:
 1. `scripts/render.sh` runs latexmk with the venue's engine (default pdflatex).
 2. If compile fails, parse `.log` for the first BLOCK error (Undefined control sequence, Reference undefined, etc.); surface to PI with the offending line; PI directs the fix.
 3. If compile succeeds, `scripts/layout_audit.py` runs against the rendered PDF plus log files.
-4. `audit.json` reports the twelve fields per `latex_audit.md`. Any BLOCK verdict halts progress; WARN verdicts noted for the Final Layout checkpoint.
+4. Before the Final Layout checkpoint, re-run claim-spine validation and
+   currency comparison plus provenance and citation checks. Any `BLOCK` or
+   `ERROR` prevents the final gate. A `WARN` is surfaced with its affected
+   claim and unit.
+5. `audit.json` reports the twelve fields per `latex_audit.md`. Any BLOCK verdict halts progress; WARN verdicts noted for the Final Layout checkpoint.
 
 Output: `main.pdf`, `audit.json`. The manuscript manifest's `related_journal` gains a pointer to the latest `audit.json` snapshot stored as a `jrn_` if the PI requests durable record.
 
@@ -192,6 +279,11 @@ Procedure:
 - **R2 Style or AI-tic**: `handle_style_r2(comment, section_path, strict=True, ai_tic_lint_script=...)` re-runs `ai_tic_lint.py` at strict mode; reports verdict PASS / WARN / BLOCK; PI reviews residual violations.
 - **R3 Inconsistency** (cross-section): `handle_inconsistency_r3(comment, section_paths, bridge_check_script=...)` uses `bridge_repetition_check.py` at ratio >= 0.7 to surface near-duplicate sentence pairs across sections; the Writer reasons over each pair to decide if it is an intentional restatement or a contradiction.
 - **R4 Logical gap or unsupported claim**: `handle_logical_r4(comment, section_path, manuscript_id, rka_client=...)` ESCALATES by preparing a `writer_evidence_gap` mission payload addressed to Brain; Writer waits for Brain's evidence-gap response.
+
+An R4 response that adds or changes evidence invalidates the dependent
+claim-spine snapshot. Re-resolve the affected claim and units. Do not strengthen
+the contribution automatically; if the exact wording changes materially, seek
+a new PI decision that supersedes the previous ratification.
 
 Classifier discipline (per `dec_01KS2WPKMRVSJ2R0PP74722PEH` Brain ratification 2026-05-20): `classify_comment` is heuristic-only because the Writer is itself a Claude Code session. The Writer's runtime IS the LLM-assisted reasoning layer that reviews comment + heuristic result before invoking any handler. No server-side LLM call.
 
@@ -217,7 +309,7 @@ Per-checkpoint specifics:
 | Checkpoint | Three option framings | Pareto axes |
 |---|---|---|
 | Venue | venue A / venue B / venue C | venue fit, deadline, audience reach |
-| Outline | results-led / method-led / motivation-led | novelty positioning, scope coverage, venue fit |
+| Outline | results-led / method-led / motivation-led, each with bounded claim wording | evidence coverage, claim boundary, novelty positioning, venue fit |
 | Table-Figure-Chart Plan | figure-heavy / table-heavy / balanced | space efficiency, readability, evidence density |
 | Reference set | broad / focused / minimum | coverage, page-budget, citation novelty |
 | Draft section | accept / revise / escalate | quality, scope, time |
@@ -242,6 +334,7 @@ rka_execute(args={
 - Checkpoints resolved: Draft §3 (PI: accept)
 - Lit added: lit_01KS... (Smith 2024) via record_literature
 - Style score current: 0.91 (target 0.85)
+- Claim spine: PASS at cursor evt_...; C1 and C2 current
 - Next action: draft §4 Evaluation
 
 ## Open items

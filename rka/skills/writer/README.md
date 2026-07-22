@@ -1,9 +1,9 @@
 # RKA Writer Skill
 
-Phase 1 MVP. Loadable by Claude Code in VSCode, the Writer co-authors
-manuscripts grounded in the RKA research graph. Drafts but does not
-assert: every prose claim carries provenance to a `lit_`, `jrn_`, or
-`dec_` entity.
+Version 2.6.0. The Writer co-authors manuscripts grounded in the RKA
+research graph and is distributed for Claude Code and Codex. It drafts
+but does not assert: manuscript claims must remain traceable to current
+RKA evidence and PI-ratified decisions.
 
 Mission of record: `mis_01KS0C3RP04XANCZAB3HTNAG0P`.
 Decisions: `dec_01KS0AWYDV752AWQRF40CQBRFZ` (deployment),
@@ -68,45 +68,22 @@ python3 rka/skills/writer/scripts/bridge_repetition_check.py sections/*.tex
 python3 rka/skills/writer/scripts/layout_audit.py --venue CHI --output audit.json
 ```
 
-## What Phase 1 ships
+## Current v2.6.0 surface
 
 | Component | Status |
 |---|---|
-| SKILL.md (16 sections, v2.3.2) | full |
-| references/ (9 files plus 2 venue files) | full |
-| scripts/ai_tic_lint.py | full Phase 1 (lexical + structural) |
-| scripts/bridge_repetition_check.py | full (clean-room) |
-| scripts/render.sh | full |
-| scripts/layout_audit.py | full Phase 1 (12 fields) |
-| scripts/chart_render.py | skeleton (PI fills per manuscript) |
-| scripts/validate_references.py | Stage A only |
-| scripts/fetch_template.py | registry lookup only |
-| workspace-template/ | full skeleton |
-| tests/skills/writer/ | 43 tests, all passing |
+| `SKILL.md` | v2.6.0 role contract, checkpoints, provenance, and review workflow |
+| `references/` | architecture, evidence and citation rules, review guidance, and venue registry |
+| `scripts/` | deterministic provenance, citation, venue, reference, layout, and claim-spine checks |
+| `mcp_tools/` | reference-metadata and discovery backends for Writer workflows |
+| `workspace-template/` | manuscript scaffold with resumable planning state |
+| `tests/skills/writer/` | unit, integration, contract, and source-to-plugin parity coverage |
 
-## What Phase 1 does NOT ship (deferred)
-
-Phase 2 deliverables:
-
-- `rka-writer-tools` MCP server (habanero + pyalex + semanticscholar +
-  arxiv + serpapi wrappers exposing high-level validation operations).
-- Reference validation Stages B through G (cross-source resolution,
-  retraction check, author disambiguation, niche-citation rescue).
-- SerpAPI integration with credit budget tracking.
-- 5 additional venue files: USENIX, IEEE-SP, NeurIPS, OSDI, Nature.
-- Author disambiguation with ORCID + SerpAPI.
-- Full bibliography compilation chain (manubot + bibtex-tidy + betterbib).
-
-Phase 3 deliverables:
-
-- Revision Loop with 4 `comment_class` mission shapes (R1, R2, R3, R4)
-  wired to the Brain via the `create_mission` operation
-  (`rka_execute(args={"operation": "create_mission", ...})`).
-- Brain mission integration: Brain spawns a Writer subagent on a
-  Revision Mission.
-
-See [`docs/phase-1-mvp.md`](docs/phase-1-mvp.md) for the detailed
-Phase 1 narrative and manual workflow guidance.
+The Writer does not replace PI judgment, treat a structural check as
+semantic proof, or produce accept/reject predictions. Evidence gaps and
+contradictions return to RKA for resolution. See
+[`docs/phase-1-mvp.md`](docs/phase-1-mvp.md) for the historical Phase 1
+narrative.
 
 ## Per-project AI-tic configuration
 
@@ -126,11 +103,12 @@ for the full tier table and replacement guidance.
 
 ## Architecture overview
 
-The Writer is a Claude Code skill (not a separate process or service).
-It reads from and writes to RKA via the existing `rka` MCP server. The
-bookkeeper-not-thinker invariant is preserved: Writer adds files only
-under `rka/skills/writer/` and `tests/skills/writer/`; zero changes to
-`rka/services/`, `rka/api/`, `rka/mcp/`, or `web/`.
+The Writer is a role skill, not a separate process or service. It reads
+from and writes to RKA through the existing `rka` MCP server. Canonical
+Writer behavior lives under `rka/skills/writer/` and is mirrored
+byte-for-byte under `plugin/skills/writer/`; its tests live under
+`tests/skills/writer/`. The bookkeeper-not-thinker boundary keeps Writer
+changes out of `rka/services/`, `rka/api/`, `rka/mcp/`, and `web/`.
 
 The manuscript is represented as a `jrn_` manifest in RKA (Option 2 per
 `dec_01KS0BKJ5ZJKJ4R19GYAK3QN9D` Q1), with the working directory tree

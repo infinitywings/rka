@@ -17,7 +17,12 @@ VSCode (PI workspace)
             +--> figures/, tables/, charts/
             +--> refs.bib
             +--> main.tex
-            +--> .planning/ (working state)
+            +--> .planning/
+                 +--> RKA_CLAIM_SPINE.yaml (editable Writer projection)
+                 +--> CONTRIBUTION_CONTRACT.md (generated, read-only)
+                 +--> ARGUMENT_SPINE.md (generated, read-only)
+                 +--> RESULTS_TRACE.md (generated, read-only)
+                 +--> other working state
             +--> .latexmkrc, .mcp.json
             +--> ai_tic_config.yaml (per-project overrides)
             +--> styles/ (vendored venue templates)
@@ -39,8 +44,9 @@ The Writer reads broadly from RKA at session start and during drafting:
 | Tool | When | Purpose |
 |---|---|---|
 | `rka_get_status` | session start | confirm phase/focus for the explicitly passed project_id |
-| `rka_get_changelog` | session start | what changed since last writing session |
+| `rka_get_changelog` | session start, before every writing gate | refresh dependencies and identify records changed since the saved claim-spine cursor |
 | `rka_get_research_map` | session start, before outline | structural overview of clusters and claims |
+| entity reads | claim planning, session start, before every writing gate | resolve claim-spine dependencies and identify affected claims and manuscript units |
 | `rka_get_journal` | during drafting | quote PI directives, prior findings |
 | `rka_get_literature` | during drafting | citation source for `lit_` entities |
 | `rka_get_decision_tree` | during outline | ratified decisions to cite |
@@ -58,6 +64,59 @@ The Writer writes back to RKA when an artifact is generated or a checkpoint reso
 | `rka_create_mission` | only for follow-ups Brain or Executor handle | revision missions during the Revision Loop |
 
 The Writer does **not** call `rka_create_project`, `rka_create_gate`, or any orchestration tool that grows new RKA structure. The bookkeeper invariant for Phase 1 is preserved.
+
+## Claim-spine representation
+
+The claim spine adds a structured argument projection without changing the RKA
+data model. Its full contract is in [`claim_spine.md`](claim_spine.md).
+
+```text
+live RKA entities and links
+        |
+        | resolve, check project, status, and terminal sources
+        v
+.planning/RKA_CLAIM_SPINE.yaml
+        |
+        | deterministic rendering only
+        +--> CONTRIBUTION_CONTRACT.md
+        +--> ARGUMENT_SPINE.md
+        +--> RESULTS_TRACE.md
+        |
+        | claim/unit dependencies
+        v
+sections/*.tex + hidden provenance comments
+```
+
+Canonicality is layered rather than duplicated:
+
+- RKA is canonical for research observations, literature, claim extraction,
+  decision history, entity status, and provenance.
+- `RKA_CLAIM_SPINE.yaml` is the editable Writer-side map from those records to
+  this manuscript. It is regenerable and cannot make a record true by naming
+  it.
+- The three Markdown files are generated views. They are never authoritative
+  inputs and are never edited to repair the YAML.
+- The manuscript `jrn_` remains the canonical RKA record for the paper itself.
+
+The Outline checkpoint owns contribution ratification. The PI chooses exact,
+bounded wording; the active `dec_` records that wording and is referenced by
+the spine's `ratified_by` field. A decision licenses the manuscript framing but
+does not serve as empirical support. Positive evidence, qualifiers, and
+counterevidence resolve through verified `clm_` records to current source
+records. An `ecl_` is useful for discovery but is not terminal evidence.
+
+The dependency snapshot records all RKA entities used by the spine, including
+sources reached through claim records. On session resume, currency comparison
+maps changed entities back to affected claim IDs and manuscript unit IDs. A
+changed record never rewrites PI-ratified wording automatically. Missing,
+wrong-project, stale, retracted, or unresolvable dependencies block the
+relevant writing gate; an unavailable resolver or snapshot is `ERROR`, never
+`PASS`.
+
+The claim spine emits no new entity or edge types and requires no service, API,
+MCP, or web change. It uses the existing research-map, changelog, entity,
+decision, and manuscript surfaces. Reviewer-facing output remains advisory and
+contains no aggregate paper score or accept/reject prediction.
 
 ## Option 2 manuscript representation (`dec_01KS0BKJ5ZJKJ4R19GYAK3QN9D` Q1)
 
@@ -106,6 +165,15 @@ draft  # draft | review | final | submitted
 
 The manifest is updated as the manuscript progresses through phases; the `tags` field carries the current phase via `phase:<draft|review|final>`. The `related_decisions` field grows as each of the six PI checkpoints ratifies a `dec_`.
 
+The Outline checkpoint produces the framing decision plus one child
+claim-scope `dec_` per selected contribution. Each child stores one exact claim
+sentence in `chosen`, so `ratified_by` remains unambiguous when a paper has
+multiple contributions. These records implement the PI's explicit Outline
+selection; they do not add a seventh checkpoint. If evidence later supports a
+materially different contribution, a new claim-scope decision supersedes the
+old one; the manifest keeps both in its decision lineage while the spine points
+only to the current decision.
+
 Option 3 (a new `man_` entity type with schema migration) was rejected per Q1 ratification because it would require migration scaffolding in `rka/db/schema.sql` and `rka/services/` (violating the bookkeeper invariant for Phase 1).
 
 ## Provenance edges Writer emits
@@ -151,6 +219,10 @@ manuscripts/<project-id>/<venue>/
   .planning/
     ACTIVE_WORKFLOW.md        # current_phase, last_checkpoint, next_action
     PRECIS.md                 # PI-authored title + abstract + venue
+    RKA_CLAIM_SPINE.yaml      # editable mapping from RKA records to claims/units
+    CONTRIBUTION_CONTRACT.md  # generated read-only contribution view
+    ARGUMENT_SPINE.md         # generated read-only unit/claim view
+    RESULTS_TRACE.md          # generated read-only result/claim view
     OUTLINE.md                # ratified outline (post-Outline checkpoint)
     REVIEW_STATE.md           # iteration counter for Revision Loop
     sketches/                 # per-section sketches before drafting
@@ -167,6 +239,9 @@ manuscripts/<project-id>/<venue>/
 Phase 1 (this mission):
 
 - SKILL.md, references/, scripts/ (with stubs for Phase 2 items), workspace-template/, tests/skills/writer/, docs.
+- RKA-backed claim-spine planning files, resolver-injected validation, and
+  deterministic rendering remain within the Writer tree and use the existing
+  RKA surface.
 - Two seed venues: CHI, EMNLP.
 - Anti-AI-tic enforcement live and tested.
 - Local LaTeX render plus layout audit live and tested.
