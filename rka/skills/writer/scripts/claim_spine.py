@@ -24,7 +24,14 @@ from urllib.request import Request, urlopen
 
 SCHEMA_VERSION = "rka-claim-spine/v1"
 SNAPSHOT_VERSION = "rka-claim-spine-snapshot/v1"
-STALE_STATES = {"abandoned", "retracted", "retired", "stale", "superseded"}
+STALE_STATES = {
+    "abandoned",
+    "inactive",
+    "retracted",
+    "retired",
+    "stale",
+    "superseded",
+}
 STALENESS_STATES = {"green", "yellow", "red"}
 STALENESS_VERDICTS = {
     "current",

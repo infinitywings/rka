@@ -422,6 +422,23 @@ class TestValidation:
         assert report.verdict == "BLOCK"
         assert "SOURCE_LINK_REQUIRED" in _codes(report)
 
+    def test_inactive_terminal_source_blocks_claim_support(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[EVIDENCE_SOURCE_ID]["status"] = "inactive"
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "BLOCK"
+        assert "STALE_SOURCE" in _codes(report)
+
     def test_ratified_claim_requires_current_pi_decision(
         self,
         claim_spine,
@@ -628,6 +645,21 @@ class TestSnapshotAndCurrency:
                 make_claim_spine_resolver(entities),
             )
 
+    def test_snapshot_builder_refuses_inactive_terminal_source(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[EVIDENCE_SOURCE_ID]["status"] = "inactive"
+        with pytest.raises(ValueError, match="got BLOCK"):
+            claim_spine.build_snapshot(
+                claim_spine_data,
+                make_claim_spine_resolver(entities),
+            )
+
     def test_unchanged_snapshot_passes(
         self, claim_spine, claim_spine_data, claim_spine_resolver
     ) -> None:
@@ -661,6 +693,30 @@ class TestSnapshotAndCurrency:
         assert EVIDENCE_SOURCE_ID in report.changed_entities
         assert report.affected_claims == ["C1"]
         assert set(report.affected_units) == {"U-ABSTRACT-1", "U-RESULTS-1"}
+
+    def test_inactive_source_blocks_currency_even_without_other_changes(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        claim_spine_resolver,
+        make_claim_spine_resolver,
+    ) -> None:
+        data = deepcopy(claim_spine_data)
+        data["rka_snapshot"] = claim_spine.build_snapshot(data, claim_spine_resolver)
+
+        changed = _copy_entities(claim_spine_entities)
+        changed[EVIDENCE_SOURCE_ID]["status"] = "inactive"
+        report = claim_spine.check_currency(
+            data,
+            make_claim_spine_resolver(changed),
+        )
+
+        assert report.verdict == "BLOCK"
+        assert EVIDENCE_SOURCE_ID in report.changed_entities
+        assert report.affected_claims == ["C1"]
+        assert set(report.affected_units) == {"U-ABSTRACT-1", "U-RESULTS-1"}
+        assert "STALE_SOURCE" in _codes(report)
 
     def test_current_content_change_requires_revalidation_without_rewriting_claim(
         self,
