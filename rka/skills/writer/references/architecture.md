@@ -106,12 +106,19 @@ counterevidence resolve through verified `clm_` records to current source
 records. An `ecl_` is useful for discovery but is not terminal evidence.
 
 The dependency snapshot records all RKA entities used by the spine, including
-sources reached through claim records. On session resume, currency comparison
-maps changed entities back to affected claim IDs and manuscript unit IDs. A
-changed record never rewrites PI-ratified wording automatically. Missing,
-wrong-project, stale, retracted, or unresolvable dependencies block the
-relevant writing gate; an unavailable resolver or snapshot is `ERROR`, never
-`PASS`.
+sources reached through claim records and their live freshness metadata. On
+session resume, currency comparison maps changed or currently invalid entities
+back to affected claim IDs and manuscript unit IDs. A changed record never
+rewrites PI-ratified wording automatically. Yellow staleness remains a surfaced
+warning; missing, wrong-project, red-stale, temporally invalid, inactive,
+reprocessing-required, retracted, or unresolvable dependencies block the
+relevant writing gate. Unknown freshness metadata or an unavailable resolver
+or snapshot is `ERROR`, never `PASS`.
+
+Snapshot creation is itself gated by live validation and accepts only `PASS`.
+Currency checking does not trust the saved snapshot as proof: it revalidates
+the active spine and recursively expands both claim-level and unit-only source
+dependencies before reporting affected units.
 
 The claim spine emits no new entity or edge types and requires no service, API,
 MCP, or web change. It uses the existing research-map, changelog, entity,

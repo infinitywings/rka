@@ -1,7 +1,7 @@
 ---
 name: rka-writer
 description: "Manuscript-drafting AI for RKA-managed research projects. Runs as a Claude Code skill in VSCode per dec_01KS0AWYDV752AWQRF40CQBRFZ. Drafts but does not assert: every prose claim carries provenance to a lit_, jrn_, or dec_ entity in the research graph. Load when starting a manuscript session in a manuscripts/<project>/<venue>/ working directory, when picking up a revision mission from the Brain, when running a pre-submission review, when building or checking a claim spine, contribution contract, argument spine, or results trace, or when reasoning about venue, references, layout, or anti-AI-tic enforcement."
-version: 2.6.0
+version: 2.6.1
 ---
 
 # Writer Skill
@@ -78,7 +78,7 @@ Scripts invoked via `Bash` (under `scripts/`):
 `validate_references.py` is a Phase 1 stub implementing Stage A only; Stages B through G raise `NotImplementedError` with a Phase 2 reference.
 `overclaim_lint.py` scans drafts for calibration/overclaim wording (`verified`, `guaranteed`, `eliminates`, `model-agnostic`, ...) and emits `overclaim_report.json`. WARN-only, never BLOCK; ranks a hit higher when its backing `jrn_`/`clm_` is at `hypothesis`/`tested` confidence. Advisory input to the pre-submission review.
 `fetch_template.py` is a Phase 1 stub for registry lookup; SHA-256 verification and actual fetching land in Phase 2.
-`claim_spine.py` safely loads `.planning/RKA_CLAIM_SPINE.yaml`, validates its schema and current RKA entity chains, builds a deterministic `rka_snapshot`, checks graph currency, and renders exactly three Markdown views: `CONTRIBUTION_CONTRACT.md`, `ARGUMENT_SPINE.md`, and `RESULTS_TRACE.md`. Use `load_spine`, `validate_spine`, `build_snapshot`, `check_currency`, and `render_views` directly or their corresponding CLI subcommands. In plugin sessions, collect a fresh project-scoped entity packet through the authenticated RKA MCP and pass it with `--entity-packet`; do not expose REST. A trusted local REST resolver is optional via `--rka-url`. Validation cannot return `PASS` without a resolver, and currency checking cannot return `PASS` without a stored snapshot. Its outputs are categorical findings (`PASS`, `WARN`, `BLOCK`, `ERROR`), never a numeric quality score.
+`claim_spine.py` safely loads `.planning/RKA_CLAIM_SPINE.yaml`, validates its schema and current RKA entity chains, builds a deterministic `rka_snapshot`, checks graph currency, and renders exactly three Markdown views: `CONTRIBUTION_CONTRACT.md`, `ARGUMENT_SPINE.md`, and `RESULTS_TRACE.md`. Use `load_spine`, `validate_spine`, `build_snapshot`, `check_currency`, and `render_views` directly or their corresponding CLI subcommands. Resolve the script relative to this loaded skill directory; never assume the current working directory is an RKA checkout. In plugin sessions, collect a fresh project-scoped entity packet through the authenticated RKA MCP and pass it with `--entity-packet`; do not expose REST. A trusted local REST resolver is optional via `--rka-url`. Validation cannot return `PASS` without a resolver, currency checking cannot return `PASS` without a stored snapshot, and snapshot creation refuses every live result other than exact `PASS`. Currency checking re-runs the live structural/evidence validation so an unchanged invalid snapshot cannot become `PASS`. Its outputs are categorical findings (`PASS`, `WARN`, `BLOCK`, `ERROR`), never a numeric quality score.
 
 ---
 
@@ -135,7 +135,7 @@ This section is the guidance; `verify_provenance.py` is the gate. They are the s
 
 Build `rka_snapshot` from every entity named by the spine plus each terminal source reached through a `clm_.source_entry_id`. Store the project id and changelog cursor with that snapshot. At session re-entry, before Results drafting, and before the Final Layout checkpoint, compare it to live RKA with `check_currency`.
 
-Treat changed evidence locally: invalidate and revalidate only the dependent claim IDs and manuscript-unit IDs reported by the checker. Do not silently refresh `allowed_wording`, delete counterevidence, or strengthen a claim because an entity changed. A current-content change is at least `WARN`; a missing, superseded, stale, abandoned, retracted, wrong-project, or unresolved source is `BLOCK`. A missing resolver, missing snapshot, malformed spine, or failed currency check is `ERROR`, and `ERROR` blocks advancement. Rebuild the snapshot only after live validation succeeds and any changed ratified wording has a new current PI decision.
+Treat changed evidence locally: invalidate and revalidate only the dependent claim IDs and manuscript-unit IDs reported by the checker. Do not silently refresh `allowed_wording`, delete counterevidence, or strengthen a claim because an entity changed. A current-content change or RKA `staleness: yellow` is at least `WARN`; a missing, red-stale, expired, not-yet-valid, inactive, superseded, abandoned, retracted, wrong-project, reprocessing-required, or unresolved source is `BLOCK`. Unknown or malformed freshness metadata, a missing resolver, missing snapshot, malformed spine, or failed currency check is `ERROR`, and `ERROR` blocks advancement. Rebuild the snapshot only after live validation succeeds and any changed ratified wording has a new current PI decision.
 
 ---
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -34,6 +35,25 @@ def _codes(report) -> set[str]:
 
 def _copy_entities(entities: dict[str, dict]) -> dict[str, dict]:
     return deepcopy(entities)
+
+
+def _legacy_snapshot_without_validation(claim_spine, data: dict, resolver) -> dict:
+    """Simulate a pre-gate or externally forged snapshot for fail-closed tests."""
+
+    resolved = claim_spine._resolve_closure(
+        claim_spine._direct_entity_ids(data), resolver
+    )
+    captured_at = claim_spine._utc_now()
+    return {
+        "schema_version": claim_spine.SNAPSHOT_VERSION,
+        "project_id": data["project_id"],
+        "entities": {
+            entity_id: claim_spine._entity_snapshot(
+                entity_id, entity, at=captured_at
+            )
+            for entity_id, entity in sorted(resolved.items())
+        },
+    }
 
 
 class TestLoadSpine:
@@ -159,6 +179,23 @@ class TestValidation:
         assert report.verdict == "BLOCK"
         assert "WRONG_PROJECT" in _codes(report)
 
+    def test_packet_record_id_must_match_lookup_key(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[EVIDENCE_CLAIM_ID]["id"] = QUALIFIER_CLAIM_ID
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "BLOCK"
+        assert "ENTITY_ID_MISMATCH" in _codes(report)
+
     def test_stale_claim_blocks(
         self,
         claim_spine,
@@ -175,6 +212,125 @@ class TestValidation:
         )
         assert report.verdict == "BLOCK"
         assert "STALE_ENTITY" in _codes(report)
+
+    def test_yellow_staleness_is_a_visible_warning_not_a_red_block(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[EVIDENCE_CLAIM_ID].update(
+            stale=True,
+            staleness="yellow",
+            stale_reason="Review after a newer benchmark",
+        )
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "WARN"
+        assert "FRESHNESS_REVIEW_REQUIRED" in _codes(report)
+
+    def test_red_staleness_blocks_even_when_legacy_flag_is_absent(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[EVIDENCE_CLAIM_ID].update(stale=False, staleness="red")
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "BLOCK"
+        assert "STALE_ENTITY" in _codes(report)
+
+    def test_expired_temporal_validity_blocks(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+        monkeypatch,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[EVIDENCE_CLAIM_ID]["valid_until"] = "2026-07-20T00:00:00Z"
+        monkeypatch.setattr(
+            claim_spine,
+            "_utc_now",
+            lambda: datetime(2026, 7, 22, tzinfo=timezone.utc),
+        )
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "BLOCK"
+        assert "TEMPORAL_VALIDITY_ENDED" in _codes(report)
+
+    def test_historical_resolution_is_not_current_manuscript_support(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[EVIDENCE_CLAIM_ID].update(
+            stale=False,
+            staleness="green",
+            staleness_verdict="historical",
+        )
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "BLOCK"
+        assert "INACTIVE_DISPOSITION" in _codes(report)
+
+    def test_dismissed_freshness_concern_remains_current(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[EVIDENCE_CLAIM_ID].update(
+            stale=False,
+            staleness="green",
+            staleness_verdict="dismissed",
+        )
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "PASS"
+
+    def test_unknown_freshness_metadata_fails_closed_as_error(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[EVIDENCE_CLAIM_ID]["staleness"] = "orange"
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "ERROR"
+        assert "INVALID_FRESHNESS_METADATA" in _codes(report)
 
     def test_current_claim_with_retracted_source_blocks(
         self,
@@ -234,6 +390,38 @@ class TestValidation:
         assert report.verdict == "BLOCK"
         assert "INVALID_EVIDENCE_ROLE" in _codes(report)
 
+    def test_direct_journal_cannot_replace_required_claim_source_chain(
+        self, claim_spine, claim_spine_data, claim_spine_resolver
+    ) -> None:
+        data = deepcopy(claim_spine_data)
+        data["claims"][0]["evidence_ids"] = [EVIDENCE_SOURCE_ID]
+        for unit in data["units"]:
+            unit["evidence_ids"] = [EVIDENCE_SOURCE_ID]
+        report = claim_spine.validate_spine(
+            data,
+            resolver=claim_spine_resolver,
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "BLOCK"
+        assert "INVALID_EVIDENCE_ROLE" in _codes(report)
+
+    def test_empirical_claim_record_requires_terminal_source_link(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[EVIDENCE_CLAIM_ID].pop("source_entry_id")
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "BLOCK"
+        assert "SOURCE_LINK_REQUIRED" in _codes(report)
+
     def test_ratified_claim_requires_current_pi_decision(
         self,
         claim_spine,
@@ -253,6 +441,42 @@ class TestValidation:
         )
         assert report.verdict == "BLOCK"
         assert "RATIFICATION_REQUIRED" in _codes(report)
+
+    def test_propagated_decision_staleness_in_assumptions_blocks_ratification(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[DECISION_ID]["assumptions"] = {"staleness": "red"}
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "BLOCK"
+        assert "RATIFICATION_REQUIRED" in _codes(report)
+
+    def test_reprocessing_required_synthesis_cannot_enter_a_unit(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        data = deepcopy(claim_spine_data)
+        data["units"][0]["evidence_ids"].append(SYNTHESIS_ID)
+        entities = _copy_entities(claim_spine_entities)
+        entities[SYNTHESIS_ID]["needs_reprocessing"] = True
+        report = claim_spine.validate_spine(
+            data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "BLOCK"
+        assert "REPROCESSING_REQUIRED" in _codes(report)
 
     def test_edit_after_ratification_requires_new_decision(
         self, claim_spine, claim_spine_data, claim_spine_resolver
@@ -328,6 +552,20 @@ class TestValidation:
         assert report.verdict == "BLOCK"
         assert "ORPHAN_RESULT" in _codes(report)
 
+    def test_result_unit_without_evidence_blocks(
+        self, claim_spine, claim_spine_data, claim_spine_resolver
+    ) -> None:
+        data = deepcopy(claim_spine_data)
+        result_unit = next(unit for unit in data["units"] if unit["kind"] == "result")
+        result_unit["evidence_ids"] = []
+        report = claim_spine.validate_spine(
+            data,
+            resolver=claim_spine_resolver,
+            project_id=PROJECT_ID,
+        )
+        assert report.verdict == "BLOCK"
+        assert "RESULT_EVIDENCE_REQUIRED" in _codes(report)
+
     @pytest.mark.parametrize("field", ["allowed_wording", "prohibited_wording"])
     def test_claim_boundary_fields_are_required(
         self,
@@ -365,6 +603,30 @@ class TestSnapshotAndCurrency:
             QUALIFIER_CLAIM_ID,
             QUALIFIER_SOURCE_ID,
         }.issubset(first["entities"])
+
+    @pytest.mark.parametrize(
+        ("updates", "expected"),
+        [
+            ({"stale": True}, "BLOCK"),
+            ({"stale": True, "staleness": "yellow"}, "WARN"),
+        ],
+    )
+    def test_snapshot_builder_refuses_nonpassing_live_state(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+        updates,
+        expected,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[EVIDENCE_CLAIM_ID].update(updates)
+        with pytest.raises(ValueError, match=f"got {expected}"):
+            claim_spine.build_snapshot(
+                claim_spine_data,
+                make_claim_spine_resolver(entities),
+            )
 
     def test_unchanged_snapshot_passes(
         self, claim_spine, claim_spine_data, claim_spine_resolver
@@ -428,6 +690,166 @@ class TestSnapshotAndCurrency:
     ) -> None:
         report = claim_spine.check_currency(claim_spine_data, claim_spine_resolver)
         assert report.verdict == "ERROR"
+
+    def test_snapshot_schema_or_project_mismatch_is_error(
+        self, claim_spine, claim_spine_data, claim_spine_resolver
+    ) -> None:
+        data = deepcopy(claim_spine_data)
+        data["rka_snapshot"] = claim_spine.build_snapshot(data, claim_spine_resolver)
+        data["rka_snapshot"]["schema_version"] = "rka-claim-spine-snapshot/v99"
+        assert claim_spine.check_currency(data, claim_spine_resolver).verdict == "ERROR"
+
+        data["rka_snapshot"]["schema_version"] = claim_spine.SNAPSHOT_VERSION
+        data["rka_snapshot"]["project_id"] = "prj_01WRONG"
+        assert claim_spine.check_currency(data, claim_spine_resolver).verdict == "ERROR"
+
+    def test_unchanged_but_expired_dependency_still_blocks_currency(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+        monkeypatch,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[EVIDENCE_CLAIM_ID]["valid_until"] = "2026-07-20T00:00:00Z"
+        resolver = make_claim_spine_resolver(entities)
+        monkeypatch.setattr(
+            claim_spine,
+            "_utc_now",
+            lambda: datetime(2026, 7, 22, tzinfo=timezone.utc),
+        )
+        data = deepcopy(claim_spine_data)
+        data["rka_snapshot"] = _legacy_snapshot_without_validation(
+            claim_spine, data, resolver
+        )
+
+        report = claim_spine.check_currency(data, resolver)
+
+        assert report.verdict == "BLOCK"
+        assert EVIDENCE_CLAIM_ID not in report.changed_entities
+        assert report.affected_claims == ["C1"]
+        assert "TEMPORAL_VALIDITY_ENDED" in _codes(report)
+
+    def test_validity_boundary_crossing_is_detected_without_record_edit(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+        monkeypatch,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[EVIDENCE_CLAIM_ID]["valid_until"] = "2026-07-22T12:00:00Z"
+        resolver = make_claim_spine_resolver(entities)
+        data = deepcopy(claim_spine_data)
+        monkeypatch.setattr(
+            claim_spine,
+            "_utc_now",
+            lambda: datetime(2026, 7, 22, 11, tzinfo=timezone.utc),
+        )
+        data["rka_snapshot"] = claim_spine.build_snapshot(data, resolver)
+
+        monkeypatch.setattr(
+            claim_spine,
+            "_utc_now",
+            lambda: datetime(2026, 7, 22, 13, tzinfo=timezone.utc),
+        )
+        report = claim_spine.check_currency(data, resolver)
+
+        assert report.verdict == "BLOCK"
+        assert EVIDENCE_CLAIM_ID in report.changed_entities
+        assert report.affected_claims == ["C1"]
+
+    def test_unchanged_yellow_dependency_remains_visible_as_warning(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[EVIDENCE_CLAIM_ID].update(stale=True, staleness="yellow")
+        resolver = make_claim_spine_resolver(entities)
+        data = deepcopy(claim_spine_data)
+        data["rka_snapshot"] = _legacy_snapshot_without_validation(
+            claim_spine, data, resolver
+        )
+
+        report = claim_spine.check_currency(data, resolver)
+
+        assert report.verdict == "WARN"
+        assert report.changed_entities == []
+        assert report.affected_claims == ["C1"]
+        assert "FRESHNESS_REVIEW_REQUIRED" in _codes(report)
+
+    def test_unverified_change_blocks_currency_not_merely_warns(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        claim_spine_resolver,
+        make_claim_spine_resolver,
+    ) -> None:
+        data = deepcopy(claim_spine_data)
+        data["rka_snapshot"] = claim_spine.build_snapshot(data, claim_spine_resolver)
+        changed = _copy_entities(claim_spine_entities)
+        changed[EVIDENCE_CLAIM_ID].update(verified=False, confidence=0.4)
+
+        report = claim_spine.check_currency(
+            data, make_claim_spine_resolver(changed)
+        )
+
+        assert report.verdict == "BLOCK"
+        assert "UNVERIFIED_EVIDENCE" in _codes(report)
+        assert report.affected_claims == ["C1"]
+
+    def test_unit_only_terminal_source_change_targets_that_unit(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        extra_claim = "clm_01UNITONLYAAAAAAAAAAAAAAAAAA"
+        extra_source = "jrn_01UNITONLYSOURCEAAAAAAAAAAAA"
+        data = deepcopy(claim_spine_data)
+        result_unit = next(unit for unit in data["units"] if unit["kind"] == "result")
+        result_unit["evidence_ids"].append(extra_claim)
+        entities = _copy_entities(claim_spine_entities)
+        entities[extra_claim] = {
+            "id": extra_claim,
+            "project_id": PROJECT_ID,
+            "source_entry_id": extra_source,
+            "claim_type": "result",
+            "content": "A unit-specific robustness measurement was positive.",
+            "confidence": 0.9,
+            "verified": True,
+            "stale": False,
+            "contradicted": False,
+        }
+        entities[extra_source] = {
+            "id": extra_source,
+            "project_id": PROJECT_ID,
+            "type": "log",
+            "content": "Unit-specific robustness run.",
+            "status": "active",
+            "confidence": "verified",
+            "superseded_by": None,
+        }
+        resolver = make_claim_spine_resolver(entities)
+        data["rka_snapshot"] = claim_spine.build_snapshot(data, resolver)
+
+        changed = _copy_entities(entities)
+        changed[extra_source]["content"] += " Rechecked with a corrected seed."
+        report = claim_spine.check_currency(
+            data, make_claim_spine_resolver(changed)
+        )
+
+        assert report.verdict == "WARN"
+        assert extra_source in report.changed_entities
+        assert report.affected_claims == []
+        assert report.affected_units == ["U-RESULTS-1"]
 
 
 class TestRendering:
@@ -522,6 +944,34 @@ class TestCli:
             str(output),
         ])
         assert rc == 3
+        assert not output.exists()
+
+    def test_snapshot_block_writes_no_baseline(
+        self,
+        claim_spine,
+        claim_spine_fixture_dir: Path,
+        claim_spine_entities: dict,
+        tmp_path: Path,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities.pop(EVIDENCE_SOURCE_ID)
+        packet = tmp_path / "missing-source.json"
+        packet.write_text(
+            json.dumps({"project_id": PROJECT_ID, "entities": entities}),
+            encoding="utf-8",
+        )
+        output = tmp_path / "must-not-exist.yaml"
+
+        rc = claim_spine.main([
+            "snapshot",
+            str(claim_spine_fixture_dir / "valid_spine.yaml"),
+            "--entity-packet",
+            str(packet),
+            "--output",
+            str(output),
+        ])
+
+        assert rc == 2
         assert not output.exists()
 
 

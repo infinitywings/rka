@@ -14,6 +14,7 @@ import json
 import sys
 from copy import deepcopy
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 from urllib.error import HTTPError, URLError
@@ -24,6 +25,16 @@ from urllib.request import Request, urlopen
 SCHEMA_VERSION = "rka-claim-spine/v1"
 SNAPSHOT_VERSION = "rka-claim-spine-snapshot/v1"
 STALE_STATES = {"abandoned", "retracted", "retired", "stale", "superseded"}
+STALENESS_STATES = {"green", "yellow", "red"}
+STALENESS_VERDICTS = {
+    "current",
+    "dismissed",
+    "historical",
+    "retired",
+    "retracted",
+    "superseded",
+}
+INACTIVE_VERDICTS = {"historical", "retired", "retracted", "superseded"}
 RATIFIED_STATES = {"ratified"}
 SEVERITY_RANK = {"PASS": 0, "WARN": 1, "BLOCK": 2, "ERROR": 3}
 Resolver = Callable[[str], Mapping[str, Any] | None]
@@ -67,6 +78,15 @@ class CurrencyReport:
     findings: list[Finding] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class FreshnessAssessment:
+    """Normalized interpretation of legacy and v2.8 RKA currency fields."""
+
+    severity: str
+    code: str
+    reason: str
+
+
 def load_spine(path: str | Path) -> dict[str, Any]:
     """Load a claim-spine YAML/JSON document without constructing objects."""
 
@@ -107,14 +127,133 @@ def _entity_prefix(entity_id: str) -> str:
     return entity_id.split("_", 1)[0] if "_" in entity_id else ""
 
 
-def _is_stale(entity: Mapping[str, Any]) -> bool:
-    if entity.get("stale") is True or entity.get("superseded_by"):
-        return True
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _rka_timestamp(value: Any, field_name: str) -> datetime | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a non-empty ISO-8601 timestamp or null")
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} is not a valid ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _explicit_staleness(entity: Mapping[str, Any]) -> Any:
+    if entity.get("staleness") is not None:
+        return entity.get("staleness")
+    # RKA decisions currently carry propagated staleness in assumptions.
+    assumptions = entity.get("assumptions")
+    if isinstance(assumptions, Mapping):
+        return assumptions.get("staleness")
+    return None
+
+
+def _freshness_assessment(
+    entity: Mapping[str, Any],
+    *,
+    at: datetime | None = None,
+) -> FreshnessAssessment:
+    """Interpret RKA currency without collapsing yellow warnings into red blocks."""
+
+    now = (at or _utc_now()).astimezone(timezone.utc)
+    raw_staleness = _explicit_staleness(entity)
+    staleness = raw_staleness.lower() if isinstance(raw_staleness, str) else raw_staleness
+    if staleness is not None and staleness not in STALENESS_STATES:
+        return FreshnessAssessment(
+            "ERROR",
+            "INVALID_FRESHNESS_METADATA",
+            f"unknown RKA staleness value {raw_staleness!r}",
+        )
+
+    raw_verdict = entity.get("staleness_verdict")
+    verdict = raw_verdict.lower() if isinstance(raw_verdict, str) else raw_verdict
+    if verdict is not None and verdict not in STALENESS_VERDICTS:
+        return FreshnessAssessment(
+            "ERROR",
+            "INVALID_FRESHNESS_METADATA",
+            f"unknown RKA staleness verdict {raw_verdict!r}",
+        )
+
+    timestamps: dict[str, datetime | None] = {}
+    try:
+        for key in ("valid_from", "valid_until", "synthesis_valid_until"):
+            timestamps[key] = _rka_timestamp(entity.get(key), key)
+    except ValueError as exc:
+        return FreshnessAssessment("ERROR", "INVALID_FRESHNESS_METADATA", str(exc))
+
+    valid_from = timestamps["valid_from"]
+    if valid_from is not None and valid_from > now:
+        return FreshnessAssessment(
+            "BLOCK",
+            "NOT_YET_VALID",
+            "the RKA record's valid_from is in the future",
+        )
+    for key in ("valid_until", "synthesis_valid_until"):
+        boundary = timestamps[key]
+        if boundary is not None and boundary <= now:
+            return FreshnessAssessment(
+                "BLOCK",
+                "TEMPORAL_VALIDITY_ENDED",
+                f"the RKA record's {key} has passed",
+            )
+
+    if entity.get("needs_reprocessing") is True:
+        return FreshnessAssessment(
+            "BLOCK",
+            "REPROCESSING_REQUIRED",
+            "the RKA synthesis is marked needs_reprocessing",
+        )
+    if entity.get("superseded_by"):
+        return FreshnessAssessment(
+            "BLOCK", "STALE_ENTITY", "the RKA record has been superseded"
+        )
     for key in ("status", "confidence"):
         value = entity.get(key)
         if isinstance(value, str) and value.lower() in STALE_STATES:
-            return True
-    return False
+            return FreshnessAssessment(
+                "BLOCK",
+                "STALE_ENTITY",
+                f"the RKA record's {key} is {value.lower()}",
+            )
+    if verdict in INACTIVE_VERDICTS:
+        return FreshnessAssessment(
+            "BLOCK",
+            "INACTIVE_DISPOSITION",
+            f"the reviewed RKA disposition is {verdict}",
+        )
+    if staleness == "red":
+        return FreshnessAssessment(
+            "BLOCK",
+            "STALE_ENTITY",
+            "RKA marks the record red (definitively stale)",
+        )
+    if staleness == "yellow":
+        return FreshnessAssessment(
+            "WARN",
+            "FRESHNESS_REVIEW_REQUIRED",
+            "RKA marks the record yellow (soft freshness review)",
+        )
+    if entity.get("stale") is True:
+        return FreshnessAssessment(
+            "BLOCK",
+            "STALE_ENTITY",
+            "the legacy RKA stale flag is set without a yellow advisory",
+        )
+    return FreshnessAssessment("PASS", "CURRENT", "the RKA record is current")
+
+
+def _is_stale(entity: Mapping[str, Any]) -> bool:
+    return _freshness_assessment(entity).severity in {"BLOCK", "ERROR"}
 
 
 def _is_verified(entity: Mapping[str, Any]) -> bool:
@@ -136,9 +275,19 @@ def _stable_payload(entity: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _entity_snapshot(entity_id: str, entity: Mapping[str, Any] | None) -> dict[str, Any]:
+def _entity_snapshot(
+    entity_id: str,
+    entity: Mapping[str, Any] | None,
+    *,
+    at: datetime | None = None,
+) -> dict[str, Any]:
     if entity is None:
-        return {"id": entity_id, "missing": True}
+        return {
+            "id": entity_id,
+            "missing": True,
+            "freshness": "BLOCK",
+            "freshness_code": "MISSING_ENTITY",
+        }
     payload = _stable_payload(entity)
     encoded = json.dumps(
         payload,
@@ -147,6 +296,7 @@ def _entity_snapshot(entity_id: str, entity: Mapping[str, Any] | None) -> dict[s
         ensure_ascii=False,
         default=str,
     ).encode("utf-8")
+    freshness = _freshness_assessment(entity, at=at)
     return {
         "id": entity_id,
         "project_id": entity.get("project_id"),
@@ -154,7 +304,16 @@ def _entity_snapshot(entity_id: str, entity: Mapping[str, Any] | None) -> dict[s
         "status": entity.get("status"),
         "confidence": entity.get("confidence"),
         "verified": entity.get("verified"),
-        "stale": _is_stale(entity),
+        "stale": freshness.severity in {"BLOCK", "ERROR"},
+        "staleness": _explicit_staleness(entity),
+        "staleness_verdict": entity.get("staleness_verdict"),
+        "valid_from": entity.get("valid_from"),
+        "valid_until": entity.get("valid_until"),
+        "synthesis_valid_until": entity.get("synthesis_valid_until"),
+        "needs_reprocessing": entity.get("needs_reprocessing"),
+        "freshness": freshness.severity,
+        "freshness_code": freshness.code,
+        "freshness_reason": freshness.reason,
         "contradicted": entity.get("contradicted") is True,
         "superseded_by": entity.get("superseded_by"),
         "fingerprint": hashlib.sha256(encoded).hexdigest(),
@@ -208,11 +367,24 @@ def _resolve_closure(
 
 
 def build_snapshot(data: Mapping[str, Any], resolver: Resolver) -> dict[str, Any]:
-    """Build a deterministic snapshot of all claim-spine RKA dependencies."""
+    """Build a deterministic snapshot only from a fully valid live spine."""
+
+    validation = validate_spine(
+        data,
+        resolver=resolver,
+        project_id=_text(data.get("project_id")) or None,
+    )
+    if validation.verdict != "PASS":
+        codes = ", ".join(sorted({finding.code for finding in validation.findings}))
+        raise ValueError(
+            f"snapshot requires validation PASS, got {validation.verdict}"
+            + (f" ({codes})" if codes else "")
+        )
 
     resolved = _resolve_closure(_direct_entity_ids(data), resolver)
+    captured_at = _utc_now()
     entities = {
-        entity_id: _entity_snapshot(entity_id, resolved[entity_id])
+        entity_id: _entity_snapshot(entity_id, resolved[entity_id], at=captured_at)
         for entity_id in sorted(resolved)
     }
     return {
@@ -254,6 +426,15 @@ def _validate_entity(
             entity_id=entity_id,
         )
         return
+    actual_id = _text(entity.get("id"))
+    if actual_id != entity_id:
+        _add(
+            findings,
+            "ENTITY_ID_MISMATCH",
+            f"RKA lookup {entity_id} returned entity {actual_id or '<missing id>'}",
+            claim_id=claim_id,
+            entity_id=entity_id,
+        )
     actual_project = _text(entity.get("project_id"))
     if expected_project and actual_project != expected_project:
         _add(
@@ -263,11 +444,16 @@ def _validate_entity(
             claim_id=claim_id,
             entity_id=entity_id,
         )
-    if _is_stale(entity):
+    freshness = _freshness_assessment(entity)
+    if freshness.severity != "PASS":
+        code = freshness.code
+        if source and freshness.severity == "BLOCK":
+            code = "STALE_SOURCE"
         _add(
             findings,
-            "STALE_SOURCE" if source else "STALE_ENTITY",
-            f"RKA {'source' if source else 'entity'} {entity_id} is not current",
+            code,
+            f"RKA {'source' if source else 'entity'} {entity_id}: {freshness.reason}",
+            severity=freshness.severity,
             claim_id=claim_id,
             entity_id=entity_id,
         )
@@ -414,6 +600,7 @@ def validate_spine(
                 and decision is not None
                 and not _is_stale(decision)
                 and _text(decision.get("decided_by")).lower() == "pi"
+                and _text(decision.get("status")).lower() == "active"
             )
             if not valid_ratification:
                 _add(
@@ -457,15 +644,44 @@ def validate_spine(
                 )
 
         if claim_type == "empirical":
+            for role, identifiers in (
+                ("evidence", evidence_ids),
+                ("qualifier", qualifier_ids),
+                ("counterevidence", counter_ids),
+            ):
+                for entity_id in identifiers:
+                    if _entity_prefix(entity_id) != "clm":
+                        _add(
+                            findings,
+                            "INVALID_EVIDENCE_ROLE",
+                            f"v1 empirical {role} {entity_id} must be a clm_ record",
+                            claim_id=claim_id,
+                            entity_id=entity_id,
+                        )
+                        continue
+                    entity = resolved.get(entity_id)
+                    if entity is None:
+                        continue
+                    source_id = _text(entity.get("source_entry_id"))
+                    if not source_id:
+                        _add(
+                            findings,
+                            "SOURCE_LINK_REQUIRED",
+                            f"empirical {role} {entity_id} has no source_entry_id",
+                            claim_id=claim_id,
+                            entity_id=entity_id,
+                        )
+                    elif _entity_prefix(source_id) != "jrn":
+                        _add(
+                            findings,
+                            "INVALID_SOURCE_ROLE",
+                            f"empirical {role} {entity_id} must resolve to a jrn_ source",
+                            claim_id=claim_id,
+                            entity_id=source_id,
+                        )
+
+        if claim_type == "empirical":
             for entity_id in evidence_ids:
-                if _entity_prefix(entity_id) not in {"clm", "jrn"}:
-                    _add(
-                        findings,
-                        "INVALID_EVIDENCE_ROLE",
-                        f"{entity_id} cannot serve as terminal empirical evidence",
-                        claim_id=claim_id,
-                        entity_id=entity_id,
-                    )
                 entity = resolved.get(entity_id)
                 if entity is not None and _entity_prefix(entity_id) == "clm":
                     if not _is_verified(entity) or entity.get("contradicted") is True:
@@ -529,6 +745,17 @@ def validate_spine(
                 "ORPHAN_RESULT",
                 f"Results unit {unit_id or '<unknown>'} serves no contribution",
             )
+        unit_evidence_ids = [
+            value
+            for value in _list(unit.get("evidence_ids"))
+            if isinstance(value, str)
+        ]
+        if kind == "result" and not unit_evidence_ids:
+            _add(
+                findings,
+                "RESULT_EVIDENCE_REQUIRED",
+                f"Results unit {unit_id or '<unknown>'} names no RKA evidence",
+            )
         for claim_id in linked_claims:
             if claim_id not in known_claims:
                 _add(
@@ -546,30 +773,66 @@ def validate_spine(
                 "RESULT_BOUNDARY_REQUIRED",
                 f"Results unit {unit_id} needs allowed and prohibited interpretations",
             )
-        for entity_id in _list(unit.get("evidence_ids")):
-            if isinstance(entity_id, str):
+        for entity_id in unit_evidence_ids:
+            entity = resolved.get(entity_id)
+            _validate_entity(
+                findings,
+                entity_id,
+                entity,
+                expected_project,
+            )
+            if kind == "result" and _entity_prefix(entity_id) != "clm":
+                _add(
+                    findings,
+                    "INVALID_EVIDENCE_ROLE",
+                    f"Results unit {unit_id} evidence {entity_id} must be a clm_ record",
+                    entity_id=entity_id,
+                )
+            if entity is None or _entity_prefix(entity_id) != "clm":
+                continue
+            source_id = _text(entity.get("source_entry_id"))
+            if not source_id:
+                _add(
+                    findings,
+                    "SOURCE_LINK_REQUIRED",
+                    f"Results evidence {entity_id} has no source_entry_id",
+                    entity_id=entity_id,
+                )
+            else:
+                if _entity_prefix(source_id) != "jrn":
+                    _add(
+                        findings,
+                        "INVALID_SOURCE_ROLE",
+                        f"Results evidence {entity_id} must resolve to a jrn_ source",
+                        entity_id=source_id,
+                    )
                 _validate_entity(
                     findings,
-                    entity_id,
-                    resolved.get(entity_id),
+                    source_id,
+                    resolved.get(source_id),
                     expected_project,
+                    source=True,
+                )
+            if kind == "result" and (
+                not _is_verified(entity) or entity.get("contradicted") is True
+            ):
+                _add(
+                    findings,
+                    "UNVERIFIED_EVIDENCE",
+                    f"Results evidence {entity_id} is not verified and uncontested",
+                    entity_id=entity_id,
                 )
 
     return ValidationReport(findings)
 
 
-def _snapshot_dependencies(data: Mapping[str, Any], claim: Mapping[str, Any]) -> set[str]:
+def _expand_snapshot_dependencies(
+    data: Mapping[str, Any], direct: Iterable[str]
+) -> set[str]:
     saved = data.get("rka_snapshot")
     saved_entities = saved.get("entities", {}) if isinstance(saved, Mapping) else {}
-    direct: set[str] = set()
-    decision_id = _text(claim.get("ratified_by"))
-    if decision_id:
-        direct.add(decision_id)
-    for key in ("evidence_ids", "qualifier_ids", "counterevidence_ids"):
-        direct.update(value for value in _list(claim.get(key)) if isinstance(value, str))
-
     expanded = set(direct)
-    pending = list(direct)
+    pending = list(expanded)
     while pending:
         entity_id = pending.pop()
         snapshot = saved_entities.get(entity_id)
@@ -580,6 +843,25 @@ def _snapshot_dependencies(data: Mapping[str, Any], claim: Mapping[str, Any]) ->
             expanded.add(source_id)
             pending.append(source_id)
     return expanded
+
+
+def _snapshot_dependencies(data: Mapping[str, Any], claim: Mapping[str, Any]) -> set[str]:
+    direct: set[str] = set()
+    decision_id = _text(claim.get("ratified_by"))
+    if decision_id:
+        direct.add(decision_id)
+    for key in ("evidence_ids", "qualifier_ids", "counterevidence_ids"):
+        direct.update(value for value in _list(claim.get(key)) if isinstance(value, str))
+    return _expand_snapshot_dependencies(data, direct)
+
+
+def _unit_dependencies(data: Mapping[str, Any], unit: Mapping[str, Any]) -> set[str]:
+    direct = {
+        value
+        for value in _list(unit.get("evidence_ids"))
+        if isinstance(value, str)
+    }
+    return _expand_snapshot_dependencies(data, direct)
 
 
 def check_currency(data: Mapping[str, Any], resolver: Resolver) -> CurrencyReport:
@@ -593,18 +875,34 @@ def check_currency(data: Mapping[str, Any], resolver: Resolver) -> CurrencyRepor
             "rka_snapshot is required before currency can be checked",
         )
         return CurrencyReport("ERROR", findings=[finding])
+    if saved.get("schema_version") != SNAPSHOT_VERSION:
+        finding = Finding(
+            "UNSUPPORTED_SNAPSHOT",
+            "ERROR",
+            f"rka_snapshot schema_version must be {SNAPSHOT_VERSION}",
+        )
+        return CurrencyReport("ERROR", findings=[finding])
+    if _text(saved.get("project_id")) != _text(data.get("project_id")):
+        finding = Finding(
+            "SNAPSHOT_PROJECT_MISMATCH",
+            "ERROR",
+            "rka_snapshot project_id does not match the claim spine",
+        )
+        return CurrencyReport("ERROR", findings=[finding])
 
     saved_entities = saved["entities"]
-    identifiers = set(saved_entities) | _direct_entity_ids(data)
     try:
-        current_resolved = _resolve_closure(identifiers, resolver)
+        current_resolved = _resolve_closure(_direct_entity_ids(data), resolver)
     except Exception as exc:
         finding = Finding("RESOLVER_ERROR", "ERROR", f"RKA resolver failed: {exc}")
         return CurrencyReport("ERROR", findings=[finding])
 
+    captured_at = _utc_now()
     current = {
-        entity_id: _entity_snapshot(entity_id, current_resolved.get(entity_id))
-        for entity_id in sorted(set(current_resolved) | set(saved_entities))
+        entity_id: _entity_snapshot(
+            entity_id, current_resolved.get(entity_id), at=captured_at
+        )
+        for entity_id in sorted(current_resolved)
     }
     changed = sorted(
         entity_id
@@ -612,12 +910,28 @@ def check_currency(data: Mapping[str, Any], resolver: Resolver) -> CurrencyRepor
         if current.get(entity_id) != saved_entities.get(entity_id)
     )
 
+    expected_project = _text(data.get("project_id"))
+    validation = validate_spine(
+        data,
+        resolver=lambda entity_id: current_resolved.get(entity_id),
+        project_id=expected_project or None,
+    )
+    validation_entity_ids = {
+        finding.entity_id for finding in validation.findings if finding.entity_id
+    }
+    validation_claim_ids = {
+        finding.claim_id for finding in validation.findings if finding.claim_id
+    }
+    impacted_entities = set(changed) | validation_entity_ids
     affected_claims: list[str] = []
     for claim in _list(data.get("claims")):
         if not isinstance(claim, Mapping):
             continue
         claim_id = _text(claim.get("claim_id"))
-        if claim_id and _snapshot_dependencies(data, claim) & set(changed):
+        if claim_id and (
+            claim_id in validation_claim_ids
+            or _snapshot_dependencies(data, claim) & impacted_entities
+        ):
             affected_claims.append(claim_id)
 
     affected_units: list[str] = []
@@ -627,23 +941,21 @@ def check_currency(data: Mapping[str, Any], resolver: Resolver) -> CurrencyRepor
             continue
         unit_id = _text(unit.get("unit_id"))
         unit_claims = set(value for value in _list(unit.get("claim_ids")) if isinstance(value, str))
-        unit_evidence = set(
-            value for value in _list(unit.get("evidence_ids")) if isinstance(value, str)
-        )
-        if unit_id and (unit_claims & affected_claim_set or unit_evidence & set(changed)):
+        if unit_id and (
+            unit_claims & affected_claim_set
+            or _unit_dependencies(data, unit) & impacted_entities
+        ):
             affected_units.append(unit_id)
 
-    findings: list[Finding] = []
-    verdict = "PASS"
+    findings: list[Finding] = list(validation.findings)
     for entity_id in changed:
-        state = current.get(entity_id, {})
-        if state.get("missing") or state.get("stale"):
-            severity = "BLOCK"
-            verdict = "BLOCK"
+        state = current.get(entity_id)
+        if state is None:
+            severity = "WARN"  # Dependency removed from the active spine.
         else:
-            severity = "WARN"
-            if verdict == "PASS":
-                verdict = "WARN"
+            severity = state.get("freshness", "WARN")
+            if severity == "PASS":
+                severity = "WARN"
         findings.append(
             Finding(
                 "DEPENDENCY_CHANGED",
@@ -651,6 +963,12 @@ def check_currency(data: Mapping[str, Any], resolver: Resolver) -> CurrencyRepor
                 f"RKA dependency {entity_id} changed after the saved snapshot",
                 entity_id=entity_id,
             )
+        )
+    verdict = "PASS"
+    if findings:
+        verdict = max(
+            (finding.severity for finding in findings),
+            key=lambda severity: SEVERITY_RANK.get(severity, 3),
         )
     return CurrencyReport(
         verdict,
@@ -933,7 +1251,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         args = _parser().parse_args(argv)
         data = load_spine(args.input)
         if args.command == "render":
-            render_views(data, args.output_dir)
+            paths = render_views(data, args.output_dir)
+            print(
+                json.dumps(
+                    {key: str(path) for key, path in sorted(paths.items())},
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
             return 0
 
         selected_project = getattr(args, "project", None) or _text(data.get("project_id"))
@@ -954,11 +1279,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(_report_json(report))
             return _exit_code(report.verdict)
         if args.command == "snapshot":
+            validation = validate_spine(
+                data,
+                resolver=resolver,
+                project_id=selected_project or None,
+            )
+            if validation.verdict != "PASS":
+                print(_report_json(validation))
+                return _exit_code(validation.verdict)
             snapshot = build_snapshot(data, resolver)
             updated = deepcopy(data)
             updated["rka_snapshot"] = snapshot
             destination = args.output or args.input
             _write_data(destination, updated)
+            print(json.dumps({"snapshot": str(destination)}, indent=2))
             return 0
     except (ValueError, OSError, RuntimeError) as exc:
         print(f"claim-spine error: {exc}", file=sys.stderr)

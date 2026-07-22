@@ -23,7 +23,8 @@ records. Its Markdown views are generated, read-only explanations of that YAML.
    but only an active PI decision ratifies the exact text. Editing ratified text
    requires a new decision that supersedes the old one.
 5. **Currency is checked recursively.** A current-looking `clm_` does not pass
-   when its `source_entry_id` is missing, stale, superseded, or retracted.
+   when its `source_entry_id` is missing, stale, superseded, retracted, outside
+   its temporal validity window, or backed by a synthesis awaiting reprocessing.
 6. **Results coverage is bidirectional.** Every empirical contribution has a
    result unit, and every major result unit names the contribution it serves.
 7. **Generated views are read-only.** Regenerate them from
@@ -171,8 +172,11 @@ which the spine depends, including terminal sources reached through a `clm_`.
 Its purpose is change detection, not offline proof. The live resolver remains
 authoritative.
 
-The snapshot builder must not mutate the spine. Currency checking compares the
-saved dependencies with fresh resolver results and reports:
+The snapshot builder must not mutate the spine and refuses to create a baseline
+unless live validation is exactly `PASS`; neither `WARN`, `BLOCK`, nor `ERROR`
+can be laundered into a snapshot. The `snapshot` CLI enforces the same gate.
+Currency checking re-runs live validation in addition to comparing the saved
+dependencies with fresh resolver results, and reports:
 
 - which entities changed;
 - which claim IDs depend on them; and
@@ -181,6 +185,16 @@ saved dependencies with fresh resolver results and reports:
 A content change does not rewrite `allowed_wording`. It marks affected claims
 for review. A stronger result may justify a new proposal, but it never silently
 upgrades PI-ratified text.
+
+RKA 2.8 freshness metadata remains authoritative. `staleness: yellow` is a
+soft review signal and therefore emits `WARN`; `staleness: red` emits `BLOCK`.
+`valid_from` and `valid_until` (or a cluster's `synthesis_valid_until`) are
+ground-truth temporal boundaries: not-yet-valid or expired records block. A
+green record with a reviewed `historical`, `retired`, `superseded`, or
+`retracted` disposition is not current manuscript support. `dismissed` means
+the prior freshness concern was dismissed and is usable unless another hard
+signal applies. Invalid or unknown freshness metadata is `ERROR`, never
+silently interpreted. `needs_reprocessing: true` blocks use of that synthesis.
 
 ## Lifecycle
 
@@ -230,7 +244,7 @@ labeled and cannot be promoted to a contribution without PI ratification.
 ### 5. Validate, snapshot, and render
 
 Resolve the manuscript, decision, claim, qualifier, counterevidence, and
-terminal-source records. When validation is free of blockers, build the
+terminal-source records. When validation is `PASS`, build the
 dependency snapshot and render the three generated views:
 
 - `.planning/CONTRIBUTION_CONTRACT.md`
@@ -287,17 +301,27 @@ prior method does not exist.
 
 ## Commands and callable surface
 
-The command names are `validate`, `snapshot`, `check-currency`, and `render`:
+The command names are `validate`, `snapshot`, `check-currency`, and `render`.
+First resolve `WRITER_SKILL_DIR` to the directory containing the currently
+loaded `rka-writer` `SKILL.md`. This works from an installed Codex/Claude plugin
+as well as a source checkout; do not assume the current directory is the RKA
+repository.
 
 ```bash
-python rka/skills/writer/scripts/claim_spine.py validate <spine.yaml> \
+WRITER_SKILL_DIR=<absolute-path-to-loaded-rka-writer-skill>
+python "$WRITER_SKILL_DIR/scripts/claim_spine.py" validate <spine.yaml> \
   --entity-packet <fresh-rka-entities.json>
-python rka/skills/writer/scripts/claim_spine.py snapshot <spine.yaml> \
+python "$WRITER_SKILL_DIR/scripts/claim_spine.py" snapshot <spine.yaml> \
   --entity-packet <fresh-rka-entities.json>
-python rka/skills/writer/scripts/claim_spine.py check-currency <spine.yaml> \
+python "$WRITER_SKILL_DIR/scripts/claim_spine.py" check-currency <spine.yaml> \
   --entity-packet <fresh-rka-entities.json>
-python rka/skills/writer/scripts/claim_spine.py render <spine.yaml> --output-dir <directory>
+python "$WRITER_SKILL_DIR/scripts/claim_spine.py" render <spine.yaml> \
+  --output-dir <directory>
 ```
+
+In a source checkout, `WRITER_SKILL_DIR="$PWD/rka/skills/writer"` when invoked
+from the repository root. An agent running the installed plugin must use the
+skill path provided when the skill was loaded, not a hard-coded cache version.
 
 For the plugin workflow, use `rka_query(operation="entity", ...)` with the
 spine's explicit project id to collect every direct dependency, then follow
@@ -326,12 +350,13 @@ accept `--rka-url http://127.0.0.1:9712` instead. REST resolution sends the
 spine's project id in `X-RKA-Project`. Do not expose REST merely to use this
 script. `validate` accepts `--project` as an additional consistency check. An
 unavailable resolver reports `ERROR`; the script does not infer evidence from
-YAML or a generated view.
+YAML or a generated view. `snapshot` runs validation itself and writes no
+snapshot unless the result is `PASS`.
 
-The local renderer is resolver-free and can run offline. From the repository root:
+The local renderer is resolver-free and can run offline:
 
 ```bash
-python rka/skills/writer/scripts/claim_spine.py render \
+python "$WRITER_SKILL_DIR/scripts/claim_spine.py" render \
   manuscripts/<project-id>/<venue>/.planning/RKA_CLAIM_SPINE.yaml \
   --output-dir manuscripts/<project-id>/<venue>/.planning
 ```
@@ -367,9 +392,11 @@ Required hard failures include:
 - duplicate local claim or unit identifiers;
 - no resolver when validation is requested;
 - wrong-project or missing entities;
-- stale, superseded, retracted, or unverified evidence;
+- red-stale, expired, not-yet-valid, inactive, superseded, retracted, or
+  unverified evidence;
 - a `clm_` whose terminal source is missing or stale;
-- a decision or evidence cluster used as empirical support;
+- direct `jrn_`, decision, or evidence-cluster records used in place of the
+  required `clm_`-to-`jrn_` empirical evidence chain;
 - a ratified claim whose text no longer matches the active PI decision;
 - unresolved counterevidence hidden behind a strong claim;
 - fluent wording with no source-backed evidence;
@@ -377,6 +404,10 @@ Required hard failures include:
 - a result unit with no contribution claim;
 - missing allowed/prohibited claim boundaries; and
 - missing or outdated currency snapshot when currency is asserted.
+
+Currency checking also expands unit-only `clm_` dependencies through their
+terminal sources, so a changed source invalidates the exact Results unit even
+when that record is not repeated in a top-level contribution claim.
 
 When evidence is missing or challenged, the PI-facing choices are: narrow the
 claim, commission an evidence-gap mission, or remove/defer the claim. The Writer

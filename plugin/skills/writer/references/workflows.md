@@ -50,7 +50,10 @@ In a plugin session, retrieve those records through the authenticated RKA MCP
 and create a fresh, temporary entity packet for `claim_spine.py
 --entity-packet`. Follow every claim to its `source_entry_id`. Do not commit or
 reuse the packet as evidence, and do not expose the local REST API merely to
-run validation.
+run validation. Preserve the live freshness fields in that packet, including
+`stale`, `staleness`, `valid_from`, `valid_until`, `staleness_verdict`, and a
+cluster's `synthesis_valid_until` / `needs_reprocessing`; stripping them can
+turn a real blocker into an unsafe apparent pass.
 
 Do not repair a claim from a generated Markdown view. The YAML is the editable
 Writer projection; RKA remains canonical for the records it names. A changed
@@ -64,6 +67,11 @@ Session-start outcomes:
 - `BLOCK`: stop the affected Outline, Draft, or Final Layout gate.
 - `ERROR`: resolver, parse, or snapshot state is unusable. Stop validation;
   `ERROR` is never treated as `PASS`.
+
+Create or refresh `rka_snapshot` only after exact `PASS`. The snapshot command
+runs the same validation and writes nothing for `WARN`, `BLOCK`, or `ERROR`.
+`check-currency` also re-runs current validation, so an unchanged invalid
+record cannot become valid merely because an earlier snapshot captured it.
 
 An empty bootstrap spine is expected before contribution planning. It is not a
 validated contribution and cannot authorize substantive drafting.

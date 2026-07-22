@@ -1,6 +1,6 @@
 # RKA Writer Skill
 
-Version 2.6.0. The Writer co-authors manuscripts grounded in the RKA
+Version 2.6.1. The Writer co-authors manuscripts grounded in the RKA
 research graph and is distributed for Claude Code and Codex. It drafts
 but does not assert: manuscript claims must remain traceable to current
 RKA evidence and PI-ratified decisions.
@@ -68,11 +68,11 @@ python3 rka/skills/writer/scripts/bridge_repetition_check.py sections/*.tex
 python3 rka/skills/writer/scripts/layout_audit.py --venue CHI --output audit.json
 ```
 
-## Current v2.6.0 surface
+## Current v2.6.1 surface
 
 | Component | Status |
 |---|---|
-| `SKILL.md` | v2.6.0 role contract, checkpoints, provenance, and review workflow |
+| `SKILL.md` | v2.6.1 role contract, checkpoints, provenance, and review workflow |
 | `references/` | architecture, evidence and citation rules, review guidance, and venue registry |
 | `scripts/` | deterministic provenance, citation, venue, reference, layout, and claim-spine checks |
 | `mcp_tools/` | reference-metadata and discovery backends for Writer workflows |
