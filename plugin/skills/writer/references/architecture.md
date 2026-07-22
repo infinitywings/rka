@@ -34,9 +34,11 @@ Same skill content in both paths; the entry point differs.
 
 The Writer reads broadly from RKA at session start and during drafting:
 
+> **v2.7.0 dispatch translation.** Legacy tool names below (`rka_add_decision`, `rka_record_pi_selection`, `rka_get_research_map`, `rka_add_note`, etc.) are synonyms for `rka_execute(args={"operation": ...})` / `rka_query(args={"operation": ...})` under the v2.7.0+ typed-arg surface. The discipline (`source="pi"` + `verbatim_input`, `related_journal=[...]` on decisions, `project_id` on every call, etc.) carries over verbatim — only the call shape changes. See the role SKILL.md files for the full mapping and `rka_describe(operation="<name>")` for per-operation signatures.
+
 | Tool | When | Purpose |
 |---|---|---|
-| `rka_get_status` | session start | confirm active project, phase |
+| `rka_get_status` | session start | confirm phase/focus for the explicitly passed project_id |
 | `rka_get_changelog` | session start | what changed since last writing session |
 | `rka_get_research_map` | session start, before outline | structural overview of clusters and claims |
 | `rka_get_journal` | during drafting | quote PI directives, prior findings |
@@ -85,16 +87,17 @@ manuscripts/<project-id>/<venue>/
 draft  # draft | review | final | submitted
 """,
     verbatim_input="<full PI-authored title + abstract>",
-    related_decisions=[
-        "dec_venue_checkpoint",
-        "dec_outline_checkpoint",
-        "dec_table_figure_plan",
-        "dec_reference_set",
-        "dec_draft_approvals",
-        "dec_final_layout",
-    ],
-    related_literature=["lit_..."],  # all cited
-    related_journal=["jrn_..."],     # all quoted
+    provenance={                      # record_note nests linkage under provenance (not top-level)
+        "related_decisions": [
+            "dec_venue_checkpoint",
+            "dec_outline_checkpoint",
+            "dec_table_figure_plan",
+            "dec_reference_set",
+            "dec_draft_approvals",
+            "dec_final_layout",
+        ],
+        "related_literature": ["lit_..."],  # all cited
+    },
     tags=["manuscript", "venue:CHI", "phase:draft", "writer-session:3"],
     importance="high",
     confidence="tested",
@@ -135,7 +138,7 @@ git diff main -- rka/services/ rka/api/ rka/mcp/ web/  # must be empty
 
 If this command produces any output, the commit violates the bookkeeper invariant and must be reworked before push.
 
-Phase 2 may introduce the `rka-writer-tools` MCP server as a separate sibling MCP (not a modification of the existing `rka` server). Phase 3 may add the optional MCP tools `rka_get_manuscript`, `rka_validate_reference`, `rka_register_manuscript` to the existing `rka` server; that introduction will land in a Phase 3 mission with its own bookkeeper exemption rationale ratified by Brain and PI. Phase 1 stays out of `rka/mcp/`.
+Phase 2 may introduce the `rka-writer-tools` MCP server as a separate sibling MCP (not a modification of the existing `rka` server). The manuscript capabilities themselves already shipped on the existing `rka` server (available at v2.5.7+) as live dispatch operations — `manuscript` (via `rka_query`), and `validate_reference` / `register_manuscript` (via `rka_execute`); the legacy bare names `rka_get_manuscript` / `rka_validate_reference` / `rka_register_manuscript` remain in the deferred tier, loadable via `rka_load_tools`. Phase 1 stays out of `rka/mcp/`.
 
 ## Workspace template structure
 
@@ -182,6 +185,6 @@ Phase 3 (separate future mission):
 
 - Revision Loop with four `comment_class` mission shapes (R1, R2, R3, R4).
 - Brain mission integration for Writer revisions (Brain spawns a Writer subagent on a Revision Mission).
-- Optional MCP tools `rka_get_manuscript`, `rka_validate_reference`, `rka_register_manuscript`.
+- Manuscript operations `manuscript` (`rka_query`), `validate_reference` and `register_manuscript` (`rka_execute`) — already shipped on the `rka` server at v2.5.7+; legacy names `rka_get_manuscript` / `rka_validate_reference` / `rka_register_manuscript` loadable via `rka_load_tools`.
 
 The phasing rationale: Phase 1 ships a usable Writer for PI's solo drafting workflow (manual reference assembly is acceptable). Phase 2 makes reference validation automated. Phase 3 closes the loop with Brain-spawned revisions.

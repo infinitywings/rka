@@ -2,29 +2,30 @@
 
 Operational depth for the Writer skill. The SKILL.md narrates the contract; this file documents how the contract executes.
 
+> **v2.7.0 dispatch translation.** Legacy tool names in this file (`rka_get_changelog`, `rka_get_research_map`, `rka_record_pi_selection`, `rka_get_literature`, `rka_search`, `rka_add_literature`, `rka_update_literature`, `rka_get_mission`, `rka_submit_report`, `rka_submit_checkpoint`, `rka_add_note`, etc.) are synonyms for `rka_query(args={"operation": ...})` (reads) / `rka_execute(args={"operation": ...})` (writes) under the v2.7.0+ typed-arg surface. Pass `project_id` explicitly on every call — there is no active-project session state at the MCP layer. See the role SKILL.md files for the full mapping and `rka_describe(operation="<name>")` for per-operation signatures.
+
 ## Session Start (full walkthrough)
 
 The PI launches `claude` in a manuscript working directory `manuscripts/<project-id>/<venue>/`. Claude Code loads the Writer skill on session start. The following steps run before the first PI exchange:
 
 ### Step 1: project confirmation
 
-```python
-rka_get_status()
-```
-
-Look at the returned project ID. Compare to the directory name. If the directory is `manuscripts/prj_01KS.../CHI/` and `rka_get_status` returns a different project, switch:
+The working directory encodes the project: `manuscripts/<project-id>/<venue>/`. Take the `prj_...` id from the directory name (e.g. `manuscripts/prj_01KS.../CHI/`) and confirm it exists:
 
 ```python
-rka_list_projects()  # show all
-rka_set_project(project_id="prj_01KS...")  # the one matching the workspace
+rka_query(args={"operation": "list_projects"})  # confirm the prj_... id from the directory name exists
 ```
 
-The MCP `_session.project_id` is per-process and ephemeral; verifying on every session start prevents writes landing in the wrong project. If `.mcp.json` env carries `RKA_PROJECT`, this step is automatic.
+There is no active-project session state at the MCP layer — thread the workspace `project_id="prj_01KS..."` explicitly on every `rka_query` / `rka_execute` call. Confirming the id against `list_projects` on every session start prevents writes landing in the wrong project.
 
 ### Step 2: changelog
 
 ```python
-rka_get_changelog(since="<last writing session date from .planning/ACTIVE_WORKFLOW.md>")
+rka_query(args={
+    "operation": "changelog",
+    "project_id": "prj_01KS...",
+    "filters": {"since": "<last writing session date from .planning/ACTIVE_WORKFLOW.md>"},
+})
 ```
 
 Surface any new `lit_`, `jrn_`, `dec_`, or `mis_` entries since the last writing session. New `lit_` items may belong in the current draft's reference set; new `jrn_` may carry PI direction that updates the working outline.
@@ -32,7 +33,7 @@ Surface any new `lit_`, `jrn_`, `dec_`, or `mis_` entries since the last writing
 ### Step 3: research map
 
 ```python
-rka_get_research_map()
+rka_query(args={"operation": "research_map", "project_id": "prj_01KS..."})
 ```
 
 Structural overview of clusters and claims. Filter to clusters relevant to the manuscript's topic before quoting. The map is the source of truth for what evidence is available to cite.
@@ -137,14 +138,14 @@ Trigger: PI provides a candidate reference list, OR drafting surfaces a citation
 
 Phase 1 procedure (manual; Stage A only):
 
-1. For each candidate reference, look up in RKA via `rka_get_literature` or `rka_search`. If present and `validation_status=VERIFIED`, accept.
-2. For references not in RKA, prompt PI to either add via `rka_add_literature` (with `validation_status=UNVERIFIED` initially) or cite from external metadata.
+1. For each candidate reference, look up in RKA via `rka_get_literature` or `rka_search`. If present and tagged `validation:VERIFIED`, accept.
+2. For references not in RKA, prompt PI to either add via `rka_add_literature` (tagged `validation:UNVERIFIED` initially) or cite from external metadata.
 3. `scripts/validate_references.py` Stage A converts `rka_get_literature` output (CSL-JSON) to BibTeX via manubot if installed.
 4. Stages B through G are stubbed; manual verification by PI in Phase 1.
 
 Phase 2 procedure (when `rka-writer-tools` MCP is live): see `reference_pipeline.md`.
 
-Output: `refs.bib` populated, per-reference `validation_status` updated on `lit_` entries via `rka_update_literature`.
+Output: `refs.bib` populated, per-reference validation verdict stored as a `validation:<status>` tag on `lit_` entries via `rka_update_literature` (there is no `validation_status` field; use `tags` or `notes`).
 
 ### 5. Section drafter
 
@@ -229,25 +230,28 @@ PI selection produces a `dec_`. The decision is immutable once selected or rejec
 At the end of each writing session, record a session digest as a `jrn_`:
 
 ```python
-rka_add_note(
-    type="note",
-    source="executor",
-    content="""
+rka_execute(args={
+    "operation": "record_note",
+    "project_id": "prj_01KS...",
+    "type": "note",
+    "source": "executor",
+    "content": """
 # Writing session digest <ISO date>
 
 - Sections advanced: §3 Method (outlined -> drafted)
 - Checkpoints resolved: Draft §3 (PI: accept)
-- Lit added: lit_01KS... (Smith 2024) via rka_add_literature
+- Lit added: lit_01KS... (Smith 2024) via record_literature
 - Style score current: 0.91 (target 0.85)
 - Next action: draft §4 Evaluation
 
 ## Open items
 - One UNVERIFIED reference flagged (Jones 2023): PI to confirm next session.
 """,
-    related_mission=None,  # or revision mission if applicable
-    related_decisions=["dec_outline_ratified", "dec_draft_section_3"],
-    tags=["writing-session-digest", "manuscript-CHI"],
-)
+    # record_note links live inside the nested provenance object
+    # (add "related_mission": "mis_..." here for a revision mission)
+    "provenance": {"related_decisions": ["dec_outline_ratified", "dec_draft_section_3"]},
+    "tags": ["writing-session-digest", "manuscript-CHI"],
+})
 ```
 
 The digest helps the next session's State Resume step find the right next action.

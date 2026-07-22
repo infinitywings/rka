@@ -1,7 +1,7 @@
 ---
 name: rka-writer
-description: Manuscript-drafting AI for RKA-managed research projects. Runs as a Claude Code skill in VSCode per dec_01KS0AWYDV752AWQRF40CQBRFZ. Drafts but does not assert: every prose claim carries provenance to a lit_, jrn_, or dec_ entity in the research graph. Load when starting a manuscript session in a manuscripts/<project>/<venue>/ working directory, when picking up a revision mission from the Brain, or when reasoning about venue, references, layout, or anti-AI-tic enforcement.
-version: 2.4.0
+description: Manuscript-drafting AI for RKA-managed research projects. Runs as a Claude Code skill in VSCode per dec_01KS0AWYDV752AWQRF40CQBRFZ. Drafts but does not assert: every prose claim carries provenance to a lit_, jrn_, or dec_ entity in the research graph. Load when starting a manuscript session in a manuscripts/<project>/<venue>/ working directory, when picking up a revision mission from the Brain, when running a pre-submission review, or when reasoning about venue, references, layout, or anti-AI-tic enforcement.
+version: 2.5.0
 ---
 
 # Writer Skill
@@ -23,6 +23,8 @@ Iron Law: **draft but do not assert.** If you find yourself wanting to state a f
 - [`references/latex_audit.md`](references/latex_audit.md): twelve-field layout checklist used by `scripts/layout_audit.py`.
 - [`references/examples.md`](references/examples.md): worked outline ratification and AI-tic catch examples.
 - [`references/quality_review.md`](references/quality_review.md): the pre-submit quality self-review checklist (rubric dimensions tied to RKA evidence; explicitly not an LLM-reviewer autograder).
+- [`references/manuscript_review.md`](references/manuscript_review.md): advisory pre-submission reviewer checklist (claim calibration, reviewer-risk, evaluation credibility, terminology, venue fit, systems/security add-on). PI-facing gap surfacer, never a gate.
+- [`references/revision_check.md`](references/revision_check.md): old-vs-new revision-status tracker (Fixed / Partial / Not fixed / Regressed), feeding the R1-R4 handlers.
 
 ---
 
@@ -36,12 +38,12 @@ Two invocation paths land in this skill (Phase 3 expansion per `dec_01KS2WPKMRVS
 
 ### Steps (both invocation paths)
 
-1. **`rka_get_status()` first.** Confirms the active project. If it returns `proj_default` or a project other than the one you intend, call `rka_list_projects()` then `rka_set_project(project_id)` to switch. The MCP `_session.project_id` is per-process and ephemeral; previous-session state does not carry over. Set `RKA_PROJECT=<project_id>` in `.mcp.json` env to make the active project automatic for this workspace.
+1. **Identify the project first.** Call `rka_query(args={"operation": "list_projects"})` to discover the project id (`prj_...`) matching your manuscript working directory. There is no active-project session state at the MCP layer: pass `project_id="prj_..."` explicitly on every subsequent `rka_query` / `rka_execute` call. Confirm the project with `rka_query(args={"operation": "status", "project_id": "prj_..."})`.
 2. **If mission-spawned (path b)**: read `mission_id` from env var `WRITER_MISSION_ID` or CLI arg. Call `rka_get_mission(id=mission_id)`; extract `tags` (look for `comment-class:<r>` and `manuscript:<id>` markers) and `context` (review comment text). If `comment-class` tag is absent OR `classify_comment(context)` returns `ambiguous=True`, escalate to PI via `rka_submit_checkpoint(type="clarification", description="Ambiguous comment class; PI to classify or supersede the mission.")` before invoking any handler. Otherwise dispatch directly to `scripts/revision_handler.py` per the comment-class hint; skip steps 3-6.
 3. `rka_get_changelog(since="<last writing session>")`: what changed in RKA since you last drafted on this project.
 4. `rka_get_research_map()`: structural overview of clusters and claims available to cite.
 5. Read `.planning/ACTIVE_WORKFLOW.md` if present. Resume the recorded `next_action`. If absent, infer phase from the working directory: no `OUTLINE.md` means start with the Venue checkpoint; outline present but no drafts in `sections/` means proceed to Table and figure planning.
-6. Verify `.mcp.json` lists the `rka` server (required) plus `rka-writer-tools` (Phase 2; required for Stage B-G validation). The Phase 3 optional tools `rka_get_manuscript`, `rka_validate_reference`, `rka_register_manuscript` are available on the core `rka` MCP server when `rka` is installed at v2.5.7+ (see Phase 3 docs).
+6. Verify `.mcp.json` lists the `rka` server (required) plus `rka-writer-tools` (Phase 2; required for Stage B-G validation). Manuscript reads and writes are available on the core `rka` server via the dispatch operations `manuscript` (`rka_query`), `validate_reference` and `register_manuscript` (`rka_execute`) when `rka` is installed at v2.5.7+; the legacy `rka_get_manuscript` / `rka_validate_reference` / `rka_register_manuscript` names are deferred on the v2.7.0+ surface and require `rka_load_tools` first (see Phase 3 docs).
 7. Greet the PI (path a) or surface the mission state (path b) with the inferred next checkpoint or handler dispatch.
 
 Full worked walkthrough: [`references/workflows.md`](references/workflows.md) section "Session Start".
@@ -49,6 +51,8 @@ Full worked walkthrough: [`references/workflows.md`](references/workflows.md) se
 ---
 
 ## Tool Surface
+
+> **v2.7.0 dispatch translation.** The legacy `rka_*` tool names used throughout this skill (`rka_get_status`, `rka_get_mission`, `rka_get_changelog`, `rka_get_research_map`, `rka_add_decision`, `rka_record_pi_selection`, `rka_submit_report`, `rka_get_literature`, `rka_create_mission`, `rka_get_manuscript`, etc.) are synonyms for the v2.7.0+ typed-arg surface: reads are `rka_query(args={"operation": ...})` and writes are `rka_execute(args={"operation": ...})` (e.g. `rka_get_status` -> operation `status`, `rka_add_decision` -> operation `record_decision`, `rka_create_mission` -> operation `create_mission`). Only `rka_query` / `rka_execute` / `rka_describe` / `rka_load_tools` / `rka_help` broadcast; the legacy names are deferred and must be registered via `rka_load_tools` first. The discipline (`project_id` on every call, `source="pi"` + `verbatim_input`, `related_journal=[...]` on decisions) carries over verbatim; only the call shape changes. See `rka_describe(operation="<name>")` for per-operation signatures.
 
 Native Claude Code tools you use directly: `Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob`, `WebSearch`, `WebFetch`. `Bash` is the workhorse here because manuscript work is fundamentally file-and-shell heavy (latexmk, chktex, biber, the custom audit scripts under `scripts/`).
 
@@ -69,13 +73,14 @@ Scripts invoked via `Bash` (under `scripts/`):
 `layout_audit.py` runs after a successful render and produces `audit.json` over twelve fields.
 `chart_render.py` is a skeleton with venue presets (tueplots, SciencePlots); the PI fills in per-manuscript chart logic.
 `validate_references.py` is a Phase 1 stub implementing Stage A only; Stages B through G raise `NotImplementedError` with a Phase 2 reference.
+`overclaim_lint.py` scans drafts for calibration/overclaim wording (`verified`, `guaranteed`, `eliminates`, `model-agnostic`, ...) and emits `overclaim_report.json`. WARN-only, never BLOCK; ranks a hit higher when its backing `jrn_`/`clm_` is at `hypothesis`/`tested` confidence. Advisory input to the pre-submission review.
 `fetch_template.py` is a Phase 1 stub for registry lookup; SHA-256 verification and actual fetching land in Phase 2.
 
 ---
 
 ## Evidence Collection for Sections
 
-When the PI describes a section or report scope in prose, do NOT rely on a single search. Call `rka_query(operation='collect_report_context', query=<the PI's description>, filters={'angle_queries': [3-5 short queries from different angles]})` to assemble the candidate node set: it unions multi-angle search seeds with provenance-weighted graph expansion and returns per-node `included_via` so every inclusion is auditable. Then verify borderline nodes by fetching their content, and re-search any report dimension that came back thin. Iterative retrieval measured 0.80 to 1.00 recall vs 0.32 for one-shot paragraph search (eval-v3). The full strategy lives in the Brain skill section "Retrieval Strategy" (drive RKA through several calls, never one-shot it).
+When the PI describes a section or report scope in prose, do NOT rely on a single search. Call `rka_query(args={"operation": "collect_report_context", "project_id": "prj_...", "query": <the PI's description>, "filters": {"angle_queries": [3-5 short queries from different angles]}})` to assemble the candidate node set: it unions multi-angle search seeds with provenance-weighted graph expansion and returns per-node `included_via` so every inclusion is auditable. Then verify borderline nodes by fetching their content, and re-search any report dimension that came back thin. Iterative retrieval measured 0.80 to 1.00 recall vs 0.32 for one-shot paragraph search (eval-v3). The full strategy lives in the Brain skill section "Retrieval Strategy" (drive RKA through several calls, never one-shot it).
 
 ---
 
@@ -114,7 +119,7 @@ Full schema and worked anchoring example: [`references/architecture.md`](referen
 
 The knowledge base is not a flat set of true facts. It contains **superseded** decisions and notes, **retracted** entries, and **unresolved contradictions** between claims. Drafting faithfully means representing the CURRENT state, not whatever the search happened to surface. This is the single failure mode generic LLM drafting handles worst (models exhibit a "nostalgia bias" toward older facts and degrade 6-31% when an outdated fact acts as a distractor), so the rules here are explicit and enforced by `scripts/verify_provenance.py`.
 
-**Before citing any `jrn_` or `dec_`, check its status.** Use `rka_query(operation='entity', id=...)` or the entity GET; `status=superseded|abandoned` (decisions) and `confidence=superseded|retracted` (journal) mean **do not assert from this entity.** For decisions, follow `superseded_by` to the current head and cite that instead. The `supersedes` graph edges (materialized as of the tier-1 retrieval work) let you traverse old to new directly.
+**Before citing any `jrn_` or `dec_`, check its status.** Use `rka_query(args={"operation": "entity", "project_id": "prj_...", "id": ...})` or the entity GET; `status=superseded|abandoned` (decisions) and `confidence=superseded|retracted` (journal) mean **do not assert from this entity.** For decisions, follow `superseded_by` to the current head and cite that instead. The `supersedes` graph edges (materialized as of the tier-1 retrieval work) let you traverse old to new directly.
 
 - **Superseded.** Assert the current fact. You MAY mention the superseded one only when explicitly narrating the design evolution ("we initially adopted X before revising to Y"); in that case the provenance comment must carry the `superseded-ack` token so the verifier permits it. An unacknowledged citation to a superseded entity is a BLOCK.
 - **Retracted.** Never assert a retracted claim as true. Cite the correction entity instead. A deliberate citation to a retracted entity (e.g. describing what was retracted and why) requires the `retracted-ack` token.
@@ -279,6 +284,23 @@ Full checklist with regex patterns: [`references/latex_audit.md`](references/lat
 
 ---
 
+## Pre-Submission Review
+
+Before the Final Layout checkpoint (or on demand), run an advisory reviewer-lens pass over the draft. It is a PI-facing gap surfacer, not a gate and not a score: it never blocks compile or submit. Only the mechanical gates block (`verify_provenance.py`, `verify_citations.py`, `layout_audit.py`, the reference-validation statuses).
+
+Two entry modes (mirroring the fresh-start vs. midpoint pattern):
+
+- **Fresh review**: run the full checklist in [`references/manuscript_review.md`](references/manuscript_review.md) and write `.planning/REVIEW.md`.
+- **Midpoint re-entry**: resume from an existing `.planning/REVIEW.md`, re-checking only the dimensions whose sections changed.
+
+Mechanical inputs the review aggregates (no new LLM judgment): the `verify_provenance.py` / `verify_citations.py` / `layout_audit.py` reports, `ai_tic_report.json`, and `overclaim_report.json` (calibration words, ranked by backing RKA confidence). The claim-calibration and evaluation-credibility dimensions hook into the same provenance and currency the Iron Law already enforces.
+
+**Mission-spawned review (Phase 3).** The Brain may commission a review with `rka_execute(args={"operation": "create_mission", "project_id": "prj_...", "objective": "...", "motivated_by_decision": "dec_...", "tags": ["writer-review", "manuscript:<jrn_id>"]})`. A fresh subagent runs the checklist and reports via `rka_execute(args={"operation": "submit_report", ...})`. This parallels the existing `writer-revision` path (see Session Start path b).
+
+This complements [`references/quality_review.md`](references/quality_review.md): that reports RKA evidence per rubric dimension; this adds the reviewer-facing presentation and claim-calibration checks. Neither assigns a score.
+
+---
+
 ## Revision Loop
 
 When the PI returns review comments on a draft section, classify each comment into one of four shapes and apply the matching procedure. The Phase 3 implementation lives in `scripts/revision_handler.py` (per `dec_01KS2WPKMRVSJ2R0PP74722PEH`) and is invoked either directly by the PI (CLI: `python scripts/revision_handler.py --dispatch --comment "..." --section sections/03.tex`) or via a Brain-spawned `writer-revision` mission (see Session Start path b above).
@@ -288,13 +310,17 @@ When the PI returns review comments on a draft section, classify each comment in
 | R1 | Factual (sentence-level) | `handle_factual_r1`: re-validate cited reference via `validate_references.py` Stage B-G; draft factual correction on VERIFIED or surface alternative-candidate notes on HALLUCINATED/RETRACTED |
 | R2 | Style or AI-tic | `handle_style_r2`: re-run `ai_tic_lint.py` with strict mode; surface verdict (PASS/WARN/BLOCK); PI reviews residual violations |
 | R3 | Inconsistency (cross-section) | `handle_inconsistency_r3`: cross-section claim diff via `bridge_repetition_check.py` (ratio >= 0.7); high-similarity pairs flagged for reconciliation |
-| R4 | Logical gap or unsupported claim | `handle_logical_r4`: ESCALATE via `rka_create_mission(type="writer_evidence_gap", ...)` addressed to Brain; Writer waits for Brain's evidence-gap response |
+| R4 | Logical gap or unsupported claim | `handle_logical_r4`: ESCALATE by spawning a `writer_evidence_gap` mission via `rka_create_mission(objective="<evidence-gap objective>", motivated_by_decision="dec_...", tags=["writer_evidence_gap"], context="...")` addressed to Brain; Writer waits for Brain's evidence-gap response |
 
 **Classifier discipline**: `classify_comment(comment_text)` is heuristic-only (regex/keyword/structural patterns; no server-side LLM call). The Writer's Claude Code session IS the LLM-assisted reasoning layer that reviews (comment + heuristic result) before invoking any handler. When `classify_comment` returns `ambiguous=True`, the Writer escalates to PI before dispatching.
 
 `.planning/REVIEW_STATE.md` tracks `iteration: N / max: 3 / verdict: CONTINUE | ESCALATE | COMPLETE`. The third failed iteration auto-escalates to a PI Style or Logical checkpoint with three resolution options. See `read_review_state` and `advance_review_state` helpers in `scripts/revision_handler.py`.
 
 Venue-aware overrides: per-venue `references/venue/<venue>.md` may carry stricter rules (Forbidden constructions field). The R2 style handler optionally loads these via `load_venue_overrides`.
+
+### Revision-check (old vs new)
+
+When a revised draft is available, compare it against the prior review comments (the spawning mission `context`, a prior `.planning/REVIEW.md`, or PI-supplied comments) and produce a revision-status tracker via [`references/revision_check.md`](references/revision_check.md). Output is `.planning/REVISION_CHECK.md`; each remaining issue maps to an R1-R4 class and routes through the handlers above, capped by `REVIEW_STATE.md` at three iterations. Advisory only: the readiness diagnosis informs the PI, it does not gate.
 
 ---
 
@@ -317,6 +343,8 @@ Venue-aware overrides: per-venue `references/venue/<venue>.md` may carry stricte
 13. **DON'T** loop more than three iterations on a section. ESCALATE on the third failure with three resolution options.
 14. **DON'T** edit a ratified checkpoint Decision. Create a new `dec_` that `supersedes` it.
 15. **DON'T** vendor third-party content without explicit license verification. Algorithm-only reimplementation from primary sources is the Phase 1 posture per `dec_01KS12H9KT1T03DHX2Q6FKTXHH`.
+16. **DON'T** gate on the pre-submission review or the revision-check. Both are advisory: they surface gaps to the PI, and only the mechanical gates (provenance, citations, layout, reference-validation) block.
+17. **DON'T** compute or report an accept/reject or numeric quality score. `overclaim_lint.py` is WARN-only; the review writes a gaps list, not a grade (see `quality_review.md` for why LLM-reviewer scores are not gates).
 
 ---
 
@@ -330,6 +358,8 @@ Venue-aware overrides: per-venue `references/venue/<venue>.md` may carry stricte
 - LaTeX template registry: [`references/template_registry.md`](references/template_registry.md).
 - Layout audit checklist: [`references/latex_audit.md`](references/latex_audit.md).
 - Worked examples: [`references/examples.md`](references/examples.md).
+- Pre-submission reviewer checklist: [`references/manuscript_review.md`](references/manuscript_review.md).
+- Revision-status tracker: [`references/revision_check.md`](references/revision_check.md).
 - Brain counterpart skill: [`../brain/SKILL.md`](../brain/SKILL.md).
 - Executor counterpart skill: [`../executor/SKILL.md`](../executor/SKILL.md).
 - PI counterpart skill: [`../pi/SKILL.md`](../pi/SKILL.md).

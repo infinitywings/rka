@@ -36,9 +36,14 @@ claude
 The Writer skill loads on session start (rka-writer skill). The Session
 Start procedure runs:
 
-1. `rka_get_status()` confirms the active project.
-2. `rka_get_changelog()` surfaces RKA changes since last session.
-3. `rka_get_research_map()` provides the structural overview.
+1. `rka_query(args={"operation": "status", "project_id": "prj_..."})`
+   confirms the project (project_id comes from `list_projects`, not
+   session state).
+2. `rka_query(args={"operation": "changelog", "project_id": "prj_...",
+   "filters": {"since": "<ISO-date>"}})` surfaces RKA changes since last
+   session.
+3. `rka_query(args={"operation": "research_map", "project_id": "prj_..."})`
+   provides the structural overview.
 4. `.planning/ACTIVE_WORKFLOW.md` carries resume state.
 5. The Writer greets the PI with the inferred next action.
 
@@ -95,11 +100,10 @@ Phase 2 deliverables:
 Phase 3 deliverables:
 
 - Revision Loop with 4 `comment_class` mission shapes (R1, R2, R3, R4)
-  wired to the Brain via `rka_create_mission`.
+  wired to the Brain via the `create_mission` operation
+  (`rka_execute(args={"operation": "create_mission", ...})`).
 - Brain mission integration: Brain spawns a Writer subagent on a
   Revision Mission.
-- Optional MCP tools `rka_get_manuscript`, `rka_validate_reference`,
-  `rka_register_manuscript` added to the existing `rka` server.
 
 See [`docs/phase-1-mvp.md`](docs/phase-1-mvp.md) for the detailed
 Phase 1 narrative and manual workflow guidance.

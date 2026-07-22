@@ -2,6 +2,8 @@
 
 Two end-to-end examples illustrating the Writer's most distinctive decisions: an outline ratification via the strip-then-re-inject UX, and an AI-tic catch via the linter plus structural detector layer.
 
+> **v2.7.0 dispatch translation.** Legacy tool names below (`rka_add_decision`, `rka_record_pi_selection`, `rka_get_research_map`, `rka_add_note`, etc.) are synonyms for `rka_execute(args={"operation": ...})` / `rka_query(args={"operation": ...})` under the v2.7.0+ typed-arg surface. The discipline (`source="pi"` + `verbatim_input`, `related_journal=[...]` on decisions, `project_id` on every call, etc.) carries over verbatim — only the call shape changes. See the role SKILL.md files for the full mapping and `rka_describe(operation="<name>")` for per-operation signatures.
+
 ## Example 1: Outline ratification
 
 ### Scenario
@@ -66,26 +68,31 @@ Mark Method-led as `is_recommended`.
 ### Step 5: PI selects
 
 ```python
-rka_add_decision(
-    project_id="prj_01KQ...",
-    question="Which outline framing for the CHI manuscript?",
-    options=[
-        {"label": "Method-led", "is_recommended": True, "description": "Lead with diary protocol contribution.", ...},
-        {"label": "Motivation-led", "description": "Lead with permission-system problem framing.", ...},
-        {"label": "Results-led", "description": "Lead with permission-fatigue empirical finding.", ...},
+rka_execute(args={
+    "operation": "record_decision",
+    "project_id": "prj_01KQ...",
+    "question": "Which outline framing for the CHI manuscript?",
+    "options": [
+        {"id": "method-led", "label": "Method-led", "is_recommended": True, "description": "Lead with diary protocol contribution."},
+        {"id": "motivation-led", "label": "Motivation-led", "description": "Lead with permission-system problem framing."},
+        {"id": "results-led", "label": "Results-led", "description": "Lead with permission-fatigue empirical finding."},
     ],
-    rationale="Methodological contribution emphasis aligns with PI's prior CHI guidance (jrn_01KQ...) and venue fit.",
-    related_journal=["jrn_01KQ..."],
-    decided_by="pi",
-    status="active",
-)
+    "chosen": "Method-led",
+    "kind": "design_choice",
+    "phase": "manuscript-drafting",
+    "rationale": "Methodological contribution emphasis aligns with PI's prior CHI guidance (jrn_01KQ...) and venue fit.",
+    "related_journal": ["jrn_01KQ..."],
+    "decided_by": "pi",
+    "status": "active",
+})
 
 # PI selects (assume Method-led):
-rka_record_pi_selection(
-    decision_id="dec_<the new one>",
-    pi_selected_option_id="Method-led",
-    pi_override_rationale=None,
-)
+rka_execute(args={
+    "operation": "record_pi_selection",
+    "project_id": "prj_01KQ...",
+    "decision_id": "dec_<the new one>",
+    "selected_option_id": "method-led",
+})
 ```
 
 ### Step 6: write OUTLINE.md
