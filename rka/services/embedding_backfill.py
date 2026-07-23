@@ -39,9 +39,9 @@ import logging
 import struct
 import time
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Iterable, Literal, Mapping, Sequence
+from typing import Any, Awaitable, Callable, Literal, Mapping, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -488,35 +488,34 @@ class BackfillService:
                     project_id = row.get("project_id") or "proj_default"
                     if vec_available:
                         vec_blob = struct.pack(f"{len(vec)}f", *vec)
-                        await self._db.execute(
-                            f"INSERT OR REPLACE INTO {cfg.vec_table} "
-                            "(id, embedding) VALUES (?, ?)",
-                            [entity_id, vec_blob],
-                        )
-                        await self._db.execute(
-                            """INSERT OR REPLACE INTO embedding_metadata
-                               (project_id, entity_type, entity_id,
-                                content_hash, model_name, dimensions)
-                               VALUES (?, ?, ?, ?, ?, ?)""",
-                            [
-                                project_id,
-                                cfg.entity_type,
-                                entity_id,
-                                _ES.content_hash(text),
-                                model_name,
-                                embed_dim,
-                            ],
-                        )
-                        # v2.7.0.7 — `post_embed_sql` clears the entity's
-                        # pending flag (e.g. `UPDATE claims SET
-                        # embedding_pending = 0`). It MUST only run when a
-                        # vector was actually stored. Previously it ran
-                        # unconditionally, so a vec_available=False pass cleared
-                        # the pending flag with NO vector written, permanently
-                        # stranding the claim (no vector, no pending signal —
-                        # needs_reembed never picks it up again).
-                        if cfg.post_embed_sql:
-                            await self._db.execute(cfg.post_embed_sql, [entity_id])
+                        async with self._db.transaction():
+                            await self._db.execute(
+                                f"INSERT OR REPLACE INTO {cfg.vec_table} "
+                                "(id, embedding) VALUES (?, ?)",
+                                [entity_id, vec_blob],
+                            )
+                            await self._db.execute(
+                                """INSERT OR REPLACE INTO embedding_metadata
+                                   (project_id, entity_type, entity_id,
+                                    content_hash, model_name, dimensions)
+                                   VALUES (?, ?, ?, ?, ?, ?)""",
+                                [
+                                    project_id,
+                                    cfg.entity_type,
+                                    entity_id,
+                                    _ES.content_hash(text),
+                                    model_name,
+                                    embed_dim,
+                                ],
+                            )
+                            # v2.7.0.7 — `post_embed_sql` clears the
+                            # entity's pending flag (e.g. `UPDATE claims SET
+                            # embedding_pending = 0`). It MUST only run when
+                            # a vector was actually stored.
+                            if cfg.post_embed_sql:
+                                await self._db.execute(
+                                    cfg.post_embed_sql, [entity_id]
+                                )
                         status.processed += 1
                     # else: no vector written (sqlite-vec unavailable). Leave the
                     # entity's pending signal intact and do NOT count it as
@@ -529,7 +528,6 @@ class BackfillService:
                         cfg.entity_type, entity_id, exc,
                     )
 
-            await self._db.commit()
             await _emit_progress(progress_callback, status)
 
 

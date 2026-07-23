@@ -1,0 +1,97 @@
+"""ChatGPT connector adapters for packaged RKA skills.
+
+Surface/tier assertions run in a pristine subprocess interpreter instead of
+importlib.reload: reload re-executes rka.mcp.server in place and rebinds
+module globals (e.g. _TOOL_REGISTRY), which silently breaks every other test
+module that bound those objects at collection time.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+
+import rka.mcp.server as server
+
+_SURFACE_SNIPPET = (
+    "import json, rka.mcp.server as s;"
+    "vis = sorted(t.name for t in s.mcp._tool_manager.list_tools());"
+    "tiers = {n: e['tier'] for n, e in s._TOOL_REGISTRY.items()"
+    " if e['category'] == 'skills'};"
+    "adv = 'rka_start_session' in s.RKA_INSTRUCTIONS;"
+    "print(json.dumps({'visible': vis, 'tiers': tiers, 'advertised': adv}))"
+)
+
+_SKILL_TOOLS = ("rka_list_skills", "rka_read_skill", "rka_start_session")
+_DISPATCH_SURFACE = {"rka_query", "rka_execute", "rka_describe", "rka_load_tools", "rka_help"}
+
+
+def _surface(**flags: str) -> dict:
+    """Import rka.mcp.server in a fresh interpreter with the given env flags
+    and report the visible tool surface + skills-category tiers."""
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("RKA_LEGACY_TOOLS", "RKA_SKILL_TOOLS")
+    }
+    env.update(flags)
+    out = subprocess.run(
+        [sys.executable, "-c", _SURFACE_SNIPPET],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(out.stdout)
+
+
+def test_skill_adapter_tools_are_deferred_in_default_mode() -> None:
+    """Keep the local default MCP surface unchanged for existing clients
+    (Claude Code / Claude Desktop / Codex stdio)."""
+    result = _surface()
+    assert set(result["visible"]) == _DISPATCH_SURFACE
+    for name in _SKILL_TOOLS:
+        assert result["tiers"][name] == "deferred"
+    assert result["advertised"] is False
+
+
+def test_skill_adapter_tools_always_on_with_skill_flag() -> None:
+    """RKA_SKILL_TOOLS=1 (ChatGPT connector deployments) promotes the skill
+    adapters to always_on — ChatGPT never calls rka_load_tools spontaneously,
+    so deferred tools are invisible to it."""
+    result = _surface(RKA_SKILL_TOOLS="1")
+    visible = set(result["visible"])
+    for name in _SKILL_TOOLS:
+        assert result["tiers"][name] == "always_on"
+        assert name in visible
+    # Dispatch surface intact alongside the skill adapters: 5 + 3 = 8.
+    assert _DISPATCH_SURFACE <= visible
+    assert len(visible) == 8
+    # Server instructions tell ChatGPT to call rka_start_session first.
+    assert result["advertised"] is True
+
+
+async def test_list_skills_returns_packaged_role_guides() -> None:
+    payload = json.loads(await server.rka_list_skills())
+    names = {entry["name"] for entry in payload["skills"]}
+    assert {"brain", "executor", "pi", "writer", "mcp-credentials"} <= names
+
+
+async def test_read_skill_returns_markdown_for_pi_role() -> None:
+    text = await server.rka_read_skill("pi")
+    assert "# Source: rka/skills/pi/SKILL.md" in text
+    assert "# PI Skill" in text
+
+
+async def test_read_skill_rejects_path_traversal() -> None:
+    payload = json.loads(await server.rka_read_skill("brain", "../pi/SKILL.md"))
+    assert payload["error"] == "skill_file_unavailable"
+
+
+async def test_start_session_includes_checklist() -> None:
+    text = await server.rka_start_session("pi", project_id="prj_test")
+    assert "# PI Skill" in text
+    assert "# ChatGPT Connector Session Checklist" in text
+    assert '"project_id": "prj_test"' in text

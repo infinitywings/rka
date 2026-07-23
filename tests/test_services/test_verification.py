@@ -120,6 +120,44 @@ class TestStalenessReviewFiling:
             "SELECT flag, status FROM review_queue WHERE item_id = 'dec_dep'")
         assert row is not None and row["flag"] == "stale_dependency"
 
+    @pytest.mark.asyncio
+    async def test_audit_failure_rolls_back_entire_review_batch(
+        self,
+        seeded: Database,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        svc = VerificationService(seeded, project_id=PID)
+        original_audit = svc.audit
+
+        async def audit_then_fail(*args, **kwargs):
+            await original_audit(*args, **kwargs)
+            raise RuntimeError("injected staleness audit failure")
+
+        monkeypatch.setattr(svc, "audit", audit_then_fail)
+        with pytest.raises(
+            RuntimeError,
+            match="injected staleness audit failure",
+        ):
+            await svc.file_staleness_reviews()
+
+        assert await seeded.fetchall(
+            """SELECT id FROM review_queue
+               WHERE project_id = ? AND flag = 'stale_dependency'""",
+            [PID],
+        ) == []
+        assert await seeded.fetchall(
+            """SELECT id FROM audit_log
+               WHERE project_id = ? AND entity_type = 'review'
+                 AND action = 'create'""",
+            [PID],
+        ) == []
+
+        # The failed transaction leaves the connection usable and a clean retry
+        # can persist the complete batch.
+        monkeypatch.setattr(svc, "audit", original_audit)
+        retry = await svc.file_staleness_reviews()
+        assert retry["filed"] >= 1
+
 
 class TestLinkSupportAudit:
     @pytest.mark.asyncio

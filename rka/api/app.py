@@ -18,10 +18,12 @@ from rka.api.routes import (
     artifacts as artifact_routes,
     audit as audit_routes,
     checkpoints as checkpoints_routes,
+    changes as changes_routes,
     config as config_routes,
     context as context_routes,
     decisions as decisions_routes,
     enrich as enrich_routes,
+    entities as entities_routes,
     events as events_routes,
     graph as graph_routes,
     literature as literature_routes,
@@ -296,6 +298,7 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
     app.include_router(literature_routes.router, prefix="/api", tags=["literature"])
     app.include_router(missions_routes.router, prefix="/api", tags=["missions"])
     app.include_router(checkpoints_routes.router, prefix="/api", tags=["checkpoints"])
+    app.include_router(changes_routes.router, prefix="/api", tags=["changes"])
     app.include_router(events_routes.router, prefix="/api", tags=["events"])
     app.include_router(search_routes.router, prefix="/api", tags=["search"])
     app.include_router(tags_routes.router, prefix="/api", tags=["tags"])
@@ -304,6 +307,7 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
     app.include_router(academic_routes.router, prefix="/api", tags=["academic"])
     app.include_router(workspace_routes.router, prefix="/api", tags=["workspace"])
     app.include_router(enrich_routes.router, prefix="/api", tags=["enrich"])
+    app.include_router(entities_routes.router, prefix="/api", tags=["entities"])
     app.include_router(graph_routes.router, prefix="/api", tags=["graph"])
     app.include_router(summary_routes.router, prefix="/api", tags=["summary"])
     app.include_router(artifact_routes.router, prefix="/api", tags=["artifacts"])

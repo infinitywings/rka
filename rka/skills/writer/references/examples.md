@@ -73,10 +73,13 @@ rka_execute(args={
     "project_id": "prj_01KQ...",
     "question": "Which outline framing for the CHI manuscript?",
     "options": [
-        {"label": "Method-led", "is_recommended": True, "description": "Lead with diary protocol contribution."},
-        {"label": "Motivation-led", "description": "Lead with permission-system problem framing."},
-        {"label": "Results-led", "description": "Lead with permission-fatigue empirical finding."},
+        {"id": "method-led", "label": "Method-led", "is_recommended": True, "description": "Lead with diary protocol contribution."},
+        {"id": "motivation-led", "label": "Motivation-led", "description": "Lead with permission-system problem framing."},
+        {"id": "results-led", "label": "Results-led", "description": "Lead with permission-fatigue empirical finding."},
     ],
+    "chosen": "Method-led",
+    "kind": "design_choice",
+    "phase": "manuscript-drafting",
     "rationale": "Methodological contribution emphasis aligns with PI's prior CHI guidance (jrn_01KQ...) and venue fit.",
     "related_journal": ["jrn_01KQ..."],
     "decided_by": "pi",
@@ -88,8 +91,7 @@ rka_execute(args={
     "operation": "record_pi_selection",
     "project_id": "prj_01KQ...",
     "decision_id": "dec_<the new one>",
-    "pi_selected_option_id": "Method-led",
-    "pi_override_rationale": None,
+    "selected_option_id": "method-led",
 })
 ```
 

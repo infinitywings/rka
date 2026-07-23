@@ -83,6 +83,7 @@ class Literature(BaseModel):
     """Full literature record from database."""
 
     id: str
+    project_id: str
     title: str
     authors: list[str] | None = None
     year: int | None = None

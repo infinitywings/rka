@@ -17,7 +17,13 @@ async def create_mission(
     actor: str = "brain",
     svc: MissionService = Depends(get_scoped_mission_service),
 ):
-    return await svc.create(data, actor=actor)
+    try:
+        return await svc.create(data, actor=actor)
+    except ValueError as e:
+        # e.g. motivated_by_decision references a non-existent decision —
+        # a client error, not a 500. Without this, the service's FK-validation
+        # ValueError would propagate as an unhandled 500.
+        raise HTTPException(400, str(e))
 
 
 @router.get("/missions", response_model=list[Mission])

@@ -14,8 +14,9 @@ Design:
   - Optionally scope to one project_id (only that project's ids are
     rebuilt — useful for a targeted repair without touching other
     projects' index rows).
-  - Per-table work runs inside a SAVEPOINT so a failure on one table does
-    not corrupt the others; the failure is reported, not swallowed.
+  - Per-table work runs inside a managed transaction (or a nested savepoint
+    when composed by a caller) so a failure on one table does not corrupt the
+    others; the failure is reported, not swallowed.
 """
 
 from __future__ import annotations
@@ -82,46 +83,39 @@ async def reindex_fts(
             report.failures[etype] = f"unknown entity type {etype!r}"
             continue
         source_table, fts_table, text_cols = spec
-        savepoint = f"reindex_{etype}"
         try:
-            await db.execute(f"SAVEPOINT {savepoint}")
-            # 1. Clear existing FTS rows (scoped to the project's ids when asked).
-            if project_id is None:
-                await db.execute(f"DELETE FROM {fts_table}")
-            else:
-                await db.execute(
-                    f"DELETE FROM {fts_table} WHERE id IN "
-                    f"(SELECT id FROM {source_table} WHERE project_id = ?)",
-                    [project_id],
+            async with db.transaction():
+                # 1. Clear existing FTS rows (scoped to the project's ids).
+                if project_id is None:
+                    await db.execute(f"DELETE FROM {fts_table}")
+                else:
+                    await db.execute(
+                        f"DELETE FROM {fts_table} WHERE id IN "
+                        f"(SELECT id FROM {source_table} WHERE project_id = ?)",
+                        [project_id],
+                    )
+                # 2. Re-INSERT from source.
+                select_cols = ", ".join(["id", *text_cols])
+                where = "WHERE project_id = ?" if project_id is not None else ""
+                params = [project_id] if project_id is not None else []
+                rows = await db.fetchall(
+                    f"SELECT {select_cols} FROM {source_table} {where}", params
                 )
-            # 2. Re-INSERT from source.
-            select_cols = ", ".join(["id", *text_cols])
-            where = "WHERE project_id = ?" if project_id is not None else ""
-            params = [project_id] if project_id is not None else []
-            rows = await db.fetchall(
-                f"SELECT {select_cols} FROM {source_table} {where}", params
-            )
-            insert_cols = ", ".join(["id", *text_cols])
-            placeholders = ", ".join("?" for _ in range(1 + len(text_cols)))
-            count = 0
-            for row in rows:
-                values = [row["id"]] + [(row[c] or "") for c in text_cols]
-                await db.execute(
-                    f"INSERT INTO {fts_table} ({insert_cols}) VALUES ({placeholders})",
-                    values,
-                )
-                count += 1
-            await db.execute(f"RELEASE {savepoint}")
+                insert_cols = ", ".join(["id", *text_cols])
+                placeholders = ", ".join("?" for _ in range(1 + len(text_cols)))
+                count = 0
+                for row in rows:
+                    values = [row["id"]] + [(row[c] or "") for c in text_cols]
+                    await db.execute(
+                        f"INSERT INTO {fts_table} "
+                        f"({insert_cols}) VALUES ({placeholders})",
+                        values,
+                    )
+                    count += 1
             report.results[etype] = count
             logger.info("reindex_fts: rebuilt %s (%d rows)", fts_table, count)
         except Exception as exc:  # noqa: BLE001
-            try:
-                await db.execute(f"ROLLBACK TO {savepoint}")
-                await db.execute(f"RELEASE {savepoint}")
-            except Exception:  # pragma: no cover
-                pass
             report.failures[etype] = f"{type(exc).__name__}: {exc}"
             logger.warning("reindex_fts: %s failed: %s", fts_table, exc)
 
-    await db.commit()
     return report

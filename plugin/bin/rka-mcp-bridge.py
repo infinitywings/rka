@@ -2,9 +2,9 @@
 """rka-mcp-bridge.py — cross-platform wrapper invoked by Claude's plugin loader.
 
 Reads integration.json (location is OS-specific), version-checks the recorded
-RKA version against the plugin's compatibility range, propagates
-default_project_id as RKA_PROJECT env var (caller-set RKA_PROJECT wins), and
-runs the local rka stdio binary with the `mcp` subcommand.
+RKA version against the plugin's compatibility range, and runs the local rka
+stdio binary with the `mcp` subcommand. Project scope is never injected through
+the environment; every project-scoped operation carries an explicit id.
 
 Exec strategy:
 - POSIX (macOS/Linux): os.execvpe — replaces this Python process with the
@@ -37,7 +37,7 @@ from pathlib import Path
 # Plugin compatibility range. Bump when shipping a plugin version that
 # requires a newer RKA backend. Matched as `version.startswith(prefix)`,
 # so "2.3" prefix accepts "2.3.0", "2.3.1", "2.3.2-rc1", "2.3", etc.
-COMPATIBLE_VERSION_PREFIX = "2.3"
+COMPATIBLE_VERSION_PREFIXES = ("2.7", "2.8")
 
 
 def integration_path() -> Path:
@@ -135,7 +135,6 @@ def main() -> None:
 
     binary_path: str | None = None
     version: str | None = None
-    default_project: str | None = None
 
     if int_path.is_file():
         try:
@@ -147,7 +146,11 @@ def main() -> None:
         # Defensive str() cast in case RKA.app ever writes non-string values.
         version = str(data.get("version") or "").strip() or None
         binary_path = str(data.get("binary_path") or "").strip() or None
-        default_project = str(data.get("default_project_id") or "").strip() or None
+        if data.get("default_project_id"):
+            err(
+                "NOTICE: integration.json default_project_id is ignored; "
+                "RKA requires project_id on every scoped operation."
+            )
 
         # Resolve relative binary_path against integration.json's directory.
         # Absolute paths pass through unchanged.
@@ -177,15 +180,21 @@ def main() -> None:
     if version is not None:
         # Use startswith with a trailing dot for "2.3.x", but also accept
         # bare "2.3" as a valid prerelease/dev marker.
-        if not (version == COMPATIBLE_VERSION_PREFIX or version.startswith(COMPATIBLE_VERSION_PREFIX + ".")):
-            err(f"ERROR: RKA version '{version}' is incompatible with this plugin (requires {COMPATIBLE_VERSION_PREFIX}.x).")
-            err(f"Either upgrade RKA to a {COMPATIBLE_VERSION_PREFIX}.x release, or install a matching plugin version.")
+        compatible = any(
+            version == prefix or version.startswith(prefix + ".")
+            for prefix in COMPATIBLE_VERSION_PREFIXES
+        )
+        if not compatible:
+            expected = ", ".join(f"{prefix}.x" for prefix in COMPATIBLE_VERSION_PREFIXES)
+            err(f"ERROR: RKA version '{version}' is incompatible with this plugin (requires {expected}).")
+            err("Upgrade RKA or install a matching plugin version.")
             sys.exit(1)
 
-    # Propagate default_project_id as RKA_PROJECT (caller-set wins).
     env = os.environ.copy()
-    if not env.get("RKA_PROJECT") and default_project:
-        env["RKA_PROJECT"] = default_project
+    # Defensive cleanup for legacy launch configurations. v2.6+ ignores this
+    # variable, but removing it makes the explicit-only contract unambiguous to
+    # child processes and diagnostics.
+    env.pop("RKA_PROJECT", None)
 
     run_binary(binary_path, env)
 

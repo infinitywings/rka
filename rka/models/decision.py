@@ -115,6 +115,7 @@ class Decision(BaseModel):
     """Full decision record from database."""
 
     id: str
+    project_id: str
     parent_id: str | None = None
     phase: str
     question: str

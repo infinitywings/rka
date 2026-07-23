@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 
 from rka.infra.ids import generate_id
-from rka.services.base import BaseService, _now
+from rka.services.base import BaseService, _now, _precise_now
 
 
 class ResearcherToolsService(BaseService):
@@ -108,9 +107,10 @@ class ResearcherToolsService(BaseService):
                 """SELECT c.id, c.claim_type, c.content, c.confidence, c.source_entry_id
                    FROM claims c
                    JOIN claim_edges ce ON ce.source_claim_id = c.id AND ce.relation = 'member_of'
-                   WHERE ce.cluster_id = ? AND c.project_id = ?
+                   WHERE ce.cluster_id = ?
+                     AND ce.project_id = ? AND c.project_id = ?
                    ORDER BY c.confidence DESC""",
-                [cl["id"], self.project_id],
+                [cl["id"], self.project_id, self.project_id],
             )
             cluster_claims[cl["id"]] = [dict(c) for c in claims]
 
@@ -119,8 +119,9 @@ class ResearcherToolsService(BaseService):
             """SELECT DISTINCT d.id, d.question, d.rationale, d.status
                FROM decisions d
                JOIN entity_links el ON el.target_id = d.id AND el.target_type = 'decision'
-               WHERE el.source_id = ? AND el.source_type = 'decision' AND d.project_id = ?""",
-            [research_question_id, self.project_id],
+               WHERE el.source_id = ? AND el.source_type = 'decision'
+                 AND el.project_id = ? AND d.project_id = ?""",
+            [research_question_id, self.project_id, self.project_id],
         )
 
         # Gather linked literature
@@ -132,8 +133,13 @@ class ResearcherToolsService(BaseService):
                         """SELECT DISTINCT l.id, l.title, l.authors, l.year
                            FROM literature l
                            JOIN entity_links el ON el.target_id = l.id AND el.target_type = 'literature'
-                           WHERE el.source_id = ? AND el.source_type = 'journal' AND l.project_id = ?""",
-                        [claim["source_entry_id"], self.project_id],
+                           WHERE el.source_id = ? AND el.source_type = 'journal'
+                             AND el.project_id = ? AND l.project_id = ?""",
+                        [
+                            claim["source_entry_id"],
+                            self.project_id,
+                            self.project_id,
+                        ],
                     )
                     for lr in lit_rows:
                         lit_ids.add(lr["id"])
@@ -194,7 +200,6 @@ class ResearcherToolsService(BaseService):
 
     def _format_lit_review(self, rq: dict, clusters: list, cluster_claims: dict, literature: list) -> str:
         lines = [f"# Literature Review: {rq['question']}", ""]
-        lit_by_id = {l["id"]: l for l in literature}
 
         for cl in clusters:
             lines.append(f"## {cl['label']}")
@@ -259,7 +264,16 @@ class ResearcherToolsService(BaseService):
     # ------------------------------------------------------------------
 
     async def split_cluster(self, source_id: str, new_clusters: list[dict]) -> dict:
-        """Split a cluster by creating new ones and reassigning specified claims."""
+        """Split one cluster as an isolated, project-scoped graph mutation."""
+        async with self.db.transaction():
+            return await self._split_cluster(source_id, new_clusters)
+
+    async def _split_cluster(
+        self,
+        source_id: str,
+        new_clusters: list[dict],
+    ) -> dict:
+        """Implementation for :meth:`split_cluster` inside its transaction."""
         source = await self.db.fetchone(
             "SELECT * FROM evidence_clusters WHERE id = ? AND project_id = ?",
             [source_id, self.project_id],
@@ -273,6 +287,17 @@ class ResearcherToolsService(BaseService):
         for spec in new_clusters:
             cluster_id = generate_id("cluster")
             rq_id = spec.get("research_question_id") or source.get("research_question_id")
+            if rq_id is not None:
+                rq = await self.db.fetchone(
+                    """SELECT 1 FROM decisions
+                       WHERE id = ? AND project_id = ?""",
+                    [rq_id, self.project_id],
+                )
+                if rq is None:
+                    raise ValueError(
+                        "split cluster research question is not available "
+                        "in this project"
+                    )
             await self.db.execute(
                 """INSERT INTO evidence_clusters
                    (id, research_question_id, label, confidence, claim_count,
@@ -283,10 +308,29 @@ class ResearcherToolsService(BaseService):
 
             claim_ids = spec.get("claim_ids", [])
             for claim_id in claim_ids:
+                membership = await self.db.fetchone(
+                    """SELECT 1
+                       FROM claim_edges AS edge
+                       JOIN claims AS claim
+                         ON claim.id = edge.source_claim_id
+                        AND claim.project_id = edge.project_id
+                       WHERE edge.source_claim_id = ?
+                         AND edge.cluster_id = ?
+                         AND edge.relation = 'member_of'
+                         AND edge.project_id = ?""",
+                    [claim_id, source_id, self.project_id],
+                )
+                if membership is None:
+                    raise ValueError(
+                        "split claim is not a current same-project member "
+                        "of the source cluster"
+                    )
                 # Remove old member_of edge
                 await self.db.execute(
-                    "DELETE FROM claim_edges WHERE source_claim_id = ? AND cluster_id = ? AND relation = 'member_of'",
-                    [claim_id, source_id],
+                    """DELETE FROM claim_edges
+                       WHERE source_claim_id = ? AND cluster_id = ?
+                         AND relation = 'member_of' AND project_id = ?""",
+                    [claim_id, source_id, self.project_id],
                 )
                 # Create new member_of edge
                 edge_id = generate_id("claim_edge")
@@ -299,20 +343,30 @@ class ResearcherToolsService(BaseService):
 
             # Update claim_count
             await self.db.execute(
-                "UPDATE evidence_clusters SET claim_count = ? WHERE id = ?",
-                [len(claim_ids), cluster_id],
+                """UPDATE evidence_clusters SET claim_count = ?
+                   WHERE id = ? AND project_id = ?""",
+                [len(claim_ids), cluster_id, self.project_id],
             )
             total_reassigned += len(claim_ids)
             created_clusters.append({"id": cluster_id, "label": spec["label"], "claim_count": len(claim_ids)})
 
         # Update source cluster claim_count
         remaining = await self.db.fetchone(
-            "SELECT COUNT(*) as cnt FROM claim_edges WHERE cluster_id = ? AND relation = 'member_of'",
-            [source_id],
+            """SELECT COUNT(*) as cnt FROM claim_edges
+               WHERE cluster_id = ? AND relation = 'member_of'
+                 AND project_id = ?""",
+            [source_id, self.project_id],
         )
         await self.db.execute(
-            "UPDATE evidence_clusters SET claim_count = ?, updated_at = ? WHERE id = ?",
-            [remaining["cnt"] if remaining else 0, _now(), source_id],
+            """UPDATE evidence_clusters
+               SET claim_count = ?, updated_at = ?
+               WHERE id = ? AND project_id = ?""",
+            [
+                remaining["cnt"] if remaining else 0,
+                _now(),
+                source_id,
+                self.project_id,
+            ],
         )
 
         await self.db.commit()
@@ -335,17 +389,59 @@ class ResearcherToolsService(BaseService):
         target_synthesis: str | None = None,
         research_question_id: str | None = None,
     ) -> dict:
-        """Merge multiple clusters into one new cluster."""
+        """Merge clusters as an isolated, project-scoped graph mutation."""
+        async with self.db.transaction():
+            return await self._merge_clusters(
+                source_ids,
+                target_label,
+                target_synthesis,
+                research_question_id,
+            )
+
+    async def _merge_clusters(
+        self,
+        source_ids: list[str],
+        target_label: str,
+        target_synthesis: str | None,
+        research_question_id: str | None,
+    ) -> dict:
+        """Implementation for :meth:`merge_clusters` inside its transaction."""
+        normalized_source_ids = list(dict.fromkeys(source_ids))
+        if not normalized_source_ids:
+            raise ValueError("merge_clusters requires at least one source cluster")
+        if len(normalized_source_ids) != len(source_ids):
+            raise ValueError("merge_clusters source_ids must be unique")
+        placeholders = ", ".join("?" for _ in normalized_source_ids)
+        source_rows = await self.db.fetchall(
+            f"""SELECT id, research_question_id
+                FROM evidence_clusters
+                WHERE project_id = ? AND id IN ({placeholders})""",
+            [self.project_id, *normalized_source_ids],
+        )
+        if {row["id"] for row in source_rows} != set(normalized_source_ids):
+            raise ValueError(
+                "every source cluster must be available in this project"
+            )
+
         # Resolve research_question_id from first source if not provided
         if not research_question_id:
-            for sid in source_ids:
-                src = await self.db.fetchone(
-                    "SELECT research_question_id FROM evidence_clusters WHERE id = ? AND project_id = ?",
-                    [sid, self.project_id],
-                )
-                if src and src.get("research_question_id"):
-                    research_question_id = src["research_question_id"]
+            source_by_id = {row["id"]: row for row in source_rows}
+            for source_id in normalized_source_ids:
+                candidate = source_by_id[source_id].get("research_question_id")
+                if candidate:
+                    research_question_id = candidate
                     break
+        if research_question_id is not None:
+            rq = await self.db.fetchone(
+                """SELECT 1 FROM decisions
+                   WHERE id = ? AND project_id = ?""",
+                [research_question_id, self.project_id],
+            )
+            if rq is None:
+                raise ValueError(
+                    "merge cluster research question is not available "
+                    "in this project"
+                )
 
         target_id = generate_id("cluster")
         await self.db.execute(
@@ -358,17 +454,21 @@ class ResearcherToolsService(BaseService):
         )
 
         total_moved = 0
-        for sid in source_ids:
+        for sid in normalized_source_ids:
             # Get all claims in source
             edges = await self.db.fetchall(
-                "SELECT source_claim_id FROM claim_edges WHERE cluster_id = ? AND relation = 'member_of'",
-                [sid],
+                """SELECT source_claim_id FROM claim_edges
+                   WHERE cluster_id = ? AND relation = 'member_of'
+                     AND project_id = ?""",
+                [sid, self.project_id],
             )
             for edge in edges:
                 claim_id = edge["source_claim_id"]
                 await self.db.execute(
-                    "DELETE FROM claim_edges WHERE source_claim_id = ? AND cluster_id = ? AND relation = 'member_of'",
-                    [claim_id, sid],
+                    """DELETE FROM claim_edges
+                       WHERE source_claim_id = ? AND cluster_id = ?
+                         AND relation = 'member_of' AND project_id = ?""",
+                    [claim_id, sid, self.project_id],
                 )
                 edge_id = generate_id("claim_edge")
                 await self.db.execute(
@@ -381,14 +481,17 @@ class ResearcherToolsService(BaseService):
 
             # Zero out source cluster
             await self.db.execute(
-                "UPDATE evidence_clusters SET claim_count = 0, updated_at = ? WHERE id = ?",
-                [_now(), sid],
+                """UPDATE evidence_clusters
+                   SET claim_count = 0, updated_at = ?
+                   WHERE id = ? AND project_id = ?""",
+                [_now(), sid, self.project_id],
             )
 
         # Set target claim_count
         await self.db.execute(
-            "UPDATE evidence_clusters SET claim_count = ? WHERE id = ?",
-            [total_moved, target_id],
+            """UPDATE evidence_clusters SET claim_count = ?
+               WHERE id = ? AND project_id = ?""",
+            [total_moved, target_id, self.project_id],
         )
         await self.db.commit()
 
@@ -396,7 +499,7 @@ class ResearcherToolsService(BaseService):
             "target_id": target_id,
             "target_label": target_label,
             "total_claims_moved": total_moved,
-            "source_ids": source_ids,
+            "source_ids": normalized_source_ids,
         }
 
     # ------------------------------------------------------------------
@@ -409,7 +512,17 @@ class ResearcherToolsService(BaseService):
         annotations: list[dict],
         summary: str | None = None,
     ) -> dict:
-        """Process reading annotations from a paper into structured claims."""
+        """Process a paper as one isolated aggregate mutation."""
+        async with self.db.transaction():
+            return await self._process_paper(lit_id, annotations, summary)
+
+    async def _process_paper(
+        self,
+        lit_id: str,
+        annotations: list[dict],
+        summary: str | None,
+    ) -> dict:
+        """Implementation for :meth:`process_paper` inside its transaction."""
         # Verify literature exists
         lit = await self.db.fetchone(
             "SELECT id, title, status FROM literature WHERE id = ? AND project_id = ?",
@@ -447,9 +560,11 @@ class ResearcherToolsService(BaseService):
         link_id = generate_id("link")
         await self.db.execute(
             """INSERT OR IGNORE INTO entity_links
-               (id, source_type, source_id, link_type, target_type, target_id, created_at, created_by)
-               VALUES (?, 'journal', ?, 'informed_by', 'literature', ?, ?, 'brain')""",
-            [link_id, journal_id, lit_id, now],
+               (id, source_type, source_id, link_type, target_type, target_id,
+                created_at, created_by, project_id)
+               VALUES (?, 'journal', ?, 'informed_by', 'literature', ?, ?,
+                       'brain', ?)""",
+            [link_id, journal_id, lit_id, now, self.project_id],
         )
 
         # Extract claims from annotations
@@ -469,14 +584,26 @@ class ResearcherToolsService(BaseService):
             d_link_id = generate_id("link")
             await self.db.execute(
                 """INSERT OR IGNORE INTO entity_links
-                   (id, source_type, source_id, link_type, target_type, target_id, created_at, created_by)
-                   VALUES (?, 'claim', ?, 'derived_from', 'journal', ?, ?, 'brain')""",
-                [d_link_id, claim_id, journal_id, now],
+                   (id, source_type, source_id, link_type, target_type, target_id,
+                    created_at, created_by, project_id)
+                   VALUES (?, 'claim', ?, 'derived_from', 'journal', ?, ?,
+                           'brain', ?)""",
+                [d_link_id, claim_id, journal_id, now, self.project_id],
             )
 
             # Inline cluster assignment
             cluster_id = ann.get("cluster_id")
             if cluster_id:
+                cluster = await self.db.fetchone(
+                    """SELECT id FROM evidence_clusters
+                       WHERE id = ? AND project_id = ?""",
+                    [cluster_id, self.project_id],
+                )
+                if cluster is None:
+                    raise ValueError(
+                        f"Evidence cluster {cluster_id} not found in project "
+                        f"{self.project_id}"
+                    )
                 edge_id = generate_id("claim_edge")
                 await self.db.execute(
                     """INSERT OR IGNORE INTO claim_edges
@@ -488,8 +615,8 @@ class ResearcherToolsService(BaseService):
                 await self.db.execute(
                     """UPDATE evidence_clusters
                        SET claim_count = claim_count + 1, updated_at = ?
-                       WHERE id = ?""",
-                    [now, cluster_id],
+                       WHERE id = ? AND project_id = ?""",
+                    [now, cluster_id, self.project_id],
                 )
                 assigned += 1
 
@@ -504,7 +631,7 @@ class ResearcherToolsService(BaseService):
         if lit["status"] == "to_read":
             await self.db.execute(
                 "UPDATE literature SET status = 'reading', updated_at = ? WHERE id = ? AND project_id = ?",
-                [now, lit_id, self.project_id],
+                [_precise_now(), lit_id, self.project_id],
             )
 
         await self.db.commit()
@@ -529,6 +656,22 @@ class ResearcherToolsService(BaseService):
         conclusion: str | None = None,
         evidence_cluster_ids: list[str] | None = None,
     ) -> dict:
+        """Advance one RQ and all linked records atomically."""
+        async with self.db.transaction():
+            return await self._advance_rq(
+                rq_id,
+                status,
+                conclusion,
+                evidence_cluster_ids,
+            )
+
+    async def _advance_rq(
+        self,
+        rq_id: str,
+        status: str,
+        conclusion: str | None,
+        evidence_cluster_ids: list[str] | None,
+    ) -> dict:
         """Advance a research question's lifecycle status.
 
         The RQ lifecycle status is stored as a tag (rq:open, rq:answered, etc.)
@@ -552,8 +695,10 @@ class ResearcherToolsService(BaseService):
 
         # Read current tags, replace any existing rq:* tag with the new one
         existing_tags = await self.db.fetchall(
-            "SELECT tag FROM tags WHERE entity_type = 'decision' AND entity_id = ?",
-            [rq_id],
+            """SELECT tag FROM tags
+               WHERE entity_type = 'decision' AND entity_id = ?
+                 AND project_id = ?""",
+            [rq_id, self.project_id],
         )
         current_tags = [r["tag"] for r in existing_tags]
         previous_rq_status = "open"
@@ -567,12 +712,17 @@ class ResearcherToolsService(BaseService):
 
         # Replace tags
         await self.db.execute(
-            "DELETE FROM tags WHERE entity_type = 'decision' AND entity_id = ?", [rq_id],
+            """DELETE FROM tags
+               WHERE entity_type = 'decision' AND entity_id = ?
+                 AND project_id = ?""",
+            [rq_id, self.project_id],
         )
         for tag in new_tags:
             await self.db.execute(
-                "INSERT INTO tags (entity_type, entity_id, tag) VALUES ('decision', ?, ?)",
-                [rq_id, tag],
+                """INSERT INTO tags
+                   (entity_type, entity_id, tag, project_id)
+                   VALUES ('decision', ?, ?, ?)""",
+                [rq_id, tag, self.project_id],
             )
 
         # Touch updated_at
@@ -599,20 +749,34 @@ class ResearcherToolsService(BaseService):
             link_id = generate_id("link")
             await self.db.execute(
                 """INSERT OR IGNORE INTO entity_links
-                   (id, source_type, source_id, link_type, target_type, target_id, created_at, created_by)
-                   VALUES (?, 'journal', ?, 'justified_by', 'decision', ?, ?, 'brain')""",
-                [link_id, journal_id, rq_id, now],
+                   (id, source_type, source_id, link_type, target_type, target_id,
+                    created_at, created_by, project_id)
+                   VALUES (?, 'journal', ?, 'justified_by', 'decision', ?, ?,
+                           'brain', ?)""",
+                [link_id, journal_id, rq_id, now, self.project_id],
             )
 
         # Create justified_by links from RQ to evidence clusters
         if evidence_cluster_ids:
             for ecl_id in evidence_cluster_ids:
+                cluster = await self.db.fetchone(
+                    """SELECT id FROM evidence_clusters
+                       WHERE id = ? AND project_id = ?""",
+                    [ecl_id, self.project_id],
+                )
+                if cluster is None:
+                    raise ValueError(
+                        f"Evidence cluster {ecl_id} not found in project "
+                        f"{self.project_id}"
+                    )
                 link_id = generate_id("link")
                 await self.db.execute(
                     """INSERT OR IGNORE INTO entity_links
-                       (id, source_type, source_id, link_type, target_type, target_id, created_at, created_by)
-                       VALUES (?, 'decision', ?, 'justified_by', 'cluster', ?, ?, 'brain')""",
-                    [link_id, rq_id, ecl_id, now],
+                       (id, source_type, source_id, link_type, target_type,
+                        target_id, created_at, created_by, project_id)
+                       VALUES (?, 'decision', ?, 'justified_by', 'cluster', ?,
+                               ?, 'brain', ?)""",
+                    [link_id, rq_id, ecl_id, now, self.project_id],
                 )
 
         await self.db.commit()
@@ -637,10 +801,26 @@ class ResearcherToolsService(BaseService):
         staleness: str = "yellow",
         propagate: bool = True,
     ) -> dict:
-        """Flag a claim, cluster, or decision as potentially stale."""
+        """Flag an entity and its propagated dependents atomically."""
         if staleness not in ("yellow", "red"):
             raise ValueError("staleness must be 'yellow' or 'red'")
 
+        async with self.db.transaction():
+            return await self._flag_stale(
+                entity_id=entity_id,
+                reason=reason,
+                staleness=staleness,
+                propagate=propagate,
+            )
+
+    async def _flag_stale(
+        self,
+        entity_id: str,
+        reason: str,
+        staleness: str,
+        propagate: bool,
+    ) -> dict:
+        """Implementation for :meth:`flag_stale` inside its transaction."""
         now = _now()
         flagged = [{"id": entity_id, "staleness": staleness}]
 
@@ -674,21 +854,28 @@ class ResearcherToolsService(BaseService):
         flagged = []
         # Find parent clusters via claim_edges
         clusters = await self.db.fetchall(
-            "SELECT DISTINCT cluster_id FROM claim_edges WHERE source_claim_id = ? AND relation = 'member_of'",
-            [claim_id],
+            """SELECT DISTINCT cluster_id FROM claim_edges
+               WHERE source_claim_id = ? AND relation = 'member_of'
+                 AND project_id = ? AND cluster_id IS NOT NULL""",
+            [claim_id, self.project_id],
         )
         for row in clusters:
             cid = row["cluster_id"]
             # Check if >50% of claims in this cluster are stale
             total = await self.db.fetchone(
-                "SELECT COUNT(*) as cnt FROM claim_edges WHERE cluster_id = ? AND relation = 'member_of'", [cid],
+                """SELECT COUNT(*) as cnt FROM claim_edges
+                   WHERE cluster_id = ? AND relation = 'member_of'
+                     AND project_id = ?""",
+                [cid, self.project_id],
             )
             stale = await self.db.fetchone(
                 """SELECT COUNT(*) as cnt FROM claim_edges ce
                    JOIN claims c ON c.id = ce.source_claim_id
+                                AND c.project_id = ce.project_id
                    WHERE ce.cluster_id = ? AND ce.relation = 'member_of'
+                     AND ce.project_id = ?
                      AND c.staleness IN ('yellow', 'red')""",
-                [cid],
+                [cid, self.project_id],
             )
             if total and stale and total["cnt"] > 0 and (stale["cnt"] / total["cnt"]) > 0.5:
                 await self.db.execute(
@@ -705,8 +892,8 @@ class ResearcherToolsService(BaseService):
         decisions = await self.db.fetchall(
             """SELECT source_id FROM entity_links
                WHERE target_id = ? AND link_type = 'justified_by'
-                 AND source_type = 'decision'""",
-            [cluster_id],
+                 AND source_type = 'decision' AND project_id = ?""",
+            [cluster_id, self.project_id],
         )
         for row in decisions:
             dec_id = row["source_id"]

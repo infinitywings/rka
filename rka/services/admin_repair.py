@@ -328,9 +328,9 @@ async def _repair_one_pair(
     # Apply path — per-pair transaction. On exception, ROLLBACK leaves
     # the row state unchanged and the failure is reported via
     # PairReport.failure_reason.
+    transaction = db.transaction()
+    await transaction.__aenter__()
     try:
-        await db.execute("BEGIN")
-
         if needs_scope_bump:
             await db.execute(
                 "UPDATE decisions SET scope_version = ?, updated_at = ? "
@@ -437,15 +437,18 @@ async def _repair_one_pair(
                 "no mutation this run — event already covered by prior pass",
             )
 
-        await db.execute("COMMIT")
-    except Exception as exc:  # rollback per-pair on any failure
+    except BaseException as exc:  # rollback per-pair on failure or cancellation
         logger.exception("repair-supersedes: pair %s -> %s failed; rolling back", old_id, new_id)
         try:
-            await db.execute("ROLLBACK")
+            await transaction.__aexit__(type(exc), exc, exc.__traceback__)
         except Exception:
             pass
+        if not isinstance(exc, Exception):
+            raise
         report.failure_reason = f"{type(exc).__name__}: {exc}"
         report.add("transaction", "FAILED", report.failure_reason)
+    else:
+        await transaction.__aexit__(None, None, None)
     return report
 
 

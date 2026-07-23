@@ -10,10 +10,10 @@ This is the official Claude Code plugin for [RKA](https://github.com/infinitywin
 
 | Surface | What | When |
 |---|---|---|
-| **MCP server** (~110 tools) | Full RKA tool surface via `mcp__plugin_rka_rka__*` | Available in every Claude Code session after install |
-| **3 skills** | `rka:rka-brain`, `rka:rka-executor`, `rka:rka-pi` | Loaded on-demand when Claude needs role-specific guidance |
-| **5 slash commands** | `/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`, `/rka-setup-claude-desktop` | Quick shortcuts; the setup command is one-time |
-| **SessionStart hook** | Cross-platform Python; pings the backend, prints reachability + active-project status | Fires automatically on every new session |
+| **MCP server** | Typed `rka_query` / `rka_execute` dispatch plus schema/help operations | Available in every Claude Code session after install |
+| **4 skills** | Brain, Executor, PI, and Writer | Loaded on demand for role-specific guidance |
+| **6 slash commands** | Status, search, pending, explicit project pinning, manuscript initialization, and Desktop setup | Quick shortcuts; setup is one-time |
+| **SessionStart hook** | Cross-platform Python; reports backend reachability and reminds callers that project ids are explicit | Fires automatically on every new session |
 
 ---
 
@@ -71,7 +71,7 @@ For natural-language equivalents, the `rka:rka-pi` skill teaches Claude Code to 
 
 | Plugin version | Compatible RKA versions | Wrapper compatibility glob |
 |---|---|---|
-| 1.0.0 (this) | 2.3.* | `2.3.*` |
+| 1.0.0 (this branch) | 2.7.* or 2.8.* | `2.7.*`, `2.8.*` |
 
 If RKA's backend version is outside the wrapper's compatibility glob, the wrapper exits with a clear error message. Either upgrade the backend or downgrade the plugin to a matching version.
 

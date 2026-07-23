@@ -177,6 +177,14 @@ ClaimTypeLit = Literal[
     "hypothesis", "evidence", "method", "result", "observation", "assumption",
 ]
 
+# Scientific evidence assessment on a claim. This is intentionally
+# independent from ``claims.verified``, which records extraction/grounding
+# fidelity against the source entry.
+EvidenceStatusLit = Literal[
+    "unassessed", "supported", "partially_supported", "inconclusive",
+    "contradicted",
+]
+
 # Cluster confidence — ``rka/models/claim.py`` ``ClusterConfidence``.
 ClusterConfLit = Literal[
     "strong", "moderate", "emerging", "contested", "refuted",
@@ -263,3 +271,86 @@ BatchImportActorLit = Literal["brain", "executor", "pi", "system", "import"]
 # ``rka_add_hook(created_by=...)`` set: pi (the typical operator),
 # brain, executor (rare), system (programmatic).
 HookCreatedByLit = Literal["pi", "brain", "executor", "system"]
+
+
+# ---------------------------------------------------------------------------
+# Native manuscripts (rka_query / rka_execute manuscript operations)
+# ---------------------------------------------------------------------------
+
+# Canonical lifecycle phases understood by the native manuscript readiness
+# engine.  Metadata-only create/update calls may still carry a custom phase
+# string, but readiness checks and phase transitions are deliberately closed
+# to this set.
+ManuscriptReadinessPhaseLit = Literal[
+    "planning", "drafting", "review", "final", "submitted",
+]
+
+# Native manuscript creation is intentionally narrower than later lifecycle
+# transitions. Named singleton aliases keep that contract visible in the
+# published typed surface and covered by the enum-drift audit.
+ManuscriptInitialPhaseLit = Literal["planning"]
+
+# Native manuscript lifecycle state — mirrors
+# ``rka.models.manuscript_native.ManuscriptState``.
+ManuscriptStateLit = Literal[
+    "active",
+    "on_hold",
+    "submitted",
+    "accepted",
+    "rejected",
+    "withdrawn",
+    "archived",
+]
+ManuscriptInitialStateLit = Literal["active"]
+
+# Argument-spine claim and unit enums.
+ManuscriptClaimKindLit = Literal[
+    "empirical",
+    "methodological",
+    "theoretical",
+    "survey",
+    "position",
+]
+ManuscriptClaimStateLit = Literal["candidate", "active", "retired"]
+ManuscriptUnitKindLit = Literal[
+    "abstract",
+    "introduction",
+    "related_work",
+    "background",
+    "method",
+    "result",
+    "discussion",
+    "limitation",
+    "conclusion",
+    "caption",
+    "appendix",
+    "other",
+]
+ManuscriptUnitStatusLit = Literal[
+    "planned", "drafted", "reviewed", "final", "removed",
+]
+ManuscriptEvidenceRoleLit = Literal[
+    "support", "qualifier", "counterevidence",
+]
+ManuscriptClaimUnitRelationshipLit = Literal[
+    "advances", "tests", "bounds", "mentions",
+]
+
+# PI checkpoint lifecycle.
+ManuscriptCheckpointKindLit = Literal[
+    "venue",
+    "outline",
+    "table_figure_plan",
+    "reference_set",
+    "draft_section",
+    "final_layout",
+]
+ManuscriptCheckpointResolutionStatusLit = Literal[
+    "resolved", "rejected",
+]
+
+# Immutable multidimensional verification attestation verdicts.
+ManuscriptVerificationVerdictLit = Literal["pass", "warn", "block", "error"]
+ManuscriptVerificationDimensionVerdictLit = Literal[
+    "pass", "warn", "block", "error", "not_checked",
+]

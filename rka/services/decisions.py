@@ -18,6 +18,10 @@ from rka.services.base import BaseService, _now
 from rka.services.jobs import JobQueue
 
 
+class DecisionNotFoundError(ValueError):
+    """Raised when a decision is absent from the active project scope."""
+
+
 class DecisionService(BaseService):
     """Manages the decision tree."""
 
@@ -51,59 +55,86 @@ class DecisionService(BaseService):
         if data.options:
             options_json = json.dumps([o.model_dump() for o in data.options])
 
-        await self.db.execute(
-            """INSERT INTO decisions
-               (id, parent_id, phase, question, options, chosen, rationale,
-                decided_by, status, related_missions, related_literature,
-                related_journal, kind, assumptions, project_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            [
-                dec_id, data.parent_id, data.phase, data.question,
-                options_json, data.chosen, data.rationale,
-                data.decided_by, data.status,
-                self._json_dumps(data.related_missions),
-                self._json_dumps(data.related_literature),
-                self._json_dumps(data.related_journal),
-                data.kind,
-                # Mission C T5b: assumptions parallel to related_* JSON-list fields.
-                self._json_dumps(data.assumptions),
-                self.project_id,
-            ],
-        )
-        await self.db.commit()
+        async with self.db.transaction():
+            await self.db.execute(
+                """INSERT INTO decisions
+                   (id, parent_id, phase, question, options, chosen, rationale,
+                    decided_by, status, related_missions, related_literature,
+                    related_journal, kind, assumptions, project_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    dec_id,
+                    data.parent_id,
+                    data.phase,
+                    data.question,
+                    options_json,
+                    data.chosen,
+                    data.rationale,
+                    data.decided_by,
+                    data.status,
+                    self._json_dumps(data.related_missions),
+                    self._json_dumps(data.related_literature),
+                    self._json_dumps(data.related_journal),
+                    data.kind,
+                    self._json_dumps(data.assumptions),
+                    self.project_id,
+                ],
+            )
 
-        # Save user-provided tags immediately; auto-tags are deferred
-        has_user_tags = bool(data.tags)
-        if has_user_tags:
-            await self._set_tags("decision", dec_id, data.tags)
+            if data.tags:
+                await self._set_tags("decision", dec_id, data.tags)
 
-        # Write entity_links for caller-provided cross-references
-        if data.related_journal:
-            for jrn_id in data.related_journal:
-                await self.add_link("decision", dec_id, "justified_by", "journal", jrn_id, created_by=actor_val)
-        if data.related_literature:
-            for lit_id in data.related_literature:
-                await self.add_link("literature", lit_id, "informed_by", "decision", dec_id, created_by=actor_val)
+            await self._replace_outgoing_links(
+                source_type="decision",
+                source_id=dec_id,
+                link_type="justified_by",
+                target_type="journal",
+                target_ids=data.related_journal,
+                created_by=actor_val,
+            )
+            await self._replace_incoming_links(
+                target_type="decision",
+                target_id=dec_id,
+                link_type="informed_by",
+                source_type="literature",
+                source_ids=data.related_literature,
+                created_by=actor_val,
+            )
+            await self._replace_outgoing_links(
+                source_type="decision",
+                source_id=dec_id,
+                link_type="triggered",
+                target_type="mission",
+                target_ids=data.related_missions,
+                created_by=actor_val,
+            )
+            await self._replace_incoming_links(
+                target_type="decision",
+                target_id=dec_id,
+                link_type="triggered",
+                source_type="decision",
+                source_ids=[data.parent_id] if data.parent_id else [],
+                created_by=actor_val,
+            )
 
-        # Sync cheap deterministic FTS now; LLM enrichment + embedding are queued
-        await self._sync_fts("decision", dec_id, {
-            "question": data.question, "rationale": data.rationale,
-        })
-
-        await self._enqueue_enrichment_jobs(
-            dec_id,
-            include_embedding=bool(self.embeddings),
-        )
-
-        await self.emit_event(
-            event_type="decision_created",
-            entity_type="decision",
-            entity_id=dec_id,
-            actor=actor_val,
-            summary=f"Decision: {data.question[:100]}",
-            phase=data.phase,
-        )
-        await self.audit("create", "decision", dec_id, actor_val)
+            await self._sync_fts(
+                "decision",
+                dec_id,
+                {"question": data.question, "rationale": data.rationale},
+            )
+            await self._enqueue_enrichment_jobs(
+                dec_id,
+                include_embedding=bool(self.embeddings),
+            )
+            await self.emit_event(
+                event_type="decision_created",
+                entity_type="decision",
+                entity_id=dec_id,
+                actor=actor_val,
+                summary=f"Decision: {data.question[:100]}",
+                phase=data.phase,
+            )
+            await self.audit("create", "decision", dec_id, actor_val)
         return await self.get(dec_id)
 
     async def get(self, dec_id: str) -> Decision | None:
@@ -156,22 +187,10 @@ class DecisionService(BaseService):
         """Update a decision."""
         dump = data.model_dump(exclude_none=True)
         tags = dump.pop("tags", None)
-
-        # Guard: a generic update may not flip status to 'superseded' without
-        # naming the successor — that creates the admin-repair orphan
-        # signature (status='superseded' AND superseded_by IS NULL) the
-        # atomic supersede path was built to prevent. Use supersede_decision
-        # (writes pointer + supersedes edge + staleness cascade atomically).
-        if dump.get("status") == "superseded" and not dump.get("superseded_by"):
-            existing = await self.get(dec_id)
-            if existing is None or not existing.superseded_by:
-                raise ValueError(
-                    f"Cannot set decision {dec_id} status='superseded' without a "
-                    f"successor: use supersede_decision (POST "
-                    f"/api/decisions/{dec_id}/supersede), which records "
-                    f"superseded_by, the supersedes graph edge, and the "
-                    f"staleness cascade atomically."
-                )
+        replace_related_missions = "related_missions" in dump
+        replace_related_literature = "related_literature" in dump
+        replace_related_journal = "related_journal" in dump
+        replace_parent = "parent_id" in dump
 
         updates = {}
         for field, value in dump.items():
@@ -182,57 +201,126 @@ class DecisionService(BaseService):
             else:
                 updates[field] = value
 
-        if tags is not None:
-            await self._set_tags("decision", dec_id, tags)
-
-        if not updates:
-            return await self.get(dec_id)
-
-        updates["updated_at"] = _now()
-        set_clause = ", ".join(f"{k} = ?" for k in updates)
-        values = list(updates.values()) + [dec_id]
-
-        await self.db.execute(
-            f"UPDATE decisions SET {set_clause} WHERE id = ? AND project_id = ?",
-            values + [self.project_id],
-        )
-        await self.db.commit()
-
-        # Materialize entity_links for updated cross-reference fields
-        if data.related_journal:
-            for jrn_id in data.related_journal:
-                await self.add_link("decision", dec_id, "justified_by", "journal", jrn_id, created_by=actor)
-        if data.related_literature:
-            for lit_id in data.related_literature:
-                await self.add_link("literature", lit_id, "informed_by", "decision", dec_id, created_by=actor)
-
-        # Emit event for status changes
-        if data.status:
-            event_type = {
-                "abandoned": "decision_abandoned",
-            }.get(data.status, "decision_updated")
-            await self.emit_event(
-                event_type=event_type,
-                entity_type="decision",
-                entity_id=dec_id,
-                actor=actor,
-                summary=f"Decision updated: status → {data.status}",
-            )
-
-        # Re-sync FTS on content changes; defer embedding to job queue
-        if "question" in updates or "rationale" in updates:
-            row = await self.db.fetchone(
-                "SELECT question, rationale FROM decisions WHERE id = ? AND project_id = ?",
+        async with self.db.transaction():
+            owned = await self.db.fetchone(
+                """SELECT id, superseded_by
+                   FROM decisions
+                   WHERE id = ? AND project_id = ?""",
                 [dec_id, self.project_id],
             )
-            if row:
-                await self._sync_fts("decision", dec_id, dict(row))
-                await self._enqueue_enrichment_jobs(
-                    dec_id,
-                    include_embedding=bool(self.embeddings),
+            if owned is None:
+                raise DecisionNotFoundError(
+                    f"decision {dec_id!r} not found in project "
+                    f"{self.project_id}"
                 )
 
-        await self.audit("update", "decision", dec_id, actor, {"fields": list(updates.keys())})
+            # A generic update may not flip status to 'superseded' without
+            # naming the successor. Check the owned row under the same write
+            # lock that protects all subsequent aggregate side effects.
+            if (
+                dump.get("status") == "superseded"
+                and not dump.get("superseded_by")
+                and not owned.get("superseded_by")
+            ):
+                raise ValueError(
+                    f"Cannot set decision {dec_id} status='superseded' without a "
+                    f"successor: use supersede_decision (POST "
+                    f"/api/decisions/{dec_id}/supersede), which records "
+                    f"superseded_by, the supersedes graph edge, and the "
+                    f"staleness cascade atomically."
+                )
+
+            if tags is not None:
+                await self._set_tags("decision", dec_id, tags)
+
+            if not updates:
+                current = await self.get(dec_id)
+                if current is None:  # pragma: no cover - protected by write lock
+                    raise RuntimeError("decision update target disappeared")
+                return current
+
+            updates["updated_at"] = _now()
+            set_clause = ", ".join(f"{k} = ?" for k in updates)
+            values = list(updates.values()) + [dec_id]
+            cursor = await self.db.execute(
+                f"UPDATE decisions SET {set_clause} WHERE id = ? AND project_id = ?",
+                values + [self.project_id],
+            )
+            if cursor.rowcount != 1:  # pragma: no cover - protected by write lock
+                raise DecisionNotFoundError(
+                    f"decision {dec_id!r} not found in project "
+                    f"{self.project_id}"
+                )
+
+            if replace_related_journal:
+                await self._replace_outgoing_links(
+                    source_type="decision",
+                    source_id=dec_id,
+                    link_type="justified_by",
+                    target_type="journal",
+                    target_ids=data.related_journal,
+                    created_by=actor,
+                )
+            if replace_related_literature:
+                await self._replace_incoming_links(
+                    target_type="decision",
+                    target_id=dec_id,
+                    link_type="informed_by",
+                    source_type="literature",
+                    source_ids=data.related_literature,
+                    created_by=actor,
+                )
+            if replace_related_missions:
+                await self._replace_outgoing_links(
+                    source_type="decision",
+                    source_id=dec_id,
+                    link_type="triggered",
+                    target_type="mission",
+                    target_ids=data.related_missions,
+                    created_by=actor,
+                )
+            if replace_parent:
+                await self._replace_incoming_links(
+                    target_type="decision",
+                    target_id=dec_id,
+                    link_type="triggered",
+                    source_type="decision",
+                    source_ids=[data.parent_id] if data.parent_id else [],
+                    created_by=actor,
+                )
+
+            if data.status:
+                event_type = {
+                    "abandoned": "decision_abandoned",
+                }.get(data.status, "decision_updated")
+                await self.emit_event(
+                    event_type=event_type,
+                    entity_type="decision",
+                    entity_id=dec_id,
+                    actor=actor,
+                    summary=f"Decision updated: status → {data.status}",
+                )
+
+            if "question" in updates or "rationale" in updates:
+                row = await self.db.fetchone(
+                    "SELECT question, rationale FROM decisions "
+                    "WHERE id = ? AND project_id = ?",
+                    [dec_id, self.project_id],
+                )
+                if row:
+                    await self._sync_fts("decision", dec_id, dict(row))
+                    await self._enqueue_enrichment_jobs(
+                        dec_id,
+                        include_embedding=bool(self.embeddings),
+                    )
+
+            await self.audit(
+                "update",
+                "decision",
+                dec_id,
+                actor,
+                {"fields": list(updates.keys())},
+            )
         return await self.get(dec_id)
 
     async def supersede_decision(
@@ -294,23 +382,16 @@ class DecisionService(BaseService):
         # raises cleanly rather than mid-transaction.
         actor_v = self._validate_actor(actor)
 
-        # v2.7.0.7 — wrap ALL post-create supersede bookkeeping in ONE
-        # transaction so it is all-or-nothing. Previously this spanned five
-        # separate commit()s (scope bump + status flip / add_link / cascade /
-        # emit_event / review_queue), so a crash mid-sequence left the
-        # supersede half-applied (e.g. status flipped but no supersedes
-        # entity-link, or no staleness cascade). add_link() and emit_event()
-        # are inlined here (instead of called) because they commit internally,
-        # which would break the single transaction. SQLite DDL/DML inside an
-        # explicit BEGIN is transactional; ROLLBACK on any failure reverts the
-        # whole bookkeeping block.
+        # Wrap all post-create supersede bookkeeping in one managed
+        # transaction. Existing service-helper commits are deferred by
+        # Database.transaction(), so any future helper extraction preserves
+        # this aggregate boundary.
         new_version = (old.scope_version or 1) + 1
         now = _now()
         link_id = generate_id("link")
         event_id = generate_id("event")
 
-        await self.db.execute("BEGIN")
-        try:
+        async with self.db.transaction():
             # Scope-version bump on the new decision (drives change feeds +
             # staleness propagation).
             await self.db.execute(
@@ -410,14 +491,6 @@ class DecisionService(BaseService):
                     ],
                 )
 
-            await self.db.execute("COMMIT")
-        except Exception:
-            try:
-                await self.db.execute("ROLLBACK")
-            except Exception:  # pragma: no cover
-                pass
-            raise
-
         return await self.get(new_decision.id)
 
     async def get_tree(self, phase: str | None = None, active_only: bool = False) -> list[DecisionTreeNode]:
@@ -478,6 +551,7 @@ class DecisionService(BaseService):
 
         return Decision(
             id=row["id"],
+            project_id=row["project_id"],
             parent_id=row.get("parent_id"),
             phase=row["phase"],
             question=row["question"],

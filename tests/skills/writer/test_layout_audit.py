@@ -35,6 +35,12 @@ def test_pages_over_limit_blocks(layout_audit) -> None:
     assert verdict.verdict == "BLOCK"
 
 
+def test_unknown_page_limit_blocks_explicitly(layout_audit) -> None:
+    verdict = layout_audit.check_pages_over_limit(pages=8, limit=0)
+    assert verdict.verdict == "BLOCK"
+    assert verdict.matches == ["page_limit_unresolved"]
+
+
 def test_pages_equals_limit_warns(layout_audit) -> None:
     verdict = layout_audit.check_pages_equals_limit(pages=14, limit=14)
     assert verdict.verdict == "WARN"
@@ -89,13 +95,47 @@ def test_underfull_badness_over_5000_warns(layout_audit) -> None:
     assert verdict.verdict == "WARN"
 
 
-def test_overall_verdict_aggregation_pass(layout_audit, tmp_path: Path) -> None:
-    files = _write_fixtures(tmp_path, log="", blg="", aux="", tex="")
+def test_overall_verdict_aggregation_pass(layout_audit, tmp_path: Path, monkeypatch) -> None:
+    pdf = tmp_path / "main.pdf"
+    log = tmp_path / "main.log"
+    tex = tmp_path / "main.tex"
+    pdf.touch()
+    log.touch()
+    tex.touch()
+    monkeypatch.setattr(layout_audit, "get_pdf_page_count", lambda _path: 1)
+    report = layout_audit.audit(
+        pdf_path=pdf, log_path=log, blg_path=None,
+        aux_path=None, tex_path=tex, venue="CHI",
+    )
+    assert report.summary["overall_verdict"] == "PASS"
+    assert report.fields["audit_inputs"]["verdict"] == "PASS"
+
+
+def test_missing_required_inputs_block(layout_audit) -> None:
     report = layout_audit.audit(
         pdf_path=None, log_path=None, blg_path=None,
         aux_path=None, tex_path=None, venue="CHI",
     )
-    assert report.summary["overall_verdict"] == "PASS"
+    assert report.summary["overall_verdict"] == "BLOCK"
+    assert report.fields["audit_inputs"]["verdict"] == "BLOCK"
+    assert set(report.fields["audit_inputs"]["matches"]) == {
+        "missing:pdf", "missing:log", "missing:tex",
+    }
+
+
+def test_unreadable_pdf_blocks(layout_audit, tmp_path: Path) -> None:
+    pdf = tmp_path / "main.pdf"
+    log = tmp_path / "main.log"
+    tex = tmp_path / "main.tex"
+    pdf.write_bytes(b"not a pdf")
+    log.touch()
+    tex.touch()
+    report = layout_audit.audit(
+        pdf_path=pdf, log_path=log, blg_path=None,
+        aux_path=None, tex_path=tex, venue="CHI",
+    )
+    assert report.fields["audit_inputs"]["verdict"] == "BLOCK"
+    assert "unreadable:pdf_pages" in report.fields["audit_inputs"]["matches"]
 
 
 def test_overall_verdict_aggregation_block(layout_audit, tmp_path: Path) -> None:

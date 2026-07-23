@@ -30,7 +30,7 @@ Design choices (decision #3 in the project locked-decisions list):
   hints, and the Phase-X²' canonical-field-name lessons (e.g. the
   `description=` vs `content=` checkpoint pitfall from the 2026-06-01
   hyperscaler-auditing PA-2 bug).
-- Single dict, one entry per operation. Total ~85 entries.
+- Single dict, one entry per operation. Total 109 entries.
 - Enum value-sets reference rka.mcp._enums for drift-detection — the
   enums dict here cites the values directly (mirror of _enums.py) so
   consumers don't need to import _enums. The lock-test in
@@ -88,6 +88,10 @@ _ENUMS = {
         "hypothesis", "evidence", "method", "result", "observation",
         "assumption",
     ],
+    "evidence_status": [
+        "unassessed", "supported", "partially_supported", "inconclusive",
+        "contradicted",
+    ],
     "cluster_confidence": [
         "strong", "moderate", "emerging", "contested", "refuted",
     ],
@@ -99,6 +103,42 @@ _ENUMS = {
     "ingest_source": ["brain", "executor", "pi", "import", "web_ui"],
     "resolved_by": ["pi", "brain", "executor"],
     "review_action": ["approve", "reject", "adjust"],
+    "manuscript_phase": [
+        "planning", "drafting", "review", "final", "submitted",
+    ],
+    "manuscript_state": [
+        "active", "on_hold", "submitted", "accepted", "rejected",
+        "withdrawn", "archived",
+    ],
+    "manuscript_claim_kind": [
+        "empirical", "methodological", "theoretical", "survey", "position",
+    ],
+    "manuscript_claim_state": ["candidate", "active", "retired"],
+    "manuscript_unit_kind": [
+        "abstract", "introduction", "related_work", "background", "method",
+        "result", "discussion", "limitation", "conclusion", "caption",
+        "appendix", "other",
+    ],
+    "manuscript_unit_status": [
+        "planned", "drafted", "reviewed", "final", "removed",
+    ],
+    "manuscript_evidence_role": [
+        "support", "qualifier", "counterevidence",
+    ],
+    "manuscript_claim_unit_relationship": [
+        "advances", "tests", "bounds", "mentions",
+    ],
+    "manuscript_checkpoint_kind": [
+        "venue", "outline", "table_figure_plan", "reference_set",
+        "draft_section", "final_layout",
+    ],
+    "manuscript_checkpoint_resolution_status": [
+        "resolved", "rejected",
+    ],
+    "manuscript_verification_verdict": ["pass", "warn", "block", "error"],
+    "manuscript_verification_dimension_verdict": [
+        "pass", "warn", "block", "error", "not_checked",
+    ],
 }
 
 
@@ -589,11 +629,11 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "signature": (
             "rka_query(operation='claims', *, project_id, limit=20, "
             "filters={'source_entry_id', 'cluster_id', 'claim_type', "
-            "'verified', 'stale'})"
+            "'verified', 'evidence_status', 'stale'})"
         ),
         "required_fields": ["project_id"],
         "optional_fields": ["limit", "filters"],
-        "enums": _e("claim_type"),
+        "enums": _e("claim_type", "evidence_status"),
         "examples": [
             {
                 "description": "Claims from a journal entry.",
@@ -607,7 +647,10 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": [
             "clusters", "extract_claims", "review_claims",
         ],
-        "notes": None,
+        "notes": (
+            "verified filters source-grounding fidelity. evidence_status "
+            "filters the independent scientific evidence assessment."
+        ),
     },
 
     "manuscript": {
@@ -615,7 +658,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "tool": "rka_query",
         "category": "manuscript",
         "role_tag": "ANY",
-        "summary": "Fetch a registered manuscript.",
+        "summary": "Fetch a manuscript by canonical or compatibility ID.",
         "signature": "rka_query(operation='manuscript', *, project_id, id)",
         "required_fields": ["project_id", "id"],
         "optional_fields": [],
@@ -626,12 +669,315 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
                 "call": {
                     "operation": "manuscript",
                     "project_id": "prj_01ABC...",
-                    "id": "msc_01XYZ...",
+                    "id": "man_01XYZ...",
                 },
             },
         ],
-        "related_operations": ["register_manuscript"],
-        "notes": None,
+        "related_operations": [
+            "register_manuscript", "create_manuscript", "manuscript_context",
+        ],
+        "notes": (
+            "Accepts canonical man_ IDs and compatibility jrn_ aliases. "
+            "Legacy-ID responses include canonical_id and deprecation metadata."
+        ),
+    },
+
+    "manuscript_reference_manifest": {
+        "operation": "manuscript_reference_manifest",
+        "tool": "rka_query",
+        "category": "manuscript",
+        "role_tag": "ANY",
+        "summary": (
+            "Read the authoritative citation-key membership and validation state."
+        ),
+        "signature": (
+            "rka_query(operation='manuscript_reference_manifest', *, "
+            "project_id, id)"
+        ),
+        "required_fields": ["project_id", "id"],
+        "optional_fields": [],
+        "enums": {},
+        "examples": [
+            {
+                "description": "Read active references before drafting.",
+                "call": {
+                    "operation": "manuscript_reference_manifest",
+                    "project_id": "prj_01ABC...",
+                    "id": "man_01XYZ...",
+                },
+            },
+        ],
+        "related_operations": [
+            "replace_manuscript_reference_manifest",
+            "validate_reference",
+            "manuscript_readiness",
+        ],
+        "notes": (
+            "Membership is project-scoped and authoritative. Each active "
+            "citation key is bound to one literature record and reports the "
+            "latest exact validation attempt; historical unbound validations "
+            "cannot authorize a citation."
+        ),
+    },
+
+    "reference_validation_status": {
+        "operation": "reference_validation_status",
+        "tool": "rka_query",
+        "category": "literature",
+        "role_tag": "ANY",
+        "summary": "Poll one asynchronous manuscript-reference validation job.",
+        "signature": (
+            "rka_query(operation='reference_validation_status', *, project_id, "
+            "manuscript_id, job_id)"
+        ),
+        "required_fields": ["project_id", "manuscript_id", "job_id"],
+        "optional_fields": [],
+        "enums": {},
+        "examples": [
+            {
+                "description": "Poll the job returned by validate_reference.",
+                "call": {
+                    "operation": "reference_validation_status",
+                    "project_id": "prj_01ABC...",
+                    "manuscript_id": "man_01XYZ...",
+                    "job_id": "job_01VALIDATION...",
+                },
+            },
+        ],
+        "related_operations": ["validate_reference", "manuscript"],
+        "notes": (
+            "The job is project- and manuscript-scoped. Completed responses "
+            "carry `result`; failed responses carry `error`. Unknown or "
+            "cross-scope jobs return 404."
+        ),
+    },
+
+    "resolve_entities": {
+        "operation": "resolve_entities",
+        "tool": "rka_query",
+        "category": "core",
+        "role_tag": "ANY",
+        "summary": "Bulk-resolve heterogeneous IDs with project attestation.",
+        "signature": (
+            "rka_query(operation='resolve_entities', *, project_id, ids, "
+            "include_sources=False, include_edges=False)"
+        ),
+        "required_fields": ["project_id", "ids"],
+        "optional_fields": ["include_sources", "include_edges"],
+        "enums": {},
+        "examples": [
+            {
+                "description": "Resolve evidence IDs with terminal sources.",
+                "call": {
+                    "operation": "resolve_entities",
+                    "project_id": "prj_01ABC...",
+                    "ids": ["clm_01CLAIM...", "dec_01DECISION..."],
+                    "include_sources": True,
+                },
+            },
+        ],
+        "related_operations": ["entity", "manuscript_context"],
+        "notes": (
+            "Returns one explicit outcome per requested ID. Foreign-project "
+            "records are reported opaquely and never returned as resolved."
+        ),
+    },
+
+    "changes_since": {
+        "operation": "changes_since",
+        "tool": "rka_query",
+        "category": "maintenance",
+        "role_tag": "ANY",
+        "summary": "Page the durable project-scoped semantic change ledger.",
+        "signature": (
+            "rka_query(operation='changes_since', *, project_id, cursor=0, "
+            "limit=100)"
+        ),
+        "required_fields": ["project_id"],
+        "optional_fields": ["cursor", "limit"],
+        "enums": {},
+        "examples": [
+            {
+                "description": "Continue after the last delivered cursor.",
+                "call": {
+                    "operation": "changes_since",
+                    "project_id": "prj_01ABC...",
+                    "cursor": 120,
+                    "limit": 100,
+                },
+            },
+        ],
+        "related_operations": ["manuscript_impact", "manuscript_spine"],
+        "notes": (
+            "Returns next_cursor, latest_cursor, and has_more. Continue from "
+            "next_cursor while has_more is true; cursors are project scoped."
+        ),
+    },
+
+    "manuscript_context": {
+        "operation": "manuscript_context",
+        "tool": "rka_query",
+        "category": "manuscript",
+        "role_tag": "ANY",
+        "summary": "Read the authoritative native manuscript aggregate.",
+        "signature": (
+            "rka_query(operation='manuscript_context', *, project_id, id)"
+        ),
+        "required_fields": ["project_id", "id"],
+        "optional_fields": [],
+        "enums": {},
+        "examples": [
+            {
+                "description": "Load claims, units, checkpoints, and attestations.",
+                "call": {
+                    "operation": "manuscript_context",
+                    "project_id": "prj_01ABC...",
+                    "id": "man_01XYZ...",
+                },
+            },
+        ],
+        "related_operations": [
+            "manuscript", "manuscript_readiness", "manuscript_spine",
+            "manuscript_writing_candidates",
+        ],
+        "notes": "RKA is authoritative; Writer files are projections.",
+    },
+
+    "manuscript_readiness": {
+        "operation": "manuscript_readiness",
+        "tool": "rka_query",
+        "category": "manuscript",
+        "role_tag": "ANY",
+        "summary": "Evaluate evidence-linked readiness for a lifecycle phase.",
+        "signature": (
+            "rka_query(operation='manuscript_readiness', *, project_id, id, "
+            "target_phase='drafting')"
+        ),
+        "required_fields": ["project_id", "id"],
+        "optional_fields": ["target_phase"],
+        "enums": _e("manuscript_phase"),
+        "examples": [
+            {
+                "description": "Check whether the manuscript can enter review.",
+                "call": {
+                    "operation": "manuscript_readiness",
+                    "project_id": "prj_01ABC...",
+                    "id": "man_01XYZ...",
+                    "target_phase": "review",
+                },
+            },
+        ],
+        "related_operations": [
+            "transition_manuscript_phase", "manuscript_context",
+        ],
+        "notes": (
+            "Readiness is mechanical and evidence-linked; it does not infer "
+            "scientific validity or PI ratification."
+        ),
+    },
+
+    "manuscript_spine": {
+        "operation": "manuscript_spine",
+        "tool": "rka_query",
+        "category": "manuscript",
+        "role_tag": "ANY",
+        "summary": "Export the deterministic Writer projection of the RKA spine.",
+        "signature": (
+            "rka_query(operation='manuscript_spine', *, project_id, id)"
+        ),
+        "required_fields": ["project_id", "id"],
+        "optional_fields": [],
+        "enums": {},
+        "examples": [
+            {
+                "description": "Export a Writer-cache projection.",
+                "call": {
+                    "operation": "manuscript_spine",
+                    "project_id": "prj_01ABC...",
+                    "id": "man_01XYZ...",
+                },
+            },
+        ],
+        "related_operations": [
+            "upsert_argument_spine", "manuscript_context",
+        ],
+        "notes": "The export is a cache projection, not an independent store.",
+    },
+
+    "manuscript_writing_candidates": {
+        "operation": "manuscript_writing_candidates",
+        "tool": "rka_query",
+        "category": "manuscript",
+        "role_tag": "ANY",
+        "summary": (
+            "Discover writing candidates through reviewed clusters and "
+            "research questions."
+        ),
+        "signature": (
+            "rka_query(operation='manuscript_writing_candidates', *, "
+            "project_id, id)"
+        ),
+        "required_fields": ["project_id", "id"],
+        "optional_fields": [],
+        "enums": {},
+        "examples": [
+            {
+                "description": (
+                    "Inspect smoothed, unratified candidates before building "
+                    "the manuscript spine."
+                ),
+                "call": {
+                    "operation": "manuscript_writing_candidates",
+                    "project_id": "prj_01ABC...",
+                    "id": "man_01XYZ...",
+                },
+            },
+        ],
+        "related_operations": [
+            "research_map",
+            "review_cluster",
+            "manuscript_context",
+            "upsert_argument_spine",
+        ],
+        "notes": (
+            "This is a read-only project-research-map discovery view. It "
+            "never promotes journals or claims, and every returned candidate "
+            "still requires PI selection, exact wording, and ratification."
+        ),
+    },
+
+    "manuscript_impact": {
+        "operation": "manuscript_impact",
+        "tool": "rka_query",
+        "category": "manuscript",
+        "role_tag": "ANY",
+        "summary": "Map changed dependencies to manuscript claims and units.",
+        "signature": (
+            "rka_query(operation='manuscript_impact', *, project_id, id, "
+            "since_cursor=0, limit=100)"
+        ),
+        "required_fields": ["project_id", "id"],
+        "optional_fields": ["since_cursor", "limit"],
+        "enums": {},
+        "examples": [
+            {
+                "description": "Find Writer units affected since synchronization.",
+                "call": {
+                    "operation": "manuscript_impact",
+                    "project_id": "prj_01ABC...",
+                    "id": "man_01XYZ...",
+                    "since_cursor": 120,
+                    "limit": 100,
+                },
+            },
+        ],
+        "related_operations": [
+            "changes_since", "manuscript_context", "manuscript_spine",
+        ],
+        "notes": (
+            "Returns next_cursor/latest_cursor/has_more even when one page has "
+            "no relevant changes. Continue until has_more is false."
+        ),
     },
 
     "graph": {
@@ -1136,7 +1482,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "rka_query(operation='changelog', *, project_id, limit=50, "
             "filters={'since': ISO8601})"
         ),
-        "required_fields": ["project_id", "since"],
+        "required_fields": ["project_id", "filters"],
         "optional_fields": ["limit"],
         "enums": {},
         "examples": [
@@ -1187,7 +1533,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "rka_query(operation='workspace_tree', *, project_id, "
             "filters={'folder_path': str, 'max_depth': int})"
         ),
-        "required_fields": ["project_id", "folder_path"],
+        "required_fields": ["project_id", "filters"],
         "optional_fields": ["max_depth"],
         "enums": {},
         "examples": [
@@ -1218,7 +1564,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "filters={'folder_path', 'ignore_patterns', "
             "'max_file_size_mb', 'use_llm'})"
         ),
-        "required_fields": ["project_id", "folder_path"],
+        "required_fields": ["project_id", "filters"],
         "optional_fields": [
             "ignore_patterns", "max_file_size_mb", "use_llm",
         ],
@@ -1303,7 +1649,8 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "required_fields": ["project_id", "content"],
         "optional_fields": [
             "source", "type", "confidence", "importance",
-            "verbatim_input", "phase", "tags", "provenance",
+            "verbatim_input", "phase", "tags", "summary", "status",
+            "pinned", "provenance",
         ],
         "enums": _e("source", "note_type", "confidence", "importance"),
         "examples": [
@@ -1424,11 +1771,12 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "required_fields": [
             "project_id", "question", "chosen", "rationale",
-            "decided_by", "kind", "related_journal",
+            "decided_by", "kind", "related_journal", "phase",
         ],
         "optional_fields": [
             "options", "supersedes_decision_id", "confidence", "tags",
-            "phase", "parent_id", "related_literature", "assumptions",
+            "parent_id", "related_literature", "related_missions", "status",
+            "assumptions",
         ],
         "enums": _e("decided_by", "decision_kind", "confidence"),
         "examples": [
@@ -1443,6 +1791,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
                     "decided_by": "pi",
                     "kind": "design_choice",
                     "related_journal": ["jrn_01XYZ...", "jrn_01ABC..."],
+                    "phase": "analysis",
                 },
             },
         ],
@@ -1502,12 +1851,12 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "summary": "Replace an old decision with a new one (atomically links the two).",
         "signature": (
             "rka_execute(operation='supersede_decision', *, project_id, "
-            "old_decision_id, question, chosen, rationale, "
+            "old_decision_id, question, chosen, rationale, related_journal, "
             "decided_by='brain', phase='', kind='decision')"
         ),
         "required_fields": [
             "project_id", "old_decision_id",
-            "question", "chosen", "rationale",
+            "question", "chosen", "rationale", "related_journal",
         ],
         "optional_fields": ["decided_by", "phase", "kind"],
         "enums": _e("decided_by", "decision_kind"),
@@ -1521,6 +1870,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
                     "question": "Which embedding model for v2 (revised)?",
                     "chosen": "bge-m3",
                     "rationale": "New benchmarks reverse the prior choice.",
+                    "related_journal": ["jrn_01XYZ..."],
                     "decided_by": "brain",
                     "kind": "design_choice",
                 },
@@ -1636,16 +1986,16 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "tool": "rka_execute",
         "category": "literature",
         "role_tag": "ANY",
-        "summary": "Add a literature entry (title-based create).",
+        "summary": "Add a literature entry from a title or DOI.",
         "signature": (
             "rka_execute(operation='record_literature', *, project_id, "
-            "title, authors=None, year=None, venue=None, doi=None, "
+            "title=None, authors=None, year=None, venue=None, doi=None, "
             "url=None, abstract=None, status='to_read', tags=None, "
             "related_decisions=None)"
         ),
-        "required_fields": ["project_id", "title"],
+        "required_fields": ["project_id"],
         "optional_fields": [
-            "authors", "year", "venue", "doi", "url", "abstract",
+            "title", "authors", "year", "venue", "doi", "url", "abstract",
             "status", "tags", "related_decisions",
         ],
         "enums": _e("lit_status"),
@@ -1665,7 +2015,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "update_literature", "import_bibtex", "enrich_doi",
             "link_literature_to_zotero",
         ],
-        "notes": None,
+        "notes": "At least one of `title` or `doi` is required.",
     },
 
     "update_literature": {
@@ -1820,27 +2170,37 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "tool": "rka_execute",
         "category": "literature",
         "role_tag": "ANY",
-        "summary": "Validate a manuscript reference (by DOI or title).",
+        "summary": "Queue asynchronous validation of a manuscript reference.",
         "signature": (
             "rka_execute(operation='validate_reference', *, project_id, "
-            "manuscript_id, doi=None, title=None)"
+            "manuscript_id, doi=None, title=None, author=None, "
+            "literature_id=None)"
         ),
         "required_fields": ["project_id", "manuscript_id"],
-        "optional_fields": ["doi", "title"],
+        "optional_fields": ["doi", "title", "author", "literature_id"],
         "enums": {},
         "examples": [
             {
-                "description": "Validate by DOI.",
+                "description": "Queue validation by DOI; save the returned job_id.",
                 "call": {
                     "operation": "validate_reference",
                     "project_id": "prj_01ABC...",
-                    "manuscript_id": "msc_01XYZ...",
+                    "manuscript_id": "jrn_01XYZ...",
                     "doi": "10.48550/arXiv.1706.03762",
                 },
             },
         ],
-        "related_operations": ["register_manuscript", "record_literature"],
-        "notes": "At least one of `doi` or `title` is required.",
+        "related_operations": [
+            "reference_validation_status",
+            "register_manuscript",
+            "record_literature",
+        ],
+        "notes": (
+            "At least one of `doi` or `title` is required. Success returns an "
+            "HTTP 202 pending job envelope, not an immediate verdict. Poll "
+            "`reference_validation_status` with the returned `job_id`; only "
+            "a completed job carries the immutable validation result."
+        ),
     },
 
     "batch_import": {
@@ -1879,7 +2239,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "tool": "rka_execute",
         "category": "manuscript",
         "role_tag": "ANY",
-        "summary": "Register a manuscript workspace.",
+        "summary": "Compatibility-register legacy and canonical manuscript IDs.",
         "signature": (
             "rka_execute(operation='register_manuscript', *, project_id, "
             "venue, title, abstract=None, sections=None)"
@@ -1898,8 +2258,427 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
                 },
             },
         ],
-        "related_operations": ["manuscript", "validate_reference"],
-        "notes": None,
+        "related_operations": [
+            "manuscript", "create_manuscript", "validate_reference",
+        ],
+        "notes": (
+            "Compatibility operation. The response contains deprecated jrn_ "
+            "id plus canonical man_ id; new callers should create_manuscript."
+        ),
+    },
+
+    "create_manuscript": {
+        "operation": "create_manuscript",
+        "tool": "rka_execute",
+        "category": "manuscript",
+        "role_tag": "ANY",
+        "summary": "Create the canonical native manuscript aggregate.",
+        "signature": (
+            "rka_execute(operation='create_manuscript', *, project_id, title, "
+            "abstract=None, venue=None, phase='planning', state='active', "
+            "workspace_ref=None, "
+            "legacy_journal_id=None)"
+        ),
+        "required_fields": ["project_id", "title"],
+        "optional_fields": [
+            "abstract", "venue", "phase", "state", "workspace_ref",
+            "legacy_journal_id",
+        ],
+        "enums": {
+            "phase": ["planning"],
+            "state": ["active"],
+        },
+        "examples": [
+            {
+                "description": "Create a native manuscript.",
+                "call": {
+                    "operation": "create_manuscript",
+                    "project_id": "prj_01ABC...",
+                    "title": "Evidence-grounded system security",
+                    "venue": "USENIX Security",
+                },
+            },
+        ],
+        "related_operations": [
+            "update_manuscript", "upsert_argument_spine", "manuscript_context",
+        ],
+        "notes": (
+            "phase and state are explicit typed fields whose only accepted "
+            "initial values are planning and active; creation never infers "
+            "PI ratification."
+        ),
+    },
+
+    "update_manuscript": {
+        "operation": "update_manuscript",
+        "tool": "rka_execute",
+        "category": "manuscript",
+        "role_tag": "ANY",
+        "summary": "Update native manuscript metadata with revision precondition.",
+        "signature": (
+            "rka_execute(operation='update_manuscript', *, project_id, id, "
+            "expected_revision, title? abstract? venue? workspace_ref?)"
+        ),
+        "required_fields": ["project_id", "id", "expected_revision"],
+        "optional_fields": [
+            "title", "abstract", "venue", "workspace_ref",
+        ],
+        "enums": {},
+        "examples": [
+            {
+                "description": "Set a venue at revision 2.",
+                "call": {
+                    "operation": "update_manuscript",
+                    "project_id": "prj_01ABC...",
+                    "id": "man_01XYZ...",
+                    "expected_revision": 2,
+                    "venue": "IEEE S&P",
+                },
+            },
+        ],
+        "related_operations": ["manuscript", "manuscript_context"],
+        "notes": (
+            "At least one update field is required. Nullable metadata can be "
+            "cleared explicitly with null; omitted fields remain unchanged. "
+            "Lifecycle phase/state changes require transition_manuscript_phase."
+        ),
+    },
+
+    "upsert_argument_spine": {
+        "operation": "upsert_argument_spine",
+        "tool": "rka_execute",
+        "category": "manuscript",
+        "role_tag": "ANY",
+        "summary": "Atomically replace the authoritative argument spine.",
+        "signature": (
+            "rka_execute(operation='upsert_argument_spine', *, project_id, "
+            "id, expected_revision, spine={'claims': [...], 'units': [...]})"
+        ),
+        "required_fields": [
+            "project_id", "id", "expected_revision", "spine",
+        ],
+        "optional_fields": [],
+        "enums": _e(
+            "manuscript_claim_kind",
+            "manuscript_claim_state",
+            "manuscript_unit_kind",
+            "manuscript_unit_status",
+            "manuscript_evidence_role",
+            "manuscript_claim_unit_relationship",
+        ),
+        "examples": [
+            {
+                "description": "Install one claim and one result unit.",
+                "call": {
+                    "operation": "upsert_argument_spine",
+                    "project_id": "prj_01ABC...",
+                    "id": "man_01XYZ...",
+                    "expected_revision": 1,
+                    "spine": {
+                        "claims": [
+                            {
+                                "local_key": "C1",
+                                "kind": "empirical",
+                                "state": "candidate",
+                                "exact_wording": "The system reduces attack time.",
+                                "allowed_wording": "Measured attack time decreased.",
+                                "prohibited_wording": ["The system prevents attacks."],
+                                "unit_links": [
+                                    {
+                                        "unit_key": "R1",
+                                        "relationship": "tests",
+                                    },
+                                ],
+                            },
+                        ],
+                        "units": [
+                            {
+                                "local_key": "R1",
+                                "kind": "result",
+                                "location": "results.attack-time",
+                                "artifact_ref": "art_01RESULT...",
+                                "allowed_interpretation": "Time decreased.",
+                                "prohibited_interpretation": "All attacks fail.",
+                            },
+                        ],
+                    },
+                },
+            },
+        ],
+        "related_operations": [
+            "ratify_manuscript_claim", "manuscript_spine",
+            "manuscript_readiness",
+        ],
+        "notes": (
+            "This is a full replacement: omitted claims are retired and "
+            "omitted units are removed. Both claims and units lists are required."
+        ),
+    },
+
+    "replace_manuscript_reference_manifest": {
+        "operation": "replace_manuscript_reference_manifest",
+        "tool": "rka_execute",
+        "category": "manuscript",
+        "role_tag": "ANY",
+        "summary": "Atomically replace the authoritative citation-key set.",
+        "signature": (
+            "rka_execute(operation='replace_manuscript_reference_manifest', "
+            "*, project_id, id, expected_revision, members=["
+            "{'citation_key', 'literature_id'}, ...])"
+        ),
+        "required_fields": [
+            "project_id", "id", "expected_revision", "members",
+        ],
+        "optional_fields": [],
+        "enums": {},
+        "examples": [
+            {
+                "description": "Register two exact citations at revision 3.",
+                "call": {
+                    "operation": "replace_manuscript_reference_manifest",
+                    "project_id": "prj_01ABC...",
+                    "id": "man_01XYZ...",
+                    "expected_revision": 3,
+                    "members": [
+                        {
+                            "citation_key": "vaswani2017attention",
+                            "literature_id": "lit_01ATTENTION...",
+                        },
+                        {
+                            "citation_key": "carlini2024stealing",
+                            "literature_id": "lit_01STEALING...",
+                        },
+                    ],
+                },
+            },
+        ],
+        "related_operations": [
+            "manuscript_reference_manifest",
+            "validate_reference",
+            "manuscript_readiness",
+        ],
+        "notes": (
+            "This is a full-set, revision-guarded replacement. Omitted active "
+            "members are retired, never deleted. Citation keys are unique "
+            "case-insensitively, literature bindings are unique, and every "
+            "literature row must belong to the manuscript project."
+        ),
+    },
+
+    "ratify_manuscript_claim": {
+        "operation": "ratify_manuscript_claim",
+        "tool": "rka_execute",
+        "category": "manuscript",
+        "role_tag": "PI",
+        "summary": "Bind exact claim wording to an explicit PI decision.",
+        "signature": (
+            "rka_execute(operation='ratify_manuscript_claim', *, project_id, "
+            "id, claim_ref, expected_revision, decision_id, claim_version=None, "
+            "ratified_at=None)"
+        ),
+        "required_fields": [
+            "project_id", "id", "claim_ref", "expected_revision", "decision_id",
+        ],
+        "optional_fields": ["claim_version", "ratified_at"],
+        "enums": {},
+        "examples": [
+            {
+                "description": "Ratify the current C1 wording.",
+                "call": {
+                    "operation": "ratify_manuscript_claim",
+                    "project_id": "prj_01ABC...",
+                    "id": "man_01XYZ...",
+                    "claim_ref": "C1",
+                    "expected_revision": 2,
+                    "decision_id": "dec_01PI...",
+                },
+            },
+        ],
+        "related_operations": [
+            "record_decision", "upsert_argument_spine",
+            "record_verification_attestation",
+        ],
+        "notes": (
+            "The decision must be same-project, active, and PI-authored. "
+            "Ratification is never inferred from notes or legacy tags."
+        ),
+    },
+
+    "transition_manuscript_phase": {
+        "operation": "transition_manuscript_phase",
+        "tool": "rka_execute",
+        "category": "manuscript",
+        "role_tag": "ANY",
+        "summary": "Run readiness gates and transition manuscript lifecycle.",
+        "signature": (
+            "rka_execute(operation='transition_manuscript_phase', *, "
+            "project_id, id, expected_revision, target_phase, "
+            "target_state=None)"
+        ),
+        "required_fields": [
+            "project_id", "id", "expected_revision", "target_phase",
+        ],
+        "optional_fields": ["target_state"],
+        "enums": {
+            "target_phase": list(_ENUMS["manuscript_phase"]),
+            "target_state": list(_ENUMS["manuscript_state"]),
+        },
+        "examples": [
+            {
+                "description": "Advance a ready manuscript into drafting.",
+                "call": {
+                    "operation": "transition_manuscript_phase",
+                    "project_id": "prj_01ABC...",
+                    "id": "man_01XYZ...",
+                    "expected_revision": 4,
+                    "target_phase": "drafting",
+                },
+            },
+        ],
+        "related_operations": [
+            "manuscript_readiness", "create_manuscript_checkpoint",
+        ],
+        "notes": "The server rejects transitions with BLOCK or ERROR findings.",
+    },
+
+    "create_manuscript_checkpoint": {
+        "operation": "create_manuscript_checkpoint",
+        "tool": "rka_execute",
+        "category": "manuscript",
+        "role_tag": "PI",
+        "summary": "Create a pending native manuscript checkpoint.",
+        "signature": (
+            "rka_execute(operation='create_manuscript_checkpoint', *, "
+            "project_id, id, expected_revision, kind, unit_id=None, "
+            "supersedes_id=None)"
+        ),
+        "required_fields": [
+            "project_id", "id", "expected_revision", "kind",
+        ],
+        "optional_fields": ["unit_id", "supersedes_id"],
+        "enums": {"kind": list(_ENUMS["manuscript_checkpoint_kind"])},
+        "examples": [
+            {
+                "description": "Create an outline checkpoint.",
+                "call": {
+                    "operation": "create_manuscript_checkpoint",
+                    "project_id": "prj_01ABC...",
+                    "id": "man_01XYZ...",
+                    "expected_revision": 3,
+                    "kind": "outline",
+                },
+            },
+        ],
+        "related_operations": [
+            "resolve_manuscript_checkpoint", "manuscript_readiness",
+        ],
+        "notes": "draft_section checkpoints require unit_id; other kinds forbid it.",
+    },
+
+    "resolve_manuscript_checkpoint": {
+        "operation": "resolve_manuscript_checkpoint",
+        "tool": "rka_execute",
+        "category": "manuscript",
+        "role_tag": "PI",
+        "summary": "Resolve a pending manuscript checkpoint via a PI decision.",
+        "signature": (
+            "rka_execute(operation='resolve_manuscript_checkpoint', *, "
+            "project_id, checkpoint_id, expected_revision, decision_id, "
+            "status, resolved_at)"
+        ),
+        "required_fields": [
+            "project_id", "checkpoint_id", "expected_revision", "decision_id",
+            "status", "resolved_at",
+        ],
+        "optional_fields": [],
+        "enums": {
+            "status": list(
+                _ENUMS["manuscript_checkpoint_resolution_status"]
+            ),
+        },
+        "examples": [
+            {
+                "description": "Resolve an outline checkpoint.",
+                "call": {
+                    "operation": "resolve_manuscript_checkpoint",
+                    "project_id": "prj_01ABC...",
+                    "checkpoint_id": "mck_01CHECK...",
+                    "expected_revision": 4,
+                    "decision_id": "dec_01PI...",
+                    "status": "resolved",
+                    "resolved_at": "2026-07-22T12:00:00Z",
+                },
+            },
+        ],
+        "related_operations": [
+            "create_manuscript_checkpoint", "record_decision",
+        ],
+        "notes": "Only pending checkpoints can be resolved.",
+    },
+
+    "record_verification_attestation": {
+        "operation": "record_verification_attestation",
+        "tool": "rka_execute",
+        "category": "manuscript",
+        "role_tag": "ANY",
+        "summary": "Append immutable multidimensional claim verification.",
+        "signature": (
+            "rka_execute(operation='record_verification_attestation', *, "
+            "project_id, id, expected_revision, claim_id, claim_version, "
+            "overall_verdict, grounding_verdict, evidence_verdict, "
+            "contradiction_verdict, currency_verdict, ratification_verdict, "
+            "unit_coverage_verdict, full_json_payload, started_at, completed_at, "
+            "changelog_cursor=None, dependency_snapshot={}, "
+            "validator_version=None)"
+        ),
+        "required_fields": [
+            "project_id", "id", "expected_revision", "claim_id",
+            "claim_version", "overall_verdict", "grounding_verdict",
+            "evidence_verdict", "contradiction_verdict", "currency_verdict",
+            "ratification_verdict", "unit_coverage_verdict",
+            "full_json_payload", "started_at", "completed_at",
+        ],
+        "optional_fields": [
+            "changelog_cursor", "dependency_snapshot", "validator_version",
+        ],
+        "enums": {
+            "overall_verdict": list(
+                _ENUMS["manuscript_verification_verdict"]
+            ),
+            "dimension_verdicts": list(
+                _ENUMS["manuscript_verification_dimension_verdict"]
+            ),
+        },
+        "examples": [
+            {
+                "description": "Record a blocking evidence check.",
+                "call": {
+                    "operation": "record_verification_attestation",
+                    "project_id": "prj_01ABC...",
+                    "id": "man_01XYZ...",
+                    "expected_revision": 5,
+                    "claim_id": "mcl_01CLAIM...",
+                    "claim_version": 1,
+                    "overall_verdict": "block",
+                    "grounding_verdict": "pass",
+                    "evidence_verdict": "block",
+                    "contradiction_verdict": "pass",
+                    "currency_verdict": "pass",
+                    "ratification_verdict": "not_checked",
+                    "unit_coverage_verdict": "pass",
+                    "full_json_payload": {"findings": []},
+                    "started_at": "2026-07-22T12:00:00Z",
+                    "completed_at": "2026-07-22T12:00:01Z",
+                },
+            },
+        ],
+        "related_operations": [
+            "manuscript_readiness", "ratify_manuscript_claim",
+        ],
+        "notes": (
+            "Attestations are append-only. Per-dimension verdicts remain "
+            "separate so a single pass/fail flag cannot hide the blocking cause."
+        ),
     },
 
     "update_status": {
@@ -2081,14 +2860,15 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "summary": "Submit a mission's final report (closes the mission).",
         "signature": (
             "rka_execute(operation='submit_report', *, project_id, "
-            "mission_id, summary, findings='', anomalies='', questions='', "
-            "codebase_state='', recommended_next='')"
+            "mission_id, summary=None, content=None, findings=None, "
+            "anomalies=None, questions=None, codebase_state=None, "
+            "recommended_next=None)"
         ),
         "required_fields": [
-            "project_id", "mission_id", "summary",
+            "project_id", "mission_id",
         ],
         "optional_fields": [
-            "findings", "anomalies", "questions",
+            "summary", "content", "findings", "anomalies", "questions",
             "codebase_state", "recommended_next",
         ],
         "enums": {},
@@ -2151,14 +2931,15 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "summary": "Raise a checkpoint when blocked or needing input.",
         "signature": (
             "rka_execute(operation='submit_checkpoint', *, project_id, "
-            "mission_id, type, description, task_reference=None, "
-            "context=None, options=None, recommendation=None, blocking=True)"
+            "mission_id, type, description=None, content=None, "
+            "task_reference=None, context=None, options=None, "
+            "recommendation=None, blocking=True)"
         ),
         "required_fields": [
-            "project_id", "mission_id", "type", "description",
+            "project_id", "mission_id", "type",
         ],
         "optional_fields": [
-            "task_reference", "context", "options",
+            "description", "content", "task_reference", "context", "options",
             "recommendation", "blocking",
         ],
         "enums": _e("checkpoint_type"),
@@ -2179,8 +2960,8 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "resolve_checkpoint", "checkpoints", "create_gate",
         ],
         "notes": (
-            "Canonical field is `description` (NOT `content` — common "
-            "Brain hallucination from the 2026-06-01 hyperscaler-auditing PA-2)."
+            "One of `description` or `content` is required. `description` is "
+            "canonical; `content` is the legacy alias."
         ),
     },
 
@@ -2319,14 +3100,15 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "tool": "rka_execute",
         "category": "claims",
         "role_tag": "BRAIN",
-        "summary": "Approve, reject, or adjust a set of claims.",
+        "summary": "Curate claim grounding and explicit evidence assessment.",
         "signature": (
             "rka_execute(operation='review_claims', *, project_id, "
-            "claim_ids, action='approve', confidence_override=None)"
+            "claim_ids, action='approve', confidence_override=None, "
+            "evidence_status=None)"
         ),
         "required_fields": ["project_id", "claim_ids"],
-        "optional_fields": ["action", "confidence_override"],
-        "enums": _e("review_action", "confidence"),
+        "optional_fields": ["action", "confidence_override", "evidence_status"],
+        "enums": _e("review_action", "evidence_status"),
         "examples": [
             {
                 "description": "Approve a batch of claims.",
@@ -2339,7 +3121,10 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": ["claims", "review_cluster"],
-        "notes": None,
+        "notes": (
+            "verified records source-grounding fidelity only. Set evidence_status "
+            "explicitly for scientific support; approve/reject never infer it."
+        ),
     },
 
     "create_cluster": {

@@ -212,6 +212,48 @@ class TestCondensedView:
         assert isinstance(payload["nodes"], list)
         assert isinstance(payload["edges"], list)
 
+    @pytest.mark.asyncio
+    async def test_refresh_failure_restores_previous_materialization(
+        self,
+        graph_svc: GraphService,
+        db: Database,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        await graph_svc.refresh_condensed_view(
+            top_per_kind=3,
+            min_importance=0.4,
+        )
+        previous_keynodes = await db.fetchall(
+            "SELECT id FROM keynodes WHERE blessed = 0 ORDER BY id"
+        )
+        previous_views = await db.fetchall(
+            "SELECT id FROM graph_views ORDER BY id"
+        )
+
+        real_execute = db.execute
+
+        async def fail_view_insert(sql, params=None):
+            if "INSERT INTO graph_views" in sql:
+                raise RuntimeError("injected graph-view insert failure")
+            return await real_execute(sql, params)
+
+        monkeypatch.setattr(db, "execute", fail_view_insert)
+        with pytest.raises(
+            RuntimeError,
+            match="injected graph-view insert failure",
+        ):
+            await graph_svc.refresh_condensed_view(
+                top_per_kind=3,
+                min_importance=0.4,
+            )
+
+        assert await db.fetchall(
+            "SELECT id FROM keynodes WHERE blessed = 0 ORDER BY id"
+        ) == previous_keynodes
+        assert await db.fetchall(
+            "SELECT id FROM graph_views ORDER BY id"
+        ) == previous_views
+
 
 class TestGuessType:
     def test_known_prefixes(self):
@@ -328,8 +370,17 @@ class TestClusterServiceAnswersLinkHook:
         # Seed a parent-RQ decision the cluster can point at.
         rq_id = "dec_test_t3_hook_rq"
         await db.execute(
-            "INSERT INTO decisions (id, question, decided_by, status, phase, project_id) VALUES (?, ?, ?, ?, ?, ?)",
-            [rq_id, "T3 hook RQ", "brain", "active", "phase_1", "proj_default"],
+            """INSERT INTO decisions
+               (id, question, kind, decided_by, status, phase, project_id)
+               VALUES (?, ?, 'research_question', ?, ?, ?, ?)""",
+            [
+                rq_id,
+                "T3 hook RQ",
+                "brain",
+                "active",
+                "phase_1",
+                "proj_default",
+            ],
         )
         await db.commit()
 
@@ -376,6 +427,437 @@ class TestClusterServiceAnswersLinkHook:
             [cluster.id],
         )
         assert rows == [], "no link should be emitted when FK is NULL"
+
+    @pytest.mark.asyncio
+    async def test_cluster_create_rejects_foreign_project_rq(
+        self,
+        db: Database,
+    ):
+        from rka.models import EvidenceClusterCreate
+        from rka.services.clusters import ClusterService
+
+        rq_id = "dec_cluster_foreign_create_rq"
+        await db.execute(
+            """INSERT INTO decisions
+               (id, question, kind, decided_by, status, phase, project_id)
+               VALUES (?, ?, 'research_question', 'brain', 'active',
+                       'phase_1', 'proj_foreign')""",
+            [rq_id, "A foreign project's research question"],
+        )
+        await db.commit()
+
+        svc = ClusterService(db=db, project_id="proj_default")
+        with pytest.raises(ValueError, match="not found in project proj_default"):
+            await svc.create(
+                EvidenceClusterCreate(
+                    research_question_id=rq_id,
+                    label="Foreign-RQ cluster must not persist",
+                )
+            )
+
+        assert await db.fetchone(
+            "SELECT id FROM evidence_clusters WHERE label = ?",
+            ["Foreign-RQ cluster must not persist"],
+        ) is None
+        assert await db.fetchone(
+            """SELECT id FROM entity_links
+               WHERE source_type = 'cluster' AND target_id = ?""",
+            [rq_id],
+        ) is None
+
+    @pytest.mark.asyncio
+    async def test_cluster_update_replaces_then_clears_answers_projection(
+        self,
+        db: Database,
+    ):
+        from rka.models import EvidenceClusterCreate, EvidenceClusterUpdate
+        from rka.services.clusters import ClusterService
+
+        old_rq_id = "dec_cluster_exact_old_rq"
+        new_rq_id = "dec_cluster_exact_new_rq"
+        for rq_id, question in (
+            (old_rq_id, "Original exact-projection question"),
+            (new_rq_id, "Replacement exact-projection question"),
+        ):
+            await db.execute(
+                """INSERT INTO decisions
+                   (id, question, kind, decided_by, status, phase, project_id)
+                   VALUES (?, ?, 'research_question', 'brain', 'active',
+                           'phase_1', 'proj_default')""",
+                [rq_id, question],
+            )
+        await db.commit()
+
+        svc = ClusterService(db=db)
+        cluster = await svc.create(
+            EvidenceClusterCreate(
+                research_question_id=old_rq_id,
+                label="Exact answers projection",
+            )
+        )
+        updated = await svc.update(
+            cluster.id,
+            EvidenceClusterUpdate(research_question_id=new_rq_id),
+        )
+        assert updated.research_question_id == new_rq_id
+        assert await db.fetchall(
+            """SELECT target_id FROM entity_links
+               WHERE project_id = 'proj_default'
+                 AND source_type = 'cluster' AND source_id = ?
+                 AND link_type = 'answers' AND target_type = 'decision'
+               ORDER BY target_id""",
+            [cluster.id],
+        ) == [{"target_id": new_rq_id}]
+
+        cleared = await svc.update(
+            cluster.id,
+            EvidenceClusterUpdate(research_question_id=None),
+        )
+        assert cleared.research_question_id is None
+        assert await db.fetchall(
+            """SELECT target_id FROM entity_links
+               WHERE project_id = 'proj_default'
+                 AND source_type = 'cluster' AND source_id = ?
+                 AND link_type = 'answers' AND target_type = 'decision'""",
+            [cluster.id],
+        ) == []
+
+    @pytest.mark.asyncio
+    async def test_cluster_update_rejects_foreign_cluster(
+        self,
+        db: Database,
+    ):
+        from rka.models import EvidenceClusterUpdate
+        from rka.services.clusters import ClusterNotFoundError, ClusterService
+
+        cluster_id = "ecl_foreign_update_scope"
+        await db.execute(
+            """INSERT INTO evidence_clusters
+               (id, label, synthesis, project_id)
+               VALUES (?, 'Foreign cluster', 'must remain unchanged',
+                       'proj_foreign')""",
+            [cluster_id],
+        )
+        await db.commit()
+
+        svc = ClusterService(db=db, project_id="proj_default")
+        with pytest.raises(ClusterNotFoundError, match="proj_default"):
+            await svc.update(
+                "ecl_missing_update_scope",
+                EvidenceClusterUpdate(),
+            )
+        with pytest.raises(ClusterNotFoundError, match="proj_default"):
+            await svc.update(
+                cluster_id,
+                EvidenceClusterUpdate(label="Cross-project overwrite"),
+            )
+
+        assert await db.fetchone(
+            """SELECT label, synthesis, project_id FROM evidence_clusters
+               WHERE id = ?""",
+            [cluster_id],
+        ) == {
+            "label": "Foreign cluster",
+            "synthesis": "must remain unchanged",
+            "project_id": "proj_foreign",
+        }
+        assert await db.fetchone(
+            """SELECT id FROM audit_log
+               WHERE entity_type = 'cluster' AND entity_id = ?""",
+            [cluster_id],
+        ) is None
+
+    @pytest.mark.asyncio
+    async def test_cluster_update_rowcount_zero_prevents_side_effects(
+        self,
+        db: Database,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from rka.models import EvidenceClusterCreate, EvidenceClusterUpdate
+        from rka.services.clusters import ClusterNotFoundError, ClusterService
+
+        rq_id = "dec_cluster_zero_row_rq"
+        await db.execute(
+            """INSERT INTO decisions
+               (id, question, kind, decided_by, status, phase, project_id)
+               VALUES (?, ?, 'research_question', 'brain', 'active',
+                       'phase_1', 'proj_default')""",
+            [rq_id, "Should zero-row updates project side effects?"],
+        )
+        await db.commit()
+
+        svc = ClusterService(db=db)
+        cluster = await svc.create(
+            EvidenceClusterCreate(label="Zero-row original")
+        )
+        audit_count = await db.fetchone(
+            """SELECT COUNT(*) AS count FROM audit_log
+               WHERE entity_type = 'cluster' AND entity_id = ?""",
+            [cluster.id],
+        )
+        real_execute = db.execute
+
+        class ZeroRowCursor:
+            rowcount = 0
+
+        async def zero_row_update(sql, params=None):
+            if sql.startswith("UPDATE evidence_clusters SET"):
+                return ZeroRowCursor()
+            return await real_execute(sql, params)
+
+        monkeypatch.setattr(db, "execute", zero_row_update)
+        with pytest.raises(ClusterNotFoundError, match="not found in project"):
+            await svc.update(
+                cluster.id,
+                EvidenceClusterUpdate(
+                    label="Zero-row replacement",
+                    research_question_id=rq_id,
+                ),
+            )
+
+        assert await db.fetchone(
+            """SELECT label, research_question_id FROM evidence_clusters
+               WHERE id = ?""",
+            [cluster.id],
+        ) == {
+            "label": "Zero-row original",
+            "research_question_id": None,
+        }
+        assert await db.fetchall(
+            """SELECT target_id FROM entity_links
+               WHERE source_type = 'cluster' AND source_id = ?
+                 AND link_type = 'answers'""",
+            [cluster.id],
+        ) == []
+        final_audit_count = await db.fetchone(
+            """SELECT COUNT(*) AS count FROM audit_log
+               WHERE entity_type = 'cluster' AND entity_id = ?""",
+            [cluster.id],
+        )
+        assert final_audit_count == audit_count
+
+    @pytest.mark.asyncio
+    async def test_cluster_create_rolls_back_row_indexes_link_and_audit(
+        self,
+        db: Database,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from rka.models import EvidenceClusterCreate
+        from rka.services.clusters import ClusterService
+
+        rq_id = "dec_cluster_create_atomic_rq"
+        await db.execute(
+            """INSERT INTO decisions
+               (id, question, kind, decided_by, status, phase, project_id)
+               VALUES (?, ?, 'research_question', 'brain', 'active',
+                       'phase_1', 'proj_default')""",
+            [rq_id, "Can cluster creation remain atomic?"],
+        )
+        await db.commit()
+
+        svc = ClusterService(db=db)
+        original_audit = svc.audit
+
+        async def audit_then_fail(*args, **kwargs):
+            await original_audit(*args, **kwargs)
+            raise RuntimeError("injected cluster create audit failure")
+
+        monkeypatch.setattr(svc, "audit", audit_then_fail)
+        with pytest.raises(
+            RuntimeError,
+            match="injected cluster create audit failure",
+        ):
+            await svc.create(
+                EvidenceClusterCreate(
+                    research_question_id=rq_id,
+                    label="Atomic create cluster",
+                    synthesis="This projection must roll back with its cluster.",
+                    confidence="emerging",
+                )
+            )
+
+        assert await db.fetchone(
+            "SELECT id FROM evidence_clusters WHERE label = ?",
+            ["Atomic create cluster"],
+        ) is None
+        assert await db.fetchone(
+            "SELECT id FROM fts_clusters WHERE label = ?",
+            ["Atomic create cluster"],
+        ) is None
+        assert await db.fetchone(
+            """SELECT id FROM entity_links
+               WHERE source_type = 'cluster' AND link_type = 'answers'
+                 AND target_id = ?""",
+            [rq_id],
+        ) is None
+        assert await db.fetchone(
+            """SELECT id FROM audit_log
+               WHERE entity_type = 'cluster' AND action = 'create'"""
+        ) is None
+
+    @pytest.mark.asyncio
+    async def test_cluster_update_rolls_back_row_indexes_link_and_audit(
+        self,
+        db: Database,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from rka.models import EvidenceClusterCreate, EvidenceClusterUpdate
+        from rka.services.clusters import ClusterService
+
+        old_rq_id = "dec_cluster_update_old_rq"
+        new_rq_id = "dec_cluster_update_new_rq"
+        for rq_id, question in (
+            (old_rq_id, "What was the original cluster question?"),
+            (new_rq_id, "What is the replacement cluster question?"),
+        ):
+            await db.execute(
+                """INSERT INTO decisions
+                   (id, question, kind, decided_by, status, phase, project_id)
+                   VALUES (?, ?, 'research_question', 'brain', 'active',
+                           'phase_1', 'proj_default')""",
+                [rq_id, question],
+            )
+        await db.commit()
+
+        svc = ClusterService(db=db)
+        cluster = await svc.create(
+            EvidenceClusterCreate(
+                research_question_id=old_rq_id,
+                label="Atomic update original",
+                synthesis="Original searchable synthesis.",
+                confidence="emerging",
+            )
+        )
+        audit_count = await db.fetchone(
+            """SELECT COUNT(*) AS count FROM audit_log
+               WHERE entity_type = 'cluster' AND entity_id = ?""",
+            [cluster.id],
+        )
+        original_audit = svc.audit
+
+        async def audit_then_fail(*args, **kwargs):
+            await original_audit(*args, **kwargs)
+            raise RuntimeError("injected cluster update audit failure")
+
+        monkeypatch.setattr(svc, "audit", audit_then_fail)
+        with pytest.raises(
+            RuntimeError,
+            match="injected cluster update audit failure",
+        ):
+            await svc.update(
+                cluster.id,
+                EvidenceClusterUpdate(
+                    research_question_id=new_rq_id,
+                    label="Atomic update replacement",
+                    synthesis="Replacement searchable synthesis.",
+                ),
+            )
+
+        row = await db.fetchone(
+            """SELECT research_question_id, label, synthesis
+               FROM evidence_clusters WHERE id = ?""",
+            [cluster.id],
+        )
+        assert row == {
+            "research_question_id": old_rq_id,
+            "label": "Atomic update original",
+            "synthesis": "Original searchable synthesis.",
+        }
+        fts_row = await db.fetchone(
+            "SELECT label, synthesis FROM fts_clusters WHERE id = ?",
+            [cluster.id],
+        )
+        assert fts_row == {
+            "label": "Atomic update original",
+            "synthesis": "Original searchable synthesis.",
+        }
+        links = await db.fetchall(
+            """SELECT target_id FROM entity_links
+               WHERE source_type = 'cluster' AND source_id = ?
+                 AND link_type = 'answers' ORDER BY target_id""",
+            [cluster.id],
+        )
+        assert links == [{"target_id": old_rq_id}]
+        final_audit_count = await db.fetchone(
+            """SELECT COUNT(*) AS count FROM audit_log
+               WHERE entity_type = 'cluster' AND entity_id = ?""",
+            [cluster.id],
+        )
+        assert final_audit_count == audit_count
+
+    @pytest.mark.asyncio
+    async def test_cluster_update_job_rolls_back_post_llm_mutation_unit(
+        self,
+        db: Database,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from rka.infra.llm import ClusterAssignment, ClaimRelation
+        from rka.services.clusters import ClusterService
+
+        await db.execute(
+            """INSERT INTO journal
+               (id, type, content, source, confidence, phase, project_id)
+               VALUES ('jrn_cluster_job_atomic', 'finding', 'source evidence',
+                       'executor', 'tested', 'phase_1', 'proj_default')"""
+        )
+        for claim_id, content in (
+            ("clm_cluster_job_source", "new result for atomic clustering"),
+            ("clm_cluster_job_target", "earlier result contradicted by the new result"),
+        ):
+            await db.execute(
+                """INSERT INTO claims
+                   (id, source_entry_id, claim_type, content, verified, project_id)
+                   VALUES (?, 'jrn_cluster_job_atomic', 'result', ?, 1,
+                           'proj_default')""",
+                [claim_id, content],
+            )
+        await db.commit()
+
+        class LLM:
+            async def assign_to_cluster(self, **_kwargs):
+                return ClusterAssignment(
+                    cluster_id=None,
+                    cluster_label="Atomic job-created cluster",
+                    relations=[
+                        ClaimRelation(
+                            target_claim_id="clm_cluster_job_target",
+                            relation="contradicts",
+                            confidence=0.9,
+                        )
+                    ],
+                )
+
+        service = ClusterService(db, llm=LLM())
+        real_execute = db.execute
+
+        async def fail_final_count(sql, params=None):
+            if "SET claim_count = ?, updated_at = ?" in sql:
+                raise RuntimeError("injected cluster count failure")
+            return await real_execute(sql, params)
+
+        monkeypatch.setattr(db, "execute", fail_final_count)
+        with pytest.raises(
+            RuntimeError,
+            match="injected cluster count failure",
+        ):
+            await service.process_cluster_update_job("clm_cluster_job_source")
+
+        assert await db.fetchone(
+            "SELECT id FROM evidence_clusters WHERE label = ?",
+            ["Atomic job-created cluster"],
+        ) is None
+        assert await db.fetchall(
+            """SELECT id FROM claim_edges
+               WHERE source_claim_id = 'clm_cluster_job_source'"""
+        ) == []
+        assert await db.fetchone(
+            "SELECT id FROM fts_clusters WHERE label = ?",
+            ["Atomic job-created cluster"],
+        ) is None
+        assert await db.fetchone(
+            """SELECT id FROM audit_log
+               WHERE entity_type = 'cluster' AND action = 'create'"""
+        ) is None
 
 
 class TestCollectReportContext:

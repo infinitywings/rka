@@ -42,9 +42,12 @@ Practical consequence: the Brain never deletes; it *supersedes* or *retracts*. O
 | Entity link | `lnk_` | Typed relationship between any two entities (provenance layer). |
 | Review queue item | `rev_` | Flagged for Brain attention (low-confidence cluster, potential contradiction, etc.). |
 
-## The 12-Type Provenance Vocabulary
+## Entity-link and claim-edge vocabularies
 
-Every `entity_links` row carries a `link_type`. The vocabulary has three semantic groups:
+RKA deliberately separates cross-entity provenance from claim semantics. Every
+`entity_links` row carries one of the nine active `link_type` values enforced by
+migration 021. Claim-to-claim scientific relations live in `claim_edges`; they
+are not legal `entity_links` values.
 
 ### Provenance (why does this entity exist?)
 
@@ -54,18 +57,26 @@ Every `entity_links` row carries a `link_type`. The vocabulary has three semanti
 - **`produced`** — output of work. `mis_X produced jrn_Y` means the mission produced that journal entry. Created automatically by mission reports.
 - **`derived_from`** — a claim's lineage to its source entry. `clm_X derived_from jrn_Y` means the claim was extracted from that journal entry. Automatic during `rka_extract_claims`.
 
-### Knowledge (how does this entity relate to peer evidence?)
+### Cross-entity association
 
 - **`cites`** — journal entry cites a paper. `jrn_X cites lit_Y`.
 - **`references`** — weaker association than `cites`: a journal entry mentions an existing decision/entity but isn't quoting it. Default fallback when stronger semantics don't fit.
-- **`supports`** — a claim provides evidence for another claim or decision.
-- **`contradicts`** — a claim or entry stands against another. Contradictions surface via `rka_detect_contradictions` and require resolution.
-- **`builds_on`** — incremental extension. `dec_X builds_on dec_Y` means X refines or extends Y without superseding it.
 
 ### Lifecycle (how has this entity changed over time?)
 
 - **`supersedes`** — newer entity replaces an older one. `dec_X supersedes dec_Y` means Y is retired but still historically queryable. Triggers staleness propagation for downstream claims.
 - **`resolved_as`** — a checkpoint's resolution maps to a decision. `chk_X resolved_as dec_Y`. Created automatically when `rka_resolve_checkpoint(create_decision=true)`.
+
+### Claim semantics (`claim_edges`, not `entity_links`)
+
+- **`member_of`** — a claim belongs to an evidence cluster.
+- **`supports`** — one claim supports another claim.
+- **`contradicts`** — one claim stands against another claim.
+- **`qualifies`** — one claim narrows or conditions another claim.
+- **`supersedes`** — a newer claim replaces an older claim.
+
+Writer may consume these relations when checking support and disagreement, but
+must not encode them as cross-entity provenance links.
 
 ### Legacy / deprecated (may exist in old rows, don't emit new ones)
 
@@ -97,7 +108,44 @@ Research Question (dec_, kind=research_question)
   - `emerging` — preliminary, needs more evidence.
   - `contested` — internally contradictory, resolve with `rka_resolve_contradiction`.
   - `refuted` — evidence turned against the initial framing.
-- **Claim confidence** is numeric (0.0–1.0). See `SKILL.md` body for the confidence-range convention.
+- **Claim confidence** is numeric extraction/grounding confidence (0.0–1.0),
+  not scientific evidence strength. See `SKILL.md` for the range convention;
+  use `evidence_status` for scientific assessment.
+
+## Evidence promotion funnel (noise control)
+
+Journal entries are an intentionally inclusive research record; they may contain
+failed attempts, transient observations, duplicated notes, or preliminary
+interpretations. Do not make the journal less useful by pretending every entry
+is paper-ready evidence. Promote information through explicit gates instead:
+
+1. **Record.** Preserve the source `jrn_` with its exact conditions, mission,
+   timestamps, and uncertainty. Raw records remain immutable evidence even when
+   their interpretation changes.
+2. **Extract.** Convert only atomic, falsifiable propositions into `clm_`
+   records. New claims default to `evidence_status=unassessed`.
+3. **Ground.** Review source offsets, numbers, direction, and wording.
+   `verified=true` means only that the claim faithfully represents its source;
+   it never means the result is scientifically supported.
+4. **Assess.** Compare current positive evidence, qualifiers, and
+   counterevidence. Set exactly one categorical `evidence_status` through
+   `review_claims`: `supported`, `partially_supported`, `inconclusive`, or
+   `contradicted`. Leave it `unassessed` until this review actually happens.
+5. **Synthesize.** Add grounded claims to an `ecl_`, represent
+   support/qualification/contradiction in `claim_edges`, and write a bounded
+   cluster synthesis. Cluster confidence summarizes the collection; it cannot
+   upgrade an unassessed member claim.
+6. **Answer.** Bind the cluster to one explicit research-question `dec_` and
+   advance the RQ only from current assessed claims. Mixed evidence produces a
+   partial, reframed, or contested answer rather than a smoothed consensus.
+7. **Write.** `rka writer assist` may propose only grounded `supported` or
+   `partially_supported` claims. Its output is still a candidate. Exact PI
+   ratification, manuscript scope, qualifiers, counterevidence, result units,
+   and claim-spine validation are required before drafting.
+
+This funnel is monotone in accountability, not in certainty: later evidence may
+move a claim to `inconclusive` or `contradicted`, which must propagate to its
+cluster, RQ conclusion, and manuscript spine instead of being averaged away.
 
 ## The Maintenance Manifest
 
