@@ -164,7 +164,11 @@ Procedure:
 4. Build a contribution contract and candidate proposal with exact claim text,
    source-backed evidence, missing evidence, novelty/significance risks,
    allowed wording, prohibited wording, and planned manuscript units. The
-   assist result seeds this work but cannot write or ratify it.
+   assist result seeds this work but cannot write or ratify it. Treat risks,
+   counterevidence, and prohibited wording as a complete internal planning
+   record, not as text that must all appear in the public manuscript. Classify
+   their public treatment through
+   [`persuasive_framing.md`](persuasive_framing.md).
 5. Generate three bounded claim-and-outline framings with PI preference stripped from context:
    - Results-led: section ordering driven by the most novel finding.
    - Method-led: section ordering driven by the methodological contribution.
@@ -172,9 +176,10 @@ Procedure:
 6. For each framing, show the exact contribution wording, its evidence path,
    conditions, known counterevidence, missing evidence, and a 5-to-8-section
    outline with one-sentence section purposes.
-7. Prune any framing dominated on evidence coverage, scope honesty,
-   novelty-positioning, and venue fit. Do not compute an aggregate paper score
-   or acceptance prediction.
+7. Prune any framing dominated on evidence coverage, scope accuracy,
+   novelty-positioning, venue fit, quick-reader comprehension, strongest-
+   evidence visibility, and narrative momentum. Do not compute an aggregate
+   paper score or acceptance prediction.
 8. Re-inject PI preference as opposing-critique; rank surviving framings.
 9. Present three (or fewer if pruned) options to the PI; one carries
    `is_recommended`. The PI may retain, narrow, or defer a claim and commission
@@ -275,20 +280,37 @@ Trigger: Claim and Outline wording ratified, claim-spine validation and currency
 checks do not block, Table-Figure-Chart Plan ratified, and References set
 ratified. Next section's status is `outlined` (not yet `drafted`).
 
-Procedure (OpenScholar evidence-first per `jrn_01KS0AVZRDA0KPXK61MN9PV5DE`):
+Procedure (OpenScholar evidence-grounded per `jrn_01KS0AVZRDA0KPXK61MN9PV5DE`):
 
 1. Dispatch a fresh subagent for the section (clean context window per `dispatching-parallel-agents` discipline).
 2. Subagent reads: section sketch, ratified outline, the relevant claim-spine
-   units, freshly resolved positive evidence and qualifiers, references in
-   scope, and the claim's prohibited wording. Generated views are explanatory;
-   resolution is against RKA.
-3. Subagent drafts the section evidence-first: quote evidence first; build prose around the quote; place hidden provenance comments before each evidence-citation prose unit. The draft must stay within each unit's allowed interpretation.
-4. Subagent checks that no new contribution appeared in prose and that each
+   units, freshly resolved positive evidence, qualifiers, counterevidence,
+   publication-boundary classifications, references in scope, and the claim's
+   prohibited wording. Generated views are explanatory; resolution is against
+   RKA.
+3. Subagent first extracts evidence facts, conditions, and boundaries into its
+   private working notes. It then drafts claim-centered, strength-first prose
+   around the section's communicative job. Quote a source only when its exact
+   wording matters; do not build the prose by patching quotations together.
+   Place hidden provenance comments before each evidence-citation prose unit.
+4. Apply the publication boundary from
+   [`persuasive_framing.md`](persuasive_framing.md): M1 and M2 issues receive
+   visible public treatment; M3 details go to the method, appendix, artifact,
+   or reproducibility material; M4 and S items remain in the private risk
+   record unless venue policy requires them. Never omit an issue whose absence
+   would materially mislead a reasonable reader. Map every M1/M2 item to its
+   public paragraph, figure, table, caption, or claim. If a mapping is missing,
+   escalate and do not advance the affected unit to `drafted`.
+5. Run the four quick-reader checks in `persuasive_framing.md`. If a scan
+   fails, revise the framing or escalate the unresolved evidence/wording
+   decision; never delete a material limitation merely to make the scan pass.
+6. Subagent checks that no new contribution appeared in prose and that each
    empirical statement has role-appropriate terminal support. A decision or
    evidence cluster alone is not support.
-5. Subagent self-audits before commit: runs `scripts/ai_tic_lint.py` on the section; iterates until style score reaches 0.85 or three iterations elapse.
-6. If three iterations fail, ESCALATE via the Revision Loop Class R2.
-7. Otherwise commit the section to `sections/<section-id>.tex`, update the
+7. Subagent self-audits before commit: runs `scripts/ai_tic_lint.py` on the
+   section; iterates until style score reaches 0.85 or three iterations elapse.
+8. If three iterations fail, ESCALATE via the Revision Loop Class R2.
+9. Otherwise commit the section to `sections/<section-id>.tex`, update the
    corresponding native unit status through a revision-guarded spine update,
    synchronize, and surface it to the PI for the Draft section checkpoint.
 
