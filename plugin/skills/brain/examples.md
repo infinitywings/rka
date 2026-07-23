@@ -150,6 +150,9 @@ rka_execute(args={
     "question": "Use PostgreSQL or SQLite?",
     "chosen": "SQLite",
     "rationale": "Simpler for local-first deployment.",
+    "decided_by": "brain",
+    "kind": "design_choice",
+    "phase": "design",
     "related_journal": ["jrn_01...benchmarks", "jrn_01...deployment-survey"],
 })
 ```
@@ -209,7 +212,7 @@ The summary was disposable LLM output. Baking it into a decision rationale canon
 **After:**
 ```python
 # Brain reads the actual clusters + claims.
-rka_query(args={"operation": "get", "project_id": "prj_01...", "id": "ecl_01...broker-limits"})
+rka_query(args={"operation": "entity", "project_id": "prj_01...", "id": "ecl_01...broker-limits"})
 # Then writes rationale with citable claim IDs.
 rka_execute(args={
     "operation": "record_decision",
@@ -244,6 +247,7 @@ Keep queries to 2–4 words. Long queries behave worse than intuitive.
 ## Related
 
 - Top-level rules: `SKILL.md`.
-- Three-actor model + 12-type provenance vocabulary: `architecture.md`.
+- Three-actor model plus provenance and claim-edge vocabularies:
+  `architecture.md`.
 - Procedures (session start, claim extraction, cluster mgmt, gates, freshness): `workflows.md`.
 - Multi-choice decision UX + Confirmation Brief template: `decision_ux.md`.

@@ -44,7 +44,6 @@ def main() -> None:
         # Without integration.json we can still try the default API URL.
         api_url = "http://localhost:9712"
         version_str = "unknown"
-        project_str = "(none configured — wrapper will fall back to PATH lookup)"
     else:
         try:
             data = json.loads(int_path.read_text())
@@ -57,7 +56,6 @@ def main() -> None:
 
         api_url = (data.get("api_endpoint_url") or "http://localhost:9712").strip()
         version_str = (data.get("version") or "unknown").strip()
-        project_str = (data.get("default_project_id") or "(no default project set)").strip()
 
     health_url = api_url.rstrip("/") + "/api/health"
     try:
@@ -65,7 +63,7 @@ def main() -> None:
             body = resp.read().decode("utf-8", errors="replace")[:200]
             if resp.status == 200:
                 print(
-                    f"✅ RKA reachable at {api_url} (version {version_str}, default project {project_str})."
+                    f"✅ RKA reachable at {api_url} (version {version_str}; explicit project_id required per operation)."
                 )
             else:
                 print(

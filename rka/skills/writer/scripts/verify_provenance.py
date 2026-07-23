@@ -24,7 +24,8 @@ live RKA knowledge base:
               the disagreement (P6)
 
 Verdicts per citation: OK | LOW_SUPPORT (WARN) | CONTRADICTED (WARN) |
-MISSING (BLOCK) | STALE (BLOCK) | RETRACTED (BLOCK). A superseded/retracted
+MISSING (BLOCK) | STALE (BLOCK) | RETRACTED (BLOCK). Coverage findings are
+MALFORMED, ORPHAN, and UNCOVERED (all BLOCK). A superseded/retracted
 entity may be cited deliberately (e.g. a "Design Evolution" paragraph) by
 adding an acknowledgement token to the comment: `superseded-ack` or
 `retracted-ack`; the verdict downgrades to OK with a note.
@@ -50,9 +51,9 @@ from typing import Callable, Optional
 #    "content": "<text used for support check>", "contradicted": bool}
 Resolver = Callable[[str], Optional[dict]]
 
-_PROV_RE = re.compile(r"^\s*%\s*provenance:\s*(.+)$", re.IGNORECASE)
+_PROV_RE = re.compile(r"^\s*%\s*provenance:\s*(.*)$", re.IGNORECASE)
 _ID_RE = re.compile(r"(jrn|dec|lit|mis|clm|ecl)_[0-9A-Z]{26}")
-_ACK_RE = re.compile(r"\b(superseded-ack|retracted-ack|status-ack)\b", re.IGNORECASE)
+_ACK_RE = re.compile(r"\b(superseded-ack|retracted-ack)\b", re.IGNORECASE)
 
 # Entity states that mean "do not assert from this" unless acknowledged.
 _STALE_STATES = {"superseded", "abandoned", "merged"}
@@ -70,7 +71,7 @@ _STOPWORDS = set(
 class CitationResult:
     entity_id: str
     line: int
-    verdict: str  # OK | LOW_SUPPORT | CONTRADICTED | MISSING | STALE | RETRACTED
+    verdict: str  # citation verdict or a fail-closed coverage finding
     detail: str = ""
     support: Optional[float] = None
     acknowledged: bool = False
@@ -80,6 +81,9 @@ class CitationResult:
 class FileReport:
     path: str
     total_citations: int = 0
+    total_markers: int = 0
+    substantive_blocks: int = 0
+    uncovered_blocks: int = 0
     citations: list = field(default_factory=list)
     verdict: str = "PASS"  # PASS | WARN | BLOCK
     counts: dict = field(default_factory=dict)
@@ -98,6 +102,10 @@ def _next_prose(lines: list, idx: int) -> str:
         s = line.strip()
         if not s:
             break
+        # Multiple contiguous provenance comments may govern the same prose
+        # block.  Skip those peers, but stop at any other comment.
+        if _PROV_RE.match(line):
+            continue
         if s.startswith("%"):
             break
         out.append(s)
@@ -106,6 +114,67 @@ def _next_prose(lines: list, idx: int) -> str:
     prose = re.sub(r"\\[a-zA-Z]+\*?(\[[^\]]*\])?(\{[^}]*\})?", " ", prose)
     prose = prose.replace("\\%", "%").replace("~", " ").replace("{,}", ",")
     return prose
+
+
+_STRUCTURAL_COMMAND_RE = re.compile(
+    r"^\\(?:documentclass|usepackage|RequirePackage|newcommand|renewcommand|"
+    r"providecommand|DeclareMathOperator|title|author|date|thanks|institute|"
+    r"affiliation|email|keywords|maketitle|tableofcontents|bibliography|"
+    r"bibliographystyle|addbibresource|printbibliography|input|include|label|"
+    r"section\*?|subsection\*?|subsubsection\*?|paragraph\*?|"
+    r"begin|end|centering|vspace|hspace|pagestyle|thispagestyle|"
+    r"setlength|hypersetup|graphicspath)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_substantive_line(line: str) -> bool:
+    """Return True for manuscript prose, not LaTeX scaffolding.
+
+    This intentionally errs toward treating ordinary text (including text
+    containing inline LaTeX) as prose.  Pure declarations, section headings,
+    labels, inputs, comments, and environment delimiters are scaffolding.
+    """
+    stripped = line.strip()
+    if not stripped or stripped.startswith("%"):
+        return False
+    if _STRUCTURAL_COMMAND_RE.match(stripped):
+        return False
+    # Standalone braces, math delimiters, and alignment punctuation are not
+    # assertions.  A line containing a letter or number after markup removal is.
+    plain = re.sub(r"\\[a-zA-Z@]+\*?(?:\[[^\]]*\])?", " ", stripped)
+    plain = re.sub(r"[{}$&_^~\\]", " ", plain)
+    return bool(re.search(r"[A-Za-z0-9]", plain))
+
+
+def _substantive_blocks(lines: list[str]) -> list[tuple[int, int]]:
+    """Return inclusive ``(start, end)`` line indexes for prose blocks."""
+    blocks: list[tuple[int, int]] = []
+    start: Optional[int] = None
+    end: Optional[int] = None
+    for idx, line in enumerate(lines):
+        if _is_substantive_line(line):
+            if start is None:
+                start = idx
+            end = idx
+            continue
+        if start is not None:
+            blocks.append((start, end if end is not None else start))
+            start = end = None
+    if start is not None:
+        blocks.append((start, end if end is not None else start))
+    return blocks
+
+
+def _governing_marker_indexes(lines: list[str], prose_start: int) -> list[int]:
+    """Find the contiguous provenance-comment group before a prose block."""
+    indexes: list[int] = []
+    idx = prose_start - 1
+    while idx >= 0 and lines[idx].strip().startswith("%"):
+        if _PROV_RE.match(lines[idx]):
+            indexes.append(idx)
+        idx -= 1
+    return indexes
 
 
 # Below this many content-tokens the cited entity is too thin for the lexical
@@ -198,40 +267,63 @@ def audit_text(text: str, resolver: Resolver, *, support_threshold: float = _LOW
                           "superseded", "earlier", "estimate"}
     draft_surfaces_disagreement = bool((surfaced_terms or set()) & disagreement_vocab)
 
+    marker_indexes: set[int] = set()
+    valid_marker_indexes: set[int] = set()
+
     for i, line in enumerate(lines):
         m = _PROV_RE.match(line)
         if not m:
             continue
+        marker_indexes.add(i)
         body = m.group(1)
         id_match = _ID_RE.search(body)
         if not id_match:
+            report.citations.append(CitationResult(
+                "<invalid>", i + 1, "MALFORMED",
+                "provenance marker does not contain a valid RKA entity ID",
+            ))
             continue
+        valid_marker_indexes.add(i)
         eid = id_match.group(0)
-        ack = bool(_ACK_RE.search(body))
+        ack_tokens = {match.group(1).lower() for match in _ACK_RE.finditer(body)}
+        has_any_ack = bool(ack_tokens)
         claim = _next_prose(lines, i)
+
+        if not claim.strip():
+            report.citations.append(CitationResult(
+                eid, i + 1, "ORPHAN",
+                "provenance marker is not followed by a substantive prose block",
+                None, has_any_ack,
+            ))
+            continue
 
         ent = resolver(eid)
         if ent is None:
             report.citations.append(CitationResult(eid, i + 1, "MISSING",
-                "entity not found in project (fabricated or wrong project)", None, ack))
+                "entity not found in project (fabricated or wrong project)",
+                None,
+                has_any_ack,
+            ))
             continue
 
         status = (ent.get("status") or "").lower()
         if status in _RETRACTED_STATES:
-            if ack:
+            acknowledged = "retracted-ack" in ack_tokens
+            if acknowledged:
                 report.citations.append(CitationResult(eid, i + 1, "OK",
                     "retracted entity cited with retracted-ack", None, True))
             else:
                 report.citations.append(CitationResult(eid, i + 1, "RETRACTED",
-                    "cites a retracted entity without retracted-ack", None, ack))
+                    "cites a retracted entity without retracted-ack", None, False))
             continue
         if status in _STALE_STATES:
-            if ack:
+            acknowledged = "superseded-ack" in ack_tokens
+            if acknowledged:
                 report.citations.append(CitationResult(eid, i + 1, "OK",
-                    f"{status} entity cited with status-ack", None, True))
+                    f"{status} entity cited with superseded-ack", None, True))
             else:
                 report.citations.append(CitationResult(eid, i + 1, "STALE",
-                    f"cites a {status} entity without superseded-ack", None, ack))
+                    f"cites a {status} entity without superseded-ack", None, False))
             continue
 
         sup, scorable = support_score(claim, ent.get("content", ""))
@@ -246,23 +338,41 @@ def audit_text(text: str, resolver: Resolver, *, support_threshold: float = _LOW
         if ent.get("contradicted") and not draft_surfaces_disagreement:
             report.citations.append(CitationResult(eid, i + 1, "CONTRADICTED",
                 "cited entity has a contradicts edge; draft does not surface the disagreement",
-                sup_round, ack))
+                sup_round, has_any_ack))
         elif scorable and sup < support_threshold:
             report.citations.append(CitationResult(eid, i + 1, "LOW_SUPPORT",
                 ("entailment judge: evidence does not support the claim" if judged is False
                  else f"claim shares only {sup:.0%} of content tokens with the cited entity "
                       "(advisory; NLI entailment is the Phase-2 check)"),
-                sup_round, ack))
+                sup_round, has_any_ack))
         else:
             note = "" if scorable else "support unscored (thin entity content; NLI Phase-2)"
-            report.citations.append(CitationResult(eid, i + 1, "OK", note, sup_round, ack))
+            report.citations.append(
+                CitationResult(eid, i + 1, "OK", note, sup_round, has_any_ack)
+            )
 
-    report.total_citations = len(report.citations)
+    blocks = _substantive_blocks(lines)
+    report.total_markers = len(marker_indexes)
+    report.total_citations = len(valid_marker_indexes)
+    report.substantive_blocks = len(blocks)
+    for start, _end in blocks:
+        governors = _governing_marker_indexes(lines, start)
+        if not any(idx in valid_marker_indexes for idx in governors):
+            report.uncovered_blocks += 1
+            preview = lines[start].strip()
+            report.citations.append(CitationResult(
+                "<uncovered>", start + 1, "UNCOVERED",
+                "substantive prose is not immediately governed by a valid "
+                f"% provenance marker: {preview[:120]}",
+            ))
+
     counts: dict = {}
     for c in report.citations:
         counts[c.verdict] = counts.get(c.verdict, 0) + 1
     report.counts = counts
-    if any(c.verdict in ("MISSING", "STALE", "RETRACTED") for c in report.citations):
+    if any(c.verdict in (
+        "MISSING", "STALE", "RETRACTED", "MALFORMED", "ORPHAN", "UNCOVERED"
+    ) for c in report.citations):
         report.verdict = "BLOCK"
     elif any(c.verdict in ("LOW_SUPPORT", "CONTRADICTED") for c in report.citations):
         report.verdict = "WARN"
@@ -319,20 +429,24 @@ def make_rest_resolver(base_url: str, project_id: str) -> Resolver:
                 cache[eid] = None
                 return None
             raise
+        if row.get("project_id") != project_id:
+            raise RuntimeError(
+                f"RKA did not attest {eid} to requested project {project_id}"
+            )
         status = row.get(status_field) or ""
         # journal stores lifecycle in `confidence`; superseded_by also signals stale
         if row.get("superseded_by"):
             if status not in _RETRACTED_STATES:
                 status = "superseded"
+        # Graph availability is part of the UNCONTESTED gate. A failed graph
+        # lookup must abort the audit rather than silently assert "no
+        # contradiction".
         contradicted = False
-        try:
-            ego = _get(f"/api/graph/ego/{eid}")
-            for edge in ego.get("edges", []):
-                if edge.get("link_type") == "contradicts" or edge.get("relation") == "contradicts":
-                    contradicted = True
-                    break
-        except Exception:
-            pass
+        ego = _get(f"/api/graph/ego/{eid}")
+        for edge in ego.get("edges", []):
+            if edge.get("link_type") == "contradicts" or edge.get("relation") == "contradicts":
+                contradicted = True
+                break
         ent = {"type": endpoint, "status": status,
                "content": row.get(content_field) or row.get("content") or "",
                "contradicted": contradicted}
@@ -346,8 +460,8 @@ def main(argv: Optional[list] = None) -> int:
     parser = argparse.ArgumentParser(description="Provenance verifier for Writer drafts.")
     parser.add_argument("files", nargs="+", type=Path, help=".tex files to verify")
     parser.add_argument("--rka-url", default=os.environ.get("RKA_API_URL", "http://localhost:9712"))
-    parser.add_argument("--project", default=os.environ.get("RKA_PROJECT"),
-                        help="Project ID (or set RKA_PROJECT)")
+    parser.add_argument("--project", required=True,
+                        help="Explicit RKA project ID (prj_...)")
     parser.add_argument("--support-threshold", type=float, default=_LOW_SUPPORT_THRESHOLD)
     parser.add_argument("--support-backend", choices=("lexical", "llm"), default="lexical",
                         help="llm: entailment judge via litellm (RKA_WRITER_JUDGE_MODEL "
@@ -355,9 +469,6 @@ def main(argv: Optional[list] = None) -> int:
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args(argv)
 
-    if not args.project:
-        print("error: --project (or RKA_PROJECT) is required", file=sys.stderr)
-        return 3
     try:
         resolver = make_rest_resolver(args.rka_url, args.project)
         # fail fast if RKA is unreachable
@@ -372,9 +483,22 @@ def main(argv: Optional[list] = None) -> int:
         print("warning: --support-backend llm requested but no judge available "
               "(set RKA_WRITER_JUDGE_MODEL and install the [llm] extra); "
               "using lexical", file=sys.stderr)
-    reports = [audit_file(f, resolver, support_threshold=args.support_threshold,
-                          judge=judge)
-               for f in args.files]
+    try:
+        reports = [
+            audit_file(
+                f,
+                resolver,
+                support_threshold=args.support_threshold,
+                judge=judge,
+            )
+            for f in args.files
+        ]
+    except Exception as exc:
+        print(
+            f"error: provenance audit could not complete against RKA: {exc}",
+            file=sys.stderr,
+        )
+        return 3
     output = {
         "version": "1.0",
         "files": [asdict(r) for r in reports],

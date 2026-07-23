@@ -24,7 +24,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Literal, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +95,29 @@ READ_TOOLS: tuple[str, ...] = (
     "rka_load_tools",
     "rka_list_tools",
     "rka_help",
+    # v2.7.0+ typed-dispatch surface. The running RKA MCP server (v2.7.0+)
+    # ships `rka_query` (read ops) / `rka_execute` (write ops) / `rka_describe`
+    # (schema lookup) as the ALWAYS-ON tools; the legacy `rka_get_*` tools above
+    # are now tier='deferred'. Without `rka_query` + `rka_describe` in the
+    # subprocess allowlist, EVERY Brain/Executor RKA READ is denied under
+    # permission_mode='dontAsk' — the subprocess calls `rka_query` (the real
+    # read path) and gets a permission error, leaving the LLM blind to RKA
+    # state and forced to work off parent-injected context only. Empirically
+    # surfaced driving Opus 4.8 against an RKA v2.8.0 server (2026-06-15): the
+    # Brain/Executor journal notes reported "both rka_query calls returned
+    # permission errors." `rka_execute` (the WRITE dispatch) is deliberately
+    # EXCLUDED here and added to `disallowed_tools` below — Phase 2.7 Option C:
+    # RKA writes flow parent-side only, never from the subprocess.
+    "rka_query",
+    "rka_describe",
 )
+
+# v2.7.0+ write dispatch verb. Belt-and-suspenders denial (mirrors the legacy
+# WRITE_TOOLS entries on `disallowed_tools`): permission_mode='dontAsk' already
+# denies anything off the allowlist, but naming the write dispatch explicitly
+# keeps the Phase 2.7 Option C "no writes from the subprocess" invariant legible
+# and robust if an upstream SDK precedence change ever inverts allow/deny order.
+_V27_WRITE_DISPATCH_TOOLS: tuple[str, ...] = ("rka_execute",)
 
 # Context7 MCP server — external documentation lookup. Useful when the
 # Brain needs to verify it's reasoning about a library API correctly
@@ -257,6 +279,12 @@ _BUILTIN_FILESYSTEM_TOOLS: tuple[str, ...] = (
     "WebFetch",
     "WebSearch",
 )
+
+# Deliberately narrow tool surface for controlled "plain Claude Code"
+# evaluation arms.  This is separate from _BUILTIN_FILESYSTEM_TOOLS because
+# the baseline must not inherit the orchestrator's MCP, web, search, skill, or
+# plugin capabilities.
+_PLAIN_CLAUDE_TOOLS: tuple[str, ...] = ("Bash", "Read", "Write")
 
 # v0.6.11 — egress tools the can_use_tool hook audits. The research
 # workflow legitimately needs open web access (papers, SEC filings), so
@@ -643,12 +671,148 @@ def _keychain_has_claude_code_credentials() -> bool:
 
 
 def _scrubbed_env() -> dict[str, str]:
-    """Return os.environ minus the API-billing-routing env vars.
+    """Return subprocess overrides with billing-routing variables blanked.
 
-    Used to construct the env dict handed to the SDK subprocess so auth
-    falls through to Claude Max paths.
+    Claude Agent SDK merges ``options.env`` over its own fresh copy of
+    ``os.environ``.  Omitting a key here therefore does *not* remove it from
+    the child.  An explicit empty-string override is required so auth falls
+    through to Claude Max paths.
     """
-    return {k: v for k, v in os.environ.items() if k not in _ENV_VARS_TO_SCRUB}
+    env = dict(os.environ)
+    for key in _ENV_VARS_TO_SCRUB:
+        env[key] = ""
+    return env
+
+
+_PLAIN_ENV_PREFIXES_TO_SCRUB: tuple[str, ...] = (
+    "RKA_",
+    "ZOTERO_",
+    "SERPAPI_",
+    "SEMANTIC_SCHOLAR_",
+    "OPENAI_",
+    "DEEPSEEK_",
+    "AWS_",
+    "GITHUB_",
+    "GH_",
+)
+_PLAIN_ENV_NAMES_TO_SCRUB: tuple[str, ...] = (
+    "SSH_AUTH_SOCK",
+    "DATABASE_URL",
+)
+
+
+def _plain_eval_env() -> dict[str, str]:
+    """Build a reduced ambient environment for the plain-Claude baseline.
+
+    The Claude authentication route is preserved, but RKA/research-service
+    discovery and unrelated credential variables are explicitly blanked.  PATH
+    entries that expose an ``rka`` executable are removed so Bash cannot reach
+    the CLI by ordinary command lookup.
+    """
+    env = _scrubbed_env()
+    for key in list(env):
+        upper = key.upper()
+        if upper == "CLAUDE_CODE_OAUTH_TOKEN":
+            continue
+        if (
+            upper in _PLAIN_ENV_NAMES_TO_SCRUB
+            or upper.startswith(_PLAIN_ENV_PREFIXES_TO_SCRUB)
+            or any(marker in upper for marker in ("PASSWORD", "SECRET", "TOKEN"))
+        ):
+            env[key] = ""
+
+    path_entries: list[str] = []
+    for entry in env.get("PATH", "").split(os.pathsep):
+        if not entry:
+            continue
+        try:
+            exposes_rka = (Path(entry) / "rka").is_file()
+        except OSError:
+            exposes_rka = False
+        if not exposes_rka:
+            path_entries.append(entry)
+    env["PATH"] = os.pathsep.join(path_entries)
+    return env
+
+
+def _plain_eval_tool_hook(workspace_path: str):
+    """Return a PreToolUse hook that keeps direct tools in the fresh workspace.
+
+    The SDK sandbox provides the OS boundary for Bash.  This hook adds explicit
+    path checks for Read/Write and blocks obvious attempts to reach RKA,
+    localhost services, the network, parent directories, or ambient secrets.
+    """
+    workspace = Path(workspace_path).resolve()
+
+    def _deny(reason: str) -> dict:
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason,
+            }
+        }
+
+    def _inside_workspace(raw_path: str) -> bool:
+        if not raw_path:
+            return False
+        candidate = Path(raw_path)
+        if not candidate.is_absolute():
+            candidate = workspace / candidate
+        try:
+            candidate.resolve(strict=False).relative_to(workspace)
+        except (OSError, ValueError):
+            return False
+        return True
+
+    async def hook(input_data, tool_use_id=None, context=None):  # noqa: ARG001
+        tool_name = input_data.get("tool_name", "")
+        tool_input = input_data.get("tool_input", {}) or {}
+        if tool_name in ("Read", "Write"):
+            raw_path = str(
+                tool_input.get("file_path")
+                or tool_input.get("path")
+                or ""
+            )
+            if not _inside_workspace(raw_path):
+                return _deny(
+                    f"{tool_name} is restricted to the isolated evaluation workspace"
+                )
+            return {}
+
+        if tool_name == "Bash":
+            command = str(tool_input.get("command") or "")
+            lowered = f" {command.lower()} "
+            blocked_fragments = (
+                " rka ",
+                " rka_",
+                "/rka ",
+                "localhost:971",
+                "127.0.0.1:971",
+                " curl ",
+                " wget ",
+                " ncat ",
+                " nc ",
+                " netcat ",
+                " ssh ",
+                " scp ",
+                " ftp ",
+                "http://",
+                "https://",
+                " printenv",
+                " env ",
+                "$home",
+                "${home",
+                " ~/.",
+                " ../",
+            )
+            if any(fragment in lowered for fragment in blocked_fragments):
+                return _deny(
+                    "Bash command would escape the no-RKA, no-network baseline"
+                )
+        return {}
+
+    return hook
 
 
 def _parse_dotenv_lines(text: str) -> dict[str, str]:
@@ -918,6 +1082,8 @@ class _RealSDKClient:
         env: dict[str, str] | None = None,
         project_id: str | None = None,
         workspace_path: str | None = None,
+        model: str | None = None,
+        plain_tools_only: bool = False,
     ) -> None:
         # Phase 2.9 T1: `project_id` propagates parent's project context to
         # the claude-agent-sdk subprocess's `rka mcp` stdio child via
@@ -946,6 +1112,15 @@ class _RealSDKClient:
         # pass the project-specific workspace_path explicitly to get
         # per-project containment.
         self._workspace_path = workspace_path
+        # Optional explicit model id (e.g. "claude-opus-4-8"). None → the SDK /
+        # claude CLI default model. Threaded into ClaudeAgentOptions(model=...)
+        # so callers can pin a model (the orchestrator's Brain/Executor run on
+        # the PI's subscription model; the eval pins Opus 4.8 for reproducibility).
+        self._model = model
+        # Evaluation-only isolation mode.  It bypasses all MCP discovery and
+        # filesystem settings, exposing exactly Bash/Read/Write in the supplied
+        # workspace.  Production Brain/Executor clients leave this False.
+        self._plain_tools_only = plain_tools_only
         # Phase E4: cost of the most recent complete() call in USD,
         # extracted from the SDK's ResultMessage. Nodes read this after
         # complete() and add to state["usd_spent"] for budget tracking.
@@ -989,61 +1164,93 @@ class _RealSDKClient:
         # only needs the SDKClient Protocol for typing).
         import claude_agent_sdk as sdk
 
-        # Phase 2.7 Option C: subprocess gets read-only MCP scope. If the
-        # `rka` binary isn't on PATH, fall back to Phase 1 text-only mode so
-        # tests + clean environments still work; log so the degradation is
-        # visible.
-        # Phase 2.9 T1: `project_id` threads through to McpStdioServerConfig.env
-        # so the subprocess inherits the parent's project context.
-        rka_binary = _find_rka_mcp_binary()
-        # v0.6.8: pass self._env so _build_zotero_server_if_configured can
-        # read project-local creds that arrived via _merge_project_env_file
-        # (e.g. project's .rka/.env declared ZOTERO_API_KEY but the daemon
-        # container's env doesn't). Without env=, Zotero would only wire
-        # when creds were in the daemon's own env block.
-        mcp_servers = _build_mcp_servers_config(
-            rka_binary, project_id=self._project_id, env=self._env
-        )
-
-        if mcp_servers:
-            include_context7 = _CONTEXT7_SERVER_NAME in mcp_servers
-            include_zotero = _ZOTERO_SERVER_NAME in mcp_servers
-            # Phase G2: install the FS-Actuator can_use_tool hook so
-            # destructive Bash/Write/Edit invocations from the subprocess
-            # are intercepted in the parent process and routed per the
-            # `fs_actuator.classify_fs_action` policy. SDK MCP/RKA tools
-            # are always allowed by the hook (it only enforces FS
-            # mutating-tool policy); RKA writes remain disallowed_tools
-            # so they still flow through `proposed_actions` → PI ratify.
+        if self._plain_tools_only:
+            # Controlled baseline: do not even run MCP discovery.  An empty
+            # strict config blocks project/user/plugin MCP bleed; disabling
+            # filesystem settings and skills prevents the local Claude setup
+            # from silently enriching the arm.  `tools` restricts what exists,
+            # while `allowed_tools` permits those three tools non-interactively.
+            mcp_servers: dict = {}
             options = sdk.ClaudeAgentOptions(
+                model=self._model,
                 system_prompt=system,
                 env=self._env,
-                mcp_servers=mcp_servers,
-                # Only servers in our config are loaded; no host MCP config bleed.
-                # With Phase-A expansion, our config can include `rka`,
-                # `context7`, and (v0.6.8) `zotero` — all are PI-ratified
-                # for the Brain/Executor subprocess via the manifest.
+                cwd=self._workspace_path,
+                tools=list(_PLAIN_CLAUDE_TOOLS),
+                allowed_tools=list(_PLAIN_CLAUDE_TOOLS),
+                mcp_servers={},
                 strict_mcp_config=True,
-                allowed_tools=_all_allowed_subprocess_tools(
-                    include_context7, include_zotero=include_zotero
-                ),
-                disallowed_tools=_prefixed_tools(WRITE_TOOLS),
-                permission_mode="dontAsk",   # deny anything off-allowlist silently
-                can_use_tool=_build_fs_actuator_hook(
-                    self._resolve_workspace_path(),
-                ),
+                setting_sources=[],
+                skills=[],
+                plugins=[],
+                permission_mode="dontAsk",
+                hooks={
+                    "PreToolUse": [
+                        sdk.HookMatcher(
+                            matcher="Bash|Read|Write",
+                            hooks=[_plain_eval_tool_hook(self._workspace_path or "")],
+                            timeout=5.0,
+                        )
+                    ]
+                },
+                sandbox={
+                    "enabled": True,
+                    "autoAllowBashIfSandboxed": True,
+                    "excludedCommands": [],
+                    "allowUnsandboxedCommands": False,
+                    "network": {
+                        "allowedDomains": [],
+                        "deniedDomains": ["*"],
+                        "allowUnixSockets": [],
+                        "allowAllUnixSockets": False,
+                        "allowLocalBinding": False,
+                    },
+                },
             )
         else:
-            logger.warning(
-                "rka MCP binary not found on PATH; subprocess will have no MCP "
-                "scope (Phase 1 text-only fallback). executor.mission_execute "
-                "cannot do work in this configuration."
+            # Phase 2.7 Option C: subprocess gets read-only MCP scope. If the
+            # `rka` binary isn't on PATH, fall back to Phase 1 text-only mode.
+            rka_binary = _find_rka_mcp_binary()
+            # v0.6.8: pass self._env so project-local Zotero credentials can
+            # reach the subprocess configuration.
+            mcp_servers = _build_mcp_servers_config(
+                rka_binary, project_id=self._project_id, env=self._env
             )
-            options = sdk.ClaudeAgentOptions(
-                system_prompt=system,
-                env=self._env,
-                allowed_tools=[],
-            )
+
+            if mcp_servers:
+                include_context7 = _CONTEXT7_SERVER_NAME in mcp_servers
+                include_zotero = _ZOTERO_SERVER_NAME in mcp_servers
+                # Phase G2: install the FS-Actuator can_use_tool hook so
+                # destructive Bash/Write/Edit invocations from the subprocess
+                # are intercepted in the parent process and routed per policy.
+                options = sdk.ClaudeAgentOptions(
+                    model=self._model,
+                    system_prompt=system,
+                    env=self._env,
+                    mcp_servers=mcp_servers,
+                    strict_mcp_config=True,
+                    allowed_tools=_all_allowed_subprocess_tools(
+                        include_context7, include_zotero=include_zotero
+                    ),
+                    disallowed_tools=_prefixed_tools(WRITE_TOOLS)
+                    + _prefixed_tools(_V27_WRITE_DISPATCH_TOOLS),
+                    permission_mode="dontAsk",
+                    can_use_tool=_build_fs_actuator_hook(
+                        self._resolve_workspace_path(),
+                    ),
+                )
+            else:
+                logger.warning(
+                    "rka MCP binary not found on PATH; subprocess will have no MCP "
+                    "scope (Phase 1 text-only fallback). executor.mission_execute "
+                    "cannot do work in this configuration."
+                )
+                options = sdk.ClaudeAgentOptions(
+                    model=self._model,
+                    system_prompt=system,
+                    env=self._env,
+                    allowed_tools=[],
+                )
 
         # Reset cost tracker; populated from ResultMessage if the SDK emits one.
         self.last_call_cost_usd = 0.0
@@ -1109,6 +1316,7 @@ def make_sdk(
     project_id: str | None = None,
     *,
     workspace_path: str | None = None,
+    model: str | None = None,
 ) -> SDKClient:
     """Construct the production SDK client.
 
@@ -1156,18 +1364,54 @@ def make_sdk(
         env=_scrubbed_env(),
         project_id=project_id,
         workspace_path=workspace_path,
+        model=model,
+    )
+
+
+def make_plain_sdk(
+    *,
+    workspace_path: str,
+    model: str | None = None,
+) -> SDKClient:
+    """Construct an MCP-free Claude SDK client for controlled baselines.
+
+    The resulting subprocess is rooted at ``workspace_path``, ignores all
+    user/project/local settings, plugins, skills, and MCP configurations, and
+    exposes exactly Bash, Read, and Write.  It shares the same Claude Max auth
+    routing and billing-key scrubbing as :func:`make_sdk`.
+    """
+    report = _verify_claude_max_routing()
+    if report.warning:
+        logger.warning(report.warning)
+    logger.info("Plain Claude SDK auth path: %s", report.auth_path)
+    if report.auth_path == _AUTH_PATH_NONE:
+        raise RuntimeError(
+            "No Claude Max credentials found (no credentials.json, no "
+            "Keychain entry, no OAuth token in env). Run `claude login`."
+        )
+
+    return _RealSDKClient(
+        env=_plain_eval_env(),
+        workspace_path=workspace_path,
+        model=model,
+        plain_tools_only=True,
     )
 
 
 __all__ = [
     "SDKClient",
     "make_sdk",
+    "make_plain_sdk",
     "AuthRoutingReport",
     "_verify_claude_max_routing",  # exposed for tests + T2 instrumentation
+    "_scrubbed_env",
+    "_plain_eval_env",
+    "_plain_eval_tool_hook",
     # Phase 2.7 T2 — subprocess MCP scope (exposed for tests + T3 consumers)
     "READ_TOOLS",
     "WRITE_TOOLS",
     "_BUILTIN_FILESYSTEM_TOOLS",
+    "_PLAIN_CLAUDE_TOOLS",
     "_prefixed_tools",
     "_find_rka_mcp_binary",
     "_build_mcp_servers_config",

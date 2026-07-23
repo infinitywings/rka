@@ -113,6 +113,7 @@ class Mission(BaseModel):
     """Full mission record from database."""
 
     id: str
+    project_id: str
     phase: str
     objective: str
     tasks: list[MissionTask] | None = None

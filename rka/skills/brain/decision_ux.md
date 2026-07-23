@@ -165,12 +165,13 @@ A single-number summary (just `override_rate`) would conflate the second and thi
 ## Recording a Decision After PI Selection
 
 ```python
-rka_update_decision(
-    id="dec_01...",
-    pi_selected_option_id="opt_01...",
-    pi_override_rationale=None,          # set to a string if PI invoked "None of these"
-    presentation_method="elicitation",   # elicitation | markdown_fallback
-)
+rka_execute(args={
+    "operation": "record_pi_selection",
+    "project_id": <pinned>,
+    "decision_id": "dec_01...",
+    "selected_option_id": "opt_01...",
+    "override_rationale": None,          # set to a string if PI invoked "None of these"
+})
 ```
 
 The `chosen` and `rationale` columns also get populated from the selected option's `label` and `justification` via the service layer. Don't set them manually.

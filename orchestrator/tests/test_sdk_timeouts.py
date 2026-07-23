@@ -531,3 +531,154 @@ class TestCallSiteCoverage:
         executor_src = Path(executor.__file__).read_text()
         assert "SDKTimeoutError" in brain_src
         assert "SDKTimeoutError" in executor_src
+
+
+class TestModelSelection:
+    """`make_sdk(model=...)` / `_RealSDKClient(model=...)` pins the model id on
+    ClaudeAgentOptions so the orchestrator's Brain/Executor run on the requested
+    model (the eval pins claude-opus-4-8 for reproducibility)."""
+
+    @pytest.mark.asyncio
+    async def test_model_is_threaded_into_options(self, monkeypatch):
+        captured: dict = {}
+
+        class _StubBlock:
+            def __init__(self, t):
+                self.text = t
+
+        class _StubAssistantMessage:
+            def __init__(self, parts):
+                self.content = [_StubBlock(p) for p in parts]
+
+        class _StubResultMessage:
+            total_cost_usd = 0.0
+
+        class _StubOptions:
+            def __init__(self, **kw):
+                self.kw = kw
+
+        async def _query(*, prompt, options):  # noqa: ARG001
+            captured["model"] = options.kw.get("model")
+            yield _StubAssistantMessage(["ok"])
+            yield _StubResultMessage()
+
+        stub_sdk = SimpleNamespace(
+            AssistantMessage=_StubAssistantMessage,
+            ResultMessage=_StubResultMessage,
+            ClaudeAgentOptions=_StubOptions,
+            query=_query,
+        )
+        monkeypatch.setitem(__import__("sys").modules, "claude_agent_sdk", stub_sdk)
+        monkeypatch.setattr(llm_client, "_find_rka_mcp_binary", lambda: None)
+
+        from orchestrator.llm_client import _RealSDKClient
+
+        client = _RealSDKClient(env={}, project_id="", workspace_path="",
+                                model="claude-opus-4-8")
+        text = await client._async_complete(prompt="hi", system=None, timeout_s=None)
+        assert text == "ok"
+        assert captured["model"] == "claude-opus-4-8"
+
+    @pytest.mark.asyncio
+    async def test_model_defaults_to_none(self, monkeypatch):
+        captured: dict = {}
+
+        class _StubBlock:
+            def __init__(self, t):
+                self.text = t
+
+        class _StubAssistantMessage:
+            def __init__(self, parts):
+                self.content = [_StubBlock(p) for p in parts]
+
+        class _StubResultMessage:
+            total_cost_usd = 0.0
+
+        class _StubOptions:
+            def __init__(self, **kw):
+                self.kw = kw
+
+        async def _query(*, prompt, options):  # noqa: ARG001
+            captured["model"] = options.kw.get("model", "MISSING")
+            yield _StubAssistantMessage(["ok"])
+            yield _StubResultMessage()
+
+        stub_sdk = SimpleNamespace(
+            AssistantMessage=_StubAssistantMessage,
+            ResultMessage=_StubResultMessage,
+            ClaudeAgentOptions=_StubOptions,
+            query=_query,
+        )
+        monkeypatch.setitem(__import__("sys").modules, "claude_agent_sdk", stub_sdk)
+        monkeypatch.setattr(llm_client, "_find_rka_mcp_binary", lambda: None)
+
+        from orchestrator.llm_client import _RealSDKClient
+
+        client = _RealSDKClient(env={}, project_id="", workspace_path="")
+        await client._async_complete(prompt="hi", system=None, timeout_s=None)
+        # model key is present (None) — back-compat: SDK falls through to default.
+        assert captured["model"] is None
+
+
+class TestV27DispatchAllowlist:
+    """v2.7.0+ RKA MCP surface: the subprocess must be ALLOWED rka_query +
+    rka_describe (read dispatch) and DENIED rka_execute (write dispatch).
+
+    Regression for the 2026-06-15 finding: driving Opus 4.8 against an RKA
+    v2.8.0 server, every Brain/Executor read was denied because READ_TOOLS
+    only listed legacy rka_get_* names — the subprocess calls rka_query (the
+    real read path) and got a permission error under permission_mode='dontAsk'."""
+
+    def test_read_dispatch_tools_in_allowlist(self):
+        from orchestrator.llm_client import READ_TOOLS, _all_allowed_subprocess_tools
+        assert "rka_query" in READ_TOOLS
+        assert "rka_describe" in READ_TOOLS
+        allowed = _all_allowed_subprocess_tools(include_context7=False)
+        assert "mcp__rka__rka_query" in allowed
+        assert "mcp__rka__rka_describe" in allowed
+        # the WRITE dispatch must NOT be in the read allowlist
+        assert "mcp__rka__rka_execute" not in allowed
+
+    @pytest.mark.asyncio
+    async def test_write_dispatch_in_disallowed_and_read_in_allowed(self, monkeypatch):
+        captured: dict = {}
+
+        class _StubBlock:
+            def __init__(self, t):
+                self.text = t
+
+        class _StubAssistantMessage:
+            def __init__(self, parts):
+                self.content = [_StubBlock(p) for p in parts]
+
+        class _StubResultMessage:
+            total_cost_usd = 0.0
+
+        class _StubOptions:
+            def __init__(self, **kw):
+                self.kw = kw
+
+        async def _query(*, prompt, options):  # noqa: ARG001
+            captured["disallowed"] = options.kw.get("disallowed_tools", [])
+            captured["allowed"] = options.kw.get("allowed_tools", [])
+            yield _StubAssistantMessage(["ok"])
+            yield _StubResultMessage()
+
+        stub_sdk = SimpleNamespace(
+            AssistantMessage=_StubAssistantMessage,
+            ResultMessage=_StubResultMessage,
+            ClaudeAgentOptions=_StubOptions,
+            query=_query,
+        )
+        monkeypatch.setitem(__import__("sys").modules, "claude_agent_sdk", stub_sdk)
+        # Force the MCP-server branch (rka binary "present") so disallowed_tools
+        # is populated.
+        monkeypatch.setattr(llm_client, "_find_rka_mcp_binary", lambda: "/fake/rka")
+
+        from orchestrator.llm_client import _RealSDKClient
+
+        client = _RealSDKClient(env={}, project_id="prj_x", workspace_path="")
+        await client._async_complete(prompt="hi", system=None, timeout_s=None)
+        assert "mcp__rka__rka_execute" in captured["disallowed"]
+        assert "mcp__rka__rka_query" in captured["allowed"]
+        assert "mcp__rka__rka_describe" in captured["allowed"]

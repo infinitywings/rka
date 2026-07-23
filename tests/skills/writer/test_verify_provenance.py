@@ -6,6 +6,12 @@ run fully offline with no RKA server.
 
 from __future__ import annotations
 
+import io
+import json
+import urllib.error
+
+import pytest
+
 
 def _resolver(entities):
     def resolve(eid):
@@ -40,6 +46,60 @@ def test_missing_entity_blocks(verify_provenance):
     assert rep.citations[0].verdict == "MISSING"
 
 
+def test_substantive_prose_without_provenance_blocks(verify_provenance):
+    tex = "The system sustains 500 authenticated updates per second.\n"
+    rep = verify_provenance.audit_text(tex, _resolver({}))
+    assert rep.verdict == "BLOCK"
+    assert rep.substantive_blocks == 1
+    assert rep.uncovered_blocks == 1
+    assert rep.citations[0].verdict == "UNCOVERED"
+
+
+def test_malformed_provenance_marker_blocks(verify_provenance):
+    tex = "% provenance: supports the claim below\nThe result improves recall.\n"
+    rep = verify_provenance.audit_text(tex, _resolver({}))
+    assert rep.verdict == "BLOCK"
+    assert "MALFORMED" in rep.counts
+    assert "UNCOVERED" in rep.counts
+
+
+def test_empty_provenance_marker_is_malformed(verify_provenance):
+    rep = verify_provenance.audit_text(
+        "% provenance:\nThe result improves recall.\n", _resolver({})
+    )
+    assert rep.verdict == "BLOCK"
+    assert "MALFORMED" in rep.counts
+
+
+def test_orphan_provenance_marker_blocks(verify_provenance):
+    tex = f"% provenance: {JID} supports the claim below\n"
+    rep = verify_provenance.audit_text(tex, _resolver({JID: {"status": "tested"}}))
+    assert rep.verdict == "BLOCK"
+    assert rep.citations[0].verdict == "ORPHAN"
+
+
+def test_latex_skeleton_without_prose_passes(verify_provenance):
+    tex = "\\documentclass{article}\n\\begin{document}\n\\section{Results}\n\\end{document}\n"
+    rep = verify_provenance.audit_text(tex, _resolver({}))
+    assert rep.verdict == "PASS"
+    assert rep.substantive_blocks == 0
+
+
+def test_contiguous_markers_can_govern_one_prose_block(verify_provenance):
+    tex = (
+        f"% provenance: {JID} primary support\n"
+        f"% provenance: {DID} PI boundary\n"
+        "The measured result remains within the ratified boundary.\n"
+    )
+    entities = {
+        JID: {"status": "tested", "content": "measured result remains within ratified boundary"},
+        DID: {"status": "active", "content": "ratified boundary for measured result"},
+    }
+    rep = verify_provenance.audit_text(tex, _resolver(entities))
+    assert rep.verdict == "PASS"
+    assert rep.uncovered_blocks == 0
+
+
 def test_superseded_entity_blocks(verify_provenance):
     tex = f"% provenance: {SID} supports the signature choice\nWe adopt Ed25519.\n"
     ents = {SID: {"type": "decision", "status": "superseded", "content": "use Ed25519"}}
@@ -58,12 +118,48 @@ def test_superseded_with_ack_passes(verify_provenance):
     assert rep.citations[0].acknowledged is True
 
 
+def test_retracted_ack_cannot_authorize_superseded_entity(verify_provenance):
+    tex = (
+        f"% provenance: {SID} retracted-ack: wrong acknowledgement class\n"
+        "We initially adopted Ed25519 before revising the design.\n"
+    )
+    ents = {
+        SID: {
+            "type": "decision",
+            "status": "superseded",
+            "content": "use Ed25519",
+        }
+    }
+    rep = verify_provenance.audit_text(tex, _resolver(ents))
+    assert rep.verdict == "BLOCK"
+    assert rep.citations[0].verdict == "STALE"
+    assert rep.citations[0].acknowledged is False
+
+
 def test_retracted_entity_blocks(verify_provenance):
     tex = f"% provenance: {RID} supports the replay claim\nThe MAC provides replay protection.\n"
     ents = {RID: {"type": "journal", "status": "retracted", "content": "MAC provides replay protection"}}
     rep = verify_provenance.audit_text(tex, _resolver(ents))
     assert rep.verdict == "BLOCK"
     assert rep.citations[0].verdict == "RETRACTED"
+
+
+def test_superseded_ack_cannot_authorize_retracted_entity(verify_provenance):
+    tex = (
+        f"% provenance: {RID} superseded-ack: wrong acknowledgement class\n"
+        "The earlier paper claimed that the MAC provided replay protection.\n"
+    )
+    ents = {
+        RID: {
+            "type": "journal",
+            "status": "retracted",
+            "content": "MAC provides replay protection",
+        }
+    }
+    rep = verify_provenance.audit_text(tex, _resolver(ents))
+    assert rep.verdict == "BLOCK"
+    assert rep.citations[0].verdict == "RETRACTED"
+    assert rep.citations[0].acknowledged is False
 
 
 def test_contradicted_entity_warns_when_not_surfaced(verify_provenance):
@@ -106,6 +202,82 @@ def test_clearly_unrelated_citation_low_support(verify_provenance):
     rep = verify_provenance.audit_text(tex, _resolver(ents))
     assert rep.citations[0].verdict == "LOW_SUPPORT"
     assert rep.verdict == "WARN"
+
+
+def test_rest_resolver_requires_server_project_attestation(
+    verify_provenance, monkeypatch
+):
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *_args, **_kwargs: io.BytesIO(
+            json.dumps({"id": JID, "content": "result", "status": "active"}).encode()
+        ),
+    )
+    resolver = verify_provenance.make_rest_resolver(
+        "http://localhost:9712", "prj_01PPPPPPPPPPPPPPPPPPPPPPPP"
+    )
+    with pytest.raises(RuntimeError, match="did not attest"):
+        resolver(JID)
+
+
+def test_rest_resolver_fails_closed_when_graph_is_unavailable(
+    verify_provenance, monkeypatch
+):
+    def fake_urlopen(request, **_kwargs):
+        if "/api/graph/ego/" in request.full_url:
+            raise urllib.error.URLError("graph offline")
+        return io.BytesIO(
+            json.dumps({
+                "id": JID,
+                "project_id": "prj_01PPPPPPPPPPPPPPPPPPPPPPPP",
+                "content": "result",
+                "status": "active",
+            }).encode()
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    resolver = verify_provenance.make_rest_resolver(
+        "http://localhost:9712", "prj_01PPPPPPPPPPPPPPPPPPPPPPPP"
+    )
+    with pytest.raises(urllib.error.URLError, match="graph offline"):
+        resolver(JID)
+
+
+def test_cli_returns_unreachable_when_graph_fails_mid_audit(
+    verify_provenance, monkeypatch, tmp_path
+):
+    project_id = "prj_01PPPPPPPPPPPPPPPPPPPPPPPP"
+    source = tmp_path / "draft.tex"
+    source.write_text(
+        f"% provenance: {JID} supports the result\n"
+        "The measured result remains within the ratified boundary.\n",
+        encoding="utf-8",
+    )
+
+    def fake_urlopen(request, **_kwargs):
+        url = request if isinstance(request, str) else request.full_url
+        if url.endswith("/api/health"):
+            return io.BytesIO(b'{"status":"ok"}')
+        if "/api/graph/ego/" in url:
+            raise urllib.error.URLError("graph offline")
+        return io.BytesIO(
+            json.dumps(
+                {
+                    "id": JID,
+                    "project_id": project_id,
+                    "content": "measured result remains within ratified boundary",
+                    "status": "active",
+                }
+            ).encode()
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    assert (
+        verify_provenance.main(
+            [str(source), "--project", project_id, "--rka-url", "http://rka.test"]
+        )
+        == 3
+    )
 
 
 class TestEntailmentJudge:

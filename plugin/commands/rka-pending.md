@@ -1,18 +1,16 @@
 ---
-description: "Show RKA pending maintenance: provenance gaps, untagged entries, decisions missing justified_by links, missions missing motivated_by_decision, unassigned clusters, etc."
+description: "Show pending maintenance for one explicit RKA project without fixing anything."
+argument-hint: "<project_id>"
 ---
 
-Call `rka_get_pending_maintenance()` to fetch the project's maintenance manifest.
+Require a canonical project id; if absent, list projects and ask the user to
+choose. Call:
 
-Present results grouped by category in priority order:
-1. **decisions_without_justified_by** — count + first 3 ids
-2. **missions_without_motivated_by** — count + first 3 ids
-3. **unassigned_clusters** — count + first 3 ids
-4. **entries_missing_cross_refs** — count + first 3 ids
-5. **entries_without_tags** — count + first 3 ids
+```python
+rka_query(args={"operation": "pending_maintenance", "project_id": "<id>"})
+```
 
-For each non-zero category, briefly describe the recommended fix action.
-
-If all categories are empty, say "✅ No pending maintenance — knowledge graph is clean."
-
-Do not actually fix anything; this command is informational only. The user must explicitly direct any fix work. Keep the response under 25 lines.
+Present non-zero categories in priority order: decisions without provenance,
+missions without motivation, unassigned clusters, missing cross-references,
+and missing tags. This command is read-only and never falls back to a default
+project.

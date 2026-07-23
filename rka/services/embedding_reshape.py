@@ -149,21 +149,13 @@ async def reshape_vec_table(db: Any, table_name: str, *, dim: int) -> int:
     # entity stranded out of vector search). Wrap DROP+CREATE+mark-pending in
     # one explicit transaction: SQLite DDL is transactional, so a crash before
     # COMMIT rolls the DROP back and the old table survives intact.
-    await db.execute("BEGIN")
-    try:
+    async with db.transaction():
         await db.execute(f"DROP TABLE IF EXISTS {table_name}")
         await db.execute(
             f"CREATE VIRTUAL TABLE {table_name} USING vec0("
             f"id TEXT PRIMARY KEY, embedding float[{dim}])"
         )
         await _mark_pending(db, table_name, entity_type, entity_table)
-        await db.execute("COMMIT")
-    except Exception:
-        try:
-            await db.execute("ROLLBACK")
-        except Exception:  # pragma: no cover
-            pass
-        raise
     return await _count_entity_rows(db, entity_table)
 
 

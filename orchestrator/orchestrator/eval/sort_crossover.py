@@ -41,6 +41,12 @@ SMALL_N = 12
 LARGE_N = 384
 NEARLY_SORTED_SWAP_FRAC = 0.05      # fraction of n random transpositions
 
+# Arm-neutral capability contract for the experiment-and-pivot comparison.
+# Both arms must conduct/log the analysis and produce a report. Decisions,
+# claims, and workflow traceability are deliberately scored only on the
+# provenance axis so Arm B is not penalized twice for lacking RKA.
+SORT_EXPERIMENT_CAPABILITY_KINDS: tuple[str, ...] = ("journal", "report")
+
 
 # --- instrumented sorts (count element comparisons) ----------------------
 

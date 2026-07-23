@@ -457,3 +457,54 @@ async def test_parity_submit_checkpoint_content_alias(captured_calls):
     assert L["body"] == V["body"], (
         f"content-alias drift: legacy={L['body']!r} verb={V['body']!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Regression: create_mission with tasks as plain DICTS (v2.7.0 rka_execute path)
+# ---------------------------------------------------------------------------
+
+
+async def test_create_mission_tasks_as_dicts_does_not_crash(captured_calls):
+    """Regression (2026-06-15): rka_execute(create_mission) routes through
+    verb_dispatch -> _legacy('rka_create_mission') passing tasks as PLAIN DICTS
+    (CreateMissionArgs.tasks: list[dict]). The legacy tool built the body with
+    `[task.model_dump() for task in tasks]`, raising
+    `'dict' object has no attribute 'model_dump'`. Both the verb path and the
+    legacy tool must accept dict tasks (passed through) AND MissionTask models
+    (model_dump'd)."""
+    leg, ver, set_factory, switch_to = captured_calls
+    set_factory(lambda m, p: (200, {"id": "mis_1", "phase": "execution",
+                                     "objective": "x", "status": "pending"}))
+    dict_tasks = [{"id": "T1", "description": "do the thing", "status": "pending"}]
+
+    # v2.7.0 verb path (rka_mission action=create) — delivers dicts to the tool.
+    switch_to(ver)
+    await mcp_mod.rka_mission(
+        action="create", project_id="prj_t", phase="execution",
+        objective="x", motivated_by_decision="dec_root", tasks=dict_tasks,
+    )
+    assert ver.requests[0]["body"]["tasks"] == dict_tasks  # dicts passed through
+
+    # legacy tool path directly with dict tasks (same coercion site).
+    switch_to(leg)
+    await mcp_mod.rka_create_mission(
+        phase="execution", objective="x", motivated_by_decision="dec_root",
+        project_id="prj_t", tasks=dict_tasks,
+    )
+    assert leg.requests[0]["body"]["tasks"] == dict_tasks
+
+
+async def test_create_mission_tasks_as_models_still_model_dumped(captured_calls):
+    """The pre-existing MissionTask-model path must still work (model_dump)."""
+    from rka.models.mission import MissionTask
+    leg, ver, set_factory, switch_to = captured_calls
+    set_factory(lambda m, p: (200, {"id": "mis_1", "phase": "execution",
+                                     "objective": "x", "status": "pending"}))
+    mt = MissionTask(description="modelled task")
+    switch_to(leg)
+    await mcp_mod.rka_create_mission(
+        phase="execution", objective="x", motivated_by_decision="dec_root",
+        project_id="prj_t", tasks=[mt],
+    )
+    sent = leg.requests[0]["body"]["tasks"]
+    assert isinstance(sent[0], dict) and sent[0].get("description") == "modelled task"

@@ -1,0 +1,106 @@
+{
+  "project_id": "prj_01PPPPPPPPPPPPPPPPPPPPPPPP",
+  "entities": {
+    "jrn_01MMMMMMMMMMMMMMMMMMMMMMMM": {
+      "id": "jrn_01MMMMMMMMMMMMMMMMMMMMMMMM",
+      "project_id": "prj_01PPPPPPPPPPPPPPPPPPPPPPPP",
+      "type": "note",
+      "content": "Manuscript manifest for the T1 and T2 evaluation.",
+      "source": "pi",
+      "status": "active",
+      "confidence": "verified",
+      "superseded_by": null,
+      "tags": ["manuscript", "phase:draft"]
+    },
+    "dec_01DDDDDDDDDDDDDDDDDDDDDDDD": {
+      "id": "dec_01DDDDDDDDDDDDDDDDDDDDDDDD",
+      "project_id": "prj_01PPPPPPPPPPPPPPPPPPPPPPPP",
+      "question": "Which bounded contribution claim should the outline use?",
+      "chosen": "Under threat models T1 and T2, the method reduces malicious update acceptance.",
+      "rationale": "The selected wording matches the completed evaluation and preserves its threat-model boundary.",
+      "decided_by": "pi",
+      "status": "active",
+      "superseded_by": null,
+      "related_journal": ["jrn_01MMMMMMMMMMMMMMMMMMMMMMMM"],
+      "phase": "writing",
+      "tags": ["writer-outline", "claim:C1"]
+    },
+    "clm_01AAAAAAAAAAAAAAAAAAAAAAAA": {
+      "id": "clm_01AAAAAAAAAAAAAAAAAAAAAAAA",
+      "project_id": "prj_01PPPPPPPPPPPPPPPPPPPPPPPP",
+      "source_entry_id": "jrn_01EEEEEEEEEEEEEEEEEEEEEEEE",
+      "claim_type": "result",
+      "content": "Across platforms A and B, malicious update acceptance decreased under threat models T1 and T2.",
+      "confidence": 0.94,
+      "verified": true,
+      "evidence_status": "supported",
+      "stale": false,
+      "contradicted": false
+    },
+    "jrn_01EEEEEEEEEEEEEEEEEEEEEEEE": {
+      "id": "jrn_01EEEEEEEEEEEEEEEEEEEEEEEE",
+      "project_id": "prj_01PPPPPPPPPPPPPPPPPPPPPPPP",
+      "type": "log",
+      "content": "Matched-budget runs on platforms A and B recorded lower malicious update acceptance under T1 and T2.",
+      "source": "executor",
+      "status": "active",
+      "confidence": "verified",
+      "superseded_by": null,
+      "tags": ["experiment", "threat-model:T1", "threat-model:T2"]
+    },
+    "clm_01QQQQQQQQQQQQQQQQQQQQQQQQ": {
+      "id": "clm_01QQQQQQQQQQQQQQQQQQQQQQQQ",
+      "project_id": "prj_01PPPPPPPPPPPPPPPPPPPPPPPP",
+      "source_entry_id": "jrn_01LLLLLLLLLLLLLLLLLLLLLLLL",
+      "claim_type": "observation",
+      "content": "The evaluation covers platforms A and B and does not establish behavior on untested platforms.",
+      "confidence": 0.91,
+      "verified": true,
+      "evidence_status": "supported",
+      "stale": false,
+      "contradicted": false
+    },
+    "jrn_01LLLLLLLLLLLLLLLLLLLLLLLL": {
+      "id": "jrn_01LLLLLLLLLLLLLLLLLLLLLLLL",
+      "project_id": "prj_01PPPPPPPPPPPPPPPPPPPPPPPP",
+      "type": "note",
+      "content": "Scope note: only platforms A and B were evaluated.",
+      "source": "executor",
+      "status": "active",
+      "confidence": "verified",
+      "superseded_by": null,
+      "tags": ["evaluation-boundary"]
+    },
+    "clm_01CCCCCCCCCCCCCCCCCCCCCCCC": {
+      "id": "clm_01CCCCCCCCCCCCCCCCCCCCCCCC",
+      "project_id": "prj_01PPPPPPPPPPPPPPPPPPPPPPPP",
+      "source_entry_id": "jrn_01RRRRRRRRRRRRRRRRRRRRRRRR",
+      "claim_type": "result",
+      "content": "A follow-up run under T2 did not reproduce the reduction on platform B.",
+      "confidence": 0.89,
+      "verified": true,
+      "evidence_status": "supported",
+      "stale": false,
+      "contradicted": false
+    },
+    "jrn_01RRRRRRRRRRRRRRRRRRRRRRRR": {
+      "id": "jrn_01RRRRRRRRRRRRRRRRRRRRRRRR",
+      "project_id": "prj_01PPPPPPPPPPPPPPPPPPPPPPPP",
+      "type": "log",
+      "content": "Follow-up replication on platform B under T2 did not reproduce the original reduction.",
+      "source": "executor",
+      "status": "active",
+      "confidence": "verified",
+      "superseded_by": null,
+      "tags": ["replication", "negative-result"]
+    },
+    "ecl_01SSSSSSSSSSSSSSSSSSSSSSSS": {
+      "id": "ecl_01SSSSSSSSSSSSSSSSSSSSSSSS",
+      "project_id": "prj_01PPPPPPPPPPPPPPPPPPPPPPPP",
+      "label": "Detection efficacy synthesis",
+      "synthesis": "The current evidence suggests lower attack acceptance under the tested conditions.",
+      "confidence": "strong",
+      "needs_reprocessing": false
+    }
+  }
+}

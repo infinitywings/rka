@@ -433,7 +433,7 @@ async def test_execute_dispatch_parity(
 def test_execute_enum_promotion() -> None:
     """rka_execute's discriminator (operation) surfaces as a JSON-Schema
     ``discriminator.mapping`` on the ``args`` parameter. This is the
-    load-bearing bit that lets the LLM see the full ~49 write-op set
+    load-bearing bit that lets the LLM see the full 58-operation write set
     without reading the docstring.
 
     v2.7.0 NO-COMPROMISE: the discriminator is keyed off the per-branch

@@ -1,6 +1,6 @@
 # Semantic Scholar — `SEMANTIC_SCHOLAR_API_KEY`
 
-The RKA MCP server's `rka_search_semantic_scholar` tool can call Semantic Scholar anonymously (rate-limited: 100 req per 5 min, shared globally), or with an API key (rate-limited: 1 req/sec per key — much more usable for batch lookups). The key is free; the user requests it via a form.
+The RKA MCP server's Semantic Scholar search — exposed as the deferred legacy tool `rka_search_semantic_scholar`, loadable on the v2.7.0+ dispatch surface via `rka_load_tools(names=["rka_search_semantic_scholar"])` — can call Semantic Scholar anonymously (rate-limited: 100 req per 5 min, shared globally), or with an API key (rate-limited: 1 req/sec per key — much more usable for batch lookups). The key is free; the user requests it via a form.
 
 ## What you need
 
@@ -40,7 +40,7 @@ Expected: JSON with `total` and `data` fields. 401 means the key is wrong; 429 m
 
 Target: **`claude_desktop_config.json` → `mcpServers.rka.env`** (the rka MCP server reads this).
 
-If the orchestrator daemon is installed, **also** persist to **`orchestrator/.env`**. The daemon's SDK subprocess passes this env to the `rka mcp` child it spawns; without it the Brain's `rka_search_semantic_scholar` calls fall back to anonymous rate limits.
+If the orchestrator daemon is installed, **also** persist to **`orchestrator/.env`**. The daemon's SDK subprocess passes this env to the `rka mcp` child it spawns; without it the Brain's Semantic Scholar searches (via the deferred legacy `rka_search_semantic_scholar` tool, loaded through `rka_load_tools`) fall back to anonymous rate limits.
 
 ```json
 {

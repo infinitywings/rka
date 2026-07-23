@@ -13,6 +13,14 @@ ClaimType = Literal[
     "hypothesis", "evidence", "method", "result", "observation", "assumption"
 ]
 
+EvidenceStatus = Literal[
+    "unassessed",
+    "supported",
+    "partially_supported",
+    "inconclusive",
+    "contradicted",
+]
+
 
 class ClaimCreate(BaseModel):
     """Create a new claim (typically by the distillation pipeline).
@@ -27,7 +35,20 @@ class ClaimCreate(BaseModel):
     claim_type: ClaimType
     content: str
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
-    verified: bool = False
+    verified: bool = Field(
+        default=False,
+        description=(
+            "Whether the extracted proposition is faithfully grounded in its "
+            "source entry. This is extraction/grounding fidelity, not evidence support."
+        ),
+    )
+    evidence_status: EvidenceStatus = Field(
+        default="unassessed",
+        description=(
+            "Independent scientific evidence assessment. Defaults to unassessed; "
+            "never infer support from verified=True."
+        ),
+    )
     source_offset_start: int | None = None
     source_offset_end: int | None = None
 
@@ -44,7 +65,14 @@ class ClaimUpdate(BaseModel):
     content: str | None = None
     claim_type: ClaimType | None = None
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
-    verified: bool | None = None
+    verified: bool | None = Field(
+        default=None,
+        description=(
+            "Update extraction/grounding fidelity only; this field does not "
+            "represent scientific evidence support."
+        ),
+    )
+    evidence_status: EvidenceStatus | None = None
     stale: bool | None = None
 
 
@@ -56,11 +84,24 @@ class Claim(BaseModel):
     claim_type: str
     content: str
     confidence: float = 0.5
-    verified: bool = False
+    verified: bool = Field(
+        default=False,
+        description=(
+            "Extraction/grounding fidelity against source_entry_id; not a "
+            "scientific-support verdict."
+        ),
+    )
+    evidence_status: EvidenceStatus = "unassessed"
+    contradicted: bool = Field(
+        description=(
+            "Server-derived graph projection. True when a same-project "
+            "claim_edges row with relation=contradicts touches this claim."
+        ),
+    )
     stale: bool = False
     source_offset_start: int | None = None
     source_offset_end: int | None = None
-    project_id: str = "proj_default"
+    project_id: str
     created_at: str | None = None
     updated_at: str | None = None
 
@@ -114,7 +155,7 @@ class EvidenceCluster(BaseModel):
     gap_count: int = 0
     needs_reprocessing: bool = False
     synthesized_by: str = "llm"
-    project_id: str = "proj_default"
+    project_id: str
     created_at: str | None = None
     updated_at: str | None = None
 

@@ -3,7 +3,8 @@
 The Writer skill scripts live under rka/skills/writer/scripts/ and are designed
 as standalone CLI scripts, not as a Python package. These fixtures use
 importlib.util.spec_from_file_location to load each script as an importable
-module for unit testing without polluting sys.modules globally.
+module for unit testing. Each module is registered under a stable `writer_*`
+name in `sys.modules`, as required by import machinery used by some scripts.
 
 Per mis_01KS0C3RP04XANCZAB3HTNAG0P T4 test convention discovery: the rka
 project uses pytest with asyncio_mode=auto; conftest.py provides per-area
@@ -13,10 +14,13 @@ fixtures. Writer tests do not need async or database fixtures.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
+import yaml
 
 
 SCRIPTS_DIR = (
@@ -24,6 +28,7 @@ SCRIPTS_DIR = (
 )
 SKILL_DIR = SCRIPTS_DIR.parent
 REFS_DIR = SKILL_DIR / "references"
+FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 
 
 def _load_module(name: str):
@@ -68,6 +73,11 @@ def verify_citations():
 
 
 @pytest.fixture
+def overclaim_lint():
+    return _load_module("overclaim_lint")
+
+
+@pytest.fixture
 def fetch_template():
     return _load_module("fetch_template")
 
@@ -93,6 +103,53 @@ def venue_md_generator():
 def cfp_loader():
     """Phase W2: CFP URL fetcher + override overlay."""
     return _load_module("cfp_loader")
+
+
+@pytest.fixture
+def claim_spine():
+    """RKA-backed claim-spine parser, validator, renderer, and currency checker."""
+    return _load_module("claim_spine")
+
+
+@pytest.fixture
+def claim_spine_fixture_dir() -> Path:
+    return FIXTURES_DIR / "claim_spine"
+
+
+@pytest.fixture
+def claim_spine_data(claim_spine_fixture_dir: Path) -> dict:
+    """Return a fresh copy of the valid v1 claim-spine fixture."""
+    path = claim_spine_fixture_dir / "valid_spine.yaml"
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+@pytest.fixture
+def claim_spine_entities(claim_spine_fixture_dir: Path) -> dict[str, dict]:
+    """Raw, API-shaped RKA entities for fully offline resolver tests."""
+    path = claim_spine_fixture_dir / "rka_entities.json"
+    return json.loads(path.read_text(encoding="utf-8"))["entities"]
+
+
+@pytest.fixture
+def make_claim_spine_resolver():
+    """Build an isolated entity-id resolver from an in-memory entity mapping.
+
+    A deep copy is returned on every call so validators cannot accidentally
+    mutate the shared fixture and make later tests order-dependent.
+    """
+    def make(entities: dict[str, dict]):
+        def resolve(entity_id: str):
+            entity = entities.get(entity_id)
+            return deepcopy(entity) if entity is not None else None
+
+        return resolve
+
+    return make
+
+
+@pytest.fixture
+def claim_spine_resolver(claim_spine_entities, make_claim_spine_resolver):
+    return make_claim_spine_resolver(claim_spine_entities)
 
 
 # Phase 2 mcp_tools backends (proper Python subpackage; import via rka.* path).

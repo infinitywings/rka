@@ -25,6 +25,39 @@ from rka.models.claim import (
 )
 from rka.models.topic import Topic, TopicCreate, TopicUpdate, EntityTopicAssignment
 from rka.models.review_queue import ReviewItem, ReviewItemCreate, ReviewItemResolve
+from rka.models.manuscript_native import (
+    Manuscript,
+    ManuscriptCreate,
+    ManuscriptUpdate,
+    ManuscriptClaim,
+    ManuscriptClaimCreate,
+    ManuscriptClaimUpdate,
+    ManuscriptClaimVersion,
+    ManuscriptClaimVersionCreate,
+    ManuscriptClaimRatification,
+    ManuscriptClaimRatificationCreate,
+    ManuscriptUnit,
+    ManuscriptUnitCreate,
+    ManuscriptUnitUpdate,
+    ManuscriptClaimEvidence,
+    ManuscriptClaimEvidenceCreate,
+    ManuscriptUnitEvidence,
+    ManuscriptUnitEvidenceCreate,
+    ManuscriptClaimUnit,
+    ManuscriptClaimUnitCreate,
+    ManuscriptReferenceMember,
+    ManuscriptReferenceMemberInput,
+    ManuscriptReferenceManifestReplace,
+    ManuscriptCheckpoint,
+    ManuscriptCheckpointCreate,
+    ManuscriptCheckpointResolve,
+    ManuscriptClaimVerificationAttestation,
+    ManuscriptClaimVerificationAttestationCreate,
+)
+from rka.models.reference_validation import (
+    ReferenceAuthor,
+    ReferenceValidationInput,
+)
 
 __all__ = [
     "ProjectState", "ProjectStateUpdate",
@@ -40,4 +73,20 @@ __all__ = [
     "ClaimEdge", "ClaimEdgeCreate",
     "Topic", "TopicCreate", "TopicUpdate", "EntityTopicAssignment",
     "ReviewItem", "ReviewItemCreate", "ReviewItemResolve",
+    "Manuscript", "ManuscriptCreate", "ManuscriptUpdate",
+    "ManuscriptClaim", "ManuscriptClaimCreate",
+    "ManuscriptClaimUpdate",
+    "ManuscriptClaimVersion", "ManuscriptClaimVersionCreate",
+    "ManuscriptClaimRatification", "ManuscriptClaimRatificationCreate",
+    "ManuscriptUnit", "ManuscriptUnitCreate", "ManuscriptUnitUpdate",
+    "ManuscriptClaimEvidence", "ManuscriptClaimEvidenceCreate",
+    "ManuscriptUnitEvidence", "ManuscriptUnitEvidenceCreate",
+    "ManuscriptClaimUnit", "ManuscriptClaimUnitCreate",
+    "ManuscriptReferenceMember", "ManuscriptReferenceMemberInput",
+    "ManuscriptReferenceManifestReplace",
+    "ManuscriptCheckpoint", "ManuscriptCheckpointCreate",
+    "ManuscriptCheckpointResolve",
+    "ManuscriptClaimVerificationAttestation",
+    "ManuscriptClaimVerificationAttestationCreate",
+    "ReferenceAuthor", "ReferenceValidationInput",
 ]

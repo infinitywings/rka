@@ -596,3 +596,34 @@ def test_route_after_fill_ack_short_circuits_on_redirect_sentinel():
         ]
     }
     assert _route_after_fill_ack(state_accept) == "bootstrap_verify"
+
+
+# ---------------------------------------------------------------------------
+# budget_usd -> state["cap_usd"] threading (daemon gold; completes cap_usd channel)
+# ---------------------------------------------------------------------------
+
+
+def test_start_run_threads_budget_usd_to_cap_usd(store: ParkedStore):
+    """Regression (2026-06-15): orchestrator_run_start(budget_usd=...) was a
+    NO-OP for the runtime cap — start_run_drive never threaded the run's
+    budget_usd into state['cap_usd'], so budget_check used DEFAULT_BUDGET_USD
+    (5.0) and an expensive run escalated before the pivot. The run's budget_usd
+    must reach the budget_check cap."""
+    scripted = _ScriptedGraph(
+        [{"current_node": "pi_acceptance", "terminal_state": "complete", "usd_spent": 0.1}]
+    )
+    runner = _make_runner(store, scripted)
+    runner.start_run(mission_id="mis_test", project_id="prj_test", budget_usd=42.0)
+    initial = scripted.invocations[0][0]
+    assert initial["cap_usd"] == 42.0
+
+
+def test_start_run_default_cap_usd_when_budget_unset(store: ParkedStore):
+    """Default budget_usd (5.0) flows to cap_usd — prior behavior preserved."""
+    scripted = _ScriptedGraph(
+        [{"current_node": "pi_acceptance", "terminal_state": "complete", "usd_spent": 0.1}]
+    )
+    runner = _make_runner(store, scripted)
+    runner.start_run(mission_id="mis_test", project_id="prj_test")
+    initial = scripted.invocations[0][0]
+    assert initial["cap_usd"] == 5.0

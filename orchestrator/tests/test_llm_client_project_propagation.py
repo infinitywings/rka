@@ -23,7 +23,6 @@ at the orchestrator state layer for the LLM to thread per-call.
 
 from __future__ import annotations
 
-import os
 from unittest.mock import patch
 
 import pytest
@@ -75,11 +74,15 @@ def test_build_mcp_servers_config_with_project_id_no_longer_sets_rka_project_env
 # ---------------------------------------------------------------------------
 
 
-def test_build_mcp_servers_config_without_project_id_omits_env():
+def test_build_mcp_servers_config_without_project_id_omits_env(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Back-compat: pre-Phase-2.9 callers continue to work. When
     `project_id` is None (or omitted), no env key is set — subprocess
     falls through to its default session. Pre-Phase-2.9 behavior
     preserved bit-for-bit (Phase 2.8 ran with this code path)."""
+    monkeypatch.delenv("SEMANTIC_SCHOLAR_API_KEY", raising=False)
+    monkeypatch.delenv("SERPAPI_KEY", raising=False)
     # Implicit None (default).
     config = _build_mcp_servers_config("/fake/path/to/rka")
     rka_config = config[_MCP_SERVER_NAME]
@@ -133,6 +136,8 @@ def test_make_sdk_project_id_no_longer_propagates_to_subprocess_env(
     monkeypatch.setattr(
         "orchestrator.llm_client._find_rka_mcp_binary", lambda: str(fake_rka)
     )
+    monkeypatch.delenv("SEMANTIC_SCHOLAR_API_KEY", raising=False)
+    monkeypatch.delenv("SERPAPI_KEY", raising=False)
     monkeypatch.setattr(
         "orchestrator.llm_client._keychain_has_claude_code_credentials", lambda: True
     )
@@ -170,9 +175,9 @@ def test_make_sdk_scrubs_anthropic_api_key_with_project_id_set(
 ):
     """Phase 2 T2 auth thesis regression check across the Phase 2.9 T1
     refactor: even when `project_id` is set (the new param), the SDK
-    options.env must STILL NOT contain ANTHROPIC_API_KEY. Catches the
-    regression where the new param's plumbing might inadvertently revive
-    the env var."""
+    options.env must STILL mask ANTHROPIC_API_KEY with an empty override.
+    The SDK merges options over the parent environment, so omission alone
+    would inadvertently revive the key."""
     fake_rka = tmp_path / "rka"
     fake_rka.write_text("#!/bin/sh\nexit 0\n")
     fake_rka.chmod(0o755)
@@ -195,10 +200,9 @@ def test_make_sdk_scrubs_anthropic_api_key_with_project_id_set(
         client.complete("smoke", max_tokens=128, system=None)
 
     opts = captured[0]
-    assert "ANTHROPIC_API_KEY" not in opts.env, (
-        "Phase 2 auth thesis regression — ANTHROPIC_API_KEY leaked back "
-        "into ClaudeAgentOptions.env after Phase 2.9 T1 refactor added "
-        "the project_id param. Auth thesis MUST hold across this change."
+    assert opts.env["ANTHROPIC_API_KEY"] == "", (
+        "Phase 2 auth thesis regression — ANTHROPIC_API_KEY was not masked "
+        "after Phase 2.9 T1 added the project_id param."
     )
     # v2.6: project_id no longer threads into subprocess env. No env
     # key set (no API keys + no RKA_PROJECT) → env block absent.
@@ -256,6 +260,8 @@ def test_real_sdk_client_without_project_id_omits_subprocess_env(
     monkeypatch.setattr(
         "orchestrator.llm_client._find_rka_mcp_binary", lambda: str(fake_rka)
     )
+    monkeypatch.delenv("SEMANTIC_SCHOLAR_API_KEY", raising=False)
+    monkeypatch.delenv("SERPAPI_KEY", raising=False)
 
     captured: list = []
 

@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from rka.infra.ids import generate_id
-from rka.models.topic import Topic, TopicCreate, TopicUpdate, EntityTopicAssignment
-from rka.services.base import BaseService, _now
+from rka.models.topic import Topic, TopicCreate, TopicUpdate
+from rka.services.base import BaseService
+
+
+class TopicNotFoundError(ValueError):
+    """Raised when a topic is absent from the active project scope."""
 
 
 class TopicService(BaseService):
@@ -14,14 +18,24 @@ class TopicService(BaseService):
 
     async def create(self, data: TopicCreate) -> Topic:
         topic_id = generate_id("topic")
-        await self.db.execute(
-            """INSERT INTO topics (id, name, parent_id, description, project_id)
-               VALUES (?, ?, ?, ?, ?)""",
-            [topic_id, data.name, data.parent_id, data.description, self.project_id],
-        )
-        await self.db.commit()
-        await self.audit("create", "topic", topic_id, "system")
-        return await self.get(topic_id)
+        async with self.db.transaction():
+            await self.db.execute(
+                """INSERT INTO topics
+                   (id, name, parent_id, description, project_id)
+                   VALUES (?, ?, ?, ?, ?)""",
+                [
+                    topic_id,
+                    data.name,
+                    data.parent_id,
+                    data.description,
+                    self.project_id,
+                ],
+            )
+            await self.audit("create", "topic", topic_id, "system")
+            created = await self.get(topic_id)
+            if created is None:  # pragma: no cover - guards impossible DB drift
+                raise RuntimeError("topic insert was not readable")
+            return created
 
     async def get(self, topic_id: str) -> Topic | None:
         row = await self.db.fetchone(
@@ -69,38 +83,76 @@ class TopicService(BaseService):
     async def update(self, topic_id: str, data: TopicUpdate) -> Topic:
         dump = data.model_dump(exclude_none=True)
         if not dump:
-            return await self.get(topic_id)
+            current = await self.get(topic_id)
+            if current is None:
+                raise TopicNotFoundError(
+                    f"topic {topic_id!r} not found in project {self.project_id}"
+                )
+            return current
 
         set_clause = ", ".join(f"{k} = ?" for k in dump)
         values = list(dump.values()) + [topic_id, self.project_id]
 
-        await self.db.execute(
-            f"UPDATE topics SET {set_clause} WHERE id = ? AND project_id = ?",
-            values,
-        )
-        await self.db.commit()
-        return await self.get(topic_id)
+        async with self.db.transaction():
+            cursor = await self.db.execute(
+                f"UPDATE topics SET {set_clause} WHERE id = ? AND project_id = ?",
+                values,
+            )
+            if cursor.rowcount != 1:
+                raise TopicNotFoundError(
+                    f"topic {topic_id!r} not found in project {self.project_id}"
+                )
+            updated = await self.get(topic_id)
+            if updated is None:  # pragma: no cover - guards impossible DB drift
+                raise RuntimeError("topic update was not readable")
+            return updated
 
     async def delete(self, topic_id: str) -> bool:
-        await self.db.execute(
-            "DELETE FROM entity_topics WHERE topic_id = ?", [topic_id],
-        )
-        await self.db.execute(
-            "DELETE FROM topics WHERE id = ? AND project_id = ?",
-            [topic_id, self.project_id],
-        )
-        await self.db.commit()
+        async with self.db.transaction():
+            owned = await self.db.fetchone(
+                "SELECT id FROM topics WHERE id = ? AND project_id = ?",
+                [topic_id, self.project_id],
+            )
+            if owned is None:
+                raise TopicNotFoundError(
+                    f"topic {topic_id!r} not found in project {self.project_id}"
+                )
+            await self.db.execute(
+                """DELETE FROM entity_topics
+                   WHERE topic_id IN (
+                       SELECT id FROM topics
+                       WHERE id = ? AND project_id = ?
+                   )""",
+                [topic_id, self.project_id],
+            )
+            cursor = await self.db.execute(
+                "DELETE FROM topics WHERE id = ? AND project_id = ?",
+                [topic_id, self.project_id],
+            )
+            if cursor.rowcount != 1:  # pragma: no cover - protected by write lock
+                raise TopicNotFoundError(
+                    f"topic {topic_id!r} not found in project {self.project_id}"
+                )
         return True
 
     # ── Assignments ──────────────────────────────────────────
 
     async def assign_entity(self, topic_id: str, entity_type: str, entity_id: str, assigned_by: str = "llm") -> None:
-        await self.db.execute(
-            """INSERT OR IGNORE INTO entity_topics (topic_id, entity_type, entity_id, assigned_by)
-               VALUES (?, ?, ?, ?)""",
-            [topic_id, entity_type, entity_id, assigned_by],
-        )
-        await self.db.commit()
+        async with self.db.transaction():
+            owned = await self.db.fetchone(
+                "SELECT id FROM topics WHERE id = ? AND project_id = ?",
+                [topic_id, self.project_id],
+            )
+            if owned is None:
+                raise TopicNotFoundError(
+                    f"topic {topic_id!r} not found in project {self.project_id}"
+                )
+            await self.db.execute(
+                """INSERT OR IGNORE INTO entity_topics
+                   (topic_id, entity_type, entity_id, assigned_by)
+                   VALUES (?, ?, ?, ?)""",
+                [topic_id, entity_type, entity_id, assigned_by],
+            )
 
     async def get_entity_topics(self, entity_type: str, entity_id: str) -> list[Topic]:
         rows = await self.db.fetchall(

@@ -97,6 +97,41 @@ class TestSummaryServiceRequiresLLM:
         result = await summary_svc.bless("sum_nonexistent")
         assert result is None
 
+    @pytest.mark.asyncio
+    async def test_generate_audit_failure_rolls_back_summary(
+        self,
+        seeded_db: Database,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        class Result:
+            one_line = "Bounded result"
+            paragraph = "A bounded result grounded in one source."
+            narrative = None
+            key_questions = []
+            sources = []
+            confidence = 0.8
+
+        class LLM:
+            async def generate_summary(self, **_kwargs):
+                return Result()
+
+        service = SummaryService(db=seeded_db, llm=LLM())
+
+        async def evidence(*_args):
+            return [{"entity_type": "journal", "entity_id": "jrn_000"}]
+
+        async def fail_audit(*_args, **_kwargs):
+            raise RuntimeError("injected summary audit failure")
+
+        monkeypatch.setattr(service, "_gather_evidence", evidence)
+        monkeypatch.setattr(service, "audit", fail_audit)
+        with pytest.raises(RuntimeError, match="injected summary audit failure"):
+            await service.generate("project")
+
+        assert await seeded_db.fetchall(
+            "SELECT id FROM exploration_summaries"
+        ) == []
+
 
 class TestSummaryEvidenceGathering:
     """Test _gather_evidence directly — this doesn't require LLM."""
@@ -144,6 +179,52 @@ class TestQAServiceRequiresLLM:
     async def test_get_session_nonexistent(self, qa_svc: QAService):
         result = await qa_svc.get_session("qas_nonexistent")
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_new_session_log_failure_rolls_back_session(
+        self,
+        seeded_db: Database,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        class Result:
+            answer = "The grounded answer."
+            answer_type = "factual"
+            sources = []
+            confidence = 0.9
+            followups = []
+
+            def model_dump(self):
+                return {
+                    "answer": self.answer,
+                    "answer_type": self.answer_type,
+                    "sources": [],
+                    "confidence": self.confidence,
+                    "followups": [],
+                }
+
+        class LLM:
+            async def answer_qa(self, **_kwargs):
+                return Result()
+
+        service = QAService(db=seeded_db, llm=LLM())
+
+        async def evidence(*_args):
+            return [{"entity_type": "journal", "entity_id": "jrn_000"}]
+
+        monkeypatch.setattr(service, "_gather_qa_evidence", evidence)
+        real_execute = seeded_db.execute
+
+        async def fail_log_insert(sql, params=None):
+            if "INSERT INTO qa_logs" in sql:
+                raise RuntimeError("injected QA log failure")
+            return await real_execute(sql, params)
+
+        monkeypatch.setattr(seeded_db, "execute", fail_log_insert)
+        with pytest.raises(RuntimeError, match="injected QA log failure"):
+            await service.ask("What is grounded?")
+
+        assert await seeded_db.fetchall("SELECT id FROM qa_sessions") == []
+        assert await seeded_db.fetchall("SELECT id FROM qa_logs") == []
 
 
 class TestQAEvidenceGathering:

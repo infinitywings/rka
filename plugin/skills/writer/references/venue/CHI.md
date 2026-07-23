@@ -195,7 +195,7 @@ For tone calibration, the Writer scaffolding should reference three to five rece
 - `https://api.openalex.org/works?filter=primary_location.source.id:S4310306537,publication_year:2025&per-page=25` (CHI 2025 by source ID; verify the source ID at scaffold time).
 - Hand-pick three to five papers spanning empirical and design domains for tone-diversity.
 
-Sample papers should be stored as `lit_` entries with `tags=["venue-sample:CHI", "venue-sample"]` so the Writer can retrieve them via `rka_search(query="venue-sample CHI", entity_types=["literature"])`.
+Sample papers should be stored as `lit_` entries with `tags=["venue-sample:CHI", "venue-sample"]` so the Writer can retrieve them via `rka_query(args={"operation": "search", "project_id": "prj_...", "query": "venue-sample CHI", "filters": {"entity_types": ["literature"]}})`.
 
 ## Notes on acmart wrapper
 

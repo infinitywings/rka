@@ -18,8 +18,8 @@ divergence can ship to the LLM-facing surface.
 The lock-tests are intentionally tolerant of additive change: any
 typed-arg model NOT in OPERATIONS_SCHEMA fails (drift); any
 OPERATIONS_SCHEMA entry without a typed model fails (coverage gap);
-any model whose ``operation`` Literal value doesn't match its
-OPERATIONS_SCHEMA key fails (renamed-without-update).
+any model whose ``operation`` Literal value or required/optional field
+partition doesn't match its OPERATIONS_SCHEMA entry fails.
 """
 
 from __future__ import annotations
@@ -143,6 +143,36 @@ def test_each_model_forbids_extras(model: type[BaseModel]) -> None:
     assert cfg.get("extra") == "forbid", (
         f"{model.__name__}: model_config['extra'] must be 'forbid' "
         f"(got {cfg.get('extra')!r})"
+    )
+
+
+@pytest.mark.parametrize("model", _union_members(QueryArgsUnion) + _union_members(ExecuteArgsUnion))
+def test_each_model_fields_match_operations_schema(model: type[BaseModel]) -> None:
+    """Describe-schema field lists must mirror the actual typed branch."""
+    operation = _operation_literal(model)
+    entry = OPERATIONS_SCHEMA[operation]
+    model_required = {
+        name
+        for name, field in model.model_fields.items()
+        if name != "operation" and field.is_required()
+    }
+    model_optional = {
+        name
+        for name, field in model.model_fields.items()
+        if name != "operation" and not field.is_required()
+    }
+    schema_required = set(entry.get("required_fields") or [])
+    schema_optional = set(entry.get("optional_fields") or [])
+
+    assert model_required == schema_required, (
+        f"{operation}: required-field drift; "
+        f"model-only={sorted(model_required - schema_required)}, "
+        f"schema-only={sorted(schema_required - model_required)}"
+    )
+    assert model_optional == schema_optional, (
+        f"{operation}: optional-field drift; "
+        f"model-only={sorted(model_optional - schema_optional)}, "
+        f"schema-only={sorted(schema_optional - model_optional)}"
     )
 
 

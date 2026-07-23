@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -11,12 +12,39 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, BinaryIO
 
+from rka import __version__
 from rka.infra.ids import generate_id
 from rka.models.knowledge_pack import KnowledgePackImportResult
 from rka.services.base import BaseService, _now
 
-PACK_SCHEMA_VERSION = 2
+PACK_SCHEMA_VERSION = 3
 PACK_FILE_SUFFIX = ".rka-pack.zip"
+_IMPORT_PROJECT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+
+# These tables are deliberately not portable even though they carry a
+# ``project_id``.  A pack transports research semantics, not one installation's
+# worker/cursor machinery or the diagnostics produced while migrating that
+# installation.  Importing semantic rows emits a fresh target-local change
+# ledger, while completed validation outcomes remain portable through the
+# immutable attestation tables in ``core_data``.
+_PORTABILITY_EXCLUSIONS: dict[str, str] = {
+    "change_events": (
+        "Target-local cursor ledger; import emits fresh events with target-local "
+        "watermarks."
+    ),
+    "jobs": (
+        "Worker queue state, retries, leases, and pending external work are "
+        "installation-local and must be requested again after import."
+    ),
+    "manuscript_migration_issues": (
+        "Diagnostics from the source installation's legacy migration, not "
+        "manuscript semantic state."
+    ),
+    "reference_validation_migration_issues": (
+        "Diagnostics from source-installation reference-validation migration, "
+        "not portable manuscript semantic state."
+    ),
+}
 
 
 # Mission A T5 (mis_01KR1Z28QW9WYXG4VV8PGYWD8G) introduced a hardcoded
@@ -32,6 +60,7 @@ _CRITICAL_INTEGRITY_CATEGORIES: frozenset[str] = frozenset({
     "orphaned_entity_link_sources",
     "orphaned_entity_link_targets",
     "orphaned_claim_edge_sources",
+    "orphaned_claim_edge_targets",
     "orphaned_claim_edge_clusters",
 })
 
@@ -67,8 +96,22 @@ _TABLE_CATEGORIES: dict[str, list[str]] = {
         "claim_edges",
         "entity_links",
         "tags",
+        # Native manuscript aggregate. Immutable histories and typed joins are
+        # first-class knowledge and must round-trip without reconstruction.
+        "manuscripts",
+        "manuscript_reference_members",
+        "manuscript_claims",
+        "manuscript_claim_versions",
+        "manuscript_claim_ratifications",
+        "manuscript_units",
+        "manuscript_claim_evidence",
+        "manuscript_unit_evidence",
+        "manuscript_claim_units",
+        "manuscript_checkpoints",
+        "manuscript_claim_verification_attestations",
         "decision_options",
         "calibration_outcomes",
+        "reference_validation_attestations",
         "hooks",
         "brain_notifications",
     ],
@@ -76,6 +119,7 @@ _TABLE_CATEGORIES: dict[str, list[str]] = {
         # SHOULD export, can rebuild if missing
         "review_queue",
         "topics",
+        "entity_topics",
         "exploration_summaries",
         "context_snapshots",
         "keynodes",
@@ -90,11 +134,13 @@ _TABLE_CATEGORIES: dict[str, list[str]] = {
         "project_states",
         "project_state",
         "schema_migrations",
+        "change_events",
         "jobs",
+        "manuscript_migration_issues",
+        "reference_validation_migration_issues",
+        "project_deletion_authorizations",
         "kv_store",
         "embedding_metadata",
-        "entity_topics",   # junction table, no project_id column
-        "qa_logs",         # child of qa_sessions via session_id, no project_id
     ],
     "indexes": [
         # SKIP — rebuilt automatically (vec_*, fts_* detected by prefix)
@@ -104,6 +150,7 @@ _TABLE_CATEGORIES: dict[str, list[str]] = {
         "audit_log",
         "events",
         "qa_sessions",
+        "qa_logs",
         "hook_executions",
     ],
 }
@@ -116,6 +163,7 @@ _INSERT_ORDER = (
     "decision_options",
     "missions",
     "journal",
+    "reference_validation_attestations",
     "checkpoints",
     "evidence_clusters",
     "claims",
@@ -125,9 +173,23 @@ _INSERT_ORDER = (
     "calibration_outcomes",
     "hooks",
     "brain_notifications",
+    # Native manuscript aggregate (FK-safe order). The legacy journal row is
+    # already present before ``manuscripts.legacy_journal_id`` is restored.
+    "manuscripts",
+    "manuscript_reference_members",
+    "manuscript_claims",
+    "manuscript_claim_versions",
+    "manuscript_units",
+    "manuscript_claim_evidence",
+    "manuscript_unit_evidence",
+    "manuscript_claim_units",
+    "manuscript_claim_ratifications",
+    "manuscript_checkpoints",
+    "manuscript_claim_verification_attestations",
     # derived_data
     "review_queue",
     "topics",
+    "entity_topics",
     "exploration_summaries",
     "context_snapshots",
     "keynodes",
@@ -139,7 +201,17 @@ _INSERT_ORDER = (
     "audit_log",
     "events",
     "qa_sessions",
+    "qa_logs",
+    "hook_executions",
 )
+_IMPORT_INSERT_TABLES = frozenset(
+    ("projects", "project_states", *_INSERT_ORDER)
+)
+_IMPORT_TRANSIENT_COLUMNS: dict[str, frozenset[str]] = {
+    # Bundled-file metadata is consumed by ``_restore_artifact_files`` and is
+    # deliberately not a column in the destination artifacts table.
+    "artifacts": frozenset({"pack_file"}),
+}
 
 # Tables to export by default (core + derived)
 _EXPORT_TABLES = _TABLE_CATEGORIES["core_data"] + _TABLE_CATEGORIES["derived_data"]
@@ -150,6 +222,8 @@ _SELF_REFERENTIAL_TABLES: dict[str, str | list[str]] = {
     "decisions": ["parent_id", "superseded_by"],
     "journal": "supersedes",
     "events": "caused_by_event",
+    "manuscript_checkpoints": "supersedes_id",
+    "topics": "parent_id",
 }
 _ID_ENTITY_TYPES = {
     "literature": "literature",
@@ -162,6 +236,14 @@ _ID_ENTITY_TYPES = {
     "claim_edges": "claim_edge",
     "decision_options": "decision_option",
     "calibration_outcomes": "calibration_outcome",
+    "reference_validation_attestations": "reference_validation",
+    "manuscripts": "manuscript",
+    "manuscript_reference_members": "manuscript_reference",
+    "manuscript_claims": "manuscript_claim",
+    "manuscript_claim_ratifications": "manuscript_claim_ratification",
+    "manuscript_units": "manuscript_unit",
+    "manuscript_checkpoints": "manuscript_checkpoint",
+    "manuscript_claim_verification_attestations": "manuscript_verification",
     "hooks": "hook",
     "hook_executions": "hook_execution",
     "brain_notifications": "brain_notification",
@@ -175,6 +257,8 @@ _ID_ENTITY_TYPES = {
     "review_queue": "review_item",
     "keynodes": "keynode",
     "graph_views": "graphview",
+    "topics": "topic",
+    "context_snapshots": "context_snapshot",
 }
 _DIRECT_ID_COLUMNS = {
     "literature": ("id",),
@@ -187,6 +271,42 @@ _DIRECT_ID_COLUMNS = {
     "claim_edges": ("id", "source_claim_id", "target_claim_id", "cluster_id"),
     "decision_options": ("id", "decision_id", "dominated_by"),
     "calibration_outcomes": ("id", "decision_id"),
+    "reference_validation_attestations": (
+        "id",
+        "manuscript_id",
+        "canonical_manuscript_id",
+        "legacy_journal_id",
+        "literature_id",
+        # Migration 036 links an attestation to the local worker job that
+        # produced it. Jobs are deliberately excluded, so this FK is cleared
+        # during remapping while the immutable completed result is retained.
+        "validation_job_id",
+    ),
+    "manuscripts": ("id", "legacy_journal_id"),
+    "manuscript_reference_members": (
+        "id", "manuscript_id", "literature_id",
+    ),
+    "manuscript_claims": ("id", "manuscript_id"),
+    "manuscript_claim_versions": ("claim_id", "manuscript_id"),
+    "manuscript_claim_ratifications": (
+        "id", "manuscript_id", "claim_id", "decision_id",
+    ),
+    "manuscript_units": ("id", "manuscript_id", "artifact_ref"),
+    "manuscript_claim_evidence": (
+        "manuscript_id", "manuscript_claim_id", "evidence_claim_id",
+    ),
+    "manuscript_unit_evidence": (
+        "manuscript_id", "unit_id", "evidence_claim_id",
+    ),
+    "manuscript_claim_units": (
+        "manuscript_id", "manuscript_claim_id", "unit_id",
+    ),
+    "manuscript_checkpoints": (
+        "id", "manuscript_id", "unit_id", "decision_id", "supersedes_id",
+    ),
+    "manuscript_claim_verification_attestations": (
+        "id", "manuscript_id", "claim_id",
+    ),
     "hooks": ("id",),
     "hook_executions": ("id", "hook_id"),
     "brain_notifications": ("id", "hook_id"),
@@ -203,6 +323,9 @@ _DIRECT_ID_COLUMNS = {
     "review_queue": ("id", "item_id"),
     "keynodes": ("id",),
     "graph_views": ("id",),
+    "topics": ("id", "parent_id"),
+    "context_snapshots": ("id",),
+    "entity_topics": ("topic_id", "entity_id"),
 }
 # Columns with actual FOREIGN KEY constraints in the schema.
 # Unresolvable references in these columns must be NULLed to avoid FK errors.
@@ -218,6 +341,37 @@ _FK_COLUMNS: dict[str, set[str]] = {
     "events": {"caused_by_event"},
     "qa_logs": {"session_id"},
     "figures": {"artifact_id"},
+    "reference_validation_attestations": {
+        "canonical_manuscript_id",
+        "legacy_journal_id",
+        "literature_id",
+        "validation_job_id",
+    },
+    "manuscripts": {"legacy_journal_id"},
+    "manuscript_reference_members": {"manuscript_id", "literature_id"},
+    "manuscript_claims": {"manuscript_id"},
+    "manuscript_claim_versions": {"claim_id", "manuscript_id"},
+    "manuscript_claim_ratifications": {
+        "manuscript_id", "claim_id", "decision_id",
+    },
+    "manuscript_units": {"manuscript_id"},
+    "manuscript_claim_evidence": {
+        "manuscript_id", "manuscript_claim_id", "evidence_claim_id",
+    },
+    "manuscript_unit_evidence": {
+        "manuscript_id", "unit_id", "evidence_claim_id",
+    },
+    "manuscript_claim_units": {
+        "manuscript_id", "manuscript_claim_id", "unit_id",
+    },
+    "manuscript_checkpoints": {
+        "manuscript_id", "unit_id", "decision_id", "supersedes_id",
+    },
+    "manuscript_claim_verification_attestations": {
+        "manuscript_id", "claim_id",
+    },
+    "topics": {"parent_id"},
+    "entity_topics": {"topic_id"},
 }
 # Matches entity-ID-shaped tokens embedded in prose/JSON strings (lowercase
 # prefix + ULID-style Crockford-base32 tail). Deliberately permissive: a
@@ -239,6 +393,10 @@ _PROSE_TEXT_COLUMNS: dict[str, tuple[str, ...]] = {
     "evidence_clusters": ("label", "synthesis"),
     "checkpoints": ("description",),
     "events": ("summary",),
+    "manuscript_claim_versions": ("exact_wording", "allowed_wording"),
+    "manuscript_units": (
+        "allowed_interpretation", "prohibited_interpretation",
+    ),
 }
 
 _JSON_ID_COLUMNS = {
@@ -249,8 +407,47 @@ _JSON_ID_COLUMNS = {
     "qa_logs": ("answer_structured", "sources"),
     "events": ("details",),
     "audit_log": ("details",),
+    "reference_validation_attestations": ("full_json_payload",),
+    "manuscript_claim_versions": ("prohibited_wording",),
+    "manuscript_claim_verification_attestations": (
+        "dependency_snapshot", "full_json_payload",
+    ),
+    "context_snapshots": ("entry_ids",),
     "keynodes": ("node_refs",),
     "graph_views": ("nodes", "edges"),
+}
+
+# Declared entity-link endpoint types and their authoritative project-scoped
+# tables. Integrity checks must match both this type and the edge's project;
+# global id existence is insufficient because IDs from another project (or a
+# different entity table) would otherwise make a corrupt edge appear valid.
+_ENTITY_LINK_ENDPOINT_TABLES: dict[str, str] = {
+    "artifact": "artifacts",
+    "checkpoint": "checkpoints",
+    "claim": "claims",
+    "claim_edge": "claim_edges",
+    "cluster": "evidence_clusters",
+    "decision": "decisions",
+    "decision_option": "decision_options",
+    "event": "events",
+    "figure": "figures",
+    "journal": "journal",
+    "link": "entity_links",
+    "literature": "literature",
+    "manuscript": "manuscripts",
+    "manuscript_checkpoint": "manuscript_checkpoints",
+    "manuscript_claim": "manuscript_claims",
+    "manuscript_claim_ratification": "manuscript_claim_ratifications",
+    "manuscript_claim_verification": (
+        "manuscript_claim_verification_attestations"
+    ),
+    "manuscript_reference": "manuscript_reference_members",
+    "manuscript_unit": "manuscript_units",
+    "mission": "missions",
+    "reference_validation": "reference_validation_attestations",
+    "research_question": "decisions",
+    "review": "review_queue",
+    "topic": "topics",
 }
 
 
@@ -258,6 +455,16 @@ class KnowledgePackService(BaseService):
     """Export and import a full project-scoped knowledge pack."""
 
     async def export_pack(self, project_id: str | None = None, include_logs: bool = False) -> tuple[str, str]:
+        """Export one transactionally consistent project snapshot."""
+        async with self.db.transaction(write=False):
+            return await self._export_pack(project_id, include_logs)
+
+    async def _export_pack(
+        self,
+        project_id: str | None,
+        include_logs: bool,
+    ) -> tuple[str, str]:
+        """Implementation for :meth:`export_pack` inside its read snapshot."""
         resolved_project_id = self._resolve_project_id(project_id)
         project = await self.db.fetchone(
             "SELECT * FROM projects WHERE id = ?",
@@ -287,10 +494,15 @@ class KnowledgePackService(BaseService):
             "schema_version": schema_version,
             "pack_format_version": PACK_SCHEMA_VERSION,
             "exported_at": _now(),
-            "rka_version": "2.1.0",
+            "rka_version": __version__,
             "categories_exported": ["core_data", "derived_data"] + (["bulk_logs"] if include_logs else []),
             "project": dict(project),
             "project_state": dict(project_state) if project_state else None,
+            "portability": {
+                "excluded_tables": dict(sorted(_PORTABILITY_EXCLUSIONS.items())),
+                "completed_validation_attestations": "included",
+                "validation_job_links_on_import": "cleared",
+            },
             "tables": {},
         }
 
@@ -302,15 +514,33 @@ class KnowledgePackService(BaseService):
         temp_path = Path(temp_file.name)
         temp_file.close()
 
-        with zipfile.ZipFile(temp_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            for table in export_tables:
-                rows = await self._export_rows_for_table(table, resolved_project_id)
-                if table == "artifacts":
-                    rows = self._attach_artifact_files(rows, archive)
-                manifest["tables"][table] = rows
-                table_counts[table] = len(rows)
-            manifest["table_counts"] = table_counts
-            archive.writestr("manifest.json", json.dumps(manifest, indent=2, sort_keys=True))
+        try:
+            with zipfile.ZipFile(
+                temp_path,
+                "w",
+                compression=zipfile.ZIP_DEFLATED,
+            ) as archive:
+                for table in export_tables:
+                    rows = await self._export_rows_for_table(
+                        table,
+                        resolved_project_id,
+                    )
+                    if table == "artifacts":
+                        rows = self._attach_artifact_files(rows, archive)
+                    manifest["tables"][table] = rows
+                    table_counts[table] = len(rows)
+                self._validate_portable_child_links(
+                    manifest["tables"],
+                    project_id=resolved_project_id,
+                )
+                manifest["table_counts"] = table_counts
+                archive.writestr(
+                    "manifest.json",
+                    json.dumps(manifest, indent=2, sort_keys=True),
+                )
+        except BaseException:
+            temp_path.unlink(missing_ok=True)
+            raise
 
         filename = f"{self._slugify(project['name'] or resolved_project_id)}{PACK_FILE_SUFFIX}"
         return str(temp_path), filename
@@ -326,105 +556,170 @@ class KnowledgePackService(BaseService):
             source_project = manifest["project"]
             source_state = manifest.get("project_state")
             source_tables: dict[str, list[dict[str, Any]]] = manifest.get("tables", {})
+            pack_format = (
+                manifest.get("pack_format_version")
+                or manifest.get("schema_version")
+            )
 
-            target_project_id = (project_id or source_project["id"]).strip()
-            target_project_name = (project_name or source_project["name"]).strip()
+            raw_target_project_id = (
+                project_id if project_id is not None else source_project.get("id")
+            )
+            raw_target_project_name = (
+                project_name
+                if project_name is not None
+                else source_project.get("name")
+            )
+            if not isinstance(raw_target_project_id, str):
+                raise ValueError("Imported project ID must be a string")
+            if not isinstance(raw_target_project_name, str):
+                raise ValueError("Imported project name must be a string")
+
+            target_project_id = raw_target_project_id.strip()
+            target_project_name = raw_target_project_name.strip()
             target_description = source_project.get("description")
             if not target_project_id:
                 raise ValueError("Imported project ID cannot be empty")
             if not target_project_name:
                 raise ValueError("Imported project name cannot be empty")
+            self._validate_import_project_id(target_project_id)
 
             await self._assert_target_project_available(target_project_id, target_project_name)
             self._assert_no_duplicate_pack_dois(source_tables)
+            self._validate_portable_child_links(
+                source_tables,
+                project_id=str(source_project["id"]),
+            )
             tables = self._remap_tables(
                 source_tables,
                 source_project_id=source_project["id"],
                 target_project_id=target_project_id,
             )
+            # Treat the uploaded manifest as untrusted input. Validate every
+            # destination key against the live schema before opening the write
+            # transaction (or creating artifact staging directories).
+            await self._validate_import_rows(tables)
 
             artifact_root = self._artifact_import_root(target_project_id)
-            created_root = False
+            artifact_project_root = artifact_root.parent
+            artifact_storage_root = artifact_project_root.parent
+            staging_project_root: Path | None = None
+            published_project_root = False
 
-            await self.db.execute("BEGIN")
-            # Defer FK checks until commit — enables forward references between
-            # tables (e.g., decisions.recommended_option_id → decision_options
-            # inserted later in _INSERT_ORDER). All refs must resolve by commit;
-            # genuine orphans still fail there.
-            await self.db.execute("PRAGMA defer_foreign_keys = ON")
+            if tables.get("artifacts"):
+                if artifact_project_root.exists():
+                    raise ValueError(
+                        "Artifact storage for imported project already exists: "
+                        f"{target_project_id}"
+                    )
+                artifact_storage_root.mkdir(parents=True, exist_ok=True)
+                staging_project_root = Path(
+                    tempfile.mkdtemp(
+                        prefix=".rka-import-",
+                        dir=str(artifact_storage_root),
+                    )
+                ).resolve()
+
             try:
-                await self._insert_row(
-                    "projects",
-                    {
-                        "id": target_project_id,
-                        "name": target_project_name,
-                        "description": target_description,
-                        "created_by": source_project.get("created_by"),
-                        "created_at": source_project.get("created_at") or _now(),
-                        "updated_at": source_project.get("updated_at") or _now(),
-                    },
-                )
+                async with self.db.transaction():
+                    # Defer FK checks until commit — enables forward references
+                    # between tables (e.g. decisions.recommended_option_id →
+                    # decision_options inserted later in _INSERT_ORDER). All
+                    # refs must resolve by commit; genuine orphans still fail.
+                    await self.db.execute("PRAGMA defer_foreign_keys = ON")
+                    await self._insert_row(
+                        "projects",
+                        {
+                            "id": target_project_id,
+                            "name": target_project_name,
+                            "description": target_description,
+                            "created_by": source_project.get("created_by"),
+                            "created_at": source_project.get("created_at") or _now(),
+                            "updated_at": source_project.get("updated_at") or _now(),
+                        },
+                    )
 
-                state_row = self._build_project_state_row(
-                    source_state=source_state,
-                    source_project=source_project,
-                    target_project_id=target_project_id,
-                    target_project_name=target_project_name,
-                    target_description=target_description,
-                )
-                await self._insert_row("project_states", state_row)
+                    state_row = self._build_project_state_row(
+                        source_state=source_state,
+                        source_project=source_project,
+                        target_project_id=target_project_id,
+                        target_project_name=target_project_name,
+                        target_description=target_description,
+                    )
+                    await self._insert_row("project_states", state_row)
 
-                imported_counts: dict[str, int] = {}
-                artifact_files_restored = 0
+                    imported_counts: dict[str, int] = {}
+                    artifact_files_restored = 0
 
-                for table in _INSERT_ORDER:
-                    rows = [dict(row) for row in tables.get(table, [])]
-                    rows = self._prepare_rows_for_insert(table, rows, target_project_id)
+                    for table in _INSERT_ORDER:
+                        rows = [dict(row) for row in tables.get(table, [])]
+                        rows = self._prepare_rows_for_insert(
+                            table, rows, target_project_id
+                        )
 
-                    if table == "artifacts":
-                        created_root = created_root or bool(rows)
-                        rows, restored = self._restore_artifact_files(rows, archive, artifact_root)
-                        artifact_files_restored += restored
+                        if table == "artifacts":
+                            staging_artifact_root = (
+                                staging_project_root / "artifacts"
+                                if staging_project_root is not None
+                                else artifact_root
+                            )
+                            rows, restored = self._restore_artifact_files(
+                                rows,
+                                archive,
+                                staging_artifact_root,
+                                persisted_root=artifact_root,
+                            )
+                            artifact_files_restored += restored
 
-                    for row in rows:
-                        await self._insert_row(table, row)
+                        for row in rows:
+                            await self._insert_row(table, row)
 
-                    imported_counts[table] = len(rows)
+                        imported_counts[table] = len(rows)
 
-                # Defect 3 (Mission A T5): integrity gate runs INSIDE the
-                # transaction so critical issues (orphaned edges / missing
-                # parents introduced by the imported rows) trigger a clean
-                # rollback instead of landing partial state. Affordance E
-                # (Mission B): the gate now reads the per-issue `severity`
-                # field rather than a hardcoded category set, so the
-                # severity-vs-category mapping lives in one place
-                # (_SEVERITY_BY_CATEGORY) and consumers don't need to know
-                # the category list.
-                integrity_issues = await self.check_integrity(target_project_id)
-                critical = [
-                    i for i in integrity_issues
-                    if i.get("severity") == "critical"
-                ]
-                if critical:
-                    await self.db.execute("ROLLBACK")
-                    if created_root and artifact_root.exists():
-                        shutil.rmtree(artifact_root.parent, ignore_errors=True)
-                    raise KnowledgePackIntegrityError(critical)
+                    # Formats 1 and 2 predate the native manuscript aggregate.
+                    # Re-run the conservative legacy projection only for the
+                    # imported project, inside the same atomic transaction.
+                    # This creates identity/metadata only: never claims,
+                    # evidence links, ratifications, or checkpoints.
+                    if pack_format in (1, 2):
+                        imported_counts["manuscripts"] += (
+                            await self._backfill_legacy_manuscripts(
+                                target_project_id
+                            )
+                        )
 
-                await self.db.commit()
-            except KnowledgePackIntegrityError:
-                # Already rolled back inside the try-block; just propagate.
-                raise
-            except Exception:
-                await self.db.execute("ROLLBACK")
-                if created_root and artifact_root.exists():
-                    shutil.rmtree(artifact_root.parent, ignore_errors=True)
+                    # The integrity gate runs inside the managed transaction so
+                    # critical issues roll back the complete imported graph.
+                    integrity_issues = await self.check_integrity(target_project_id)
+                    critical = [
+                        i
+                        for i in integrity_issues
+                        if i.get("severity") == "critical"
+                    ]
+                    if critical:
+                        raise KnowledgePackIntegrityError(critical)
+
+                    if staging_project_root is not None:
+                        if artifact_project_root.exists():
+                            raise ValueError(
+                                "Artifact storage for imported project appeared "
+                                f"during import: {target_project_id}"
+                            )
+                        staging_project_root.replace(artifact_project_root)
+                        published_project_root = True
+            except BaseException:
+                if (
+                    staging_project_root is not None
+                    and staging_project_root.exists()
+                ):
+                    shutil.rmtree(staging_project_root, ignore_errors=True)
+                if published_project_root and artifact_project_root.exists():
+                    shutil.rmtree(artifact_project_root, ignore_errors=True)
                 raise
 
         # Success path. Sync indexes for the (now committed) rows + repair
         # non-critical findings so the import doesn't land with stale derived
         # counts (Brain-ratified addition during the upfront Backbrief).
-        await self._sync_imported_indexes(tables)
+        await self._sync_imported_indexes(tables, target_project_id)
         if any(i.get("category") == "claim_count_mismatch"
                for i in integrity_issues):
             await self._recompute_cluster_claim_counts(target_project_id)
@@ -438,7 +733,234 @@ class KnowledgePackService(BaseService):
             integrity_issues=integrity_issues,
         )
 
+    async def _backfill_legacy_manuscripts(self, project_id: str) -> int:
+        """Project legacy Writer journals into native manuscript identities.
+
+        This is the import-time counterpart of migration 034 for accepted
+        KnowledgePack formats that were created before native manuscripts
+        existed.  It intentionally uses the same fail-closed eligibility rules
+        and records diagnostics rather than guessing through ambiguity.
+        """
+        rows = await self.db.fetchall(
+            """SELECT j.id, j.project_id, j.verbatim_input, j.status,
+                      j.created_at, j.updated_at
+               FROM journal AS j
+               WHERE j.project_id = ?
+                 AND EXISTS (
+                     SELECT 1
+                     FROM tags AS t
+                     WHERE t.entity_type = 'journal'
+                       AND t.entity_id = j.id
+                       AND lower(t.tag) = 'manuscript'
+                 )
+               ORDER BY j.id""",
+            [project_id],
+        )
+        created = 0
+        for row in rows:
+            legacy_id = str(row["id"])
+            candidate_id = (
+                f"man_{legacy_id[4:]}"
+                if legacy_id.startswith("jrn_") and len(legacy_id) > 4
+                else None
+            )
+            tag_rows = await self.db.fetchall(
+                """SELECT tag, project_id
+                   FROM tags
+                   WHERE entity_type = 'journal' AND entity_id = ?
+                   ORDER BY lower(tag), tag""",
+                [legacy_id],
+            )
+            manuscript_tags = [
+                tag for tag in tag_rows
+                if str(tag.get("tag") or "").casefold() == "manuscript"
+            ]
+            scoped_manuscript_tags = [
+                tag for tag in manuscript_tags
+                if tag.get("project_id") == project_id
+            ]
+            venue_tags = [
+                str(tag.get("tag") or "")[6:].strip()
+                for tag in tag_rows
+                if tag.get("project_id") == project_id
+                and str(tag.get("tag") or "")[:6].casefold() == "venue:"
+            ]
+            phase_tags = [
+                str(tag.get("tag") or "")[6:].strip().casefold()
+                for tag in tag_rows
+                if tag.get("project_id") == project_id
+                and str(tag.get("tag") or "")[:6].casefold() == "phase:"
+            ]
+            normalized_input = str(row.get("verbatim_input") or "").replace(
+                "\r", ""
+            )
+            title, separator, remainder = normalized_input.partition("\n\n")
+            title = title.strip()
+            abstract = (remainder.strip() or None) if separator else None
+
+            issues: list[tuple[str, dict[str, Any]]] = []
+            if len(manuscript_tags) != len(scoped_manuscript_tags):
+                issues.append(
+                    (
+                        "tag_project_mismatch",
+                        {
+                            "manuscript_tag_count": len(manuscript_tags),
+                            "same_project_tag_count": len(
+                                scoped_manuscript_tags
+                            ),
+                        },
+                    )
+                )
+            if candidate_id is None:
+                issues.append(
+                    (
+                        "invalid_legacy_id",
+                        {
+                            "expected_prefix": "jrn_",
+                            "actual_id": legacy_id,
+                        },
+                    )
+                )
+            if not title:
+                issues.append(
+                    (
+                        "missing_title",
+                        {
+                            "source": (
+                                "journal.verbatim_input:first_paragraph"
+                            )
+                        },
+                    )
+                )
+            if len(venue_tags) == 0 or (
+                len(venue_tags) == 1 and not venue_tags[0]
+            ):
+                issues.append(
+                    ("missing_venue", {"venue_tag_count": len(venue_tags)})
+                )
+            elif len(venue_tags) > 1:
+                issues.append(
+                    ("ambiguous_venue", {"venue_tag_count": len(venue_tags)})
+                )
+            if len(phase_tags) == 0 or (
+                len(phase_tags) == 1 and not phase_tags[0]
+            ):
+                issues.append(
+                    ("missing_phase", {"phase_tag_count": len(phase_tags)})
+                )
+            elif len(phase_tags) > 1:
+                issues.append(
+                    ("ambiguous_phase", {"phase_tag_count": len(phase_tags)})
+                )
+            elif phase_tags[0] not in {"draft", "drafting", "review", "final"}:
+                issues.append(
+                    (
+                        "unsupported_phase",
+                        {
+                            "phase": phase_tags[0],
+                            "supported": [
+                                "draft",
+                                "drafting",
+                                "review",
+                                "final",
+                            ],
+                        },
+                    )
+                )
+            if row.get("status") not in {"draft", "active"}:
+                issues.append(
+                    (
+                        "inactive_legacy_status",
+                        {"status": row.get("status")},
+                    )
+                )
+
+            bound = await self.db.fetchone(
+                """SELECT id
+                   FROM manuscripts
+                   WHERE legacy_journal_id = ? AND project_id = ?""",
+                [legacy_id, project_id],
+            )
+            collision = (
+                await self.db.fetchone(
+                    """SELECT id, legacy_journal_id, project_id
+                       FROM manuscripts WHERE id = ?""",
+                    [candidate_id],
+                )
+                if candidate_id is not None
+                else None
+            )
+            if bound is None and collision is not None:
+                issues.append(
+                    (
+                        "deterministic_id_conflict",
+                        {
+                            "candidate_id": candidate_id,
+                            "existing_legacy_journal_id": collision.get(
+                                "legacy_journal_id"
+                            ),
+                            "existing_project_id": collision.get("project_id"),
+                        },
+                    )
+                )
+
+            for reason, details in issues:
+                await self.db.execute(
+                    """INSERT OR IGNORE INTO manuscript_migration_issues
+                       (legacy_journal_id, project_id,
+                        canonical_candidate_id, reason, details)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    [
+                        legacy_id,
+                        project_id,
+                        candidate_id,
+                        reason,
+                        json.dumps(details, sort_keys=True),
+                    ],
+                )
+
+            if bound is not None or issues:
+                continue
+            phase = "drafting" if phase_tags[0] == "draft" else phase_tags[0]
+            await self.db.execute(
+                """INSERT INTO manuscripts
+                   (id, project_id, title, abstract, venue, phase, state,
+                    legacy_journal_id, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)""",
+                [
+                    candidate_id,
+                    project_id,
+                    title,
+                    abstract,
+                    venue_tags[0],
+                    phase,
+                    legacy_id,
+                    row["created_at"],
+                    row["updated_at"],
+                ],
+            )
+            created += 1
+        return created
+
     async def _export_rows_for_table(self, table: str, project_id: str) -> list[dict[str, Any]]:
+        if table == "entity_topics":
+            return await self.db.fetchall(
+                """SELECT et.*
+                   FROM entity_topics AS et
+                   JOIN topics AS t ON t.id = et.topic_id
+                   WHERE t.project_id = ?
+                   ORDER BY et.topic_id, et.entity_type, et.entity_id""",
+                [project_id],
+            )
+        if table == "qa_logs":
+            return await self.db.fetchall(
+                """SELECT ql.*
+                   FROM qa_logs AS ql
+                   JOIN qa_sessions AS qs ON qs.id = ql.session_id
+                   WHERE qs.project_id = ?
+                   ORDER BY ql.id""",
+                [project_id],
+            )
         # Safety: verify the table exists and has project_id before querying
         try:
             cols = await self.db.fetchall(f"PRAGMA table_info([{table}])")
@@ -449,8 +971,19 @@ class KnowledgePackService(BaseService):
             return []  # table doesn't exist
         if "project_id" not in col_names:
             return []  # table has no project_id — skip silently
+        primary_key = [
+            column["name"]
+            for column in sorted(cols, key=lambda column: int(column["pk"] or 0))
+            if int(column["pk"] or 0) > 0
+        ]
+        if primary_key:
+            order_by = ", ".join(f"[{column}]" for column in primary_key)
+        elif "id" in col_names:
+            order_by = "[id]"
+        else:
+            order_by = "rowid"
         return await self.db.fetchall(
-            f"SELECT * FROM [{table}] WHERE project_id = ? ORDER BY rowid",
+            f"SELECT * FROM [{table}] WHERE project_id = ? ORDER BY {order_by}",
             [project_id],
         )
 
@@ -463,13 +996,23 @@ class KnowledgePackService(BaseService):
         for row in rows:
             artifact = dict(row)
             filepath = artifact.get("filepath")
-            pack_file = None
-            if filepath:
-                path = Path(filepath)
-                if path.exists() and path.is_file():
-                    safe_name = self._safe_filename(path.name)
-                    pack_file = f"artifacts/{artifact['id']}/{safe_name}"
-                    archive.write(path, pack_file)
+            path = Path(filepath) if isinstance(filepath, str) else None
+            if path is None or not path.exists() or not path.is_file():
+                raise ValueError(
+                    f"Artifact '{artifact.get('id') or '<unknown>'}' cannot be "
+                    "exported because its registered file is missing"
+                )
+            safe_name = self._safe_filename(path.name)
+            pack_file = f"artifacts/{artifact['id']}/{safe_name}"
+            with path.open("rb") as src, archive.open(
+                pack_file, "w"
+            ) as dst:
+                actual_hash = self._copy_and_hash(src, dst)
+            self._assert_artifact_content_hash(
+                artifact,
+                actual_hash,
+                operation="export",
+            )
             artifact["pack_file"] = pack_file
             enriched.append(artifact)
         return enriched
@@ -512,6 +1055,64 @@ class KnowledgePackService(BaseService):
             raise ValueError(
                 f"Knowledge pack contains duplicate literature DOI(s): {sample}"
             )
+
+    @staticmethod
+    def _validate_portable_child_links(
+        tables: dict[str, list[dict[str, Any]]],
+        *,
+        project_id: str,
+    ) -> None:
+        """Fail closed when a child row cannot be scoped and re-keyed safely."""
+        topic_ids = {
+            str(row["id"])
+            for row in tables.get("topics", [])
+            if row.get("id") and row.get("project_id") == project_id
+        }
+        endpoint_ids: dict[str, set[str]] = {}
+        for entity_type, table in _ENTITY_LINK_ENDPOINT_TABLES.items():
+            endpoint_ids[entity_type] = {
+                str(row["id"])
+                for row in tables.get(table, [])
+                if row.get("id")
+                and (
+                    "project_id" not in row
+                    or row.get("project_id") == project_id
+                )
+            }
+        endpoint_ids["project"] = {project_id}
+
+        for membership in tables.get("entity_topics", []):
+            topic_id = str(membership.get("topic_id") or "")
+            entity_type = str(membership.get("entity_type") or "")
+            entity_id = str(membership.get("entity_id") or "")
+            if topic_id not in topic_ids:
+                raise ValueError(
+                    "Knowledge pack entity_topics contains a topic outside "
+                    f"project {project_id!r}"
+                )
+            if entity_type not in endpoint_ids:
+                raise ValueError(
+                    "Knowledge pack entity_topics contains unsupported "
+                    f"entity type {entity_type!r}"
+                )
+            if entity_id not in endpoint_ids[entity_type]:
+                raise ValueError(
+                    "Knowledge pack entity_topics contains an entity that is "
+                    "outside the project or absent from this pack: "
+                    f"{entity_type}:{entity_id}"
+                )
+
+        session_ids = {
+            str(row["id"])
+            for row in tables.get("qa_sessions", [])
+            if row.get("id") and row.get("project_id") == project_id
+        }
+        for log in tables.get("qa_logs", []):
+            if str(log.get("session_id") or "") not in session_ids:
+                raise ValueError(
+                    "Knowledge pack qa_logs contains a session outside the "
+                    f"project or absent from this pack: {log.get('session_id')!r}"
+                )
 
     def _remap_tables(
         self,
@@ -574,12 +1175,25 @@ class KnowledgePackService(BaseService):
 
         for column in _JSON_ID_COLUMNS.get(table, ()):
             if remapped.get(column):
-                remapped[column] = self._rewrite_json_refs(
-                    remapped[column],
-                    id_map=id_map,
-                    source_project_id=source_project_id,
-                    target_project_id=target_project_id,
-                )
+                if (
+                    table == "reference_validation_attestations"
+                    and column == "full_json_payload"
+                ):
+                    remapped[column] = (
+                        self._rewrite_reference_validation_payload(
+                            remapped[column],
+                            id_map=id_map,
+                            source_project_id=source_project_id,
+                            target_project_id=target_project_id,
+                        )
+                    )
+                else:
+                    remapped[column] = self._rewrite_json_refs(
+                        remapped[column],
+                        id_map=id_map,
+                        source_project_id=source_project_id,
+                        target_project_id=target_project_id,
+                    )
 
         # Final pass: rewrite entity IDs EMBEDDED IN PROSE (rationale text
         # like "Supersedes dec_…", journal content citing other entries,
@@ -649,6 +1263,52 @@ class KnowledgePackService(BaseService):
         except json.JSONDecodeError:
             return value
         rewritten = self._rewrite_nested_refs(payload, id_map, source_project_id, target_project_id)
+        return json.dumps(rewritten)
+
+    def _rewrite_reference_validation_payload(
+        self,
+        value: Any,
+        *,
+        id_map: dict[str, str],
+        source_project_id: str,
+        target_project_id: str,
+    ) -> Any:
+        """Re-key semantic ids and make an excluded worker id provenance-only.
+
+        Only ``full_json_payload.result.job_id`` has the worker-job semantics
+        defined by the reference validator. Other keys named ``job_id`` are
+        left untouched rather than globally rewriting arbitrary validator
+        output.
+        """
+        if not isinstance(value, str):
+            return value
+        try:
+            payload = json.loads(value)
+        except json.JSONDecodeError:
+            return value
+
+        source_result = payload.get("result") if isinstance(payload, dict) else None
+        preserved_source_job_id = None
+        preserved_source_project_id = None
+        if isinstance(source_result, dict):
+            preserved_source_job_id = source_result.get("source_job_id")
+            preserved_source_project_id = source_result.get("source_project_id")
+
+        rewritten = self._rewrite_nested_refs(
+            payload, id_map, source_project_id, target_project_id
+        )
+        if isinstance(rewritten, dict):
+            result = rewritten.get("result")
+            if isinstance(result, dict) and "job_id" in result:
+                source_job_id = result.pop("job_id")
+                result["source_job_id"] = source_job_id
+                result["source_project_id"] = source_project_id
+            elif isinstance(result, dict) and preserved_source_job_id is not None:
+                # A pack may itself have been imported earlier. Keep the
+                # original worker provenance stable across another round trip.
+                result["source_job_id"] = preserved_source_job_id
+                if preserved_source_project_id is not None:
+                    result["source_project_id"] = preserved_source_project_id
         return json.dumps(rewritten)
 
     def _rewrite_nested_refs(
@@ -769,56 +1429,206 @@ class KnowledgePackService(BaseService):
         rows: list[dict[str, Any]],
         archive: zipfile.ZipFile,
         artifact_root: Path,
+        *,
+        persisted_root: Path | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         restored = 0
         if rows:
             artifact_root.mkdir(parents=True, exist_ok=True)
 
+        resolved_artifact_root = artifact_root.resolve()
+        resolved_persisted_root = (
+            persisted_root.resolve()
+            if persisted_root is not None
+            else resolved_artifact_root
+        )
         prepared: list[dict[str, Any]] = []
         for row in rows:
             artifact = dict(row)
             pack_file = artifact.get("pack_file")
-            if pack_file:
-                destination = artifact_root / artifact["id"] / self._safe_filename(artifact.get("filename") or "artifact.bin")
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                try:
-                    with archive.open(pack_file) as src, destination.open("wb") as dst:
-                        shutil.copyfileobj(src, dst)
-                    artifact["filepath"] = str(destination.resolve())
-                    restored += 1
-                except KeyError as exc:
-                    raise ValueError(f"Knowledge pack is missing bundled artifact file '{pack_file}'") from exc
+            if not isinstance(pack_file, str) or not pack_file:
+                raise ValueError(
+                    f"Knowledge pack artifact '{artifact.get('id') or '<unknown>'}' "
+                    "has no bundled file"
+                )
+            safe_filename = self._safe_filename(
+                artifact.get("filename") or "artifact.bin"
+            )
+            destination = (
+                resolved_artifact_root / artifact["id"] / safe_filename
+            ).resolve()
+            if not destination.is_relative_to(resolved_artifact_root):
+                raise ValueError("Unsafe artifact destination in knowledge pack")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with archive.open(pack_file) as src, destination.open("wb") as dst:
+                    actual_hash = self._copy_and_hash(src, dst)
+                self._assert_artifact_content_hash(
+                    artifact,
+                    actual_hash,
+                    operation="import",
+                )
+                persisted_destination = (
+                    resolved_persisted_root / artifact["id"] / safe_filename
+                ).resolve()
+                if not persisted_destination.is_relative_to(
+                    resolved_persisted_root
+                ):
+                    raise ValueError(
+                        "Unsafe persisted artifact destination in knowledge pack"
+                    )
+                artifact["filepath"] = str(persisted_destination)
+                restored += 1
+            except KeyError as exc:
+                raise ValueError(
+                    f"Knowledge pack is missing bundled artifact file '{pack_file}'"
+                ) from exc
             artifact.pop("pack_file", None)
             prepared.append(artifact)
         return prepared, restored
 
+    async def _table_columns(self, table: str) -> frozenset[str]:
+        """Return the live column allowlist for a fixed import table."""
+        if table not in _IMPORT_INSERT_TABLES:
+            raise ValueError(
+                f"Knowledge pack targets unsupported table {table!r}"
+            )
+        cache: dict[str, frozenset[str]] = getattr(
+            self,
+            "_import_table_columns_cache",
+            {},
+        )
+        if table in cache:
+            return cache[table]
+        columns = await self.db.fetchall(f"PRAGMA table_info([{table}])")
+        names = frozenset(str(column["name"]) for column in columns)
+        if not names:
+            raise ValueError(
+                f"Knowledge pack target table {table!r} is unavailable"
+            )
+        cache[table] = names
+        self._import_table_columns_cache = cache
+        return names
+
+    async def _validate_import_rows(
+        self,
+        tables: dict[str, list[dict[str, Any]]],
+    ) -> None:
+        """Reject unsupported tables and row keys before any import writes."""
+        unknown_tables = sorted(set(tables) - set(_INSERT_ORDER))
+        if unknown_tables:
+            raise ValueError(
+                "Knowledge pack contains unsupported table(s): "
+                + ", ".join(unknown_tables)
+            )
+
+        for table, rows in tables.items():
+            allowed = await self._table_columns(table)
+            transient = _IMPORT_TRANSIENT_COLUMNS.get(table, frozenset())
+            for index, row in enumerate(rows):
+                if not isinstance(row, dict):
+                    raise ValueError(
+                        f"Knowledge pack {table}[{index}] must be an object"
+                    )
+                unknown_columns = sorted(
+                    str(column)
+                    for column in row
+                    if column not in allowed and column not in transient
+                )
+                if unknown_columns:
+                    raise ValueError(
+                        f"Knowledge pack {table}[{index}] contains unsupported "
+                        "column(s): "
+                        + ", ".join(unknown_columns)
+                    )
+
     async def _insert_row(self, table: str, row: dict[str, Any]) -> None:
+        """Insert one already-remapped row using schema-approved identifiers."""
+        allowed = await self._table_columns(table)
         columns = list(row.keys())
+        unknown_columns = [
+            str(column) for column in columns if column not in allowed
+        ]
+        if unknown_columns:
+            raise ValueError(
+                f"Knowledge pack row for {table!r} contains unsupported "
+                "column(s): "
+                + ", ".join(sorted(unknown_columns))
+            )
+        if not columns:
+            raise ValueError(
+                f"Knowledge pack row for {table!r} cannot be empty"
+            )
         placeholders = ", ".join("?" for _ in columns)
-        column_sql = ", ".join(columns)
+        # Identifiers come only from PRAGMA table_info above. Bracket quoting
+        # keeps approved names syntactically isolated from uploaded content.
+        column_sql = ", ".join(f"[{column}]" for column in columns)
         await self.db.execute(
-            f"INSERT INTO {table} ({column_sql}) VALUES ({placeholders})",
+            f"INSERT INTO [{table}] ({column_sql}) VALUES ({placeholders})",
             [row[column] for column in columns],
         )
 
-    async def _sync_imported_indexes(self, tables: dict[str, list[dict[str, Any]]]) -> None:
+    async def _sync_imported_indexes(
+        self,
+        tables: dict[str, list[dict[str, Any]]],
+        target_project_id: str,
+    ) -> None:
+        # Import callers can override the destination independently of the
+        # service's default project. Use a dedicated scoped service so every
+        # embedding metadata lookup/write is bound to the explicit target
+        # without mutating ``self.project_id``.
+        scoped_indexer = BaseService(
+            self.db,
+            embeddings=self.embeddings,
+            project_id=target_project_id,
+        )
         for row in tables.get("journal", []):
-            await self._sync_indexes("journal", row["id"], row)
+            await scoped_indexer._sync_indexes("journal", row["id"], row)
         for row in tables.get("decisions", []):
-            await self._sync_indexes("decision", row["id"], row)
+            await scoped_indexer._sync_indexes("decision", row["id"], row)
         for row in tables.get("literature", []):
-            await self._sync_indexes("literature", row["id"], row)
+            await scoped_indexer._sync_indexes("literature", row["id"], row)
         for row in tables.get("missions", []):
-            await self._sync_indexes("mission", row["id"], row)
+            await scoped_indexer._sync_indexes("mission", row["id"], row)
         # Defect 3 (mis_01KR1Z28QW9WYXG4VV8PGYWD8G T5): pre-v2.3.4 the iteration
         # stopped at missions, so imported claims and clusters were invisible
         # to FTS / vec search until a manual reindex. _sync_indexes routes via
         # _FTS_CONFIG (claim + cluster present) and _EMBED_TEXT_MAP (claim
         # present; cluster vectors parked).
         for row in tables.get("claims", []):
-            await self._sync_indexes("claim", row["id"], row)
+            await scoped_indexer._sync_indexes("claim", row["id"], row)
         for row in tables.get("evidence_clusters", []):
-            await self._sync_indexes("cluster", row["id"], row)
+            await scoped_indexer._sync_indexes("cluster", row["id"], row)
+
+    @staticmethod
+    def _copy_and_hash(src: BinaryIO, dst: BinaryIO) -> str:
+        """Stream bytes from ``src`` to ``dst`` and return their SHA-256."""
+        digest = hashlib.sha256()
+        while chunk := src.read(64 * 1024):
+            digest.update(chunk)
+            dst.write(chunk)
+        return digest.hexdigest()
+
+    @staticmethod
+    def _assert_artifact_content_hash(
+        artifact: dict[str, Any],
+        actual_hash: str,
+        *,
+        operation: str,
+    ) -> None:
+        """Fail closed when bundled bytes disagree with artifact metadata."""
+        expected_hash = artifact.get("content_hash")
+        normalized_expected = (
+            expected_hash.removeprefix("sha256:").lower()
+            if isinstance(expected_hash, str)
+            else ""
+        )
+        if normalized_expected != actual_hash:
+            artifact_id = artifact.get("id") or "<unknown>"
+            raise ValueError(
+                f"Artifact '{artifact_id}' content hash mismatch during "
+                f"knowledge pack {operation}"
+            )
 
     async def _recompute_cluster_claim_counts(self, project_id: str) -> None:
         """Project-scoped recompute of evidence_clusters.claim_count from
@@ -841,8 +1651,25 @@ class KnowledgePackService(BaseService):
         await self.db.commit()
 
     def _artifact_import_root(self, project_id: str) -> Path:
+        self._validate_import_project_id(project_id)
         db_dir = Path(self.db.db_path).resolve().parent
-        return db_dir / "knowledge-packs" / project_id / "artifacts"
+        storage_root = (db_dir / "knowledge-packs").resolve()
+        artifact_root = (storage_root / project_id / "artifacts").resolve()
+        if not artifact_root.is_relative_to(storage_root):
+            raise ValueError("Imported project ID escapes knowledge-pack storage")
+        return artifact_root
+
+    @staticmethod
+    def _validate_import_project_id(project_id: str) -> None:
+        """Require one bounded, filesystem-safe path component for imports."""
+        if (
+            project_id in {".", ".."}
+            or not _IMPORT_PROJECT_ID_RE.fullmatch(project_id)
+        ):
+            raise ValueError(
+                "Imported project ID must use only letters, numbers, '.', "
+                "'_', or '-' and cannot contain path separators"
+            )
 
     @staticmethod
     def _slugify(value: str) -> str:
@@ -883,17 +1710,15 @@ class KnowledgePackService(BaseService):
 
     async def _get_schema_version(self) -> int:
         """Get the latest migration number as the schema version."""
-        try:
-            row = await self.db.fetchone(
-                "SELECT MAX(CAST(SUBSTR(name, 1, 3) AS INTEGER)) as ver FROM schema_migrations"
-            )
-            return row["ver"] if row and row["ver"] else 0
-        except Exception:
-            return 0
+        row = await self.db.fetchone(
+            """SELECT MAX(CAST(SUBSTR(filename, 1, 3) AS INTEGER)) AS ver
+               FROM schema_migrations"""
+        )
+        return int(row["ver"]) if row and row["ver"] is not None else 0
 
     # Affordance E (Mission B / mis_01KR209WY4M6WQFEXRH79KC2ZF):
     # severity table mapping integrity-issue category → severity level. The
-    # 4 orphan-class categories are critical (rollback on import); the
+    # Orphan-class categories are critical (rollback on import); the
     # claim_count_mismatch category is warning (commit + recompute).
     # New categories added later default to "warning" — explicit migration
     # to "critical" is required if a future invariant violation should
@@ -904,6 +1729,7 @@ class KnowledgePackService(BaseService):
         "orphaned_entity_link_sources": "critical",
         "orphaned_entity_link_targets": "critical",
         "orphaned_claim_edge_sources": "critical",
+        "orphaned_claim_edge_targets": "critical",
         "orphaned_claim_edge_clusters": "critical",
         "claim_count_mismatch": "warning",
     }
@@ -925,17 +1751,19 @@ class KnowledgePackService(BaseService):
         pid = project_id or self.project_id
         issues: list[dict] = []
 
-        # 1. entity_links with orphaned source_id
+        source_exists = self._typed_entity_link_endpoint_sql(
+            type_column="source_type", id_column="source_id"
+        )
+        target_exists = self._typed_entity_link_endpoint_sql(
+            type_column="target_type", id_column="target_id"
+        )
+
+        # 1. entity_links whose declared source type/id does not resolve in the
+        # edge's own project.
         orphaned_source = await self.db.fetchall(
-            """SELECT el.id, el.source_id, el.source_type FROM entity_links el
+            f"""SELECT el.id, el.source_id, el.source_type FROM entity_links el
                WHERE el.project_id = ?
-               AND NOT EXISTS (SELECT 1 FROM journal j WHERE j.id = el.source_id)
-               AND NOT EXISTS (SELECT 1 FROM decisions d WHERE d.id = el.source_id)
-               AND NOT EXISTS (SELECT 1 FROM literature l WHERE l.id = el.source_id)
-               AND NOT EXISTS (SELECT 1 FROM missions m WHERE m.id = el.source_id)
-               AND NOT EXISTS (SELECT 1 FROM claims c WHERE c.id = el.source_id)
-               AND NOT EXISTS (SELECT 1 FROM evidence_clusters ec WHERE ec.id = el.source_id)
-               AND NOT EXISTS (SELECT 1 FROM checkpoints ck WHERE ck.id = el.source_id)
+               AND NOT ({source_exists})
                LIMIT 50""",
             [pid],
         )
@@ -946,21 +1774,18 @@ class KnowledgePackService(BaseService):
                 "severity": self._severity_for(cat),
                 "count": len(orphaned_source),
                 "ids": [r["id"] for r in orphaned_source[:10]],
-                "description": "entity_links with source_id pointing to non-existent entities",
+                "description": (
+                    "entity_links whose declared source type/id is missing "
+                    "from the edge project"
+                ),
                 "fix_action": "Delete orphaned edges or re-import missing entities",
             })
 
-        # 2. entity_links with orphaned target_id
+        # 2. Same invariant for target endpoints.
         orphaned_target = await self.db.fetchall(
-            """SELECT el.id, el.target_id, el.target_type FROM entity_links el
+            f"""SELECT el.id, el.target_id, el.target_type FROM entity_links el
                WHERE el.project_id = ?
-               AND NOT EXISTS (SELECT 1 FROM journal j WHERE j.id = el.target_id)
-               AND NOT EXISTS (SELECT 1 FROM decisions d WHERE d.id = el.target_id)
-               AND NOT EXISTS (SELECT 1 FROM literature l WHERE l.id = el.target_id)
-               AND NOT EXISTS (SELECT 1 FROM missions m WHERE m.id = el.target_id)
-               AND NOT EXISTS (SELECT 1 FROM claims c WHERE c.id = el.target_id)
-               AND NOT EXISTS (SELECT 1 FROM evidence_clusters ec WHERE ec.id = el.target_id)
-               AND NOT EXISTS (SELECT 1 FROM checkpoints ck WHERE ck.id = el.target_id)
+               AND NOT ({target_exists})
                LIMIT 50""",
             [pid],
         )
@@ -971,7 +1796,10 @@ class KnowledgePackService(BaseService):
                 "severity": self._severity_for(cat),
                 "count": len(orphaned_target),
                 "ids": [r["id"] for r in orphaned_target[:10]],
-                "description": "entity_links with target_id pointing to non-existent entities",
+                "description": (
+                    "entity_links whose declared target type/id is missing "
+                    "from the edge project"
+                ),
                 "fix_action": "Delete orphaned edges or re-import missing entities",
             })
 
@@ -979,7 +1807,11 @@ class KnowledgePackService(BaseService):
         orphaned_claims = await self.db.fetchall(
             """SELECT ce.id FROM claim_edges ce
                WHERE ce.project_id = ?
-               AND NOT EXISTS (SELECT 1 FROM claims c WHERE c.id = ce.source_claim_id)
+               AND NOT EXISTS (
+                   SELECT 1 FROM claims c
+                   WHERE c.id = ce.source_claim_id
+                     AND c.project_id = ce.project_id
+               )
                LIMIT 50""",
             [pid],
         )
@@ -994,11 +1826,57 @@ class KnowledgePackService(BaseService):
                 "fix_action": "Delete orphaned claim edges",
             })
 
-        # 4. claim_edges with orphaned cluster_id
+        # 4. Non-membership claim edges need a same-project target claim.
+        orphaned_targets = await self.db.fetchall(
+            """SELECT ce.id FROM claim_edges ce
+               WHERE ce.project_id = ?
+                 AND ce.relation <> 'member_of'
+                 AND (
+                     (
+                         ce.target_claim_id IS NULL
+                         AND (
+                             ce.relation <> 'contradicts'
+                             OR ce.cluster_id IS NULL
+                         )
+                     )
+                     OR NOT EXISTS (
+                         SELECT 1 FROM claims c
+                         WHERE c.id = ce.target_claim_id
+                           AND c.project_id = ce.project_id
+                     )
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if orphaned_targets:
+            cat = "orphaned_claim_edge_targets"
+            issues.append({
+                "category": cat,
+                "severity": self._severity_for(cat),
+                "count": len(orphaned_targets),
+                "ids": [r["id"] for r in orphaned_targets[:10]],
+                "description": (
+                    "non-membership claim_edges whose target claim is missing "
+                    "from the edge project"
+                ),
+                "fix_action": "Delete orphaned claim edges or restore target claims",
+            })
+
+        # 5. Any declared cluster must be same-project; membership requires one.
         orphaned_clusters = await self.db.fetchall(
             """SELECT ce.id FROM claim_edges ce
-               WHERE ce.project_id = ? AND ce.cluster_id IS NOT NULL
-               AND NOT EXISTS (SELECT 1 FROM evidence_clusters ec WHERE ec.id = ce.cluster_id)
+               WHERE ce.project_id = ?
+                 AND (
+                     (ce.relation = 'member_of' AND ce.cluster_id IS NULL)
+                     OR (
+                         ce.cluster_id IS NOT NULL
+                         AND NOT EXISTS (
+                         SELECT 1 FROM evidence_clusters ec
+                         WHERE ec.id = ce.cluster_id
+                           AND ec.project_id = ce.project_id
+                         )
+                     )
+                 )
                LIMIT 50""",
             [pid],
         )
@@ -1013,15 +1891,19 @@ class KnowledgePackService(BaseService):
                 "fix_action": "Delete orphaned claim edges or re-create clusters",
             })
 
-        # 5. evidence_clusters.claim_count mismatch
+        # 6. evidence_clusters.claim_count mismatch
         mismatched = await self.db.fetchall(
             """SELECT ec.id, ec.claim_count,
                       (SELECT COUNT(*) FROM claim_edges ce
-                       WHERE ce.cluster_id = ec.id AND ce.relation = 'member_of') as actual
+                       WHERE ce.cluster_id = ec.id
+                         AND ce.project_id = ec.project_id
+                         AND ce.relation = 'member_of') as actual
                FROM evidence_clusters ec
                WHERE ec.project_id = ?
                AND ec.claim_count != (SELECT COUNT(*) FROM claim_edges ce
-                                      WHERE ce.cluster_id = ec.id AND ce.relation = 'member_of')
+                                      WHERE ce.cluster_id = ec.id
+                                        AND ce.project_id = ec.project_id
+                                        AND ce.relation = 'member_of')
                LIMIT 50""",
             [pid],
         )
@@ -1037,3 +1919,24 @@ class KnowledgePackService(BaseService):
             })
 
         return issues
+
+    @staticmethod
+    def _typed_entity_link_endpoint_sql(
+        *, type_column: str, id_column: str
+    ) -> str:
+        """Return a trusted SQL predicate for a typed, project-local endpoint."""
+        clauses = []
+        for entity_type, table in _ENTITY_LINK_ENDPOINT_TABLES.items():
+            clauses.append(
+                f"(el.{type_column} = '{entity_type}' "
+                f"AND EXISTS (SELECT 1 FROM [{table}] AS endpoint "
+                f"WHERE endpoint.id = el.{id_column} "
+                "AND endpoint.project_id = el.project_id))"
+            )
+        clauses.append(
+            f"(el.{type_column} = 'project' "
+            f"AND el.{id_column} = el.project_id "
+            "AND EXISTS (SELECT 1 FROM projects AS endpoint "
+            f"WHERE endpoint.id = el.{id_column}))"
+        )
+        return " OR ".join(clauses)

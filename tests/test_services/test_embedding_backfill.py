@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import struct
 from dataclasses import dataclass, field
-from typing import Any
 
 import pytest
 
@@ -695,3 +693,58 @@ async def test_metadata_written_when_vec_available_true(db):
         "vec_available=True must write metadata for each processed row "
         "(positive-case backward compat)."
     )
+
+
+@pytest.mark.asyncio
+async def test_row_write_failure_rolls_back_vector_metadata_and_pending_flag(
+    db,
+    monkeypatch,
+):
+    """One entity's vector, metadata, and pending flag are atomic."""
+    clear_registry()
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS vec_claims (
+               id TEXT PRIMARY KEY,
+               embedding BLOB NOT NULL
+           )"""
+    )
+    monkeypatch.setattr(db, "_vec_loaded", True)
+    await _insert_journal(db, jid="jrn_atomic_embed")
+    [claim_id] = await _insert_pending_claims(
+        db,
+        jid="jrn_atomic_embed",
+        count=1,
+        prefix="clm_atomic_embed_",
+    )
+
+    real_execute = db.execute
+
+    async def fail_metadata(sql, params=None):
+        if "INSERT OR REPLACE INTO embedding_metadata" in sql:
+            raise RuntimeError("injected metadata failure")
+        return await real_execute(sql, params)
+
+    monkeypatch.setattr(db, "execute", fail_metadata)
+    status = register_job()
+    service = BackfillService(
+        db=db,
+        embeddings=FakeEmbedder(dim=4),
+        batch_size=1,
+    )
+    result = await service.run_backfill(status, entity_types=("claim",))
+
+    assert result.processed == 0
+    assert await db.fetchone(
+        "SELECT id FROM vec_claims WHERE id = ?",
+        [claim_id],
+    ) is None
+    assert await db.fetchone(
+        """SELECT entity_id FROM embedding_metadata
+           WHERE entity_type = 'claim' AND entity_id = ?""",
+        [claim_id],
+    ) is None
+    pending = await db.fetchone(
+        "SELECT embedding_pending FROM claims WHERE id = ?",
+        [claim_id],
+    )
+    assert pending["embedding_pending"] == 1

@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import json
+import re
+import shutil
+import sqlite3
+from pathlib import Path
 
 from rka.constants import DEFAULT_PROJECT_ID, SENTINEL_PROJECT_ID
 from rka.infra.ids import generate_id
@@ -14,6 +18,9 @@ class ProjectService(BaseService):
     """Manages projects and per-project state."""
 
     DEFAULT_PROJECT_ID = DEFAULT_PROJECT_ID
+    _SAFE_STORAGE_PROJECT_ID = re.compile(
+        r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z"
+    )
 
     async def list_projects(self) -> list[ProjectInfo]:
         rows = await self.db.fetchall(
@@ -23,6 +30,15 @@ class ProjectService(BaseService):
         return [ProjectInfo(**dict(row)) for row in rows]
 
     async def create_project(self, data: ProjectCreate, actor: str = "system") -> ProjectInfo:
+        """Create project metadata, state, and audit record atomically."""
+        async with self.db.transaction():
+            return await self._create_project(data, actor)
+
+    async def _create_project(
+        self,
+        data: ProjectCreate,
+        actor: str,
+    ) -> ProjectInfo:
         project_id = (data.id or generate_id("project")).strip()
         existing_id = await self.db.fetchone("SELECT id FROM projects WHERE id = ?", [project_id])
         if existing_id:
@@ -75,6 +91,22 @@ class ProjectService(BaseService):
         project_id: str = DEFAULT_PROJECT_ID,
     ) -> ProjectState:
         """Initialize project state (called by `rka init`)."""
+        async with self.db.transaction():
+            return await self._initialize(
+                name,
+                description,
+                phases,
+                project_id,
+            )
+
+    async def _initialize(
+        self,
+        name: str,
+        description: str | None,
+        phases: list[str] | None,
+        project_id: str,
+    ) -> ProjectState:
+        """Implementation for :meth:`initialize` inside its transaction."""
         default_phases = phases or [
             "literature", "planning", "data_collection",
             "implementation", "evaluation", "paper_writing",
@@ -101,6 +133,16 @@ class ProjectService(BaseService):
         project_id: str = DEFAULT_PROJECT_ID,
     ) -> ProjectState:
         """Update project state with partial data."""
+        async with self.db.transaction():
+            return await self._update(data, actor, project_id)
+
+    async def _update(
+        self,
+        data: ProjectStateUpdate,
+        actor: str,
+        project_id: str,
+    ) -> ProjectState:
+        """Implementation for :meth:`update` inside its transaction."""
         current = await self.get(project_id=project_id)
         if current is None:
             raise ValueError("Project not initialized. Run `rka init` first.")
@@ -145,34 +187,197 @@ class ProjectService(BaseService):
     # All project-scoped tables that must be cascade-deleted.
     # Order: dependents first (reverse of insert order).
     _DELETE_TABLES = (
-        "review_queue", "claim_edges", "claims", "evidence_clusters",
-        "entity_topics", "topics", "context_snapshots",
-        "checkpoints", "bootstrap_log", "graph_views", "keynodes",
-        "entity_links", "tags", "audit_log", "events",
-        "qa_logs", "qa_sessions", "exploration_summaries", "figures", "artifacts",
-        "jobs", "embedding_metadata",
-        "journal", "missions", "decisions", "literature",
+        # Native manuscript and immutable validation histories.
+        "manuscript_claim_verification_attestations",
+        "manuscript_claim_ratifications",
+        "manuscript_claim_evidence",
+        "manuscript_unit_evidence",
+        "manuscript_claim_units",
+        "manuscript_checkpoints",
+        "manuscript_reference_members",
+        "reference_validation_attestations",
+        "manuscript_claim_versions",
+        "manuscript_units",
+        "manuscript_claims",
+        "manuscripts",
+        "manuscript_migration_issues",
+        "reference_validation_migration_issues",
+        # Research graph and operational records.
+        "review_queue",
+        "claim_edges",
+        "claims",
+        "evidence_clusters",
+        "calibration_outcomes",
+        "decision_options",
+        "hook_executions",
+        "brain_notifications",
+        "hooks",
+        "topics",
+        "context_snapshots",
+        "checkpoints",
+        "bootstrap_log",
+        "graph_views",
+        "keynodes",
+        "entity_links",
+        "tags",
+        "audit_log",
+        "events",
+        "qa_sessions",
+        "exploration_summaries",
+        "figures",
+        "artifacts",
+        "jobs",
+        "embedding_metadata",
+        "journal",
+        "missions",
+        "decisions",
+        "literature",
+        # Delete the semantic cursor after all delete triggers have fired.
+        "change_events",
         "project_states",
     )
 
+    _INDIRECT_DELETE_COUNT_QUERIES = {
+        "qa_logs": """
+            SELECT COUNT(*) AS cnt
+            FROM qa_logs
+            WHERE session_id IN (
+                SELECT id FROM qa_sessions WHERE project_id = ?
+            )
+        """,
+        "entity_topics": """
+            SELECT COUNT(*) AS cnt
+            FROM entity_topics
+            WHERE topic_id IN (
+                SELECT id FROM topics WHERE project_id = ?
+            )
+        """,
+    }
+
     async def get_project_entity_counts(self, project_id: str) -> dict[str, int]:
         """Return row counts per table for a project, for confirmation UI."""
-        counts = {}
+        counts: dict[str, int] = {}
+        for table, query in self._INDIRECT_DELETE_COUNT_QUERIES.items():
+            try:
+                row = await self.db.fetchone(query, [project_id])
+            except sqlite3.OperationalError as exc:
+                if "no such table" not in str(exc).lower():
+                    raise
+                continue
+            count = row["cnt"] if row else 0
+            if count > 0:
+                counts[table] = count
+
         for table in self._DELETE_TABLES:
             try:
                 row = await self.db.fetchone(
                     f"SELECT COUNT(*) as cnt FROM {table} WHERE project_id = ?",
                     [project_id],
                 )
-                cnt = row["cnt"] if row else 0
-                if cnt > 0:
-                    counts[table] = cnt
-            except Exception:
-                pass  # table may not exist in older schemas
+            except sqlite3.OperationalError as exc:
+                if "no such table" not in str(exc).lower():
+                    raise
+                continue
+            count = row["cnt"] if row else 0
+            if count > 0:
+                counts[table] = count
         return counts
 
     async def delete_project(self, project_id: str, confirm: bool = False) -> dict:
         """Delete a project and all its scoped data. Requires confirm=True."""
+        knowledge_pack_dir: Path | None = None
+        async with self.db.transaction():
+            if confirm:
+                # Preflight the only filesystem path this service owns before
+                # mutating the database. Filesystem removal itself happens
+                # after commit because it cannot be rolled back with SQLite.
+                knowledge_pack_dir = self._knowledge_pack_project_dir(project_id)
+            result = await self._delete_project(project_id, confirm)
+
+        if knowledge_pack_dir is not None:
+            try:
+                removed = self._remove_knowledge_pack_project_dir(
+                    project_id,
+                    expected_path=knowledge_pack_dir,
+                )
+            except (OSError, RuntimeError, ValueError) as exc:
+                # The SQLite deletion is already committed. Report that truth
+                # and leave an actionable cleanup warning instead of raising a
+                # misleading, non-retryable "delete failed" response.
+                result["managed_storage_cleanup"] = {
+                    "status": "failed",
+                    "path": str(knowledge_pack_dir),
+                    "error": str(exc),
+                }
+                result["message"] = (
+                    f"Project '{result['project_name']}' was permanently "
+                    "deleted from RKA, but its managed KnowledgePack files "
+                    "could not be removed; see managed_storage_cleanup."
+                )
+            else:
+                result["managed_storage_cleanup"] = {
+                    "status": "deleted" if removed else "not_present",
+                    "path": str(knowledge_pack_dir),
+                }
+        return result
+
+    def _knowledge_pack_project_dir(self, project_id: str) -> Path:
+        """Return the service-owned project directory after strict validation."""
+        if (
+            project_id in {".", ".."}
+            or not self._SAFE_STORAGE_PROJECT_ID.fullmatch(project_id)
+        ):
+            raise ValueError(
+                "Project ID is not safe for knowledge-pack storage cleanup"
+            )
+
+        db_dir = Path(self.db.db_path).resolve().parent
+        storage_root = db_dir / "knowledge-packs"
+        if storage_root.is_symlink():
+            raise ValueError(
+                "Knowledge-pack storage root must not be a symbolic link"
+            )
+
+        resolved_root = storage_root.resolve()
+        project_dir = storage_root / project_id
+        if project_dir.is_symlink():
+            raise ValueError(
+                "Knowledge-pack project directory must not be a symbolic link"
+            )
+
+        resolved_project_dir = project_dir.resolve()
+        if (
+            not resolved_project_dir.is_relative_to(resolved_root)
+            or resolved_project_dir.parent != resolved_root
+        ):
+            raise ValueError(
+                "Project ID escapes knowledge-pack storage cleanup root"
+            )
+        if project_dir.exists() and not project_dir.is_dir():
+            raise ValueError(
+                "Knowledge-pack project storage path is not a directory"
+            )
+        return project_dir
+
+    def _remove_knowledge_pack_project_dir(
+        self,
+        project_id: str,
+        *,
+        expected_path: Path,
+    ) -> bool:
+        """Remove only the validated service-owned directory after DB commit."""
+        project_dir = self._knowledge_pack_project_dir(project_id)
+        if project_dir != expected_path:
+            raise RuntimeError(
+                "Knowledge-pack project storage path changed during deletion"
+            )
+        if project_dir.exists():
+            shutil.rmtree(project_dir)
+            return True
+        return False
+
+    async def _delete_project(self, project_id: str, confirm: bool) -> dict:
+        """Implementation for :meth:`delete_project` inside its transaction."""
         if project_id == SENTINEL_PROJECT_ID:
             raise ValueError("Cannot delete the default project (proj_default)")
 
@@ -194,6 +399,42 @@ class ProjectService(BaseService):
                 "message": "Set confirm=true to permanently delete this project and all its data.",
             }
 
+        await self.db.execute(
+            """INSERT INTO project_deletion_authorizations (project_id)
+               VALUES (?)""",
+            [project_id],
+        )
+
+        # Child tables without their own project_id need scoped joins. Break
+        # the checkpoint self-reference before its ON DELETE RESTRICT guard.
+        await self.db.execute(
+            """DELETE FROM qa_logs
+               WHERE session_id IN (
+                   SELECT id FROM qa_sessions WHERE project_id = ?
+               )""",
+            [project_id],
+        )
+        await self.db.execute(
+            """DELETE FROM entity_topics
+               WHERE topic_id IN (
+                   SELECT id FROM topics WHERE project_id = ?
+               )""",
+            [project_id],
+        )
+        await self.db.execute(
+            """UPDATE manuscript_checkpoints
+               SET supersedes_id = NULL
+               WHERE project_id = ?""",
+            [project_id],
+        )
+        await self.db.execute(
+            """UPDATE decisions
+               SET recommended_option_id = NULL,
+                   pi_selected_option_id = NULL
+               WHERE project_id = ?""",
+            [project_id],
+        )
+
         # Cascade delete in reverse dependency order
         for table in self._DELETE_TABLES:
             try:
@@ -201,11 +442,18 @@ class ProjectService(BaseService):
                     f"DELETE FROM {table} WHERE project_id = ?",
                     [project_id],
                 )
-            except Exception:
-                pass  # table may not exist in older schemas
+            except sqlite3.OperationalError as exc:
+                if "no such table" not in str(exc).lower():
+                    raise
+                # Some pre-migration databases do not have every scoped table.
 
         # Delete the project row itself
         await self.db.execute("DELETE FROM projects WHERE id = ?", [project_id])
+        await self.db.execute(
+            """DELETE FROM project_deletion_authorizations
+               WHERE project_id = ?""",
+            [project_id],
+        )
         await self.db.commit()
 
         return {

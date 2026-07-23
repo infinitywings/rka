@@ -13,8 +13,8 @@ Recorded as a Decision (`dec_`) in RKA with the chosen framing
 
 ## Decision reference
 
-ratified_via: dec_REPLACE_WITH_OUTLINE_DECISION_ID
-ratified_at: (ISO date)
+ratified_via: null
+ratified_at: null
 
 ## Sections
 

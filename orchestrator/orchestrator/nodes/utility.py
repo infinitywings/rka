@@ -58,7 +58,20 @@ def budget_check(
     spent = float(state.get("usd_spent", 0.0))
     loops = int(state.get("loop_iterations", 0))
 
-    if spent >= cap_usd:
+    # A per-run `cap_usd` seeded into state OVERRIDES the constant default.
+    # The hardcoded DEFAULT_BUDGET_USD (5.0) is calibrated for cheap models;
+    # an expensive model (e.g. Opus 4.8, which ships ~50 tool schemas every
+    # turn at ~$1/node + a multi-turn mission_execute experiment loop) blows
+    # it after a handful of nodes — escalating the run BEFORE it reaches the
+    # decision/pivot stage. Making the cap state-configurable lets a caller
+    # (the runner or the eval driver) size it to the model without editing a
+    # global constant. Empirically surfaced driving Opus 4.8 (2026-06-15):
+    # usd_spent=5.18 >= cap=5.0 fired at budget_check after mission_execute,
+    # starving the pi_decision_select pivot gate.
+    state_cap = state.get("cap_usd")
+    effective_cap = float(state_cap) if state_cap else cap_usd
+
+    if spent >= effective_cap:
         return {
             "current_node": "budget_check",
             "next_node_override": "escalation_router",
@@ -66,7 +79,7 @@ def budget_check(
                 _error(
                     "budget_check",
                     "budget_exceeded",
-                    f"usd_spent={spent} >= cap={cap_usd}",
+                    f"usd_spent={spent} >= cap={effective_cap}",
                 )
             ],
         }

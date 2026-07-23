@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from rka.infra.ids import generate_id
 from rka.models.literature import Literature, LiteratureCreate, LiteratureUpdate
-from rka.services.base import BaseService, _now
+from rka.services.base import BaseService, _precise_now
 from rka.services.jobs import JobQueue
+
+
+class LiteratureNotFoundError(ValueError):
+    """Raised when a literature entry is absent from the active project scope."""
 
 
 class LiteratureService(BaseService):
@@ -37,50 +41,71 @@ class LiteratureService(BaseService):
         lit_id = generate_id("literature")
         source = actor or data.added_by
 
-        await self.db.execute(
-            """INSERT INTO literature
-               (id, title, authors, year, venue, doi, url, bibtex, pdf_path, abstract,
-                status, key_findings, methodology_notes, relevance, relevance_score,
-                related_decisions, added_by, notes,
-                zotero_item_key, zotero_match_method, project_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            [
-                lit_id, data.title, self._json_dumps(data.authors),
-                data.year, data.venue, data.doi, data.url, data.bibtex,
-                data.pdf_path, data.abstract, data.status,
-                self._json_dumps(data.key_findings), data.methodology_notes,
-                data.relevance, data.relevance_score,
-                self._json_dumps(data.related_decisions),
-                data.added_by, data.notes,
-                data.zotero_item_key, data.zotero_match_method,
-                self.project_id,
-            ],
-        )
-        await self.db.commit()
+        async with self.db.transaction():
+            await self.db.execute(
+                """INSERT INTO literature
+                   (id, title, authors, year, venue, doi, url, bibtex, pdf_path,
+                    abstract, status, key_findings, methodology_notes, relevance,
+                    relevance_score, related_decisions, added_by, notes,
+                    zotero_item_key, zotero_match_method, project_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    lit_id,
+                    data.title,
+                    self._json_dumps(data.authors),
+                    data.year,
+                    data.venue,
+                    data.doi,
+                    data.url,
+                    data.bibtex,
+                    data.pdf_path,
+                    data.abstract,
+                    data.status,
+                    self._json_dumps(data.key_findings),
+                    data.methodology_notes,
+                    data.relevance,
+                    data.relevance_score,
+                    self._json_dumps(data.related_decisions),
+                    data.added_by,
+                    data.notes,
+                    data.zotero_item_key,
+                    data.zotero_match_method,
+                    self.project_id,
+                ],
+            )
 
-        # Save user-provided tags immediately; auto-tags are deferred
-        has_user_tags = bool(data.tags)
-        if has_user_tags:
-            await self._set_tags("literature", lit_id, data.tags)
+            if data.tags:
+                await self._set_tags("literature", lit_id, data.tags)
 
-        # Sync cheap deterministic FTS now; LLM enrichment + embedding are queued
-        await self._sync_fts("literature", lit_id, {
-            "title": data.title, "abstract": data.abstract, "notes": data.notes,
-        })
-
-        await self._enqueue_enrichment_jobs(
-            lit_id,
-            include_embedding=bool(self.embeddings),
-        )
-
-        await self.emit_event(
-            event_type="literature_added",
-            entity_type="literature",
-            entity_id=lit_id,
-            actor=source,
-            summary=f"Added: {data.title[:100]}",
-        )
-        await self.audit("create", "literature", lit_id, source)
+            await self._replace_outgoing_links(
+                source_type="literature",
+                source_id=lit_id,
+                link_type="informed_by",
+                target_type="decision",
+                target_ids=data.related_decisions,
+                created_by=source,
+            )
+            await self._sync_fts(
+                "literature",
+                lit_id,
+                {
+                    "title": data.title,
+                    "abstract": data.abstract,
+                    "notes": data.notes,
+                },
+            )
+            await self._enqueue_enrichment_jobs(
+                lit_id,
+                include_embedding=bool(self.embeddings),
+            )
+            await self.emit_event(
+                event_type="literature_added",
+                entity_type="literature",
+                entity_id=lit_id,
+                actor=source,
+                summary=f"Added: {data.title[:100]}",
+            )
+            await self.audit("create", "literature", lit_id, source)
         return await self.get(lit_id)
 
     async def get(self, lit_id: str) -> Literature | None:
@@ -138,6 +163,7 @@ class LiteratureService(BaseService):
         """Update a literature entry."""
         dump = data.model_dump(exclude_none=True)
         tags = dump.pop("tags", None)
+        replace_related_decisions = "related_decisions" in dump
 
         updates = {}
         for field, value in dump.items():
@@ -146,46 +172,78 @@ class LiteratureService(BaseService):
             else:
                 updates[field] = value
 
-        if tags is not None:
-            await self._set_tags("literature", lit_id, tags)
-
-        if not updates:
-            return await self.get(lit_id)
-
-        updates["updated_at"] = _now()
-        set_clause = ", ".join(f"{k} = ?" for k in updates)
-        values = list(updates.values()) + [lit_id]
-
-        await self.db.execute(
-            f"UPDATE literature SET {set_clause} WHERE id = ? AND project_id = ?",
-            values + [self.project_id],
-        )
-        await self.db.commit()
-
-        # Emit event if status changed to cited
-        if data.status == "cited":
-            await self.emit_event(
-                event_type="literature_cited",
-                entity_type="literature",
-                entity_id=lit_id,
-                actor=actor,
-                summary="Literature cited",
-            )
-
-        # Re-sync FTS on content changes; defer embedding to job queue
-        if any(f in updates for f in ("title", "abstract", "notes")):
-            row = await self.db.fetchone(
-                "SELECT title, abstract, notes FROM literature WHERE id = ? AND project_id = ?",
+        async with self.db.transaction():
+            owned = await self.db.fetchone(
+                "SELECT id FROM literature WHERE id = ? AND project_id = ?",
                 [lit_id, self.project_id],
             )
-            if row:
-                await self._sync_fts("literature", lit_id, dict(row))
-                await self._enqueue_enrichment_jobs(
-                    lit_id,
-                    include_embedding=bool(self.embeddings),
+            if owned is None:
+                raise LiteratureNotFoundError(
+                    f"literature {lit_id!r} not found in project "
+                    f"{self.project_id}"
                 )
 
-        await self.audit("update", "literature", lit_id, actor, {"fields": list(updates.keys())})
+            if tags is not None:
+                await self._set_tags("literature", lit_id, tags)
+
+            if not updates:
+                current = await self.get(lit_id)
+                if current is None:  # pragma: no cover - protected by write lock
+                    raise RuntimeError("literature update target disappeared")
+                return current
+
+            updates["updated_at"] = _precise_now()
+            set_clause = ", ".join(f"{k} = ?" for k in updates)
+            values = list(updates.values()) + [lit_id]
+            cursor = await self.db.execute(
+                f"UPDATE literature SET {set_clause} WHERE id = ? AND project_id = ?",
+                values + [self.project_id],
+            )
+            if cursor.rowcount != 1:  # pragma: no cover - protected by write lock
+                raise LiteratureNotFoundError(
+                    f"literature {lit_id!r} not found in project "
+                    f"{self.project_id}"
+                )
+
+            if replace_related_decisions:
+                await self._replace_outgoing_links(
+                    source_type="literature",
+                    source_id=lit_id,
+                    link_type="informed_by",
+                    target_type="decision",
+                    target_ids=data.related_decisions,
+                    created_by=actor,
+                )
+
+            if data.status == "cited":
+                await self.emit_event(
+                    event_type="literature_cited",
+                    entity_type="literature",
+                    entity_id=lit_id,
+                    actor=actor,
+                    summary="Literature cited",
+                )
+
+            if any(f in updates for f in ("title", "abstract", "notes")):
+                row = await self.db.fetchone(
+                    "SELECT title, abstract, notes FROM literature "
+                    "WHERE id = ? AND project_id = ?",
+                    [lit_id, self.project_id],
+                )
+                if row:
+                    await self._sync_fts("literature", lit_id, dict(row))
+                    await self._enqueue_enrichment_jobs(
+                        lit_id,
+                        include_embedding=bool(self.embeddings),
+                    )
+
+            await self.audit(
+                "update",
+                "literature",
+                lit_id,
+                actor,
+                {"fields": list(updates.keys())},
+            )
         return await self.get(lit_id)
 
     async def _row_to_model(self, row: dict) -> Literature:
@@ -193,6 +251,7 @@ class LiteratureService(BaseService):
         enrichment_status = await self._get_enrichment_status("literature", row["id"])
         return Literature(
             id=row["id"],
+            project_id=row["project_id"],
             title=row["title"],
             authors=self._json_loads(row.get("authors")),
             year=row.get("year"),
