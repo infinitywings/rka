@@ -14,6 +14,10 @@ from rka.services.base import BaseService, _now
 from rka.services.jobs import JobQueue
 
 
+class MissionNotFoundError(ValueError):
+    """Raised when a mission is absent from the active project scope."""
+
+
 class MissionService(BaseService):
     """Manages mission lifecycle."""
 
@@ -181,6 +185,7 @@ class MissionService(BaseService):
         """Update a mission. Generic dump-iterating (Pattern A) — every field
         declared in MissionUpdate is persisted; undeclared fields are rejected
         by Pydantic at request time (extra="forbid")."""
+        self._validate_actor(actor)
         dump = data.model_dump(exclude_none=True)
         tags = dump.pop("tags", None)
         replace_motivated_by = "motivated_by_decision" in dump
@@ -200,11 +205,24 @@ class MissionService(BaseService):
             updates["completed_at"] = _now()
 
         async with self.db.transaction():
+            owned = await self.db.fetchone(
+                "SELECT id FROM missions WHERE id = ? AND project_id = ?",
+                [mis_id, self.project_id],
+            )
+            if owned is None:
+                raise MissionNotFoundError(
+                    f"mission {mis_id!r} not found in project "
+                    f"{self.project_id}"
+                )
+
             if tags is not None:
                 await self._set_tags("mission", mis_id, tags)
 
             if not updates:
-                return await self.get(mis_id)
+                current = await self.get(mis_id)
+                if current is None:  # pragma: no cover - protected by write lock
+                    raise RuntimeError("mission update target disappeared")
+                return current
 
             if replace_motivated_by and updates["motivated_by_decision"] is not None:
                 dec = await self.db.fetchone(
@@ -220,10 +238,15 @@ class MissionService(BaseService):
 
             set_clause = ", ".join(f"{k} = ?" for k in updates)
             values = list(updates.values()) + [mis_id]
-            await self.db.execute(
+            cursor = await self.db.execute(
                 f"UPDATE missions SET {set_clause} WHERE id = ? AND project_id = ?",
                 values + [self.project_id],
             )
+            if cursor.rowcount != 1:  # pragma: no cover - protected by write lock
+                raise MissionNotFoundError(
+                    f"mission {mis_id!r} not found in project "
+                    f"{self.project_id}"
+                )
 
             if replace_motivated_by:
                 motivated_by = updates["motivated_by_decision"]
@@ -280,7 +303,10 @@ class MissionService(BaseService):
                 actor,
                 {"fields": list(updates.keys())},
             )
-        return await self.get(mis_id)
+        updated = await self.get(mis_id)
+        if updated is None:  # pragma: no cover - guards impossible DB drift
+            raise RuntimeError("mission update was not readable")
+        return updated
 
     async def submit_report(
         self, mis_id: str, data: MissionReportCreate, actor: str = "executor"
@@ -301,11 +327,16 @@ class MissionService(BaseService):
         )
 
         async with self.db.transaction():
-            await self.db.execute(
+            cursor = await self.db.execute(
                 "UPDATE missions SET report = ?, status = 'complete', completed_at = ? "
                 "WHERE id = ? AND project_id = ?",
                 [report.model_dump_json(), _now(), mis_id, self.project_id],
             )
+            if cursor.rowcount != 1:
+                raise MissionNotFoundError(
+                    f"mission {mis_id!r} not found in project "
+                    f"{self.project_id}"
+                )
             await self.emit_event(
                 event_type="mission_completed",
                 entity_type="mission",

@@ -13,7 +13,7 @@ The PI launches `claude` in a manuscript working directory `manuscripts/<project
 Read `.rka/manuscript.json`, which `rka writer init` writes only after registering or verifying the manuscript and atomically publishing the workspace. Treat its `project_id` and `manuscript_id` as the binding, then confirm the project exists:
 
 ```python
-rka_query(args={"operation": "list_projects"})  # confirm the prj_... id from the directory name exists
+rka_query(args={"operation": "list_projects"})  # confirm the bound prj_... id exists
 ```
 
 There is no active-project session state at the MCP layer and the workspace `.mcp.json` intentionally carries no default project. Thread `project_id="prj_01KS..."` explicitly on every call. A missing/malformed metadata file is a setup blocker; do not infer a write target from the directory name.
@@ -47,6 +47,11 @@ rka writer sync \
 ```
 
 ```python
+rka_query(args={
+    "operation": "changelog",
+    "project_id": "prj_01KS...",
+    "filters": {"since": "<last writing session date from .planning/ACTIVE_WORKFLOW.md>"},
+})  # orientation only; the integer manuscript cursor remains authoritative
 rka_query(args={"operation": "research_map", "project_id": "prj_01KS..."})
 ```
 

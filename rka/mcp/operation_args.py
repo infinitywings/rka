@@ -9,8 +9,9 @@ operation gets its own Pydantic ``Args`` model that:
    arrays — the LLM cannot emit a bad enum value (the tool surface rejects it
    pre-dispatch).
 2. **Locks required fields per operation.** Each branch's required-fields
-   array is explicit; the LLM-emission-time gap that Run-5 exploited
-   (``confidence='confirmed'``, ``content=`` vs ``description=``) is closed.
+   array is explicit; the LLM-emission-time gap that Run-5 exploited is
+   closed. Canonical/legacy aliases such as checkpoint ``description`` and
+   ``content`` are handled by explicit cross-field validators.
 3. **Locks cross-field invariants** via ``model_validator(mode='after')``
    for the empirically-observed Brain hallucination + omission classes
    (``related_journal=[]``, ``source='pi'`` without ``verbatim_input``,

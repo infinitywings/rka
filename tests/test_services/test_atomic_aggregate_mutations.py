@@ -7,14 +7,18 @@ import json
 import pytest
 
 from rka.infra.database import Database
+from rka.models.checkpoint import CheckpointCreate, CheckpointResolve
 from rka.models.decision import DecisionCreate, DecisionUpdate
 from rka.models.journal import JournalEntryCreate, JournalEntryUpdate
 from rka.models.literature import LiteratureCreate, LiteratureUpdate
 from rka.models.mission import MissionCreate, MissionReportCreate, MissionUpdate
+from rka.models.project import ProjectCreate
+from rka.services.checkpoints import CheckpointNotFoundError, CheckpointService
 from rka.services.decisions import DecisionService
 from rka.services.literature import LiteratureService
 from rka.services.missions import MissionService
 from rka.services.notes import NoteService
+from rka.services.project import ProjectService
 
 PROJECT_ID = "proj_default"
 
@@ -310,6 +314,214 @@ async def test_note_create_failure_rolls_back_all_aggregate_rows(
     ) is None
     assert await db.fetchone(
         "SELECT id FROM events WHERE summary LIKE '%atomiccreaterollbacktoken%'"
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_create_failure_rolls_back_row_and_event(
+    db_with_project: Database,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = db_with_project
+    mission = await MissionService(db, project_id=PROJECT_ID).create(
+        MissionCreate(phase="execution", objective="checkpoint rollback anchor")
+    )
+    service = CheckpointService(db, project_id=PROJECT_ID)
+
+    async def fail_audit(*args, **kwargs) -> None:
+        raise RuntimeError("simulated checkpoint audit failure")
+
+    monkeypatch.setattr(service, "audit", fail_audit)
+    with pytest.raises(RuntimeError, match="simulated checkpoint audit failure"):
+        await service.create(
+            CheckpointCreate(
+                mission_id=mission.id,
+                type="decision",
+                description="atomiccheckpointcreaterollbacktoken",
+            )
+        )
+
+    assert await db.fetchone(
+        """SELECT id FROM checkpoints
+           WHERE description = 'atomiccheckpointcreaterollbacktoken'"""
+    ) is None
+    assert await db.fetchone(
+        """SELECT id FROM events
+           WHERE event_type = 'checkpoint_created'
+             AND summary LIKE '%atomiccheckpointcreaterollbacktoken%'"""
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_create_rejects_foreign_mission_without_side_effects(
+    db_with_project: Database,
+) -> None:
+    db = db_with_project
+    foreign_project = "proj_foreign_checkpoint_mission"
+    await ProjectService(db).create_project(
+        ProjectCreate(id=foreign_project, name="Foreign Checkpoint Mission"),
+        actor="system",
+    )
+    foreign_mission = await MissionService(
+        db,
+        project_id=foreign_project,
+    ).create(
+        MissionCreate(phase="execution", objective="foreign mission")
+    )
+    changes_before = db.conn.total_changes
+
+    with pytest.raises(ValueError, match="mission .* not found"):
+        await CheckpointService(db, project_id=PROJECT_ID).create(
+            CheckpointCreate(
+                mission_id=foreign_mission.id,
+                type="decision",
+                description="must not cross project scope",
+            )
+        )
+
+    assert db.conn.total_changes == changes_before
+    assert await db.fetchone(
+        "SELECT id FROM checkpoints WHERE mission_id = ?",
+        [foreign_mission.id],
+    ) is None
+    assert await db.fetchone(
+        """SELECT id FROM events
+           WHERE project_id = ? AND entity_type = 'checkpoint'
+             AND summary LIKE '%must not cross project scope%'""",
+        [PROJECT_ID],
+    ) is None
+    assert await db.fetchone(
+        """SELECT id FROM audit_log
+           WHERE project_id = ? AND entity_type = 'checkpoint'
+             AND action = 'create'""",
+        [PROJECT_ID],
+    ) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_kind", ["missing", "foreign"])
+async def test_checkpoint_resolve_rejects_unowned_target_before_linked_decision(
+    db_with_project: Database,
+    target_kind: str,
+) -> None:
+    db = db_with_project
+    foreign_project = "proj_foreign_checkpoint_resolve"
+    await ProjectService(db).create_project(
+        ProjectCreate(id=foreign_project, name="Foreign Checkpoint Resolve"),
+        actor="system",
+    )
+    foreign_mission = await MissionService(
+        db,
+        project_id=foreign_project,
+    ).create(
+        MissionCreate(phase="execution", objective="foreign mission")
+    )
+    foreign_service = CheckpointService(db, project_id=foreign_project)
+    foreign_checkpoint = await foreign_service.create(
+        CheckpointCreate(
+            mission_id=foreign_mission.id,
+            type="decision",
+            description="foreign checkpoint source",
+        )
+    )
+    target_id = (
+        "chk_missing_resolve"
+        if target_kind == "missing"
+        else foreign_checkpoint.id
+    )
+    changes_before = db.conn.total_changes
+
+    with pytest.raises(CheckpointNotFoundError, match="not found"):
+        await CheckpointService(db, project_id=PROJECT_ID).resolve(
+            target_id,
+            CheckpointResolve(
+                resolution="must not create an orphan decision",
+                resolved_by="pi",
+                create_decision=True,
+            ),
+            decision_service=DecisionService(db, project_id=PROJECT_ID),
+        )
+
+    assert db.conn.total_changes == changes_before
+    assert await db.fetchone(
+        """SELECT status, resolution, linked_decision_id
+           FROM checkpoints WHERE id = ?""",
+        [foreign_checkpoint.id],
+    ) == {
+        "status": "open",
+        "resolution": None,
+        "linked_decision_id": None,
+    }
+    assert await db.fetchone(
+        """SELECT id FROM decisions
+           WHERE project_id = ? AND chosen = ?""",
+        [PROJECT_ID, "must not create an orphan decision"],
+    ) is None
+    assert await db.fetchone(
+        """SELECT id FROM events
+           WHERE project_id = ? AND entity_type = 'checkpoint'
+             AND entity_id = ? AND event_type = 'checkpoint_resolved'""",
+        [PROJECT_ID, target_id],
+    ) is None
+    assert await db.fetchone(
+        """SELECT id FROM audit_log
+           WHERE project_id = ? AND entity_type = 'checkpoint'
+             AND entity_id = ? AND action = 'update'""",
+        [PROJECT_ID, target_id],
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_resolve_failure_restores_checkpoint_and_linked_decision(
+    db_with_project: Database,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = db_with_project
+    mission = await MissionService(db, project_id=PROJECT_ID).create(
+        MissionCreate(phase="execution", objective="checkpoint resolution anchor")
+    )
+    service = CheckpointService(db, project_id=PROJECT_ID)
+    checkpoint = await service.create(
+        CheckpointCreate(
+            mission_id=mission.id,
+            type="decision",
+            description="atomiccheckpointresolverollbacktoken",
+        )
+    )
+
+    async def fail_audit(*args, **kwargs) -> None:
+        raise RuntimeError("simulated checkpoint resolution audit failure")
+
+    monkeypatch.setattr(service, "audit", fail_audit)
+    with pytest.raises(
+        RuntimeError,
+        match="simulated checkpoint resolution audit failure",
+    ):
+        await service.resolve(
+            checkpoint.id,
+            CheckpointResolve(
+                resolution="retain the atomic boundary",
+                resolved_by="pi",
+                rationale="rollback every dependent write",
+                create_decision=True,
+            ),
+            decision_service=DecisionService(db, project_id=PROJECT_ID),
+        )
+
+    restored = await service.get(checkpoint.id)
+    assert restored is not None
+    assert restored.status == "open"
+    assert restored.resolution is None
+    assert restored.linked_decision_id is None
+    assert await db.fetchone(
+        """SELECT id FROM decisions
+           WHERE question = 'atomiccheckpointresolverollbacktoken'"""
+    ) is None
+    assert await db.fetchone(
+        """SELECT id FROM events
+           WHERE event_type = 'checkpoint_resolved'
+             AND entity_id = ?""",
+        [checkpoint.id],
     ) is None
 
 

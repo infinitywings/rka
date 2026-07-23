@@ -12,6 +12,10 @@ from rka.services.jobs import JobQueue
 logger = logging.getLogger(__name__)
 
 
+class NoteNotFoundError(ValueError):
+    """Raised when a journal entry is absent from the active project scope."""
+
+
 class NoteService(BaseService):
     """Manages research journal entries."""
 
@@ -245,19 +249,37 @@ class NoteService(BaseService):
                 updates[field] = value
 
         async with self.db.transaction():
+            owned = await self.db.fetchone(
+                "SELECT id FROM journal WHERE id = ? AND project_id = ?",
+                [entry_id, self.project_id],
+            )
+            if owned is None:
+                raise NoteNotFoundError(
+                    f"journal entry {entry_id!r} not found in project "
+                    f"{self.project_id}"
+                )
+
             if tags is not None:
                 await self._set_tags("journal", entry_id, tags)
 
             if not updates:
-                return await self.get(entry_id)
+                current = await self.get(entry_id)
+                if current is None:  # pragma: no cover - protected by write lock
+                    raise RuntimeError("journal update target disappeared")
+                return current
 
             updates["updated_at"] = _now()
             set_clause = ", ".join(f"{k} = ?" for k in updates)
             values = list(updates.values()) + [entry_id]
-            await self.db.execute(
+            cursor = await self.db.execute(
                 f"UPDATE journal SET {set_clause} WHERE id = ? AND project_id = ?",
                 values + [self.project_id],
             )
+            if cursor.rowcount != 1:  # pragma: no cover - protected by write lock
+                raise NoteNotFoundError(
+                    f"journal entry {entry_id!r} not found in project "
+                    f"{self.project_id}"
+                )
 
             if replace_related_decisions:
                 await self._replace_outgoing_links(
@@ -459,16 +481,17 @@ class NoteService(BaseService):
         if not summary:
             return {"outcome": "noop"}
 
-        await self.db.execute(
-            "UPDATE journal SET summary = ? WHERE id = ? AND project_id = ?",
-            [summary, entry_id, self.project_id],
-        )
-        await self.db.commit()
+        async with self.db.transaction():
+            await self.db.execute(
+                "UPDATE journal SET summary = ? WHERE id = ? AND project_id = ?",
+                [summary, entry_id, self.project_id],
+            )
 
-        # Re-sync FTS so the summary is searchable
-        await self._sync_fts("journal", entry_id, {
-            "content": row["content"], "summary": summary,
-        })
+            # Keep the source mutation and its searchable projection in one
+            # managed unit. The LLM call above remains outside the transaction.
+            await self._sync_fts("journal", entry_id, {
+                "content": row["content"], "summary": summary,
+            })
 
         return {"outcome": "updated", "summary_len": len(summary)}
 

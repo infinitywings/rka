@@ -24,7 +24,7 @@ from urllib.parse import urlsplit, urlunsplit
 from rka.infra.database import Database
 from rka.infra.ids import generate_id
 from rka.models.reference_validation import normalize_reference_input
-from rka.services.base import BaseService, _now
+from rka.services.base import BaseService, _precise_now
 from rka.services.jobs import JobLeaseLost, JobQueue
 from rka.services.manuscript_native import NativeManuscriptService
 
@@ -121,6 +121,7 @@ _SAFE_FIXED_NOTES = {
     "stage_f_betterbib_unavailable",
     "stage_f_bibtex_tidy_applied",
     "stage_f_bibtex_tidy_unavailable",
+    "stage_f_manubot_csljson_converted",
     "stage_f_reference_missing_resolvable_id",
     "stage_f_skipped_no_manubot",
     "stage_f_skipped_no_resolvable_ids",
@@ -547,8 +548,10 @@ class ReferenceValidationService(BaseService):
         *,
         manuscript_id: str,
         literature_id: str | None = None,
+        actor: str = "executor",
     ) -> dict[str, Any]:
         """Queue one validation attempt and return pending job metadata."""
+        self._validate_actor(actor)
         normalized_reference = normalize_reference_input(reference)
         manuscript_id = _require_bounded_id(manuscript_id, label="manuscript_id")
         if literature_id is not None:
@@ -604,16 +607,28 @@ class ReferenceValidationService(BaseService):
             f"{hashlib.sha256(dedupe_material.encode('utf-8')).hexdigest()}"
         )
         queue = JobQueue(self.db)
-        job_id = await queue.enqueue(
-            REFERENCE_VALIDATE_JOB,
-            project_id=self.project_id,
-            entity_type="manuscript",
-            entity_id=manuscript.id,
-            payload=payload,
-            dedupe_key=dedupe_key,
-            priority=40,
-            max_attempts=3,
-        )
+        async with self.db.transaction():
+            job_id = await queue.enqueue(
+                REFERENCE_VALIDATE_JOB,
+                project_id=self.project_id,
+                entity_type="manuscript",
+                entity_id=manuscript.id,
+                payload=payload,
+                dedupe_key=dedupe_key,
+                priority=40,
+                max_attempts=3,
+            )
+            await self.audit(
+                "create",
+                "reference_validation_job",
+                job_id,
+                actor,
+                {
+                    "operation": "enqueue_reference_validation",
+                    "manuscript_id": manuscript.id,
+                    "literature_id": literature_id,
+                },
+            )
         status = await self.get_status(manuscript.id, job_id)
         if status is None:  # pragma: no cover - guards impossible queue drift
             raise RuntimeError(f"queued validation job {job_id} was not readable")
@@ -816,7 +831,7 @@ class ReferenceValidationRunner(BaseService):
             _require_reference_literature_identity(reference, dict(literature))
 
         validation_id = generate_id("reference_validation")
-        started_at = _now()
+        started_at = _precise_now()
         input_doi = reference.get("DOI") or reference.get("doi")
         input_title = reference.get("title")
         input_authors = reference.get("author") or []
@@ -965,7 +980,7 @@ class ReferenceValidationRunner(BaseService):
                         ),
                         pipeline_version,
                         started_at,
-                        _now(),
+                        _precise_now(),
                     ]
                 if validation_job_id is not None:
                     insert_sql += """
@@ -986,7 +1001,7 @@ class ReferenceValidationRunner(BaseService):
                             self.project_id,
                             validation_worker_id,
                             validation_lease_token,
-                            _now(),
+                            _precise_now(),
                         ]
                     )
                 cursor = await self.db.execute(insert_sql, insert_params)

@@ -22,7 +22,7 @@ The rka MCP server ships a **discriminated-union dispatch surface**. Five tools 
 | `rka_execute(args)` | All 58 write/lifecycle operations (notes, decisions, missions, native manuscripts, reference manifests, checkpoints, claims, hooks, maintenance) |
 | `rka_describe(operation)` | Schema lookup + worked example for any operation; `rka_describe('')` returns the <250-token index |
 | `rka_load_tools(names)` | Escape hatch — brings deferred legacy tools online when you specifically need backwards-compat access |
-| `rka_help(topic)` | Deprecated alias for `rka_describe`; retained always-on for cockpits that learned the v2.6.3 navigator vocabulary |
+| `rka_help(name)` | Deprecated alias for `rka_describe`; retained always-on for cockpits that learned the v2.6.3 navigator vocabulary |
 
 `args` is a **typed Pydantic model** discriminated by `operation`. There are 109 models in `rka/mcp/operation_args.py`. FastMCP renders them as `inputSchema.oneOf` with per-branch enum constraints + required-field arrays. **The schema layer rejects wrong enum values, missing required fields, and missing provenance BEFORE the call is dispatched** — the historical `confidence='confirmed'` hallucination class is structurally impossible at the inputSchema level.
 
@@ -32,7 +32,7 @@ The rka MCP server ships a **discriminated-union dispatch surface**. Five tools 
 # Read: project status
 rka_query(args={"operation": "status", "project_id": "prj_01..."})
 
-# Read: decision tree
+# Read: decision tree ('id' is optional — omit it for the full project tree)
 rka_query(args={"operation": "decision_tree", "project_id": "prj_01...",
                 "id": "dec_01..."})
 
@@ -40,7 +40,7 @@ rka_query(args={"operation": "decision_tree", "project_id": "prj_01...",
 rka_execute(args={"operation": "record_note", "project_id": "prj_01...",
                   "content": "MQTT throughput results from Tuesday's run",
                   "type": "note", "source": "executor",
-                  "related_mission": "mis_01..."})
+                  "provenance": {"related_mission": "mis_01..."}})
 
 # Write: record a decision (provenance enforced — related_journal min_length=1)
 rka_execute(args={"operation": "record_decision", "project_id": "prj_01...",
@@ -108,7 +108,7 @@ When the PI gives a directive that leads to significant work (a mission, researc
 3. **Proposed scope** — in, out, boundaries.
 4. **Success criteria**.
 
-Present naturally in conversation. Wait for PI correction before moving to planning or execution. Tag the recorded entry `confirmation-brief` so the Executor can find the vetted intent via `rka_query(args={"operation": "search", "project_id": <pinned>, "query": "confirmation-brief", "entity_types": ["journal"]})`.
+Present naturally in conversation. Wait for PI correction before moving to planning or execution. Tag the recorded entry `confirmation-brief` so the Executor can find the vetted intent via `rka_query(args={"operation": "search", "project_id": <pinned>, "query": "confirmation-brief", "filters": {"entity_types": ["journal"]}})`.
 
 Template + worked example: `decision_ux.md` § "Confirmation Brief". Do NOT loop — no Confirmation Brief is needed for trivial questions ("what's the graph stats?") or unambiguous small instructions ("mark that mission complete").
 
@@ -197,7 +197,7 @@ Each RKA project has an auto-created Zotero **collection** that holds the projec
 
 ### Linkage workflow per new paper
 
-1. **Add the literature entry** with whatever metadata you have: `rka_execute(args={"operation": "record_literature", "project_id": <pinned>, ...})` or `rka_execute(args={"operation": "enrich_doi", "project_id": <pinned>, "doi": "..."})`.
+1. **Add the literature entry** with whatever metadata you have: `rka_execute(args={"operation": "record_literature", "project_id": <pinned>, ...})` (title- or DOI-only create both work). To enrich a DOI-only row afterward, call `rka_execute(args={"operation": "enrich_doi", "project_id": <pinned>, "lit_id": "lit_..."})` on the returned `lit_` id — `enrich_doi` reads the row's stored DOI, it does not create the row.
 2. **Try to link it**: `rka_execute(args={"operation": "link_literature_to_zotero", "project_id": <pinned>, "lit_id": "lit_..."})`. The linker tries five strategies in order — DOI → arXiv ID → URL → ISBN → title+author+year — and persists `zotero_item_key` + `zotero_match_method` on success.
 3. **Read the outcome**:
    - `{"zotero_item_key": "ABC123", "matched_by": "doi"}` → linked, you can call `zotero_get_fulltext("ABC123")` and extract grounded claims.
@@ -255,7 +255,7 @@ Not every task needs all four gates — quick bug fixes need only Gate 1; litera
 
 ## Knowledge Freshness
 
-Knowledge decays. Run `rka_query(args={"operation": "freshness", "project_id": <pinned>})` at session start alongside `rka_query(args={"operation": "pending_maintenance", "project_id": <pinned>})`. When new evidence contradicts old claims, `rka_execute(args={"operation": "flag_stale", "project_id": <pinned>, "entity_id": "...", "propagate": True})` cascades staleness through dependent clusters and decisions.
+Knowledge decays. Run `rka_query(args={"operation": "freshness", "project_id": <pinned>})` at session start alongside `rka_query(args={"operation": "pending_maintenance", "project_id": <pinned>})`. When new evidence contradicts old claims, `rka_execute(args={"operation": "flag_stale", "project_id": <pinned>, "entity_id": "...", "reason": "superseded by new benchmark", "propagate": True})` cascades staleness through dependent clusters and decisions.
 
 `staleness` (green/yellow/red) is the Brain's editorial overlay. `valid_until` (v2.2, migration 018) is the ground-truth temporal end-of-validity. Different signals — a claim can be temporally valid but editorially yellow (flagged for review).
 
@@ -307,7 +307,7 @@ A single search call is not a retrieval strategy. Measured on the rka_developmen
 12. **DON'T** create missions without the structured handoff format — INTENT / BACKGROUND / CONSTRAINTS / ASSUMPTIONS / VERIFICATION in the context field.
 13. **DON'T** skip reviewing the Executor's Backbrief — approve their plan before they begin significant work.
 14. **DON'T** ignore escalation triggers from the Executor — they indicate potential misalignment or invalidated assumptions that need immediate attention.
-15. **DON'T** upgrade RKA without exporting first — use the dashboard export or `GET /api/projects/export`, inspect the pack, then run `rka_query(args={"operation": "integrity", "project_id": <pinned>})` after import to verify no data was lost.
+15. **DON'T** upgrade RKA without exporting first — use the dashboard export or `GET /api/projects/export` (or explicitly load legacy `rka_export`), inspect the pack, then run `rka_query(args={"operation": "integrity", "project_id": <pinned>})` after import to verify no data was lost.
 16. **DON'T** treat `verified=true`, a high numeric confidence, or a strong
     cluster as scientific support — only an explicit current
     `evidence_status` assessment can promote a claim toward a manuscript.

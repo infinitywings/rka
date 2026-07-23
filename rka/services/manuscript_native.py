@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
 from typing import Any
 
 from rka.infra.ids import generate_id
@@ -47,6 +48,32 @@ def _normalized_reference_title(value: Any) -> str | None:
     return normalized or None
 
 
+def _timestamp_is_strictly_after(later: Any, earlier: Any) -> bool:
+    """Compare ISO timestamps chronologically and fail closed on ambiguity."""
+
+    def parse(value: Any) -> datetime | None:
+        if not isinstance(value, str) or not value.strip():
+            return None
+        normalized = value.strip()
+        if normalized.endswith("Z"):
+            normalized = f"{normalized[:-1]}+00:00"
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    parsed_later = parse(later)
+    parsed_earlier = parse(earlier)
+    return bool(
+        parsed_later is not None
+        and parsed_earlier is not None
+        and parsed_later > parsed_earlier
+    )
+
+
 def _validation_identity_matches_literature(
     *,
     input_doi: Any,
@@ -69,6 +96,14 @@ def _validation_identity_matches_literature(
 
 class ManuscriptRevisionConflict(ValueError):
     """Raised when an optimistic manuscript revision no longer matches."""
+
+
+class ManuscriptNotFoundError(ValueError):
+    """Raised when a manuscript is absent from the active project scope."""
+
+
+class ManuscriptCheckpointNotFoundError(ManuscriptNotFoundError):
+    """Raised when a native checkpoint is absent from the active project."""
 
 
 class NativeManuscriptService(BaseService):
@@ -255,7 +290,9 @@ class NativeManuscriptService(BaseService):
         async with self.db.transaction():
             current = await self.get(manuscript_id)
             if current is None:
-                raise ValueError(f"manuscript {manuscript_id!r} not found")
+                raise ManuscriptNotFoundError(
+                    f"manuscript {manuscript_id!r} not found"
+                )
             if current.phase not in self._PHASE_ORDER:
                 raise ValueError(
                     f"current manuscript phase {current.phase!r} is not managed"
@@ -372,8 +409,10 @@ class NativeManuscriptService(BaseService):
         decision_id: str,
         expected_revision: int,
         ratified_at: str | None = None,
+        actor: str = "executor",
     ) -> ManuscriptClaimRatification:
         """Bind an exact claim version to an active same-project PI decision."""
+        self._validate_actor(actor)
         canonical_id = await self._require_id(manuscript_id)
         if bool(claim_id) == bool(local_key):
             raise ValueError("provide exactly one of claim_id or local_key")
@@ -422,6 +461,19 @@ class NativeManuscriptService(BaseService):
                 ],
             )
             await self._bump_revision(canonical_id, expected_revision)
+            await self.audit(
+                "update",
+                "manuscript_claim",
+                claim["id"],
+                actor,
+                {
+                    "manuscript_id": canonical_id,
+                    "operation": "ratify_claim",
+                    "claim_version": version,
+                    "decision_id": decision_id,
+                    "expected_revision": expected_revision,
+                },
+            )
             row = await self.db.fetchone(
                 "SELECT * FROM manuscript_claim_ratifications WHERE id = ?",
                 [ratification_id],
@@ -556,7 +608,9 @@ class NativeManuscriptService(BaseService):
             [canonical_id, self.project_id],
         )
         if manuscript is None:
-            raise ValueError(f"manuscript {canonical_id!r} not found")
+            raise ManuscriptNotFoundError(
+                f"manuscript {canonical_id!r} not found"
+            )
         rows = await self.db.fetchall(
             """WITH ranked_validations AS (
                    SELECT rv.*,
@@ -644,9 +698,9 @@ class NativeManuscriptService(BaseService):
                 and row.get("literature_status") != "excluded"
                 and (
                     not literature_updated_at
-                    or (
-                        isinstance(completed_at, str)
-                        and completed_at >= literature_updated_at
+                    or _timestamp_is_strictly_after(
+                        completed_at,
+                        literature_updated_at,
                     )
                 )
             )
@@ -686,7 +740,9 @@ class NativeManuscriptService(BaseService):
         data: ManuscriptCheckpointCreate,
         *,
         expected_revision: int,
+        actor: str = "executor",
     ) -> ManuscriptCheckpoint:
+        self._validate_actor(actor)
         canonical_id = await self._require_id(data.manuscript_id)
         checkpoint_id = generate_id("manuscript_checkpoint")
         async with self.db.transaction():
@@ -761,6 +817,18 @@ class NativeManuscriptService(BaseService):
                 ],
             )
             await self._bump_revision(canonical_id, expected_revision)
+            await self.audit(
+                "create",
+                "manuscript_checkpoint",
+                checkpoint_id,
+                actor,
+                {
+                    "manuscript_id": canonical_id,
+                    "kind": data.kind,
+                    "unit_id": data.unit_id,
+                    "expected_revision": expected_revision,
+                },
+            )
             row = await self.db.fetchone(
                 "SELECT * FROM manuscript_checkpoints WHERE id = ?",
                 [checkpoint_id],
@@ -773,7 +841,9 @@ class NativeManuscriptService(BaseService):
         data: ManuscriptCheckpointResolve,
         *,
         expected_revision: int,
+        actor: str = "executor",
     ) -> ManuscriptCheckpoint:
+        self._validate_actor(actor)
         async with self.db.transaction():
             row = await self.db.fetchone(
                 """SELECT manuscript_id, kind, unit_id
@@ -782,7 +852,7 @@ class NativeManuscriptService(BaseService):
                 [checkpoint_id, self.project_id],
             )
             if row is None:
-                raise ValueError(
+                raise ManuscriptCheckpointNotFoundError(
                     f"manuscript checkpoint {checkpoint_id!r} not found"
                 )
             manuscript_id = row["manuscript_id"]
@@ -827,6 +897,19 @@ class NativeManuscriptService(BaseService):
             if cursor.rowcount != 1:
                 raise ValueError("checkpoint is not pending")
             await self._bump_revision(manuscript_id, expected_revision)
+            await self.audit(
+                "update",
+                "manuscript_checkpoint",
+                checkpoint_id,
+                actor,
+                {
+                    "manuscript_id": manuscript_id,
+                    "operation": "resolve_checkpoint",
+                    "decision_id": data.decision_id,
+                    "status": data.status,
+                    "expected_revision": expected_revision,
+                },
+            )
             updated = await self.db.fetchone(
                 "SELECT * FROM manuscript_checkpoints WHERE id = ?",
                 [checkpoint_id],
@@ -838,7 +921,9 @@ class NativeManuscriptService(BaseService):
         data: ManuscriptClaimVerificationAttestationCreate,
         *,
         expected_revision: int,
+        actor: str = "executor",
     ) -> ManuscriptClaimVerificationAttestation:
+        self._validate_actor(actor)
         canonical_id = await self._require_id(data.manuscript_id)
         attestation_id = generate_id("manuscript_verification")
         async with self.db.transaction():
@@ -874,6 +959,18 @@ class NativeManuscriptService(BaseService):
                 ],
             )
             await self._bump_revision(canonical_id, expected_revision)
+            await self.audit(
+                "create",
+                "manuscript_claim_verification_attestation",
+                attestation_id,
+                actor,
+                {
+                    "manuscript_id": canonical_id,
+                    "claim_id": data.claim_id,
+                    "claim_version": data.claim_version,
+                    "expected_revision": expected_revision,
+                },
+            )
             row = await self.db.fetchone(
                 """SELECT * FROM manuscript_claim_verification_attestations
                    WHERE id = ?""",
@@ -890,7 +987,9 @@ class NativeManuscriptService(BaseService):
         """Read the full current native manuscript aggregate."""
         manuscript = await self.get(manuscript_id)
         if manuscript is None:
-            raise ValueError(f"manuscript {manuscript_id!r} not found")
+            raise ManuscriptNotFoundError(
+                f"manuscript {manuscript_id!r} not found"
+            )
         canonical_id = manuscript.id
 
         claim_rows = await self.db.fetchall(
@@ -1317,9 +1416,9 @@ class NativeManuscriptService(BaseService):
                 completed_at = validation.get("completed_at")
                 if (
                     literature_updated
-                    and (
-                        not isinstance(completed_at, str)
-                        or completed_at < literature_updated
+                    and not _timestamp_is_strictly_after(
+                        completed_at,
+                        literature_updated,
                     )
                 ):
                     add(
@@ -1420,7 +1519,9 @@ class NativeManuscriptService(BaseService):
             canonical_id = await self._require_id(manuscript_id)
             manuscript = await self.get(canonical_id)
             if manuscript is None:  # pragma: no cover - guarded by _require_id
-                raise ValueError(f"manuscript {manuscript_id!r} not found")
+                raise ManuscriptNotFoundError(
+                    f"manuscript {manuscript_id!r} not found"
+                )
             cluster_rows = await self.db.fetchall(
                 """SELECT ec.*, rq.question AS research_question,
                           rq.status AS rq_status,
@@ -2037,7 +2138,7 @@ class NativeManuscriptService(BaseService):
     async def _require_id(self, manuscript_id: str) -> str:
         canonical_id = await self.resolve_id(manuscript_id)
         if canonical_id is None:
-            raise ValueError(
+            raise ManuscriptNotFoundError(
                 f"manuscript {manuscript_id!r} does not belong to project "
                 f"{self.project_id}"
             )
@@ -2049,7 +2150,9 @@ class NativeManuscriptService(BaseService):
             [manuscript_id, self.project_id],
         )
         if row is None:
-            raise ValueError(f"manuscript {manuscript_id!r} not found")
+            raise ManuscriptNotFoundError(
+                f"manuscript {manuscript_id!r} not found"
+            )
         if int(row["revision"]) != expected_revision:
             raise ManuscriptRevisionConflict(
                 f"manuscript {manuscript_id} revision is {row['revision']}, "
@@ -2064,7 +2167,9 @@ class NativeManuscriptService(BaseService):
             [manuscript_id, self.project_id],
         )
         if row is None:
-            raise ValueError(f"manuscript {manuscript_id!r} not found")
+            raise ManuscriptNotFoundError(
+                f"manuscript {manuscript_id!r} not found"
+            )
         raise ManuscriptRevisionConflict(
             f"manuscript {manuscript_id} revision is {row['revision']}, "
             f"expected {expected_revision}"

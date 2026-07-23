@@ -69,7 +69,7 @@ writer readiness` asks RKA for the authoritative target-phase gate.
 
 ### Steps (both invocation paths)
 
-1. **Identify the project first.** Prefer the explicit `project_id` and `manuscript_id` in `.rka/manuscript.json`, created only by `rka writer init`. Otherwise call `rka_query(args={"operation": "list_projects"})`. There is no active-project session state at the MCP layer: pass `project_id="prj_..."` explicitly on every subsequent `rka_query` / `rka_execute` call.
+1. **Identify the project first.** Prefer the explicit `project_id` and `manuscript_id` in `.rka/manuscript.json`, created only by `rka writer init`. Otherwise call `rka_query(args={"operation": "list_projects"})`. Confirm the selected project with `rka_query(args={"operation": "status", "project_id": "prj_..."})`. There is no active-project session state at the MCP layer: pass `project_id="prj_..."` explicitly on every subsequent `rka_query` / `rka_execute` call.
 2. **If mission-spawned (path b)**: read `mission_id` from env var `WRITER_MISSION_ID` or CLI arg. Call `rka_query(args={"operation": "mission", "project_id": "prj_...", "id": mission_id})`; extract `tags` (look for `comment-class:<r>` and `manuscript:<id>` markers) and `context` (review comment text). If `comment-class` tag is absent OR `classify_comment(context)` returns `ambiguous=True`, escalate to PI via `rka_execute(args={"operation": "submit_checkpoint", "project_id": "prj_...", "mission_id": mission_id, "type": "clarification", "description": "Ambiguous comment class; PI to classify or supersede the mission."})` before invoking any handler. Otherwise dispatch directly to `scripts/revision_handler.py` per the comment-class hint; skip steps 3-6.
 3. If `.planning/RKA_CLAIM_SPINE.yaml` exists, run `rka writer impact` from
    its integer change cursor. Inspect only the affected claims, units, source
@@ -307,15 +307,15 @@ claim-edge vocabularies".
 
 Seven stages (A through G) are implemented in `scripts/validate_references.py`. Missing optional providers are recorded as unavailable and never count as confirmations. Core manuscript validation keeps Stage D enabled and stores its result.
 
-A. **Extraction.** `lit_` entities from `rka_get_literature` OR anystyle parse of free-text references OR direct identifiers (DOI, arXiv, PMID).
-B. **Identifier resolution.** habanero Crossref preferred, manubot fallback, OpenAlex, Semantic Scholar, arXiv. Never Google Scholar direct.
-C. **Cross-source existence validation.** At least two independent sources must confirm.
-D. **Retraction.** Crossref `update-to` field plus Retraction Watch Database CSV mirror. OpenAlex is secondary per the Dec 2023 to Mar 2024 pipeline issue documented by Hauschke and Nazarovets (2024).
-E. **Author disambiguation.** OpenAlex plus ORCID two-step. SerpAPI `google_scholar_author` is a third source only on `AUTHOR_MISMATCH` or `LOW_CONFIDENCE` verdicts, per `dec_01KS0AXXASJ5GXV7M0SS39Y066`.
-F. **Bibliography compilation.** manubot then bibtex-tidy. betterbib subprocess is optional (GPL-3.0; subprocess only, never vendored).
+A. **Extraction.** `lit_` entities from `rka_get_literature` OR anystyle parse of free-text references OR direct identifiers (DOI, arXiv, PMID). Identifier-backed records resolve through `manubot cite --format=csljson`; local code serializes the returned CSL-JSON to BibTeX.
+B. **Identifier resolution.** DOI lookups query Crossref, OpenAlex, and Semantic Scholar; title-only searches also query arXiv. Never Google Scholar direct.
+C. **Cross-source existence validation.** At least two independent qualifying sources must confirm. Title-only hits must match the normalized requested title, overlap an input author surname when authors are supplied, and remain mutually title-consistent.
+D. **Retraction.** Crossref update metadata is authoritative in the implemented check; an enabled backend failure blocks. OpenAlex retraction data is not used as authority.
+E. **Author disambiguation.** OpenAlex author candidates plus optional affiliation hints; SerpAPI is a budgeted fallback. No ORCID lookup is currently implemented.
+F. **Bibliography compilation.** manubot emits CSL-JSON, the local deterministic serializer emits BibTeX, then bibtex-tidy applies hygiene. betterbib subprocess is optional (GPL-3.0; subprocess only, never vendored).
 G. **Niche-citation rescue.** When Stages B through C return empty across all primary sources, one SerpAPI `google_scholar` lookup runs before a `HALLUCINATED` verdict; a hit yields `UNVERIFIED` with `note=scholar-only-source` plus a PI checkpoint.
 
-Validation statuses: `VERIFIED`, `FIELD_ERROR`, `UNVERIFIED`, `RETRACTED`, `HALLUCINATED`, `AUTHOR_MISMATCH`, `LOW_CONFIDENCE`. Only `VERIFIED` references are eligible for bibliography compilation; every non-`VERIFIED` status blocks the CLI gate. Stage C is a provider-hit count, not a metadata-consistency attestation.
+Validation statuses: `VERIFIED`, `FIELD_ERROR`, `UNVERIFIED`, `RETRACTED`, `HALLUCINATED`, `AUTHOR_MISMATCH`, `LOW_CONFIDENCE`. Only `VERIFIED` references are eligible for bibliography compilation; every non-`VERIFIED` status blocks the CLI gate. Stage C establishes metadata-qualified source agreement for identity, not full reconciliation of every bibliographic field.
 
 Full pipeline schema, API endpoints, rate budgets, error taxonomy: [`references/reference_pipeline.md`](references/reference_pipeline.md).
 
@@ -429,7 +429,9 @@ Mechanical inputs the review aggregates (no new LLM judgment): the `verify_prove
 `rka_execute(args={"operation": "create_mission", "project_id": "prj_...",
 "objective": "...", "motivated_by_decision": "dec_...", "tags":
 ["writer-review", "manuscript:<man_id>"]})`. A fresh Writer agent runs the
-checklist and reports through RKA.
+checklist and reports through
+`rka_execute(args={"operation": "submit_report", ...})`. This parallels the
+existing `writer-revision` path described in Session Start path (b).
 
 This complements [`references/quality_review.md`](references/quality_review.md): that reports RKA evidence per rubric dimension; this adds the reviewer-facing presentation and claim-calibration checks. Neither assigns a score.
 

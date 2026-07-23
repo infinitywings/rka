@@ -24,6 +24,15 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _precise_now() -> str:
+    """Microsecond-precise ISO 8601 UTC timestamp."""
+    return (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
+    )
+
+
 class BaseService:
     """Base class for all services. Provides DB access, audit logging, event emission,
     and Phase 2 FTS5/embedding sync hooks."""
@@ -125,16 +134,18 @@ class BaseService:
     ) -> None:
         """Replace all tags for an entity."""
         resolved_project_id = self._resolve_project_id(project_id)
-        await self.db.execute(
-            "DELETE FROM tags WHERE entity_type = ? AND entity_id = ? AND project_id = ?",
-            [entity_type, entity_id, resolved_project_id],
-        )
-        for tag in tags:
+        async with self.db.transaction():
             await self.db.execute(
-                "INSERT OR IGNORE INTO tags (tag, entity_type, entity_id, project_id) VALUES (?, ?, ?, ?)",
-                [tag.lower().strip(), entity_type, entity_id, resolved_project_id],
+                "DELETE FROM tags WHERE entity_type = ? AND entity_id = ? AND project_id = ?",
+                [entity_type, entity_id, resolved_project_id],
             )
-        await self.db.commit()
+            for tag in tags:
+                await self.db.execute(
+                    "INSERT OR IGNORE INTO tags "
+                    "(tag, entity_type, entity_id, project_id) VALUES (?, ?, ?, ?)",
+                    [tag.lower().strip(), entity_type, entity_id, resolved_project_id],
+                )
+            await self.db.commit()
 
     async def _get_enrichment_status(
         self,

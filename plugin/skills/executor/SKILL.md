@@ -22,11 +22,11 @@ The rka MCP server ships a **discriminated-union dispatch surface**. Five tools 
 | `rka_execute(args)` | All 58 write/lifecycle operations (notes, native manuscript and reference-manifest updates, checkpoints, reports, mission lifecycle, document ingest, claim extraction, etc.) |
 | `rka_describe(operation)` | Schema lookup + worked example; `rka_describe('')` returns the <250-token index |
 | `rka_load_tools(names)` | Escape hatch — brings deferred legacy tools online when you specifically need backwards-compat access |
-| `rka_help(topic)` | Deprecated alias for `rka_describe` |
+| `rka_help(name)` | Deprecated alias for `rka_describe` |
 
 `args` is a **typed Pydantic model** discriminated by `operation`. FastMCP renders the 109-model union as `inputSchema.oneOf` with per-branch enum + required-field constraints. The schema layer rejects wrong enum values, missing required fields, and missing provenance BEFORE the call is dispatched.
 
-> **Orchestrator subprocess note.** When this Executor instance is the LangGraph orchestrator's `claude-agent-sdk` subprocess (daemon under `orchestrator/docker-compose.yml`), it runs with `RKA_LEGACY_TOOLS=1`, so the 91 legacy tools + 8 v2.7.0a2 intent verbs are surfaced and the 3 dispatch tools are deferred. This preserves the parent-side TWO-TAP autonomy contract at `pi_decision_select` (per-tool ratification granularity in `WRITE_TOOLS`). Cockpit Executor sessions (Claude Desktop / Claude Code talking directly to the PI) see the typed dispatch surface described above.
+> **Orchestrator subprocess note.** When this Executor instance is the LangGraph orchestrator's `claude-agent-sdk` subprocess (daemon under `orchestrator/docker-compose.yml`), it runs with `RKA_LEGACY_TOOLS=1`, restoring the v2.7.0a2 always-on surface (the 12-tool legacy baseline + the 8 v2.7.0a2 intent verbs) alongside the always-on dispatch tools (`rka_query` / `rka_execute` / `rka_describe`, which are never deferred); the remaining legacy tools stay `tier='deferred'` and are reachable via `rka_load_tools`. This preserves the parent-side TWO-TAP autonomy contract at `pi_decision_select` (per-tool ratification granularity in `WRITE_TOOLS`). Cockpit Executor sessions (Claude Desktop / Claude Code talking directly to the PI) see the typed dispatch surface described above.
 
 ### Worked examples
 
@@ -52,28 +52,28 @@ rka_execute(args={"operation": "record_note",
                   "content": "Reproduced 12% packet-loss at 5kHz publish rate",
                   "type": "note",
                   "source": "executor",
-                  "related_mission": "mis_01...",
-                  "related_decisions": ["dec_01..."]})
+                  "provenance": {"related_mission": "mis_01...",
+                                 "related_decisions": ["dec_01..."]}})
 
 # Write: raise a checkpoint when scope is ambiguous
 rka_execute(args={"operation": "submit_checkpoint",
                   "project_id": "prj_01...",
                   "mission_id": "mis_01...",
                   "type": "clarification",
-                  "description": "Mission says \"acceptable latency\" but the bound isn't set..."})
+                  "description": "Acceptance criterion #3 ambiguous: mission says \"acceptable latency\" but the bound isn't set..."})
 
 # Write: submit a mission report at completion
 rka_execute(args={"operation": "submit_report",
                   "project_id": "prj_01...",
                   "mission_id": "mis_01...",
-                  "summary": "...", "findings": "...", "anomalies": "...",
-                  "questions": "...", "codebase_state": "...",
+                  "summary": "...", "findings": ["..."], "anomalies": ["..."],
+                  "questions": ["..."], "codebase_state": "...",
                   "recommended_next": "..."})
 
 # Write: flip mission lifecycle
 rka_execute(args={"operation": "update_mission_status",
                   "project_id": "prj_01...",
-                  "id": "mis_01...", "status": "complete"})
+                  "mission_id": "mis_01...", "status": "complete"})
 
 # Schema lookup
 rka_describe(operation="submit_checkpoint")
@@ -135,8 +135,8 @@ Record as a journal note with `tags=["backbrief"]` and WAIT for Brain approval. 
 
 - Record findings + analysis with `rka_execute(args={"operation": "record_note", "type": "note", "source": "executor", ...})`.
 - Record procedural steps with `rka_execute(args={"operation": "record_note", "type": "log", "source": "executor", ...})`.
-- Always set `related_mission` when the work belongs to a mission.
-- Add `related_decisions=[...]` when a finding bears on an active decision.
+- Always set `provenance.related_mission` when the work belongs to a mission (for `record_note`, mission/decision/literature links live inside the nested `provenance` object; `update_note`, by contrast, takes `related_mission` / `related_decisions` as top-level fields).
+- Add `provenance.related_decisions=[...]` when a finding bears on an active decision.
 - Raise a checkpoint via `rka_execute(args={"operation": "submit_checkpoint", ...})` when strategy, ambiguity, or risk exceeds execution authority.
 - Submit a mission report via `rka_execute(args={"operation": "submit_report", ...})` when the assigned work is complete.
 
@@ -174,7 +174,7 @@ When the PI points you at a workspace folder (local research files to ingest int
 2. **`rka_query(args={"operation": "workspace_scan", "project_id": <pinned>, "filters": {"folder_path": "/absolute/path/subdirectory"}})`** — deep-scan a specific subdirectory to classify files by type (markdown, code, PDF, bibtex, data). Do NOT call this on the root if it has thousands of files — pick subdirectories from step 1.
 3. **`rka_execute(args={"operation": "bootstrap_workspace", "project_id": <pinned>, "folder_path": "/absolute/path/subdirectory"})`** — ingest the classified files into RKA. Call on the same subdirectory you scanned.
 
-Do NOT skip step 1 and call `scan_workspace` directly on a large root folder — external drives (exFAT, network mounts) are pathologically slow for recursive enumeration.
+Do NOT skip step 1 and call `workspace_scan` directly on a large root folder — external drives (exFAT, network mounts) are pathologically slow for recursive enumeration.
 
 ## Reading a paper for analysis
 
@@ -186,7 +186,7 @@ When a mission asks you to read a paper:
 4. On `reason: "no_match"`: emit a FULL-TEXT REQUEST checkpoint asking the PI to capture the paper into the project's Zotero collection. Do not proceed at abstract-level confidence unless the mission explicitly allows it.
 5. On `reason: "multiple_matches_below_threshold"`: render the candidates and ask the PI to disambiguate via checkpoint.
 
-**Mission guard (negative knowledge).** At pickup, call `rka_query(args={"operation": "mission_guard", "project_id": <pinned>, "id": <mission_id>})` alongside the mission context. It lists retracted and superseded findings and unresolved contradictions relevant to the objective: approaches already falsified or contested. Do not repeat a falsified approach unknowingly; if a guard warning conflicts with your plan, address it in the Backbrief.
+**Mission guard (negative knowledge).** At pickup, call `rka_query(args={"operation": "mission_guard", "project_id": <pinned>, "id": "mis_..."})` alongside the mission context. It lists retracted and superseded findings and unresolved contradictions relevant to the objective: approaches already falsified or contested. Do not repeat a falsified approach unknowingly; if a guard warning conflicts with your plan, address it in the Backbrief.
 
 ---
 

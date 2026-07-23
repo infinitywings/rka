@@ -18,6 +18,10 @@ from rka.services.base import BaseService, _now
 from rka.services.jobs import JobQueue
 
 
+class DecisionNotFoundError(ValueError):
+    """Raised when a decision is absent from the active project scope."""
+
+
 class DecisionService(BaseService):
     """Manages the decision tree."""
 
@@ -188,22 +192,6 @@ class DecisionService(BaseService):
         replace_related_journal = "related_journal" in dump
         replace_parent = "parent_id" in dump
 
-        # Guard: a generic update may not flip status to 'superseded' without
-        # naming the successor — that creates the admin-repair orphan
-        # signature (status='superseded' AND superseded_by IS NULL) the
-        # atomic supersede path was built to prevent. Use supersede_decision
-        # (writes pointer + supersedes edge + staleness cascade atomically).
-        if dump.get("status") == "superseded" and not dump.get("superseded_by"):
-            existing = await self.get(dec_id)
-            if existing is None or not existing.superseded_by:
-                raise ValueError(
-                    f"Cannot set decision {dec_id} status='superseded' without a "
-                    f"successor: use supersede_decision (POST "
-                    f"/api/decisions/{dec_id}/supersede), which records "
-                    f"superseded_by, the supersedes graph edge, and the "
-                    f"staleness cascade atomically."
-                )
-
         updates = {}
         for field, value in dump.items():
             if field == "options":
@@ -214,19 +202,55 @@ class DecisionService(BaseService):
                 updates[field] = value
 
         async with self.db.transaction():
+            owned = await self.db.fetchone(
+                """SELECT id, superseded_by
+                   FROM decisions
+                   WHERE id = ? AND project_id = ?""",
+                [dec_id, self.project_id],
+            )
+            if owned is None:
+                raise DecisionNotFoundError(
+                    f"decision {dec_id!r} not found in project "
+                    f"{self.project_id}"
+                )
+
+            # A generic update may not flip status to 'superseded' without
+            # naming the successor. Check the owned row under the same write
+            # lock that protects all subsequent aggregate side effects.
+            if (
+                dump.get("status") == "superseded"
+                and not dump.get("superseded_by")
+                and not owned.get("superseded_by")
+            ):
+                raise ValueError(
+                    f"Cannot set decision {dec_id} status='superseded' without a "
+                    f"successor: use supersede_decision (POST "
+                    f"/api/decisions/{dec_id}/supersede), which records "
+                    f"superseded_by, the supersedes graph edge, and the "
+                    f"staleness cascade atomically."
+                )
+
             if tags is not None:
                 await self._set_tags("decision", dec_id, tags)
 
             if not updates:
-                return await self.get(dec_id)
+                current = await self.get(dec_id)
+                if current is None:  # pragma: no cover - protected by write lock
+                    raise RuntimeError("decision update target disappeared")
+                return current
 
             updates["updated_at"] = _now()
             set_clause = ", ".join(f"{k} = ?" for k in updates)
             values = list(updates.values()) + [dec_id]
-            await self.db.execute(
+            cursor = await self.db.execute(
                 f"UPDATE decisions SET {set_clause} WHERE id = ? AND project_id = ?",
                 values + [self.project_id],
             )
+            if cursor.rowcount != 1:  # pragma: no cover - protected by write lock
+                raise DecisionNotFoundError(
+                    f"decision {dec_id!r} not found in project "
+                    f"{self.project_id}"
+                )
 
             if replace_related_journal:
                 await self._replace_outgoing_links(

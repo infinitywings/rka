@@ -55,17 +55,26 @@ class SummaryService(BaseService):
         summary_id = generate_id("summary")
         source_refs = json.dumps([s.model_dump() for s in result.sources]) if result.sources else None
 
-        await self.db.execute(
-            """INSERT INTO exploration_summaries
-               (id, scope_type, scope_id, granularity, content, produced_by,
-                confidence, source_refs, project_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            [summary_id, scope_type, scope_id, granularity, content,
-             produced_by, result.confidence, source_refs, self.project_id],
-        )
-        await self.db.commit()
-
-        await self.audit("create", "summary", summary_id, produced_by)
+        async with self.db.transaction():
+            await self.db.execute(
+                """INSERT INTO exploration_summaries
+                   (id, scope_type, scope_id, granularity, content, produced_by,
+                    confidence, source_refs, project_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    summary_id,
+                    scope_type,
+                    scope_id,
+                    granularity,
+                    content,
+                    produced_by,
+                    result.confidence,
+                    source_refs,
+                    self.project_id,
+                ],
+            )
+            await self.audit("create", "summary", summary_id, produced_by)
+            await self.db.commit()
 
         return {
             "id": summary_id,
@@ -118,12 +127,31 @@ class SummaryService(BaseService):
 
     async def bless(self, summary_id: str, actor: str = "pi") -> dict | None:
         """Mark a summary as blessed (human-approved)."""
-        await self.db.execute(
-            "UPDATE exploration_summaries SET blessed = 1, updated_at = ? WHERE id = ? AND project_id = ?",
-            [_now(), summary_id, self.project_id],
-        )
-        await self.db.commit()
-        await self.audit("update", "summary", summary_id, actor, {"action": "bless"})
+        async with self.db.transaction():
+            owned = await self.db.fetchone(
+                """SELECT id FROM exploration_summaries
+                   WHERE id = ? AND project_id = ?""",
+                [summary_id, self.project_id],
+            )
+            if owned is None:
+                return None
+
+            cursor = await self.db.execute(
+                "UPDATE exploration_summaries "
+                "SET blessed = 1, updated_at = ? "
+                "WHERE id = ? AND project_id = ?",
+                [_now(), summary_id, self.project_id],
+            )
+            if cursor.rowcount != 1:  # pragma: no cover - protected by write lock
+                return None
+            await self.audit(
+                "update",
+                "summary",
+                summary_id,
+                actor,
+                {"action": "bless"},
+            )
+            await self.db.commit()
         return await self.get(summary_id)
 
     def _evidence_limit(self) -> int:
@@ -327,14 +355,12 @@ class QAService(BaseService):
         if not self.llm:
             raise LLMUnavailableError("QAService requires a configured LLM.")
 
-        # Create or reuse session
-        if not session_id:
+        # Resolve the session before the external LLM call, but defer creating
+        # a new row until the answer is ready so no empty session survives an
+        # evidence or model failure.
+        create_session = not session_id
+        if create_session:
             session_id = generate_id("qa_session")
-            await self.db.execute(
-                "INSERT INTO qa_sessions (id, project_id, created_by, title) VALUES (?, ?, ?, ?)",
-                [session_id, self.project_id, actor, question[:100]],
-            )
-            await self.db.commit()
         else:
             existing_session = await self.db.fetchone(
                 "SELECT id FROM qa_sessions WHERE id = ? AND project_id = ?",
@@ -359,20 +385,31 @@ class QAService(BaseService):
 
         # Store the Q&A log
         log_id = generate_id("qa_log")
-        await self.db.execute(
-            """INSERT INTO qa_logs
-               (id, session_id, question, answer, answer_structured, sources, confidence)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            [
-                log_id, session_id, question, result.answer,
-                json.dumps(result.model_dump()),
-                json.dumps([s.model_dump() for s in result.sources]),
-                result.confidence,
-            ],
-        )
-        await self.db.commit()
-
-        await self.audit("create", "qa_log", log_id, actor)
+        async with self.db.transaction():
+            if create_session:
+                await self.db.execute(
+                    """INSERT INTO qa_sessions
+                       (id, project_id, created_by, title)
+                       VALUES (?, ?, ?, ?)""",
+                    [session_id, self.project_id, actor, question[:100]],
+                )
+            await self.db.execute(
+                """INSERT INTO qa_logs
+                   (id, session_id, question, answer, answer_structured,
+                    sources, confidence)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    log_id,
+                    session_id,
+                    question,
+                    result.answer,
+                    json.dumps(result.model_dump()),
+                    json.dumps([s.model_dump() for s in result.sources]),
+                    result.confidence,
+                ],
+            )
+            await self.audit("create", "qa_log", log_id, actor)
+            await self.db.commit()
 
         return {
             "session_id": session_id,

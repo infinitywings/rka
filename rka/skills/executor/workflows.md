@@ -12,11 +12,11 @@ Procedural reference for the Executor skill. Loaded on demand when `SKILL.md` po
 > | `rka_add_note(type=..., source="executor", ...)` | `rka_execute(args={"operation": "record_note", "project_id": <pinned>, ...})` |
 > | `rka_submit_checkpoint(type=..., ...)` | `rka_execute(args={"operation": "submit_checkpoint", "project_id": <pinned>, ...})` |
 > | `rka_submit_report(mission_id=..., ...)` | `rka_execute(args={"operation": "submit_report", "project_id": <pinned>, ...})` |
-> | `rka_update_mission_status(id=..., status=...)` | `rka_execute(args={"operation": "update_mission_status", "project_id": <pinned>, "id": "...", "status": "..."})` |
+> | `rka_update_mission_status(id=..., status=...)` | `rka_execute(args={"operation": "update_mission_status", "project_id": <pinned>, "mission_id": "...", "status": "..."})` |
 > | `rka_ingest_document(...)` | `rka_execute(args={"operation": "ingest_document", "project_id": <pinned>, ...})` |
 > | `rka_link_literature_to_zotero(lit_id=...)` | `rka_execute(args={"operation": "link_literature_to_zotero", "project_id": <pinned>, "lit_id": "..."})` |
 >
-> When this Executor runs as the orchestrator's `claude-agent-sdk` subprocess with `RKA_LEGACY_TOOLS=1`, the legacy names are the live tool surface (typed dispatch is deferred). When running directly in Claude Desktop / Claude Code, the dispatch shape is the live surface. The discipline is identical either way. Index of operations: `rka_describe(operation="")`.
+> When this Executor runs as the orchestrator's `claude-agent-sdk` subprocess with `RKA_LEGACY_TOOLS=1`, the v2.7.0a2 baseline (core legacy tools, intent verbs, navigators) is restored to always-on and the 3 typed dispatch tools also remain always-on. Legacy names outside that baseline (e.g. `rka_submit_report`, `rka_get_mission`, `rka_submit_checkpoint`) stay deferred and must be loaded via `rka_load_tools` — or simply use the dispatch shape, which works in every mode. When running directly in Claude Desktop / Claude Code, the dispatch shape is the live surface. The discipline is identical either way. Index of operations: `rka_describe(operation="")`.
 
 ---
 
@@ -37,7 +37,7 @@ rka_add_note(
     content="Executor Backbrief for mission mis_01...: [plan summary, assumptions, risks]",
     type="log",
     source="executor",
-    related_mission="mis_01...",
+    provenance={"related_mission": "mis_01..."},  # record_note nests linkage under provenance
     tags=["backbrief"],
 )
 ```
@@ -57,9 +57,9 @@ Worked example: `examples.md` § "Backbrief — Bug B URL fix".
 Use `rka_submit_report` with structured sections:
 
 - **`summary`** — full narrative of what was done, methodology, results. This is the main report body.
-- **`findings`** — key findings, one per line.
-- **`anomalies`** — unexpected observations or issues.
-- **`questions`** — open questions for the Brain or PI.
+- **`findings`** — key findings. Dispatch shape (`rka_execute` operation=`submit_report`): a list of strings, one item per finding. Legacy `rka_submit_report` (`RKA_LEGACY_TOOLS=1` only): a single newline-separated string — the tool splits it one per line.
+- **`anomalies`** — unexpected observations or issues. Same shape as `findings` (dispatch: list of strings; legacy: newline-separated string).
+- **`questions`** — open questions for the Brain or PI. Same shape as `findings` (dispatch: list of strings; legacy: newline-separated string).
 - **`codebase_state`** — state of the codebase after the mission.
 - **`recommended_next`** — suggested next steps as a single string.
 
@@ -132,7 +132,7 @@ Before creating your mission, the Brain verified its understanding of the PI's i
 - The numbered assumptions in the mission context have been reviewed by the PI.
 - If the mission still seems confusing or contradictory, that's a signal to raise a checkpoint — the Confirmation Brief may have missed something.
 
-Find the Confirmation Brief via `rka_search(query="confirmation-brief", entity_types=["journal"])`.
+Find the Confirmation Brief via `rka_search(query="confirmation-brief", filters={"entity_types": ["journal"]})`.
 
 ### When to Raise a Checkpoint vs Proceed
 

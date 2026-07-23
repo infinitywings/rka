@@ -14,6 +14,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from rka.services.base import BaseService
+from rka.services.manuscript_native import ManuscriptNotFoundError
 
 
 CHANGE_CURSOR_SCHEMA_VERSION = "rka-change-cursor/v1"
@@ -156,7 +157,9 @@ class ChangeTrackingService(BaseService):
             [self.project_id, manuscript_id, manuscript_id],
         )
         if manuscript is None:
-            raise ValueError(f"manuscript {manuscript_id!r} not found")
+            raise ManuscriptNotFoundError(
+                f"manuscript {manuscript_id!r} not found"
+            )
         canonical_id = str(manuscript["id"])
 
         page = await self.changes_since(since_cursor, limit=limit)

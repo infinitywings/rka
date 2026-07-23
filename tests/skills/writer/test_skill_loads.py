@@ -1,6 +1,7 @@
 """Test that SKILL.md loads correctly: frontmatter, required sections, and references.
 
-Per mis_01KS0C3RP04XANCZAB3HTNAG0P T4 acceptance criteria.
+Per mis_01KS0C3RP04XANCZAB3HTNAG0P T4 acceptance criteria. The "Pre-Submission
+Review" section (v2.5.0) sits between "Local Rendering" and "Revision Loop".
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ EXPECTED_SECTIONS = [
     "## Venue Tone",
     "## LaTeX Template Management",
     "## Local Rendering",
+    "## Pre-Submission Review",
     "## Revision Loop",
     "## Anti-Patterns",
     "## Related",

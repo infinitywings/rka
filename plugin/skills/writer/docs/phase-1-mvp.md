@@ -136,10 +136,10 @@ on Python 3.13.8 with pytest 9.0.2.
 - Optional MCP tools for manuscripts, added to the existing `rka` server.
   (Now shipped, 2026-05-20. On the v2.7.0+ surface these are
   `rka_query(args={"operation": "manuscript", "project_id": "prj_...", "id":
-  "jrn_..."})`, `rka_execute(args={"operation": "register_manuscript",
+  "man_..."})`, `rka_execute(args={"operation": "register_manuscript",
   "project_id": "prj_...", "venue": "...", "title": "..."})`, and
   `rka_execute(args={"operation": "validate_reference", "project_id":
-  "prj_...", "manuscript_id": "jrn_...", "doi": "..."})` — `validate_reference`
+  "prj_...", "manuscript_id": "man_...", "doi": "..."})` — `validate_reference`
   requires at least one of `doi`/`title`. The legacy names
   `rka_get_manuscript` / `rka_register_manuscript` / `rka_validate_reference`
   remain loadable via `rka_load_tools`.)

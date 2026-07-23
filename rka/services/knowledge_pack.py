@@ -204,6 +204,14 @@ _INSERT_ORDER = (
     "qa_logs",
     "hook_executions",
 )
+_IMPORT_INSERT_TABLES = frozenset(
+    ("projects", "project_states", *_INSERT_ORDER)
+)
+_IMPORT_TRANSIENT_COLUMNS: dict[str, frozenset[str]] = {
+    # Bundled-file metadata is consumed by ``_restore_artifact_files`` and is
+    # deliberately not a column in the destination artifacts table.
+    "artifacts": frozenset({"pack_file"}),
+}
 
 # Tables to export by default (core + derived)
 _EXPORT_TABLES = _TABLE_CATEGORIES["core_data"] + _TABLE_CATEGORIES["derived_data"]
@@ -586,6 +594,10 @@ class KnowledgePackService(BaseService):
                 source_project_id=source_project["id"],
                 target_project_id=target_project_id,
             )
+            # Treat the uploaded manifest as untrusted input. Validate every
+            # destination key against the live schema before opening the write
+            # transaction (or creating artifact staging directories).
+            await self._validate_import_rows(tables)
 
             artifact_root = self._artifact_import_root(target_project_id)
             artifact_project_root = artifact_root.parent
@@ -1475,12 +1487,84 @@ class KnowledgePackService(BaseService):
             prepared.append(artifact)
         return prepared, restored
 
+    async def _table_columns(self, table: str) -> frozenset[str]:
+        """Return the live column allowlist for a fixed import table."""
+        if table not in _IMPORT_INSERT_TABLES:
+            raise ValueError(
+                f"Knowledge pack targets unsupported table {table!r}"
+            )
+        cache: dict[str, frozenset[str]] = getattr(
+            self,
+            "_import_table_columns_cache",
+            {},
+        )
+        if table in cache:
+            return cache[table]
+        columns = await self.db.fetchall(f"PRAGMA table_info([{table}])")
+        names = frozenset(str(column["name"]) for column in columns)
+        if not names:
+            raise ValueError(
+                f"Knowledge pack target table {table!r} is unavailable"
+            )
+        cache[table] = names
+        self._import_table_columns_cache = cache
+        return names
+
+    async def _validate_import_rows(
+        self,
+        tables: dict[str, list[dict[str, Any]]],
+    ) -> None:
+        """Reject unsupported tables and row keys before any import writes."""
+        unknown_tables = sorted(set(tables) - set(_INSERT_ORDER))
+        if unknown_tables:
+            raise ValueError(
+                "Knowledge pack contains unsupported table(s): "
+                + ", ".join(unknown_tables)
+            )
+
+        for table, rows in tables.items():
+            allowed = await self._table_columns(table)
+            transient = _IMPORT_TRANSIENT_COLUMNS.get(table, frozenset())
+            for index, row in enumerate(rows):
+                if not isinstance(row, dict):
+                    raise ValueError(
+                        f"Knowledge pack {table}[{index}] must be an object"
+                    )
+                unknown_columns = sorted(
+                    str(column)
+                    for column in row
+                    if column not in allowed and column not in transient
+                )
+                if unknown_columns:
+                    raise ValueError(
+                        f"Knowledge pack {table}[{index}] contains unsupported "
+                        "column(s): "
+                        + ", ".join(unknown_columns)
+                    )
+
     async def _insert_row(self, table: str, row: dict[str, Any]) -> None:
+        """Insert one already-remapped row using schema-approved identifiers."""
+        allowed = await self._table_columns(table)
         columns = list(row.keys())
+        unknown_columns = [
+            str(column) for column in columns if column not in allowed
+        ]
+        if unknown_columns:
+            raise ValueError(
+                f"Knowledge pack row for {table!r} contains unsupported "
+                "column(s): "
+                + ", ".join(sorted(unknown_columns))
+            )
+        if not columns:
+            raise ValueError(
+                f"Knowledge pack row for {table!r} cannot be empty"
+            )
         placeholders = ", ".join("?" for _ in columns)
-        column_sql = ", ".join(columns)
+        # Identifiers come only from PRAGMA table_info above. Bracket quoting
+        # keeps approved names syntactically isolated from uploaded content.
+        column_sql = ", ".join(f"[{column}]" for column in columns)
         await self.db.execute(
-            f"INSERT INTO {table} ({column_sql}) VALUES ({placeholders})",
+            f"INSERT INTO [{table}] ({column_sql}) VALUES ({placeholders})",
             [row[column] for column in columns],
         )
 
@@ -1626,13 +1710,11 @@ class KnowledgePackService(BaseService):
 
     async def _get_schema_version(self) -> int:
         """Get the latest migration number as the schema version."""
-        try:
-            row = await self.db.fetchone(
-                "SELECT MAX(CAST(SUBSTR(name, 1, 3) AS INTEGER)) as ver FROM schema_migrations"
-            )
-            return row["ver"] if row and row["ver"] else 0
-        except Exception:
-            return 0
+        row = await self.db.fetchone(
+            """SELECT MAX(CAST(SUBSTR(filename, 1, 3) AS INTEGER)) AS ver
+               FROM schema_migrations"""
+        )
+        return int(row["ver"]) if row and row["ver"] is not None else 0
 
     # Affordance E (Mission B / mis_01KR209WY4M6WQFEXRH79KC2ZF):
     # severity table mapping integrity-issue category → severity level. The

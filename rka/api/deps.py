@@ -76,6 +76,24 @@ def get_project_id(
     return (x_rka_project or project_id or DEFAULT_PROJECT_ID).strip()
 
 
+def get_transport_actor(
+    x_rka_actor: str | None = Header(default=None, alias="X-RKA-Actor"),
+) -> str:
+    """Attribute the request transport for audit records.
+
+    Direct REST/UI calls default to ``web_ui``. The bundled MCP proxy sends
+    ``executor`` explicitly. This is provenance metadata, not an
+    authentication or authorization decision.
+    """
+    actor = (x_rka_actor or "web_ui").strip()
+    if actor not in {"executor", "web_ui"}:
+        raise HTTPException(
+            status_code=422,
+            detail="X-RKA-Actor must be 'executor' or 'web_ui'",
+        )
+    return actor
+
+
 async def require_project(
     project_id: str = Depends(get_project_id),
     db: Database = Depends(get_db),

@@ -82,8 +82,13 @@ class Database:
         if not migrations_dir.exists():
             return 0
 
-        # Gather .sql files sorted by name
-        sql_files = sorted(f for f in migrations_dir.iterdir() if f.suffix == ".sql")
+        # Gather .sql files sorted by name. Ignore macOS AppleDouble/resource-fork
+        # sidecars that can appear on external or synced volumes.
+        sql_files = sorted(
+            f
+            for f in migrations_dir.iterdir()
+            if f.suffix == ".sql" and not f.name.startswith("._")
+        )
         if not sql_files:
             return 0
 
@@ -104,14 +109,20 @@ class Database:
             # Ensure the tracking table exists.  Each migration re-reads its
             # ledger row after BEGIN IMMEDIATE because another process may have
             # applied the file while this process was waiting for the lock.
-            await conn.execute(
-                "CREATE TABLE IF NOT EXISTS schema_migrations ("
-                "  filename TEXT PRIMARY KEY,"
-                "  applied_at TEXT NOT NULL DEFAULT "
-                "(strftime('%Y-%m-%dT%H:%M:%SZ','now'))"
-                ")"
-            )
-            await conn.commit()
+            try:
+                await self._begin_migration_transaction(conn)
+                await conn.execute(
+                    "CREATE TABLE IF NOT EXISTS schema_migrations ("
+                    "  filename TEXT PRIMARY KEY,"
+                    "  applied_at TEXT NOT NULL DEFAULT "
+                    "(strftime('%Y-%m-%dT%H:%M:%SZ','now'))"
+                    ")"
+                )
+                await conn.commit()
+            except BaseException:
+                if conn.in_transaction:
+                    await conn.rollback()
+                raise
 
             for sql_file in sql_files:
                 sql = sql_file.read_text()
@@ -152,7 +163,7 @@ class Database:
 
                 logger.info("Applying migration: %s", sql_file.name)
                 try:
-                    await conn.execute("BEGIN IMMEDIATE")
+                    await self._begin_migration_transaction(conn)
                     cursor = await conn.execute(
                         "SELECT 1 FROM schema_migrations WHERE filename = ?",
                         [sql_file.name],
@@ -181,6 +192,50 @@ class Database:
         if count:
             logger.info("Applied %d migration(s)", count)
         return count
+
+    @staticmethod
+    def _migration_lock_timeout_ms() -> int:
+        """Return the bounded cross-process migration lock wait budget."""
+        raw = os.environ.get("RKA_MIGRATION_LOCK_TIMEOUT_MS", "60000")
+        try:
+            timeout_ms = int(raw)
+        except ValueError as exc:
+            raise ValueError(
+                "RKA_MIGRATION_LOCK_TIMEOUT_MS must be an integer"
+            ) from exc
+        if not 1 <= timeout_ms <= 600_000:
+            raise ValueError(
+                "RKA_MIGRATION_LOCK_TIMEOUT_MS must be between 1 and 600000"
+            )
+        return timeout_ms
+
+    async def _begin_migration_transaction(
+        self,
+        conn: aiosqlite.Connection,
+    ) -> None:
+        """Acquire the migration write lock with a bounded retry budget.
+
+        The connection's ordinary 5-second busy timeout remains appropriate
+        for request traffic. Startup migrations receive a longer, configurable
+        aggregate budget because another healthy RKA process may briefly hold
+        the database writer lock during a rolling restart.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._migration_lock_timeout_ms() / 1000
+        delay = 0.05
+        while True:
+            try:
+                await conn.execute("BEGIN IMMEDIATE")
+                return
+            except sqlite3.OperationalError as exc:
+                message = str(exc).casefold()
+                if "locked" not in message and "busy" not in message:
+                    raise
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise
+                await asyncio.sleep(min(delay, remaining))
+                delay = min(delay * 2, 0.5)
 
     @staticmethod
     def _migrations_directory() -> Path:

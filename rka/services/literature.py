@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from rka.infra.ids import generate_id
 from rka.models.literature import Literature, LiteratureCreate, LiteratureUpdate
-from rka.services.base import BaseService, _now
+from rka.services.base import BaseService, _precise_now
 from rka.services.jobs import JobQueue
+
+
+class LiteratureNotFoundError(ValueError):
+    """Raised when a literature entry is absent from the active project scope."""
 
 
 class LiteratureService(BaseService):
@@ -169,19 +173,37 @@ class LiteratureService(BaseService):
                 updates[field] = value
 
         async with self.db.transaction():
+            owned = await self.db.fetchone(
+                "SELECT id FROM literature WHERE id = ? AND project_id = ?",
+                [lit_id, self.project_id],
+            )
+            if owned is None:
+                raise LiteratureNotFoundError(
+                    f"literature {lit_id!r} not found in project "
+                    f"{self.project_id}"
+                )
+
             if tags is not None:
                 await self._set_tags("literature", lit_id, tags)
 
             if not updates:
-                return await self.get(lit_id)
+                current = await self.get(lit_id)
+                if current is None:  # pragma: no cover - protected by write lock
+                    raise RuntimeError("literature update target disappeared")
+                return current
 
-            updates["updated_at"] = _now()
+            updates["updated_at"] = _precise_now()
             set_clause = ", ".join(f"{k} = ?" for k in updates)
             values = list(updates.values()) + [lit_id]
-            await self.db.execute(
+            cursor = await self.db.execute(
                 f"UPDATE literature SET {set_clause} WHERE id = ? AND project_id = ?",
                 values + [self.project_id],
             )
+            if cursor.rowcount != 1:  # pragma: no cover - protected by write lock
+                raise LiteratureNotFoundError(
+                    f"literature {lit_id!r} not found in project "
+                    f"{self.project_id}"
+                )
 
             if replace_related_decisions:
                 await self._replace_outgoing_links(

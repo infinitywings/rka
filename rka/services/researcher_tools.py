@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from rka.infra.ids import generate_id
-from rka.services.base import BaseService, _now
+from rka.services.base import BaseService, _now, _precise_now
 
 
 class ResearcherToolsService(BaseService):
@@ -631,7 +631,7 @@ class ResearcherToolsService(BaseService):
         if lit["status"] == "to_read":
             await self.db.execute(
                 "UPDATE literature SET status = 'reading', updated_at = ? WHERE id = ? AND project_id = ?",
-                [now, lit_id, self.project_id],
+                [_precise_now(), lit_id, self.project_id],
             )
 
         await self.db.commit()

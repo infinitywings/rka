@@ -48,6 +48,7 @@ Start procedure runs:
 5. `.planning/ACTIVE_WORKFLOW.md` carries disposable local resume state.
 6. `rka writer readiness --target-phase ...` asks RKA for the authoritative
    mechanical gate.
+7. The Writer greets the PI with the inferred next action.
 
 ### 3. Run scripts via Bash
 

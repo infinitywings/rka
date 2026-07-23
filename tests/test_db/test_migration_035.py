@@ -116,9 +116,20 @@ async def test_change_triggers_cover_core_edges_and_every_native_table(db) -> No
     }
     assert required_insert_triggers <= triggers
 
+    immutable_update_stems = {
+        "trg_change_manuscript_claim_versions",
+        "trg_change_manuscript_claim_ratifications",
+        "trg_change_manuscript_claim_verifications",
+        "trg_change_reference_validations",
+    }
     for insert_trigger in required_insert_triggers:
         stem = insert_trigger.removesuffix("_insert")
-        assert f"{stem}_update" in triggers
+        if stem in immutable_update_stems:
+            # Migration 039 removes unreachable AFTER UPDATE triggers from
+            # append-only tables whose BEFORE UPDATE guards always abort.
+            assert f"{stem}_update" not in triggers
+        else:
+            assert f"{stem}_update" in triggers
         assert f"{stem}_delete" in triggers
 
     assert {

@@ -8,12 +8,13 @@ Run the plugin compatibility wrapper, forwarding the user's flags exactly:
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/start-manuscript.py \
   --project-id <prj_...> --venue <venue-id> --title <PI-authored-title> \
-  [--path <workspace>] [--manuscript-id <jrn_...>] [--cfp-url <url>] \
+  [--path <workspace>] [--manuscript-id <man_...>] [--cfp-url <url>] \
   [--api-url <local-rka-url>]
 ```
 
 The wrapper delegates to `rka writer init`. The command requires an explicit
-project, registers a new `jrn_` manuscript (or verifies `--manuscript-id`),
+project, registers a new canonical `man_` manuscript (or verifies
+`--manuscript-id`; legacy `jrn_` aliases remain accepted for compatibility),
 renders every template token in a sibling staging directory, verifies that no
 core sentinel remains, writes `.rka/manuscript.json`, and atomically publishes
 the target. It refuses a non-empty target and never stores API keys or a

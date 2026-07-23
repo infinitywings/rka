@@ -93,29 +93,47 @@ class ArtifactService(BaseService):
         fname = filename or path.name
         ftype = filetype or path.suffix.lstrip(".")
         file_size = path.stat().st_size
+        resolved_path = str(path.resolve())
+        metadata_json = json.dumps(metadata) if metadata else None
 
         # Compute content hash for dedup
         content_hash = self._hash_file(path)
 
-        # Check for duplicate
-        existing = await self.db.fetchone(
-            "SELECT id FROM artifacts WHERE content_hash = ? AND project_id = ?",
-            [content_hash, self.project_id],
-        )
-        if existing:
-            return {"id": existing["id"], "duplicate": True}
-
         artifact_id = generate_id("artifact")
-        await self.db.execute(
-            """INSERT INTO artifacts
-               (id, filename, filepath, filetype, file_size, mime, content_hash,
-                extraction_status, created_by, metadata, project_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
-            [artifact_id, fname, str(path.resolve()), ftype, file_size, mime,
-             content_hash, created_by, json.dumps(metadata) if metadata else None, self.project_id],
-        )
-        await self.db.commit()
-        await self.audit("create", "artifact", artifact_id, created_by)
+        async with self.db.transaction():
+            # The write lock makes duplicate detection and insertion one
+            # coherent unit for callers sharing this database.
+            existing = await self.db.fetchone(
+                "SELECT id FROM artifacts WHERE content_hash = ? AND project_id = ?",
+                [content_hash, self.project_id],
+            )
+            if existing:
+                return {"id": existing["id"], "duplicate": True}
+
+            await self.db.execute(
+                """INSERT INTO artifacts
+                   (id, filename, filepath, filetype, file_size, mime, content_hash,
+                    extraction_status, created_by, metadata, project_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
+                [
+                    artifact_id,
+                    fname,
+                    resolved_path,
+                    ftype,
+                    file_size,
+                    mime,
+                    content_hash,
+                    created_by,
+                    metadata_json,
+                    self.project_id,
+                ],
+            )
+            await self.db.commit()
+            await self.audit("create", "artifact", artifact_id, created_by)
+
+        # Embedding can call an external provider. Keep it outside the
+        # database unit so a slow or unavailable provider does not hold the
+        # SQLite write lock or undo a durable registration.
         await self._embed_artifact(
             artifact_id=artifact_id,
             filename=fname,

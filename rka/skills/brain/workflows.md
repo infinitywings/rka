@@ -19,7 +19,7 @@ Procedural reference for the Brain skill. Each section is a self-contained workf
 > | `rka_review_cluster(...)` | `rka_execute(args={"operation": "review_cluster", "project_id": <pinned>, ...})` |
 > | `rka_check_freshness()` | `rka_query(args={"operation": "freshness", "project_id": <pinned>})` |
 > | `rka_flag_stale(..., propagate=true)` | `rka_execute(args={"operation": "flag_stale", "project_id": <pinned>, "propagate": True, ...})` |
-> | `rka_detect_contradictions(...)` | `rka_query(args={"operation": "contradictions", "project_id": <pinned>, "id": "...", ...})` |
+> | `rka_detect_contradictions(...)` | `rka_query(args={"operation": "contradictions", "project_id": <pinned>, "id": "clm_..."})` |
 > | `rka_set_project(...)` | Deprecated no-op; `project_id` is now passed as a required field on every operation. |
 >
 > Full per-operation signature lookup: `rka_describe(operation="<name>")`. Index of operations: `rka_describe(operation="")`.
@@ -40,7 +40,7 @@ Brain: rka_get_pending_maintenance()
   → 12 items: 3 decisions without justified_by, 2 unassigned clusters, 7 entries without tags
 Brain: [silently processes top-priority items, budget=10]
   - For each decision_without_justified_by: rka_update_decision(id, related_journal=[...])
-  - For each unassigned_cluster: rka_review_cluster(id, research_question_id=...)
+  - For each unassigned_cluster: rka_review_cluster(id, confidence=..., synthesis=..., research_question_id=...)  # review_cluster requires confidence + synthesis
 Brain: rka_get_research_map()
   → 5 RQs, 104 clusters, 549 claims
 Brain: "Hi! I've caught up on the project. The research map has 5 active research questions…"
@@ -94,7 +94,7 @@ rka_add_note(
     verbatim_input="[PI's original direction that initiated this protocol]",
     type="directive",
     tags=["research-protocol", "gate-0"],
-    related_decisions=["dec_..."],
+    provenance={"related_decisions": ["dec_..."]},
 )
 ```
 
@@ -123,16 +123,16 @@ strength; those belong in the separate categorical `evidence_status` review.
 Entry: *"The stress test showed 12% packet loss above 400 connections. We used MQTT with QoS 1."*
 
 Claims:
-1. type: `evidence`, content: `"12% packet loss above 400 connections"`, confidence: `0.8`.
-2. type: `method`, content: `"Stress test used MQTT with QoS 1"`, confidence: `0.95`.
+1. type: `evidence`, text: `"12% packet loss above 400 connections"`, confidence: `0.8`.
+2. type: `method`, text: `"Stress test used MQTT with QoS 1"`, confidence: `0.95`.
 
 ```python
 rka_extract_claims(
     entry_id="jrn_01...",
     claims=[
-        {"claim_type": "evidence", "content": "12% packet loss above 400 connections",
+        {"claim_type": "evidence", "text": "12% packet loss above 400 connections",
          "confidence": 0.8, "cluster_id": "ecl_01..."},
-        {"claim_type": "method", "content": "Stress test used MQTT with QoS 1",
+        {"claim_type": "method", "text": "Stress test used MQTT with QoS 1",
          "confidence": 0.95, "cluster_id": "ecl_01..."},
     ],
 )
@@ -327,10 +327,12 @@ rka_process_paper(
     lit_id="lit_01...",
     summary="This paper introduces a layered oracle architecture…",
     annotations=[
-        {"passage": "Table 3 shows 94% detection rate",
+        {"text": "Table 3 shows 94% detection rate",
+         "passage": "Table 3 shows 94% detection rate",
          "note": "Strong evidence for layered approach",
          "claim_type": "evidence", "confidence": 0.85, "cluster_id": "ecl_01..."},
-        {"passage": "The authors use Docker-in-Docker for isolation",
+        {"text": "The authors use Docker-in-Docker for isolation",
+         "passage": "The authors use Docker-in-Docker for isolation",
          "note": "Same approach we considered",
          "claim_type": "method", "confidence": 0.9},
     ],
@@ -401,7 +403,7 @@ rka_execute(args={
     "project_id": "prj_01...",
     "question": "Should we use MQTT for sensor data?",
     "assumptions": ["Network latency <50ms", "Sensor count stays under 500"],
-    # ... other fields (chosen, rationale, related_journal, ...)
+    # ... other required fields (chosen, rationale, decided_by, kind, related_journal, phase)
 })
 ```
 

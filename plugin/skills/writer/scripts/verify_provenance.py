@@ -53,7 +53,7 @@ Resolver = Callable[[str], Optional[dict]]
 
 _PROV_RE = re.compile(r"^\s*%\s*provenance:\s*(.*)$", re.IGNORECASE)
 _ID_RE = re.compile(r"(jrn|dec|lit|mis|clm|ecl)_[0-9A-Z]{26}")
-_ACK_RE = re.compile(r"\b(superseded-ack|retracted-ack|status-ack)\b", re.IGNORECASE)
+_ACK_RE = re.compile(r"\b(superseded-ack|retracted-ack)\b", re.IGNORECASE)
 
 # Entity states that mean "do not assert from this" unless acknowledged.
 _STALE_STATES = {"superseded", "abandoned", "merged"}
@@ -285,39 +285,45 @@ def audit_text(text: str, resolver: Resolver, *, support_threshold: float = _LOW
             continue
         valid_marker_indexes.add(i)
         eid = id_match.group(0)
-        ack = bool(_ACK_RE.search(body))
+        ack_tokens = {match.group(1).lower() for match in _ACK_RE.finditer(body)}
+        has_any_ack = bool(ack_tokens)
         claim = _next_prose(lines, i)
 
         if not claim.strip():
             report.citations.append(CitationResult(
                 eid, i + 1, "ORPHAN",
                 "provenance marker is not followed by a substantive prose block",
-                None, ack,
+                None, has_any_ack,
             ))
             continue
 
         ent = resolver(eid)
         if ent is None:
             report.citations.append(CitationResult(eid, i + 1, "MISSING",
-                "entity not found in project (fabricated or wrong project)", None, ack))
+                "entity not found in project (fabricated or wrong project)",
+                None,
+                has_any_ack,
+            ))
             continue
 
         status = (ent.get("status") or "").lower()
         if status in _RETRACTED_STATES:
-            if ack:
+            acknowledged = "retracted-ack" in ack_tokens
+            if acknowledged:
                 report.citations.append(CitationResult(eid, i + 1, "OK",
                     "retracted entity cited with retracted-ack", None, True))
             else:
                 report.citations.append(CitationResult(eid, i + 1, "RETRACTED",
-                    "cites a retracted entity without retracted-ack", None, ack))
+                    "cites a retracted entity without retracted-ack", None, False))
             continue
         if status in _STALE_STATES:
-            if ack:
+            acknowledged = "superseded-ack" in ack_tokens
+            if acknowledged:
                 report.citations.append(CitationResult(eid, i + 1, "OK",
-                    f"{status} entity cited with status-ack", None, True))
+                    f"{status} entity cited with superseded-ack", None, True))
             else:
                 report.citations.append(CitationResult(eid, i + 1, "STALE",
-                    f"cites a {status} entity without superseded-ack", None, ack))
+                    f"cites a {status} entity without superseded-ack", None, False))
             continue
 
         sup, scorable = support_score(claim, ent.get("content", ""))
@@ -332,16 +338,18 @@ def audit_text(text: str, resolver: Resolver, *, support_threshold: float = _LOW
         if ent.get("contradicted") and not draft_surfaces_disagreement:
             report.citations.append(CitationResult(eid, i + 1, "CONTRADICTED",
                 "cited entity has a contradicts edge; draft does not surface the disagreement",
-                sup_round, ack))
+                sup_round, has_any_ack))
         elif scorable and sup < support_threshold:
             report.citations.append(CitationResult(eid, i + 1, "LOW_SUPPORT",
                 ("entailment judge: evidence does not support the claim" if judged is False
                  else f"claim shares only {sup:.0%} of content tokens with the cited entity "
                       "(advisory; NLI entailment is the Phase-2 check)"),
-                sup_round, ack))
+                sup_round, has_any_ack))
         else:
             note = "" if scorable else "support unscored (thin entity content; NLI Phase-2)"
-            report.citations.append(CitationResult(eid, i + 1, "OK", note, sup_round, ack))
+            report.citations.append(
+                CitationResult(eid, i + 1, "OK", note, sup_round, has_any_ack)
+            )
 
     blocks = _substantive_blocks(lines)
     report.total_markers = len(marker_indexes)
@@ -475,9 +483,22 @@ def main(argv: Optional[list] = None) -> int:
         print("warning: --support-backend llm requested but no judge available "
               "(set RKA_WRITER_JUDGE_MODEL and install the [llm] extra); "
               "using lexical", file=sys.stderr)
-    reports = [audit_file(f, resolver, support_threshold=args.support_threshold,
-                          judge=judge)
-               for f in args.files]
+    try:
+        reports = [
+            audit_file(
+                f,
+                resolver,
+                support_threshold=args.support_threshold,
+                judge=judge,
+            )
+            for f in args.files
+        ]
+    except Exception as exc:
+        print(
+            f"error: provenance audit could not complete against RKA: {exc}",
+            file=sys.stderr,
+        )
+        return 3
     output = {
         "version": "1.0",
         "files": [asdict(r) for r in reports],

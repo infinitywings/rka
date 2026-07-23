@@ -150,6 +150,9 @@ rka_execute(args={
     "question": "Use PostgreSQL or SQLite?",
     "chosen": "SQLite",
     "rationale": "Simpler for local-first deployment.",
+    "decided_by": "brain",
+    "kind": "design_choice",
+    "phase": "design",
     "related_journal": ["jrn_01...benchmarks", "jrn_01...deployment-survey"],
 })
 ```

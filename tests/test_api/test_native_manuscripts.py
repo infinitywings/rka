@@ -260,6 +260,235 @@ async def test_metadata_routes_cannot_bypass_lifecycle_gates(
 
 
 @pytest.mark.asyncio
+async def test_native_mutations_record_transport_actor(
+    api_client: httpx.AsyncClient,
+) -> None:
+    direct = await api_client.post(
+        "/api/manuscripts/native",
+        headers=DEFAULT_HEADERS,
+        json={"title": "Direct REST actor"},
+    )
+    assert direct.status_code == 201
+    direct_spine = await api_client.put(
+        f"/api/manuscripts/{direct.json()['id']}/argument-spine",
+        headers=DEFAULT_HEADERS,
+        json={
+            "expected_revision": 1,
+            "spine": {"claims": [], "units": []},
+        },
+    )
+    assert direct_spine.status_code == 200
+    direct_audit = await api_client.get(
+        "/api/audit",
+        headers=DEFAULT_HEADERS,
+        params={
+            "entity_type": "manuscript",
+            "entity_id": direct.json()["id"],
+        },
+    )
+    assert direct_audit.status_code == 200
+    assert {entry["actor"] for entry in direct_audit.json()} == {"web_ui"}
+    assert {entry["action"] for entry in direct_audit.json()} == {
+        "create",
+        "update",
+    }
+
+    mcp_headers = {**DEFAULT_HEADERS, "X-RKA-Actor": "executor"}
+    proxied = await api_client.post(
+        "/api/manuscripts/native",
+        headers=mcp_headers,
+        json={"title": "MCP-proxied actor"},
+    )
+    assert proxied.status_code == 201
+    proxied_audit = await api_client.get(
+        "/api/audit",
+        headers=DEFAULT_HEADERS,
+        params={
+            "entity_type": "manuscript",
+            "entity_id": proxied.json()["id"],
+        },
+    )
+    assert proxied_audit.status_code == 200
+    assert {entry["actor"] for entry in proxied_audit.json()} == {"executor"}
+
+    queued = await api_client.post(
+        f"/api/manuscripts/{proxied.json()['id']}/validate-reference",
+        headers=mcp_headers,
+        json={"title": "Transport-attributed reference"},
+    )
+    assert queued.status_code == 202
+    queued_audit = await api_client.get(
+        "/api/audit",
+        headers=DEFAULT_HEADERS,
+        params={
+            "entity_type": "reference_validation_job",
+            "entity_id": queued.json()["job_id"],
+        },
+    )
+    assert queued_audit.status_code == 200
+    assert {entry["actor"] for entry in queued_audit.json()} == {"executor"}
+
+    rejected = await api_client.post(
+        "/api/manuscripts/native",
+        headers={**DEFAULT_HEADERS, "X-RKA-Actor": "pi"},
+        json={"title": "Spoofed identity"},
+    )
+    assert rejected.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_native_manuscript_routes_return_uniform_not_found(
+    api_client: httpx.AsyncClient,
+) -> None:
+    """A missing same-project aggregate is 404 on every manuscript route."""
+    manuscript_id = "man_missing"
+    attestation = {
+        "claim_id": "mcl_missing",
+        "claim_version": 1,
+        "overall_verdict": "block",
+        "grounding_verdict": "block",
+        "evidence_verdict": "not_checked",
+        "contradiction_verdict": "not_checked",
+        "currency_verdict": "not_checked",
+        "ratification_verdict": "not_checked",
+        "unit_coverage_verdict": "not_checked",
+        "full_json_payload": {"findings": ["missing manuscript"]},
+        "started_at": "2026-07-23T12:00:00Z",
+        "completed_at": "2026-07-23T12:00:01Z",
+    }
+    requests = [
+        ("GET", f"/api/manuscripts/{manuscript_id}", None),
+        ("GET", f"/api/manuscripts/{manuscript_id}/context", None),
+        ("GET", f"/api/manuscripts/{manuscript_id}/readiness", None),
+        ("GET", f"/api/manuscripts/{manuscript_id}/spine", None),
+        ("GET", f"/api/manuscripts/{manuscript_id}/references", None),
+        (
+            "GET",
+            f"/api/manuscripts/{manuscript_id}/writing-candidates",
+            None,
+        ),
+        ("GET", f"/api/manuscripts/{manuscript_id}/impact", None),
+        (
+            "PATCH",
+            f"/api/manuscripts/{manuscript_id}",
+            {"expected_revision": 1, "title": "Missing"},
+        ),
+        (
+            "PUT",
+            f"/api/manuscripts/{manuscript_id}/argument-spine",
+            {
+                "expected_revision": 1,
+                "spine": {"claims": [], "units": []},
+            },
+        ),
+        (
+            "PUT",
+            f"/api/manuscripts/{manuscript_id}/references",
+            {"expected_revision": 1, "members": []},
+        ),
+        (
+            "POST",
+            f"/api/manuscripts/{manuscript_id}/claims/C1/ratifications",
+            {"expected_revision": 1, "decision_id": "dec_missing"},
+        ),
+        (
+            "POST",
+            f"/api/manuscripts/{manuscript_id}/transition",
+            {"expected_revision": 1, "target_phase": "drafting"},
+        ),
+        (
+            "POST",
+            f"/api/manuscripts/{manuscript_id}/checkpoints",
+            {"expected_revision": 1, "kind": "venue"},
+        ),
+        (
+            "POST",
+            "/api/manuscripts/checkpoints/mcp_missing/resolve",
+            {
+                "expected_revision": 1,
+                "decision_id": "dec_missing",
+                "status": "resolved",
+                "resolved_at": "2026-07-23T12:00:01Z",
+            },
+        ),
+        (
+            "POST",
+            f"/api/manuscripts/{manuscript_id}/verification-attestations",
+            {"expected_revision": 1, "attestation": attestation},
+        ),
+        (
+            "POST",
+            f"/api/manuscripts/{manuscript_id}/validate-reference",
+            {"title": "Missing manuscript reference"},
+        ),
+    ]
+
+    for method, path, payload in requests:
+        response = await api_client.request(
+            method,
+            path,
+            headers=DEFAULT_HEADERS,
+            json=payload,
+        )
+        assert response.status_code == 404, (
+            f"{method} {path} returned {response.status_code}: {response.text}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_native_domain_validation_remains_unprocessable(
+    api_client: httpx.AsyncClient,
+) -> None:
+    created = await api_client.post(
+        "/api/manuscripts/native",
+        headers=DEFAULT_HEADERS,
+        json={"title": "Domain validation"},
+    )
+    assert created.status_code == 201
+
+    response = await api_client.post(
+        f"/api/manuscripts/{created.json()['id']}/transition",
+        headers=DEFAULT_HEADERS,
+        json={"expected_revision": 1, "target_phase": "planning"},
+    )
+    assert response.status_code == 422
+    assert "must advance" in response.text
+
+
+@pytest.mark.asyncio
+async def test_foreign_manuscript_is_hidden_as_not_found(
+    api_client: httpx.AsyncClient,
+) -> None:
+    foreign = await api_client.post(
+        "/api/manuscripts/native",
+        headers=OTHER_HEADERS,
+        json={"title": "Foreign manuscript"},
+    )
+    assert foreign.status_code == 201
+    manuscript_id = foreign.json()["id"]
+
+    requests = [
+        ("GET", f"/api/manuscripts/{manuscript_id}/readiness", None),
+        ("GET", f"/api/manuscripts/{manuscript_id}/impact", None),
+        (
+            "PATCH",
+            f"/api/manuscripts/{manuscript_id}",
+            {"expected_revision": 1, "title": "Hidden"},
+        ),
+    ]
+    for method, path, payload in requests:
+        response = await api_client.request(
+            method,
+            path,
+            headers=DEFAULT_HEADERS,
+            json=payload,
+        )
+        assert response.status_code == 404, (
+            f"{method} {path} returned {response.status_code}: {response.text}"
+        )
+
+
+@pytest.mark.asyncio
 async def test_bulk_resolver_attests_scope_and_withholds_foreign_content(
     api_client: httpx.AsyncClient,
 ) -> None:

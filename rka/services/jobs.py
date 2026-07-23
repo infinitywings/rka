@@ -103,19 +103,43 @@ class JobQueue:
             )
         now = _now()
         lease_until = _after_seconds(self.lease_seconds)
-        candidates = await self.db.fetchall(
-            """SELECT id
-               FROM jobs
-               WHERE
-                   (status = 'pending' AND run_after <= ?)
-                   OR (status = 'running' AND lease_until IS NOT NULL AND lease_until <= ?)
-               ORDER BY priority ASC, created_at ASC
-               LIMIT 10""",
-            [now, now],
-        )
-        for candidate in candidates:
-            lease_token = generate_id("lease")
-            async with self.db.transaction():
+        async with self.db.transaction():
+            # A worker can disappear after consuming its final allowed
+            # attempt. Terminalize that expired lease before selecting work so
+            # it can never be reclaimed for attempt max_attempts + 1.
+            await self.db.execute(
+                """UPDATE jobs
+                   SET status = 'failed',
+                       lease_until = NULL,
+                       lease_token = NULL,
+                       worker_id = NULL,
+                       last_error = 'lease expired after maximum attempts',
+                       updated_at = ?,
+                       completed_at = COALESCE(completed_at, ?)
+                   WHERE status = 'running'
+                     AND lease_until IS NOT NULL
+                     AND lease_until <= ?
+                     AND attempts >= max_attempts""",
+                [now, now, now],
+            )
+            candidates = await self.db.fetchall(
+                """SELECT id
+                   FROM jobs
+                   WHERE attempts < max_attempts
+                     AND (
+                         (status = 'pending' AND run_after <= ?)
+                         OR (
+                             status = 'running'
+                             AND lease_until IS NOT NULL
+                             AND lease_until <= ?
+                         )
+                     )
+                   ORDER BY priority ASC, created_at ASC
+                   LIMIT 10""",
+                [now, now],
+            )
+            for candidate in candidates:
+                lease_token = generate_id("lease")
                 cursor = await self.db.execute(
                     """UPDATE jobs
                        SET status = 'running',
@@ -126,6 +150,7 @@ class JobQueue:
                            updated_at = ?,
                            last_error = NULL
                        WHERE id = ?
+                         AND attempts < max_attempts
                          AND (
                             (status = 'pending' AND run_after <= ?)
                             OR (

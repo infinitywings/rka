@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from rka.services.change_tracking import ChangeTrackingService
+from rka.services.manuscript_native import ManuscriptNotFoundError
 
 
 async def _seed_project(db, project_id: str) -> None:
@@ -425,7 +426,7 @@ async def test_cursor_arguments_fail_closed(db) -> None:
         await service.changes_since(-1)
     with pytest.raises(ValueError, match="between"):
         await service.changes_since(0, limit=0)
-    with pytest.raises(ValueError, match="not found"):
+    with pytest.raises(ManuscriptNotFoundError, match="not found"):
         await service.get_manuscript_impact("man_missing")
 
 

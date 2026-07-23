@@ -253,9 +253,13 @@ Save and **fully quit Claude Desktop** (Cmd+Q on macOS) then reopen. RKA tools w
 
 **Claude Code** — same JSON shape, in `.claude/mcp.json` (per-project) or `~/.claude/settings.json` under the same `mcpServers` key (user-level), or via the VS Code extension's **MCP Servers** UI.
 
-To find your project id: run `rka_list_projects()` in any Claude session, or open `http://localhost:9712` and read the id from the URL when you switch projects.
+To find your project id: run `rka_query(args={"operation": "list_projects"})` in any Claude session, or open `http://localhost:9712` and read the id from the URL when you switch projects.
 
 > **After Code Changes:** Always run `UV_CACHE_DIR=/tmp/uv-cache uv tool install --force --reinstall .` (update MCP binary) then `docker compose up -d --build` (update server). Plain `uv tool install --force .` uses cached wheels and may NOT pick up changes.
+
+### 5.4 — Using RKA from ChatGPT (Custom Connector)
+
+RKA can also be reached from ChatGPT as a custom MCP connector. The path: start the MCP server in HTTP mode on `127.0.0.1:9713` with `RKA_SKILL_TOOLS=1` (which exposes the 8-tool skill surface), front it with the OAuth reverse proxy (`scripts/rka_mcp_oauth_proxy.py`) on `127.0.0.1:9720`, expose that over HTTPS with an ngrok tunnel, then register the tunnel URL as the ChatGPT connector **Server URL** (`https://<ngrok-host>/mcp`) and authenticate over OAuth. Only the MCP server is exposed — the web UI stays private and is never tunneled, and your OAuth passphrase and API keys stay on your machine. See [`CHATGPT_CONNECTOR.md`](CHATGPT_CONNECTOR.md) for the full step-by-step setup.
 
 ---
 
@@ -287,15 +291,17 @@ RKA supports multiple isolated projects. When you first start RKA, a default pro
 
 ## Chapter 7: The Session Protocol
 
+> **Dispatch shape (v2.7.0+).** The calls below are shown as dispatch operations: reads go through `rka_query(operation="…")` and writes through `rka_execute(operation="…")`, with `project_id` threaded on every call. See the Chapter 16 banner for the full legacy-name → operation mapping and the `rka_describe` lookup.
+
 ### 7.1 — Brain Session Start
 
 Every Brain session should begin with these steps. The `RKA_INSTRUCTIONS` tell the Brain to do this automatically:
 
 | Step | Tool Call | Purpose |
 |------|-----------|---------|
-| 1 | `rka_get_status()` | Load project phase, summary, metrics |
-| 2 | `rka_get_context(topic="current work")` | Load recent knowledge relevant to the current focus |
-| 3 | `rka_get_pending_maintenance()` | Check for provenance gaps, untagged entries, orphaned clusters |
+| 1 | `rka_query(operation="status")` | Load project phase, summary, metrics |
+| 2 | `rka_query(operation="context", query="current work")` | Load recent knowledge relevant to the current focus |
+| 3 | `rka_query(operation="pending_maintenance")` | Check for provenance gaps, untagged entries, orphaned clusters |
 | 4 | *(silent processing)* | Tag entries, add links, extract claims — up to 10 items |
 | 5 | Greet the user | Begin the actual conversation |
 
@@ -305,20 +311,20 @@ Every Brain session should begin with these steps. The `RKA_INSTRUCTIONS` tell t
 
 | Step | Tool Call | Purpose |
 |------|-----------|---------|
-| 1 | `rka_get_mission()` | Load the current assigned mission with tasks |
-| 2 | Read mission context links | Use `rka_get(id)` on `motivated_by_decision`, related journal/literature |
-| 3 | `rka_get_context(topic="<mission topic>")` | Load relevant prior knowledge |
+| 1 | `rka_query(operation="mission")` | Load the current assigned mission with tasks |
+| 2 | Read mission context links | Use `rka_query(operation="entity", id=…)` on `motivated_by_decision`, related journal/literature |
+| 3 | `rka_query(operation="context", query="<mission topic>")` | Load relevant prior knowledge |
 
 ### 7.3 — Recording Standards
 
 When creating entities, always provide provenance links:
 
-| Situation | Tool | Required Links |
-|-----------|------|----------------|
-| Making a decision | `rka_add_decision` | `related_journal` (what evidence?), `related_literature` (what papers?) |
-| Creating a mission | `rka_create_mission` | `motivated_by_decision` (which decision spawned this?) |
-| Recording a finding | `rka_add_note` | `related_decisions`, `related_mission`, `related_literature` |
-| Finishing a mission | `rka_submit_report` | `related_decisions` (which decisions do the results bear on?) |
+| Situation | Operation | Required Links |
+|-----------|-----------|----------------|
+| Making a decision | `rka_execute(operation="record_decision")` | `related_journal` (what evidence?), `related_literature` (what papers?) |
+| Creating a mission | `rka_execute(operation="create_mission")` | `motivated_by_decision` (which decision spawned this?) |
+| Recording a finding | `rka_execute(operation="record_note")` | `related_decisions`, `related_mission`, `related_literature` (nested under `provenance={…}`) |
+| Finishing a mission | `rka_execute(operation="submit_report")` | `related_decisions` (which decisions do the results bear on?) |
 
 ---
 
@@ -376,13 +382,13 @@ A complete provenance chain looks like this:
 
 > **Literature** (MQTT benchmarks) → *informed* → **Decision** (test broker limits) → *motivated* → **Mission** (stress test at scale) → *produced* → **Finding** (12% packet loss) → *derived* → **Claim** (threshold at 400) → *justified* → **Decision** (implement sharding)
 
-You can traverse this chain in either direction using `rka_trace_provenance(entity_id, direction="upstream")` or `direction="downstream"`.
+You can traverse this chain in either direction using `rka_query(operation="provenance", id=<entity_id>, filters={"direction": "backward"})` (upstream, toward what produced the entity) or `filters={"direction": "forward"}` (downstream).
 
 > **Why Provenance Matters:** Without provenance links, the knowledge graph is disconnected islands — decisions in one column, literature in another, findings in a third. With provenance, you can ask "why did we decide to use sharding?" and get a chain: because the stress test showed 12% packet loss, which was motivated by the decision to test broker limits, which was informed by the MQTT benchmarks paper.
 
 ### 9.1 — The Maintenance Manifest
 
-The maintenance manifest (`rka_get_pending_maintenance`) is a pure-SQL tool that detects provenance gaps:
+The maintenance manifest (`rka_query(operation="pending_maintenance")`) is a pure-SQL tool that detects provenance gaps:
 
 - **Decisions without justified_by links** — no evidence trail
 - **Missions without motivated_by_decision** — no triggering decision
@@ -451,13 +457,13 @@ The Knowledge Graph is a low-level debugging view. For structured navigation, us
 
 ### Step 1: Create the Project
 
-Use the web dashboard or have the Brain call `rka_create_project()`. Give it a descriptive name and description.
+Use the web dashboard or have the Brain call `rka_execute(args={"operation": "create_project", ...})`. Give it a descriptive name and description.
 
 ### Step 2: Frame Your Research Questions
 
 The Brain creates research questions as decisions with `kind="research_question"`. These become the top-level nodes in the Research Map and organize everything below.
 
-**Example:** `rka_execute(args={"operation": "record_decision", "project_id": "prj_01...", "question": "Does protocol-specific feature engineering improve IDS detection?", "kind": "research_question", "phase": "exploration", "decided_by": "brain"})`
+**Example:** `rka_execute(args={"operation": "record_decision", "project_id": "prj_01...", "question": "Does protocol-specific feature engineering improve IDS detection?", "chosen": "Yes — test protocol-specific features", "rationale": "Prior IoT-IDS work suggests protocol fields carry discriminative signal worth evaluating.", "kind": "research_question", "phase": "exploration", "decided_by": "brain", "related_journal": ["jrn_01..."]})` — `record_decision` requires `question`, `chosen`, `rationale`, `decided_by`, `kind`, `phase`, and a non-empty `related_journal`; the typed-arg surface rejects the call before it leaves the client if any are missing.
 
 ### Step 3: Add Initial Literature
 
@@ -465,7 +471,7 @@ Import papers via BibTeX, DOI, Semantic Scholar, or arXiv search. Always link li
 
 ### Step 4: Record Initial Ideas and Observations
 
-Use `rka_add_note` for early observations, meeting notes, and hypotheses. Link them to relevant decisions.
+Use `rka_execute(operation="record_note")` for early observations, meeting notes, and hypotheses. Link them to relevant decisions (via `provenance={…}`).
 
 ### Step 5: Start the Mission Cycle
 
@@ -495,13 +501,13 @@ The mission lifecycle is the primary coordination mechanism between Brain and Ex
 
 ### 14.1 — Adding Papers
 
-| Method | Tool | Best For |
-|--------|------|----------|
-| Manual | `rka_add_literature(title, authors, year, ...)` | Adding a known paper with metadata |
-| DOI Lookup | `rka_enrich_doi(lit_id)` | Filling in missing metadata from CrossRef |
-| BibTeX Import | `rka_import_bibtex(content)` | Bulk import from a .bib file |
-| Semantic Scholar | `rka_search_semantic_scholar(query, add_to_library=true)` | Searching for relevant papers |
-| arXiv Search | `rka_search_arxiv(query, add_to_library=true)` | Finding preprints |
+| Method | Operation | Best For |
+|--------|-----------|----------|
+| Manual | `rka_execute(operation="record_literature")` (title, authors, year, …) | Adding a known paper with metadata |
+| DOI Lookup | `rka_execute(operation="enrich_doi")` (lit_id) | Filling in missing metadata from CrossRef |
+| BibTeX Import | `rka_execute(operation="import_bibtex")` (bibtex) | Bulk import from a .bib file |
+| Semantic Scholar | `rka_search_semantic_scholar` — deferred legacy tool; load via `rka_load_tools(names=[…])` | Searching for relevant papers |
+| arXiv Search | `rka_search_arxiv` — deferred legacy tool; load via `rka_load_tools(names=[…])` | Finding preprints |
 
 ### 14.2 — Reading Pipeline
 
@@ -535,63 +541,63 @@ The Brain processes up to 10 maintenance items per session, prioritized by impor
 
 ## Chapter 16: MCP Tools Quick Reference
 
-> **v2.7.0 dispatch translation.** The legacy tool names below (`rka_add_note`, `rka_add_decision`, `rka_create_mission`, `rka_get_status`, `rka_search`, etc.) are synonyms for `rka_query(args={"operation": ...})` / `rka_execute(args={"operation": ...})` under the v2.7.0+ typed-arg surface. The discipline (`source="pi"` + `verbatim_input`, `related_journal=[...]` on decisions, `motivated_by_decision=...` on missions, `project_id` on every call) is unchanged — only the call shape changes. See `rka_describe(operation="<name>")` for per-operation signatures, or `rka_describe(operation="")` for the operation index. The `rka_set_project` row is now a deprecated no-op (v2.6 removed it); pin `project_id` at conversation start and thread it on every operation. Pre-v2.4 `rka_ask` / `rka_generate_summary` rows are historical and no longer first-class.
+> **v2.7.0+ dispatch surface.** RKA broadcasts exactly 5 always-on tools: 3 dispatch tools (`rka_query`, `rka_execute`, `rka_describe`) plus 2 escape hatches (`rka_load_tools`, `rka_help`). The tables below list the **operation names** — the values you pass as `operation`: 51 read operations go through `rka_query(args={"operation": ...})` and 58 write/lifecycle operations through `rka_execute(args={"operation": ...})`. There are 109 typed operations total. The pre-v2.7 per-tool names (`rka_add_note`, `rka_get_status`, `rka_trace_provenance`, …) are `tier=deferred` legacy synonyms: they resolve to these operations (typically drop the `rka_`/`get_`/`add_` prefix, e.g. `rka_get_status` → `status`, `rka_add_note` → `record_note`, `rka_trace_provenance` → `provenance`), but on the default surface you call the operation through the dispatch tools rather than the legacy name. The discipline (`source="pi"` + `verbatim_input`, `related_journal=[...]` on decisions, `motivated_by_decision=...` on missions, `project_id` on every call) is unchanged. See `rka_describe(operation="<name>")` for per-operation signatures, or `rka_describe(operation="")` for the full 109-operation index. `rka_set_project` was removed in v2.6 (deprecated no-op) — pin `project_id` at conversation start and thread it on every operation. The LLM-backed `rka_ask` / `rka_generate_summary` features were removed in v2.4.0 and are no longer part of the surface.
 
-### Knowledge Management
+### Knowledge Management (`rka_execute`)
 
-| Tool | Purpose |
-|------|---------|
-| `rka_add_note` | Add a journal entry (note/log/directive) |
-| `rka_update_note` | Update an existing entry |
-| `rka_add_decision` | Add a decision to the tree |
-| `rka_update_decision` | Update a decision (status, rationale, links) |
-| `rka_add_literature` | Add a paper/article |
-| `rka_update_literature` | Update literature metadata |
-| `rka_bulk_update` | Batch update multiple entities |
+| Operation | Purpose |
+|-----------|---------|
+| `record_note` | Add a journal entry (note/log/directive) |
+| `update_note` | Update an existing entry |
+| `record_decision` | Add a decision to the tree |
+| `update_decision` | Update a decision (status, rationale, links) |
+| `record_literature` | Add a paper/article |
+| `update_literature` | Update literature metadata |
+| `bulk_update` | Batch update multiple entities |
 
 ### Mission Lifecycle
 
-| Tool | Purpose |
-|------|---------|
-| `rka_create_mission` | Create a mission for the Executor |
-| `rka_get_mission` | Get current or specific mission |
-| `rka_update_mission_status` | Update mission status and tasks |
-| `rka_submit_report` | Submit execution report |
-| `rka_submit_checkpoint` | Escalate a decision/question |
-| `rka_resolve_checkpoint` | Resolve a checkpoint |
+| Operation | Dispatch tool | Purpose |
+|-----------|---------------|---------|
+| `create_mission` | `rka_execute` | Create a mission for the Executor |
+| `mission` | `rka_query` | Get current or specific mission |
+| `update_mission_status` | `rka_execute` | Update mission status and tasks |
+| `submit_report` | `rka_execute` | Submit execution report |
+| `submit_checkpoint` | `rka_execute` | Escalate a decision/question |
+| `resolve_checkpoint` | `rka_execute` | Resolve a checkpoint |
 
-### Search & Context
+### Search & Context (`rka_query`)
 
-| Tool | Purpose |
-|------|---------|
-| `rka_search` | Hybrid search across all entities |
-| `rka_get` | Get full content of any entity by ID |
-| `rka_get_context` | Generate a focused context package |
-| `rka_ask` | Ask a question grounded in the knowledge base |
-| `rka_get_pending_maintenance` | Detect provenance gaps and maintenance items |
+| Operation | Purpose |
+|-----------|---------|
+| `search` | Hybrid search across all entities |
+| `entity` | Get full content of any entity by ID |
+| `context` | Generate a focused context package |
+| `multi_hop` | Multi-hop retrieval for questions spanning several entities |
+| `pending_maintenance` | Detect provenance gaps and maintenance items |
 
 ### Research Map & Review
 
-| Tool | Purpose |
-|------|---------|
-| `rka_get_research_map` | Three-level view: RQs → clusters → claims |
-| `rka_get_claims` | Query extracted claims with filters |
-| `rka_review_cluster` | Brain reviews and synthesizes a cluster |
-| `rka_resolve_contradiction` | Brain resolves conflicting claims |
-| `rka_trace_provenance` | Trace the reasoning chain behind any entity |
-| `rka_get_decision_tree` | Get the full decision tree |
-| `rka_graph_stats` | Knowledge graph statistics |
+| Operation | Dispatch tool | Purpose |
+|-----------|---------------|---------|
+| `research_map` | `rka_query` | Three-level view: RQs → clusters → claims |
+| `claims` | `rka_query` | Query extracted claims with filters |
+| `review_cluster` | `rka_execute` | Brain reviews and synthesizes a cluster |
+| `resolve_contradiction` | `rka_execute` | Brain resolves conflicting claims |
+| `provenance` | `rka_query` | Trace the reasoning chain behind any entity |
+| `decision_tree` | `rka_query` | Get the full decision tree |
+| `graph_stats` | `rka_query` | Knowledge graph statistics |
 
 ### Project & Session
 
-| Tool | Purpose |
-|------|---------|
-| `rka_list_projects` | List all projects |
-| `rka_set_project` | Deprecated no-op; pass `project_id` on each scoped operation |
-| `rka_create_project` | Create a new project |
-| `rka_get_status` | Get project state |
-| `rka_update_status` | Update project state |
-| `rka_session_digest` | Compact session summary |
+| Operation | Dispatch tool | Purpose |
+|-----------|---------------|---------|
+| `list_projects` | `rka_query` | List all projects |
+| *(project switching)* | — | `rka_set_project` was removed in v2.6 (deprecated no-op) — pin `project_id` per call instead |
+| `create_project` | `rka_execute` | Create a new project |
+| `status` | `rka_query` | Get project state |
+| `update_status` | `rka_execute` | Update project state |
+| `session_digest` | `rka_execute` | Compact session summary |
 
 ---
 
@@ -609,12 +615,12 @@ The web dashboard at `http://localhost:9712` provides a visual interface for bro
 | **Timeline** | `/timeline` | Event stream with causal chain visualization |
 | **Knowledge Graph** | `/graph` | Entity relationship network (low-level debugging view) |
 | **Research Map** | `/research-map` | Three-level drill-down: RQs → clusters → claims |
-| **Notebook** | `/notebook` | Q&A chat and summary generation |
+| **Notebook** | `/notebook` | (historical) Q&A chat and summary generation — the LLM-backed Q&A/summary features were removed in v2.4.0 |
 | **Audit Log** | `/audit` | System audit trail with action/entity/actor filters |
 | **Context Inspector** | `/context` | Generate and inspect context packages |
 | **Research Health** | `/health` | Provenance coverage, research-debt trajectory, mission-cycle stats, bookkeeping overhead; staleness-review + link-support audit actions |
 | **Report Context** | `/report-context` | Prose description + angle queries -> report-scoped node collection with per-node inclusion provenance |
-| **Settings** | `/settings` | API health, DB stats, LLM config, project settings |
+| **Settings** | `/settings` | API health, DB stats, embedding backend config, project settings |
 
 ### Dashboard Page
 
@@ -644,7 +650,7 @@ The Research Map is the primary navigation tool for understanding your research.
 
 ### Settings Page
 
-The Settings page shows API health status, database statistics, LLM configuration (optional — for `rka_ask` and `rka_generate_summary`), and project configuration. Use the quick links to access `/docs` (Swagger API reference) and `/api/health`.
+The Settings page shows API health status, database statistics, embedding backend configuration (**Settings → Embeddings**), and project configuration. Use the quick links to access `/docs` (Swagger API reference) and `/api/health`. (The LLM-backed Q&A/summary configuration was removed in v2.4.0.)
 
 ---
 
@@ -667,18 +673,11 @@ The Settings page shows API health status, database statistics, LLM configuratio
 
 ### 18.3 — Context Engine
 
-In v2.4 the context engine has no tunable settings. Ranking is deterministic SQL-time: `journal.importance` (CASE: critical=4 → archived=0) × `entity_links` centrality × `created_at` DESC, with a +0.5 lift for PI-sourced entries. The legacy `RKA_CONTEXT_HOT_DAYS`, `RKA_CONTEXT_WARM_DAYS`, and `RKA_CONTEXT_DEFAULT_MAX_TOKENS` env vars were removed (see `dec_01KQQPD6Y6B362T3K08368BDMP`). For multi-hop questions, use `rka_multi_hop_retrieval` instead of `rka_get_context`.
+In v2.4 the context engine has no tunable settings. Ranking is deterministic SQL-time: `journal.importance` (CASE: critical=4 → archived=0) × `entity_links` centrality × `created_at` DESC, with a +0.5 lift for PI-sourced entries. The legacy `RKA_CONTEXT_HOT_DAYS`, `RKA_CONTEXT_WARM_DAYS`, and `RKA_CONTEXT_DEFAULT_MAX_TOKENS` env vars were removed (see `dec_01KQQPD6Y6B362T3K08368BDMP`). For multi-hop questions, use `rka_query(operation="multi_hop")` instead of `rka_query(operation="context")`.
 
-### 18.4 — LLM Settings (Optional)
+### 18.4 — LLM Settings (Removed in v2.4.0)
 
-LLM configuration is optional and only needed for `rka_ask` and `rka_generate_summary`. These tools require a cloud API key. All other enrichment is handled by the Brain during sessions.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `RKA_LLM_ENABLED` | `false` | Enable LLM features (for Q&A and summaries only) |
-| `RKA_LLM_MODEL` | `openai/gpt-4o-mini` | LiteLLM model identifier |
-| `RKA_LLM_API_BASE` | — | LLM API base URL |
-| `RKA_LLM_API_KEY` | — | API key for cloud LLM provider |
+> **Historical.** Earlier versions exposed server-side LLM features (`rka_ask`, `rka_generate_summary`, and the web-UI Q&A page) configured through `RKA_LLM_*` environment variables. These features were **removed in v2.4.0** and `/api/capabilities` no longer returns an `llm` field. There is no LLM configuration to set: all intelligent enrichment (tagging, claim extraction, cluster synthesis, contradiction resolution) is now performed by the Brain during sessions. The removed `RKA_LLM_ENABLED` / `RKA_LLM_MODEL` / `RKA_LLM_API_BASE` / `RKA_LLM_API_KEY` variables have no effect on current builds.
 
 ---
 
@@ -688,9 +687,9 @@ LLM configuration is optional and only needed for `rka_ask` and `rka_generate_su
 
 | Problem | Cause | Fix |
 |---------|-------|-----|
-| MCP tool not visible in Claude | Claude caches the tool list on connect; or the tool is deferred | Restart Claude Desktop; or use `tool_search` to load deferred tools |
-| `rka_trace_provenance` returns error | Known bug: empty response parsing | Use `rka_get(id)` + manual link traversal as workaround |
-| Knowledge graph shows disconnected columns | Missing provenance links between entity types | Brain processes `rka_get_pending_maintenance()` items |
+| MCP tool not visible in Claude | Claude caches the tool list on connect; or the legacy tool is `tier=deferred` | Restart Claude Desktop; or use `rka_load_tools(names=[…])` to register deferred legacy tools |
+| `provenance` operation returns error | Known bug: empty response parsing | Use `rka_query(operation="entity", id=…)` + manual link traversal as workaround |
+| Knowledge graph shows disconnected columns | Missing provenance links between entity types | Brain processes `rka_query(operation="pending_maintenance")` items |
 | Research map has many "emerging" clusters | Clusters auto-generated by old LLM pipeline with only 1–2 claims | Brain reviews and merges thin clusters over time |
 | Docker container unhealthy | API not responding | Check `docker compose logs -f rka`; rebuild with `--build` |
 | MCP binary out of date | Source changed but `uv tool` not reinstalled | Run: `UV_CACHE_DIR=/tmp/uv-cache uv tool install --force --reinstall .` |
@@ -700,7 +699,7 @@ LLM configuration is optional and only needed for `rka_ask` and `rka_generate_su
 ### Frequently Asked Questions
 
 **Q: Do I need a local LLM (LM Studio, Ollama)?**
-No. RKA v2.0+ removed the local LLM requirement. All intelligent enrichment is handled by the Brain (Claude) during sessions. The only local models are embeddings (FastEmbed, ~130MB, no GPU needed) for semantic search. The optional `rka_ask` and `rka_generate_summary` tools are the exception — they need a configured LLM key — but the core workflow doesn't.
+No. RKA v2.0+ removed the local LLM requirement, and v2.4.0 removed the remaining server-side LLM features (`rka_ask`, `rka_generate_summary`, web-UI Q&A) entirely. All intelligent enrichment is now handled by the Brain (Claude) during sessions. The only local models are embeddings (FastEmbed, ~130MB, no GPU needed) for semantic search.
 
 **Q: Do I need to tell the Brain to maintain the knowledge base?**
 No. The Brain's MCP instructions include a maintenance protocol that runs automatically at session start. It checks for provenance gaps, untagged entries, and orphaned clusters, then silently processes up to 10 items before greeting you. You only need to ask explicitly after large batch operations (e.g., importing 30 papers).

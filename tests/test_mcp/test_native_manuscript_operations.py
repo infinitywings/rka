@@ -104,6 +104,66 @@ def requests(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     return captured
 
 
+def test_create_manuscript_describe_schema_matches_typed_model() -> None:
+    schema = OPERATIONS_SCHEMA["create_manuscript"]
+    assert {"phase", "state"} <= set(schema["optional_fields"])
+    assert schema["enums"]["phase"] == ["planning"]
+    assert schema["enums"]["state"] == ["active"]
+
+    parsed = TypeAdapter(ExecuteArgsUnion).validate_python({
+        "operation": "create_manuscript",
+        "project_id": "prj_test",
+        "title": "Native manuscript",
+        "phase": "planning",
+        "state": "active",
+    })
+    assert parsed.phase == "planning"
+    assert parsed.state == "active"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("operation", "extra", "expected_path"),
+    [
+        ("changes_since", {}, "/api/changes"),
+        (
+            "manuscript_impact",
+            {"id": "man_1"},
+            "/api/manuscripts/man_1/impact",
+        ),
+    ],
+)
+async def test_legacy_change_queries_default_to_100(
+    requests: list[dict[str, Any]],
+    operation: str,
+    extra: dict[str, Any],
+    expected_path: str,
+) -> None:
+    await server._rka_query_legacy_impl(
+        operation=operation,
+        project_id="prj_test",
+        **extra,
+    )
+    assert requests[-1] == {
+        "method": "GET",
+        "path": expected_path,
+        "params": {
+            **({"cursor": 0} if operation == "changes_since" else {"since_cursor": 0}),
+            "limit": 100,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_mcp_http_client_attests_executor_transport() -> None:
+    client = server._client("prj_test")
+    try:
+        assert client.headers["X-RKA-Project"] == "prj_test"
+        assert client.headers["X-RKA-Actor"] == "executor"
+    finally:
+        await client.aclose()
+
+
 def test_operation_registry_and_typed_unions_are_complete() -> None:
     query_mapping = TypeAdapter(QueryArgsUnion).json_schema()["discriminator"][
         "mapping"

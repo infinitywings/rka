@@ -1,8 +1,20 @@
 # RKA Installation Guide
 
 > **How to read this guide**
-> - **Humans**: read top-to-bottom; quick install path is in §3 below.
-> - **Claude Code**: this is the authoritative reference for any user request like *"install RKA"*, *"set up RKA for Claude Desktop"*, or *"finish my RKA setup"*. The procedural steps in §6, §7 (diagnosis), and §11 (orchestrator install — agentic branch only) are written for you to execute when invoked. Main-branch users can stop at §10.
+> - **Humans**: read top-to-bottom; the quick install path is §3.
+> - **A coding agent (Claude Code, Codex, or similar) asked to "install RKA" / "finish my RKA setup"**: this file is your runbook. Execute §3 in order; §6 (Claude Desktop wiring), §7 (diagnosis), and §11 (orchestrator, agentic branch only) are procedures to run when the relevant step calls for them. Follow the **execution contract** in §0 before you start.
+
+## 0. Execution contract (read first if you are the installing agent)
+
+You are running on a machine that already has Docker and a coding agent. Your job is to bring RKA up and wire it into the surfaces the user actually wants. Follow these rules:
+
+1. **Confirm scope first.** Do **Step 0** in §3 before running anything — ask the user which surfaces to set up. Do not assume "all of them."
+2. **Go in order; verify as you go.** After each step, check its **✅ success signal** before moving on. If a signal doesn't appear, **⛔ stop**, run the step's recovery/failure note, and surface the exact output — don't push forward on a broken step.
+3. **Stop and ask at every 🟡 gate.** A **🟡 ASK THE USER** marker means the next action needs information or an action only the user can supply — an install location, an API key, an ngrok authtoken, an OAuth passphrase, a "yes, do the destructive thing." **Never invent, generate, or guess a secret, token, path, or scope choice.** Ask, wait for the answer, then continue.
+4. **Never write secrets into the repo or a chat transcript.** Tokens, passphrases, and API keys go only into the user's local credential vault (`rka cred`, see §5.5) or their own shell/env. If the user pastes a secret to you, use it in memory only; do not echo it back or commit it.
+5. **Idempotence.** Every step is safe to re-run. If something is already configured correctly, report that and move on rather than clobbering it.
+
+**Legend used throughout:** ✅ = success signal to confirm before proceeding · 🟡 = stop and ask the user · ⛔ = stop on failure and surface the error.
 
 ---
 
@@ -11,9 +23,10 @@
 | Surface | What you'll have |
 |---|---|
 | **RKA backend** | FastAPI + worker + SQLite + FTS5 + sqlite-vec running in Docker on `localhost:9712`. Web dashboard at the same URL. |
-| **Claude Code (Executor)** | Full plugin: 4 role skills (`rka:rka-brain`, `rka:rka-executor`, `rka:rka-pi`, `rka:rka-writer`), 6 slash commands (`/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`, `/rka-setup-claude-desktop`, `/rka-start-manuscript`), a SessionStart hook that pings the backend on every new session, and the v2.7.0+ dispatch surface — 3 always-on tools (`rka_query`, `rka_execute`, `rka_describe`) routing to 109 typed Pydantic operations, plus 2 escape hatches (`rka_load_tools` to register legacy aliases on demand, `rka_help` as a `rka_describe` alias). The historical 91-tool surface remains available via `RKA_LEGACY_TOOLS=1` for backwards compatibility. |
-| **Writer (manuscript drafting)** | The `rka:rka-writer` skill drafts venue-targeted manuscripts (CHI, EMNLP, NeurIPS, USENIX, IEEE-SP, OSDI, Nature seed venues). Bootstrap a per-manuscript workspace via `/rka-start-manuscript` (creates `.mcp.json`, `main.tex`, `refs.bib`, `.planning/` directory). Reference-validation MCP server (`rka-writer-tools`) wraps Crossref + OpenAlex + Semantic Scholar + arXiv + SerpAPI; install separately via `uv tool install '.[writer-tools]'` (see §3.6). |
+| **Claude Code (Executor)** | Full plugin: 4 role skills (`rka:rka-brain`, `rka:rka-executor`, `rka:rka-pi`, `rka:rka-writer`), 6 slash commands (`/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`, `/rka-setup-claude-desktop`, `/rka-start-manuscript`), a SessionStart hook that pings the backend on every new session, and the v2.7.0+ dispatch surface — 3 always-on tools (`rka_query`, `rka_execute`, `rka_describe`) routing to 109 typed Pydantic operations, plus 2 escape hatches (`rka_load_tools` to register legacy aliases on demand, `rka_help` as a `rka_describe` alias). The 91 legacy per-tool aliases load on demand via `rka_load_tools`; `RKA_LEGACY_TOOLS=1` restores the v2.7.0a2 20-tool always-on surface for backwards compatibility. |
+| **Writer (manuscript drafting)** | The `rka:rka-writer` skill drafts venue-targeted manuscripts (CHI, EMNLP, NeurIPS, USENIX, IEEE-SP, OSDI, Nature seed venues). Bootstrap a per-manuscript workspace via `/rka-start-manuscript` (creates `.mcp.json`, `main.tex`, `refs.bib`, `.planning/` directory). Reference-validation MCP server (`rka-writer-tools`) wraps Crossref + OpenAlex + Semantic Scholar + arXiv + SerpAPI; install separately via `uv tool install '.[writer-tools]'` (see Step 4.5). |
 | **Claude Desktop (Brain)** | Typed RKA tool surface via the `mcpServers.rka` entry in `claude_desktop_config.json`. Wrapper-based config gives version checking; every scoped operation still requires an explicit project id. Skills and slash commands are Claude Code only (Claude Desktop's plugin format is separate). |
+| **ChatGPT (optional remote connector)** | RKA reachable from ChatGPT as a custom MCP connector over an OAuth-protected ngrok tunnel — an 8-tool surface (5 dispatch + 3 skill tools). Opt-in; set up in **Step 6** (§3). The web UI is never exposed. |
 
 ### 1.1 Tool surface (v2.7.0)
 
@@ -27,7 +40,7 @@ In Claude Desktop and Claude Code, you'll see **5 always-on `rka` tools** at ses
 | `rka_load_tools` | Escape hatch: register legacy tool aliases for the rest of the session | — |
 | `rka_help` | Alias for `rka_describe` (mnemonic surface) | — |
 
-The 109 typed Pydantic operations under `rka_query` / `rka_execute` carry per-branch enum and required-field enforcement at the **FastMCP schema layer**, so the LLM cannot emit invalid values — the tool surface itself rejects pre-dispatch. The historical 91-tool surface (one MCP tool per operation, the pre-v2.7.0 layout) is available via `RKA_LEGACY_TOOLS=1` for backwards-compat use cases (notably the orchestrator daemon subprocess, which has not yet been ported to the typed `rka_execute(args={...})` surface).
+The 109 typed Pydantic operations under `rka_query` / `rka_execute` carry per-branch enum and required-field enforcement at the **FastMCP schema layer**, so the LLM cannot emit invalid values — the tool surface itself rejects pre-dispatch. The 91 legacy per-tool aliases (the pre-v2.7.0 layout) are `tier=deferred` and load on demand via `rka_load_tools`; separately, `RKA_LEGACY_TOOLS=1` restores the v2.7.0a2 20-tool always-on surface for backwards-compatibility use cases, notably the orchestrator daemon subprocess.
 
 ---
 
@@ -66,13 +79,29 @@ Optional:
 
 ## 3. Quick install (the recommended path)
 
-The plugin handles most of the work. Follow these five steps in order.
+The plugin handles most of the work. Follow the steps in order. Step 0 decides which of the later steps you run.
+
+### Step 0 — 🟡 Confirm scope with the user
+
+Before installing anything, ask the user which surfaces they want. Their answer decides which steps below you run. Present these options and wait for a reply:
+
+| Surface | What it gives them | Steps to run |
+|---|---|---|
+| **Claude Desktop (Brain)** | Strategy/synthesis role in the Claude desktop app | Steps 1–5 |
+| **Claude Code (Executor)** | The full plugin — skills, slash commands, hook — in VSCode/Claude Code | Steps 1–3 (+ Step 4 wires Desktop) |
+| **Codex or another MCP client** | RKA's stdio MCP surface in a non-Claude client | Step 1 + the **Manual install** in §8 (Codex uses its own MCP config, not the Claude plugin) |
+| **ChatGPT (remote connector)** | RKA reachable from ChatGPT over an OAuth tunnel | Steps 1 + **Step 6** (needs ngrok; you will ask for a token and passphrase there) |
+| **Agentic orchestrator** | LangGraph Brain⇄Executor⇄PI engine (agentic branch only) | §11 |
+
+Also ask whether they have any of the **optional API keys** in §2 (Semantic Scholar, Zotero, Unpaywall email, SerpAPI). You'll wire those in at Step 5.5 — RKA runs without them, but literature features are richer with them.
+
+Everyone runs **Step 1** (the backend). Then run only the steps their chosen surfaces need. If the user just says "install RKA" without specifics, the sensible default is Claude Desktop + Claude Code (Steps 1–5); confirm that read-back with them before proceeding, and mention ChatGPT/orchestrator are available as add-ons.
 
 ### Step 1 — Start the RKA backend
 
 **Pre-check**: Docker Desktop must be running before `docker compose up -d` will work. Confirm with `docker info` (non-zero exit means Docker isn't running — launch Docker Desktop and wait until the whale icon says "running", then retry).
 
-**Precondition (cwd guidance)**: pick a parent directory (e.g., `~/Code` on macOS/Linux, `%USERPROFILE%\Code` on Windows) and `cd` into it before cloning. The repo will land at `<parent>/rka`. The absolute path `<parent>/rka` will be used as the marketplace path in Step 2 — **record it now**. Without this, an agent running these commands in CI from an unstated cwd will clone wherever the process happens to start.
+**🟡 Precondition (clone location)**: ask the user where they want the repo cloned (default: `~/Code` on macOS/Linux, `%USERPROFILE%\Code` on Windows). `cd` into that parent, so the repo lands at `<parent>/rka`. **Record the absolute `<parent>/rka` path** — Step 2 needs it as the marketplace path. Don't clone into an unstated cwd; if the user has no preference, state the default you're using and proceed.
 
 ```bash
 # Example: pick a parent dir and cd into it first
@@ -88,12 +117,12 @@ Wait ~1 minute. Verify:
 
 ```bash
 curl http://localhost:9712/api/health
-# Expect: {"status":"ok","version":"2.7.0", ...}
+# Expect: {"status":"ok","version":"2.x.x", ...}  (any 2.x version is fine)
 ```
 
 Open http://localhost:9712 in your browser to confirm the dashboard loads.
 
-**Success signal**: `curl` returns JSON with `"version":"2.7.0"` AND `http://localhost:9712` renders the dashboard HTML.
+**✅ Success signal**: `curl` returns JSON with `"status":"ok"` and a `"version"` field (any `2.x`) AND `http://localhost:9712` renders the dashboard HTML.
 
 **Recovery**: if curl returns non-zero or non-2xx, run `docker compose ps` to confirm both `rka-server` and `rka-worker` are up. If a container is restarting, run `docker compose logs --tail=20 rka` and surface the output. If the worker is `OOMKilled`, bump Docker Desktop's Resources → Memory ceiling to ≥6 GB (per the operational note in CLAUDE.md) and re-up.
 
@@ -180,21 +209,63 @@ Open a fresh chat in Claude Desktop. Ask:
 
 > List my RKA projects.
 
-Brain should call `rka_query(operation="list_projects")` (v2.7.0 dispatch) and return the list (empty on a fresh install). If you also see a SessionStart hook line like `✅ RKA reachable at http://localhost:9712 (version 2.7.0, default project ...)` at session start in Claude Code, you're done. The `version 2.7.0` substring is the agent's confirmation that the hook handshake succeeded.
+Brain should call `rka_query(operation="list_projects")` (v2.7.0 dispatch surface) and return the list (empty on a fresh install). If you also see a SessionStart hook line like `✅ RKA reachable at http://localhost:9712 (version 2.x.x, default project ...)` at session start in Claude Code, you're done. The `✅ RKA reachable` line (with any `version 2.x` substring) is the agent's confirmation that the hook handshake succeeded.
 
-**Success signal**: SessionStart hook line contains `version 2.7.0` AND Brain returns a project list (empty or otherwise) without error.
+**✅ Success signal**: SessionStart hook line contains `✅ RKA reachable` (with a `version 2.x` substring) AND Brain returns a project list (empty or otherwise) without error.
 
-### Step 5.5 — First-run credentials (`rka cred init`)
+### Step 5.5 — 🟡 First-run credentials (`rka cred init`)
 
-With the backend up and the plugin wired, bootstrap the global credential vault before your first real session:
+With the backend up and the plugin wired, bootstrap the global credential vault before the first real session. **Ask the user for each API key you're going to store** (from the list they gave you at Step 0) — never invent or hard-code a key. RKA runs fine with zero keys; each one just enriches literature features.
 
 ```bash
 rka cred init          # creates ~/.config/rka/creds.env (mode 0600, XDG-compliant)
-rka cred set SEMANTIC_SCHOLAR_API_KEY ...   # plus ZOTERO_API_KEY, etc. from §2
+rka cred set SEMANTIC_SCHOLAR_API_KEY <value-the-user-gave-you>   # repeat per key: ZOTERO_API_KEY, etc. from §2
 rka cred check         # verifies which keys are present + reachable
 ```
 
-`rka cred env` prints export lines for shell sourcing; `rka cred propagate` syncs the vault into downstream consumers (Claude Desktop config, `orchestrator/.env`). Full reference: [`docs/CRED_VAULT.md`](docs/CRED_VAULT.md). The keys from §2 (Semantic Scholar, Zotero, Unpaywall email, optionally SerpAPI / CORE / Claude OAuth) all live here — going forward this is the recommended path instead of hand-editing `claude_desktop_config.json` env blocks.
+The key values are secrets: pass them straight to `rka cred set` and do not echo them back or write them into any file the repo tracks. `rka cred env` prints export lines for shell sourcing; `rka cred propagate` syncs the vault into downstream consumers (Claude Desktop config, `orchestrator/.env`). Full reference: [`docs/CRED_VAULT.md`](docs/CRED_VAULT.md). The keys from §2 (Semantic Scholar, Zotero, Unpaywall email, optionally SerpAPI / CORE / Claude OAuth) all live here — this is the recommended path instead of hand-editing `claude_desktop_config.json` env blocks.
+
+### Step 6 (optional) — Expose RKA to ChatGPT (custom connector)
+
+Run this **only if** the user chose ChatGPT at Step 0. It exposes the local MCP server to ChatGPT over an OAuth-protected tunnel; the web UI stays private and secrets never leave the machine. This step has three 🟡 gates because it needs an install, a token, and a passphrase that only the user can provide. The full reference (with every env var, health check, and troubleshooting) is [`docs/CHATGPT_CONNECTOR.md`](docs/CHATGPT_CONNECTOR.md) — this step is the executable summary.
+
+**Architecture**: `ChatGPT ──HTTPS──▶ ngrok ──▶ OAuth proxy (:9720) ──▶ RKA HTTP MCP (:9713) ──▶ RKA API (:9712)`.
+
+> Steps 3, 4, and 5 each start a **long-running foreground process**. Run them in the background or in separate terminals (don't block waiting on them), then confirm each with its health check before moving on. To keep the connector working, all three must stay running.
+
+1. **🟡 Confirm + check ngrok.** Confirm the user still wants the ChatGPT connector, then check `command -v ngrok`. If it's missing, ask the user to install it ([ngrok.com/download](https://ngrok.com/download)) and, one-time, authenticate it with their own authtoken: `ngrok config add-authtoken <their-token>`. The authtoken is a personal secret — **ask them to run that command themselves, or paste the token for you to use in-memory only; never store it in the repo.**
+
+2. **🟡 Choose an OAuth passphrase.** Ask the user to choose a strong passphrase for the connector login (this is what they'll enter in ChatGPT's OAuth flow). Keep it in the environment only — do not write it to a tracked file. Export it for the proxy:
+   ```bash
+   export RKA_MCP_OAUTH_PASSPHRASE='<passphrase-the-user-chose>'
+   ```
+
+3. **Start the HTTP MCP with skill tools on** (port 9713). `RKA_SKILL_TOOLS=1` gives ChatGPT the 8-tool surface (the 5 dispatch tools plus `rka_start_session`, `rka_list_skills`, `rka_read_skill`); local stdio clients are unaffected:
+   ```bash
+   RKA_API_URL=http://127.0.0.1:9712 RKA_SKILL_TOOLS=1 \
+     rka mcp --transport http --host 127.0.0.1 --port 9713
+   ```
+   (A `406` from `curl http://127.0.0.1:9713/mcp` is expected — that endpoint needs the MCP handshake, not a plain GET.)
+
+4. **Start the OAuth proxy** (port 9720), reading the passphrase from step 2:
+   ```bash
+   RKA_MCP_UPSTREAM='http://127.0.0.1:9713/mcp' RKA_MCP_OAUTH_PORT=9720 \
+     python3 scripts/rka_mcp_oauth_proxy.py
+   ```
+   **✅ Success signal**: `curl -sS http://127.0.0.1:9720/healthz` returns `{"status":"ok"}`.
+
+5. **Start the tunnel** and read the public host:
+   ```bash
+   ngrok http 9720
+   ```
+   Note the `https://<something>.ngrok.app` host it prints.
+
+6. **🟡 Hand the user the connector settings** and let them finish in ChatGPT (you can't drive their ChatGPT UI):
+   - Connection type: **Server URL**
+   - Server URL: `https://<ngrok-host>/mcp`
+   - Authentication: **OAuth**, then enter the passphrase from step 2.
+
+**✅ Success signal**: in ChatGPT, `rka_start_session(role="pi")` returns a role skill + checklist, and `rka_query(args={"operation": "list_projects"})` returns the project list. If ChatGPT shows only 5 tools, the MCP was started without `RKA_SKILL_TOOLS=1` (or ChatGPT cached the old list — reconnect the connector). The free ngrok host changes on restart; if it does, update the Server URL in ChatGPT.
 
 ---
 
@@ -216,6 +287,10 @@ The plugin install copies its files to `~/.claude/plugins/cache/rka/rka/<version
 
 The wrapper reads `integration.json` to know which RKA instance to bridge to. By default, the plugin's setup writes one pointing at the Docker backend at `http://localhost:9712`. To override (e.g., for a remote RKA instance), edit `integration.json` directly.
 
+### Remote access: ChatGPT custom connector (optional)
+
+RKA can also be reached from ChatGPT as a custom MCP connector: local HTTP MCP on `127.0.0.1:9713` (with `RKA_SKILL_TOOLS=1` for the 8-tool surface) → OAuth reverse proxy (`scripts/rka_mcp_oauth_proxy.py`) on `127.0.0.1:9720` → ngrok HTTPS → ChatGPT "Server URL" + OAuth. Only the MCP server is tunneled — the web UI stays private, and the passphrase and API keys never leave the machine. The executable steps (with the 🟡 ngrok/passphrase gates) are **Step 6** in §3; the full reference is [`docs/CHATGPT_CONNECTOR.md`](docs/CHATGPT_CONNECTOR.md). Never paste real secrets into a chat transcript.
+
 ---
 
 ## 5. Verifying the install
@@ -227,7 +302,7 @@ After Step 5, run these checks:
 1. `/help` should list six `rka:rka` slash commands. String-match each of: `/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`, `/rka-setup-claude-desktop`, `/rka-start-manuscript`. All six must be present.
 2. `/context` should show four `rka:rka-*` skills available (`rka-brain`, `rka-executor`, `rka-pi`, `rka-writer`).
 3. Run `/rka-status`. Expected output: project name, phase, focus, open checkpoints (or "none").
-4. New chat sessions should start with an automatic line. **Expected stdout snippet**: `✅ RKA reachable at http://localhost:9712 (version 2.7.0, default project ...)`.
+4. New chat sessions should start with an automatic line. **Expected stdout snippet**: `✅ RKA reachable at http://localhost:9712 (version 2.x.x, default project ...)`.
 
 ### In Claude Desktop
 
@@ -246,7 +321,7 @@ docker compose ps
 # Expect both rka-server and rka-worker as "Up" / "healthy"
 
 curl http://localhost:9712/api/health
-# Expect {"status":"ok","version":"2.7.0", ...}
+# Expect {"status":"ok","version":"2.x.x", ...}  (any 2.x version is fine)
 ```
 
 ---
@@ -310,14 +385,14 @@ Use the `_python_launcher()` helper defined in §6.1 to resolve the right Python
 
 ```bash
 # macOS/Linux — python3 is usually on PATH
-curl -sf http://localhost:9712/api/health | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='ok' and d['version'].startswith('2.7.'), d; print('healthy')"
+curl -sf http://localhost:9712/api/health | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='ok' and d['version'].startswith('2.'), d; print('healthy')"
 ```
 
 ```powershell
 # Windows (PowerShell) — uses the `py` launcher (most common) with a python fallback
 $json = curl.exe -sf http://localhost:9712/api/health
 $py = (Get-Command py -ErrorAction SilentlyContinue) ?? (Get-Command python -ErrorAction SilentlyContinue) ?? (Get-Command python3 -ErrorAction SilentlyContinue)
-$json | & $py.Source -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='ok' and d['version'].startswith('2.7.'), d; print('healthy')"
+$json | & $py.Source -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='ok' and d['version'].startswith('2.'), d; print('healthy')"
 ```
 
 Or, fully cross-platform from inside a single Python process (recommended when running the §6 sequence as one script — this is the same `_python_launcher()` semantics the wrapper config will use):
@@ -325,13 +400,13 @@ Or, fully cross-platform from inside a single Python process (recommended when r
 ```python
 import json, urllib.request
 d = json.loads(urllib.request.urlopen("http://localhost:9712/api/health", timeout=5).read())
-assert d["status"] == "ok" and d["version"].startswith("2.7."), d
+assert d["status"] == "ok" and d["version"].startswith("2."), d
 print("healthy")
 ```
 
 **Success signal**: stdout prints `healthy`.
 
-**Failure modes**: if non-zero exit, the user needs to run `docker compose up -d` from their RKA repo, then retry. If the backend is up but reports a pre-2.7 version, halt and tell the user to upgrade (`git pull && docker compose up -d --build`).
+**Failure modes**: if non-zero exit, the user needs to run `docker compose up -d` from their RKA repo, then retry. If the backend is up but reports a pre-2.7 version (the dispatch surface this guide assumes landed in v2.7.0), halt and tell the user to upgrade (`git pull && docker compose up -d --build`).
 
 ### 6.3 — Locate the plugin's wrapper script
 
@@ -573,7 +648,7 @@ When the user asks variants of *"set up RKA"*, *"finish RKA install"*, *"connect
 3. For "uninstall RKA" requests:
    - Run `/plugin uninstall rka@rka` in Claude Code.
    - Restore Claude Desktop's config from the most recent backup.
-   - Optionally: `docker compose down -v` to wipe the backend (warn user this destroys their RKA data — recommend a knowledge-pack export first via `rka_export`).
+   - Optionally: `docker compose down -v` to wipe the backend (warn user this destroys their RKA data — recommend a knowledge-pack export first via the project-scoped REST endpoint `GET /api/projects/export`, or the web dashboard's export control; see [USAGE_GUIDE.md](USAGE_GUIDE.md) for the pack import/export workflow. Note: `export` is not a typed dispatch operation, so it is not directly callable from the default 5-tool surface).
 
 ---
 
@@ -890,4 +965,4 @@ docker compose -f docker-compose.yml -f orchestrator/docker-compose.yml down
 | `<your-clone-dir>/rka/orchestrator/.env` *(agentic only, mode 0600)* | `CLAUDE_CODE_OAUTH_TOKEN`, `RKA_LEGACY_TOOLS=1`, and optional API keys |
 | `<your-clone-dir>/rka/.env` *(agentic only, optional)* | `HOST_WORKSPACE_ROOT` for non-`$HOME` workspace bind mount (see §11 Workspace bind mount) |
 | `~/.claude.json` *(agentic only, mounted read-only into container)* | Host's Claude CLI global config consumed by the orchestrator daemon's SDK subprocess |
-| [`docs/v2.6.x-v2.7.0-tool-surface-arc.md`](docs/v2.6.x-v2.7.0-tool-surface-arc.md) | Canonical narrative of the v2.6 → v2.7.0 tool-surface migration (project_id discipline → dispatch + 87 typed Pydantic operations) |
+| [`docs/v2.6.x-v2.7.0-tool-surface-arc.md`](docs/v2.6.x-v2.7.0-tool-surface-arc.md) | Canonical narrative of the v2.6 → v2.7.0 tool-surface migration (project_id discipline → dispatch + 91 typed Pydantic operations) |

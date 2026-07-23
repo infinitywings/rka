@@ -96,9 +96,20 @@ async def generate(post: Transport, put: Transport) -> dict[str, Any]:
             gt["tag_cohorts"].setdefault(t, []).append(r["id"])
         return r["id"]
 
-    async def decision(key, question, options, chosen, rationale, phase="threat-model",
-                       decided_by="pi", related_journal=None, tags=None):
+    async def decision(
+        key,
+        question,
+        options,
+        chosen,
+        rationale,
+        phase="threat-model",
+        decided_by="pi",
+        related_journal=None,
+        tags=None,
+        kind="decision",
+    ):
         body = {"question": question, "phase": phase, "decided_by": decided_by,
+                "kind": kind,
                 "options": [{"label": label, "description": desc} for label, desc in options],
                 "chosen": chosen, "rationale": rationale, "tags": tags or []}
         if related_journal:
@@ -392,7 +403,7 @@ async def generate(post: Transport, put: Transport) -> dict[str, Any]:
         "RQ: What application-layer integrity controls are necessary "
         "for safe FUOTA on constrained meters?", [("open", "research question")],
         "open", "Top-level integrity research question.", phase="experiments",
-        tags=["research-question", "integrity"])
+        tags=["research-question", "integrity"], kind="research_question")
     cl = await post(
         "/api/clusters",
         {"research_question_id": dec["rq_integrity"],

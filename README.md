@@ -143,7 +143,7 @@ graph LR
 
 ```
 Brain:    rka_execute(operation="record_note", content="12% packet loss above 400 connections", type="note", project_id="prj_…")
-          rka_execute(operation="record_decision", question="Use horizontal sharding", related_journal=["jrn_…"], project_id="prj_…")
+          rka_execute(operation="record_decision", question="How should we scale the broker?", chosen="horizontal sharding", rationale="Sharding cut packet loss from 12% to 2% in the 500-connection test", decided_by="brain", kind="decision", phase="execution", related_journal=["jrn_…"], project_id="prj_…")
           rka_execute(operation="create_mission", objective="Test sharding", motivated_by_decision="dec_…", project_id="prj_…")
 
 Executor: rka_execute(operation="record_note", content="Ran 500-connection stress test", type="log", project_id="prj_…")
@@ -156,12 +156,12 @@ Executor: rka_execute(operation="record_note", content="Ran 500-connection stres
 **Navigate and search (v2.7.0 dispatch surface):**
 
 ```
-rka_query(operation="get_research_map", project_id="prj_…")         → Three-level view: RQs → clusters → claims
-rka_query(operation="trace_provenance", entity_id="…", project_id="prj_…") → Literature → decision → mission → finding → claim
-rka_query(operation="get_review_queue", project_id="prj_…")         → Items flagged for Brain's deep reasoning
+rka_query(operation="research_map", project_id="prj_…")             → Three-level view: RQs → clusters → claims
+rka_query(operation="provenance", id="…", project_id="prj_…")        → Literature → decision → mission → finding → claim
+rka_query(operation="review_queue", project_id="prj_…")             → Items flagged for Brain's deep reasoning
 rka_query(operation="search", query="MQTT scalability", project_id="prj_…") → Entries, decisions, literature, claims
-rka_query(operation="get_context", topic="…", project_id="prj_…")   → Importance-ranked context package
-rka_query(operation="multi_hop_retrieval", query="…", project_id="prj_…")  → Query-anchored ranked subgraph
+rka_query(operation="context", query="…", project_id="prj_…")       → Importance-ranked context package
+rka_query(operation="multi_hop", query="…", project_id="prj_…")     → Query-anchored ranked subgraph
 ```
 
 ---
@@ -186,11 +186,11 @@ rka_query(operation="multi_hop_retrieval", query="…", project_id="prj_…")  �
 | **Cluster management**       | Split large clusters, merge thin ones — claim provenance preserved automatically                                                                                                                                                                                                                                         |
 | **Literature workflow**      | `rka_process_paper` captures reading annotations as structured claims in one call                                                                                                                                                                                                                                       |
 | **RQ lifecycle**             | Track research questions from open → partially_answered → answered → reframed → closed                                                                                                                                                                                                                                |
-| **Evidence assembly**        | `rka_assemble_evidence` produces lit reviews, progress reports, and proposal sections from existing knowledge                                                                                                                                                                                                           |
+| **Evidence assembly**        | the `evidence` operation produces progress reports, briefings, and audit summaries from existing knowledge                                                                                                                                                                                                           |
 | **Data integrity**           | Categorized table registry prevents silent data loss during export;`rka_check_integrity` verifies the knowledge graph                                                                                                                                                                                                   |
 | **Multi-choice decision UX** | `rka_present_decision` renders structured option sets with Pareto highlights; `rka_record_pi_selection` captures the human choice and `rka_record_outcome` closes the calibration loop with Brier score, ECE, and override-rate metrics                                                                             |
 | **Hook system**              | Event-driven automation (migration 019): 5 event types and 8 MCP tools (`rka_add_hook`, `rka_list_hooks`, `rka_enable_hook`/`rka_disable_hook`, `rka_delete_hook`, `rka_get_hook_executions`, `rka_get_brain_notifications`, `rka_clear_brain_notifications`) for drift detection and Brain notifications |
-| **Streamable HTTP MCP**      | Optional `rka mcp --transport http` mode for remote / multi-client access (dev-only until OAuth 2.1 lands)                                                                                                                                                                                                              |
+| **Streamable HTTP MCP**      | Optional `rka mcp --transport http` mode for remote / multi-client access (bind to localhost; add OAuth for remote access via the ChatGPT-connector reverse proxy — see [`docs/CHATGPT_CONNECTOR.md`](docs/CHATGPT_CONNECTOR.md))                                                                                                                                                                                                              |
 
 ---
 
@@ -328,7 +328,7 @@ Research Map
   Research Questions --> Clusters --> Claims
 ```
 
-`rka_query(operation="get_pending_maintenance", project_id="prj_…")` detects entries needing distillation and other provenance gaps. The Brain processes these at session start using `rka_execute(operation="extract_claims", …)`, `rka_execute(operation="create_cluster", …)`, and `rka_execute(operation="assign_claims_to_cluster", …)`.
+`rka_query(operation="pending_maintenance", project_id="prj_…")` detects entries needing distillation and other provenance gaps. The Brain processes these at session start using `rka_execute(operation="extract_claims", …)`, `rka_execute(operation="create_cluster", …)`, and `rka_execute(operation="assign_claims_to_cluster", …)`.
 
 ### ULID-Based IDs
 
@@ -365,7 +365,7 @@ The Context Engine returns a single ranked list of entries — no token-budget t
 
 > Earlier RKA versions (≤ v2.3) used HOT/WARM/COLD temperature bucketing on day-thresholds plus a token budget. Both were removed in v2.4 (see `dec_01KQQPD6Y6B362T3K08368BDMP`): day-thresholds systematically excluded older relevant content, and frontier model context windows make a bookkeeper-imposed budget unnecessary.
 
-For multi-hop questions where the answer depends on connected entities multiple hops from the seeds, see `rka_multi_hop_retrieval` — it returns a query-anchored relevance-ranked subgraph using the typed edge vocabulary with per-relation weights.
+For multi-hop questions where the answer depends on connected entities multiple hops from the seeds, see the `multi_hop` operation (`rka_query(operation="multi_hop", …)`) — it returns a query-anchored relevance-ranked subgraph using the typed edge vocabulary with per-relation weights.
 
 ---
 
@@ -525,9 +525,9 @@ If the LLM ever omits `project_id`, the dispatch validator rejects the call at t
 
 To find a project id, run `rka_query(operation="list_projects")` once in any session, or check `http://localhost:9712` in the dashboard URL bar.
 
-**The v2.7.0+ dispatch architecture.** The rka MCP server ships **5 always-on tools**: 3 dispatch tools (`rka_query` for 51 read operations, `rka_execute` for 58 write/lifecycle operations, `rka_describe` to introspect operation schemas) plus 2 escape hatches (`rka_load_tools` and `rka_help`) that surface deferred compatibility tools. Every operation is backed by a typed Pydantic model — **109 models total** — with per-branch enum and required-field enforcement at the FastMCP schema layer. This makes Brain-hallucination classes (e.g. `confidence='confirmed'` or `rka_submit_checkpoint(content=…)` instead of `description=`) structurally impossible at the wire layer: the schema rejects them before the LLM can ship a call. See `docs/v2.6.x-v2.7.0-tool-surface-arc.md` for the historical narrative of how the dispatch architecture landed.
+**The v2.7.0+ dispatch architecture.** The rka MCP server ships **5 always-on tools**: 3 dispatch tools (`rka_query` for 51 read operations, `rka_execute` for 58 write/lifecycle operations, `rka_describe` to introspect operation schemas) plus 2 escape hatches (`rka_load_tools` and `rka_help`) that surface deferred compatibility tools. Every operation is backed by a typed Pydantic model — **109 models total** — with per-branch enum, required-field, and cross-field enforcement at the FastMCP schema layer. This makes Brain-hallucination classes (e.g. `confidence='confirmed'` or a checkpoint call omitting both canonical `description` and legacy `content`) structurally impossible at the wire layer: the schema rejects them before the LLM can ship a call. See `docs/v2.6.x-v2.7.0-tool-surface-arc.md` for the historical narrative of how the dispatch architecture landed.
 
-The legacy navigator surface (v2.6.3 — 12 always-on + ~79 deferred + `rka_load_tools`/`rka_list_tools`/`rka_help` triad) is preserved via `RKA_LEGACY_TOOLS=1`. The orchestrator subprocess sets this flag in its Compose overlay to preserve per-tool dispatch granularity for the TWO-TAP autonomy-contract gate at `pi_decision_select`; PI sessions should leave it unset and use the dispatch surface.
+Setting `RKA_LEGACY_TOOLS=1` restores the v2.7.0a2 always-on surface (20 tools) — the orchestrator subprocess sets this flag in its Compose overlay to preserve per-tool dispatch granularity for the TWO-TAP autonomy-contract gate at `pi_decision_select`. It does **not** promote the 91 legacy tools to always-on, and it is **not** what makes the 109 typed operations reachable — those are always available through the 3 dispatch tools, flag or no flag. PI sessions should leave it unset and use the dispatch surface.
 
 **Step 2d — Verify.** In each app, ask:
 
@@ -546,9 +546,13 @@ For the full setup walkthrough including troubleshooting, see [USAGE_GUIDE.md](U
 The `rka mcp` binary supports two transport modes:
 
 - **Stdio (default)** — `rka mcp` with no arguments. Claude Desktop and Claude Code spawn the binary as a subprocess and communicate over stdin/stdout. This is the mode the install instructions above configure.
-- **Streamable HTTP (opt-in, v2.2+)** — `rka mcp --transport http --port 9713` runs the server on `http://127.0.0.1:9713/mcp`. Useful for remote access, multi-client scenarios, or mitmproxy-based protocol debugging. Enable via the `--transport http` flag or `RKA_MCP_TRANSPORT=http` env var. Authentication is not yet implemented — treat HTTP mode as dev/internal only until a future mission adds OAuth 2.1.
+- **Streamable HTTP (opt-in, v2.2+)** — `rka mcp --transport http --port 9713` runs the server on `http://127.0.0.1:9713/mcp`. Useful for remote access, multi-client scenarios, or mitmproxy-based protocol debugging. Enable via the `--transport http` flag or `RKA_MCP_TRANSPORT=http` env var. The HTTP transport itself has **no built-in authentication** — bind it to `127.0.0.1` only. For authenticated remote access (e.g. exposing RKA to ChatGPT as a custom connector), front it with the OAuth reverse proxy described in [ChatGPT connector](#chatgpt-connector) below rather than exposing the raw port.
 
 The tool surface is identical across transports. Docker's default command still launches stdio-nothing there has changed.
+
+#### ChatGPT connector
+
+RKA can be exposed to ChatGPT as a custom connector without ever publishing your web dashboard. The path runs a local HTTP MCP server on `127.0.0.1:9713` with the 8-tool skill surface (`RKA_SKILL_TOOLS=1`), fronts it with the OAuth reverse proxy in [`scripts/rka_mcp_oauth_proxy.py`](scripts/rka_mcp_oauth_proxy.py) on `:9720`, and tunnels that over HTTPS (e.g. ngrok); ChatGPT then points its "Server URL" at the HTTPS `/mcp` endpoint and authenticates through the proxy's OAuth flow. The REST API and web UI stay private on `:9712`. Full step-by-step setup — including the exact env vars and OAuth passphrase handling — is in [`docs/CHATGPT_CONNECTOR.md`](docs/CHATGPT_CONNECTOR.md).
 
 ### 3. Generate Onboarding Instructions (Optional)
 
@@ -596,13 +600,13 @@ The MCP server instructions tell Claude to load the appropriate skill prompt at 
 **Brain session start (v2.7.0):**
 
 1. Pin `project_id` from the conversation context (ask the PI if it's not stated)
-2. `rka_query(operation="get_changelog", since="yesterday", project_id="prj_…")` → `rka_query(operation="get_research_map", project_id="prj_…")`
+2. `rka_query(operation="changelog", filters={"since": "yesterday"}, project_id="prj_…")` → `rka_query(operation="research_map", project_id="prj_…")`
 3. Process up to 10 maintenance items silently
 4. Greet the user
 
 **Executor mission pickup:**
 
-1. `rka_query(operation="get_mission", project_id="prj_…")` → read `motivated_by_decision` → read context links
+1. `rka_query(operation="mission", project_id="prj_…")` → read `motivated_by_decision` → read context links
 2. Present a Backbrief (plan summary, assumptions, risks)
 3. Wait for Brain approval before starting
 
@@ -773,9 +777,9 @@ The MCP server is defined in `rka/mcp/server.py`. As of v2.7.0 it ships **5 alwa
 | `rka_load_tools` | Escape hatch — surface deferred legacy tools by name (rare; preserved for backward-compatibility).                     |
 | `rka_help`       | Escape hatch — list available operations or describe a single one (alias for `rka_describe`).                          |
 
-Every operation is backed by a typed Pydantic model. **109 models live in `rka/mcp/operation_args.py`**, all unioned under `discriminator='operation'` so FastMCP renders the inputSchema as `oneOf` — each branch carries its own enum constraints (`confidence: Literal["hypothesis", "tested", "verified", "superseded", "retracted"]`, `type: Literal["note", "log", "directive"]`, etc.) and `min_length=1` on required provenance fields (`related_journal` on `record_decision`, `motivated_by_decision` on `create_mission`, …). Brain hallucinations like `confidence='confirmed'` or `submit_checkpoint(content=…)` (instead of `description=`) are rejected at the inputSchema layer before the call ships.
+Every operation is backed by a typed Pydantic model. **109 models live in `rka/mcp/operation_args.py`**, all unioned under `discriminator='operation'` so FastMCP renders the inputSchema as `oneOf` — each branch carries its own enum constraints (`confidence: Literal["hypothesis", "tested", "verified", "superseded", "retracted"]`, `type: Literal["note", "log", "directive"]`, etc.) and `min_length=1` on required provenance fields (`related_journal` on `record_decision`, `motivated_by_decision` on `create_mission`, …). Brain hallucinations like `confidence='confirmed'` or a `submit_checkpoint` call with neither canonical `description` nor legacy `content` are rejected at the inputSchema layer before the call ships.
 
-The pre-v2.7.0 91-tool surface (every individual `rka_add_note`, `rka_get_status`, `rka_submit_report`, …) is preserved at `tier=deferred` and callable via `rka_load_tools(names=[…])`. The v2.7.0a2 verb surface (8 intent verbs) is also deferred. **Set `RKA_LEGACY_TOOLS=1`** to restore the v2.7.0a2 verb-plus-legacy surface as always-on — the orchestrator daemon's subprocess does this to preserve per-tool dispatch granularity for the TWO-TAP autonomy-contract gate.
+The pre-v2.7.0 91-tool surface (every individual `rka_add_note`, `rka_get_status`, `rka_submit_report`, …) is preserved at `tier=deferred` and callable via `rka_load_tools(names=[…])`. The v2.7.0a2 verb surface (8 intent verbs) is also deferred. **Set `RKA_LEGACY_TOOLS=1`** to restore the v2.7.0a2 always-on surface (20 tools) — the orchestrator daemon's subprocess does this to preserve per-tool dispatch granularity for the TWO-TAP autonomy-contract gate. This flag only changes which tools are *always-on*; all 109 typed operations remain reachable through the 3 dispatch tools regardless of the flag.
 
 Below: the operation catalog grouped semantically. Operation names map to the `operation` field of `rka_query` / `rka_execute`. For the canonical end-to-end narrative of how this architecture replaced the v2.6.3 navigator (12 always-on + ~79 deferred), see `docs/v2.6.x-v2.7.0-tool-surface-arc.md`.
 
@@ -785,164 +789,171 @@ Below: the operation catalog grouped semantically. Operation names map to the `o
 | ------------------ | ------------- | ------------------------------------------------------------- |
 | `list_projects`    | `rka_query`   | List all projects with name, description, and ID (unscoped — no project_id needed) |
 | `create_project`   | `rka_execute` | Create a new project (unscoped — returns the new project_id)  |
-| `get_status`       | `rka_query`   | Get current project state (phase, summary, blockers, metrics) |
+| `status`           | `rka_query`   | Get current project state (phase, summary, blockers, metrics) |
 | `update_status`    | `rka_execute` | Update project state                                          |
 
 > **Deprecated** — `rka_set_project` was a no-op as of v2.6 (the per-process session-state mechanism it managed was removed); on the v2.7.0 dispatch surface it lives at `tier=deferred` and is callable only via `rka_load_tools`. Pass `project_id` on every operation call instead.
 
-> **Legacy mapping** — the v2.6.x tool name for each operation is the operation name prefixed with `rka_` (e.g. `record_decision` → `rka_add_decision`, `get_research_map` → `rka_get_research_map`, `submit_checkpoint` → `rka_submit_checkpoint`). The reference tables below use operation names; if you have a v2.6.x snippet, map the tool name back to the operation by stripping `rka_` and (for write tools) translating `add_` → `record_` where appropriate. `rka_describe("")` is the authoritative index.
+> **Legacy mapping** — the reference tables below use **v2.7.0 operation names** (the value of the `operation` field on `rka_query` / `rka_execute`). To reconstruct the old v2.6.x tool name from an operation: prefix with `rka_`, add a leading `get_` for most reads, and translate `record_` → `add_` for the note/decision/literature writers — e.g. `research_map` → `rka_get_research_map`, `provenance` → `rka_trace_provenance`, `record_decision` → `rka_add_decision`, `submit_checkpoint` → `rka_submit_checkpoint`. Going the other way (v2.6.x snippet → operation), strip `rka_`, drop any leading `get_`, and translate `add_` → `record_` (so `rka_get_research_map` maps to the `research_map` operation, **not** `get_research_map`). A handful of academic-search, export, and CLAUDE.md-generation helpers remain deferred legacy tools or REST endpoints rather than dispatch operations — those are flagged inline in their tables. `rka_describe("")` is the authoritative operation index.
 
 ### Notes
 
-| Tool                | Purpose                                                                                                         |
-| ------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `rka_add_note`    | Add a journal entry with optional tags; type is note, log, or directive (legacy types are mapped automatically) |
-| `rka_update_note` | Update an existing journal entry                                                                                |
-| `rka_get_journal` | Query journal entries with filters (type, phase, confidence, since)                                             |
+| Operation         | Purpose                                                                                                         |
+| ----------------- | --------------------------------------------------------------------------------------------------------------- |
+| `record_note`     | Add a journal entry with optional tags; type is note, log, or directive (legacy types are mapped automatically) |
+| `update_note`     | Update an existing journal entry                                                                                |
+| `journal`         | Query journal entries with filters (type, phase, confidence, since)                                             |
 
 ### Decisions
 
-| Tool                      | Purpose                                                                |
-| ------------------------- | ---------------------------------------------------------------------- |
-| `rka_add_decision`      | Add a decision node to the research decision tree                      |
-| `rka_update_decision`   | Update a decision (change status, record chosen option, add rationale) |
-| `rka_get_decision_tree` | Get the full decision tree structure                                   |
+| Operation           | Purpose                                                                |
+| ------------------- | ---------------------------------------------------------------------- |
+| `record_decision`   | Add a decision node to the research decision tree                      |
+| `update_decision`   | Update a decision (change status, record chosen option, add rationale) |
+| `decision_tree`     | Get the full decision tree structure                                   |
 
 ### Literature
 
-| Tool                      | Purpose                                                                                                         |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `rka_add_literature`    | Add a literature entry (paper, article, book)                                                                   |
-| `rka_update_literature` | Update any literature field (title, authors, year, venue, doi, abstract, status, methodology_notes, tags, etc.) |
-| `rka_get_literature`    | Query literature with filters                                                                                   |
-| `rka_enrich_doi`        | Enrich a literature entry by looking up its DOI via CrossRef                                                    |
+| Operation           | Purpose                                                                                                         |
+| ------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `record_literature` | Add a literature entry (paper, article, book)                                                                   |
+| `update_literature` | Update any literature field (title, authors, year, venue, doi, abstract, status, methodology_notes, tags, etc.) |
+| `literature`        | Query literature with filters                                                                                   |
+| `enrich_doi`        | Enrich a literature entry by looking up its DOI via CrossRef                                                    |
 
 ### Missions
 
-| Tool                          | Purpose                                                                           |
-| ----------------------------- | --------------------------------------------------------------------------------- |
-| `rka_create_mission`        | Create a mission for the Executor with objectives, tasks, and acceptance criteria |
-| `rka_get_mission`           | Get a mission by ID, or the current active mission                                |
-| `rka_update_mission_status` | Update mission status and task progress                                           |
-| `rka_submit_report`         | Submit an execution report for a completed/partial mission                        |
-| `rka_get_report`            | Retrieve a mission report                                                         |
+| Operation               | Purpose                                                                           |
+| ----------------------- | --------------------------------------------------------------------------------- |
+| `create_mission`        | Create a mission for the Executor with objectives, tasks, and acceptance criteria |
+| `mission`               | Get a mission by ID, or the current active mission                                |
+| `update_mission_status` | Update mission status and task progress                                           |
+| `submit_report`         | Submit an execution report for a completed/partial mission                        |
+| `report`                | Retrieve a mission report                                                         |
 
 ### Checkpoints (Escalation)
 
-| Tool                       | Purpose                                                |
-| -------------------------- | ------------------------------------------------------ |
-| `rka_submit_checkpoint`  | Raise a decision/clarification/inspection checkpoint   |
-| `rka_get_checkpoints`    | List checkpoints by status (open, resolved, dismissed) |
-| `rka_resolve_checkpoint` | Resolve a checkpoint with a decision and rationale     |
+| Operation              | Purpose                                                |
+| ---------------------- | ------------------------------------------------------ |
+| `submit_checkpoint`    | Raise a decision/clarification/inspection checkpoint   |
+| `checkpoints`          | List checkpoints by status (open, resolved, dismissed) |
+| `resolve_checkpoint`   | Resolve a checkpoint with a decision and rationale     |
 
 ### Research Map (v2.0)
 
-| Tool                             | Purpose                                                                                           |
-| -------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `rka_get_research_map`         | Get the three-level research map: research questions, evidence clusters, and claims               |
-| `rka_get_claims`               | Query extracted claims with filters (type, confidence, cluster, entry_id)                         |
-| `rka_extract_claims`           | Brain creates claims from a journal entry (takes entry_id + list of claim objects)                |
-| `rka_create_cluster`           | Brain creates an evidence cluster, optionally assigning claims in one call                        |
-| `rka_assign_claims_to_cluster` | Brain wires existing claims to an existing cluster via member_of edges                            |
-| `rka_supersede_decision`       | Mark a decision as superseded by a new decision, with optional re-distillation of affected claims |
-| `rka_trace_provenance`         | Trace the full provenance chain for an entity — all upstream sources and downstream derivatives  |
+| Operation                   | Purpose                                                                                           |
+| --------------------------- | ------------------------------------------------------------------------------------------------- |
+| `research_map`              | Get the three-level research map: research questions, evidence clusters, and claims               |
+| `claims`                    | Query extracted claims with filters (type, confidence, cluster, entry_id)                         |
+| `extract_claims`            | Brain creates claims from a journal entry (takes entry_id + list of claim objects)                |
+| `create_cluster`            | Brain creates an evidence cluster, optionally assigning claims in one call                        |
+| `assign_claims_to_cluster`  | Brain wires existing claims to an existing cluster via member_of edges                            |
+| `supersede_decision`        | Mark a decision as superseded by a new decision, with optional re-distillation of affected claims |
+| `provenance`                | Trace the full provenance chain for an entity — all upstream sources and downstream derivatives  |
 
 ### Cluster Management (v2.1)
 
-| Tool                   | Purpose                                                              |
-| ---------------------- | -------------------------------------------------------------------- |
-| `rka_list_clusters`  | List evidence clusters with claim counts, confidence, and synthesis  |
-| `rka_split_cluster`  | Split a cluster into multiple new clusters by reassigning its claims |
-| `rka_merge_clusters` | Merge multiple clusters into one new cluster                         |
+| Operation          | Purpose                                                              |
+| ------------------ | -------------------------------------------------------------------- |
+| `clusters`         | List evidence clusters with claim counts, confidence, and synthesis  |
+| `split_cluster`    | Split a cluster into multiple new clusters by reassigning its claims |
+| `merge_clusters`   | Merge multiple clusters into one new cluster                         |
 
 ### Review Queue (v2.0)
 
-| Tool                          | Purpose                                                                            |
-| ----------------------------- | ---------------------------------------------------------------------------------- |
-| `rka_get_review_queue`      | List items in the review queue (low confidence, contradictions, synthesis needed)  |
-| `rka_review_cluster`        | Review and approve or revise an evidence cluster's synthesized summary             |
-| `rka_review_claims`         | Review a set of claims — accept, reject, merge, or flag for further investigation |
-| `rka_resolve_contradiction` | Resolve a contradiction between two claims with a rationale and disposition        |
+| Operation               | Purpose                                                                            |
+| ----------------------- | ---------------------------------------------------------------------------------- |
+| `review_queue`          | List items in the review queue (low confidence, contradictions, synthesis needed)  |
+| `review_cluster`        | Review and approve or revise an evidence cluster's synthesized summary             |
+| `review_claims`         | Review a set of claims — accept, reject, merge, or flag for further investigation |
+| `resolve_contradiction` | Resolve a contradiction between two claims with a rationale and disposition        |
 
 ### Knowledge Freshness (v2.1)
 
-| Tool                          | Purpose                                                                                                         |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `rka_flag_stale`            | Flag a claim, cluster, or decision as stale (yellow/red) with optional propagation through the dependency graph |
-| `rka_check_freshness`       | Scan for potentially stale knowledge: aging claims, superseded sources, stale clusters and decisions            |
-| `rka_detect_contradictions` | Find claims that may contradict a given claim using vector similarity or FTS fallback                           |
+| Operation         | Purpose                                                                                                         |
+| ----------------- | --------------------------------------------------------------------------------------------------------------- |
+| `flag_stale`      | Flag a claim, cluster, or decision as stale (yellow/red) with optional propagation through the dependency graph |
+| `freshness`       | Scan for potentially stale knowledge: aging claims, superseded sources, stale clusters and decisions            |
+| `contradictions`  | Find claims that may contradict a given claim using vector similarity or FTS fallback                           |
 
 ### Validation Gates (v2.1)
 
-| Tool                  | Purpose                                                                                                       |
-| --------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `rka_create_gate`   | Create a validation gate checkpoint (problem_framing, plan_validation, evidence_review, synthesis_validation) |
-| `rka_evaluate_gate` | Evaluate a gate with Go/Kill/Hold/Recycle verdict; invalidated assumptions auto-cascade staleness             |
+| Operation         | Purpose                                                                                                       |
+| ----------------- | ------------------------------------------------------------------------------------------------------------- |
+| `create_gate`     | Create a validation gate checkpoint (problem_framing, plan_validation, evidence_review, synthesis_validation) |
+| `evaluate_gate`   | Evaluate a gate with Go/Kill/Hold/Recycle verdict; invalidated assumptions auto-cascade staleness             |
 
 ### Researcher Experience (v2.1)
 
-| Tool                      | Purpose                                                                                                              |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `rka_get_changelog`     | Cross-entity temporal view — what changed since a given date across all entity types                                |
-| `rka_assemble_evidence` | Assemble evidence under a research question into structured markdown (lit_review, progress_report, proposal_section) |
-| `rka_process_paper`     | Literature reading workflow — create reading notes + extract claims from annotations in one call                    |
-| `rka_advance_rq`        | Advance a research question's lifecycle (open → partially_answered → answered → reframed → closed)               |
-| `rka_check_integrity`   | Verify knowledge base integrity — orphaned edges, missing references, count mismatches                              |
+| Operation       | Purpose                                                                                                              |
+| --------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `changelog`     | Cross-entity temporal view — what changed since a given date across all entity types (`since` nests under `filters`) |
+| `evidence`      | Assemble evidence under a research question into structured markdown (`format`: progress_report, briefing, audit)   |
+| `process_paper` | Literature reading workflow — create reading notes + extract claims from annotations (each annotation needs a `text` key) in one call |
+| `advance_rq`    | Advance a research question's lifecycle (open → partially_answered → answered → reframed → closed)               |
+| `integrity`     | Verify knowledge base integrity — orphaned edges, missing references, count mismatches                              |
 
 ### Search and Context
 
-| Tool                   | Purpose                                                              |
-| ---------------------- | -------------------------------------------------------------------- |
-| `rka_search`         | Hybrid search across all entity types                                |
-| `rka_get_context`    | Importance-ranked context package (v2.4: no token budget; ordered by importance × centrality × recency) |
-| `rka_multi_hop_retrieval` | Query-anchored relevance-ranked subgraph traversing typed edges with per-relation weights |
-| `rka_summarize`      | On-demand topic summarization                                        |
-| `rka_eviction_sweep` | Propose entries for archival based on staleness                      |
+| Operation        | Purpose                                                              |
+| ---------------- | -------------------------------------------------------------------- |
+| `search`         | Hybrid search across all entity types (`entity_types` nests under `filters`) |
+| `context`        | Importance-ranked context package (v2.4: no token budget; ordered by importance × centrality × recency) |
+| `multi_hop`      | Query-anchored relevance-ranked subgraph traversing typed edges with per-relation weights |
+| `summarize`      | On-demand topic summarization                                        |
+| `eviction_sweep` | Propose entries for archival based on staleness                      |
 
 ### Graph
 
-| Tool                  | Purpose                                                  |
-| --------------------- | -------------------------------------------------------- |
-| `rka_get_graph`     | Get the full entity relationship graph                   |
-| `rka_get_ego_graph` | Get the ego graph centered on a specific entity          |
-| `rka_graph_stats`   | Get graph statistics (node counts, edge counts, density) |
+| Operation      | Purpose                                                  |
+| -------------- | -------------------------------------------------------- |
+| `graph`        | Get the full entity relationship graph                   |
+| `ego_graph`    | Get the ego graph centered on a specific entity          |
+| `graph_stats`  | Get graph statistics (node counts, edge counts, density) |
+| `graph_mermaid`| Render the decision tree as Mermaid graph syntax         |
 
 ### Academic Import and Enrichment
 
-| Tool                            | Purpose                                                                                               |
-| ------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `rka_search_semantic_scholar` | Search Semantic Scholar for papers by query, with optional year/field filters and auto-add to library |
-| `rka_search_arxiv`            | Search arXiv for papers by query, with sort options and optional auto-add to library                  |
-| `rka_search_elicit`           | Search Elicit for papers relevant to a research question                                              |
-| `rka_import_bibtex`           | Import literature entries from a BibTeX string (auto-detects duplicates by DOI and title)             |
+Only `import_bibtex` is a dispatch operation (on `rka_execute`). The three literature-search helpers below are **deferred legacy tools** — not dispatch operations — loaded on demand via `rka_load_tools(names=[…])`.
+
+| Name / tool                            | Purpose                                                                                               |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `rka_search_semantic_scholar` (deferred tool) | Search Semantic Scholar for papers by query, with optional year/field filters and auto-add to library |
+| `rka_search_arxiv` (deferred tool)     | Search arXiv for papers by query, with sort options and optional auto-add to library                  |
+| `rka_search_elicit` (deferred tool)    | Search Elicit for papers relevant to a research question                                              |
+| `import_bibtex` (operation)            | Import literature entries from a BibTeX string (auto-detects duplicates by DOI and title)             |
 
 ### Workspace Bootstrap
 
-| Tool                        | Purpose                                                                                      |
-| --------------------------- | -------------------------------------------------------------------------------------------- |
-| `rka_scan_workspace`      | Scan a folder and classify files for ingestion (regex heuristics + optional LLM enhancement) |
-| `rka_bootstrap_workspace` | One-shot scan + ingest: classify and import all files into the knowledge base                |
-| `rka_review_bootstrap`    | Review a completed bootstrap — entry counts, suggestions, and narrative for Brain handoff   |
+| Operation             | Purpose                                                                                      |
+| --------------------- | -------------------------------------------------------------------------------------------- |
+| `scan_workspace`      | Scan a folder and classify files for ingestion (regex heuristics + optional LLM enhancement) |
+| `bootstrap_workspace` | One-shot scan + ingest: classify and import all files into the knowledge base                |
+| `bootstrap_review`    | Review a completed bootstrap — entry counts, suggestions, and narrative for Brain handoff   |
 
 ### Session
 
-| Tool                   | Purpose                                                         |
-| ---------------------- | --------------------------------------------------------------- |
-| `rka_session_digest` | Generate a digest of the current session's activity for handoff |
-| `rka_reset_session`  | Reset per-session state (compaction counters, digest buffer)    |
+| Operation         | Purpose                                                         |
+| ----------------- | --------------------------------------------------------------- |
+| `session_digest`  | Generate a digest of the current session's activity for handoff |
+| `reset_session`   | Reset per-session state (compaction counters, digest buffer)    |
 
 ### Onboarding (v2.0)
 
-| Tool                       | Purpose                                                                           |
-| -------------------------- | --------------------------------------------------------------------------------- |
-| `rka_generate_claude_md` | Generate a customized CLAUDE.md for the active project and role (executor, brain) |
+CLAUDE.md generation is **not** a dispatch operation — it is a REST endpoint (`GET /api/generate-claude-md?role=…`), also exposed as the deferred legacy tool `rka_generate_claude_md`.
+
+| Name / endpoint                                          | Purpose                                                                           |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `rka_generate_claude_md` / `GET /api/generate-claude-md` | Generate a customized CLAUDE.md for the active project and role (executor, brain) |
 
 ### Export
 
-| Tool                   | Purpose                                                                                                 |
-| ---------------------- | ------------------------------------------------------------------------------------------------------- |
-| `rka_export`         | Export research data as markdown, JSON, or Mermaid diagram (scopes: state, decisions, literature, full) |
-| `rka_export_mermaid` | Export the decision tree as a Mermaid flowchart with status-based styling                               |
+Full-project export is a REST endpoint (`GET /api/projects/export`), not a dispatch operation. The decision-tree Mermaid render is available as the `graph_mermaid` read operation.
+
+| Name / endpoint                                         | Purpose                                                                                                 |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `GET /api/projects/export` (deferred tool `rka_export`) | Export research data as markdown, JSON, or Mermaid diagram (scopes: state, decisions, literature, full) |
+| `graph_mermaid` (operation)                             | Export the decision tree as a Mermaid flowchart with status-based styling                               |
 
 ---
 
@@ -1321,7 +1332,7 @@ The Context Engine builds an importance-ranked package for a given topic. The pi
 3. **SQL-time ranking** — `journal.importance` (CASE 4..0) × centrality × `created_at` DESC, with a +0.5 lift for PI-sourced entries.
 4. **Optional narrative** — Pass `depth="detailed"` to ask an LLM (if configured) to synthesize a coherent narrative over the ranked list.
 
-No token-budget truncation; the full ranked list is returned. For multi-hop questions where the answer depends on connected entities multiple hops from the seeds, use `rka_multi_hop_retrieval` instead.
+No token-budget truncation; the full ranked list is returned. For multi-hop questions where the answer depends on connected entities multiple hops from the seeds, use the `multi_hop` operation (`rka_query(operation="multi_hop", …)`) instead.
 
 Request a context package:
 
@@ -1348,7 +1359,7 @@ All knowledge enrichment is handled by the Brain (Claude Desktop) during normal 
 - Assigns evidence clusters to research questions
 - Repairs missing provenance links
 
-**Maintenance manifest:** `rka_query(operation="get_pending_maintenance", project_id="prj_…")` detects all provenance gaps with pure SQL queries. The Brain processes up to 10 items per session at startup.
+**Maintenance manifest:** `rka_query(operation="pending_maintenance", project_id="prj_…")` detects all provenance gaps with pure SQL queries. The Brain processes up to 10 items per session at startup.
 
 ### Review Queue
 

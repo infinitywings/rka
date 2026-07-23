@@ -99,7 +99,7 @@ After persistence:
 
 If `mcpServers.zotero` doesn't exist yet, the user hasn't installed the `zotero-mcp` server — surface that. The credentials alone don't give Claude Desktop the tools; they need the server entry too. Point them at https://github.com/54yyyu/zotero-mcp for install instructions, then re-run this walkthrough.
 
-The orchestrator daemon **also** uses these env vars (for the `rka_link_literature_to_zotero` flow). If RKA is installed, additionally persist to **`orchestrator/.env`**.
+The orchestrator daemon **also** uses these env vars (for the `link_literature_to_zotero` operation on `rka_execute`). If RKA is installed, additionally persist to **`orchestrator/.env`**.
 
 ## Restart instruction
 
@@ -124,5 +124,5 @@ linkage.
 
 - **User ID vs username** — `ZOTERO_LIBRARY_ID` is a number, not the user's screen name. The username (`carolus_linnaeus`) won't work.
 - **Type mismatch** — using `type=user` with a group ID, or vice versa, returns 404 from the Zotero API. The error doesn't say "wrong type" — it says "not found".
-- **Read-only key + RKA write flow** — `rka_link_literature_to_zotero` may want to write back tags or attached files to Zotero. If the user wants that, the key needs read+write permission. Re-mint if necessary.
+- **Read-only key + RKA write flow** — the `link_literature_to_zotero` operation (rka_execute) may want to write back tags or attached files to Zotero. If the user wants that, the key needs read+write permission. Re-mint if necessary.
 - **Library with many items + first call** — zotero-mcp may cache locally on first call; the user might see a delay. Normal.

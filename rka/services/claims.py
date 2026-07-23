@@ -19,6 +19,10 @@ from rka.services.jobs import JobQueue
 logger = logging.getLogger(__name__)
 
 
+class ClaimNotFoundError(ValueError):
+    """Raised when a claim is absent from the active project scope."""
+
+
 class ClaimService(BaseService):
     """Manages claims extracted from journal entries."""
 
@@ -180,7 +184,13 @@ class ClaimService(BaseService):
     async def update(self, claim_id: str, data: ClaimUpdate) -> Claim:
         dump = data.model_dump(exclude_none=True)
         if not dump:
-            return await self.get(claim_id)
+            current = await self.get(claim_id)
+            if current is None:
+                raise ClaimNotFoundError(
+                    f"claim {claim_id!r} not found in project "
+                    f"{self.project_id}"
+                )
+            return current
 
         # Convert bool fields to int for SQLite
         for bfield in ("verified", "stale"):
@@ -192,10 +202,15 @@ class ClaimService(BaseService):
         values = list(dump.values()) + [claim_id, self.project_id]
 
         async with self.db.transaction():
-            await self.db.execute(
+            cursor = await self.db.execute(
                 f"UPDATE claims SET {set_clause} WHERE id = ? AND project_id = ?",
                 values,
             )
+            if cursor.rowcount != 1:
+                raise ClaimNotFoundError(
+                    f"claim {claim_id!r} not found in project "
+                    f"{self.project_id}"
+                )
 
             # v2.7.0.7 — re-sync derived indexes when the searchable/embeddable
             # `content` field changed.
@@ -373,15 +388,16 @@ class ClaimService(BaseService):
         result = await self.llm.extract_claims(row["content"], existing_contents or None)
 
         created_ids = []
-        for extracted in result.claims:
-            claim = await self.create(ClaimCreate(
-                source_entry_id=entry_id,
-                claim_type=extracted.claim_type,
-                content=extracted.content,
-                source_offset_start=extracted.source_offset_start,
-                source_offset_end=extracted.source_offset_end,
-            ))
-            created_ids.append(claim.id)
+        async with self.db.transaction():
+            for extracted in result.claims:
+                claim = await self.create(ClaimCreate(
+                    source_entry_id=entry_id,
+                    claim_type=extracted.claim_type,
+                    content=extracted.content,
+                    source_offset_start=extracted.source_offset_start,
+                    source_offset_end=extracted.source_offset_end,
+                ))
+                created_ids.append(claim.id)
 
         return {"outcome": "updated", "claims_created": len(created_ids), "claim_ids": created_ids}
 
@@ -410,25 +426,37 @@ class ClaimService(BaseService):
 
         verification = await self.llm.verify_claim(claim_row["content"], source_row["content"])
 
-        await self.db.execute(
-            "UPDATE claims SET verified = ?, confidence = ?, updated_at = ? WHERE id = ? AND project_id = ?",
-            [
-                int(verification.exists_in_source and verification.number_accuracy and verification.direction_correct),
-                verification.overall_confidence,
-                _now(),
-                claim_id,
-                self.project_id,
-            ],
+        passed = (
+            verification.exists_in_source
+            and verification.number_accuracy
+            and verification.direction_correct
         )
-        await self.db.commit()
+        async with self.db.transaction():
+            await self.db.execute(
+                """UPDATE claims
+                   SET verified = ?, confidence = ?, updated_at = ?
+                   WHERE id = ? AND project_id = ?""",
+                [
+                    int(passed),
+                    verification.overall_confidence,
+                    _now(),
+                    claim_id,
+                    self.project_id,
+                ],
+            )
 
-        # If verification failed, flag for review
-        if not (verification.exists_in_source and verification.number_accuracy and verification.direction_correct):
-            await self._flag_for_review(claim_id, "claim", verification.issues)
+            # If verification failed, persist the review flag with the claim
+            # state change. The external verifier call above stays outside.
+            if not passed:
+                await self._flag_for_review(
+                    claim_id,
+                    "claim",
+                    verification.issues,
+                )
 
         return {
             "outcome": "updated",
-            "verified": verification.exists_in_source and verification.number_accuracy and verification.direction_correct,
+            "verified": passed,
             "confidence": verification.overall_confidence,
         }
 

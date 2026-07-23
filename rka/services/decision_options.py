@@ -52,6 +52,34 @@ def _row_to_model(row: dict) -> DecisionOption:
 class DecisionOptionsService(BaseService):
     """CRUD + pareto filter + PI-selection recording on decision_options."""
 
+    async def _require_owned_decision(self, decision_id: str) -> dict:
+        """Return a decision only when it belongs to the active project."""
+        decision = await self.db.fetchone(
+            """SELECT id FROM decisions
+               WHERE id = ? AND project_id = ?""",
+            [decision_id, self.project_id],
+        )
+        if decision is None:
+            raise ValueError(
+                f"decision {decision_id!r} not found in project "
+                f"{self.project_id}"
+            )
+        return decision
+
+    async def _require_owned_option(self, option_id: str) -> dict:
+        """Return an option only when it belongs to the active project."""
+        option = await self.db.fetchone(
+            """SELECT id, decision_id FROM decision_options
+               WHERE id = ? AND project_id = ?""",
+            [option_id, self.project_id],
+        )
+        if option is None:
+            raise ValueError(
+                f"decision_option {option_id!r} not found in project "
+                f"{self.project_id}"
+            )
+        return option
+
     # ------------------------------------------------------------------ create
 
     async def create(
@@ -61,40 +89,44 @@ class DecisionOptionsService(BaseService):
     ) -> DecisionOption:
         """Insert one decision_options row and return the created model."""
         opt_id = generate_id("decision_option")
-        await self.db.execute(
-            """INSERT INTO decision_options
-               (id, decision_id, project_id, label, summary, justification,
-                expert_archetype, explanation, pros, cons, evidence,
-                confidence_verbal, confidence_numeric, confidence_evidence_strength,
-                confidence_known_unknowns, effort_time, effort_cost,
-                effort_reversibility, presentation_order_seed, is_recommended)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
-            [
-                opt_id,
-                decision_id,
-                self.project_id,
-                option.label,
-                option.summary,
-                option.justification,
-                option.expert_archetype,
-                option.explanation,
-                json.dumps(option.pros),
-                json.dumps(option.cons),
-                json.dumps([e.model_dump() for e in option.evidence]),
-                option.confidence_verbal,
-                option.confidence_numeric,
-                option.confidence_evidence_strength,
-                json.dumps(option.confidence_known_unknowns),
-                option.effort_time,
-                option.effort_cost,
-                option.effort_reversibility,
-                option.presentation_order_seed,
-            ],
-        )
-        await self.db.commit()
-        created = await self.get(opt_id)
-        assert created is not None  # just inserted
-        return created
+        async with self.db.transaction():
+            await self._require_owned_decision(decision_id)
+            await self.db.execute(
+                """INSERT INTO decision_options
+                   (id, decision_id, project_id, label, summary, justification,
+                    expert_archetype, explanation, pros, cons, evidence,
+                    confidence_verbal, confidence_numeric,
+                    confidence_evidence_strength,
+                    confidence_known_unknowns, effort_time, effort_cost,
+                    effort_reversibility, presentation_order_seed,
+                    is_recommended)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
+                [
+                    opt_id,
+                    decision_id,
+                    self.project_id,
+                    option.label,
+                    option.summary,
+                    option.justification,
+                    option.expert_archetype,
+                    option.explanation,
+                    json.dumps(option.pros),
+                    json.dumps(option.cons),
+                    json.dumps([e.model_dump() for e in option.evidence]),
+                    option.confidence_verbal,
+                    option.confidence_numeric,
+                    option.confidence_evidence_strength,
+                    json.dumps(option.confidence_known_unknowns),
+                    option.effort_time,
+                    option.effort_cost,
+                    option.effort_reversibility,
+                    option.presentation_order_seed,
+                ],
+            )
+            created = await self.get(opt_id)
+            if created is None:  # pragma: no cover - guards impossible DB drift
+                raise RuntimeError("created decision option was not readable")
+            return created
 
     async def create_bulk(
         self,
@@ -104,6 +136,7 @@ class DecisionOptionsService(BaseService):
         """Insert multiple options transactionally (typical: 3 at presentation)."""
         created_ids: list[str] = []
         async with self.db.transaction():
+            await self._require_owned_decision(decision_id)
             for option in options:
                 opt_id = generate_id("decision_option")
                 await self.db.execute(
@@ -139,8 +172,15 @@ class DecisionOptionsService(BaseService):
                     ],
                 )
                 created_ids.append(opt_id)
-            await self.db.commit()
-            return [await self.get(cid) for cid in created_ids]  # type: ignore[misc]
+            created: list[DecisionOption] = []
+            for option_id in created_ids:
+                option = await self.get(option_id)
+                if option is None:  # pragma: no cover - impossible after insert
+                    raise RuntimeError(
+                        "created decision option was not readable"
+                    )
+                created.append(option)
+            return created
 
     # ------------------------------------------------------------------- read
 
@@ -177,11 +217,25 @@ class DecisionOptionsService(BaseService):
             raise ValueError(
                 f"decision_option {option_id} cannot dominate itself"
             )
-        await self.db.execute(
-            "UPDATE decision_options SET dominated_by = ? WHERE id = ? AND project_id = ?",
-            [dominator_id, option_id, self.project_id],
-        )
-        await self.db.commit()
+        async with self.db.transaction():
+            target = await self._require_owned_option(option_id)
+            if dominator_id is not None:
+                dominator = await self._require_owned_option(dominator_id)
+                if dominator["decision_id"] != target["decision_id"]:
+                    raise ValueError(
+                        f"decision_option {dominator_id!r} cannot dominate "
+                        f"{option_id!r}: options belong to different decisions"
+                    )
+            cursor = await self.db.execute(
+                """UPDATE decision_options SET dominated_by = ?
+                   WHERE id = ? AND project_id = ?""",
+                [dominator_id, option_id, self.project_id],
+            )
+            if cursor.rowcount != 1:  # pragma: no cover - protected by write lock
+                raise ValueError(
+                    f"decision_option {option_id!r} not found in project "
+                    f"{self.project_id}"
+                )
 
     # --------------------------------------------------------- pareto filter
 
@@ -207,28 +261,46 @@ class DecisionOptionsService(BaseService):
         same transaction, and updates decisions.recommended_option_id to
         point at the new recommendation.
         """
-        target = await self.get(option_id)
-        if target is None:
-            raise ValueError(f"decision_option {option_id} not found")
-        # Clear previous recommendations for this decision.
-        await self.db.execute(
-            """UPDATE decision_options
-               SET is_recommended = 0
-               WHERE decision_id = ? AND project_id = ? AND is_recommended = 1""",
-            [target.decision_id, self.project_id],
-        )
-        # Mark target.
-        await self.db.execute(
-            "UPDATE decision_options SET is_recommended = 1 WHERE id = ?",
-            [option_id],
-        )
-        # Mirror onto the decisions row. Advance updated_at so downstream
-        # readers see the recommendation change. See mis_01KQMWG5DADXY6TB3CKYKJZ583.
-        await self.db.execute(
-            "UPDATE decisions SET recommended_option_id = ?, updated_at = ? WHERE id = ? AND project_id = ?",
-            [option_id, _now(), target.decision_id, self.project_id],
-        )
-        await self.db.commit()
+        async with self.db.transaction():
+            target = await self._require_owned_option(option_id)
+            await self._require_owned_decision(target["decision_id"])
+            # Clear previous recommendations for this decision.
+            await self.db.execute(
+                """UPDATE decision_options
+                   SET is_recommended = 0
+                   WHERE decision_id = ? AND project_id = ?
+                     AND is_recommended = 1""",
+                [target["decision_id"], self.project_id],
+            )
+            # Mark target.
+            target_cursor = await self.db.execute(
+                """UPDATE decision_options SET is_recommended = 1
+                   WHERE id = ? AND decision_id = ? AND project_id = ?""",
+                [option_id, target["decision_id"], self.project_id],
+            )
+            if target_cursor.rowcount != 1:
+                raise ValueError(
+                    f"decision_option {option_id!r} not found in project "
+                    f"{self.project_id}"
+                )
+            # Mirror onto the decisions row. Advance updated_at so downstream
+            # readers see the recommendation change. See
+            # mis_01KQMWG5DADXY6TB3CKYKJZ583.
+            decision_cursor = await self.db.execute(
+                "UPDATE decisions SET recommended_option_id = ?, updated_at = ? "
+                "WHERE id = ? AND project_id = ?",
+                [
+                    option_id,
+                    _now(),
+                    target["decision_id"],
+                    self.project_id,
+                ],
+            )
+            if decision_cursor.rowcount != 1:
+                raise ValueError(
+                    f"decision {target['decision_id']!r} not found in project "
+                    f"{self.project_id}"
+                )
 
     # --------------------------------------------------- record_pi_selection
 
@@ -253,29 +325,38 @@ class DecisionOptionsService(BaseService):
                 "record_pi_selection: at least one of selected_option_id or "
                 "override_rationale must be set"
             )
-        if has_selected:
-            # Verify the referenced option exists within this project.
-            opt = await self.get(selected_option_id)  # type: ignore[arg-type]
-            if opt is None or opt.decision_id != decision_id:
-                raise ValueError(
-                    f"selected_option_id {selected_option_id!r} not found on "
-                    f"decision {decision_id}"
+        async with self.db.transaction():
+            await self._require_owned_decision(decision_id)
+            if has_selected:
+                # Verify the referenced option exists within this project and
+                # belongs to the decision being ratified.
+                opt = await self._require_owned_option(
+                    selected_option_id  # type: ignore[arg-type]
                 )
-        # Advance updated_at so downstream readers (change feeds,
-        # staleness propagation) see the PI ratification.
-        # See mis_01KQMWG5DADXY6TB3CKYKJZ583.
-        await self.db.execute(
-            """UPDATE decisions
-               SET pi_selected_option_id = ?,
-                   pi_override_rationale = ?,
-                   updated_at = ?
-               WHERE id = ? AND project_id = ?""",
-            [
-                selected_option_id if has_selected else None,
-                override_rationale if has_override else None,
-                _now(),
-                decision_id,
-                self.project_id,
-            ],
-        )
-        await self.db.commit()
+                if opt["decision_id"] != decision_id:
+                    raise ValueError(
+                        f"selected_option_id {selected_option_id!r} not found "
+                        f"on decision {decision_id}"
+                    )
+            # Advance updated_at so downstream readers (change feeds,
+            # staleness propagation) see the PI ratification.
+            # See mis_01KQMWG5DADXY6TB3CKYKJZ583.
+            cursor = await self.db.execute(
+                """UPDATE decisions
+                   SET pi_selected_option_id = ?,
+                       pi_override_rationale = ?,
+                       updated_at = ?
+                   WHERE id = ? AND project_id = ?""",
+                [
+                    selected_option_id if has_selected else None,
+                    override_rationale if has_override else None,
+                    _now(),
+                    decision_id,
+                    self.project_id,
+                ],
+            )
+            if cursor.rowcount != 1:  # pragma: no cover - protected by write lock
+                raise ValueError(
+                    f"decision {decision_id!r} not found in project "
+                    f"{self.project_id}"
+                )

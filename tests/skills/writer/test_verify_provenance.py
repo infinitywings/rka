@@ -118,12 +118,48 @@ def test_superseded_with_ack_passes(verify_provenance):
     assert rep.citations[0].acknowledged is True
 
 
+def test_retracted_ack_cannot_authorize_superseded_entity(verify_provenance):
+    tex = (
+        f"% provenance: {SID} retracted-ack: wrong acknowledgement class\n"
+        "We initially adopted Ed25519 before revising the design.\n"
+    )
+    ents = {
+        SID: {
+            "type": "decision",
+            "status": "superseded",
+            "content": "use Ed25519",
+        }
+    }
+    rep = verify_provenance.audit_text(tex, _resolver(ents))
+    assert rep.verdict == "BLOCK"
+    assert rep.citations[0].verdict == "STALE"
+    assert rep.citations[0].acknowledged is False
+
+
 def test_retracted_entity_blocks(verify_provenance):
     tex = f"% provenance: {RID} supports the replay claim\nThe MAC provides replay protection.\n"
     ents = {RID: {"type": "journal", "status": "retracted", "content": "MAC provides replay protection"}}
     rep = verify_provenance.audit_text(tex, _resolver(ents))
     assert rep.verdict == "BLOCK"
     assert rep.citations[0].verdict == "RETRACTED"
+
+
+def test_superseded_ack_cannot_authorize_retracted_entity(verify_provenance):
+    tex = (
+        f"% provenance: {RID} superseded-ack: wrong acknowledgement class\n"
+        "The earlier paper claimed that the MAC provided replay protection.\n"
+    )
+    ents = {
+        RID: {
+            "type": "journal",
+            "status": "retracted",
+            "content": "MAC provides replay protection",
+        }
+    }
+    rep = verify_provenance.audit_text(tex, _resolver(ents))
+    assert rep.verdict == "BLOCK"
+    assert rep.citations[0].verdict == "RETRACTED"
+    assert rep.citations[0].acknowledged is False
 
 
 def test_contradicted_entity_warns_when_not_surfaced(verify_provenance):
@@ -205,6 +241,43 @@ def test_rest_resolver_fails_closed_when_graph_is_unavailable(
     )
     with pytest.raises(urllib.error.URLError, match="graph offline"):
         resolver(JID)
+
+
+def test_cli_returns_unreachable_when_graph_fails_mid_audit(
+    verify_provenance, monkeypatch, tmp_path
+):
+    project_id = "prj_01PPPPPPPPPPPPPPPPPPPPPPPP"
+    source = tmp_path / "draft.tex"
+    source.write_text(
+        f"% provenance: {JID} supports the result\n"
+        "The measured result remains within the ratified boundary.\n",
+        encoding="utf-8",
+    )
+
+    def fake_urlopen(request, **_kwargs):
+        url = request if isinstance(request, str) else request.full_url
+        if url.endswith("/api/health"):
+            return io.BytesIO(b'{"status":"ok"}')
+        if "/api/graph/ego/" in url:
+            raise urllib.error.URLError("graph offline")
+        return io.BytesIO(
+            json.dumps(
+                {
+                    "id": JID,
+                    "project_id": project_id,
+                    "content": "measured result remains within ratified boundary",
+                    "status": "active",
+                }
+            ).encode()
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    assert (
+        verify_provenance.main(
+            [str(source), "--project", project_id, "--rka-url", "http://rka.test"]
+        )
+        == 3
+    )
 
 
 class TestEntailmentJudge:

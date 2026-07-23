@@ -21,7 +21,7 @@ The rka MCP server ships a **discriminated-union dispatch surface**. Five tools 
 | `rka_execute(args)` | All 58 write/lifecycle operations |
 | `rka_describe(operation)` | Schema lookup + worked example; `rka_describe('')` returns the <250-token index |
 | `rka_load_tools(names)` | Escape hatch for explicit legacy-tool access |
-| `rka_help(topic)` | Deprecated alias for `rka_describe` |
+| `rka_help(name)` | Deprecated alias for `rka_describe` |
 
 `args` is a **typed Pydantic model** discriminated by `operation`. 109 models in `rka/mcp/operation_args.py` render as `inputSchema.oneOf` with per-branch enum + required-field constraints. **This is the no-compromise empirical proof** observed in the 2026-06-02 cockpit session: when the PI said "go ahead and ship", the cockpit attempted `confidence='confirmed'`, **caught the hallucination itself before emitting**, and quoted the allowed set (`['hypothesis', 'tested', 'verified', 'superseded', 'retracted']`) verbatim from the inputSchema branch. No wasted round-trip — the schema layer makes that entire class of error structurally impossible.
 

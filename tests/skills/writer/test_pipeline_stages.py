@@ -9,6 +9,10 @@ Per mis_01KS2S871YPQ3D5RVY5K3PSQY6 T6 acceptance criteria.
 
 from __future__ import annotations
 
+import json
+import subprocess
+
+
 class _FakeBackend:
     """Module-attribute-style fake; replaces _crossref / _openalex / _s2 / _arxiv / _serpapi."""
 
@@ -91,6 +95,144 @@ class TestStageCConfirmation:
 
     def test_zero_sources_unverified(self, validate_references) -> None:
         assert validate_references.stage_c_cross_source([]) == validate_references.Status.UNVERIFIED
+
+
+class TestTitleOnlyMetadataQualification:
+    """Title searches count only metadata-compatible backend hits."""
+
+    class _SearchBackend:
+        def __init__(self, hit):
+            self.hit = hit
+
+        def search_works(self, _query, rows=10, max_results=10):
+            return [self.hit] if self.hit else []
+
+        def search_papers(self, _query, limit=10, max_results=10):
+            return [self.hit] if self.hit else []
+
+    def _install(self, vr, *hits):
+        backends = [
+            self._SearchBackend(hit) for hit in (*hits, None, None, None, None)
+        ]
+        vr._crossref, vr._openalex, vr._s2, vr._arxiv = backends[:4]
+
+    def test_two_unrelated_hits_do_not_verify_hallucinated_title(
+        self, validate_references
+    ) -> None:
+        vr = validate_references
+        self._install(
+            vr,
+            {"title": "Neural Machine Translation with Attention"},
+            {"title": "A Survey of Database Query Optimization"},
+        )
+
+        verdict = vr.validate_reference(
+            title="Post-Quantum Firmware Attestation for Satellites",
+            check_retraction=False,
+        )
+
+        assert verdict.status == vr.Status.UNVERIFIED
+        assert verdict.sources_confirmed == []
+        assert sum("title_mismatch" in note for note in verdict.notes) >= 2
+
+    def test_two_close_title_and_author_hits_verify(
+        self, validate_references
+    ) -> None:
+        vr = validate_references
+        self._install(
+            vr,
+            {
+                "title": "Post-Quantum Firmware Attestation for Satellites",
+                "author": [{"family": "Fu"}],
+            },
+            {
+                "title": "Post Quantum Firmware Attestation for Satellites",
+                "author": [{"family": "Fu"}, {"family": "Smith"}],
+            },
+        )
+
+        verdict = vr.validate_reference(
+            title="Post-Quantum Firmware Attestation for Satellites",
+            authors=["Fu"],
+            check_retraction=False,
+        )
+
+        assert verdict.status == vr.Status.VERIFIED
+        assert verdict.sources_confirmed == ["crossref", "openalex"]
+
+    def test_title_match_with_wrong_author_does_not_confirm(
+        self, validate_references
+    ) -> None:
+        vr = validate_references
+        hit = {
+            "title": "Post-Quantum Firmware Attestation for Satellites",
+            "author": [{"family": "Mallory"}],
+        }
+        self._install(vr, hit, hit)
+
+        verdict = vr.validate_reference(
+            title="Post-Quantum Firmware Attestation for Satellites",
+            authors=["Fu"],
+            check_retraction=False,
+        )
+
+        assert verdict.status == vr.Status.UNVERIFIED
+        assert verdict.sources_confirmed == []
+        assert sum("author_mismatch" in note for note in verdict.notes) >= 2
+
+
+class TestManubotCSLConversion:
+    """Current Manubot emits CSL JSON; Writer converts it locally to BibTeX."""
+
+    def test_stage_f_uses_supported_csljson_format(
+        self, validate_references, monkeypatch, tmp_path
+    ) -> None:
+        vr = validate_references
+        observed = {}
+        csl = [{
+            "id": "fu2026",
+            "type": "article-journal",
+            "title": "Secure Systems",
+            "author": [{"family": "Fu", "given": "Chenglong"}],
+            "issued": {"date-parts": [[2026]]},
+            "container-title": "Security Journal",
+            "DOI": "10.1/secure",
+        }]
+
+        def fake_run(command, **kwargs):
+            observed["command"] = command
+            observed["timeout"] = kwargs.get("timeout")
+            return subprocess.CompletedProcess(command, 0, json.dumps(csl), "")
+
+        monkeypatch.setattr(vr, "manubot_available", lambda: True)
+        monkeypatch.setattr(vr.subprocess, "run", fake_run)
+        output = tmp_path / "refs.bib"
+
+        code, notes = vr.stage_f_compile_bibliography(
+            [{"DOI": "10.1/secure"}],
+            output,
+            apply_bibtex_tidy=False,
+        )
+
+        assert code == 0
+        assert "--format=csljson" in observed["command"]
+        assert observed["timeout"] == vr._MANUBOT_TIMEOUT_SECONDS
+        assert "@article{fu2026" in output.read_text(encoding="utf-8")
+        assert "stage_f_manubot_csljson_converted" in notes
+
+    def test_stage_a_timeout_fails_closed(
+        self, validate_references, monkeypatch, tmp_path
+    ) -> None:
+        vr = validate_references
+        source = tmp_path / "refs.json"
+        source.write_text(json.dumps([{"DOI": "10.1/slow"}]), encoding="utf-8")
+        monkeypatch.setattr(vr, "manubot_available", lambda: True)
+
+        def timeout(*_args, **_kwargs):
+            raise subprocess.TimeoutExpired("manubot", vr._MANUBOT_TIMEOUT_SECONDS)
+
+        monkeypatch.setattr(vr.subprocess, "run", timeout)
+        assert vr.stage_a_csl_to_bibtex(source, tmp_path / "refs.bib") == 1
 
 
 class TestStageDRetraction:

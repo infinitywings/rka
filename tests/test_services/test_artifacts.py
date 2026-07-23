@@ -23,6 +23,55 @@ async def test_register_rejects_invalid_actor_without_partial_write(db, tmp_path
     assert row["cnt"] == 0
 
 
+@pytest.mark.asyncio
+async def test_register_audit_failure_rolls_back_artifact(
+    db,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    path = tmp_path / "atomic-artifact.txt"
+    path.write_text("atomic artifact registration", encoding="utf-8")
+    svc = ArtifactService(db)
+
+    async def fail_audit(*args, **kwargs) -> None:
+        raise RuntimeError("simulated artifact audit failure")
+
+    monkeypatch.setattr(svc, "audit", fail_audit)
+    with pytest.raises(RuntimeError, match="simulated artifact audit failure"):
+        await svc.register(filepath=str(path), created_by="system")
+
+    assert await db.fetchone(
+        "SELECT id FROM artifacts WHERE filename = 'atomic-artifact.txt'"
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_register_embeds_after_database_transaction(
+    db,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    path = tmp_path / "embedded-artifact.txt"
+    path.write_text("embed after commit", encoding="utf-8")
+    svc = ArtifactService(db)
+    transaction_states: list[tuple[object | None, bool]] = []
+
+    async def observe_embedding(**kwargs) -> None:
+        transaction_states.append(
+            (db._transaction_owner, db.conn.in_transaction)
+        )
+
+    monkeypatch.setattr(svc, "_embed_artifact", observe_embedding)
+    result = await svc.register(filepath=str(path), created_by="system")
+
+    assert result["duplicate"] is False
+    assert transaction_states == [(None, False)]
+    assert await db.fetchone(
+        "SELECT id FROM artifacts WHERE id = ?",
+        [result["id"]],
+    ) is not None
+
+
 async def _seed_artifact(db, artifact_id: str = "art_atomic") -> None:
     await db.execute(
         """INSERT INTO artifacts

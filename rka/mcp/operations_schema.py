@@ -1482,7 +1482,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "rka_query(operation='changelog', *, project_id, limit=50, "
             "filters={'since': ISO8601})"
         ),
-        "required_fields": ["project_id", "since"],
+        "required_fields": ["project_id", "filters"],
         "optional_fields": ["limit"],
         "enums": {},
         "examples": [
@@ -1533,7 +1533,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "rka_query(operation='workspace_tree', *, project_id, "
             "filters={'folder_path': str, 'max_depth': int})"
         ),
-        "required_fields": ["project_id", "folder_path"],
+        "required_fields": ["project_id", "filters"],
         "optional_fields": ["max_depth"],
         "enums": {},
         "examples": [
@@ -1564,7 +1564,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "filters={'folder_path', 'ignore_patterns', "
             "'max_file_size_mb', 'use_llm'})"
         ),
-        "required_fields": ["project_id", "folder_path"],
+        "required_fields": ["project_id", "filters"],
         "optional_fields": [
             "ignore_patterns", "max_file_size_mb", "use_llm",
         ],
@@ -1649,7 +1649,8 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "required_fields": ["project_id", "content"],
         "optional_fields": [
             "source", "type", "confidence", "importance",
-            "verbatim_input", "phase", "tags", "provenance",
+            "verbatim_input", "phase", "tags", "summary", "status",
+            "pinned", "provenance",
         ],
         "enums": _e("source", "note_type", "confidence", "importance"),
         "examples": [
@@ -1770,11 +1771,12 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "required_fields": [
             "project_id", "question", "chosen", "rationale",
-            "decided_by", "kind", "related_journal",
+            "decided_by", "kind", "related_journal", "phase",
         ],
         "optional_fields": [
             "options", "supersedes_decision_id", "confidence", "tags",
-            "phase", "parent_id", "related_literature", "assumptions",
+            "parent_id", "related_literature", "related_missions", "status",
+            "assumptions",
         ],
         "enums": _e("decided_by", "decision_kind", "confidence"),
         "examples": [
@@ -1789,6 +1791,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
                     "decided_by": "pi",
                     "kind": "design_choice",
                     "related_journal": ["jrn_01XYZ...", "jrn_01ABC..."],
+                    "phase": "analysis",
                 },
             },
         ],
@@ -1848,12 +1851,12 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "summary": "Replace an old decision with a new one (atomically links the two).",
         "signature": (
             "rka_execute(operation='supersede_decision', *, project_id, "
-            "old_decision_id, question, chosen, rationale, "
+            "old_decision_id, question, chosen, rationale, related_journal, "
             "decided_by='brain', phase='', kind='decision')"
         ),
         "required_fields": [
             "project_id", "old_decision_id",
-            "question", "chosen", "rationale",
+            "question", "chosen", "rationale", "related_journal",
         ],
         "optional_fields": ["decided_by", "phase", "kind"],
         "enums": _e("decided_by", "decision_kind"),
@@ -1867,6 +1870,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
                     "question": "Which embedding model for v2 (revised)?",
                     "chosen": "bge-m3",
                     "rationale": "New benchmarks reverse the prior choice.",
+                    "related_journal": ["jrn_01XYZ..."],
                     "decided_by": "brain",
                     "kind": "design_choice",
                 },
@@ -1982,16 +1986,16 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "tool": "rka_execute",
         "category": "literature",
         "role_tag": "ANY",
-        "summary": "Add a literature entry (title-based create).",
+        "summary": "Add a literature entry from a title or DOI.",
         "signature": (
             "rka_execute(operation='record_literature', *, project_id, "
-            "title, authors=None, year=None, venue=None, doi=None, "
+            "title=None, authors=None, year=None, venue=None, doi=None, "
             "url=None, abstract=None, status='to_read', tags=None, "
             "related_decisions=None)"
         ),
-        "required_fields": ["project_id", "title"],
+        "required_fields": ["project_id"],
         "optional_fields": [
-            "authors", "year", "venue", "doi", "url", "abstract",
+            "title", "authors", "year", "venue", "doi", "url", "abstract",
             "status", "tags", "related_decisions",
         ],
         "enums": _e("lit_status"),
@@ -2011,7 +2015,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "update_literature", "import_bibtex", "enrich_doi",
             "link_literature_to_zotero",
         ],
-        "notes": None,
+        "notes": "At least one of `title` or `doi` is required.",
     },
 
     "update_literature": {
@@ -2271,14 +2275,19 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "summary": "Create the canonical native manuscript aggregate.",
         "signature": (
             "rka_execute(operation='create_manuscript', *, project_id, title, "
-            "abstract=None, venue=None, workspace_ref=None, "
+            "abstract=None, venue=None, phase='planning', state='active', "
+            "workspace_ref=None, "
             "legacy_journal_id=None)"
         ),
         "required_fields": ["project_id", "title"],
         "optional_fields": [
-            "abstract", "venue", "workspace_ref", "legacy_journal_id",
+            "abstract", "venue", "phase", "state", "workspace_ref",
+            "legacy_journal_id",
         ],
-        "enums": {},
+        "enums": {
+            "phase": ["planning"],
+            "state": ["active"],
+        },
         "examples": [
             {
                 "description": "Create a native manuscript.",
@@ -2294,8 +2303,9 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "update_manuscript", "upsert_argument_spine", "manuscript_context",
         ],
         "notes": (
-            "Creation always starts at phase=planning and state=active and "
-            "never infers PI ratification."
+            "phase and state are explicit typed fields whose only accepted "
+            "initial values are planning and active; creation never infers "
+            "PI ratification."
         ),
     },
 
@@ -2850,14 +2860,15 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "summary": "Submit a mission's final report (closes the mission).",
         "signature": (
             "rka_execute(operation='submit_report', *, project_id, "
-            "mission_id, summary, findings='', anomalies='', questions='', "
-            "codebase_state='', recommended_next='')"
+            "mission_id, summary=None, content=None, findings=None, "
+            "anomalies=None, questions=None, codebase_state=None, "
+            "recommended_next=None)"
         ),
         "required_fields": [
-            "project_id", "mission_id", "summary",
+            "project_id", "mission_id",
         ],
         "optional_fields": [
-            "findings", "anomalies", "questions",
+            "summary", "content", "findings", "anomalies", "questions",
             "codebase_state", "recommended_next",
         ],
         "enums": {},
@@ -2920,14 +2931,15 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "summary": "Raise a checkpoint when blocked or needing input.",
         "signature": (
             "rka_execute(operation='submit_checkpoint', *, project_id, "
-            "mission_id, type, description, task_reference=None, "
-            "context=None, options=None, recommendation=None, blocking=True)"
+            "mission_id, type, description=None, content=None, "
+            "task_reference=None, context=None, options=None, "
+            "recommendation=None, blocking=True)"
         ),
         "required_fields": [
-            "project_id", "mission_id", "type", "description",
+            "project_id", "mission_id", "type",
         ],
         "optional_fields": [
-            "task_reference", "context", "options",
+            "description", "content", "task_reference", "context", "options",
             "recommendation", "blocking",
         ],
         "enums": _e("checkpoint_type"),
@@ -2948,8 +2960,8 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "resolve_checkpoint", "checkpoints", "create_gate",
         ],
         "notes": (
-            "Canonical field is `description` (NOT `content` — common "
-            "Brain hallucination from the 2026-06-01 hyperscaler-auditing PA-2)."
+            "One of `description` or `content` is required. `description` is "
+            "canonical; `content` is the legacy alias."
         ),
     },
 

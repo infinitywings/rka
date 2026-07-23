@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from rka.api.deps import get_db, require_project
 from rka.infra.database import Database
 from rka.services.change_tracking import ChangeTrackingService
+from rka.services.manuscript_native import ManuscriptNotFoundError
 
 
 router = APIRouter()
@@ -51,7 +52,5 @@ async def get_manuscript_impact(
             since_cursor=since_cursor,
             limit=limit,
         )
-    except ValueError as exc:
-        if "not found" in str(exc):
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ManuscriptNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

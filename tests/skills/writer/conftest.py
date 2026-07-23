@@ -3,7 +3,8 @@
 The Writer skill scripts live under rka/skills/writer/scripts/ and are designed
 as standalone CLI scripts, not as a Python package. These fixtures use
 importlib.util.spec_from_file_location to load each script as an importable
-module for unit testing without polluting sys.modules globally.
+module for unit testing. Each module is registered under a stable `writer_*`
+name in `sys.modules`, as required by import machinery used by some scripts.
 
 Per mis_01KS0C3RP04XANCZAB3HTNAG0P T4 test convention discovery: the rka
 project uses pytest with asyncio_mode=auto; conftest.py provides per-area
@@ -69,6 +70,11 @@ def verify_provenance():
 @pytest.fixture
 def verify_citations():
     return _load_module("verify_citations")
+
+
+@pytest.fixture
+def overclaim_lint():
+    return _load_module("overclaim_lint")
 
 
 @pytest.fixture

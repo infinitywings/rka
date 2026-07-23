@@ -17,6 +17,7 @@ from rka.api.deps import (
     get_db,
     get_embeddings,
     get_llm,
+    get_transport_actor,
     require_project,
 )
 from rka.infra.database import Database
@@ -33,6 +34,7 @@ from rka.models.manuscript_native import (
 from rka.models.reference_validation import ReferenceValidationInput
 from rka.services.manuscript import ManuscriptService
 from rka.services.manuscript_native import (
+    ManuscriptNotFoundError,
     ManuscriptRevisionConflict,
     NativeManuscriptService,
 )
@@ -173,6 +175,7 @@ def get_scoped_reference_validation_service(
 @router.post("/manuscripts", status_code=201)
 async def register_manuscript(
     data: ManuscriptRegisterRequest,
+    actor: str = Depends(get_transport_actor),
     svc: ManuscriptService = Depends(get_scoped_manuscript_service),
     native: NativeManuscriptService = Depends(get_scoped_native_manuscript_service),
 ) -> dict[str, Any]:
@@ -182,6 +185,7 @@ async def register_manuscript(
         title=data.title,
         abstract=data.abstract,
         sections=data.sections,
+        actor=actor,
     )
     canonical_id = await native.resolve_id(entry.id)
     return {
@@ -204,10 +208,11 @@ async def register_manuscript(
 @router.post("/manuscripts/native", status_code=201)
 async def create_native_manuscript(
     data: ManuscriptCreate,
+    actor: str = Depends(get_transport_actor),
     svc: NativeManuscriptService = Depends(get_scoped_native_manuscript_service),
 ) -> dict[str, Any]:
     """Create a canonical native manuscript without inferred ratification."""
-    manuscript = await svc.create(data)
+    manuscript = await svc.create(data, actor=actor)
     return manuscript.model_dump()
 
 
@@ -252,10 +257,19 @@ async def get_manuscript(
 async def update_native_manuscript(
     manuscript_id: str,
     data: ManuscriptMetadataUpdateRequest,
+    actor: str = Depends(get_transport_actor),
     svc: NativeManuscriptService = Depends(get_scoped_native_manuscript_service),
 ) -> dict[str, Any]:
     try:
-        return (await svc.update(manuscript_id, data.to_domain())).model_dump()
+        return (
+            await svc.update(
+                manuscript_id,
+                data.to_domain(),
+                actor=actor,
+            )
+        ).model_dump()
+    except ManuscriptNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ManuscriptRevisionConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
@@ -266,6 +280,7 @@ async def update_native_manuscript(
 async def upsert_argument_spine(
     manuscript_id: str,
     data: ArgumentSpineUpsertRequest,
+    actor: str = Depends(get_transport_actor),
     svc: NativeManuscriptService = Depends(get_scoped_native_manuscript_service),
 ) -> dict[str, Any]:
     try:
@@ -273,7 +288,10 @@ async def upsert_argument_spine(
             manuscript_id,
             expected_revision=data.expected_revision,
             spine=data.spine,
+            actor=actor,
         )
+    except ManuscriptNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ManuscriptRevisionConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
@@ -288,19 +306,28 @@ async def get_manuscript_reference_manifest(
     """Read active citation membership and exact validation currency."""
     try:
         return await svc.get_reference_manifest(manuscript_id)
-    except ValueError as exc:
+    except ManuscriptNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.put("/manuscripts/{manuscript_id}/references")
 async def replace_manuscript_reference_manifest(
     manuscript_id: str,
     data: ManuscriptReferenceManifestReplace,
+    actor: str = Depends(get_transport_actor),
     svc: NativeManuscriptService = Depends(get_scoped_native_manuscript_service),
 ) -> dict[str, Any]:
     """Atomically replace the authoritative active citation-key set."""
     try:
-        return await svc.replace_reference_manifest(manuscript_id, data)
+        return await svc.replace_reference_manifest(
+            manuscript_id,
+            data,
+            actor=actor,
+        )
+    except ManuscriptNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ManuscriptRevisionConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
@@ -312,6 +339,7 @@ async def ratify_manuscript_claim(
     manuscript_id: str,
     claim_ref: str,
     data: ClaimRatificationRequest,
+    actor: str = Depends(get_transport_actor),
     svc: NativeManuscriptService = Depends(get_scoped_native_manuscript_service),
 ) -> dict[str, Any]:
     try:
@@ -323,8 +351,11 @@ async def ratify_manuscript_claim(
             decision_id=data.decision_id,
             expected_revision=data.expected_revision,
             ratified_at=data.ratified_at,
+            actor=actor,
         )
         return ratification.model_dump()
+    except ManuscriptNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ManuscriptRevisionConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
@@ -335,6 +366,7 @@ async def ratify_manuscript_claim(
 async def transition_manuscript(
     manuscript_id: str,
     data: ManuscriptTransitionRequest,
+    actor: str = Depends(get_transport_actor),
     svc: NativeManuscriptService = Depends(get_scoped_native_manuscript_service),
 ) -> dict[str, Any]:
     try:
@@ -343,8 +375,11 @@ async def transition_manuscript(
             expected_revision=data.expected_revision,
             target_phase=data.target_phase,
             target_state=data.target_state,
+            actor=actor,
         )
         return manuscript.model_dump()
+    except ManuscriptNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ManuscriptRevisionConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
@@ -358,8 +393,10 @@ async def get_native_manuscript_context(
 ) -> dict[str, Any]:
     try:
         return await svc.get_context(manuscript_id)
-    except ValueError as exc:
+    except ManuscriptNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/manuscripts/{manuscript_id}/readiness")
@@ -373,6 +410,8 @@ async def get_native_manuscript_readiness(
             manuscript_id,
             target_phase=target_phase,
         )
+    except ManuscriptNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -384,8 +423,10 @@ async def export_native_argument_spine(
 ) -> dict[str, Any]:
     try:
         return await svc.export_spine_projection(manuscript_id)
-    except ValueError as exc:
+    except ManuscriptNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/manuscripts/{manuscript_id}/writing-candidates")
@@ -396,14 +437,17 @@ async def get_native_manuscript_writing_candidates(
     """Return cluster/RQ-smoothed, read-only candidate paper claims."""
     try:
         return await svc.get_writing_candidates(manuscript_id)
-    except ValueError as exc:
+    except ManuscriptNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/manuscripts/{manuscript_id}/checkpoints", status_code=201)
 async def create_manuscript_checkpoint(
     manuscript_id: str,
     data: ManuscriptCheckpointRequest,
+    actor: str = Depends(get_transport_actor),
     svc: NativeManuscriptService = Depends(get_scoped_native_manuscript_service),
 ) -> dict[str, Any]:
     try:
@@ -415,8 +459,11 @@ async def create_manuscript_checkpoint(
                 supersedes_id=data.supersedes_id,
             ),
             expected_revision=data.expected_revision,
+            actor=actor,
         )
         return checkpoint.model_dump()
+    except ManuscriptNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ManuscriptRevisionConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
@@ -427,6 +474,7 @@ async def create_manuscript_checkpoint(
 async def resolve_manuscript_checkpoint(
     checkpoint_id: str,
     data: ManuscriptCheckpointResolutionRequest,
+    actor: str = Depends(get_transport_actor),
     svc: NativeManuscriptService = Depends(get_scoped_native_manuscript_service),
 ) -> dict[str, Any]:
     try:
@@ -438,8 +486,11 @@ async def resolve_manuscript_checkpoint(
                 resolved_at=data.resolved_at,
             ),
             expected_revision=data.expected_revision,
+            actor=actor,
         )
         return checkpoint.model_dump()
+    except ManuscriptNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ManuscriptRevisionConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
@@ -453,6 +504,7 @@ async def resolve_manuscript_checkpoint(
 async def record_manuscript_verification_attestation(
     manuscript_id: str,
     data: VerificationAttestationRequest,
+    actor: str = Depends(get_transport_actor),
     svc: NativeManuscriptService = Depends(get_scoped_native_manuscript_service),
 ) -> dict[str, Any]:
     payload = dict(data.attestation)
@@ -461,8 +513,11 @@ async def record_manuscript_verification_attestation(
         attestation = await svc.record_verification_attestation(
             ManuscriptClaimVerificationAttestationCreate.model_validate(payload),
             expected_revision=data.expected_revision,
+            actor=actor,
         )
         return attestation.model_dump()
+    except ManuscriptNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ManuscriptRevisionConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
@@ -476,6 +531,7 @@ async def record_manuscript_verification_attestation(
 async def validate_reference(
     manuscript_id: str,
     data: ReferenceValidationRequest,
+    actor: str = Depends(get_transport_actor),
     svc: ReferenceValidationService = Depends(
         get_scoped_reference_validation_service
     ),
@@ -506,6 +562,7 @@ async def validate_reference(
             reference_dict,
             manuscript_id=manuscript_id,
             literature_id=literature_id,
+            actor=actor,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

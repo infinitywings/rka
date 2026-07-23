@@ -6,11 +6,13 @@ implementation of all seven stages (A through G) per design doc Section 9 and
 references/reference_pipeline.md.
 
 Stages:
-  A. CSL-JSON pass-through to BibTeX via manubot (Phase 1; kept).
+  A. CSL-JSON identifier resolution via manubot, followed by deterministic
+     local BibTeX serialization (Phase 1 compatibility path).
   B. Provider resolution: DOI lookups query Crossref, OpenAlex, and Semantic
      Scholar; title searches also query arXiv. Never scrape Google Scholar.
-  C. Cross-source existence validation by source count only (no metadata
-     field reconciliation): at least 2 sources must confirm for VERIFIED;
+  C. Cross-source validation: title-only searches count a source only when
+     normalized title metadata and, when supplied, author surnames match.
+     At least 2 mutually consistent sources must confirm for VERIFIED;
      1 source -> LOW_CONFIDENCE; 0 -> UNVERIFIED (advances to Stage G).
   D. Retraction check: Crossref update-to metadata. A local RWDB mirror and
      OpenAlex is_retracted are documented future secondary sources, not
@@ -58,10 +60,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
+import unicodedata
 from dataclasses import dataclass, field, asdict
+from difflib import SequenceMatcher
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -219,6 +224,121 @@ class AuditReport:
 # ---- Stage A: CSL-JSON to BibTeX via manubot (Phase 1; kept) -------------
 
 
+_MANUBOT_TIMEOUT_SECONDS = 120
+
+
+def _first_text(value: Any) -> str:
+    """Return a normalized scalar string from common CSL field shapes."""
+    if isinstance(value, list):
+        return _first_text(value[0]) if value else ""
+    return str(value or "").strip()
+
+
+def _bibtex_escape(value: Any) -> str:
+    """Escape metadata for a braced BibTeX value."""
+    text = _first_text(value)
+    replacements = {
+        "\\": r"\textbackslash{}",
+        "{": r"\{",
+        "}": r"\}",
+        "&": r"\&",
+        "%": r"\%",
+        "#": r"\#",
+        "_": r"\_",
+    }
+    return "".join(replacements.get(char, char) for char in text)
+
+
+def _csl_year(record: dict[str, Any]) -> str:
+    date_parts = (record.get("issued") or {}).get("date-parts") or []
+    if date_parts and date_parts[0]:
+        return str(date_parts[0][0])
+    return _first_text(record.get("year"))
+
+
+def _csl_authors(record: dict[str, Any]) -> str:
+    rendered: list[str] = []
+    for author in record.get("author") or []:
+        if isinstance(author, str):
+            if author.strip():
+                rendered.append(author.strip())
+            continue
+        if not isinstance(author, dict):
+            continue
+        literal = _first_text(author.get("literal"))
+        if literal:
+            rendered.append(literal)
+            continue
+        family = _first_text(author.get("family"))
+        given = _first_text(author.get("given"))
+        if family and given:
+            rendered.append(f"{family}, {given}")
+        elif family or given:
+            rendered.append(family or given)
+    return " and ".join(rendered)
+
+
+def _csl_records_to_bibtex(records: list[dict[str, Any]]) -> str:
+    """Serialize Manubot CSL-JSON into deterministic, dependency-free BibTeX."""
+    type_map = {
+        "article-journal": "article",
+        "paper-conference": "inproceedings",
+        "chapter": "incollection",
+        "book": "book",
+        "report": "techreport",
+        "thesis": "phdthesis",
+    }
+    used_keys: set[str] = set()
+    entries: list[str] = []
+    for index, record in enumerate(records, start=1):
+        if not isinstance(record, dict):
+            raise ValueError("Manubot CSL output contains a non-object record")
+        entry_type = type_map.get(_first_text(record.get("type")).lower(), "misc")
+        raw_key = (
+            _first_text(record.get("id"))
+            or _first_text(record.get("DOI"))
+            or f"reference-{index}"
+        )
+        base_key = re.sub(r"[^A-Za-z0-9:._-]+", "-", raw_key).strip("-") or f"reference-{index}"
+        key = base_key
+        suffix = 2
+        while key in used_keys:
+            key = f"{base_key}-{suffix}"
+            suffix += 1
+        used_keys.add(key)
+
+        container_field = "booktitle" if entry_type in {"inproceedings", "incollection"} else "journal"
+        fields: list[tuple[str, Any]] = [
+            ("author", _csl_authors(record)),
+            ("title", record.get("title")),
+            (container_field, record.get("container-title")),
+            ("year", _csl_year(record)),
+            ("volume", record.get("volume")),
+            ("number", record.get("issue")),
+            ("pages", record.get("page")),
+            ("publisher", record.get("publisher")),
+            ("doi", record.get("DOI")),
+            ("url", record.get("URL")),
+        ]
+        rendered_fields = [
+            f"  {name} = {{{_bibtex_escape(value)}}}"
+            for name, value in fields
+            if _first_text(value)
+        ]
+        entries.append(
+            f"@{entry_type}{{{key},\n" + ",\n".join(rendered_fields) + "\n}"
+        )
+    return "\n\n".join(entries) + ("\n" if entries else "")
+
+
+def _parse_manubot_csl(stdout: str) -> list[dict[str, Any]]:
+    parsed = json.loads(stdout)
+    records = parsed if isinstance(parsed, list) else [parsed]
+    if not records or not all(isinstance(record, dict) for record in records):
+        raise ValueError("Manubot returned no valid CSL records")
+    return records
+
+
 def manubot_available() -> bool:
     """Check whether manubot CLI is installed and callable."""
     return shutil.which("manubot") is not None
@@ -228,8 +348,8 @@ def stage_a_csl_to_bibtex(csl_json_path: Path, out_bib: Path) -> int:
     """Phase 1 Stage A: CSL-JSON to BibTeX via manubot subprocess.
 
     Reads CSL-JSON from csl_json_path, extracts resolvable identifiers
-    (DOI, PMID, PMC, arXiv URL), and feeds them through `manubot cite
-    --format=bibtex` to produce a BibTeX file at out_bib.
+    (DOI, PMID, PMC, arXiv URL), resolves them through `manubot cite
+    --format=csljson`, and serializes the returned CSL records to BibTeX.
 
     Returns 0 on success, non-zero on failure.
     """
@@ -275,11 +395,21 @@ def stage_a_csl_to_bibtex(csl_json_path: Path, out_bib: Path) -> int:
 
     try:
         result = subprocess.run(
-            ["manubot", "cite", "--format=bibtex", *identifiers],
-            capture_output=True, text=True, check=False,
+            ["manubot", "cite", "--format=csljson", *identifiers],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_MANUBOT_TIMEOUT_SECONDS,
         )
     except FileNotFoundError:
         print("validate_references: manubot disappeared between checks.", file=sys.stderr)
+        return 1
+    except subprocess.TimeoutExpired:
+        print(
+            f"validate_references: manubot timed out after "
+            f"{_MANUBOT_TIMEOUT_SECONDS}s.",
+            file=sys.stderr,
+        )
         return 1
 
     if result.returncode != 0:
@@ -287,7 +417,13 @@ def stage_a_csl_to_bibtex(csl_json_path: Path, out_bib: Path) -> int:
         print(result.stderr, file=sys.stderr)
         return 1
 
-    out_bib.write_text(result.stdout, encoding="utf-8")
+    try:
+        records = _parse_manubot_csl(result.stdout)
+        bib_text = _csl_records_to_bibtex(records)
+    except (json.JSONDecodeError, ValueError) as exc:
+        print(f"validate_references: invalid Manubot CSL output: {exc}", file=sys.stderr)
+        return 1
+    out_bib.write_text(bib_text, encoding="utf-8")
     return 0
 
 
@@ -328,7 +464,7 @@ def stage_b_resolve(doi: str) -> tuple[dict[str, Any] | None, list[str], list[st
 
 
 def stage_c_cross_source(sources_confirmed: list[str]) -> Status:
-    """Map confirmation count to status without reconciling metadata fields.
+    """Map the count of metadata-qualified confirmations to a status.
 
     2 or more sources concur -> VERIFIED.
     1 source -> LOW_CONFIDENCE (blocking; not cross-verified).
@@ -339,6 +475,61 @@ def stage_c_cross_source(sources_confirmed: list[str]) -> Status:
     if len(sources_confirmed) == 1:
         return Status.LOW_CONFIDENCE
     return Status.UNVERIFIED
+
+
+def _normalize_metadata_text(value: Any) -> str:
+    text = unicodedata.normalize("NFKD", _first_text(value)).casefold()
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    return " ".join(re.findall(r"[a-z0-9]+", text))
+
+
+def _title_similarity(left: Any, right: Any) -> tuple[float, float]:
+    left_norm = _normalize_metadata_text(left)
+    right_norm = _normalize_metadata_text(right)
+    if not left_norm or not right_norm:
+        return 0.0, 0.0
+    sequence = SequenceMatcher(None, left_norm, right_norm).ratio()
+    left_tokens = set(left_norm.split())
+    right_tokens = set(right_norm.split())
+    union = left_tokens | right_tokens
+    jaccard = len(left_tokens & right_tokens) / len(union) if union else 0.0
+    return sequence, jaccard
+
+
+def _author_families(value: Any) -> set[str]:
+    families: set[str] = set()
+    for author in value or []:
+        if isinstance(author, dict):
+            name = author.get("family") or author.get("literal")
+        else:
+            name = author
+        normalized = _normalize_metadata_text(name)
+        if normalized:
+            families.add(normalized.split()[-1])
+    return families
+
+
+def _qualify_title_hit(
+    requested_title: str,
+    requested_authors: list[str],
+    hit: dict[str, Any],
+) -> tuple[bool, str]:
+    sequence, jaccard = _title_similarity(requested_title, hit.get("title"))
+    if sequence < 0.90 and jaccard < 0.85:
+        return False, f"title_mismatch:{sequence:.2f}:{jaccard:.2f}"
+    expected_authors = _author_families(requested_authors)
+    if expected_authors:
+        hit_authors = _author_families(hit.get("author"))
+        if not hit_authors:
+            return False, "author_metadata_missing"
+        if not (expected_authors & hit_authors):
+            return False, "author_mismatch"
+    return True, "matched"
+
+
+def _title_hits_consistent(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    sequence, jaccard = _title_similarity(left.get("title"), right.get("title"))
+    return sequence >= 0.90 or jaccard >= 0.85
 
 
 # ---- Stage D: Retraction check -------------------------------------------
@@ -436,7 +627,8 @@ def stage_f_compile_bibliography(
 ) -> tuple[int, list[str]]:
     """Stage F: produce a polished refs.bib from VERIFIED CSL-JSON records.
 
-    Chain: manubot generates BibTeX -> bibtex-tidy applies hygiene rules ->
+    Chain: manubot generates CSL-JSON -> local deterministic BibTeX serializer
+    -> bibtex-tidy applies hygiene rules ->
     betterbib (optional) cross-source field sync.
 
     bibtex-tidy and betterbib are graceful degradations: if absent, that
@@ -464,8 +656,11 @@ def stage_f_compile_bibliography(
 
     try:
         result = subprocess.run(
-            ["manubot", "cite", "--format=bibtex", *identifiers],
-            capture_output=True, text=True, check=False, timeout=120,
+            ["manubot", "cite", "--format=csljson", *identifiers],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_MANUBOT_TIMEOUT_SECONDS,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
         notes.append(f"stage_f_manubot_subprocess_error:{exc}")
@@ -475,7 +670,13 @@ def stage_f_compile_bibliography(
         notes.append(f"stage_f_manubot_exit_{result.returncode}")
         return 1, notes
 
-    bib_text = result.stdout
+    try:
+        manubot_records = _parse_manubot_csl(result.stdout)
+        bib_text = _csl_records_to_bibtex(manubot_records)
+    except (json.JSONDecodeError, ValueError) as exc:
+        notes.append(f"stage_f_manubot_invalid_csl:{exc}")
+        return 1, notes
+    notes.append("stage_f_manubot_csljson_converted")
 
     if apply_bibtex_tidy and _bibtex_tidy_available():
         try:
@@ -601,6 +802,7 @@ def validate_reference(
     csl: dict[str, Any] | None = None
     sources_tried: list[str] = []
     sources_confirmed: list[str] = []
+    title_hits: list[dict[str, Any]] = []
 
     if not doi and not title:
         stage_trace["A_extraction"] = _stage_record(
@@ -646,9 +848,25 @@ def validate_reference(
                 except TypeError:
                     hits = fn(title)
                 if hits:
+                    hit = hits[0]
+                    if not isinstance(hit, dict):
+                        notes.append(f"stage_b_{name}_rejected:non_object_hit")
+                        continue
+                    qualifies, reason = _qualify_title_hit(
+                        title,
+                        authors or [],
+                        hit,
+                    )
+                    if not qualifies:
+                        notes.append(f"stage_b_{name}_rejected:{reason}")
+                        continue
+                    if title_hits and not _title_hits_consistent(title_hits[0], hit):
+                        notes.append(f"stage_b_{name}_rejected:cross_source_title_mismatch")
+                        continue
+                    title_hits.append(hit)
                     sources_confirmed.append(name)
                     if csl is None:
-                        csl = hits[0]
+                        csl = hit
     except Exception as exc:  # backend adapters have heterogeneous error types
         stage_trace["B_source_resolution"] = _stage_record(
             enabled=True,

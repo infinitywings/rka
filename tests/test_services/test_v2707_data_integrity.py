@@ -13,14 +13,19 @@ Covers the data-integrity fixes from the v2.7.0.6 third-party review:
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
 from rka.models.claim import ClaimCreate, ClaimUpdate
 from rka.models.decision import DecisionCreate, DecisionSupersedeBody
+from rka.models.topic import TopicCreate
 from rka.services.claims import ClaimService
+from rka.services.clusters import ClusterService
 from rka.services.decisions import DecisionService
+from rka.services.notes import NoteService
 from rka.services.reindex import reindex_fts
+from rka.services.topics import TopicService
 
 _PROJECT = "proj_default"
 
@@ -32,6 +37,245 @@ async def _seed_journal(db, jid="jrn_x", content="seed"):
         [jid, _PROJECT, content],
     )
     await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_auto_tag_failure_rolls_back_partial_replacement(db, monkeypatch):
+    """The DELETE and every generated-tag INSERT form one mutation unit."""
+    await _seed_journal(db, "jrn_tags", "taggable source")
+    service = NoteService(db, llm=object(), project_id=_PROJECT)
+
+    async def generated_tags(*_args):
+        return ["first", "second"]
+
+    monkeypatch.setattr(service, "_auto_enrich_tags", generated_tags)
+    real_execute = db.execute
+    tag_inserts = 0
+
+    async def fail_second_insert(sql, params=None):
+        nonlocal tag_inserts
+        if sql.startswith("INSERT OR IGNORE INTO tags"):
+            tag_inserts += 1
+            if tag_inserts == 2:
+                raise RuntimeError("injected second tag failure")
+        return await real_execute(sql, params)
+
+    monkeypatch.setattr(db, "execute", fail_second_insert)
+    with pytest.raises(RuntimeError, match="injected second tag failure"):
+        await service.process_auto_tag_job("jrn_tags")
+
+    assert await db.fetchall(
+        "SELECT tag FROM tags WHERE entity_type = 'journal' AND entity_id = ?",
+        ["jrn_tags"],
+    ) == []
+
+
+@pytest.mark.asyncio
+async def test_auto_summary_projection_failure_rolls_back_source_update(
+    db,
+    monkeypatch,
+):
+    """A summary cannot commit without completing its FTS projection step."""
+    await _seed_journal(db, "jrn_summary_atomic", "summarizable source")
+    service = NoteService(db, llm=object(), project_id=_PROJECT)
+
+    async def generated_summary(*_args):
+        return "generated summary"
+
+    async def fail_fts(*_args, **_kwargs):
+        raise RuntimeError("injected summary FTS failure")
+
+    monkeypatch.setattr(service, "_auto_summarize", generated_summary)
+    monkeypatch.setattr(service, "_sync_fts", fail_fts)
+
+    with pytest.raises(RuntimeError, match="injected summary FTS failure"):
+        await service.process_auto_summarize_job("jrn_summary_atomic")
+
+    assert await db.fetchone(
+        "SELECT summary FROM journal WHERE id = ?",
+        ["jrn_summary_atomic"],
+    ) == {"summary": None}
+
+
+@pytest.mark.asyncio
+async def test_claim_extraction_batch_rolls_back_if_later_claim_fails(
+    db,
+    monkeypatch,
+):
+    """One extracted batch is durable only when every claim persists."""
+    await _seed_journal(db, "jrn_claim_batch", "two extractable observations")
+
+    class LLM:
+        async def extract_claims(self, *_args):
+            return SimpleNamespace(
+                claims=[
+                    SimpleNamespace(
+                        claim_type="observation",
+                        content="first extracted claim",
+                        source_offset_start=0,
+                        source_offset_end=5,
+                    ),
+                    SimpleNamespace(
+                        claim_type="observation",
+                        content="second extracted claim",
+                        source_offset_start=6,
+                        source_offset_end=12,
+                    ),
+                ]
+            )
+
+    service = ClaimService(db, llm=LLM(), project_id=_PROJECT)
+    real_create = service.create
+    attempts = 0
+
+    async def fail_second(data):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 2:
+            raise RuntimeError("injected second claim failure")
+        return await real_create(data)
+
+    monkeypatch.setattr(service, "create", fail_second)
+    with pytest.raises(RuntimeError, match="injected second claim failure"):
+        await service.process_extract_claims_job("jrn_claim_batch")
+
+    assert await db.fetchall(
+        "SELECT id FROM claims WHERE source_entry_id = ?",
+        ["jrn_claim_batch"],
+    ) == []
+
+
+@pytest.mark.asyncio
+async def test_claim_verification_review_failure_rolls_back_claim_state(
+    db,
+    monkeypatch,
+):
+    """Failed review persistence cannot leave verification half-applied."""
+    await _seed_journal(db, "jrn_claim_verify", "source assertion")
+
+    class LLM:
+        async def verify_claim(self, *_args):
+            return SimpleNamespace(
+                exists_in_source=False,
+                number_accuracy=True,
+                direction_correct=True,
+                overall_confidence=0.2,
+                issues=["not present"],
+            )
+
+    service = ClaimService(db, llm=LLM(), project_id=_PROJECT)
+    claim = await service.create(
+        ClaimCreate(
+            source_entry_id="jrn_claim_verify",
+            claim_type="observation",
+            content="source assertion",
+            confidence=0.8,
+            verified=True,
+        )
+    )
+
+    async def fail_review(*_args, **_kwargs):
+        raise RuntimeError("injected review persistence failure")
+
+    monkeypatch.setattr(service, "_flag_for_review", fail_review)
+    with pytest.raises(RuntimeError, match="injected review persistence failure"):
+        await service.process_verify_claim_job(claim.id)
+
+    assert await db.fetchone(
+        "SELECT verified, confidence FROM claims WHERE id = ?",
+        [claim.id],
+    ) == {"verified": 1, "confidence": 0.8}
+
+
+@pytest.mark.asyncio
+async def test_topic_delete_failure_restores_assignments(db, monkeypatch):
+    """Assignment deletion cannot commit without deleting its topic."""
+    service = TopicService(db, project_id=_PROJECT)
+    topic = await service.create(TopicCreate(name="atomic-topic"))
+    await service.assign_entity(topic.id, "journal", "jrn_topic_target")
+
+    real_execute = db.execute
+
+    async def fail_topic_delete(sql, params=None):
+        if sql.startswith("DELETE FROM topics"):
+            raise RuntimeError("injected topic delete failure")
+        return await real_execute(sql, params)
+
+    monkeypatch.setattr(db, "execute", fail_topic_delete)
+    with pytest.raises(RuntimeError, match="injected topic delete failure"):
+        await service.delete(topic.id)
+
+    assert await db.fetchone(
+        "SELECT id FROM topics WHERE id = ?",
+        [topic.id],
+    )
+    assert await db.fetchone(
+        "SELECT topic_id FROM entity_topics WHERE topic_id = ?",
+        [topic.id],
+    )
+
+
+@pytest.mark.asyncio
+async def test_cluster_review_failure_rolls_back_synthesis(db, monkeypatch):
+    """Synthesis and its review flag persist together after the LLM returns."""
+    await _seed_journal(db, "jrn_cluster", "cluster source")
+    await db.execute(
+        """INSERT INTO evidence_clusters
+           (id, label, synthesis, confidence, project_id)
+           VALUES ('ecl_atomic', 'Atomic cluster', 'old synthesis',
+                   'emerging', ?)""",
+        [_PROJECT],
+    )
+    await db.execute(
+        """INSERT INTO claims
+           (id, source_entry_id, claim_type, content, project_id)
+           VALUES ('clm_cluster', 'jrn_cluster', 'evidence',
+                   'cluster evidence', ?)""",
+        [_PROJECT],
+    )
+    await db.execute(
+        """INSERT INTO claim_edges
+           (id, source_claim_id, cluster_id, relation, project_id)
+           VALUES ('ced_cluster', 'clm_cluster', 'ecl_atomic',
+                   'member_of', ?)""",
+        [_PROJECT],
+    )
+    await db.commit()
+
+    class Synthesis:
+        synthesis = "new contested synthesis"
+        confidence = "contested"
+        gaps = ["needs review"]
+        contradictions = ["bounded conflict"]
+
+    class LLM:
+        async def synthesize_theme(self, **_kwargs):
+            return Synthesis()
+
+    service = ClusterService(db, llm=LLM(), project_id=_PROJECT)
+    real_execute = db.execute
+
+    async def fail_review_insert(sql, params=None):
+        if "INSERT OR IGNORE INTO review_queue" in sql:
+            raise RuntimeError("injected cluster review failure")
+        return await real_execute(sql, params)
+
+    monkeypatch.setattr(db, "execute", fail_review_insert)
+    with pytest.raises(RuntimeError, match="injected cluster review failure"):
+        await service.process_theme_synthesize_job("ecl_atomic")
+
+    cluster = await db.fetchone(
+        "SELECT synthesis, confidence FROM evidence_clusters WHERE id = ?",
+        ["ecl_atomic"],
+    )
+    assert cluster == {
+        "synthesis": "old synthesis",
+        "confidence": "emerging",
+    }
+    assert await db.fetchall(
+        "SELECT id FROM review_queue WHERE item_id = ?",
+        ["ecl_atomic"],
+    ) == []
 
 
 # ---------------------------------------------------------------------------

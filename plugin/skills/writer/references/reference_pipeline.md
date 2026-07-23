@@ -19,15 +19,19 @@ Outputs:
 - A working set of candidate references in CSL-JSON form.
 - Each candidate carries `source_origin` (RKA-resident `lit_`, free-text parse, or direct identifier).
 
-Current status: **implemented** for CSL-JSON/direct identifiers and manubot conversion. Free-text anystyle parsing remains an optional external preprocessing path.
+Current status: **implemented** for CSL-JSON/direct identifiers. For
+identifier-backed records, Stage A calls `manubot cite --format=csljson`, parses
+the returned CSL-JSON, and converts it with the local deterministic BibTeX
+serializer. Manubot does not provide a `bibtex` output format. Free-text
+anystyle parsing remains an optional external preprocessing path.
 
 ## Stage B: Identifier resolution
 
 Current provider calls:
 
-1. **DOI input:** Crossref, OpenAlex, and Semantic Scholar are queried so Stage C can count independent provider hits.
-2. **Title-only input:** Crossref, OpenAlex, Semantic Scholar, and arXiv are searched.
-3. **manubot:** used by Stage A's standalone identifier-to-BibTeX path and by Stage F compilation; it is not counted as a Stage C provider hit.
+1. **DOI input:** Crossref, OpenAlex, and Semantic Scholar are queried so Stage C can count independent provider hits for the same identifier.
+2. **Title-only input:** Crossref, OpenAlex, Semantic Scholar, and arXiv are searched; raw search hits are not confirmations until they pass the metadata checks below.
+3. **manubot:** used by Stages A and F to resolve identifiers to CSL-JSON; local code serializes that CSL-JSON to BibTeX. Manubot is not counted as a Stage C provider hit.
 
 Never query Google Scholar directly. Direct scraping is forbidden per `dec_01KS0AXXASJ5GXV7M0SS39Y066` and anti-pattern 8 in SKILL.md.
 
@@ -35,17 +39,26 @@ Current status: **implemented** through the installed `rka-writer-tools` backend
 
 ## Stage C: Cross-source existence validation
 
-A reference is `VERIFIED` at Stage C only when at least two independent providers return a hit. The current deterministic gate counts provider hits; it does not reconcile title, author, year, or venue fields. Detailed cross-provider field reconciliation remains a PI-visible follow-up and must not be inferred from `VERIFIED` alone.
+A reference is `VERIFIED` at Stage C only when at least two independent,
+metadata-qualified providers confirm it. DOI-based validation counts providers
+that resolve the same DOI. For title-only validation, each hit must match the
+normalized requested title (SequenceMatcher ratio at least 0.90 or token
+Jaccard at least 0.85); when input authors are supplied, at least one normalized
+author surname must overlap. Qualifying title hits must also be mutually
+consistent under the same title thresholds. Rejected or inconsistent hits are
+recorded in the stage notes and do not count.
 
 Statuses set by Stage C:
 
-- `VERIFIED`: at least two independent providers return a hit.
-- `LOW_CONFIDENCE`: exactly one provider returns a hit; this is blocking.
-- `UNVERIFIED`: no provider returns a hit; advance to Stage G niche-citation rescue.
+- `VERIFIED`: at least two independent qualifying, mutually consistent providers confirm.
+- `LOW_CONFIDENCE`: exactly one qualifying provider confirms; this is blocking.
+- `UNVERIFIED`: no qualifying provider confirms; advance to Stage G niche-citation rescue.
 
 `FIELD_ERROR` is not a metadata-disagreement verdict in the current implementation. It records malformed input or a provider/stage failure that prevents a trustworthy conclusion.
 
-Current status: **implemented** for source-count confirmation.
+Current status: **implemented** for DOI confirmation and metadata-qualified,
+mutually consistent title-only confirmation. This is not full reconciliation
+of year, venue, pagination, or every author.
 
 ## Stage D: Retraction check
 
@@ -79,9 +92,10 @@ Current status: **implemented when authors are supplied and author checking is r
 
 Once all references are `VERIFIED`, compile `refs.bib`:
 
-1. manubot generates BibTeX entries from CSL-JSON.
-2. bibtex-tidy (Node CLI, MIT) applies hygiene: `--curly --numeric --sort=key --duplicates=key,doi --escape --tidy-comments --remove-empty-fields --enclosing-braces=title`.
-3. Optional: betterbib (GPL-3.0) cross-source field sync via subprocess. betterbib is **never vendored** due to its GPL license; only subprocess invocation is permitted.
+1. manubot resolves DOI/arXiv identifiers with `cite --format=csljson`.
+2. the local deterministic serializer converts the returned CSL-JSON to BibTeX.
+3. bibtex-tidy (Node CLI, MIT) applies hygiene: `--curly --numeric --sort=key --duplicates=key,doi --escape --tidy-comments --remove-empty-fields --enclosing-braces=title`.
+4. Optional: betterbib (GPL-3.0) cross-source field sync via subprocess. betterbib is **never vendored** due to its GPL license; only subprocess invocation is permitted.
 
 Current status: **implemented** for entries whose preceding validation verdict permits compilation.
 

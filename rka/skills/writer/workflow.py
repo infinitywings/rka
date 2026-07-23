@@ -274,7 +274,11 @@ def _copy_and_substitute(template: Path, stage: Path, replacements: Mapping[str,
         except UnicodeDecodeError:
             shutil.copy2(source, destination)
             continue
-        for sentinel, value in replacements.items():
+        for sentinel, value in sorted(
+            replacements.items(),
+            key=lambda item: len(item[0]),
+            reverse=True,
+        ):
             text = text.replace(sentinel, value)
         destination.write_text(text, encoding="utf-8")
 

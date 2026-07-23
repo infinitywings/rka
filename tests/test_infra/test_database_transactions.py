@@ -409,3 +409,46 @@ async def test_concurrent_migration_runners_apply_file_once(
     finally:
         await first.close()
         await second.close()
+
+
+@pytest.mark.asyncio
+async def test_migration_retries_past_connection_busy_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+    (migrations / "001_wait.sql").write_text(
+        "CREATE TABLE migration_waited (id INTEGER PRIMARY KEY);\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        Database, "_migrations_directory", staticmethod(lambda: migrations)
+    )
+    monkeypatch.setenv("RKA_MIGRATION_LOCK_TIMEOUT_MS", "1000")
+
+    db_path = str(tmp_path / "migration-wait.db")
+    lock_holder = Database(db_path)
+    migrator = Database(db_path)
+    await lock_holder.connect()
+    await migrator.connect()
+    try:
+        # Force each SQLite lock attempt to fail quickly so the migration-level
+        # retry loop, rather than the connection-wide timeout, is exercised.
+        await migrator.conn.execute("PRAGMA busy_timeout = 20")
+        await lock_holder.conn.execute("BEGIN IMMEDIATE")
+
+        task = asyncio.create_task(migrator.run_migrations())
+        await asyncio.sleep(0.1)
+        assert not task.done()
+        await lock_holder.conn.rollback()
+
+        assert await task == 1
+        assert await migrator.fetchone(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'migration_waited'"
+        ) == {"1": 1}
+    finally:
+        if lock_holder.conn.in_transaction:
+            await lock_holder.conn.rollback()
+        await lock_holder.close()
+        await migrator.close()
