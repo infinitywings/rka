@@ -36,7 +36,7 @@ mcl_ manuscript claims + PI ratification
         v
 mun_ units, argument spine, and results trace
         |
-        | evidence-first drafting and post-hoc citation validation
+        | evidence-grounded, claim-centered drafting and citation validation
         v
 manuscript prose
 ```
@@ -99,6 +99,10 @@ discovery only when:
 An LLM-created synthesis is not sufficient until the Brain reviews it. An
 `ecl_` is a discovery and synthesis layer, not terminal empirical evidence.
 The supporting `clm_` and their terminal sources remain the provenance base.
+"Resolved counterevidence" means an explicit, provenance-preserving
+disposition: repair the evidence gap, narrow or withdraw the affected claim,
+or assign proportionate public treatment. It never means deleting, relabeling,
+or privately dismissing an adverse result that remains material.
 
 Use:
 
@@ -150,6 +154,22 @@ when counterevidence remains unresolved, or when prohibited wording is empty.
 The PI ratifies the exact wording through an active `paper_writing` decision.
 A decision licenses wording and scope; it does not supply empirical evidence.
 
+### Internal completeness and public selection
+
+RKA and the contribution contract retain the complete positive, qualifying,
+contradicting, and speculative record. Public prose is a selective projection,
+not a dump of that record. Classify every risk or boundary through
+[`persuasive_framing.md`](persuasive_framing.md):
+
+- M1 and M2 receive visible, proportionate public treatment because omission
+  would distort a claim or its scope;
+- M3 belongs in methods, an appendix, an artifact, or reproducibility material;
+- M4 and S remain in the internal planning and review record unless the venue
+  requires disclosure.
+
+Selection changes placement, not evidence. It never authorizes cherry-picking,
+suppression of a claim-relevant mixed result, or deletion of provenance.
+
 ## 5. Argument spine and unit plan
 
 Build the argument at claim-sized granularity:
@@ -175,7 +195,7 @@ merely a list of section headings. The deterministic
 
 - which introduction promise each result tests;
 - which discussion statement resolves each research question;
-- where limitations bound the interpretation.
+- where material or venue-required boundaries constrain interpretation.
 
 ## 6. Results-to-claim trace
 
@@ -200,13 +220,18 @@ authoritative.
 Draft one unit at a time:
 
 1. Resolve the unit, ratified claim version, positive support, qualifiers,
-   counterevidence, and prohibited wording from RKA.
-2. Read the evidence before drafting.
-3. Draft the smallest prose block that performs the unit's communicative job.
-4. Stay within the allowed interpretation.
-5. Attach citations in a separate pass and validate them.
-6. Update unit status through a revision-guarded aggregate change.
-7. Synchronize projections and re-run readiness.
+   counterevidence, prohibited wording, and publication-boundary
+   classifications from RKA and the private planning record.
+2. Extract the evidence facts, conditions, and material boundaries before
+   drafting.
+3. Draft the smallest claim-centered, strength-first prose block that performs
+   the unit's communicative job and makes the strongest evidence easy to find.
+4. Stay within the allowed interpretation and apply M1-M4/S public placement.
+5. Run the quick-reader checks in `persuasive_framing.md`; revise the framing
+   or escalate an unresolved materiality decision.
+6. Attach citations in a separate pass and validate them.
+7. Update unit status through a revision-guarded aggregate change.
+8. Synchronize projections and re-run readiness.
 
 Generated projections aid review but never supply evidence. A local prose edit
 does not change RKA semantics.

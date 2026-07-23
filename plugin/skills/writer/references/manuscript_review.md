@@ -18,7 +18,11 @@ self-preference biases).
 Run this before the Final Layout checkpoint, or on demand. Point to exact
 sections, pages, paragraphs, figures, and tables throughout. Where a claim
 needs support, name the RKA entity (`lit_`, `jrn_`, `dec_`, `clm_`) or the kind
-of source needed; do not invent one.
+of source needed; do not invent one. `.planning/REVIEW.md` is a private
+authoring artifact, not manuscript source text. Apply
+[`persuasive_framing.md`](persuasive_framing.md) when deciding which internal
+risks need public treatment. Order the review as: strengths and existing
+defenses, mandatory integrity repairs, then optional polish.
 
 ## 0. Source, venue, and evidence discipline
 
@@ -28,11 +32,15 @@ Before commenting, state your assumptions:
   is known), and paper type (systems, security, AI, HCI, NLP, empirical, theory).
 - The strongest evidence in the manuscript.
 - The weakest or most fragile evidence in the manuscript.
+- The M1-M4 or S public-treatment class for each weakness, counterexample, or
+  reviewer concern.
 
 Strict evidence rule: a claim is not safe because it sounds plausible. Check
 whether the manuscript itself supports it through an experiment, a citation, a
 formal argument, or explicit limitation text. If it is unsupported, ask for
-evidence or suggest softer wording.
+evidence or suggest narrower wording. Keep the complete risk inventory in the
+private review; require public disclosure only when the issue is material to a
+claim or mandated by the venue.
 
 ## 1. Overall assessment and top reviewer-facing risks
 
@@ -44,8 +52,9 @@ evidence or suggest softer wording.
 - Is the strongest evidence placed where a reviewer will see it?
 - What are the top 3 to 5 reviewer-facing risks?
 
-Be direct. If something is strong, say why. If something invites reviewer
-skepticism, name it.
+Start with what is strong and how the evidence supports it. For each risk, name
+the current defense, its materiality class, and the least disruptive public
+treatment that keeps the paper accurate.
 
 ## 2. Claim-calibration table
 
@@ -65,8 +74,8 @@ mechanically: it is WARN-only and marks `priority="high"` when a governing
 `% provenance:` comment resolves to weak-confidence evidence. Fold its
 `overclaim_report.json` into this table rather than re-scanning by eye.
 
-The goal is not to weaken the paper. It is to make the claims precise,
-defensible, and reviewer-proof.
+The goal is not blanket weakening. Preserve the strongest defensible claim and
+make its scope precise, easy to find, and reviewer-resilient.
 
 ## 3. Abstract review
 
@@ -79,6 +88,8 @@ defensible, and reviewer-proof.
 
 Provide remaining abstract problems and a revised abstract draft that is
 shorter, clearer, and more credible, with a one-line note on why it is better.
+Do not load the abstract with non-material caveats. Do retain any mixed or
+negative result that materially changes the headline claim.
 
 ## 4. Introduction review
 
@@ -97,7 +108,10 @@ contribution list.
 - Are background, threat model, design, implementation, evaluation, discussion,
   related work, and limitations cleanly separated (design not tangled with
   evaluation configuration)?
-- Do limitations appear early enough?
+- Do material or venue-required boundaries appear where a quick reader needs
+  them?
+- Does a generic limitations catalog interrupt the contribution story even
+  though the details could be placed more precisely?
 - Is the evaluation easy to follow, and does the paper need a clearer roadmap?
 
 Provide a proposed section outline and specific movement suggestions (for
@@ -114,8 +128,10 @@ example, "move this table to the appendix" or "move this limitation earlier").
 - Are outcome categories separated from defense mechanisms?
 - Are statistical claims presented without overstating independence, and are
   repeated trials treated appropriately?
-- Are the limitations of each benchmark stated, and are positive results that
-  should read as preliminary framed that way?
+- Are benchmark boundaries classified correctly: M1/M2 in claim-adjacent
+  prose, M3 in methods or reproducibility material, and M4/S in the private
+  review unless required?
+- Are positive results that should read as preliminary framed that way?
 
 Look for arithmetic errors, confusing denominators, and ambiguous terms (trial,
 scenario, attack evaluation, task success, safe tool call, blocked, bypass).
@@ -129,10 +145,12 @@ numerical-consistency checklist to run before submission.
 For each important figure or table: is the caption clear and does it explain the
 denominator; is it readable in two-column format; does it support the main
 argument; is it duplicative; does it overstate the result; is a mixed or
-negative result hidden in a dense table? This complements (does not duplicate)
+negative result that materially changes a claim hidden in a dense table? This
+complements (does not duplicate)
 `layout_audit.py`, which handles the mechanical layout gates (page limit,
 undefined refs and cites, overfull boxes). Provide better titles and captions,
-visual-simplification suggestions, and move-to-appendix candidates.
+visual-simplification suggestions, and move-to-appendix candidates. Never move
+material contrary evidence merely to reduce its visibility.
 
 ## 8. Terminology normalization
 
@@ -172,21 +190,23 @@ If the venue is unknown, list the venue-dependent checks the PI should make.
 
 ## 12. Reviewer-risk analysis
 
-| Criticism | Why a reviewer raises it | Severity | How to preempt | Suggested wording |
-|---|---|---|---|---|
+| Criticism | Why a reviewer raises it | Severity | Materiality / public treatment | Existing defense | How to preempt | Suggested wording |
+|---|---|---|---|---|---|---|
 
 Include risks such as: the paper overclaims; baselines look weak or unfair; the
 strongest result is not emphasized; the abstract hides a mixed result;
 evaluation numbers are hard to reconcile; the threat model is inconsistent with
 the attack taxonomy; the writing is repetitive; figures or tables are too dense;
-limitations appear too late.
+material or venue-required limitations appear too late.
 
 ## 13. Concrete rewrite package
 
 Provide a focused, submission-ready package: revised title options, a revised
 abstract, a revised key-insight paragraph, a revised contribution list, a
-revised limitation paragraph, a revised evaluation-roadmap paragraph, and a
-revised related-work positioning paragraph.
+revised evaluation-roadmap paragraph, and a revised related-work positioning
+paragraph. Include a limitation paragraph only when an M1/M2 issue or venue
+policy requires one; otherwise provide a concise scope-and-defense paragraph
+at the most relevant location.
 
 ## 14. Systems, security, and AI-agent add-on (venue-conditional)
 
@@ -201,7 +221,7 @@ systems/security work):
   fairly?
 - Are evaluation outcomes separated from defense mechanisms, external-benchmark
   results adapted transparently, and controlled-benchmark results not oversold?
-- Are mixed results acknowledged in the main text?
+- Are claim-relevant mixed results acknowledged in the main text?
 - Do final claims distinguish architecture-level generality from empirical
   results on the tested models?
 - Are confidentiality, integrity, availability, and usability claims each
@@ -213,7 +233,10 @@ Write `.planning/REVIEW.md`: one table per dimension above, each with an explici
 **Gaps** list drawn from the mechanical inputs (`verify_provenance.py`,
 `verify_citations.py`, `ai_tic_report.json`, `overclaim_report.json`,
 `layout_audit.py`) and RKA evidence (confidence levels, `contradicts` edges).
-No numeric score. No accept/reject verdict.
+No numeric score. No accept/reject verdict. Keep it private by default and do
+not auto-export its raw weakness inventory into the manuscript. Cross-check
+that every current M1/M2 row names its public manuscript location. A missing
+location is a mandatory integrity repair, not optional polish.
 
 ## Fast pass
 
@@ -228,3 +251,8 @@ output, abbreviated.
 - DON'T treat this review as a gate; only the mechanical gates block.
 - DON'T assert a review claim without pointing at the manuscript location or the
   RKA entity that supports it.
+- DON'T copy the private risk register into public prose.
+- DON'T hide an M1/M2 issue, claim-relevant mixed result, or required
+  limitation.
+- DON'T weaken a defensible claim with generic caveats that add no material
+  boundary.
