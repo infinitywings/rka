@@ -34,6 +34,10 @@ PLUGIN_SKILLS = REPO_ROOT / "plugin" / "skills"
 _SKIP_NAMES = {".DS_Store", "__pycache__"}
 # Files that exist only on the packaged side by design.
 _PACKAGED_ONLY = {"SKILL.md"}  # top-level role index used by the MCP prompts
+# The agentic branch ships one Claude Code plugin skill backed by the
+# orchestrator MCP rather than the core RKA package.  Keep this allowlist exact
+# so any other plugin/package drift still fails loudly.
+_PLUGIN_ONLY = {"orchestrator-pi/SKILL.md"}
 
 
 def _is_artifact(rel: Path) -> bool:
@@ -63,7 +67,7 @@ def test_plugin_skills_match_packaged_skills() -> None:
     plugin = _tree(PLUGIN_SKILLS)
 
     only_packaged = sorted(set(packaged) - set(plugin))
-    only_plugin = sorted(set(plugin) - set(packaged))
+    only_plugin = sorted(set(plugin) - set(packaged) - _PLUGIN_ONLY)
     drifted = sorted(
         rel for rel in set(packaged) & set(plugin) if packaged[rel] != plugin[rel]
     )
