@@ -143,7 +143,13 @@ name = "rka-orchestrator"
 # escalation_router), sentinel short-circuit preserved at the top.
 # NODE_NAMES 18→19. +12 tests (test_mission_redraft.py); 3 lock-tests
 # updated. Full orchestrator suite: 1340 passed.
-version = "0.6.13"
+# 0.6.13 → 0.6.14: Opus 4.8 lifecycle-eval fixes plus a scientifically
+# isolated Arm-B baseline. The plain-Claude arm now requires a fresh workspace,
+# exposes exactly Bash/Read/Write under strict empty MCP/settings/skills/plugin
+# configuration plus sandbox/hooks, masks inherited billing/research secrets,
+# and uses an arm-neutral capability contract that leaves RKA traceability to
+# the provenance axis.
+version = "0.6.14"
 description = "RKA + LangGraph orchestrator (Phase A → Phase-X² polish; agentic branch)"
 readme = "README.md"
 requires-python = ">=3.11"

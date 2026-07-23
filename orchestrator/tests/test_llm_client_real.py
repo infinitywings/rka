@@ -16,7 +16,6 @@ CLI subprocess.
 from __future__ import annotations
 
 import os
-from typing import AsyncIterator
 from unittest.mock import patch
 
 import pytest
@@ -24,7 +23,6 @@ import pytest
 from orchestrator.llm_client import (
     AuthRoutingReport,
     READ_TOOLS,
-    SDKClient,
     WRITE_TOOLS,
     _AUTH_PATH_CREDENTIALS_JSON,
     _AUTH_PATH_ENV_API_KEY,
@@ -33,10 +31,14 @@ from orchestrator.llm_client import (
     _AUTH_PATH_OAUTH_TOKEN,
     _BUILTIN_FILESYSTEM_TOOLS,
     _MCP_SERVER_NAME,
+    _PLAIN_CLAUDE_TOOLS,
     _RealSDKClient,
+    _plain_eval_env,
+    _plain_eval_tool_hook,
     _prefixed_tools,
     _scrubbed_env,
     _verify_claude_max_routing,
+    make_plain_sdk,
     make_sdk,
 )
 
@@ -115,6 +117,69 @@ def test_complete_returns_non_empty_string_against_mock():
     assert result == "Hello, world!"
 
 
+def test_plain_sdk_exposes_only_filesystem_tools_and_skips_mcp(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+):
+    """The arm-B baseline must not discover host MCPs, settings, or skills."""
+    captured = {}
+
+    def _fake_query(*, prompt, options=None, transport=None):
+        captured["prompt"] = prompt
+        captured["options"] = options
+        return _async_iter_messages([_fake_assistant_message("done")])
+
+    def _mcp_discovery_must_not_run(*args, **kwargs):
+        raise AssertionError("plain SDK attempted MCP discovery")
+
+    monkeypatch.setattr(
+        "orchestrator.llm_client._build_mcp_servers_config",
+        _mcp_discovery_must_not_run,
+    )
+    monkeypatch.setattr(
+        "orchestrator.llm_client._find_rka_mcp_binary",
+        _mcp_discovery_must_not_run,
+    )
+    with patch("claude_agent_sdk.query", side_effect=_fake_query):
+        client = _RealSDKClient(
+            env={},
+            workspace_path=str(tmp_path),
+            model="claude-test",
+            plain_tools_only=True,
+        )
+        assert client.complete("baseline", system="plain") == "done"
+
+    options = captured["options"]
+    assert captured["prompt"] == "baseline"
+    assert options.tools == list(_PLAIN_CLAUDE_TOOLS)
+    assert options.allowed_tools == list(_PLAIN_CLAUDE_TOOLS)
+    assert options.mcp_servers == {}
+    assert options.strict_mcp_config is True
+    assert options.setting_sources == []
+    assert options.skills == []
+    assert options.plugins == []
+    assert options.permission_mode == "dontAsk"
+    assert str(options.cwd) == str(tmp_path)
+    assert options.sandbox["enabled"] is True
+    assert options.sandbox["allowUnsandboxedCommands"] is False
+    assert options.sandbox["network"]["deniedDomains"] == ["*"]
+    assert len(options.hooks["PreToolUse"]) == 1
+
+
+def test_make_plain_sdk_sets_isolation_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        "orchestrator.llm_client._verify_claude_max_routing",
+        lambda: AuthRoutingReport(auth_path=_AUTH_PATH_KEYCHAIN),
+    )
+    client = make_plain_sdk(workspace_path=str(tmp_path), model="claude-test")
+    assert isinstance(client, _RealSDKClient)
+    assert client._plain_tools_only is True
+    assert client._workspace_path == str(tmp_path)
+
+
 # ---------------------------------------------------------------------------
 # T1 (c) — auth-priority test: ANTHROPIC_API_KEY consumed when set;
 #          otherwise falls back to credentials.json mock.
@@ -174,13 +239,17 @@ class TestAuthPathPriority:
         assert report.warning is None
 
     def test_warning_emitted_when_api_key_set_alongside_max_path(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
     ):
         """The PI directive's load-bearing case: ANTHROPIC_API_KEY IS set
         AND a Claude Max path IS available. Verify the helper reports
         the Max path AND emits a warning naming the scrubbed env var."""
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-fake-test-value-not-real")
         monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+        monkeypatch.setattr(
+            "orchestrator.llm_client.Path",
+            lambda *a, **kw: tmp_path / "nope" / ".credentials.json",
+        )
         monkeypatch.setattr(
             "orchestrator.llm_client._keychain_has_claude_code_credentials",
             lambda: True,
@@ -255,17 +324,16 @@ def test_complete_surfaces_clean_exception_on_sdk_failure():
 # ---------------------------------------------------------------------------
 
 
-def test_scrubbed_env_removes_anthropic_api_key(monkeypatch: pytest.MonkeyPatch):
+def test_scrubbed_env_masks_anthropic_api_key(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-fake-test-value-not-real")
     monkeypatch.setenv("PATH", "/usr/bin")  # any innocuous var to verify it survives
     scrubbed = _scrubbed_env()
-    assert "ANTHROPIC_API_KEY" not in scrubbed
+    assert scrubbed["ANTHROPIC_API_KEY"] == ""
     assert scrubbed.get("PATH") == "/usr/bin"
 
 
-def test_complete_passes_scrubbed_env_to_sdk():
-    """The SDK options.env must NOT contain ANTHROPIC_API_KEY when the
-    caller's process env has it set. Locks the scrub-and-pass contract."""
+def test_complete_passes_masking_override_to_sdk(monkeypatch: pytest.MonkeyPatch):
+    """The SDK child-env merge must receive an explicit empty API-key override."""
 
     captured_envs: list[dict[str, str]] = []
 
@@ -273,15 +341,73 @@ def test_complete_passes_scrubbed_env_to_sdk():
         captured_envs.append(dict(options.env) if options else {})
         return _async_iter_messages([_fake_assistant_message("ok")])
 
-    scrubbed_env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
-    scrubbed_env["PATH"] = "/usr/bin"  # ensure non-billing var survives
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-fake-test-value-not-real")
+    monkeypatch.setenv("PATH", "/usr/bin")
     with patch("claude_agent_sdk.query", side_effect=_capturing_query):
-        client = _RealSDKClient(env=scrubbed_env)
+        client = _RealSDKClient(env=_scrubbed_env())
         client.complete("smoke", max_tokens=128, system=None)
 
     assert len(captured_envs) == 1
-    assert "ANTHROPIC_API_KEY" not in captured_envs[0]
+    # claude-agent-sdk composes {**os.environ, **options.env}; the empty
+    # options value therefore masks, rather than merely omits, the parent key.
+    child_env = {**os.environ, **captured_envs[0]}
+    assert child_env["ANTHROPIC_API_KEY"] == ""
     assert captured_envs[0].get("PATH") == "/usr/bin"
+
+
+def test_plain_eval_env_hides_rka_path_and_research_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+):
+    exposed = tmp_path / "exposed"
+    exposed.mkdir()
+    rka = exposed / "rka"
+    rka.write_text("#!/bin/sh\nexit 0\n")
+    rka.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{exposed}{os.pathsep}/usr/bin")
+    monkeypatch.setenv("RKA_URL", "http://localhost:9712")
+    monkeypatch.setenv("SERPAPI_KEY", "not-real")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-needed-for-auth")
+
+    env = _plain_eval_env()
+    assert env["PATH"] == "/usr/bin"
+    assert env["RKA_URL"] == ""
+    assert env["SERPAPI_KEY"] == ""
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth-needed-for-auth"
+
+
+@pytest.mark.asyncio
+async def test_plain_eval_hook_denies_escape_rka_and_network(tmp_path):
+    hook = _plain_eval_tool_hook(str(tmp_path))
+    inside = tmp_path / "analysis.py"
+    outside = tmp_path.parent / "outside.txt"
+
+    assert await hook({
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(inside), "content": "pass\n"},
+    }) == {}
+    denied_read = await hook({
+        "tool_name": "Read",
+        "tool_input": {"file_path": str(outside)},
+    })
+    assert denied_read["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    for command in (
+        "rka status",
+        "curl http://localhost:9712/api/health",
+        "python ../steal.py",
+        "printenv",
+    ):
+        denied = await hook({
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+        })
+        assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    assert await hook({
+        "tool_name": "Bash",
+        "tool_input": {"command": "python analysis.py"},
+    }) == {}
 
 
 # ---------------------------------------------------------------------------
@@ -417,7 +543,7 @@ def test_t2_refactor_preserves_anthropic_api_key_scrub(
     """Phase 2 T2 auth thesis regression check (load-bearing across phases):
     even after the T2 refactor adds new option fields (mcp_servers,
     strict_mcp_config, permission_mode, disallowed_tools), ANTHROPIC_API_KEY
-    must still be absent from the subprocess env handed to the SDK.
+    must still be masked in the subprocess env handed to the SDK.
 
     This is the test that would have caught a regression in the Phase 2.5
     fold + Phase 2.7 refactor stack independently."""
@@ -429,17 +555,15 @@ def test_t2_refactor_preserves_anthropic_api_key_scrub(
     )
 
     capturing_query, captured = _capture_one_options()
-    scrubbed_env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    scrubbed_env = dict(os.environ)
+    scrubbed_env["ANTHROPIC_API_KEY"] = ""
     scrubbed_env["PATH"] = "/usr/bin"
     with patch("claude_agent_sdk.query", side_effect=capturing_query):
         client = _RealSDKClient(env=scrubbed_env)
         client.complete("smoke", max_tokens=128, system=None)
 
     opts = captured[0]
-    assert "ANTHROPIC_API_KEY" not in opts.env, (
-        "Phase 2 T2 auth thesis regression — ANTHROPIC_API_KEY leaked back "
-        "into ClaudeAgentOptions.env after Phase 2.7 T2 refactor"
-    )
+    assert opts.env["ANTHROPIC_API_KEY"] == ""
     assert opts.env.get("PATH") == "/usr/bin"
 
 

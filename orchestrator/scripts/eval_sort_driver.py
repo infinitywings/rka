@@ -43,9 +43,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import graph
 from orchestrator.llm_client import (
-    SDK_TIMEOUT_BACKBRIEF_S,
-    SDK_TIMEOUT_DEFAULT_S,
-    SDK_TIMEOUT_TOOL_USE_S,
     SDKTimeoutError,
 )
 from orchestrator.mcp_client import make_client
@@ -54,6 +51,7 @@ from orchestrator.eval import graders
 from orchestrator.eval.run_record import RunRecord
 from orchestrator.eval.runbook_sort import build_sort_oracle, mission_spec
 from orchestrator.eval.sort_crossover import (
+    SORT_EXPERIMENT_CAPABILITY_KINDS,
     full_quadrant_design,
     run_sort_experiment,
     sort_crossover_subject,
@@ -164,6 +162,17 @@ def _is_packet_decision(d: dict) -> bool:
     `rka_add_decision` the packet PROPOSES, dispatched by execute_ratified_actions."""
     q = (d.get("question") or "").strip().lower()
     return q.startswith("# brain proposes") or q.startswith("brain proposes")
+
+
+def _capability_kinds_for_run_label(run_label: str) -> tuple[str, ...] | None:
+    """Use an arm-neutral contract for the experiment compared with Arm B."""
+    try:
+        mission_name = run_label.split("-", 1)[-1]
+        if mission_name == "experiment-and-pivot":
+            return SORT_EXPERIMENT_CAPABILITY_KINDS
+        return tuple(mission_spec(mission_name)["expected_artifact_kinds"])
+    except Exception:
+        return None
 
 
 def _extract_final_claim(final: dict, mcp, subject) -> tuple[str, list[dict]]:
@@ -329,11 +338,7 @@ def main(argv: list[str] | None = None) -> int:
         subject_ground_truth_hash=subject.ground_truth_hash(), arm="A",
         wall_clock_s=wall,
     )
-    spec_kinds = None
-    try:
-        spec_kinds = tuple(mission_spec(args.run_label.split("-", 1)[-1])["expected_artifact_kinds"])
-    except Exception:
-        pass
+    spec_kinds = _capability_kinds_for_run_label(args.run_label)
 
     surprise = sort_surprise_signal(run_sort_experiment(full_quadrant_design(), seed=args.seed))
     report = graders.grade_run(

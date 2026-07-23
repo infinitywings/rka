@@ -17,11 +17,16 @@ Usage:
   .venv/bin/python orchestrator/scripts/eval_sort_armB.py \
       --workspace /Volumes/base/projects/sort-crossover-armB \
       --output-dir orchestrator/results/e2e-sort-2026-06-15
+
+The workspace must be new and empty. Reusing a prior run directory is rejected
+so old reports, code, or measurements cannot leak into the baseline.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -31,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator.eval import graders
 from orchestrator.eval.run_record import RunRecord
 from orchestrator.eval.sort_crossover import (
+    SORT_EXPERIMENT_CAPABILITY_KINDS,
     full_quadrant_design,
     run_sort_experiment,
     sort_crossover_subject,
@@ -66,22 +72,71 @@ def _armb_prompt(workspace: str) -> str:
         f"a simple comparison-count figure to {workspace}/armB_figure.txt (ASCII "
         f"is fine) or .png.\n\n"
         "Use Bash to actually run the experiment; ground every number in real output."
-    )
+)
 
 
-def _classify_workspace_artifacts(workspace: str) -> list[dict]:
-    """Map arm B's produced files to grader artifact kinds, so capability is
-    measured on its real deliverables (it has no RKA entities)."""
-    arts: list[dict] = []
+def _require_fresh_workspace(workspace: str) -> None:
+    """Reject non-empty workspaces so prior-run answers cannot leak."""
     ws = Path(workspace)
+    entries = sorted(ws.iterdir()) if ws.exists() else []
+    if entries:
+        preview = ", ".join(p.name for p in entries[:5])
+        more = "..." if len(entries) > 5 else ""
+        raise ValueError(
+            "Arm B requires a new, empty workspace; found "
+            f"{len(entries)} existing entr{'y' if len(entries) == 1 else 'ies'}: "
+            f"{preview}{more}"
+        )
+
+
+def _workspace_snapshot(workspace: str) -> dict[Path, str]:
+    """Return content hashes for visible, regular files in ``workspace``.
+
+    Arm B starts from a fresh workspace. The snapshot still excludes hidden
+    SDK state and lets the grader count only files produced by this run.
+    """
+    ws = Path(workspace)
+    snapshot: dict[Path, str] = {}
     if not ws.exists():
-        return arts
+        return snapshot
     for f in sorted(ws.rglob("*")):
-        if not f.is_file():
+        if not f.is_file() or f.is_symlink():
             continue
+        rel = f.relative_to(ws)
+        if any(part.startswith(".") or part == "__pycache__" for part in rel.parts):
+            continue
+        try:
+            digest = hashlib.sha256()
+            with f.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            snapshot[rel] = digest.hexdigest()
+        except OSError:
+            continue
+    return snapshot
+
+
+def _changed_workspace_files(
+    workspace: str,
+    before: dict[Path, str],
+) -> list[Path]:
+    """Return files created or content-modified since ``before``."""
+    ws = Path(workspace)
+    after = _workspace_snapshot(workspace)
+    return [ws / rel for rel, digest in sorted(after.items()) if before.get(rel) != digest]
+
+
+def _classify_workspace_artifacts(files: list[Path]) -> list[dict]:
+    """Map files produced by this arm-B run to grader artifact kinds."""
+    arts: list[dict] = []
+    for f in files:
         name = f.name.lower()
         suffix = f.suffix.lower()
-        if suffix in (".png", ".svg", ".jpg", ".jpeg") or "figure" in name or "fig" in name:
+        figure_token = re.search(
+            r"(?:^|[^a-z0-9])fig(?:ure)?[0-9]*(?:[^a-z0-9]|$)",
+            f.stem.lower(),
+        )
+        if suffix in (".png", ".svg", ".jpg", ".jpeg") or figure_token:
             kind = "diagram"
         elif suffix in (".md", ".tex", ".pdf") or "report" in name or "manuscript" in name:
             kind = "report"
@@ -95,11 +150,11 @@ def _classify_workspace_artifacts(workspace: str) -> list[dict]:
     return arts
 
 
-def _extract_claim(text: str, workspace: str) -> str:
-    """Pull the 'FINAL CLAIM:' line from the completion or the report file."""
+def _extract_claim(text: str, workspace: str, produced_files: list[Path]) -> str:
+    """Pull ``FINAL CLAIM:`` from the completion or this run's report."""
     sources = [text or ""]
     report = Path(workspace) / "armB_report.md"
-    if report.exists():
+    if report in set(produced_files):
         try:
             sources.append(report.read_text(encoding="utf-8"))
         except OSError:
@@ -114,7 +169,11 @@ def _extract_claim(text: str, workspace: str) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Arm B — plain Claude Code, no RKA")
-    p.add_argument("--workspace", default="/Volumes/base/projects/sort-crossover-armB")
+    p.add_argument(
+        "--workspace",
+        default="/Volumes/base/projects/sort-crossover-armB",
+        help="New, empty workspace dedicated to this single Arm-B run.",
+    )
     p.add_argument("--model", default="claude-opus-4-8")
     p.add_argument("--run-label", default="armB-plain-claude")
     p.add_argument("--output-dir", required=True)
@@ -123,8 +182,10 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
 
     Path(args.workspace).mkdir(parents=True, exist_ok=True)
-    from orchestrator.llm_client import make_sdk
-    sdk = make_sdk(workspace_path=args.workspace, model=args.model)
+    _require_fresh_workspace(args.workspace)
+    before = _workspace_snapshot(args.workspace)
+    from orchestrator.llm_client import make_plain_sdk
+    sdk = make_plain_sdk(workspace_path=args.workspace, model=args.model)
 
     print(f"=== ARM B (plain Claude Code, no RKA) — model={args.model} ===")
     print(f"  workspace={args.workspace}")
@@ -139,8 +200,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  completed in {wall}s; terminal={terminal}; cost(est)={sdk.last_call_cost_usd}")
 
     subject = sort_crossover_subject()
-    claim_text = _extract_claim(out, args.workspace)
-    artifacts = _classify_workspace_artifacts(args.workspace)
+    produced_files = _changed_workspace_files(args.workspace, before)
+    claim_text = _extract_claim(out, args.workspace, produced_files)
+    artifacts = _classify_workspace_artifacts(produced_files)
     print(f"  workspace artifacts: {[(a['kind']) for a in artifacts]}")
     print(f"  FINAL CLAIM (extracted): {claim_text[:240]!r}")
 
@@ -161,6 +223,7 @@ def main(argv: list[str] | None = None) -> int:
     surprise = sort_surprise_signal(run_sort_experiment(full_quadrant_design(), seed=args.seed))
     report = graders.grade_run(
         record, subject=subject, claim_text=claim_text, surprise=surprise,
+        expected_kinds=SORT_EXPERIMENT_CAPABILITY_KINDS,
         budget_usd=args.budget_usd, max_redrafts=4,
     )
 
