@@ -109,6 +109,7 @@ class ResearchMapService(BaseService):
                 "content": c["content"],
                 "confidence": c.get("confidence", 0.5),
                 "verified": bool(c.get("verified", 0)),
+                "evidence_status": c.get("evidence_status", "unassessed"),
                 "stale": bool(c.get("stale", 0)),
                 "source_entry_id": c["source_entry_id"],
                 "source_offset_start": c.get("source_offset_start"),

@@ -1,6 +1,6 @@
 [project]
 name = "rka"
-version = "2.8.1"
+version = "2.9.0"
 description = "Research Knowledge Agent — MCP server + REST API for AI-assisted research orchestration"
 requires-python = ">=3.11"
 dependencies = [
@@ -74,14 +74,18 @@ rka = [
     "skills/*.md",
     "skills/**/*.md",
     "skills/**/*.yaml",
+    "skills/**/*.json",
     "skills/**/*.py",
     "skills/**/*.tex",
     "skills/**/*.bib",
     "skills/**/*.sh",
-    "skills/**/.latexmkrc",
-    "skills/**/.mcp.json",
-    "skills/**/.gitkeep",
     "skills/**/.planning/*.md",
+    "skills/**/.planning/*.yaml",
+    "skills/writer/workspace-template/.planning/*.md",
+    "skills/writer/workspace-template/.planning/*.yaml",
+    "skills/**/.mcp.json",
+    "skills/**/.latexmkrc",
+    "skills/**/.gitkeep",
 ]
 
 [tool.setuptools.exclude-package-data]

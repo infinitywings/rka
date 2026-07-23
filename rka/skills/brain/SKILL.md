@@ -18,13 +18,13 @@ The rka MCP server ships a **discriminated-union dispatch surface**. Five tools 
 
 | Always-on tool | Purpose |
 |---|---|
-| `rka_query(args)` | All 42 read operations (status, context, journal, decisions, missions, literature, research-map, etc.) |
-| `rka_execute(args)` | All 49 write/lifecycle operations (notes, decisions, missions, checkpoints, reports, literature, claims, clusters, hooks, maintenance) |
+| `rka_query(args)` | All 51 read operations (status, context, journal, research map, native manuscripts, writing candidates, reference manifests, change impact, etc.) |
+| `rka_execute(args)` | All 58 write/lifecycle operations (notes, decisions, missions, native manuscripts, reference manifests, checkpoints, claims, hooks, maintenance) |
 | `rka_describe(operation)` | Schema lookup + worked example for any operation; `rka_describe('')` returns the <250-token index |
 | `rka_load_tools(names)` | Escape hatch — brings deferred legacy tools online when you specifically need backwards-compat access |
-| `rka_help(name)` | Returns docs for a legacy `rka_*` tool by its canonical name; escape hatch retained always-on for cockpits that learned the v2.6.3 navigator vocabulary |
+| `rka_help(name)` | Deprecated alias for `rka_describe`; retained always-on for cockpits that learned the v2.6.3 navigator vocabulary |
 
-`args` is a **typed Pydantic model** discriminated by `operation`. There are 91 models in `rka/mcp/operation_args.py`. FastMCP renders them as `inputSchema.oneOf` with per-branch enum constraints + required-field arrays. **The schema layer rejects wrong enum values, missing required fields, and missing provenance BEFORE the call is dispatched** — the historical `confidence='confirmed'` hallucination class is structurally impossible at the inputSchema level.
+`args` is a **typed Pydantic model** discriminated by `operation`. There are 109 models in `rka/mcp/operation_args.py`. FastMCP renders them as `inputSchema.oneOf` with per-branch enum constraints + required-field arrays. **The schema layer rejects wrong enum values, missing required fields, and missing provenance BEFORE the call is dispatched** — the historical `confidence='confirmed'` hallucination class is structurally impossible at the inputSchema level.
 
 ### Worked examples
 
@@ -45,22 +45,25 @@ rka_execute(args={"operation": "record_note", "project_id": "prj_01...",
 # Write: record a decision (provenance enforced — related_journal min_length=1)
 rka_execute(args={"operation": "record_decision", "project_id": "prj_01...",
                   "question": "Adopt MQTT or AMQP for the edge gateway?",
-                  "chosen": "MQTT", "kind": "design_choice", "phase": "design",
+                  "chosen": "MQTT",
                   "rationale": "MQTT wins on packet-loss tolerance per jrn_01...",
-                  "decided_by": "brain",
+                  "decided_by": "brain", "kind": "design_choice",
+                  "phase": "design",
                   "related_journal": ["jrn_01..."],
                   "confidence": "tested"})
 
 # Schema lookup
 rka_describe(operation="record_decision")  # signature + example + enums
-rka_describe(operation="")                 # <250-token index of all 91 ops
+rka_describe(operation="")                 # <250-token index of all 109 ops
 ```
 
 When a workflow below references a legacy tool name like `rka_add_decision`, treat it as a synonym for `rka_execute(args={"operation": "record_decision", ...})`. The mapping is in `rka_describe('')`. The typed-arg surface obviates `rka_load_tools` for normal work; only use it for explicit legacy access (e.g., orchestrator subprocess running with `RKA_LEGACY_TOOLS=1`).
 
 ## Supplementary references (load on demand)
 
-- [`architecture.md`](architecture.md) — three-actor model, 12-type provenance vocabulary, research-map structure, maintenance manifest.
+- [`architecture.md`](architecture.md) — three-actor model, enforced
+  provenance and claim-edge vocabularies, evidence-promotion funnel,
+  research-map structure, and maintenance manifest.
 - [`workflows.md`](workflows.md) — session-start walkthrough, claim extraction, cluster management, freshness, validation gates, literature workflow, evidence assembly, mission decomposition, Research Protocol (Gate 0) template.
 - [`decision_ux.md`](decision_ux.md) — Confirmation Brief template and multi-choice decision UX (strip-then-re-inject ordering).
 - [`examples.md`](examples.md) — worked examples for PI attribution, Confirmation Brief, tags, common anti-patterns.
@@ -164,7 +167,9 @@ rka_execute(args={"operation": "update_note",
 
 Don't leave it for maintenance — better to link at creation time.
 
-Full 12-type entity_links vocabulary (informed_by / justified_by / motivated / produced / derived_from / cites / references / supports / contradicts / builds_on / supersedes / resolved_as) with semantic groups and examples: `architecture.md` § "The 12-Type Provenance Vocabulary".
+The enforced provenance vocabulary (nine active `entity_links` types) and the
+separate five-relation `claim_edges` vocabulary are documented with directions
+and examples in `architecture.md` § "Entity-link and claim-edge vocabularies".
 
 ---
 
@@ -173,10 +178,14 @@ Full 12-type entity_links vocabulary (informed_by / justified_by / motivated / p
 Journal entries get distilled into structured claims during maintenance. Good claims are **atomic** (one fact per claim), **directly quotable** from the source entry, and typed: `hypothesis | evidence | method | result | observation | assumption`.
 
 Confidence ranges:
-- `0.0–0.3` — speculative, needs investigation.
-- `0.3–0.6` — preliminary, first analysis (abstract-level, snippets).
-- `0.6–0.8` — solid evidence, multiple sources.
-- `0.8–1.0` — verified, replicated (full-text grounded with quoted evidence).
+- `0.0–0.3` — weak or ambiguous extraction from the source.
+- `0.3–0.6` — plausible wording from partial context (abstract/snippet).
+- `0.6–0.8` — well grounded in the source record.
+- `0.8–1.0` — explicit full-text grounding with precise offsets/quotation.
+
+This numeric field is extraction confidence, not replication or scientific
+support. `verified` records the categorical grounding review;
+`evidence_status` records the separate scientific assessment.
 
 **Confidence cap without full text**: claims extracted from abstracts or search snippets cap at **0.65**. To exceed that, you need full-text grounding with a direct quote.
 
@@ -246,7 +255,7 @@ Not every task needs all four gates — quick bug fixes need only Gate 1; litera
 
 ## Knowledge Freshness
 
-Knowledge decays. Run `rka_query(args={"operation": "freshness", "project_id": <pinned>})` at session start alongside `rka_query(args={"operation": "pending_maintenance", ...})`. When new evidence contradicts old claims, `rka_execute(args={"operation": "flag_stale", "project_id": <pinned>, "entity_id": "...", "reason": "superseded by new benchmark", "propagate": True})` cascades staleness through dependent clusters and decisions.
+Knowledge decays. Run `rka_query(args={"operation": "freshness", "project_id": <pinned>})` at session start alongside `rka_query(args={"operation": "pending_maintenance", "project_id": <pinned>})`. When new evidence contradicts old claims, `rka_execute(args={"operation": "flag_stale", "project_id": <pinned>, "entity_id": "...", "reason": "superseded by new benchmark", "propagate": True})` cascades staleness through dependent clusters and decisions.
 
 `staleness` (green/yellow/red) is the Brain's editorial overlay. `valid_until` (v2.2, migration 018) is the ground-truth temporal end-of-validity. Different signals — a claim can be temporally valid but editorially yellow (flagged for review).
 
@@ -257,6 +266,14 @@ Procedures for `rka_check_freshness`, `rka_flag_stale`, `rka_detect_contradictio
 ## Research Map Navigation
 
 The three-level hierarchy is RQ → Cluster → Claim. `rka_query(args={"operation": "research_map", "project_id": <pinned>})` is the canonical navigation call. Cluster confidence (`emerging` → `moderate` → `strong` → `contested` → `refuted`) summarizes the state of the evidence, not the Brain's endorsement.
+
+Do not promote noisy journal material directly into a paper argument. Follow
+the Record → Extract → Ground → Assess → Synthesize → Answer → Write funnel
+in `architecture.md` § "Evidence promotion funnel (noise control)." In
+particular, `verified` is source-grounding fidelity only. Set
+`evidence_status` explicitly with `review_claims` after comparing current
+support, qualifiers, and counterevidence; an unassessed claim cannot become
+paper-ready merely because its cluster is strong.
 
 Full navigation command catalogue + advancement heuristics: `workflows.md` § "Research Map Navigation".
 
@@ -290,13 +307,17 @@ A single search call is not a retrieval strategy. Measured on the rka_developmen
 12. **DON'T** create missions without the structured handoff format — INTENT / BACKGROUND / CONSTRAINTS / ASSUMPTIONS / VERIFICATION in the context field.
 13. **DON'T** skip reviewing the Executor's Backbrief — approve their plan before they begin significant work.
 14. **DON'T** ignore escalation triggers from the Executor — they indicate potential misalignment or invalidated assumptions that need immediate attention.
-15. **DON'T** upgrade RKA without exporting first — load the legacy export tool with `rka_load_tools(names=["rka_export"])` and run `rka_export(...)` to verify the pack includes all expected tables (there is no `export` dispatch operation), then `rka_query(args={"operation": "integrity", "project_id": <pinned>})` after import to verify no data was lost.
+15. **DON'T** upgrade RKA without exporting first — use the dashboard export or `GET /api/projects/export` (or explicitly load legacy `rka_export`), inspect the pack, then run `rka_query(args={"operation": "integrity", "project_id": <pinned>})` after import to verify no data was lost.
+16. **DON'T** treat `verified=true`, a high numeric confidence, or a strong
+    cluster as scientific support — only an explicit current
+    `evidence_status` assessment can promote a claim toward a manuscript.
 
 ---
 
 ## Related
 
-- Architecture + 12-type provenance vocabulary + entity taxonomy: [`architecture.md`](architecture.md).
+- Architecture, provenance/claim-edge vocabularies, evidence-promotion funnel,
+  and entity taxonomy: [`architecture.md`](architecture.md).
 - Session-start walkthrough, claim extraction, cluster management, gates, freshness, literature, evidence assembly: [`workflows.md`](workflows.md).
 - Multi-choice decision UX + Confirmation Brief template: [`decision_ux.md`](decision_ux.md).
 - Worked examples for PI attribution, tags, anti-patterns: [`examples.md`](examples.md).

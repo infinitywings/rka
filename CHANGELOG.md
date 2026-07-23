@@ -3,6 +3,67 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [2.9.0] — 2026-07-23 (Native claim spine + provenance-gated Writer)
+
+This release integrates the native manuscript/claim-spine branch with the
+2.8.1 ChatGPT connector and Writer review work from `main`. It adds a durable,
+project-scoped bridge from noisy research records through claims and evidence
+clusters to a ratified paper spine, while keeping drafting subordinate to RKA
+provenance and PI decisions.
+
+### Added
+
+- **Canonical native manuscripts and claim spine.** Migrations 031–039 add
+  project-scoped manuscript aggregates, append-only claim versions,
+  PI-decision ratifications, evidence/unit bindings, checkpoints,
+  verification attestations, authoritative reference membership, semantic
+  change cursors, entity resolution, and asynchronous reference validation.
+- **Native REST and MCP workflow.** Typed manuscript context, readiness,
+  argument-spine, impact, change-feed, validation, checkpoint, ratification,
+  and lifecycle operations expand the dispatch surface to **109 operations**
+  (51 reads + 58 writes).
+- **Writer skill v2.7.0.** RKA-grounded candidate smoothing, PaperSpine-style
+  argument planning, exact claim/version provenance, fail-closed drafting
+  gates, pre-submission review, revision comparison, and publication-quality
+  workflow guidance are available in both packaged and plugin mirrors.
+- **Reference-manifest currency.** Active citation keys bind to same-project
+  literature records and exact immutable validation attestations.
+
+### Fixed
+
+- **Mission task dispatch compatibility.** Typed `create_mission` and
+  `update_mission_status` calls now accept the plain task dictionaries emitted
+  by the v2.7+ dispatch layer while preserving legacy `MissionTask` model
+  support.
+- **Transactional integrity under SQLite autocommit.** Multi-statement
+  recommendation, tag, graph, topic, synthesis, QA, embedding, claim, mission,
+  and manuscript operations now roll back as coherent units; missing or
+  cross-project entities cannot leave phantom audit/event/search state.
+- **Untrusted knowledge-pack imports.** Imported row identifiers are
+  preflighted against live table schemas and safely quoted; unknown columns
+  fail before any project data is written.
+- **Writer scientific-integrity gates.** Title-only reference confirmation now
+  requires normalized title agreement and author overlap when supplied.
+  Manubot uses its supported CSL-JSON output with bounded execution and local
+  deterministic BibTeX serialization. Provenance outages return the
+  unreachable exit code, and acknowledgement tokens are status-specific.
+- **API and audit provenance.** Native manuscript not-found responses are
+  consistently 404, revision conflicts remain 409, and REST mutations record
+  the `web_ui` transport actor while MCP/service calls retain `executor`.
+- **Queue, migration, and validation reliability.** Exhausted expired jobs are
+  terminalized, validation freshness fails closed on same-instant updates,
+  migration lock acquisition has a configurable bounded retry, unreachable
+  immutable-table triggers and a redundant index are removed, and legacy
+  change queries inherit their native 100-row defaults.
+
+### Operational notes
+
+- `change_events` remains an unpruned durable cursor ledger. Retention requires
+  a future cursor-floor plus snapshot/rebase protocol; this release does not
+  silently invalidate lagging clients.
+- Migration number 030 was unused in reachable history. Existing migration
+  numbers remain unchanged because the migration ledger keys by filename.
+
 ## [2.8.1] — 2026-07-06 (Docs & skills alignment + ChatGPT connector)
 
 A consistency release: every skill guide and user-facing doc now teaches the

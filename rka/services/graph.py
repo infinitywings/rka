@@ -175,24 +175,25 @@ class GraphService:
 
         Heuristic ranking is used so this works even without LLM dependencies.
         """
-        candidates = await self._collect_keynode_candidates(project_id=project_id, top_per_kind=top_per_kind)
+        candidates = await self._collect_keynode_candidates(
+            project_id=project_id,
+            top_per_kind=top_per_kind,
+        )
         selected = [c for c in candidates if c["importance"] >= min_importance]
 
-        await self.db.execute(
-            f"DELETE FROM keynodes WHERE blessed = 0 AND {self._project_clause()}",
-            [project_id],
-        )
-
         nodes: list[dict[str, Any]] = []
+        keynode_rows: list[list[Any]] = []
         ref_to_keynode: dict[tuple[str, str], str] = {}
 
         for item in selected:
             keynode_id = generate_id("keynode")
-            node_refs = [{"entity_type": item["entity_type"], "entity_id": item["entity_id"]}]
-            await self.db.execute(
-                """INSERT INTO keynodes
-                   (id, kind, title, summary, produced_by, importance, node_refs, blessed, project_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)""",
+            node_refs = [
+                {
+                    "entity_type": item["entity_type"],
+                    "entity_id": item["entity_id"],
+                }
+            ]
+            keynode_rows.append(
                 [
                     keynode_id,
                     item["kind"],
@@ -202,7 +203,7 @@ class GraphService:
                     item["importance"],
                     json.dumps(node_refs),
                     project_id,
-                ],
+                ]
             )
             ref_to_keynode[(item["entity_type"], item["entity_id"])] = keynode_id
             nodes.append(
@@ -219,16 +220,41 @@ class GraphService:
                 }
             )
 
-        edges = await self._build_condensed_edges(project_id=project_id, ref_to_keynode=ref_to_keynode)
+        edges = await self._build_condensed_edges(
+            project_id=project_id,
+            ref_to_keynode=ref_to_keynode,
+        )
 
         view_id = generate_id("graphview")
         params = {"top_per_kind": top_per_kind, "min_importance": min_importance}
-        await self.db.execute(
-            """INSERT INTO graph_views (id, name, params, nodes, edges, project_id)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            [view_id, "condensed", json.dumps(params), json.dumps(nodes), json.dumps(edges), project_id],
-        )
-        await self.db.commit()
+        async with self.db.transaction():
+            await self.db.execute(
+                f"DELETE FROM keynodes "
+                f"WHERE blessed = 0 AND {self._project_clause()}",
+                [project_id],
+            )
+            for row in keynode_rows:
+                await self.db.execute(
+                    """INSERT INTO keynodes
+                       (id, kind, title, summary, produced_by, importance,
+                        node_refs, blessed, project_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)""",
+                    row,
+                )
+            await self.db.execute(
+                """INSERT INTO graph_views
+                   (id, name, params, nodes, edges, project_id)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                [
+                    view_id,
+                    "condensed",
+                    json.dumps(params),
+                    json.dumps(nodes),
+                    json.dumps(edges),
+                    project_id,
+                ],
+            )
+            await self.db.commit()
 
         return {
             "view": "condensed",

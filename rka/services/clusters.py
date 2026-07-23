@@ -10,10 +10,13 @@ from rka.models.claim import (
     ClaimEdgeCreate,
 )
 from rka.services.base import BaseService, _now
-from rka.services.jobs import JobQueue
 from rka.services.rendering import with_staleness_prefix
 
 logger = logging.getLogger(__name__)
+
+
+class ClusterNotFoundError(ValueError):
+    """Raised when a cluster is unavailable in the active project."""
 
 
 class ClusterService(BaseService):
@@ -23,28 +26,34 @@ class ClusterService(BaseService):
 
     async def create(self, data: EvidenceClusterCreate) -> EvidenceCluster:
         cluster_id = generate_id("cluster")
-        await self.db.execute(
-            """INSERT INTO evidence_clusters
-               (id, research_question_id, label, synthesis, confidence, project_id)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            [
-                cluster_id, data.research_question_id, data.label,
-                data.synthesis, data.confidence, self.project_id,
-            ],
-        )
-        await self.db.commit()
-        await self._sync_fts("cluster", cluster_id, {
-            "label": data.label, "synthesis": data.synthesis or "",
-        })
-        # Mirror the FK as an entity_link so graph traversal sees it. Migration
-        # 023 backfilled the existing rows; this hook keeps parity going forward.
-        if data.research_question_id:
-            await self.add_link(
-                "cluster", cluster_id,
-                "answers",
-                "decision", data.research_question_id,
+        async with self.db.transaction():
+            if data.research_question_id:
+                await self._validate_research_question(
+                    data.research_question_id
+                )
+            await self.db.execute(
+                """INSERT INTO evidence_clusters
+                   (id, research_question_id, label, synthesis, confidence, project_id)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                [
+                    cluster_id, data.research_question_id, data.label,
+                    data.synthesis, data.confidence, self.project_id,
+                ],
             )
-        await self.audit("create", "cluster", cluster_id, "llm")
+            await self.db.commit()
+            await self._sync_fts("cluster", cluster_id, {
+                "label": data.label, "synthesis": data.synthesis or "",
+            })
+            # Mirror the FK as an entity_link so graph traversal sees it.
+            # Migration 023 backfilled the existing rows; this hook keeps parity
+            # going forward.
+            if data.research_question_id:
+                await self.add_link(
+                    "cluster", cluster_id,
+                    "answers",
+                    "decision", data.research_question_id,
+                )
+            await self.audit("create", "cluster", cluster_id, "llm")
         return await self.get(cluster_id)
 
     async def get(self, cluster_id: str) -> EvidenceCluster | None:
@@ -87,23 +96,19 @@ class ClusterService(BaseService):
         return [self._row_to_model(row) for row in rows]
 
     async def update(self, cluster_id: str, data: EvidenceClusterUpdate) -> EvidenceCluster:
+        rq_assignment_supplied = "research_question_id" in data.model_fields_set
         dump = data.model_dump(exclude_none=True)
+        if rq_assignment_supplied:
+            # Explicit null clears both the FK and its graph projection.
+            dump["research_question_id"] = data.research_question_id
         if not dump:
-            return await self.get(cluster_id)
-
-        # Validate research_question_id if provided
-        if "research_question_id" in dump:
-            rq_id = dump["research_question_id"]
-            rq = await self.db.fetchone(
-                "SELECT id, kind FROM decisions WHERE id = ? AND project_id = ?",
-                [rq_id, self.project_id],
-            )
-            if not rq:
-                raise ValueError(f"Decision {rq_id} not found")
-            if rq["kind"] != "research_question":
-                raise ValueError(
-                    f"Decision {rq_id} is not a research_question (kind={rq['kind']})"
+            current = await self.get(cluster_id)
+            if current is None:
+                raise ClusterNotFoundError(
+                    f"cluster {cluster_id!r} not found in project "
+                    f"{self.project_id}"
                 )
+            return current
 
         if "needs_reprocessing" in dump:
             dump["needs_reprocessing"] = int(dump["needs_reprocessing"])
@@ -112,29 +117,82 @@ class ClusterService(BaseService):
         set_clause = ", ".join(f"{k} = ?" for k in dump)
         values = list(dump.values()) + [cluster_id, self.project_id]
 
-        await self.db.execute(
-            f"UPDATE evidence_clusters SET {set_clause} WHERE id = ? AND project_id = ?",
-            values,
-        )
-        await self.db.commit()
-        if "label" in dump or "synthesis" in dump:
-            row = await self.db.fetchone(
-                "SELECT label, synthesis FROM evidence_clusters WHERE id = ? AND project_id = ?",
+        async with self.db.transaction():
+            owned = await self.db.fetchone(
+                """SELECT id FROM evidence_clusters
+                   WHERE id = ? AND project_id = ?""",
                 [cluster_id, self.project_id],
             )
-            if row:
-                await self._sync_fts("cluster", cluster_id, dict(row))
-        # Mirror the FK as an entity_link when the RQ assignment changes.
-        # INSERT OR IGNORE via add_link keeps repeats safe; the existing
-        # link is preserved across re-runs.
-        if dump.get("research_question_id"):
-            await self.add_link(
-                "cluster", cluster_id,
-                "answers",
-                "decision", dump["research_question_id"],
+            if owned is None:
+                raise ClusterNotFoundError(
+                    f"cluster {cluster_id!r} not found in project "
+                    f"{self.project_id}"
+                )
+
+            # Keep validation and mutation in one write snapshot so the parent
+            # decision cannot change between the check and the FK assignment.
+            if dump.get("research_question_id"):
+                await self._validate_research_question(
+                    dump["research_question_id"]
+                )
+
+            cursor = await self.db.execute(
+                f"UPDATE evidence_clusters SET {set_clause} "
+                "WHERE id = ? AND project_id = ?",
+                values,
             )
-        await self.audit("update", "cluster", cluster_id, "system", {"fields": list(dump.keys())})
+            if cursor.rowcount != 1:  # pragma: no cover - protected by write lock
+                raise ClusterNotFoundError(
+                    f"cluster {cluster_id!r} not found in project "
+                    f"{self.project_id}"
+                )
+            await self.db.commit()
+            if "label" in dump or "synthesis" in dump:
+                row = await self.db.fetchone(
+                    "SELECT label, synthesis FROM evidence_clusters "
+                    "WHERE id = ? AND project_id = ?",
+                    [cluster_id, self.project_id],
+                )
+                if row:
+                    await self._sync_fts("cluster", cluster_id, dict(row))
+            # Keep the FK and graph projection exactly aligned, including
+            # replacement and explicit clearing.
+            if rq_assignment_supplied:
+                rq_id = dump["research_question_id"]
+                await self._replace_outgoing_links(
+                    source_type="cluster",
+                    source_id=cluster_id,
+                    link_type="answers",
+                    target_type="decision",
+                    target_ids=[rq_id] if rq_id else [],
+                    project_id=self.project_id,
+                )
+            await self.audit(
+                "update",
+                "cluster",
+                cluster_id,
+                "system",
+                {"fields": list(dump.keys())},
+            )
         return await self.get(cluster_id)
+
+    async def _validate_research_question(self, research_question_id: str) -> None:
+        """Require an RQ decision owned by the active project."""
+        rq = await self.db.fetchone(
+            """SELECT id, kind FROM decisions
+               WHERE id = ? AND project_id = ?""",
+            [research_question_id, self.project_id],
+        )
+        if rq is None:
+            raise ValueError(
+                f"Decision {research_question_id} not found in project "
+                f"{self.project_id}"
+            )
+        if rq["kind"] != "research_question":
+            raise ValueError(
+                f"Decision {research_question_id} is not a research_question "
+                f"(kind={rq['kind']})"
+            )
 
     async def mark_needs_reprocessing(self, cluster_id: str) -> None:
         """Flag a cluster for re-distillation."""
@@ -147,7 +205,7 @@ class ClusterService(BaseService):
     # ── Background job handlers ──────────────────────────────
 
     async def process_cluster_update_job(self, claim_id: str) -> dict:
-        """Assign a verified claim to a cluster and score inter-claim relations."""
+        """Assign a source-grounded claim to a cluster and score relations."""
         claim_row = await self.db.fetchone(
             "SELECT * FROM claims WHERE id = ? AND project_id = ?",
             [claim_id, self.project_id],
@@ -163,7 +221,8 @@ class ClusterService(BaseService):
             [self.project_id],
         )
 
-        # Get nearby claims (most recent verified claims)
+        # Get nearby claims whose extraction is grounded in their source. This
+        # does not imply that their scientific evidence_status is supported.
         nearby = await self.db.fetchall(
             """SELECT id, claim_type, content FROM claims
                WHERE project_id = ? AND verified = 1 AND stale = 0 AND id != ?
@@ -178,52 +237,66 @@ class ClusterService(BaseService):
             nearby_claims=[dict(n) for n in nearby],
         )
 
-        # Create or find cluster
-        if assignment.cluster_id:
-            cluster_id = assignment.cluster_id
-        else:
-            # Create new cluster
-            cluster = await self.create(EvidenceClusterCreate(
-                label=assignment.cluster_label,
-            ))
-            cluster_id = cluster.id
-
-        # Create member_of edge
+        # The external LLM assignment above intentionally completes before the
+        # write transaction. Cluster creation, membership, relation-driven
+        # reprocessing flags, and the final count are one mutation unit.
         from rka.services.claims import ClaimService
-        claim_svc = ClaimService(self.db, llm=self.llm, embeddings=self.embeddings, project_id=self.project_id)
-        await claim_svc.create_edge(ClaimEdgeCreate(
-            source_claim_id=claim_id,
-            cluster_id=cluster_id,
-            relation="member_of",
-        ))
 
-        # Create inter-claim relation edges
-        for rel in assignment.relations:
-            # Validate target exists
-            target = await self.db.fetchone(
-                "SELECT id FROM claims WHERE id = ? AND project_id = ?",
-                [rel.target_claim_id, self.project_id],
-            )
-            if target:
-                await claim_svc.create_edge(ClaimEdgeCreate(
-                    source_claim_id=claim_id,
-                    target_claim_id=rel.target_claim_id,
-                    cluster_id=cluster_id,
-                    relation=rel.relation,
-                    confidence=rel.confidence,
+        claim_svc = ClaimService(
+            self.db,
+            llm=self.llm,
+            embeddings=self.embeddings,
+            project_id=self.project_id,
+        )
+        async with self.db.transaction():
+            # Create or find cluster.
+            if assignment.cluster_id:
+                cluster_id = assignment.cluster_id
+            else:
+                cluster = await self.create(EvidenceClusterCreate(
+                    label=assignment.cluster_label,
                 ))
+                cluster_id = cluster.id
 
-        # Update cluster claim count
-        count_row = await self.db.fetchone(
-            "SELECT COUNT(*) as cnt FROM claim_edges WHERE cluster_id = ? AND relation = 'member_of'",
-            [cluster_id],
-        )
-        claim_count = count_row["cnt"] if count_row else 0
-        await self.db.execute(
-            "UPDATE evidence_clusters SET claim_count = ?, updated_at = ? WHERE id = ?",
-            [claim_count, _now(), cluster_id],
-        )
-        await self.db.commit()
+            # Create member_of edge.
+            await claim_svc.create_edge(ClaimEdgeCreate(
+                source_claim_id=claim_id,
+                cluster_id=cluster_id,
+                relation="member_of",
+            ))
+
+            # Create inter-claim relation edges. Contradiction edges may mark
+            # the affected cluster for reprocessing inside create_edge().
+            for rel in assignment.relations:
+                # Validate target exists.
+                target = await self.db.fetchone(
+                    "SELECT id FROM claims WHERE id = ? AND project_id = ?",
+                    [rel.target_claim_id, self.project_id],
+                )
+                if target:
+                    await claim_svc.create_edge(ClaimEdgeCreate(
+                        source_claim_id=claim_id,
+                        target_claim_id=rel.target_claim_id,
+                        cluster_id=cluster_id,
+                        relation=rel.relation,
+                        confidence=rel.confidence,
+                    ))
+
+            # Recompute the count defensively after all edge writes.
+            count_row = await self.db.fetchone(
+                """SELECT COUNT(*) AS cnt FROM claim_edges
+                   WHERE cluster_id = ? AND relation = 'member_of'
+                     AND project_id = ?""",
+                [cluster_id, self.project_id],
+            )
+            claim_count = count_row["cnt"] if count_row else 0
+            await self.db.execute(
+                """UPDATE evidence_clusters
+                   SET claim_count = ?, updated_at = ?
+                   WHERE id = ? AND project_id = ?""",
+                [claim_count, _now(), cluster_id, self.project_id],
+            )
+            await self.db.commit()
 
         # Note: theme synthesis and contradiction checks are now Brain tasks,
         # not automated LLM jobs. Use rka_review_cluster and rka_resolve_contradiction.
@@ -254,42 +327,64 @@ class ClusterService(BaseService):
             claims=[dict(c) for c in claims],
         )
 
-        await self.db.execute(
-            """UPDATE evidence_clusters
-               SET synthesis = ?, confidence = ?, gap_count = ?, needs_reprocessing = 0, updated_at = ?
-               WHERE id = ? AND project_id = ?""",
-            [
-                synthesis.synthesis, synthesis.confidence,
-                len(synthesis.gaps), _now(),
-                cluster_id, self.project_id,
-            ],
+        # The external LLM call above intentionally runs before the write
+        # transaction. Persist the synthesis, its search projection, and any
+        # review flag as one mutation unit.
+        needs_review = len(claims) >= 10 or synthesis.confidence == "contested"
+        review_id = generate_id("review") if needs_review else None
+        flag = (
+            "complex_synthesis_needed"
+            if len(claims) >= 10
+            else "potential_contradiction"
         )
-        await self.db.commit()
-        await self._sync_fts("cluster", cluster_id, {
-            "label": cluster.label, "synthesis": synthesis.synthesis,
-        })
-
-        # Flag for Brain review if complex
-        if len(claims) >= 10 or synthesis.confidence == "contested":
-            review_id = generate_id("review")
-            import json
-            flag = "complex_synthesis_needed" if len(claims) >= 10 else "potential_contradiction"
+        async with self.db.transaction():
             await self.db.execute(
-                """INSERT OR IGNORE INTO review_queue
-                   (id, item_type, item_id, flag, context, priority, project_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                """UPDATE evidence_clusters
+                   SET synthesis = ?, confidence = ?, gap_count = ?,
+                       needs_reprocessing = 0, updated_at = ?
+                   WHERE id = ? AND project_id = ?""",
                 [
-                    review_id, "cluster", cluster_id, flag,
-                    json.dumps({
-                        "claim_count": len(claims),
-                        "confidence": synthesis.confidence,
-                        "gaps": synthesis.gaps,
-                        "contradictions": synthesis.contradictions,
-                    }),
-                    70 if flag == "potential_contradiction" else 90,
+                    synthesis.synthesis,
+                    synthesis.confidence,
+                    len(synthesis.gaps),
+                    _now(),
+                    cluster_id,
                     self.project_id,
                 ],
             )
+            await self._sync_fts(
+                "cluster",
+                cluster_id,
+                {
+                    "label": cluster.label,
+                    "synthesis": synthesis.synthesis,
+                },
+            )
+
+            # Flag for Brain review if complex.
+            if needs_review:
+                import json
+
+                await self.db.execute(
+                    """INSERT OR IGNORE INTO review_queue
+                       (id, item_type, item_id, flag, context, priority,
+                        project_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    [
+                        review_id,
+                        "cluster",
+                        cluster_id,
+                        flag,
+                        json.dumps({
+                            "claim_count": len(claims),
+                            "confidence": synthesis.confidence,
+                            "gaps": synthesis.gaps,
+                            "contradictions": synthesis.contradictions,
+                        }),
+                        70 if flag == "potential_contradiction" else 90,
+                        self.project_id,
+                    ],
+                )
             await self.db.commit()
 
         return {
@@ -357,7 +452,7 @@ class ClusterService(BaseService):
             gap_count=row.get("gap_count", 0),
             needs_reprocessing=bool(row.get("needs_reprocessing", 0)),
             synthesized_by=row.get("synthesized_by", "llm"),
-            project_id=row.get("project_id", "proj_default"),
+            project_id=row["project_id"],
             created_at=row.get("created_at"),
             updated_at=row.get("updated_at"),
         )

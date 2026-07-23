@@ -121,6 +121,7 @@ class JournalEntry(BaseModel):
     """Full journal entry from database."""
 
     id: str
+    project_id: str
     type: str
     content: str
     summary: str | None = None

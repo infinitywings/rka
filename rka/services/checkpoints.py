@@ -11,6 +11,10 @@ from rka.models.checkpoint import (
 from rka.services.base import BaseService, _now
 
 
+class CheckpointNotFoundError(ValueError):
+    """Raised when a checkpoint is absent from the active project scope."""
+
+
 class CheckpointService(BaseService):
     """Manages checkpoints (Executor submits, Brain/PI resolves)."""
 
@@ -22,28 +26,39 @@ class CheckpointService(BaseService):
         if data.options:
             options_json = json.dumps([o.model_dump() for o in data.options])
 
-        await self.db.execute(
-            """INSERT INTO checkpoints
-               (id, mission_id, task_reference, type, description, context,
-                options, recommendation, blocking, project_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            [
-                chk_id, data.mission_id, data.task_reference,
-                data.type, data.description, data.context,
-                options_json, data.recommendation,
-                1 if data.blocking else 0, self.project_id,
-            ],
-        )
-        await self.db.commit()
+        async with self.db.transaction():
+            mission = await self.db.fetchone(
+                "SELECT id FROM missions WHERE id = ? AND project_id = ?",
+                [data.mission_id, self.project_id],
+            )
+            if mission is None:
+                raise ValueError(
+                    f"mission {data.mission_id!r} not found in project "
+                    f"{self.project_id}"
+                )
 
-        await self.emit_event(
-            event_type="checkpoint_created",
-            entity_type="checkpoint",
-            entity_id=chk_id,
-            actor=actor,
-            summary=f"Checkpoint ({data.type}): {data.description[:100]}",
-        )
-        await self.audit("create", "checkpoint", chk_id, actor)
+            await self.db.execute(
+                """INSERT INTO checkpoints
+                   (id, mission_id, task_reference, type, description, context,
+                    options, recommendation, blocking, project_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    chk_id, data.mission_id, data.task_reference,
+                    data.type, data.description, data.context,
+                    options_json, data.recommendation,
+                    1 if data.blocking else 0, self.project_id,
+                ],
+            )
+            await self.db.commit()
+
+            await self.emit_event(
+                event_type="checkpoint_created",
+                entity_type="checkpoint",
+                entity_id=chk_id,
+                actor=actor,
+                summary=f"Checkpoint ({data.type}): {data.description[:100]}",
+            )
+            await self.audit("create", "checkpoint", chk_id, actor)
         return await self.get(chk_id)
 
     async def get(self, chk_id: str) -> Checkpoint | None:
@@ -95,56 +110,91 @@ class CheckpointService(BaseService):
         now = _now()
         linked_decision_id = None
 
-        # Optionally create a linked decision
-        if data.create_decision and decision_service:
-            chk = await self.get(chk_id)
-            if chk:
+        async with self.db.transaction():
+            checkpoint = await self.db.fetchone(
+                """SELECT id, description
+                   FROM checkpoints
+                   WHERE id = ? AND project_id = ?""",
+                [chk_id, self.project_id],
+            )
+            if checkpoint is None:
+                raise CheckpointNotFoundError(
+                    f"checkpoint {chk_id!r} not found in project "
+                    f"{self.project_id}"
+                )
+
+            # Optionally create a linked decision. DecisionService uses the
+            # same managed Database, so its nested transaction becomes a
+            # savepoint owned by this aggregate resolution.
+            if data.create_decision and decision_service:
+                if (
+                    decision_service.db is not self.db
+                    or decision_service.project_id != self.project_id
+                ):
+                    raise ValueError(
+                        "decision_service must share the checkpoint database "
+                        "and project scope"
+                    )
                 from rka.models.decision import DecisionCreate
                 project_row = await self.db.fetchone(
                     "SELECT current_phase FROM project_states WHERE project_id = ?",
                     [self.project_id],
                 )
                 dec_data = DecisionCreate(
-                    question=chk.description,
+                    question=checkpoint["description"],
                     chosen=data.resolution,
                     rationale=data.rationale or "",
                     decided_by=data.resolved_by,
                     phase=(project_row or {}).get("current_phase") or "",
                 )
-                dec = await decision_service.create(dec_data, actor=data.resolved_by)
+                dec = await decision_service.create(
+                    dec_data,
+                    actor=data.resolved_by,
+                )
                 linked_decision_id = dec.id
 
-        await self.db.execute(
-            """UPDATE checkpoints
-               SET resolution = ?, resolved_by = ?, resolution_rationale = ?,
-                   linked_decision_id = ?, status = 'resolved', resolved_at = ?
-               WHERE id = ? AND project_id = ?""",
-            [data.resolution, data.resolved_by, data.rationale,
-             linked_decision_id, now, chk_id, self.project_id],
-        )
-        await self.db.commit()
+            cursor = await self.db.execute(
+                """UPDATE checkpoints
+                   SET resolution = ?, resolved_by = ?, resolution_rationale = ?,
+                       linked_decision_id = ?, status = 'resolved', resolved_at = ?
+                   WHERE id = ? AND project_id = ?""",
+                [data.resolution, data.resolved_by, data.rationale,
+                 linked_decision_id, now, chk_id, self.project_id],
+            )
+            if cursor.rowcount != 1:  # pragma: no cover - protected by write lock
+                raise CheckpointNotFoundError(
+                    f"checkpoint {chk_id!r} not found in project "
+                    f"{self.project_id}"
+                )
+            await self.db.commit()
 
-        resolve_evt = await self.emit_event(
-            event_type="checkpoint_resolved",
-            entity_type="checkpoint",
-            entity_id=chk_id,
-            actor=data.resolved_by,
-            summary=f"Resolved: {data.resolution[:100]}",
-        )
-
-        # If a decision was created, link the causal chain
-        if linked_decision_id:
-            await self.emit_event(
-                event_type="decision_created",
-                entity_type="decision",
-                entity_id=linked_decision_id,
+            resolve_evt = await self.emit_event(
+                event_type="checkpoint_resolved",
+                entity_type="checkpoint",
+                entity_id=chk_id,
                 actor=data.resolved_by,
-                summary="Decision created from checkpoint resolution",
-                caused_by_event=resolve_evt,
-                caused_by_entity=chk_id,
+                summary=f"Resolved: {data.resolution[:100]}",
             )
 
-        await self.audit("update", "checkpoint", chk_id, data.resolved_by, {"action": "resolve"})
+            # If a decision was created, link the causal chain.
+            if linked_decision_id:
+                await self.emit_event(
+                    event_type="decision_created",
+                    entity_type="decision",
+                    entity_id=linked_decision_id,
+                    actor=data.resolved_by,
+                    summary="Decision created from checkpoint resolution",
+                    caused_by_event=resolve_evt,
+                    caused_by_entity=chk_id,
+                )
+
+            await self.audit(
+                "update",
+                "checkpoint",
+                chk_id,
+                data.resolved_by,
+                {"action": "resolve"},
+            )
         return await self.get(chk_id)
 
     def _row_to_model(self, row: dict) -> Checkpoint:

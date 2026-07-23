@@ -18,13 +18,13 @@ The rka MCP server ships a **discriminated-union dispatch surface**. Five tools 
 
 | Always-on tool | Purpose |
 |---|---|
-| `rka_query(args)` | All 42 read operations (mission lookup, status, context, checkpoints, journal, reports, search, etc.) |
-| `rka_execute(args)` | All 49 write/lifecycle operations (notes, checkpoints, reports, mission status updates, document ingest, claim extraction, etc.) |
+| `rka_query(args)` | All 51 read operations (missions, status, context, native manuscripts, writing candidates, reference manifests, change impact, reports, search, etc.) |
+| `rka_execute(args)` | All 58 write/lifecycle operations (notes, native manuscript and reference-manifest updates, checkpoints, reports, mission lifecycle, document ingest, claim extraction, etc.) |
 | `rka_describe(operation)` | Schema lookup + worked example; `rka_describe('')` returns the <250-token index |
 | `rka_load_tools(names)` | Escape hatch — brings deferred legacy tools online when you specifically need backwards-compat access |
-| `rka_help(name)` | Per-tool documentation lookup for legacy `rka_*` tool names (companion to `rka_load_tools`) |
+| `rka_help(name)` | Deprecated alias for `rka_describe` |
 
-`args` is a **typed Pydantic model** discriminated by `operation`. FastMCP renders the 91-model union as `inputSchema.oneOf` with per-branch enum + required-field constraints. The schema layer rejects wrong enum values, missing required fields, and missing provenance BEFORE the call is dispatched.
+`args` is a **typed Pydantic model** discriminated by `operation`. FastMCP renders the 109-model union as `inputSchema.oneOf` with per-branch enum + required-field constraints. The schema layer rejects wrong enum values, missing required fields, and missing provenance BEFORE the call is dispatched.
 
 > **Orchestrator subprocess note.** When this Executor instance is the LangGraph orchestrator's `claude-agent-sdk` subprocess (daemon under `orchestrator/docker-compose.yml`), it runs with `RKA_LEGACY_TOOLS=1`, restoring the v2.7.0a2 always-on surface (the 12-tool legacy baseline + the 8 v2.7.0a2 intent verbs) alongside the always-on dispatch tools (`rka_query` / `rka_execute` / `rka_describe`, which are never deferred); the remaining legacy tools stay `tier='deferred'` and are reachable via `rka_load_tools`. This preserves the parent-side TWO-TAP autonomy contract at `pi_decision_select` (per-tool ratification granularity in `WRITE_TOOLS`). Cockpit Executor sessions (Claude Desktop / Claude Code talking directly to the PI) see the typed dispatch surface described above.
 
@@ -107,6 +107,16 @@ When you receive a mission:
 4. Call `rka_query(args={"operation": "context", "project_id": <pinned>, "query": "<mission objective>"})` for relevant prior knowledge.
 5. If significant work: present a Backbrief (see below). If trivial: just do it.
 
+## Evidence-recording boundary
+
+Record findings with the exact setup, conditions, units, uncertainty, failed
+runs, and anomalies needed for later review. Extraction may create `clm_`
+records, but new claims remain `evidence_status=unassessed`. The Executor does
+not promote its own result to `supported`; the Brain performs that assessment
+against current positive evidence, qualifiers, and counterevidence. Never use
+`verified=true` as shorthand for scientific validity—it records source-grounding
+fidelity only.
+
 ## Backbrief — Confirm Your Plan
 
 For significant missions, BEFORE implementing, present a Backbrief with:
@@ -160,9 +170,9 @@ Detailed examples for each trigger, and the counterpart-Brain context (Gate 1 pl
 
 When the PI points you at a workspace folder (local research files to ingest into RKA), use this three-step workflow:
 
-1. **`rka_query(args={"operation": "workspace_tree", "project_id": <pinned>, "filters": {"folder_path": "..."}})`** — fast overview of the directory structure with file counts per subdirectory. Always start here. Works on any filesystem including slow external drives.
-2. **`rka_query(args={"operation": "workspace_scan", "project_id": <pinned>, "filters": {"folder_path": "<subdirectory>"}})`** — deep-scan a specific subdirectory to classify files by type (markdown, code, PDF, bibtex, data). Do NOT call this on the root if it has thousands of files — pick subdirectories from step 1.
-3. **`rka_execute(args={"operation": "bootstrap_workspace", "project_id": <pinned>, "folder_path": "<absolute subdirectory path>"})`** — ingest the classified files into RKA. Call on the same subdirectory you scanned.
+1. **`rka_query(args={"operation": "workspace_tree", "project_id": <pinned>, "filters": {"folder_path": "/absolute/path"}})`** — fast overview of the directory structure with file counts per subdirectory. Always start here. Works on any filesystem including slow external drives.
+2. **`rka_query(args={"operation": "workspace_scan", "project_id": <pinned>, "filters": {"folder_path": "/absolute/path/subdirectory"}})`** — deep-scan a specific subdirectory to classify files by type (markdown, code, PDF, bibtex, data). Do NOT call this on the root if it has thousands of files — pick subdirectories from step 1.
+3. **`rka_execute(args={"operation": "bootstrap_workspace", "project_id": <pinned>, "folder_path": "/absolute/path/subdirectory"})`** — ingest the classified files into RKA. Call on the same subdirectory you scanned.
 
 Do NOT skip step 1 and call `workspace_scan` directly on a large root folder — external drives (exFAT, network mounts) are pathologically slow for recursive enumeration.
 

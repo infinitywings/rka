@@ -1,15 +1,16 @@
 ---
-description: "Show RKA project status: active project, phase, current focus, open checkpoints, and recent maintenance items."
+description: "Show status and open checkpoints for one explicit RKA project."
+argument-hint: "<project_id>"
 ---
 
-Call `rka_get_status()` to fetch the active project's state. Then call `rka_get_checkpoints(status="open")` to list any unresolved blockers.
+Require a canonical `project_id`. If absent, list projects and ask the user to
+choose one. Then call:
 
-Present the result as a concise dashboard:
-- **Active project** (id + name)
-- **Phase** (current research phase)
-- **Summary** (first 200 chars)
-- **Open checkpoints** (count + one-line previews; or "none" if zero)
+```python
+rka_query(args={"operation": "status", "project_id": "<id>"})
+rka_query(args={"operation": "checkpoints", "project_id": "<id>",
+                "filters": {"status": "open"}})
+```
 
-If the active project is `proj_default` and no project was explicitly chosen this session, surface a warning: the user likely meant to work in a specific project — suggest `rka_list_projects()` and `rka_set_project(...)` to switch.
-
-Do not call any other tools beyond `rka_get_status()` and `rka_get_checkpoints()` for this command. Keep the response under 15 lines.
+Present project id/name, phase, summary, and open checkpoint previews. There is
+no active-project state or environment default; do not call `rka_set_project`.

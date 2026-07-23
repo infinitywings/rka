@@ -6,19 +6,20 @@ implementation of all seven stages (A through G) per design doc Section 9 and
 references/reference_pipeline.md.
 
 Stages:
-  A. CSL-JSON pass-through to BibTeX via manubot (Phase 1; kept).
-  B. Identifier resolution waterfall: Crossref (habanero) -> manubot ->
-     OpenAlex (pyalex) -> Semantic Scholar -> arXiv. Never Google Scholar
-     direct.
-  C. Cross-source existence validation: at least 2 sources must confirm
-     for VERIFIED; 1 source -> LOW_CONFIDENCE; 0 -> UNVERIFIED (advances
-     to Stage G).
-  D. Retraction check: Crossref update-to field + RWDB CSV mirror.
-     OpenAlex is_retracted as tertiary (pipeline issues documented; see
-     Hauschke and Nazarovets 2024 arXiv:2403.13339).
-  E. Author disambiguation: OpenAlex two-step + ORCID.
-     On AUTHOR_MISMATCH or LOW_CONFIDENCE, escalates to SerpAPI
-     google_scholar_profiles (one credit, budget enforced).
+  A. CSL-JSON identifier resolution via manubot, followed by deterministic
+     local BibTeX serialization (Phase 1 compatibility path).
+  B. Provider resolution: DOI lookups query Crossref, OpenAlex, and Semantic
+     Scholar; title searches also query arXiv. Never scrape Google Scholar.
+  C. Cross-source validation: title-only searches count a source only when
+     normalized title metadata and, when supplied, author surnames match.
+     At least 2 mutually consistent sources must confirm for VERIFIED;
+     1 source -> LOW_CONFIDENCE; 0 -> UNVERIFIED (advances to Stage G).
+  D. Retraction check: Crossref update-to metadata. A local RWDB mirror and
+     OpenAlex is_retracted are documented future secondary sources, not
+     current checks.
+  E. Author disambiguation: OpenAlex candidate search with affiliation hints.
+     Unmatched authors conditionally fall back to SerpAPI author search
+     (one credit per lookup, budget enforced).
   F. Bibliography compile: manubot -> bibtex-tidy -> betterbib subprocess.
      bibtex-tidy and betterbib are optional; skipped gracefully if absent.
      betterbib is GPL-3.0 (never vendored; subprocess only).
@@ -27,13 +28,12 @@ Stages:
      PI checkpoint. Miss -> HALLUCINATED with note=budget-exceeded /
      no-serpapi-budget / no-serpapi-installed as applicable.
 
-Output: refs.audit.json with one ReferenceVerdict per input reference plus a
-serpapi credit-budget accounting block. Statuses: VERIFIED / FIELD_ERROR /
+Output: refs.audit.json with one ReferenceVerdict and closed A-G stage trace
+per input reference plus a SerpAPI credit-budget accounting block. Statuses: VERIFIED / FIELD_ERROR /
 UNVERIFIED / RETRACTED / HALLUCINATED / AUTHOR_MISMATCH / LOW_CONFIDENCE.
 
-Compile is blocked on UNVERIFIED or HALLUCINATED references without an
-explicit PI override stored as a dec_ entry (the consuming Writer skill
-enforces; this script returns the audit, not the gate verdict).
+Only VERIFIED references are eligible for bibliography compilation;
+LOW_CONFIDENCE and every other non-VERIFIED status block the CLI gate.
 
 CLI:
     # Stage A only (Phase 1 backwards-compat path; CSL-JSON -> BibTeX via manubot):
@@ -47,9 +47,8 @@ CLI:
     python validate_references.py --check
 
 Exit codes:
-    0: all references reached terminal status (VERIFIED dominant)
-    1: any reference ended UNVERIFIED / HALLUCINATED / RETRACTED /
-       AUTHOR_MISMATCH (caller decides whether to gate on these)
+    0: all references are VERIFIED and bibliography compilation completed
+    1: any reference ended in a non-VERIFIED status
     2: pipeline error (e.g., manubot subprocess failure during Stage A/F)
     3: usage error
 
@@ -61,10 +60,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
+import unicodedata
 from dataclasses import dataclass, field, asdict
+from difflib import SequenceMatcher
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -102,6 +104,88 @@ class Status(str, Enum):
     LOW_CONFIDENCE = "LOW_CONFIDENCE"
 
 
+class StageOutcome(str, Enum):
+    """Closed outcome vocabulary for each audit-trace stage."""
+
+    DISABLED = "disabled"
+    NOT_REACHED = "not_reached"
+    PASSED = "passed"
+    INCONCLUSIVE = "inconclusive"
+    REJECTED = "rejected"
+    UNAVAILABLE = "unavailable"
+    ERROR = "error"
+
+
+STAGE_TRACE_SCHEMA = "rka.reference-validation.stage-trace.v1"
+STAGE_KEYS = (
+    "A_extraction",
+    "B_source_resolution",
+    "C_cross_source_confirmation",
+    "D_retraction",
+    "E_author_disambiguation",
+    "F_bibliography_compile",
+    "G_niche_rescue",
+)
+
+
+def _stage_record(
+    *,
+    enabled: bool,
+    reached: bool = False,
+    completed: bool = False,
+    outcome: StageOutcome | None = None,
+) -> dict[str, bool | str]:
+    """Build one internally consistent stage record.
+
+    ``completed`` means the intended check/action completed, not merely that
+    its Python function returned.  For example, an unavailable backend is
+    reached but not completed.
+    """
+    if not enabled:
+        reached = False
+        completed = False
+        outcome = StageOutcome.DISABLED
+    elif not reached:
+        completed = False
+        outcome = StageOutcome.NOT_REACHED
+    elif completed and outcome in {
+        None,
+        StageOutcome.DISABLED,
+        StageOutcome.NOT_REACHED,
+        StageOutcome.UNAVAILABLE,
+        StageOutcome.ERROR,
+    }:
+        raise ValueError("completed stage requires a terminal outcome")
+    elif not completed and outcome in {StageOutcome.PASSED, StageOutcome.REJECTED}:
+        raise ValueError("incomplete stage cannot pass or reject")
+    elif not completed and outcome is None:
+        outcome = StageOutcome.ERROR
+
+    return {
+        "enabled": enabled,
+        "reached": reached,
+        "completed": completed,
+        "outcome": (outcome or StageOutcome.NOT_REACHED).value,
+    }
+
+
+def _new_stage_trace(
+    *,
+    check_retraction: bool,
+    check_disambiguation: bool,
+) -> dict[str, dict[str, bool | str]]:
+    """Create a complete A-G trace before any stage is reached."""
+    return {
+        "A_extraction": _stage_record(enabled=True),
+        "B_source_resolution": _stage_record(enabled=True),
+        "C_cross_source_confirmation": _stage_record(enabled=True),
+        "D_retraction": _stage_record(enabled=check_retraction),
+        "E_author_disambiguation": _stage_record(enabled=check_disambiguation),
+        "F_bibliography_compile": _stage_record(enabled=True),
+        "G_niche_rescue": _stage_record(enabled=True),
+    }
+
+
 @dataclass
 class ReferenceVerdict:
     """The final verdict for a single input reference."""
@@ -112,6 +196,7 @@ class ReferenceVerdict:
     sources_tried: list[str] = field(default_factory=list)
     sources_confirmed: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    stage_trace: dict[str, dict[str, bool | str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -121,7 +206,7 @@ class AuditReport:
     refs: list[ReferenceVerdict] = field(default_factory=list)
     serpapi_budget: int = 0
     serpapi_credits_used: int = 0
-    pipeline_version: str = "2.0"
+    pipeline_version: str = "2.1"
 
     def has_any_blocking(self) -> bool:
         """Return True if any verdict would block compile without a PI override."""
@@ -131,11 +216,127 @@ class AuditReport:
             Status.RETRACTED,
             Status.AUTHOR_MISMATCH,
             Status.FIELD_ERROR,
+            Status.LOW_CONFIDENCE,
         }
         return any(r.status in blocking for r in self.refs)
 
 
 # ---- Stage A: CSL-JSON to BibTeX via manubot (Phase 1; kept) -------------
+
+
+_MANUBOT_TIMEOUT_SECONDS = 120
+
+
+def _first_text(value: Any) -> str:
+    """Return a normalized scalar string from common CSL field shapes."""
+    if isinstance(value, list):
+        return _first_text(value[0]) if value else ""
+    return str(value or "").strip()
+
+
+def _bibtex_escape(value: Any) -> str:
+    """Escape metadata for a braced BibTeX value."""
+    text = _first_text(value)
+    replacements = {
+        "\\": r"\textbackslash{}",
+        "{": r"\{",
+        "}": r"\}",
+        "&": r"\&",
+        "%": r"\%",
+        "#": r"\#",
+        "_": r"\_",
+    }
+    return "".join(replacements.get(char, char) for char in text)
+
+
+def _csl_year(record: dict[str, Any]) -> str:
+    date_parts = (record.get("issued") or {}).get("date-parts") or []
+    if date_parts and date_parts[0]:
+        return str(date_parts[0][0])
+    return _first_text(record.get("year"))
+
+
+def _csl_authors(record: dict[str, Any]) -> str:
+    rendered: list[str] = []
+    for author in record.get("author") or []:
+        if isinstance(author, str):
+            if author.strip():
+                rendered.append(author.strip())
+            continue
+        if not isinstance(author, dict):
+            continue
+        literal = _first_text(author.get("literal"))
+        if literal:
+            rendered.append(literal)
+            continue
+        family = _first_text(author.get("family"))
+        given = _first_text(author.get("given"))
+        if family and given:
+            rendered.append(f"{family}, {given}")
+        elif family or given:
+            rendered.append(family or given)
+    return " and ".join(rendered)
+
+
+def _csl_records_to_bibtex(records: list[dict[str, Any]]) -> str:
+    """Serialize Manubot CSL-JSON into deterministic, dependency-free BibTeX."""
+    type_map = {
+        "article-journal": "article",
+        "paper-conference": "inproceedings",
+        "chapter": "incollection",
+        "book": "book",
+        "report": "techreport",
+        "thesis": "phdthesis",
+    }
+    used_keys: set[str] = set()
+    entries: list[str] = []
+    for index, record in enumerate(records, start=1):
+        if not isinstance(record, dict):
+            raise ValueError("Manubot CSL output contains a non-object record")
+        entry_type = type_map.get(_first_text(record.get("type")).lower(), "misc")
+        raw_key = (
+            _first_text(record.get("id"))
+            or _first_text(record.get("DOI"))
+            or f"reference-{index}"
+        )
+        base_key = re.sub(r"[^A-Za-z0-9:._-]+", "-", raw_key).strip("-") or f"reference-{index}"
+        key = base_key
+        suffix = 2
+        while key in used_keys:
+            key = f"{base_key}-{suffix}"
+            suffix += 1
+        used_keys.add(key)
+
+        container_field = "booktitle" if entry_type in {"inproceedings", "incollection"} else "journal"
+        fields: list[tuple[str, Any]] = [
+            ("author", _csl_authors(record)),
+            ("title", record.get("title")),
+            (container_field, record.get("container-title")),
+            ("year", _csl_year(record)),
+            ("volume", record.get("volume")),
+            ("number", record.get("issue")),
+            ("pages", record.get("page")),
+            ("publisher", record.get("publisher")),
+            ("doi", record.get("DOI")),
+            ("url", record.get("URL")),
+        ]
+        rendered_fields = [
+            f"  {name} = {{{_bibtex_escape(value)}}}"
+            for name, value in fields
+            if _first_text(value)
+        ]
+        entries.append(
+            f"@{entry_type}{{{key},\n" + ",\n".join(rendered_fields) + "\n}"
+        )
+    return "\n\n".join(entries) + ("\n" if entries else "")
+
+
+def _parse_manubot_csl(stdout: str) -> list[dict[str, Any]]:
+    parsed = json.loads(stdout)
+    records = parsed if isinstance(parsed, list) else [parsed]
+    if not records or not all(isinstance(record, dict) for record in records):
+        raise ValueError("Manubot returned no valid CSL records")
+    return records
 
 
 def manubot_available() -> bool:
@@ -147,8 +348,8 @@ def stage_a_csl_to_bibtex(csl_json_path: Path, out_bib: Path) -> int:
     """Phase 1 Stage A: CSL-JSON to BibTeX via manubot subprocess.
 
     Reads CSL-JSON from csl_json_path, extracts resolvable identifiers
-    (DOI, PMID, PMC, arXiv URL), and feeds them through `manubot cite
-    --format=bibtex` to produce a BibTeX file at out_bib.
+    (DOI, PMID, PMC, arXiv URL), resolves them through `manubot cite
+    --format=csljson`, and serializes the returned CSL records to BibTeX.
 
     Returns 0 on success, non-zero on failure.
     """
@@ -194,11 +395,21 @@ def stage_a_csl_to_bibtex(csl_json_path: Path, out_bib: Path) -> int:
 
     try:
         result = subprocess.run(
-            ["manubot", "cite", "--format=bibtex", *identifiers],
-            capture_output=True, text=True, check=False,
+            ["manubot", "cite", "--format=csljson", *identifiers],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_MANUBOT_TIMEOUT_SECONDS,
         )
     except FileNotFoundError:
         print("validate_references: manubot disappeared between checks.", file=sys.stderr)
+        return 1
+    except subprocess.TimeoutExpired:
+        print(
+            f"validate_references: manubot timed out after "
+            f"{_MANUBOT_TIMEOUT_SECONDS}s.",
+            file=sys.stderr,
+        )
         return 1
 
     if result.returncode != 0:
@@ -206,7 +417,13 @@ def stage_a_csl_to_bibtex(csl_json_path: Path, out_bib: Path) -> int:
         print(result.stderr, file=sys.stderr)
         return 1
 
-    out_bib.write_text(result.stdout, encoding="utf-8")
+    try:
+        records = _parse_manubot_csl(result.stdout)
+        bib_text = _csl_records_to_bibtex(records)
+    except (json.JSONDecodeError, ValueError) as exc:
+        print(f"validate_references: invalid Manubot CSL output: {exc}", file=sys.stderr)
+        return 1
+    out_bib.write_text(bib_text, encoding="utf-8")
     return 0
 
 
@@ -247,10 +464,10 @@ def stage_b_resolve(doi: str) -> tuple[dict[str, Any] | None, list[str], list[st
 
 
 def stage_c_cross_source(sources_confirmed: list[str]) -> Status:
-    """Map confirmation count to status.
+    """Map the count of metadata-qualified confirmations to a status.
 
     2 or more sources concur -> VERIFIED.
-    1 source -> LOW_CONFIDENCE (suggests an existence but not cross-verified).
+    1 source -> LOW_CONFIDENCE (blocking; not cross-verified).
     0 -> UNVERIFIED (advance to Stage G niche-rescue).
     """
     if len(sources_confirmed) >= 2:
@@ -260,15 +477,69 @@ def stage_c_cross_source(sources_confirmed: list[str]) -> Status:
     return Status.UNVERIFIED
 
 
+def _normalize_metadata_text(value: Any) -> str:
+    text = unicodedata.normalize("NFKD", _first_text(value)).casefold()
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    return " ".join(re.findall(r"[a-z0-9]+", text))
+
+
+def _title_similarity(left: Any, right: Any) -> tuple[float, float]:
+    left_norm = _normalize_metadata_text(left)
+    right_norm = _normalize_metadata_text(right)
+    if not left_norm or not right_norm:
+        return 0.0, 0.0
+    sequence = SequenceMatcher(None, left_norm, right_norm).ratio()
+    left_tokens = set(left_norm.split())
+    right_tokens = set(right_norm.split())
+    union = left_tokens | right_tokens
+    jaccard = len(left_tokens & right_tokens) / len(union) if union else 0.0
+    return sequence, jaccard
+
+
+def _author_families(value: Any) -> set[str]:
+    families: set[str] = set()
+    for author in value or []:
+        if isinstance(author, dict):
+            name = author.get("family") or author.get("literal")
+        else:
+            name = author
+        normalized = _normalize_metadata_text(name)
+        if normalized:
+            families.add(normalized.split()[-1])
+    return families
+
+
+def _qualify_title_hit(
+    requested_title: str,
+    requested_authors: list[str],
+    hit: dict[str, Any],
+) -> tuple[bool, str]:
+    sequence, jaccard = _title_similarity(requested_title, hit.get("title"))
+    if sequence < 0.90 and jaccard < 0.85:
+        return False, f"title_mismatch:{sequence:.2f}:{jaccard:.2f}"
+    expected_authors = _author_families(requested_authors)
+    if expected_authors:
+        hit_authors = _author_families(hit.get("author"))
+        if not hit_authors:
+            return False, "author_metadata_missing"
+        if not (expected_authors & hit_authors):
+            return False, "author_mismatch"
+    return True, "matched"
+
+
+def _title_hits_consistent(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    sequence, jaccard = _title_similarity(left.get("title"), right.get("title"))
+    return sequence >= 0.90 or jaccard >= 0.85
+
+
 # ---- Stage D: Retraction check -------------------------------------------
 
 
 def stage_d_retraction(doi: str) -> tuple[bool, list[dict[str, Any]]]:
-    """Retraction check via Crossref update-to + RWDB CSV mirror.
+    """Retraction check via Crossref update-to metadata.
 
-    Returns (is_retracted, raw_updates_list). RWDB CSV is the authoritative
-    secondary check; absent locally, we rely on Crossref update-to only
-    (which feeds RWDB since Crossref's September 2023 acquisition).
+    Returns ``(is_retracted, raw_updates_list)``. No local RWDB mirror or
+    OpenAlex retraction field is consulted by this implementation.
     """
     if not _crossref or not _crossref.is_available():
         return False, []
@@ -356,7 +627,8 @@ def stage_f_compile_bibliography(
 ) -> tuple[int, list[str]]:
     """Stage F: produce a polished refs.bib from VERIFIED CSL-JSON records.
 
-    Chain: manubot generates BibTeX -> bibtex-tidy applies hygiene rules ->
+    Chain: manubot generates CSL-JSON -> local deterministic BibTeX serializer
+    -> bibtex-tidy applies hygiene rules ->
     betterbib (optional) cross-source field sync.
 
     bibtex-tidy and betterbib are graceful degradations: if absent, that
@@ -384,8 +656,11 @@ def stage_f_compile_bibliography(
 
     try:
         result = subprocess.run(
-            ["manubot", "cite", "--format=bibtex", *identifiers],
-            capture_output=True, text=True, check=False, timeout=120,
+            ["manubot", "cite", "--format=csljson", *identifiers],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_MANUBOT_TIMEOUT_SECONDS,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
         notes.append(f"stage_f_manubot_subprocess_error:{exc}")
@@ -395,7 +670,13 @@ def stage_f_compile_bibliography(
         notes.append(f"stage_f_manubot_exit_{result.returncode}")
         return 1, notes
 
-    bib_text = result.stdout
+    try:
+        manubot_records = _parse_manubot_csl(result.stdout)
+        bib_text = _csl_records_to_bibtex(manubot_records)
+    except (json.JSONDecodeError, ValueError) as exc:
+        notes.append(f"stage_f_manubot_invalid_csl:{exc}")
+        return 1, notes
+    notes.append("stage_f_manubot_csljson_converted")
 
     if apply_bibtex_tidy and _bibtex_tidy_available():
         try:
@@ -513,65 +794,249 @@ def validate_reference(
     E (if VERIFIED + check_disambiguation) -> G (if Stage C UNVERIFIED).
     """
     identifier = doi or title or "<unknown>"
+    stage_trace = _new_stage_trace(
+        check_retraction=check_retraction,
+        check_disambiguation=check_disambiguation,
+    )
     notes: list[str] = []
     csl: dict[str, Any] | None = None
     sources_tried: list[str] = []
     sources_confirmed: list[str] = []
+    title_hits: list[dict[str, Any]] = []
 
-    if doi:
-        csl, sources_tried, sources_confirmed = stage_b_resolve(doi)
-    elif title:
-        for name, fn in (
-            ("crossref", _crossref.search_works if _crossref else None),
-            ("openalex", _openalex.search_works if _openalex else None),
-            ("semantic_scholar", _s2.search_papers if _s2 else None),
-            ("arxiv", _arxiv.search_papers if _arxiv else None),
-        ):
-            if fn is None:
-                continue
-            sources_tried.append(name)
-            try:
-                hits = (fn(title, rows=1) if name == "crossref"
-                        else fn(title, max_results=1) if name in ("openalex", "arxiv")
-                        else fn(title, limit=1))
-            except TypeError:
-                hits = fn(title)
-            if hits:
-                sources_confirmed.append(name)
-                if csl is None:
-                    csl = hits[0]
-    else:
-        return ReferenceVerdict(identifier, Status.FIELD_ERROR, notes=["missing_doi_and_title"])
+    if not doi and not title:
+        stage_trace["A_extraction"] = _stage_record(
+            enabled=True,
+            reached=True,
+            completed=True,
+            outcome=StageOutcome.REJECTED,
+        )
+        return ReferenceVerdict(
+            identifier,
+            Status.FIELD_ERROR,
+            notes=["missing_doi_and_title"],
+            stage_trace=stage_trace,
+        )
+
+    stage_trace["A_extraction"] = _stage_record(
+        enabled=True,
+        reached=True,
+        completed=True,
+        outcome=StageOutcome.PASSED,
+    )
+    try:
+        if doi:
+            csl, sources_tried, sources_confirmed = stage_b_resolve(doi)
+        else:
+            for name, fn in (
+                ("crossref", _crossref.search_works if _crossref else None),
+                ("openalex", _openalex.search_works if _openalex else None),
+                ("semantic_scholar", _s2.search_papers if _s2 else None),
+                ("arxiv", _arxiv.search_papers if _arxiv else None),
+            ):
+                if fn is None:
+                    continue
+                sources_tried.append(name)
+                try:
+                    hits = (
+                        fn(title, rows=1)
+                        if name == "crossref"
+                        else fn(title, max_results=1)
+                        if name in ("openalex", "arxiv")
+                        else fn(title, limit=1)
+                    )
+                except TypeError:
+                    hits = fn(title)
+                if hits:
+                    hit = hits[0]
+                    if not isinstance(hit, dict):
+                        notes.append(f"stage_b_{name}_rejected:non_object_hit")
+                        continue
+                    qualifies, reason = _qualify_title_hit(
+                        title,
+                        authors or [],
+                        hit,
+                    )
+                    if not qualifies:
+                        notes.append(f"stage_b_{name}_rejected:{reason}")
+                        continue
+                    if title_hits and not _title_hits_consistent(title_hits[0], hit):
+                        notes.append(f"stage_b_{name}_rejected:cross_source_title_mismatch")
+                        continue
+                    title_hits.append(hit)
+                    sources_confirmed.append(name)
+                    if csl is None:
+                        csl = hit
+    except Exception as exc:  # backend adapters have heterogeneous error types
+        stage_trace["B_source_resolution"] = _stage_record(
+            enabled=True,
+            reached=True,
+            completed=False,
+            outcome=StageOutcome.ERROR,
+        )
+        notes.append(f"stage_b_resolution_error:{type(exc).__name__}")
+        return ReferenceVerdict(
+            identifier=identifier,
+            status=Status.FIELD_ERROR,
+            csl_json=csl,
+            sources_tried=sources_tried,
+            sources_confirmed=sources_confirmed,
+            notes=notes,
+            stage_trace=stage_trace,
+        )
+
+    stage_trace["B_source_resolution"] = _stage_record(
+        enabled=True,
+        reached=True,
+        completed=bool(sources_tried),
+        outcome=(
+            StageOutcome.PASSED
+            if sources_confirmed
+            else StageOutcome.INCONCLUSIVE
+            if sources_tried
+            else StageOutcome.UNAVAILABLE
+        ),
+    )
 
     status = stage_c_cross_source(sources_confirmed)
+    stage_trace["C_cross_source_confirmation"] = _stage_record(
+        enabled=True,
+        reached=True,
+        completed=True,
+        outcome=(
+            StageOutcome.PASSED
+            if status == Status.VERIFIED
+            else StageOutcome.INCONCLUSIVE
+        ),
+    )
 
     if status == Status.UNVERIFIED and budget is not None:
         query = doi or title or ""
         if query:
-            rescue_csl, rescue_notes, _ = stage_g_niche_rescue(query, budget=budget)
-            notes.extend(rescue_notes)
-            if rescue_csl is not None:
-                csl = rescue_csl
-                # Per design Section 9: Stage G hit -> UNVERIFIED with
-                # scholar-only-source (PI checkpoint required).
-                status = Status.UNVERIFIED
+            try:
+                rescue_csl, rescue_notes, _ = stage_g_niche_rescue(query, budget=budget)
+            except Exception as exc:  # preserve an audit even on adapter failure
+                stage_trace["G_niche_rescue"] = _stage_record(
+                    enabled=True,
+                    reached=True,
+                    completed=False,
+                    outcome=StageOutcome.ERROR,
+                )
+                notes.append(f"stage_g_rescue_error:{type(exc).__name__}")
+                status = Status.FIELD_ERROR
             else:
-                status = Status.HALLUCINATED
+                rescue_unavailable = any(
+                    note in {
+                        "no-serpapi-installed",
+                        "no-serpapi-budget",
+                        "budget-exceeded",
+                    }
+                    for note in rescue_notes
+                )
+                stage_trace["G_niche_rescue"] = _stage_record(
+                    enabled=True,
+                    reached=True,
+                    completed=not rescue_unavailable,
+                    outcome=(
+                        StageOutcome.PASSED
+                        if rescue_csl is not None
+                        else StageOutcome.UNAVAILABLE
+                        if rescue_unavailable
+                        else StageOutcome.REJECTED
+                    ),
+                )
+                notes.extend(rescue_notes)
+                if rescue_csl is not None:
+                    csl = rescue_csl
+                    # Per design Section 9: Stage G hit -> UNVERIFIED with
+                    # scholar-only-source (PI checkpoint required).
+                    status = Status.UNVERIFIED
+                else:
+                    status = Status.HALLUCINATED
 
     if status == Status.VERIFIED and check_retraction and doi:
-        is_retracted, _updates = stage_d_retraction(doi)
-        if is_retracted:
-            status = Status.RETRACTED
-            notes.append("retraction_detected_via_crossref_update_to")
+        try:
+            backend_available = bool(_crossref and _crossref.is_available())
+        except Exception as exc:  # backend availability probes can perform setup
+            stage_trace["D_retraction"] = _stage_record(
+                enabled=True,
+                reached=True,
+                completed=False,
+                outcome=StageOutcome.ERROR,
+            )
+            notes.append(f"stage_d_availability_error:{type(exc).__name__}")
+            status = Status.FIELD_ERROR
+        else:
+            if not backend_available:
+                stage_trace["D_retraction"] = _stage_record(
+                    enabled=True,
+                    reached=True,
+                    completed=False,
+                    outcome=StageOutcome.UNAVAILABLE,
+                )
+                notes.append("stage_d_retraction_backend_unavailable")
+                status = Status.FIELD_ERROR
+            else:
+                try:
+                    is_retracted, _updates = stage_d_retraction(doi)
+                except Exception as exc:  # preserve an audit even on adapter failure
+                    stage_trace["D_retraction"] = _stage_record(
+                        enabled=True,
+                        reached=True,
+                        completed=False,
+                        outcome=StageOutcome.ERROR,
+                    )
+                    notes.append(f"stage_d_retraction_error:{type(exc).__name__}")
+                    status = Status.FIELD_ERROR
+                else:
+                    stage_trace["D_retraction"] = _stage_record(
+                        enabled=True,
+                        reached=True,
+                        completed=True,
+                        outcome=(
+                            StageOutcome.REJECTED if is_retracted else StageOutcome.PASSED
+                        ),
+                    )
+                    if is_retracted:
+                        status = Status.RETRACTED
+                        notes.append("retraction_detected_via_crossref_update_to")
 
     if status == Status.VERIFIED and check_disambiguation and authors:
-        author_status, author_notes, _credits = stage_e_disambiguate_authors(
-            authors, affiliation_hints=affiliation_hints, budget=budget,
-            escalate_to_serpapi=False,
-        )
-        notes.extend(author_notes)
-        if author_status != Status.VERIFIED:
-            status = author_status
+        try:
+            author_status, author_notes, _credits = stage_e_disambiguate_authors(
+                authors,
+                affiliation_hints=affiliation_hints,
+                budget=budget,
+                escalate_to_serpapi=True,
+            )
+        except Exception as exc:  # preserve an audit even on adapter failure
+            stage_trace["E_author_disambiguation"] = _stage_record(
+                enabled=True,
+                reached=True,
+                completed=False,
+                outcome=StageOutcome.ERROR,
+            )
+            notes.append(f"stage_e_disambiguation_error:{type(exc).__name__}")
+            status = Status.FIELD_ERROR
+        else:
+            backend_unavailable = "openalex_unavailable" in author_notes
+            stage_trace["E_author_disambiguation"] = _stage_record(
+                enabled=True,
+                reached=True,
+                completed=not backend_unavailable,
+                outcome=(
+                    StageOutcome.UNAVAILABLE
+                    if backend_unavailable
+                    else StageOutcome.PASSED
+                    if author_status == Status.VERIFIED
+                    else StageOutcome.INCONCLUSIVE
+                    if author_status == Status.LOW_CONFIDENCE
+                    else StageOutcome.REJECTED
+                ),
+            )
+            notes.extend(author_notes)
+            if author_status != Status.VERIFIED:
+                status = author_status
 
     return ReferenceVerdict(
         identifier=identifier,
@@ -580,6 +1045,7 @@ def validate_reference(
         sources_tried=sources_tried,
         sources_confirmed=sources_confirmed,
         notes=notes,
+        stage_trace=stage_trace,
     )
 
 
@@ -607,10 +1073,33 @@ def validate_all(
 
     verdicts: list[ReferenceVerdict] = []
     for ref in refs:
+        if not isinstance(ref, dict):
+            trace = _new_stage_trace(
+                check_retraction=check_retraction,
+                check_disambiguation=check_disambiguation,
+            )
+            trace["A_extraction"] = _stage_record(
+                enabled=True,
+                reached=True,
+                completed=True,
+                outcome=StageOutcome.REJECTED,
+            )
+            verdicts.append(ReferenceVerdict(
+                identifier="<unknown>",
+                status=Status.FIELD_ERROR,
+                notes=["reference_input_not_object"],
+                stage_trace=trace,
+            ))
+            continue
+        author_families = [
+            author.get("family")
+            for author in (ref.get("author") or [])
+            if isinstance(author, dict) and author.get("family")
+        ]
         verdict = validate_reference(
             doi=ref.get("DOI"),
             title=ref.get("title"),
-            authors=[a.get("family") for a in (ref.get("author") or []) if a.get("family")],
+            authors=author_families,
             affiliation_hints=ref.get("_affiliation_hints"),
             budget=budget,
             check_retraction=check_retraction,
@@ -629,6 +1118,98 @@ def _verdict_to_jsonable(v: ReferenceVerdict) -> dict[str, Any]:
     out = asdict(v)
     out["status"] = v.status.value
     return out
+
+
+def _has_resolvable_bibliography_id(record: dict[str, Any]) -> bool:
+    """Return whether Stage F can pass this CSL record to manubot."""
+    return bool(
+        record.get("DOI")
+        or (
+            record.get("URL")
+            and "arxiv.org/abs/" in str(record["URL"])
+        )
+    )
+
+
+def _apply_stage_f(
+    report: AuditReport,
+    out_bib: Path,
+) -> tuple[int, dict[str, bool | str]]:
+    """Compile VERIFIED references and attach native per-reference traces.
+
+    Stage F is a batch action, but every reference still receives its own
+    trace.  A VERIFIED record without a manubot-resolvable identifier is
+    explicitly marked incomplete instead of being silently omitted.
+    """
+    verified = [
+        verdict
+        for verdict in report.refs
+        if verdict.status == Status.VERIFIED and verdict.csl_json
+    ]
+    if not verified:
+        return 0, _stage_record(enabled=True)
+
+    resolvable = [
+        verdict
+        for verdict in verified
+        if _has_resolvable_bibliography_id(verdict.csl_json or {})
+    ]
+    unresolved = [verdict for verdict in verified if verdict not in resolvable]
+    for verdict in unresolved:
+        verdict.stage_trace["F_bibliography_compile"] = _stage_record(
+            enabled=True,
+            reached=True,
+            completed=False,
+            outcome=StageOutcome.INCONCLUSIVE,
+        )
+        verdict.notes.append("stage_f_reference_missing_resolvable_id")
+
+    if not resolvable:
+        return 1, _stage_record(
+            enabled=True,
+            reached=True,
+            completed=False,
+            outcome=StageOutcome.INCONCLUSIVE,
+        )
+
+    exit_code, notes = stage_f_compile_bibliography(
+        [verdict.csl_json for verdict in resolvable if verdict.csl_json],
+        out_bib,
+    )
+    unavailable = any(
+        note == "stage_f_skipped_no_manubot"
+        for note in notes
+    )
+    outcome = (
+        StageOutcome.PASSED
+        if exit_code == 0
+        else StageOutcome.UNAVAILABLE
+        if unavailable
+        else StageOutcome.ERROR
+    )
+    completed = exit_code == 0
+    for verdict in resolvable:
+        verdict.stage_trace["F_bibliography_compile"] = _stage_record(
+            enabled=True,
+            reached=True,
+            completed=completed,
+            outcome=outcome,
+        )
+        verdict.notes.extend(notes)
+
+    if unresolved:
+        return 1, _stage_record(
+            enabled=True,
+            reached=True,
+            completed=False,
+            outcome=StageOutcome.INCONCLUSIVE,
+        )
+    return exit_code, _stage_record(
+        enabled=True,
+        reached=True,
+        completed=completed,
+        outcome=outcome,
+    )
 
 
 # ---- CLI -----------------------------------------------------------------
@@ -687,24 +1268,29 @@ def main(argv: list[str] | None = None) -> int:
             check_retraction=not args.no_retraction,
             check_disambiguation=args.check_disambiguation,
         )
+        stage_f_exit, batch_stage_f = _apply_stage_f(report, args.bib_out)
         payload = {
             "pipeline_version": report.pipeline_version,
+            "stage_trace_schema": STAGE_TRACE_SCHEMA,
             "refs": [_verdict_to_jsonable(v) for v in report.refs],
             "serpapi_budget": report.serpapi_budget,
             "serpapi_credits_used": report.serpapi_credits_used,
+            "batch_stage_trace": {
+                "F_bibliography_compile": batch_stage_f,
+            },
             "summary": {
                 "total": len(report.refs),
                 "verified": sum(1 for r in report.refs if r.status == Status.VERIFIED),
                 "blocking": sum(1 for r in report.refs if r.status in {
                     Status.UNVERIFIED, Status.HALLUCINATED, Status.RETRACTED,
                     Status.AUTHOR_MISMATCH, Status.FIELD_ERROR,
+                    Status.LOW_CONFIDENCE,
                 }),
             },
         }
         args.audit_out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        verified_csl = [r.csl_json for r in report.refs if r.status == Status.VERIFIED and r.csl_json]
-        if verified_csl:
-            stage_f_compile_bibliography(verified_csl, args.bib_out)
+        if stage_f_exit != 0:
+            return 2
         return 1 if report.has_any_blocking() else 0
 
     if args.csl_json:

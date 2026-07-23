@@ -168,46 +168,65 @@ class VerificationService(BaseService):
         ):
             roots.extend(r["id"] for r in await self.db.fetchall(sql, [pid]))
 
-        existing = {
-            (r["item_id"], r["flag"])
-            for r in await self.db.fetchall(
-                "SELECT item_id, flag FROM review_queue "
-                "WHERE project_id = ? AND status = 'pending'",
-                [pid],
-            )
-        }
-
-        filed: list[dict] = []
+        # Graph traversal is read-only and potentially expensive. Resolve every
+        # impact set before opening the write transaction, then persist the
+        # resulting review batch and its audit record atomically.
+        impacts: list[tuple[str, dict[str, Any]]] = []
         for root in roots:
             impact = await graph.staleness_impact(root, max_depth=max_depth, project_id=pid)
-            for node in impact["impacted"]:
-                # The successor in a supersede chain is not "resting on" the
-                # stale root; skip nodes that are themselves stale roots too.
-                if node["id"] in roots:
-                    continue
-                key = (node["id"], "stale_dependency")
-                if key in existing:
-                    continue
-                existing.add(key)
-                review_id = generate_id("review")
-                context = json.dumps({
-                    "stale_root": root,
-                    "root_status": impact["root_status"],
-                    "via": node["via"],
-                    "depth": node["depth"],
-                })
-                await self.db.execute(
-                    """INSERT INTO review_queue
-                       (id, item_type, item_id, flag, context, priority, raised_by, project_id)
-                       VALUES (?, ?, ?, 'stale_dependency', ?, 40, 'system', ?)""",
-                    [review_id, node["type"], node["id"], context, pid],
+            impacts.append((root, impact))
+
+        filed: list[dict] = []
+        async with self.db.transaction():
+            existing = {
+                (r["item_id"], r["flag"])
+                for r in await self.db.fetchall(
+                    "SELECT item_id, flag FROM review_queue "
+                    "WHERE project_id = ? AND status = 'pending'",
+                    [pid],
                 )
-                filed.append({"review_id": review_id, "item_id": node["id"],
-                              "stale_root": root})
-        await self.db.commit()
-        if filed:
-            await self.audit("create", "review", filed[0]["review_id"], "system",
-                             {"filed": len(filed), "kind": "stale_dependency"})
+            }
+
+            for root, impact in impacts:
+                for node in impact["impacted"]:
+                    # The successor in a supersede chain is not "resting on"
+                    # the stale root; skip nodes that are themselves stale
+                    # roots too.
+                    if node["id"] in roots:
+                        continue
+                    key = (node["id"], "stale_dependency")
+                    if key in existing:
+                        continue
+                    existing.add(key)
+                    review_id = generate_id("review")
+                    context = json.dumps({
+                        "stale_root": root,
+                        "root_status": impact["root_status"],
+                        "via": node["via"],
+                        "depth": node["depth"],
+                    })
+                    await self.db.execute(
+                        """INSERT INTO review_queue
+                           (id, item_type, item_id, flag, context, priority,
+                            raised_by, project_id)
+                           VALUES (?, ?, ?, 'stale_dependency', ?, 40,
+                                   'system', ?)""",
+                        [review_id, node["type"], node["id"], context, pid],
+                    )
+                    filed.append({
+                        "review_id": review_id,
+                        "item_id": node["id"],
+                        "stale_root": root,
+                    })
+            await self.db.commit()
+            if filed:
+                await self.audit(
+                    "create",
+                    "review",
+                    filed[0]["review_id"],
+                    "system",
+                    {"filed": len(filed), "kind": "stale_dependency"},
+                )
         return {"stale_roots": len(roots), "filed": len(filed), "items": filed}
 
     # ------------------------------------------------------------------

@@ -19,11 +19,19 @@ from pydantic import Field
 import httpx
 
 from rka.models.mission import MissionTask
+from rka.models.reference_validation import (
+    MAX_REFERENCE_AUTHORS,
+    MAX_REFERENCE_DOI_CHARS,
+    MAX_REFERENCE_TITLE_CHARS,
+    ReferenceAuthor,
+    ReferenceValidationInput,
+)
 from rka.mcp._enums import (
     ChkTypeLit,
     ConfidenceLit,
     DecidedByLit,
     DecisionKindLit,
+    EvidenceStatusLit,
     ImportanceLit,
     IngestSourceLit,
     MissionStatusLit,
@@ -66,7 +74,8 @@ ConfidenceLiteral = Annotated[
     ConfidenceLit,
     Field(
         description=(
-            "Confidence level for the journal entry / claim. The Brain "
+            "Confidence level for the journal entry. Claim confidence is a "
+            "numeric 0.0-1.0 field on the claim API. The Brain "
             "LLM commonly hallucinates 'confirmed' — that value is NOT "
             "in the allowed set. Use 'verified' for cross-checked "
             "findings or 'tested' for empirically probed findings."
@@ -255,14 +264,14 @@ Detailed operating guidance is available via MCP prompts:
 Use these prompts to load role-specific guidance at session start.
 
 ## Tool Surface (v2.7.0+) — Typed Dispatch Architecture
-RKA ships 5 always-on tools: 3 dispatch tools that route to 91 typed
+RKA ships 5 always-on tools: 3 dispatch tools that route to 109 typed
 operations, plus 2 escape hatches into the legacy surface.
 
 - **Dispatch (always-on):**
-  - `rka_query(args={"operation": ..., "project_id": ..., ...})` — 42 read
+- `rka_query(args={"operation": ..., "project_id": ..., ...})` — 51 read
     operations (status, context, journal, decisions, missions, literature,
     research map, etc.). Returns structured data.
-  - `rka_execute(args={"operation": ..., "project_id": ..., ...})` — 49
+- `rka_execute(args={"operation": ..., "project_id": ..., ...})` — 58
     write/lifecycle operations (record_note, record_decision, create_mission,
     submit_report, submit_checkpoint, etc.). Returns the created/updated entity.
   - `rka_describe(operation="" | "<op_name>")` — schema lookup. With no
@@ -274,7 +283,7 @@ operations, plus 2 escape hatches into the legacy surface.
     the live tool surface. Useful only for back-compat with old transcripts.
   - `rka_help(name=...)` — deprecated alias for `rka_describe`.
 
-The 91 operations are typed Pydantic models with per-branch enum constraints
+The 109 operations are typed Pydantic models with per-branch enum constraints
 and required-field enforcement at the FastMCP schema layer — illegal values
 (e.g. `confidence="confirmed"`) are rejected at the inputSchema boundary
 before the call goes out.
@@ -668,7 +677,9 @@ def _client(project_id: str | None = None) -> httpx.AsyncClient:
     instantly. Per-call TCP handshake cost on localhost is ~1ms, negligible
     against the multi-second LLM round-trip the calls are part of.
     """
-    headers = {"X-RKA-Project": project_id} if project_id else {}
+    headers = {"X-RKA-Actor": "executor"}
+    if project_id:
+        headers["X-RKA-Project"] = project_id
     return httpx.AsyncClient(
         base_url=API_URL,
         timeout=API_TIMEOUT,
@@ -2374,6 +2385,7 @@ async def rka_get(
                     "type": cl.get("claim_type"),
                     "confidence": cl.get("confidence"),
                     "verified": v,
+                    "evidence_status": cl.get("evidence_status", "unassessed"),
                     "content": content,
                 })
             data["claims"] = claim_summaries
@@ -4394,6 +4406,7 @@ async def rka_get_claims(
     cluster_id: str | None = None,
     claim_type: str | None = None,
     verified: bool | None = None,
+    evidence_status: EvidenceStatusLit | None = None,
     stale: bool | None = None,
     limit: int = 20,
     *,
@@ -4407,7 +4420,8 @@ async def rka_get_claims(
         source_entry_id: Filter by source journal entry ID
         cluster_id: Filter by evidence cluster ID
         claim_type: Filter by type: hypothesis, evidence, method, result, observation, assumption
-        verified: Filter by verification status
+        verified: Filter by source-grounding/extraction-fidelity status
+        evidence_status: Filter by independent scientific evidence assessment
         stale: Filter by stale status (true = needs re-distillation)
         limit: Max results (default 20)
     """
@@ -4420,6 +4434,8 @@ async def rka_get_claims(
         params["claim_type"] = claim_type
     if verified is not None:
         params["verified"] = verified
+    if evidence_status is not None:
+        params["evidence_status"] = evidence_status
     if stale is not None:
         params["stale"] = stale
     async with _client(project_id) as c:
@@ -4431,9 +4447,17 @@ async def rka_get_claims(
     lines = [f"Found {len(claims)} claims:"]
     for cl in claims:
         v = "✓" if cl.get("verified") else "○"
+        evidence = cl.get("evidence_status", "unassessed")
+        contradiction_state = cl.get("contradicted")
+        contradicted = (
+            "yes" if contradiction_state is True
+            else "no" if contradiction_state is False
+            else "unknown"
+        )
         s = " [STALE]" if cl.get("stale") else ""
         lines.append(
-            f"  {v} [{cl['id']}] ({cl['claim_type']}) "
+            f"  [{cl['id']}] ({cl['claim_type']}) "
+            f"grounded={v} evidence={evidence} contradicted={contradicted} "
             f"conf={cl.get('confidence', '?'):.2f}{s}"
         )
         lines.append(f"    {cl['content'][:500]}")
@@ -5080,15 +5104,19 @@ async def rka_review_claims(
     claim_ids: list[str],
     action: str = "approve",
     confidence_override: float | None = None,
+    evidence_status: EvidenceStatusLit | None = None,
     *,
     project_id: str,
 ) -> str:
-    """Brain reviews extracted claims — approve, adjust confidence, or reject.
+    """Brain reviews claim grounding and explicit evidence assessments.
 
     Args:
         claim_ids: List of claim IDs to review
-        action: approve (mark verified), reject (mark stale), adjust (set confidence)
+        action: approve (mark source-grounded), reject (mark stale and ungrounded),
+            adjust (set numeric confidence and/or evidence_status)
         confidence_override: New confidence value (0.0-1.0), used with action=adjust
+        evidence_status: Explicit scientific evidence assessment. This is never
+            inferred from approve/reject and is independent from verified.
     """
     results = []
     async with _client(project_id) as c:
@@ -5097,11 +5125,17 @@ async def rka_review_claims(
                 payload = {"verified": True}
             elif action == "reject":
                 payload = {"stale": True, "verified": False}
-            elif action == "adjust" and confidence_override is not None:
-                payload = {"confidence": confidence_override}
+            elif action == "adjust" and (
+                confidence_override is not None or evidence_status is not None
+            ):
+                payload = {}
             else:
                 results.append(f"{cid}: invalid action")
                 continue
+            if action == "adjust" and confidence_override is not None:
+                payload["confidence"] = confidence_override
+            if evidence_status is not None:
+                payload["evidence_status"] = evidence_status
             r = await c.put(f"/api/claims/{cid}", json=payload)
             if r.is_success:
                 results.append(f"{cid}: {action}d")
@@ -5607,12 +5641,13 @@ async def rka_get_pending_maintenance(*, project_id: str) -> str:
 
 
 # ============================================================
-# Manuscript MCP tools (Phase 3 per dec_01KS2WPKMRVSJ2R0PP74722PEH)
+# Manuscript and entity-resolution MCP adapters
 # ============================================================
-# Bookkeeper-exempt addition: 3 new @mcp.tool() functions wrap the
-# manuscript REST endpoints (rka/api/routes/manuscripts.py) which in
-# turn delegate to ManuscriptService (rka/services/manuscript.py).
-# Phase 1+2 strict bookkeeper invariant returns after Phase 3 merges.
+# These deferred adapters are the REST-wiring layer for both the compatibility
+# ``register_manuscript`` / ``manuscript`` operations and the canonical native
+# manuscript aggregate exposed through the typed rka_query/rka_execute unions.
+# The typed operations remain the preferred surface; these functions keep the
+# dispatch layer thin and preserve the legacy-tool escape hatch.
 
 
 @tool(category="manuscript")
@@ -5624,12 +5659,12 @@ async def rka_register_manuscript(
     *,
     project_id: str,
 ) -> str:
-    """Create a new manuscript manifest (jrn_ entry tagged 'manuscript').
+    """Compatibility-register a Writer manuscript.
 
-    Phase 3 deliverable. Wraps the Option 2 manuscript representation
-    (file + jrn_ manifest) ratified in dec_01KS0BKJ5ZJKJ4R19GYAK3QN9D Q1.
-    The manifest carries the title and abstract verbatim plus a section
-    index; tags=['manuscript', f'venue:{venue}', 'phase:draft'].
+    Creates the legacy ``jrn_`` manifest and its canonical native ``man_``
+    aggregate.  The response includes both IDs and marks the journal ID as
+    deprecated.  New callers should use ``create_manuscript`` through
+    ``rka_execute``.
 
     Args:
         venue: Target venue (CHI, EMNLP, USENIX, IEEE-SP, NeurIPS, OSDI, Nature).
@@ -5651,14 +5686,10 @@ async def rka_register_manuscript(
 
 @tool(category="manuscript")
 async def rka_get_manuscript(manuscript_id: str, *, project_id: str) -> str:
-    """Read a manuscript manifest by id.
+    """Read a manuscript by canonical ``man_`` or compatibility ``jrn_`` id.
 
-    Returns 404 if the journal entry does not exist OR if it is not
-    tagged 'manuscript' (in which case it is a regular journal entry,
-    not a Writer manuscript manifest).
-
-    Args:
-        manuscript_id: The jrn_ id of the manuscript manifest.
+    The route returns canonical-ID and deprecation metadata when a legacy
+    journal alias is used.
     """
     async with _client(project_id) as c:
         r = await c.get(f"/api/manuscripts/{manuscript_id}")
@@ -5667,44 +5698,468 @@ async def rka_get_manuscript(manuscript_id: str, *, project_id: str) -> str:
     return json.dumps(data, indent=2)
 
 
-@tool(category="literature")
-async def rka_validate_reference(
-    manuscript_id: str,
-    doi: str | None = None,
-    title: str | None = None,
-    author: list[dict] | None = None,
+@tool(category="manuscript")
+async def rka_resolve_entities(
+    ids: list[str],
+    include_sources: bool = False,
+    include_edges: bool = False,
     *,
     project_id: str,
 ) -> str:
-    """Validate a single reference via the Writer's Stage B-G pipeline.
+    """Resolve heterogeneous IDs with explicit same-project attestation."""
+    payload = {
+        "ids": ids,
+        "include_sources": include_sources,
+        "include_edges": include_edges,
+    }
+    async with _client(project_id) as c:
+        r = await c.post("/api/entities/resolve", json=payload)
+        _raise_with_detail(r)
+        data = r.json()
+    return json.dumps(data, indent=2)
 
-    Proxies to scripts/validate_references.py (the Phase 2 full pipeline:
-    Crossref to OpenAlex to Semantic Scholar to arXiv; cross-source
-    confirmation; retraction check; author disambiguation; SerpAPI niche
-    rescue). Returns one of 7 verdict statuses: VERIFIED / FIELD_ERROR /
-    UNVERIFIED / RETRACTED / HALLUCINATED / AUTHOR_MISMATCH /
-    LOW_CONFIDENCE.
+
+@tool(category="manuscript")
+async def rka_get_manuscript_context(
+    manuscript_id: str,
+    *,
+    project_id: str,
+) -> str:
+    """Read the complete authoritative native manuscript aggregate."""
+    async with _client(project_id) as c:
+        r = await c.get(f"/api/manuscripts/{manuscript_id}/context")
+        _raise_with_detail(r)
+        data = r.json()
+    return json.dumps(data, indent=2)
+
+
+@tool(category="manuscript")
+async def rka_get_manuscript_reference_manifest(
+    manuscript_id: str,
+    *,
+    project_id: str,
+) -> str:
+    """Read active citation membership and its exact validation state."""
+    async with _client(project_id) as c:
+        r = await c.get(f"/api/manuscripts/{manuscript_id}/references")
+        _raise_with_detail(r)
+        data = r.json()
+    return json.dumps(data, indent=2)
+
+
+@tool(category="manuscript")
+async def rka_get_manuscript_readiness(
+    manuscript_id: str,
+    target_phase: str = "drafting",
+    *,
+    project_id: str,
+) -> str:
+    """Evaluate evidence-linked readiness for a native lifecycle phase."""
+    async with _client(project_id) as c:
+        r = await c.get(
+            f"/api/manuscripts/{manuscript_id}/readiness",
+            params={"target_phase": target_phase},
+        )
+        _raise_with_detail(r)
+        data = r.json()
+    return json.dumps(data, indent=2)
+
+
+@tool(category="manuscript")
+async def rka_get_manuscript_spine(
+    manuscript_id: str,
+    *,
+    project_id: str,
+) -> str:
+    """Export the deterministic Writer projection of the native RKA spine."""
+    async with _client(project_id) as c:
+        r = await c.get(f"/api/manuscripts/{manuscript_id}/spine")
+        _raise_with_detail(r)
+        data = r.json()
+    return json.dumps(data, indent=2)
+
+
+@tool(category="manuscript")
+async def rka_get_manuscript_writing_candidates(
+    manuscript_id: str,
+    *,
+    project_id: str,
+) -> str:
+    """Discover claim candidates through reviewed clusters and research questions."""
+    async with _client(project_id) as c:
+        r = await c.get(
+            f"/api/manuscripts/{manuscript_id}/writing-candidates"
+        )
+        _raise_with_detail(r)
+        data = r.json()
+    return json.dumps(data, indent=2)
+
+
+@tool(category="manuscript")
+async def rka_changes_since(
+    cursor: int = 0,
+    limit: int = 100,
+    *,
+    project_id: str,
+) -> str:
+    """Page semantic project changes after an opaque monotonic cursor.
+
+    The response includes both ``next_cursor`` (the final delivered row) and
+    ``latest_cursor`` (the current same-project ledger head). Continue while
+    ``has_more`` is true.
+    """
+    async with _client(project_id) as c:
+        r = await c.get(
+            "/api/changes",
+            params={"cursor": cursor, "limit": limit},
+        )
+        _raise_with_detail(r)
+        data = r.json()
+    return json.dumps(data, indent=2)
+
+
+@tool(category="manuscript")
+async def rka_get_manuscript_impact(
+    manuscript_id: str,
+    since_cursor: int = 0,
+    limit: int = 100,
+    *,
+    project_id: str,
+) -> str:
+    """Map changed dependencies to affected manuscript claims and units.
+
+    The response preserves the cursor-page contract with ``next_cursor``,
+    ``latest_cursor``, and ``has_more`` even when the current page has no
+    manuscript-relevant changes.
+    """
+    async with _client(project_id) as c:
+        r = await c.get(
+            f"/api/manuscripts/{manuscript_id}/impact",
+            params={"since_cursor": since_cursor, "limit": limit},
+        )
+        _raise_with_detail(r)
+        data = r.json()
+    return json.dumps(data, indent=2)
+
+
+@tool(category="manuscript")
+async def rka_create_native_manuscript(
+    title: str,
+    abstract: str | None = None,
+    venue: str | None = None,
+    phase: str = "planning",
+    state: str = "active",
+    workspace_ref: str | None = None,
+    legacy_journal_id: str | None = None,
+    *,
+    project_id: str,
+) -> str:
+    """Create a planning/active manuscript without inferred ratification."""
+    payload = {
+        "title": title,
+        "abstract": abstract,
+        "venue": venue,
+        "phase": phase,
+        "state": state,
+        "workspace_ref": workspace_ref,
+        "legacy_journal_id": legacy_journal_id,
+    }
+    async with _client(project_id) as c:
+        r = await c.post("/api/manuscripts/native", json=payload)
+        _raise_with_detail(r)
+        data = r.json()
+    return json.dumps(data, indent=2)
+
+
+@tool(category="manuscript")
+async def rka_update_native_manuscript(
+    manuscript_id: str,
+    expected_revision: int,
+    updates: dict,
+    *,
+    project_id: str,
+) -> str:
+    """Update descriptive metadata using optimistic concurrency.
+
+    Lifecycle phase/state changes must use the readiness-gated transition
+    operation.
+    """
+    allowed = {"title", "abstract", "venue", "workspace_ref"}
+    unknown = sorted(set(updates) - allowed)
+    if unknown:
+        return json.dumps(
+            {
+                "error": "invalid_field",
+                "message": f"unsupported manuscript update fields: {unknown}",
+            },
+            indent=2,
+        )
+    if not updates:
+        return json.dumps(
+            {
+                "error": "missing_field",
+                "message": "at least one manuscript update field is required",
+            },
+            indent=2,
+        )
+    payload = {"expected_revision": expected_revision, **updates}
+    async with _client(project_id) as c:
+        r = await c.patch(
+            f"/api/manuscripts/{manuscript_id}",
+            json=payload,
+        )
+        _raise_with_detail(r)
+        data = r.json()
+    return json.dumps(data, indent=2)
+
+
+@tool(category="manuscript")
+async def rka_upsert_argument_spine(
+    manuscript_id: str,
+    expected_revision: int,
+    spine: dict,
+    *,
+    project_id: str,
+) -> str:
+    """Atomically replace the native argument-spine projection."""
+    async with _client(project_id) as c:
+        r = await c.put(
+            f"/api/manuscripts/{manuscript_id}/argument-spine",
+            json={"expected_revision": expected_revision, "spine": spine},
+        )
+        _raise_with_detail(r)
+        data = r.json()
+    return json.dumps(data, indent=2)
+
+
+@tool(category="manuscript")
+async def rka_replace_manuscript_reference_manifest(
+    manuscript_id: str,
+    expected_revision: int,
+    members: list[dict],
+    *,
+    project_id: str,
+) -> str:
+    """Atomically replace the manuscript's authoritative citation set."""
+    async with _client(project_id) as c:
+        r = await c.put(
+            f"/api/manuscripts/{manuscript_id}/references",
+            json={
+                "expected_revision": expected_revision,
+                "members": members,
+            },
+        )
+        _raise_with_detail(r)
+        data = r.json()
+    return json.dumps(data, indent=2)
+
+
+@tool(category="manuscript")
+async def rka_ratify_manuscript_claim(
+    manuscript_id: str,
+    claim_ref: str,
+    expected_revision: int,
+    decision_id: str,
+    claim_version: int | None = None,
+    ratified_at: str | None = None,
+    *,
+    project_id: str,
+) -> str:
+    """Bind an exact manuscript-claim version to an explicit PI decision."""
+    payload = {
+        "expected_revision": expected_revision,
+        "decision_id": decision_id,
+    }
+    if claim_version is not None:
+        payload["claim_version"] = claim_version
+    if ratified_at is not None:
+        payload["ratified_at"] = ratified_at
+    async with _client(project_id) as c:
+        r = await c.post(
+            f"/api/manuscripts/{manuscript_id}/claims/{claim_ref}/ratifications",
+            json=payload,
+        )
+        _raise_with_detail(r)
+        data = r.json()
+    return json.dumps(data, indent=2)
+
+
+@tool(category="manuscript")
+async def rka_transition_manuscript_phase(
+    manuscript_id: str,
+    expected_revision: int,
+    target_phase: str,
+    target_state: str | None = None,
+    *,
+    project_id: str,
+) -> str:
+    """Run server-side readiness gates and transition manuscript phase."""
+    payload = {
+        "expected_revision": expected_revision,
+        "target_phase": target_phase,
+    }
+    if target_state is not None:
+        payload["target_state"] = target_state
+    async with _client(project_id) as c:
+        r = await c.post(
+            f"/api/manuscripts/{manuscript_id}/transition",
+            json=payload,
+        )
+        _raise_with_detail(r)
+        data = r.json()
+    return json.dumps(data, indent=2)
+
+
+@tool(category="manuscript")
+async def rka_create_native_manuscript_checkpoint(
+    manuscript_id: str,
+    expected_revision: int,
+    kind: str,
+    unit_id: str | None = None,
+    supersedes_id: str | None = None,
+    *,
+    project_id: str,
+) -> str:
+    """Create a pending native manuscript checkpoint."""
+    payload = {
+        "expected_revision": expected_revision,
+        "kind": kind,
+    }
+    if unit_id is not None:
+        payload["unit_id"] = unit_id
+    if supersedes_id is not None:
+        payload["supersedes_id"] = supersedes_id
+    async with _client(project_id) as c:
+        r = await c.post(
+            f"/api/manuscripts/{manuscript_id}/checkpoints",
+            json=payload,
+        )
+        _raise_with_detail(r)
+        data = r.json()
+    return json.dumps(data, indent=2)
+
+
+@tool(category="manuscript")
+async def rka_resolve_native_manuscript_checkpoint(
+    checkpoint_id: str,
+    expected_revision: int,
+    decision_id: str,
+    status: str,
+    resolved_at: str,
+    *,
+    project_id: str,
+) -> str:
+    """Resolve a pending native manuscript checkpoint via a PI decision."""
+    payload = {
+        "expected_revision": expected_revision,
+        "decision_id": decision_id,
+        "status": status,
+        "resolved_at": resolved_at,
+    }
+    async with _client(project_id) as c:
+        r = await c.post(
+            f"/api/manuscripts/checkpoints/{checkpoint_id}/resolve",
+            json=payload,
+        )
+        _raise_with_detail(r)
+        data = r.json()
+    return json.dumps(data, indent=2)
+
+
+@tool(category="manuscript")
+async def rka_record_manuscript_verification_attestation(
+    manuscript_id: str,
+    expected_revision: int,
+    attestation: dict,
+    *,
+    project_id: str,
+) -> str:
+    """Append an immutable multidimensional claim-verification attestation."""
+    async with _client(project_id) as c:
+        r = await c.post(
+            f"/api/manuscripts/{manuscript_id}/verification-attestations",
+            json={
+                "expected_revision": expected_revision,
+                "attestation": attestation,
+            },
+        )
+        _raise_with_detail(r)
+        data = r.json()
+    return json.dumps(data, indent=2)
+
+
+@tool(category="literature")
+async def rka_get_reference_validation_status(
+    manuscript_id: str,
+    job_id: str,
+    *,
+    project_id: str,
+) -> str:
+    """Poll one project- and manuscript-scoped reference-validation job.
+
+    Use the ``job_id`` from ``validate_reference``. Pending and in-progress
+    responses contain job metadata; a completed response additionally carries
+    ``result``, while a failed response carries ``error``.
+    """
+    async with _client(project_id) as c:
+        r = await c.get(
+            f"/api/manuscripts/{manuscript_id}/reference-validations/{job_id}"
+        )
+        _raise_with_detail(r)
+        data = r.json()
+    return json.dumps(data, indent=2)
+
+
+@tool(category="literature")
+async def rka_validate_reference(
+    manuscript_id: str,
+    doi: Annotated[
+        str | None,
+        Field(default=None, min_length=1, max_length=MAX_REFERENCE_DOI_CHARS),
+    ] = None,
+    title: Annotated[
+        str | None,
+        Field(default=None, min_length=1, max_length=MAX_REFERENCE_TITLE_CHARS),
+    ] = None,
+    author: Annotated[
+        list[ReferenceAuthor] | None,
+        Field(default=None, max_length=MAX_REFERENCE_AUTHORS),
+    ] = None,
+    literature_id: str | None = None,
+    *,
+    project_id: str,
+) -> str:
+    """Queue one reference for asynchronous Writer Stage B-G validation.
+
+    The REST endpoint returns HTTP 202 with a ``pending`` job envelope,
+    including ``job_id``; this call does not return an immediate verdict.
+    Poll ``reference_validation_status`` with the same manuscript ID and
+    returned job ID. Only a completed job carries the immutable validation
+    result produced by the Writer pipeline.
 
     Args:
-        manuscript_id: Manuscript jrn_ id (the reference is recorded
-            against this manuscript's manifest).
+        manuscript_id: Canonical man_ id or compatibility jrn_ alias.
         doi: Reference DOI; preferred identifier.
         title: Reference title; fallback search key when DOI absent.
         author: Optional CSL-JSON author list:
             [{"family": "Smith", "given": "J"}, ...].
+        literature_id: Optional same-project lit_ record linked to the
+            immutable validation attestation.
     """
-    if not doi and not title:
+    try:
+        normalized = ReferenceValidationInput(
+            doi=doi,
+            title=title,
+            author=author,
+        )
+        payload: dict[str, object] = normalized.durable_dict()
+    except ValueError as exc:
         return json.dumps({
             "status": "error",
-            "message": "Provide at least one of doi or title.",
+            "message": str(exc),
         }, indent=2)
-    payload: dict[str, object] = {}
-    if doi is not None:
-        payload["DOI"] = doi
-    if title is not None:
-        payload["title"] = title
-    if author is not None:
-        payload["author"] = author
+    if literature_id is not None:
+        payload["literature_id"] = literature_id
     async with _client(project_id) as c:
         r = await c.post(
             f"/api/manuscripts/{manuscript_id}/validate-reference",
@@ -5963,7 +6418,7 @@ mcp._mcp_server.create_initialization_options = _create_init_with_list_changed
 # ============================================================
 # Eight always-on verbs that collapse the read/write surface for the
 # Brain / Executor / PI loops:
-#   - rka_query (29 read scopes)
+#   - rka_query (project-scoped reads plus unscoped discovery/health)
 #   - rka_record_note
 #   - rka_record_decision
 #   - rka_record_literature       (PR-2 will land via parallel agent)
@@ -5989,7 +6444,7 @@ from typing import Literal as _Literal
 # Discriminator literals — kept inline (vs an _enums.py addition) so the
 # verb-surface is self-contained and reviewable in one place.
 
-# rka_query operation set — full ~37 read operations per v2.7.0a3
+# rka_query operation set — project-scoped read operations plus two unscoped
 # Decision 1 taxonomy. Covers every read-side legacy tool plus the
 # session-level get_status / get_research_map / get_context that the
 # orchestrator's minimal session start uses.
@@ -6008,7 +6463,12 @@ QueryScopeLit = _Literal[
     "status", "context", "search", "entity", "journal", "literature",
     "mission", "report", "checkpoints", "decision_tree", "calibration_metrics",
     "hooks", "hook_executions", "brain_notifications", "research_map",
-    "review_queue", "clusters", "claims", "manuscript", "graph",
+    "review_queue", "clusters", "claims", "manuscript",
+    "resolve_entities", "changes_since", "manuscript_context",
+    "manuscript_reference_manifest",
+    "manuscript_readiness", "manuscript_spine",
+    "manuscript_writing_candidates", "manuscript_impact",
+    "reference_validation_status", "graph",
     "ego_graph", "graph_stats", "graph_mermaid", "provenance", "multi_hop",
     "collect_report_context", "staleness_impact", "mission_guard", "belief_as_of",
     "summarize", "generate_summary", "evidence", "freshness", "contradictions",
@@ -6068,8 +6528,8 @@ async def rka_query(args: _QueryArgsUnion) -> str:
     """[ANY] READ from the project knowledge base. ALL reads flow through this verb.
 
     v2.7.0 NO-COMPROMISE typed-arg surface. The ``args`` parameter is a
-    Pydantic discriminated union (keyed by ``operation``) covering all
-    42 read operations. FastMCP renders the union as JSON Schema
+    Pydantic discriminated union (keyed by ``operation``) covering every
+    supported read operation. FastMCP renders the union as JSON Schema
     ``oneOf`` with per-branch enum + required-field arrays, so the
     LLM cannot emit an invalid operation, missing required field, or
     out-of-set enum value — the tool surface itself rejects pre-dispatch.
@@ -6077,8 +6537,11 @@ async def rka_query(args: _QueryArgsUnion) -> str:
     Trigger phrases: "what's the status", "what's blocked", "search for",
     "show me decisions", "list literature", "fetch entity", "context",
     "research map", "decision tree", "ego graph", "trace provenance",
-    "multi-hop", "claims", "clusters", "review queue", "open
-    checkpoints", "pending maintenance", "list projects", "health check".
+    "multi-hop", "claims", "clusters", "resolve entities", "manuscript
+    context", "manuscript readiness", "manuscript spine", "changes since",
+    "what changed", "manuscript impact", "reference validation status",
+    "review queue", "open checkpoints", "pending maintenance",
+    "list projects", "health check".
 
     Args:
         args: One of the typed ``Query*Args`` models from
@@ -6115,7 +6578,12 @@ async def _rka_query_legacy_impl(
                 "contradictions / integrity / hooks / hook_executions / "
                 "brain_notifications / calibration_metrics / changelog / "
                 "workspace_tree / workspace_scan / bootstrap_review / "
-                "manuscript / list_projects / health)."
+                "manuscript / resolve_entities / changes_since / "
+                "manuscript_context / manuscript_readiness / "
+                "manuscript_reference_manifest / manuscript_spine / "
+                "manuscript_writing_candidates / "
+                "manuscript_impact / "
+                "reference_validation_status / list_projects / health)."
             )
         ),
     ] = None,  # type: ignore[assignment]
@@ -6123,9 +6591,17 @@ async def _rka_query_legacy_impl(
     project_id: str | None = None,
     id: str | None = None,
     query: str | None = None,
-    limit: int = 20,
+    limit: int | None = None,
     filters: dict | None = None,
     options: dict | None = None,
+    ids: list[str] | None = None,
+    include_sources: bool = False,
+    include_edges: bool = False,
+    target_phase: str | None = None,
+    cursor: int = 0,
+    since_cursor: int = 0,
+    manuscript_id: str | None = None,
+    job_id: str | None = None,
     scope: str | None = None,  # v2.7.0a3 back-compat: legacy `scope` alias
 ) -> str:
     """[ANY] READ from the project knowledge base. ALL reads flow through this verb.
@@ -6148,7 +6624,7 @@ async def _rka_query_legacy_impl(
     examples.
 
     Args:
-        operation: One of ~37 read operations (status, context, search,
+        operation: One of the supported read operations (status, context, search,
             entity, journal, literature, mission, report, checkpoints,
             decision_tree, calibration_metrics, hooks, hook_executions,
             brain_notifications, research_map, review_queue, clusters,
@@ -6156,7 +6632,8 @@ async def _rka_query_legacy_impl(
             graph_mermaid, provenance, multi_hop, summarize,
             generate_summary, evidence, freshness, contradictions,
             integrity, pending_maintenance, changelog, bootstrap_review,
-            workspace_tree, workspace_scan, list_projects, health).
+            workspace_tree, workspace_scan, reference_validation_status,
+            list_projects, health).
         project_id: Project ID (prj_...). REQUIRED for project-scoped
             operations (most of them); UNSCOPED for list_projects and
             health.
@@ -6170,6 +6647,14 @@ async def _rka_query_legacy_impl(
             ["decision"]}, {"status": "open"}, {"phase": "design"}).
         options: Reserved for operation-specific options (e.g. depth,
             format).
+        ids: Entity IDs for resolve_entities.
+        include_sources: Include direct claim-source closure in resolver output.
+        include_edges: Include same-project typed edges in resolver output.
+        target_phase: Lifecycle phase for manuscript_readiness.
+        cursor: Opaque monotonic cursor for changes_since.
+        since_cursor: Last synchronized cursor for manuscript_impact.
+        manuscript_id: Manuscript scope for reference_validation_status.
+        job_id: Validation job ID for reference_validation_status.
         scope: DEPRECATED v2.7.0a3 alias for `operation`. Accepted for
             one release window; removal scheduled in v2.8.0.
     """
@@ -6193,6 +6678,11 @@ async def _rka_query_legacy_impl(
             "message": "rka_query requires `operation` (one of the read operations).",
         }, indent=2)
     s = operation
+    if limit is None:
+        # Preserve the historical 20-row default for ordinary legacy list
+        # operations while matching the native change-feed endpoints' 100-row
+        # defaults when callers omit the argument.
+        limit = 100 if s in {"changes_since", "manuscript_impact"} else 20
     # UNSCOPED operations — no project_id needed.
     if s == "list_projects":
         async with _client() as c:
@@ -6215,7 +6705,8 @@ async def _rka_query_legacy_impl(
         return json.dumps({
             "error": "missing_field",
             "message": (
-                f"rka_query(operation={s!r}) requires `project_id` "
+                f"rka_query(args={{'operation': {s!r}, ...}}) requires "
+                "`project_id` "
                 "(every project-scoped read needs explicit project pinning "
                 "in v2.6+)."
             ),
@@ -6312,6 +6803,111 @@ async def _rka_query_legacy_impl(
         if not id:
             return json.dumps({"error": "rka_query(scope='manuscript') requires `id`"}, indent=2)
         return await _query_get(project_id, f"/api/manuscripts/{id}")
+    if s == "resolve_entities":
+        if not ids:
+            return json.dumps(
+                {"error": "rka_query(scope='resolve_entities') requires `ids`"},
+                indent=2,
+            )
+        return await _query_post(
+            project_id,
+            "/api/entities/resolve",
+            {
+                "ids": ids,
+                "include_sources": include_sources,
+                "include_edges": include_edges,
+            },
+        )
+    if s == "manuscript_context":
+        if not id:
+            return json.dumps(
+                {"error": "rka_query(scope='manuscript_context') requires `id`"},
+                indent=2,
+            )
+        return await _query_get(project_id, f"/api/manuscripts/{id}/context")
+    if s == "manuscript_reference_manifest":
+        if not id:
+            return json.dumps(
+                {
+                    "error": (
+                        "rka_query(scope='manuscript_reference_manifest') "
+                        "requires `id`"
+                    )
+                },
+                indent=2,
+            )
+        return await _query_get(
+            project_id,
+            f"/api/manuscripts/{id}/references",
+        )
+    if s == "manuscript_readiness":
+        if not id:
+            return json.dumps(
+                {"error": "rka_query(scope='manuscript_readiness') requires `id`"},
+                indent=2,
+            )
+        return await _query_get(
+            project_id,
+            f"/api/manuscripts/{id}/readiness",
+            params={"target_phase": target_phase or "drafting"},
+        )
+    if s == "manuscript_spine":
+        if not id:
+            return json.dumps(
+                {"error": "rka_query(scope='manuscript_spine') requires `id`"},
+                indent=2,
+            )
+        return await _query_get(project_id, f"/api/manuscripts/{id}/spine")
+    if s == "manuscript_writing_candidates":
+        if not id:
+            return json.dumps(
+                {
+                    "error": (
+                        "rka_query(scope='manuscript_writing_candidates') "
+                        "requires `id`"
+                    )
+                },
+                indent=2,
+            )
+        return await _query_get(
+            project_id,
+            f"/api/manuscripts/{id}/writing-candidates",
+        )
+    if s == "changes_since":
+        return await _query_get(
+            project_id,
+            "/api/changes",
+            params={"cursor": cursor, "limit": limit},
+        )
+    if s == "manuscript_impact":
+        if not id:
+            return json.dumps(
+                {"error": "rka_query(scope='manuscript_impact') requires `id`"},
+                indent=2,
+            )
+        return await _query_get(
+            project_id,
+            f"/api/manuscripts/{id}/impact",
+            params={"since_cursor": since_cursor, "limit": limit},
+        )
+    if s == "reference_validation_status":
+        if not manuscript_id or not job_id:
+            return json.dumps(
+                {
+                    "error": (
+                        "rka_query(scope='reference_validation_status') "
+                        "requires `manuscript_id` and `job_id`"
+                    )
+                },
+                indent=2,
+            )
+        return await _query_get(
+            project_id,
+            (
+                f"/api/manuscripts/{manuscript_id}/reference-validations/"
+                f"{job_id}"
+            ),
+        )
     if s == "graph":
         params = {
             "include_types": f.get("include_types"),
@@ -6888,7 +7484,8 @@ async def rka_record_literature(
     - action='link_zotero' + lit_id: resolve Zotero item key
     - action='enrich_doi' + lit_id: CrossRef enrichment
     - action='process_paper' + lit_id + annotations: reading-notes pipeline
-    - action='validate_reference' + manuscript_id + (doi | title): Writer validator
+    - action='validate_reference' + manuscript_id + (doi | title): queue Writer
+      validation and return a pending job envelope
 
     For LIST reads use `rka_query(scope='literature')`. The verb
     accepts `add_to_library=True` on search modes to auto-create
@@ -7238,8 +7835,9 @@ async def rka_describe(operation: str = "") -> str:
       - unknown operation    -> {error: 'unknown_operation', did_you_mean: [...]}.
 
     Args:
-        operation: Canonical operation name (the value you would pass
-            to rka_query(operation=...) or rka_execute(operation=...)).
+        operation: Canonical operation name (the value you would put in
+            rka_query(args={"operation": ...}) or
+            rka_execute(args={"operation": ...})).
             Pass '' to list every known operation.
 
     Returns:
@@ -7382,7 +7980,7 @@ before using `rka_query` or `rka_execute`.
 # ============================================================
 # Companion to rka_query (reads) and rka_describe (schema lookup).
 #
-# This verb collapses the entire write/lifecycle surface (~47
+# This verb collapses the entire write/lifecycle surface (58
 # operations) behind one Annotated[Literal] discriminator so the LLM
 # sees the full enum in its inputSchema. Dispatch lives in
 # rka/mcp/verb_dispatch.py::dispatch_execute, which routes to the
@@ -7419,7 +8017,7 @@ async def rka_execute(args: _ExecuteArgsUnion) -> str:
 
     v2.7.0 NO-COMPROMISE typed-arg surface. The ``args`` parameter is a
     Pydantic discriminated union (keyed by ``operation``) covering all
-    49 write/lifecycle operations. FastMCP renders the union as JSON
+    58 write/lifecycle operations. FastMCP renders the union as JSON
     Schema ``oneOf`` with per-branch ``required`` arrays + per-branch
     ``enum`` constraints on every Literal-typed field. The LLM CANNOT
     emit ``confidence='confirmed'``, ``decided_by='SUPERVISOR'``,
@@ -7564,11 +8162,11 @@ support; the Skill is authoritative.
 Always begin a session by loading context:
 
 0. **Tool surface (v2.7.0+ typed dispatch).** RKA ships 3 always-on dispatch
-   tools — `rka_query` (42 read ops), `rka_execute` (49 write/lifecycle ops),
+   tools — `rka_query` (51 read ops), `rka_execute` (58 write/lifecycle ops),
    and `rka_describe` (schema lookup) — plus 2 escape hatches (`rka_load_tools`
    for legacy compat and `rka_help` as a deprecated alias of `rka_describe`).
    No activation step is required: every operation is reachable from
-   `rka_query` / `rka_execute` on the first call. To browse the 91 operations
+   `rka_query` / `rka_execute` on the first call. To browse the 109 operations
    call `rka_describe("")`; for one operation's full schema call
    `rka_describe("record_decision")`. Per-branch enum + required-field
    enforcement at the FastMCP schema layer guarantees values like
@@ -7710,7 +8308,7 @@ Skill is authoritative.
 ## Session Start Protocol
 
 0. **Tool surface (v2.7.0+ typed dispatch).** RKA ships 3 always-on dispatch
-   tools — `rka_query` (42 read ops), `rka_execute` (49 write/lifecycle ops),
+   tools — `rka_query` (51 read ops), `rka_execute` (58 write/lifecycle ops),
    and `rka_describe` (schema lookup) — plus 2 escape hatches (`rka_load_tools`
    for legacy compat and `rka_help` as a deprecated alias of `rka_describe`).
    No activation step is required: every operation is reachable from

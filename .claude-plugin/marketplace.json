@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "rka",
-      "description": "Connects Claude Code to a local RKA backend for provenance-tracked research workflows. Provides ~89 MCP tools, four role skills (Brain, Executor, PI, Writer), six slash commands (/rka-status, /rka-search, /rka-pending, /rka-set-project, /rka-setup-claude-desktop, /rka-start-manuscript), and a SessionStart hook that pings the backend on every new session. Activates when user mentions RKA, research knowledge, knowledge graph, research notes, decisions, missions, journal entries, evidence clusters, citing literature, organizing research, tracking provenance, or drafting a manuscript (Writer skill bootstraps a per-manuscript VSCode workspace via /rka-start-manuscript).",
+      "description": "Connects Claude Code to a local RKA backend for provenance-tracked research workflows. Provides 5 always-on MCP tools routing 109 typed operations (51 read, 58 write/lifecycle), four role skills (Brain, Executor, PI, Writer), six slash commands (/rka-status, /rka-search, /rka-pending, /rka-set-project, /rka-setup-claude-desktop, /rka-start-manuscript), and a SessionStart hook that pings the backend on every new session. Activates when user mentions RKA, research knowledge, knowledge graph, research notes, decisions, missions, journal entries, evidence clusters, citing literature, organizing research, tracking provenance, or drafting a manuscript (Writer skill bootstraps a per-manuscript VSCode workspace via /rka-start-manuscript).",
       "author": {
         "name": "Chenglong Fu"
       },
