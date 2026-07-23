@@ -1740,7 +1740,13 @@ async def rka_create_mission(
         body = {
             "phase": phase,
             "objective": objective,
-            "tasks": [task.model_dump() for task in tasks] if tasks else None,
+            # Coerce each task to a plain dict. Via the v2.7.0+ `rka_execute`
+            # dispatch path (verb_dispatch -> _legacy("rka_create_mission")),
+            # `tasks` arrive as plain dicts (CreateMissionArgs.tasks: list[dict]),
+            # NOT MissionTask models — so a bare `task.model_dump()` raised
+            # `'dict' object has no attribute 'model_dump'`. Accept both shapes.
+            "tasks": [t.model_dump() if hasattr(t, "model_dump") else t
+                      for t in tasks] if tasks else None,
             "context": context, "acceptance_criteria": acceptance_criteria,
             "scope_boundaries": scope_boundaries,
             "checkpoint_triggers": checkpoint_triggers,
@@ -1809,7 +1815,10 @@ async def rka_update_mission_status(
     async with _client(project_id) as c:
         body = {"status": status}
         if tasks:
-            body["tasks"] = [task.model_dump() for task in tasks]
+            # Accept both MissionTask models and plain dicts (the v2.7.0+
+            # rka_execute dispatch passes dicts; see rka_create_mission).
+            body["tasks"] = [t.model_dump() if hasattr(t, "model_dump") else t
+                             for t in tasks]
         r = await c.put(f"/api/missions/{id}", json=body)
         _raise_with_detail(r)
         return f"Mission {id} → {status}"
