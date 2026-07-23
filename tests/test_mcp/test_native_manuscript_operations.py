@@ -1,0 +1,644 @@
+"""Typed MCP coverage for native manuscripts and bulk entity resolution."""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+import pytest
+from pydantic import TypeAdapter, ValidationError
+
+from rka.mcp import server
+from rka.mcp.operation_args import ExecuteArgsUnion, QueryArgsUnion
+from rka.mcp.operations_schema import OPERATIONS_SCHEMA
+from rka.mcp.verb_dispatch import EXECUTE_OPERATIONS, _QUERY_DISPATCH
+
+
+QUERY_OPERATIONS = {
+    "resolve_entities",
+    "manuscript_context",
+    "manuscript_reference_manifest",
+    "manuscript_readiness",
+    "manuscript_spine",
+    "manuscript_writing_candidates",
+    "changes_since",
+    "manuscript_impact",
+    "reference_validation_status",
+}
+EXECUTE_OPERATIONS_NATIVE = {
+    "create_manuscript",
+    "update_manuscript",
+    "upsert_argument_spine",
+    "replace_manuscript_reference_manifest",
+    "ratify_manuscript_claim",
+    "transition_manuscript_phase",
+    "create_manuscript_checkpoint",
+    "resolve_manuscript_checkpoint",
+    "record_verification_attestation",
+}
+
+
+class _Response:
+    is_success = True
+
+    @staticmethod
+    def json() -> dict[str, bool]:
+        return {"ok": True}
+
+
+class _CaptureClient:
+    def __init__(self, requests: list[dict[str, Any]]) -> None:
+        self.requests = requests
+
+    async def __aenter__(self) -> "_CaptureClient":
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+    async def get(
+        self,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+    ) -> _Response:
+        self.requests.append({"method": "GET", "path": path, "params": params})
+        return _Response()
+
+    async def post(
+        self,
+        path: str,
+        *,
+        json: dict[str, Any] | None = None,
+    ) -> _Response:
+        self.requests.append({"method": "POST", "path": path, "json": json})
+        return _Response()
+
+    async def patch(
+        self,
+        path: str,
+        *,
+        json: dict[str, Any] | None = None,
+    ) -> _Response:
+        self.requests.append({"method": "PATCH", "path": path, "json": json})
+        return _Response()
+
+    async def put(
+        self,
+        path: str,
+        *,
+        json: dict[str, Any] | None = None,
+    ) -> _Response:
+        self.requests.append({"method": "PUT", "path": path, "json": json})
+        return _Response()
+
+
+@pytest.fixture
+def requests(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    captured: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        server,
+        "_client",
+        lambda _project_id=None: _CaptureClient(captured),
+    )
+    return captured
+
+
+def test_operation_registry_and_typed_unions_are_complete() -> None:
+    query_mapping = TypeAdapter(QueryArgsUnion).json_schema()["discriminator"][
+        "mapping"
+    ]
+    execute_mapping = TypeAdapter(ExecuteArgsUnion).json_schema()[
+        "discriminator"
+    ]["mapping"]
+
+    assert QUERY_OPERATIONS <= set(query_mapping)
+    assert EXECUTE_OPERATIONS_NATIVE <= set(execute_mapping)
+    assert QUERY_OPERATIONS <= set(_QUERY_DISPATCH)
+    assert EXECUTE_OPERATIONS_NATIVE <= set(EXECUTE_OPERATIONS)
+    assert QUERY_OPERATIONS | EXECUTE_OPERATIONS_NATIVE <= set(OPERATIONS_SCHEMA)
+    assert OPERATIONS_SCHEMA["register_manuscript"]["tool"] == "rka_execute"
+    assert OPERATIONS_SCHEMA["manuscript"]["tool"] == "rka_query"
+
+
+@pytest.mark.parametrize(
+    "adapter,payload",
+    [
+        (
+            TypeAdapter(QueryArgsUnion),
+            {
+                "operation": "manuscript_readiness",
+                "project_id": "prj_test",
+                "id": "man_test",
+                "target_phase": "draft",
+            },
+        ),
+        (
+            TypeAdapter(ExecuteArgsUnion),
+            {
+                "operation": "replace_manuscript_reference_manifest",
+                "project_id": "prj_test",
+                "id": "man_test",
+                "expected_revision": 2,
+                "members": [
+                    {
+                        "citation_key": "Smith2026",
+                        "literature_id": "lit_1",
+                    },
+                    {
+                        "citation_key": "smith2026",
+                        "literature_id": "lit_2",
+                    },
+                ],
+            },
+        ),
+        (
+            TypeAdapter(QueryArgsUnion),
+            {
+                "operation": "changes_since",
+                "project_id": "prj_test",
+                "cursor": -1,
+            },
+        ),
+        (
+            TypeAdapter(QueryArgsUnion),
+            {
+                "operation": "manuscript_impact",
+                "project_id": "prj_test",
+                "id": "man_test",
+                "since_cursor": 0,
+                "limit": 1001,
+            },
+        ),
+        (
+            TypeAdapter(QueryArgsUnion),
+            {
+                "operation": "reference_validation_status",
+                "project_id": "prj_test",
+                "manuscript_id": "man_test",
+            },
+        ),
+        (
+            TypeAdapter(ExecuteArgsUnion),
+            {
+                "operation": "create_manuscript",
+                "project_id": "prj_test",
+                "title": "Lifecycle bypass",
+                "phase": "submitted",
+            },
+        ),
+        (
+            TypeAdapter(ExecuteArgsUnion),
+            {
+                "operation": "update_manuscript",
+                "project_id": "prj_test",
+                "id": "man_test",
+                "expected_revision": 1,
+                "phase": "submitted",
+            },
+        ),
+        (
+            TypeAdapter(ExecuteArgsUnion),
+            {
+                "operation": "transition_manuscript_phase",
+                "project_id": "prj_test",
+                "id": "man_test",
+                "expected_revision": 1,
+                "target_phase": "camera_ready",
+            },
+        ),
+        (
+            TypeAdapter(ExecuteArgsUnion),
+            {
+                "operation": "create_manuscript_checkpoint",
+                "project_id": "prj_test",
+                "id": "man_test",
+                "expected_revision": 1,
+                "kind": "approval",
+            },
+        ),
+        (
+            TypeAdapter(ExecuteArgsUnion),
+            {
+                "operation": "upsert_argument_spine",
+                "project_id": "prj_test",
+                "id": "man_test",
+                "expected_revision": 1,
+                "spine": {
+                    "claims": [
+                        {
+                            "local_key": "C1",
+                            "kind": "unsupported_kind",
+                            "exact_wording": "Claim.",
+                            "allowed_wording": "Claim.",
+                            "prohibited_wording": ["Overclaim."],
+                        },
+                    ],
+                    "units": [],
+                },
+            },
+        ),
+    ],
+)
+def test_invalid_native_enums_fail_at_typed_boundary(
+    adapter: TypeAdapter,
+    payload: dict[str, Any],
+) -> None:
+    with pytest.raises(ValidationError):
+        adapter.validate_python(payload)
+
+
+@pytest.mark.parametrize(
+    "payload,method,path,expected",
+    [
+        (
+            {
+                "operation": "resolve_entities",
+                "project_id": "prj_test",
+                "ids": ["clm_1", "dec_1"],
+                "include_sources": True,
+                "include_edges": True,
+            },
+            "POST",
+            "/api/entities/resolve",
+            {
+                "ids": ["clm_1", "dec_1"],
+                "include_sources": True,
+                "include_edges": True,
+            },
+        ),
+        (
+            {
+                "operation": "manuscript_context",
+                "project_id": "prj_test",
+                "id": "man_1",
+            },
+            "GET",
+            "/api/manuscripts/man_1/context",
+            None,
+        ),
+        (
+            {
+                "operation": "manuscript_reference_manifest",
+                "project_id": "prj_test",
+                "id": "man_1",
+            },
+            "GET",
+            "/api/manuscripts/man_1/references",
+            None,
+        ),
+        (
+            {
+                "operation": "manuscript_readiness",
+                "project_id": "prj_test",
+                "id": "man_1",
+                "target_phase": "review",
+            },
+            "GET",
+            "/api/manuscripts/man_1/readiness",
+            {"target_phase": "review"},
+        ),
+        (
+            {
+                "operation": "manuscript_spine",
+                "project_id": "prj_test",
+                "id": "man_1",
+            },
+            "GET",
+            "/api/manuscripts/man_1/spine",
+            None,
+        ),
+        (
+            {
+                "operation": "manuscript_writing_candidates",
+                "project_id": "prj_test",
+                "id": "man_1",
+            },
+            "GET",
+            "/api/manuscripts/man_1/writing-candidates",
+            None,
+        ),
+        (
+            {
+                "operation": "changes_since",
+                "project_id": "prj_test",
+                "cursor": 41,
+                "limit": 25,
+            },
+            "GET",
+            "/api/changes",
+            {"cursor": 41, "limit": 25},
+        ),
+        (
+            {
+                "operation": "manuscript_impact",
+                "project_id": "prj_test",
+                "id": "man_1",
+                "since_cursor": 41,
+                "limit": 25,
+            },
+            "GET",
+            "/api/manuscripts/man_1/impact",
+            {"since_cursor": 41, "limit": 25},
+        ),
+        (
+            {
+                "operation": "reference_validation_status",
+                "project_id": "prj_test",
+                "manuscript_id": "man_1",
+                "job_id": "job_1",
+            },
+            "GET",
+            "/api/manuscripts/man_1/reference-validations/job_1",
+            None,
+        ),
+    ],
+)
+async def test_typed_query_rest_wiring(
+    requests: list[dict[str, Any]],
+    payload: dict[str, Any],
+    method: str,
+    path: str,
+    expected: dict[str, Any] | None,
+) -> None:
+    args = TypeAdapter(QueryArgsUnion).validate_python(payload)
+    await server.rka_query(args)
+
+    request = next(item for item in requests if item["path"] == path)
+    assert request["method"] == method
+    key = "json" if method == "POST" else "params"
+    assert request.get(key) == expected
+
+
+async def test_reference_validation_status_preserves_pending_envelope(
+    requests: list[dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        _Response,
+        "json",
+        staticmethod(
+            lambda: {
+                "job_id": "job_1",
+                "status": "pending",
+                "canonical_manuscript_id": "man_1",
+                "requested_manuscript_id": "man_1",
+                "attempts": 0,
+                "max_attempts": 3,
+            }
+        ),
+    )
+    args = TypeAdapter(QueryArgsUnion).validate_python(
+        {
+            "operation": "reference_validation_status",
+            "project_id": "prj_test",
+            "manuscript_id": "man_1",
+            "job_id": "job_1",
+        }
+    )
+
+    result = json.loads(await server.rka_query(args))
+
+    assert result["job_id"] == "job_1"
+    assert result["status"] == "pending"
+    assert requests == [
+        {
+            "method": "GET",
+            "path": "/api/manuscripts/man_1/reference-validations/job_1",
+            "params": None,
+        }
+    ]
+
+
+def test_async_reference_validation_contract_is_described() -> None:
+    validate_schema = OPERATIONS_SCHEMA["validate_reference"]
+    status_schema = OPERATIONS_SCHEMA["reference_validation_status"]
+
+    assert "202" in validate_schema["notes"]
+    assert "not an immediate verdict" in validate_schema["notes"]
+    assert "reference_validation_status" in validate_schema["related_operations"]
+    assert status_schema["tool"] == "rka_query"
+    assert status_schema["required_fields"] == [
+        "project_id",
+        "manuscript_id",
+        "job_id",
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "operation": "changes_since",
+            "project_id": "prj_test",
+            "cursor": 4,
+        },
+        {
+            "operation": "manuscript_impact",
+            "project_id": "prj_test",
+            "id": "man_1",
+            "since_cursor": 4,
+        },
+    ],
+)
+async def test_cursor_queries_expose_page_cursors(
+    requests: list[dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+    payload: dict[str, Any],
+) -> None:
+    monkeypatch.setattr(
+        _Response,
+        "json",
+        staticmethod(
+            lambda: {
+                "from_cursor": 4,
+                "next_cursor": 7,
+                "latest_cursor": 11,
+                "has_more": True,
+            }
+        ),
+    )
+    args = TypeAdapter(QueryArgsUnion).validate_python(payload)
+    result = json.loads(await server.rka_query(args))
+
+    assert result["next_cursor"] == 7
+    assert result["latest_cursor"] == 11
+    assert result["has_more"] is True
+    assert requests
+
+
+_ATTESTATION = {
+    "claim_id": "mcl_1",
+    "claim_version": 1,
+    "overall_verdict": "warn",
+    "grounding_verdict": "pass",
+    "evidence_verdict": "warn",
+    "contradiction_verdict": "pass",
+    "currency_verdict": "pass",
+    "ratification_verdict": "not_checked",
+    "unit_coverage_verdict": "pass",
+    "dependency_snapshot": {"claim": "sha256:abc"},
+    "full_json_payload": {"findings": []},
+    "started_at": "2026-07-22T12:00:00Z",
+    "completed_at": "2026-07-22T12:00:01Z",
+}
+
+
+@pytest.mark.parametrize(
+    "payload,method,path,expected_json",
+    [
+        (
+            {
+                "operation": "create_manuscript",
+                "project_id": "prj_test",
+                "title": "Native manuscript",
+                "venue": "USENIX Security",
+            },
+            "POST",
+            "/api/manuscripts/native",
+            {"title": "Native manuscript", "venue": "USENIX Security"},
+        ),
+        (
+            {
+                "operation": "update_manuscript",
+                "project_id": "prj_test",
+                "id": "man_1",
+                "expected_revision": 2,
+                "venue": None,
+            },
+            "PATCH",
+            "/api/manuscripts/man_1",
+            {"expected_revision": 2, "venue": None},
+        ),
+        (
+            {
+                "operation": "upsert_argument_spine",
+                "project_id": "prj_test",
+                "id": "man_1",
+                "expected_revision": 3,
+                "spine": {"claims": [], "units": []},
+            },
+            "PUT",
+            "/api/manuscripts/man_1/argument-spine",
+            {
+                "expected_revision": 3,
+                "spine": {"claims": [], "units": []},
+            },
+        ),
+        (
+            {
+                "operation": "replace_manuscript_reference_manifest",
+                "project_id": "prj_test",
+                "id": "man_1",
+                "expected_revision": 4,
+                "members": [
+                    {
+                        "citation_key": "smith2026",
+                        "literature_id": "lit_1",
+                    }
+                ],
+            },
+            "PUT",
+            "/api/manuscripts/man_1/references",
+            {
+                "expected_revision": 4,
+                "members": [
+                    {
+                        "citation_key": "smith2026",
+                        "literature_id": "lit_1",
+                    }
+                ],
+            },
+        ),
+        (
+            {
+                "operation": "ratify_manuscript_claim",
+                "project_id": "prj_test",
+                "id": "man_1",
+                "claim_ref": "C1",
+                "expected_revision": 4,
+                "decision_id": "dec_1",
+            },
+            "POST",
+            "/api/manuscripts/man_1/claims/C1/ratifications",
+            {"expected_revision": 4, "decision_id": "dec_1"},
+        ),
+        (
+            {
+                "operation": "transition_manuscript_phase",
+                "project_id": "prj_test",
+                "id": "man_1",
+                "expected_revision": 5,
+                "target_phase": "review",
+            },
+            "POST",
+            "/api/manuscripts/man_1/transition",
+            {"expected_revision": 5, "target_phase": "review"},
+        ),
+        (
+            {
+                "operation": "create_manuscript_checkpoint",
+                "project_id": "prj_test",
+                "id": "man_1",
+                "expected_revision": 6,
+                "kind": "outline",
+            },
+            "POST",
+            "/api/manuscripts/man_1/checkpoints",
+            {"expected_revision": 6, "kind": "outline"},
+        ),
+        (
+            {
+                "operation": "resolve_manuscript_checkpoint",
+                "project_id": "prj_test",
+                "checkpoint_id": "mck_1",
+                "expected_revision": 7,
+                "decision_id": "dec_2",
+                "status": "resolved",
+                "resolved_at": "2026-07-22T12:00:00Z",
+            },
+            "POST",
+            "/api/manuscripts/checkpoints/mck_1/resolve",
+            {
+                "expected_revision": 7,
+                "decision_id": "dec_2",
+                "status": "resolved",
+                "resolved_at": "2026-07-22T12:00:00Z",
+            },
+        ),
+        (
+            {
+                "operation": "record_verification_attestation",
+                "project_id": "prj_test",
+                "id": "man_1",
+                "expected_revision": 8,
+                **_ATTESTATION,
+            },
+            "POST",
+            "/api/manuscripts/man_1/verification-attestations",
+            {"expected_revision": 8, "attestation": _ATTESTATION},
+        ),
+    ],
+)
+async def test_typed_execute_rest_wiring(
+    requests: list[dict[str, Any]],
+    payload: dict[str, Any],
+    method: str,
+    path: str,
+    expected_json: dict[str, Any],
+) -> None:
+    args = TypeAdapter(ExecuteArgsUnion).validate_python(payload)
+    await server.rka_execute(args)
+
+    request = next(item for item in requests if item["path"] == path)
+    assert request["method"] == method
+    assert request["path"] == path
+    if payload["operation"] == "create_manuscript":
+        # The REST model has explicit nullable fields; only assert the values
+        # supplied through the typed operation plus canonical defaults.
+        for key, value in expected_json.items():
+            assert request["json"][key] == value
+        assert request["json"]["phase"] == "planning"
+        assert request["json"]["state"] == "active"
+    else:
+        assert request["json"] == expected_json

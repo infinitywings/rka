@@ -6,6 +6,7 @@ import json
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from rka.mcp import server as mcp_server
 from rka.mcp import verb_dispatch
@@ -21,25 +22,53 @@ def test_typed_args_expose_journal_authors_and_literature_binding() -> None:
         literature_id="lit_example",
     )
     assert args.manuscript_id.startswith("jrn_")
-    assert args.author == [{"family": "Smith", "given": "J"}]
+    assert [author.model_dump(exclude_none=True) for author in args.author or []] == [
+        {"family": "Smith", "given": "J"}
+    ]
     schema = ValidateReferenceArgs.model_json_schema()["properties"]
     assert "author" in schema
     assert "literature_id" in schema
     assert "jrn_" in schema["manuscript_id"]["description"]
+    assert "202 pending job envelope" in (
+        ValidateReferenceArgs.model_json_schema()["description"]
+    )
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"title": "x" * 2_001, "doi": None},
+        {"author": [{"family": "Smith", "credential": "secret"}]},
+        {"author": [{"given": "No family or literal"}]},
+        {"author": [{"family": "Smith"}] * 101},
+    ],
+)
+def test_typed_args_reject_unbounded_or_open_author_payloads(overrides) -> None:
+    payload = {
+        "project_id": "prj_test",
+        "manuscript_id": "man_test",
+        "doi": "10.1234/example",
+        **overrides,
+    }
+    with pytest.raises(ValidationError):
+        ValidateReferenceArgs(**payload)
 
 
 @pytest.mark.asyncio
-async def test_mcp_proxy_forwards_literature_binding(monkeypatch) -> None:
+async def test_mcp_proxy_returns_pending_job_and_forwards_binding(monkeypatch) -> None:
     calls: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append({"path": request.url.path, "body": json.loads(request.content)})
         return httpx.Response(
-            200,
+            202,
             json={
-                "status": "VERIFIED",
-                "validation_id": "rvd_mcp",
-                "retraction_checked": True,
+                "job_id": "job_mcp",
+                "status": "pending",
+                "canonical_manuscript_id": "man_mcp",
+                "requested_manuscript_id": "jrn_manuscript",
+                "attempts": 0,
+                "max_attempts": 3,
             },
         )
 
@@ -58,7 +87,8 @@ async def test_mcp_proxy_forwards_literature_binding(monkeypatch) -> None:
             project_id="prj_test",
         )
     )
-    assert result["validation_id"] == "rvd_mcp"
+    assert result["job_id"] == "job_mcp"
+    assert result["status"] == "pending"
     validation_calls = [
         call for call in calls if call["path"].endswith("/validate-reference")
     ]
@@ -72,6 +102,20 @@ async def test_mcp_proxy_forwards_literature_binding(monkeypatch) -> None:
             },
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_deferred_mcp_tool_revalidates_nested_authors() -> None:
+    result = json.loads(
+        await mcp_server.rka_validate_reference(
+            manuscript_id="man_test",
+            title="Bounded",
+            author=[{"family": "Smith", "credential": "secret"}],
+            project_id="prj_test",
+        )
+    )
+    assert result["status"] == "error"
+    assert "extra" in result["message"].lower()
 
 
 @pytest.mark.asyncio

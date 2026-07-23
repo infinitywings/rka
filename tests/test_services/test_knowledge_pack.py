@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
+import zipfile
 from pathlib import Path
 
 import pytest
 
+from rka import __version__
 from rka.infra.database import Database
 from rka.models.decision import DecisionCreate, DecisionOption
 from rka.models.journal import JournalEntryCreate
@@ -165,6 +169,137 @@ async def test_knowledge_pack_round_trip_imports_into_same_db_with_remapped_ids_
 
 
 @pytest.mark.asyncio
+async def test_knowledge_pack_export_rejects_stale_artifact_file(
+    tmp_path: Path,
+) -> None:
+    db = await _make_db(tmp_path / "stale-artifact-export.db")
+    artifact_path = tmp_path / "stale.txt"
+    artifact_path.write_bytes(b"registered bytes")
+
+    try:
+        await ProjectService(db).create_project(
+            ProjectCreate(id="proj_stale_artifact", name="Stale Artifact"),
+            actor="system",
+        )
+        artifact = await ArtifactService(
+            db,
+            project_id="proj_stale_artifact",
+        ).register(
+            filepath=str(artifact_path),
+            created_by="system",
+        )
+        artifact_path.write_bytes(b"bytes changed after registration")
+
+        with pytest.raises(
+            ValueError,
+            match=rf"Artifact '{artifact['id']}' content hash mismatch.*export",
+        ):
+            await KnowledgePackService(
+                db,
+                project_id="proj_stale_artifact",
+            ).export_pack()
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_knowledge_pack_export_rejects_missing_artifact_file(
+    tmp_path: Path,
+) -> None:
+    db = await _make_db(tmp_path / "missing-artifact-export.db")
+    artifact_path = tmp_path / "missing-after-registration.txt"
+    artifact_path.write_bytes(b"registered bytes")
+    try:
+        await ProjectService(db).create_project(
+            ProjectCreate(id="proj_missing_export", name="Missing Export"),
+            actor="system",
+        )
+        artifact = await ArtifactService(
+            db,
+            project_id="proj_missing_export",
+        ).register(filepath=str(artifact_path), created_by="system")
+        artifact_path.unlink()
+
+        with pytest.raises(
+            ValueError,
+            match=rf"Artifact '{artifact['id']}'.*registered file is missing",
+        ):
+            await KnowledgePackService(
+                db,
+                project_id="proj_missing_export",
+            ).export_pack()
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_knowledge_pack_import_rejects_corrupted_bundled_artifact(
+    tmp_path: Path,
+) -> None:
+    db = await _make_db(tmp_path / "corrupted-artifact-import.db")
+    artifact_path = tmp_path / "source.txt"
+    original_bytes = b"artifact bytes recorded by ArtifactService"
+    artifact_path.write_bytes(original_bytes)
+
+    try:
+        await ProjectService(db).create_project(
+            ProjectCreate(id="proj_artifact_source", name="Artifact Source"),
+            actor="system",
+        )
+        artifact = await ArtifactService(
+            db,
+            project_id="proj_artifact_source",
+        ).register(
+            filepath=str(artifact_path),
+            created_by="system",
+        )
+        pack_path, _ = await KnowledgePackService(
+            db,
+            project_id="proj_artifact_source",
+        ).export_pack()
+
+        corrupted_pack = tmp_path / "corrupted.rka-pack.zip"
+        with zipfile.ZipFile(pack_path) as source, zipfile.ZipFile(
+            corrupted_pack,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+        ) as destination:
+            for member in source.infolist():
+                payload = source.read(member.filename)
+                if member.filename.startswith("artifacts/"):
+                    payload = b"corrupted but internally valid zip bytes"
+                destination.writestr(member, payload)
+
+        with corrupted_pack.open("rb") as pack_file:
+            with pytest.raises(
+                ValueError,
+                match=r"Artifact '.*' content hash mismatch.*import",
+            ):
+                await KnowledgePackService(db).import_pack(
+                    pack_file,
+                    project_id="proj_artifact_corrupted",
+                    project_name="Corrupted Artifact Copy",
+                )
+
+        assert artifact["duplicate"] is False
+        assert hashlib.sha256(original_bytes).hexdigest() == (
+            await db.fetchone(
+                "SELECT content_hash FROM artifacts WHERE id = ?",
+                [artifact["id"]],
+            )
+        )["content_hash"]
+        assert await db.fetchone(
+            "SELECT id FROM projects WHERE id = ?",
+            ["proj_artifact_corrupted"],
+        ) is None
+        storage_root = tmp_path / "knowledge-packs"
+        assert not (storage_root / "proj_artifact_corrupted").exists()
+        assert list(storage_root.glob(".rka-import-*")) == []
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
 async def test_knowledge_pack_import_with_mission_motivated_by_decision(tmp_path: Path):
     """Import must succeed when missions reference decisions via motivated_by_decision FK."""
     db = await _make_db(tmp_path / "mission-fk.db")
@@ -242,7 +377,7 @@ async def test_knowledge_pack_import_remaps_decision_related_journal(tmp_path: P
             JournalEntryCreate(content="Background analysis.", type="note"),
             actor="executor",
         )
-        decision = await decision_svc.create(
+        await decision_svc.create(
             DecisionCreate(
                 question="Which approach?",
                 decided_by="brain",
@@ -257,7 +392,7 @@ async def test_knowledge_pack_import_remaps_decision_related_journal(tmp_path: P
 
         import_svc = KnowledgePackService(db)
         with open(pack_path, "rb") as pack_file:
-            result = await import_svc.import_pack(
+            await import_svc.import_pack(
                 pack_file,
                 project_id="proj_dst",
                 project_name="Destination",
@@ -314,8 +449,6 @@ async def test_knowledge_pack_import_rejects_duplicate_target_project_name(tmp_p
 # critical issues; the success path repairs non-critical claim_count drift.
 
 
-import zipfile  # noqa: E402
-
 from rka.services.knowledge_pack import (  # noqa: E402
     KnowledgePackIntegrityError,
     PACK_SCHEMA_VERSION,
@@ -349,6 +482,257 @@ def _write_synthetic_pack(
     }
     with zipfile.ZipFile(pack_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("manifest.json", json.dumps(manifest, indent=2, sort_keys=True))
+
+
+@pytest.mark.asyncio
+async def test_import_embedding_sync_uses_explicit_target_project_scope(
+    tmp_path: Path,
+) -> None:
+    pack_path = tmp_path / "embedding-scope.rka-pack.zip"
+    _write_synthetic_pack(
+        pack_path,
+        source_project_id="proj_embedding_source",
+        source_project_name="Embedding Source",
+        tables={
+            "journal": [
+                {
+                    "id": "jrn_embedding_source",
+                    "type": "finding",
+                    "content": "Imported evidence must use the target scope.",
+                    "source": "executor",
+                    "project_id": "proj_embedding_source",
+                }
+            ]
+        },
+    )
+
+    class RecordingEmbeddings:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def embed_and_store(
+            self,
+            entity_type: str,
+            entity_id: str,
+            text: str,
+            *,
+            project_id: str,
+        ) -> None:
+            self.calls.append(
+                {
+                    "entity_type": entity_type,
+                    "entity_id": entity_id,
+                    "text": text,
+                    "project_id": project_id,
+                }
+            )
+
+    db = await _make_db(tmp_path / "embedding-scope.db")
+    embeddings = RecordingEmbeddings()
+    service = KnowledgePackService(
+        db,
+        embeddings=embeddings,
+        project_id="proj_unrelated_service_default",
+    )
+    try:
+        with pack_path.open("rb") as pack_file:
+            await service.import_pack(
+                pack_file,
+                project_id="proj_embedding_target",
+                project_name="Embedding Target",
+            )
+
+        assert service.project_id == "proj_unrelated_service_default"
+        assert len(embeddings.calls) == 1
+        assert embeddings.calls[0]["entity_type"] == "journal"
+        assert embeddings.calls[0]["project_id"] == "proj_embedding_target"
+        imported = await db.fetchone(
+            "SELECT id FROM journal WHERE project_id = ?",
+            ["proj_embedding_target"],
+        )
+        assert imported is not None
+        assert embeddings.calls[0]["entity_id"] == imported["id"]
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_knowledge_pack_import_rejects_path_like_project_id_without_touching_sibling(
+    tmp_path: Path,
+) -> None:
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    sentinel = victim / "keep.txt"
+    sentinel.write_text("do not delete", encoding="utf-8")
+    pack_path = tmp_path / "path-traversal.rka-pack.zip"
+    _write_synthetic_pack(
+        pack_path,
+        source_project_id="../victim",
+        source_project_name="Traversal Source",
+        tables={
+            "artifacts": [
+                {
+                    "id": "art_traversal",
+                    "filename": "payload.txt",
+                    "filepath": "/source/payload.txt",
+                    "pack_file": "artifacts/art_traversal/payload.txt",
+                    "project_id": "../victim",
+                }
+            ]
+        },
+    )
+
+    db = await _make_db(tmp_path / "path-traversal.db")
+    try:
+        with pack_path.open("rb") as pack_file:
+            with pytest.raises(ValueError, match="cannot contain path separators"):
+                await KnowledgePackService(db).import_pack(pack_file)
+
+        assert sentinel.read_text(encoding="utf-8") == "do not delete"
+        assert not (tmp_path / "knowledge-packs").exists()
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_knowledge_pack_import_rejects_artifact_without_bundled_file(
+    tmp_path: Path,
+) -> None:
+    source_machine_path = tmp_path / "source-machine-artifact.txt"
+    source_machine_path.write_bytes(b"local bytes must not satisfy a portable pack")
+    pack_path = tmp_path / "artifact-without-bundle.rka-pack.zip"
+    _write_synthetic_pack(
+        pack_path,
+        source_project_id="proj_unbundled_artifact_src",
+        source_project_name="Unbundled Artifact Source",
+        tables={
+            "artifacts": [
+                {
+                    "id": "art_unbundled",
+                    "filename": source_machine_path.name,
+                    "filepath": str(source_machine_path),
+                    "content_hash": hashlib.sha256(
+                        source_machine_path.read_bytes()
+                    ).hexdigest(),
+                    "pack_file": None,
+                    "extraction_status": "complete",
+                    "project_id": "proj_unbundled_artifact_src",
+                }
+            ]
+        },
+    )
+
+    db = await _make_db(tmp_path / "artifact-without-bundle.db")
+    try:
+        with pack_path.open("rb") as pack_file:
+            with pytest.raises(ValueError, match="has no bundled file"):
+                await KnowledgePackService(db).import_pack(
+                    pack_file,
+                    project_id="proj_unbundled_artifact_dst",
+                    project_name="Unbundled Artifact Destination",
+                )
+
+        assert await db.fetchone(
+            "SELECT id FROM projects WHERE id = ?",
+            ["proj_unbundled_artifact_dst"],
+        ) is None
+        storage_root = tmp_path / "knowledge-packs"
+        assert not (storage_root / "proj_unbundled_artifact_dst").exists()
+        assert list(storage_root.glob(".rka-import-*")) == []
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_knowledge_pack_failed_artifact_restore_removes_only_staging_root(
+    tmp_path: Path,
+) -> None:
+    pack_path = tmp_path / "missing-artifact.rka-pack.zip"
+    _write_synthetic_pack(
+        pack_path,
+        source_project_id="proj_missing_artifact_src",
+        source_project_name="Missing Artifact Source",
+        tables={
+            "artifacts": [
+                {
+                    "id": "art_missing",
+                    "filename": "missing.txt",
+                    "filepath": "/source/missing.txt",
+                    "pack_file": "artifacts/art_missing/missing.txt",
+                    "project_id": "proj_missing_artifact_src",
+                }
+            ]
+        },
+    )
+
+    db = await _make_db(tmp_path / "missing-artifact.db")
+    try:
+        with pack_path.open("rb") as pack_file:
+            with pytest.raises(ValueError, match="missing bundled artifact"):
+                await KnowledgePackService(db).import_pack(
+                    pack_file,
+                    project_id="proj_missing_artifact_dst",
+                    project_name="Missing Artifact Destination",
+                )
+
+        storage_root = tmp_path / "knowledge-packs"
+        assert not (storage_root / "proj_missing_artifact_dst").exists()
+        assert list(storage_root.glob(".rka-import-*")) == []
+        assert await db.fetchone(
+            "SELECT id FROM projects WHERE id = ?",
+            ["proj_missing_artifact_dst"],
+        ) is None
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_knowledge_pack_import_preserves_preexisting_artifact_directory(
+    tmp_path: Path,
+) -> None:
+    storage_root = tmp_path / "knowledge-packs"
+    existing_root = storage_root / "proj_existing_files"
+    existing_root.mkdir(parents=True)
+    sentinel = existing_root / "keep.txt"
+    sentinel.write_text("preexisting", encoding="utf-8")
+    pack_path = tmp_path / "preexisting-artifact-root.rka-pack.zip"
+    _write_synthetic_pack(
+        pack_path,
+        source_project_id="proj_existing_files_src",
+        source_project_name="Existing Files Source",
+        tables={
+            "artifacts": [
+                {
+                    "id": "art_existing",
+                    "filename": "payload.txt",
+                    "filepath": "/source/payload.txt",
+                    "pack_file": "artifacts/art_existing/payload.txt",
+                    "project_id": "proj_existing_files_src",
+                }
+            ]
+        },
+    )
+    with zipfile.ZipFile(pack_path, "a") as archive:
+        archive.writestr("artifacts/art_existing/payload.txt", "payload")
+
+    db = await _make_db(tmp_path / "preexisting-artifact-root.db")
+    try:
+        with pack_path.open("rb") as pack_file:
+            with pytest.raises(ValueError, match="already exists"):
+                await KnowledgePackService(db).import_pack(
+                    pack_file,
+                    project_id="proj_existing_files",
+                    project_name="Existing Files Destination",
+                )
+
+        assert sentinel.read_text(encoding="utf-8") == "preexisting"
+        assert list(storage_root.glob(".rka-import-*")) == []
+        assert await db.fetchone(
+            "SELECT id FROM projects WHERE id = ?",
+            ["proj_existing_files"],
+        ) is None
+    finally:
+        await db.close()
 
 
 @pytest.mark.asyncio
@@ -555,5 +939,318 @@ async def test_knowledge_pack_import_recomputes_stale_claim_count(tmp_path: Path
             "Success-path recompute should have repaired the stale claim_count "
             f"(99 → 1 member_of edge); got {rows[0]['claim_count']}."
         )
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_export_uses_one_snapshot_under_concurrent_writer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "snapshot-export.db"
+    db = await _make_db(db_path)
+    writer = Database(str(db_path))
+    await writer.connect()
+    try:
+        await ProjectService(db).create_project(
+            ProjectCreate(id="proj_snapshot", name="Snapshot Source"),
+            actor="system",
+        )
+        await db.execute(
+            """INSERT INTO manuscripts
+               (id, project_id, title, venue)
+               VALUES ('man_snapshot', 'proj_snapshot',
+                       'Snapshot manuscript', 'Test Venue')"""
+        )
+        await db.commit()
+
+        service = KnowledgePackService(db, project_id="proj_snapshot")
+        literature_read = asyncio.Event()
+        resume_export = asyncio.Event()
+        original_export_rows = service._export_rows_for_table
+
+        async def pause_after_literature(table: str, project_id: str):
+            rows = await original_export_rows(table, project_id)
+            if table == "literature":
+                literature_read.set()
+                await resume_export.wait()
+            return rows
+
+        monkeypatch.setattr(
+            service,
+            "_export_rows_for_table",
+            pause_after_literature,
+        )
+        export_task = asyncio.create_task(service.export_pack())
+        await literature_read.wait()
+        async with writer.transaction():
+            await writer.execute(
+                """INSERT INTO literature (id, title, project_id)
+                   VALUES ('lit_snapshot_late', 'Late literature',
+                           'proj_snapshot')"""
+            )
+            await writer.execute(
+                """INSERT INTO manuscript_reference_members
+                   (id, manuscript_id, project_id, citation_key,
+                    literature_id)
+                   VALUES ('mrf_snapshot_late', 'man_snapshot',
+                           'proj_snapshot', 'late2026',
+                           'lit_snapshot_late')"""
+            )
+        resume_export.set()
+        pack_path, _ = await export_task
+
+        with zipfile.ZipFile(pack_path) as archive:
+            manifest = json.loads(archive.read("manifest.json"))
+        assert manifest["rka_version"] == __version__
+        literature_ids = {
+            row["id"] for row in manifest["tables"]["literature"]
+        }
+        member_ids = {
+            row["id"]
+            for row in manifest["tables"]["manuscript_reference_members"]
+        }
+        assert "lit_snapshot_late" not in literature_ids
+        assert "mrf_snapshot_late" not in member_ids
+
+        with open(pack_path, "rb") as pack_file:
+            await KnowledgePackService(db).import_pack(
+                pack_file,
+                project_id="proj_snapshot_copy",
+                project_name="Snapshot Copy",
+            )
+    finally:
+        await writer.close()
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_topics_and_context_snapshots_rekey_on_same_database_copy(
+    tmp_path: Path,
+) -> None:
+    db = await _make_db(tmp_path / "derived-rekey.db")
+    try:
+        await ProjectService(db).create_project(
+            ProjectCreate(id="proj_derived_source", name="Derived Source"),
+            actor="system",
+        )
+        await db.execute(
+            """INSERT INTO journal
+               (id, type, content, source, project_id)
+               VALUES ('jrn_derived_source', 'note', 'source', 'executor',
+                       'proj_derived_source')"""
+        )
+        await db.execute(
+            """INSERT INTO claims
+               (id, source_entry_id, claim_type, content, confidence, project_id)
+               VALUES ('clm_derived_source', 'jrn_derived_source',
+                       'observation', 'derived claim', 0.8,
+                       'proj_derived_source')"""
+        )
+        await db.execute(
+            """INSERT INTO topics (id, name, project_id)
+               VALUES ('top_derived_parent', 'parent',
+                       'proj_derived_source')"""
+        )
+        await db.execute(
+            """INSERT INTO topics (id, name, parent_id, project_id)
+               VALUES ('top_derived_child', 'child', 'top_derived_parent',
+                       'proj_derived_source')"""
+        )
+        await db.execute(
+            """INSERT INTO context_snapshots
+               (id, entry_ids, query, project_id)
+               VALUES ('ctx_derived_source', '["jrn_derived_source"]',
+                       'source query', 'proj_derived_source')"""
+        )
+        await db.execute(
+            """INSERT INTO entity_topics
+               (topic_id, entity_type, entity_id, assigned_by)
+               VALUES ('top_derived_child', 'claim', 'clm_derived_source',
+                       'brain')"""
+        )
+        await db.commit()
+
+        pack_path, _ = await KnowledgePackService(
+            db,
+            project_id="proj_derived_source",
+        ).export_pack()
+        with open(pack_path, "rb") as pack_file:
+            await KnowledgePackService(db).import_pack(
+                pack_file,
+                project_id="proj_derived_copy",
+                project_name="Derived Copy",
+            )
+
+        imported_journal = await db.fetchone(
+            """SELECT id FROM journal
+               WHERE project_id = 'proj_derived_copy'"""
+        )
+        imported_topics = await db.fetchall(
+            """SELECT id, name, parent_id FROM topics
+               WHERE project_id = 'proj_derived_copy'
+               ORDER BY name"""
+        )
+        imported_context = await db.fetchone(
+            """SELECT id, entry_ids FROM context_snapshots
+               WHERE project_id = 'proj_derived_copy'"""
+        )
+        imported_claim = await db.fetchone(
+            """SELECT id FROM claims
+               WHERE project_id = 'proj_derived_copy'"""
+        )
+        assert imported_journal is not None
+        assert imported_context is not None
+        assert imported_claim is not None
+        assert imported_context["id"] != "ctx_derived_source"
+        assert json.loads(imported_context["entry_ids"]) == [
+            imported_journal["id"]
+        ]
+        topics_by_name = {row["name"]: row for row in imported_topics}
+        assert topics_by_name["parent"]["id"] != "top_derived_parent"
+        assert topics_by_name["child"]["id"] != "top_derived_child"
+        assert (
+            topics_by_name["child"]["parent_id"]
+            == topics_by_name["parent"]["id"]
+        )
+        imported_membership = await db.fetchone(
+            """SELECT topic_id, entity_type, entity_id, assigned_by
+               FROM entity_topics
+               WHERE topic_id = ?""",
+            [topics_by_name["child"]["id"]],
+        )
+        assert imported_membership == {
+            "topic_id": topics_by_name["child"]["id"],
+            "entity_type": "claim",
+            "entity_id": imported_claim["id"],
+            "assigned_by": "brain",
+        }
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_export_rejects_cross_project_topic_membership(
+    tmp_path: Path,
+) -> None:
+    db = await _make_db(tmp_path / "foreign-topic-membership.db")
+    try:
+        projects = ProjectService(db)
+        await projects.create_project(
+            ProjectCreate(id="proj_topic_owner", name="Topic Owner"),
+            actor="system",
+        )
+        await projects.create_project(
+            ProjectCreate(id="proj_foreign_entity", name="Foreign Entity"),
+            actor="system",
+        )
+        await db.execute(
+            """INSERT INTO topics (id, name, project_id)
+               VALUES ('top_owner', 'owner topic', 'proj_topic_owner')"""
+        )
+        await db.execute(
+            """INSERT INTO journal
+               (id, type, content, source, project_id)
+               VALUES ('jrn_foreign_topic_target', 'note', 'foreign',
+                       'executor', 'proj_foreign_entity')"""
+        )
+        await db.execute(
+            """INSERT INTO entity_topics
+               (topic_id, entity_type, entity_id, assigned_by)
+               VALUES ('top_owner', 'journal', 'jrn_foreign_topic_target',
+                       'brain')"""
+        )
+        await db.commit()
+
+        with pytest.raises(ValueError, match="outside the project or absent"):
+            await KnowledgePackService(
+                db,
+                project_id="proj_topic_owner",
+            ).export_pack()
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_include_logs_round_trip_preserves_hook_executions(
+    tmp_path: Path,
+) -> None:
+    db = await _make_db(tmp_path / "hook-log-pack.db")
+    try:
+        await ProjectService(db).create_project(
+            ProjectCreate(id="proj_hook_log", name="Hook Log Source"),
+            actor="system",
+        )
+        await db.execute(
+            """INSERT INTO hooks
+               (id, event, project_id, handler_type, handler_config, name)
+               VALUES ('hk_log_source', 'session_start', 'proj_hook_log',
+                       'sql', '{}', 'log hook')"""
+        )
+        await db.execute(
+            """INSERT INTO hook_executions
+               (id, hook_id, project_id, status, payload)
+               VALUES ('hkx_log_source', 'hk_log_source', 'proj_hook_log',
+                       'success', '{"event":"session_start"}')"""
+        )
+        await db.execute(
+            """INSERT INTO qa_sessions (id, project_id, title)
+               VALUES ('qas_log_source', 'proj_hook_log', 'Portable QA')"""
+        )
+        await db.execute(
+            """INSERT INTO qa_logs
+               (id, session_id, question, answer, answer_structured, sources)
+               VALUES ('qal_log_source', 'qas_log_source', 'What ran?',
+                       'The hook ran.',
+                       '{"hook_id":"hk_log_source"}',
+                       '["hk_log_source"]')"""
+        )
+        await db.commit()
+
+        pack_path, _ = await KnowledgePackService(
+            db,
+            project_id="proj_hook_log",
+        ).export_pack(include_logs=True)
+        with open(pack_path, "rb") as pack_file:
+            result = await KnowledgePackService(db).import_pack(
+                pack_file,
+                project_id="proj_hook_log_copy",
+                project_name="Hook Log Copy",
+            )
+        imported_hook = await db.fetchone(
+            """SELECT id FROM hooks
+               WHERE project_id = 'proj_hook_log_copy'"""
+        )
+        imported_execution = await db.fetchone(
+            """SELECT id, hook_id, payload FROM hook_executions
+               WHERE project_id = 'proj_hook_log_copy'"""
+        )
+        imported_session = await db.fetchone(
+            """SELECT id FROM qa_sessions
+               WHERE project_id = 'proj_hook_log_copy'"""
+        )
+        imported_log = await db.fetchone(
+            """SELECT id, session_id, answer_structured, sources
+               FROM qa_logs WHERE session_id = ?""",
+            [imported_session["id"] if imported_session else ""],
+        )
+        assert result.imported_counts["hook_executions"] == 1
+        assert result.imported_counts["qa_logs"] == 1
+        assert imported_hook is not None
+        assert imported_execution is not None
+        assert imported_session is not None
+        assert imported_log is not None
+        assert imported_execution["id"] != "hkx_log_source"
+        assert imported_execution["hook_id"] == imported_hook["id"]
+        assert json.loads(imported_execution["payload"]) == {
+            "event": "session_start"
+        }
+        assert imported_log["id"] != "qal_log_source"
+        assert imported_log["session_id"] == imported_session["id"]
+        assert json.loads(imported_log["answer_structured"]) == {
+            "hook_id": imported_hook["id"]
+        }
+        assert json.loads(imported_log["sources"]) == [imported_hook["id"]]
     finally:
         await db.close()

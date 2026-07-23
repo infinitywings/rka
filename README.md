@@ -231,7 +231,7 @@ graph TD
     end
 
     subgraph "RKA Server"
-        MCP["MCP Server — 5 always-on dispatch tools (91 typed operations)"]
+        MCP["MCP Server — 5 always-on dispatch tools (109 typed operations)"]
         API["REST API — FastAPI"]
         SVC["Service Layer — shared logic"]
         DB["SQLite + FTS5 + sqlite-vec"]
@@ -525,7 +525,7 @@ If the LLM ever omits `project_id`, the dispatch validator rejects the call at t
 
 To find a project id, run `rka_query(operation="list_projects")` once in any session, or check `http://localhost:9712` in the dashboard URL bar.
 
-**The v2.7.0 dispatch architecture.** The rka MCP server ships **5 always-on tools**: 3 dispatch tools (`rka_query` for 42 read operations, `rka_execute` for 49 write/lifecycle operations, `rka_describe` to introspect operation schemas) plus 2 escape hatches (`rka_load_tools` and `rka_help`) that surface the 91 legacy tools + 8 v2.7.0a2 verbs at tier=deferred for backward compatibility. Every operation is backed by a typed Pydantic model — **91 models total** — with per-branch enum and required-field enforcement at the FastMCP schema layer. This makes Brain-hallucination classes (e.g. `confidence='confirmed'` or `rka_submit_checkpoint(content=…)` instead of `description=`) structurally impossible at the wire layer: the schema rejects them before the LLM can ship a call. See `docs/v2.6.x-v2.7.0-tool-surface-arc.md` for the canonical narrative of how the architecture landed.
+**The v2.7.0+ dispatch architecture.** The rka MCP server ships **5 always-on tools**: 3 dispatch tools (`rka_query` for 51 read operations, `rka_execute` for 58 write/lifecycle operations, `rka_describe` to introspect operation schemas) plus 2 escape hatches (`rka_load_tools` and `rka_help`) that surface deferred compatibility tools. Every operation is backed by a typed Pydantic model — **109 models total** — with per-branch enum and required-field enforcement at the FastMCP schema layer. This makes Brain-hallucination classes (e.g. `confidence='confirmed'` or `rka_submit_checkpoint(content=…)` instead of `description=`) structurally impossible at the wire layer: the schema rejects them before the LLM can ship a call. See `docs/v2.6.x-v2.7.0-tool-surface-arc.md` for the historical narrative of how the dispatch architecture landed.
 
 The legacy navigator surface (v2.6.3 — 12 always-on + ~79 deferred + `rka_load_tools`/`rka_list_tools`/`rka_help` triad) is preserved via `RKA_LEGACY_TOOLS=1`. The orchestrator subprocess sets this flag in its Compose overlay to preserve per-tool dispatch granularity for the TWO-TAP autonomy-contract gate at `pi_decision_select`; PI sessions should leave it unset and use the dispatch surface.
 
@@ -767,13 +767,13 @@ The MCP server is defined in `rka/mcp/server.py`. As of v2.7.0 it ships **5 alwa
 
 | Tool             | Purpose                                                                                                                |
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `rka_query`      | Dispatcher for **42 read operations** (`get_status`, `search`, `get_research_map`, `list_projects`, `get_context`, …) — call with `operation="…"` plus the operation's typed args. |
-| `rka_execute`    | Dispatcher for **49 write/lifecycle operations** (`record_note`, `record_decision`, `create_mission`, `submit_report`, `submit_checkpoint`, …) — call with `operation="…"` plus typed args. |
+| `rka_query`      | Dispatcher for **51 read operations** (`status`, `search`, `research_map`, `list_projects`, `manuscript_context`, `manuscript_reference_manifest`, `manuscript_writing_candidates`, `changes_since`, …) — call with `args={"operation": "…", ...}`. |
+| `rka_execute`    | Dispatcher for **58 write/lifecycle operations** (`record_note`, `record_decision`, `create_mission`, `upsert_argument_spine`, `replace_manuscript_reference_manifest`, `submit_report`, …) — call with `args={"operation": "…", ...}`. |
 | `rka_describe`   | Introspect operation schemas. `rka_describe("")` returns the index (<250 tokens); `rka_describe("record_decision")` returns the full Pydantic schema with required fields, enums, and provenance constraints. |
 | `rka_load_tools` | Escape hatch — surface deferred legacy tools by name (rare; preserved for backward-compatibility).                     |
 | `rka_help`       | Escape hatch — list available operations or describe a single one (alias for `rka_describe`).                          |
 
-Every operation is backed by a typed Pydantic model. **87 models live in `rka/mcp/operation_args.py`**, all unioned under `discriminator='operation'` so FastMCP renders the inputSchema as `oneOf` — each branch carries its own enum constraints (`confidence: Literal["high", "medium", "low"]`, `type: Literal["note", "log", "directive"]`, etc.) and `min_length=1` on required provenance fields (`related_journal` on `record_decision`, `motivated_by_decision` on `create_mission`, …). Brain hallucinations like `confidence='confirmed'` or `submit_checkpoint(content=…)` (instead of `description=`) are rejected at the inputSchema layer before the call ships.
+Every operation is backed by a typed Pydantic model. **109 models live in `rka/mcp/operation_args.py`**, all unioned under `discriminator='operation'` so FastMCP renders the inputSchema as `oneOf` — each branch carries its own enum constraints (`confidence: Literal["hypothesis", "tested", "verified", "superseded", "retracted"]`, `type: Literal["note", "log", "directive"]`, etc.) and `min_length=1` on required provenance fields (`related_journal` on `record_decision`, `motivated_by_decision` on `create_mission`, …). Brain hallucinations like `confidence='confirmed'` or `submit_checkpoint(content=…)` (instead of `description=`) are rejected at the inputSchema layer before the call ships.
 
 The pre-v2.7.0 91-tool surface (every individual `rka_add_note`, `rka_get_status`, `rka_submit_report`, …) is preserved at `tier=deferred` and callable via `rka_load_tools(names=[…])`. The v2.7.0a2 verb surface (8 intent verbs) is also deferred. **Set `RKA_LEGACY_TOOLS=1`** to restore the v2.7.0a2 verb-plus-legacy surface as always-on — the orchestrator daemon's subprocess does this to preserve per-tool dispatch granularity for the TWO-TAP autonomy-contract gate.
 

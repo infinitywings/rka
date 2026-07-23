@@ -22,7 +22,7 @@ Bookkeeper invariant: this module lives under rka/, so it goes to
 
 THE 8 VERBS:
   1. rka_query(scope, *, project_id, id?, query?, limit?, filters?, options?)
-     — 29 read scopes
+     — project-scoped read operations
   2. rka_record_note(content, *, project_id, source, type, ...)
   3. rka_record_decision(question, chosen, rationale, *, project_id, ...)
   4. rka_record_literature(*, project_id, title?|bibtex?|search_query?|doi?,
@@ -891,7 +891,7 @@ async def dispatch_review(target: str, *, project_id: str, payload: dict[str, An
 
 
 # ---------------------------------------------------------------------------
-# rka_query dispatch — 29 read scopes
+# rka_query dispatch — project-scoped read operations
 # ---------------------------------------------------------------------------
 #
 # Each scope maps to a legacy @tool function. Kwargs flow through normalized
@@ -962,6 +962,19 @@ _QUERY_DISPATCH: dict[str, str] = {
 
     # manuscript
     "manuscript": "rka_get_manuscript",
+    "manuscript_context": "rka_get_manuscript_context",
+    "manuscript_reference_manifest": "rka_get_manuscript_reference_manifest",
+    "manuscript_readiness": "rka_get_manuscript_readiness",
+    "manuscript_spine": "rka_get_manuscript_spine",
+    "manuscript_writing_candidates": "rka_get_manuscript_writing_candidates",
+    "manuscript_impact": "rka_get_manuscript_impact",
+    "reference_validation_status": "rka_get_reference_validation_status",
+
+    # bounded heterogeneous resolver
+    "resolve_entities": "rka_resolve_entities",
+
+    # durable semantic change cursor
+    "changes_since": "rka_changes_since",
 }
 
 
@@ -974,6 +987,14 @@ async def dispatch_query(
     limit: int | None = None,
     filters: dict[str, Any] | None = None,
     options: dict[str, Any] | None = None,
+    ids: list[str] | None = None,
+    include_sources: bool = False,
+    include_edges: bool = False,
+    target_phase: str | None = None,
+    cursor: int | None = None,
+    since_cursor: int | None = None,
+    manuscript_id: str | None = None,
+    job_id: str | None = None,
 ) -> str:
     """[ANY] Universal read dispatcher.
 
@@ -991,6 +1012,14 @@ async def dispatch_query(
         filters: Per-scope filter dict.
         options: Per-scope option dict (e.g. {'depth': 'detailed'} for
             'context').
+        ids: Entity IDs for the bounded ``resolve_entities`` operation.
+        include_sources: Include terminal claim-source closure when resolving.
+        include_edges: Include same-project typed edges when resolving.
+        target_phase: Lifecycle phase for ``manuscript_readiness``.
+        cursor: Opaque monotonic cursor for ``changes_since``.
+        since_cursor: Last synchronized cursor for ``manuscript_impact``.
+        manuscript_id: Manuscript scope for ``reference_validation_status``.
+        job_id: Validation-job identifier for ``reference_validation_status``.
     """
     if scope not in _QUERY_DISPATCH:
         valid = ", ".join(sorted(_QUERY_DISPATCH))
@@ -1318,6 +1347,88 @@ async def dispatch_query(
                 "rka_query(scope='manuscript'): id required",
             )
         return await legacy(manuscript_id=id, project_id=project_id)
+
+    if scope in (
+        "manuscript_context",
+        "manuscript_spine",
+        "manuscript_writing_candidates",
+    ):
+        if not id:
+            return _err(
+                "missing_field",
+                f"rka_query(scope={scope!r}): id required",
+            )
+        return await legacy(manuscript_id=id, project_id=project_id)
+
+    if scope == "manuscript_readiness":
+        if not id:
+            return _err(
+                "missing_field",
+                "rka_query(scope='manuscript_readiness'): id required",
+            )
+        return await legacy(
+            manuscript_id=id,
+            target_phase=target_phase or "drafting",
+            project_id=project_id,
+        )
+
+    if scope == "resolve_entities":
+        if not ids:
+            return _err(
+                "missing_field",
+                "rka_query(scope='resolve_entities'): ids required",
+            )
+        return await legacy(
+            ids=ids,
+            include_sources=include_sources,
+            include_edges=include_edges,
+            project_id=project_id,
+        )
+
+    if scope == "changes_since":
+        return await legacy(
+            cursor=0 if cursor is None else cursor,
+            limit=100 if limit is None else limit,
+            project_id=project_id,
+        )
+
+    if scope == "manuscript_impact":
+        if not id:
+            return _err(
+                "missing_field",
+                "rka_query(scope='manuscript_impact'): id required",
+            )
+        return await legacy(
+            manuscript_id=id,
+            since_cursor=0 if since_cursor is None else since_cursor,
+            limit=100 if limit is None else limit,
+            project_id=project_id,
+        )
+
+    if scope == "manuscript_reference_manifest":
+        if not id:
+            return _err(
+                "missing_field",
+                "rka_query(scope='manuscript_reference_manifest'): "
+                "id required",
+            )
+        return await legacy(
+            manuscript_id=id,
+            project_id=project_id,
+        )
+
+    if scope == "reference_validation_status":
+        if not manuscript_id or not job_id:
+            return _err(
+                "missing_field",
+                "rka_query(scope='reference_validation_status') requires "
+                "manuscript_id and job_id",
+            )
+        return await legacy(
+            manuscript_id=manuscript_id,
+            job_id=job_id,
+            project_id=project_id,
+        )
 
     return _err(
         "invalid_scope",
@@ -1729,7 +1840,7 @@ async def dispatch_session(
 # v2.7.0a3 — rka_execute dispatch (the unified write/lifecycle surface)
 # ---------------------------------------------------------------------------
 #
-# Routes ~47 write/lifecycle operations to the appropriate existing
+# Routes all 58 write/lifecycle operations to the appropriate existing
 # dispatcher above (or to a legacy @tool function for ops that aren't
 # already covered by one of the 8 v2.7.0a2 verbs). The goal: one
 # always-on tool for ALL writes, with an Annotated[Literal] operation
@@ -1776,6 +1887,12 @@ EXECUTE_OPERATIONS = (
     "record_note", "record_decision", "record_literature",
     "ingest_document", "import_bibtex", "batch_import",
     "register_manuscript",
+    # canonical native manuscript aggregate
+    "create_manuscript", "update_manuscript", "upsert_argument_spine",
+    "replace_manuscript_reference_manifest",
+    "ratify_manuscript_claim", "transition_manuscript_phase",
+    "create_manuscript_checkpoint", "resolve_manuscript_checkpoint",
+    "record_verification_attestation",
     # update
     "update_note", "update_decision", "update_literature",
     "update_status", "bulk_update", "supersede_decision",
@@ -1863,6 +1980,144 @@ async def dispatch_execute(
             f"rka_execute(operation={op!r}) requires project_id "
             "(every project-scoped write needs explicit project pinning "
             "in v2.6+).",
+        )
+
+    # --- canonical native manuscript aggregate ---
+    if op == "create_manuscript":
+        return await _legacy("rka_create_native_manuscript")(
+            title=kw.get("title"),
+            abstract=kw.get("abstract"),
+            venue=kw.get("venue"),
+            phase=phase or "planning",
+            state=kw.get("state", "active"),
+            workspace_ref=kw.get("workspace_ref"),
+            legacy_journal_id=kw.get("legacy_journal_id"),
+            project_id=project_id,
+        )
+
+    if op == "update_manuscript":
+        provided_fields = set(kw.pop("_provided_fields", ()))
+        if not provided_fields:
+            # Defense-in-depth for direct legacy dispatcher callers that do
+            # not pass the typed model's fields-set metadata.
+            provided_fields = {
+                field_name
+                for field_name in (
+                    "title",
+                    "abstract",
+                    "venue",
+                    "state",
+                    "workspace_ref",
+                )
+                if field_name in kw
+            }
+            if phase is not None:
+                provided_fields.add("phase")
+        updates: dict[str, Any] = {}
+        for field_name in (
+            "title",
+            "abstract",
+            "venue",
+            "phase",
+            "state",
+            "workspace_ref",
+        ):
+            if field_name not in provided_fields:
+                continue
+            updates[field_name] = phase if field_name == "phase" else kw.get(
+                field_name
+            )
+        return await _legacy("rka_update_native_manuscript")(
+            manuscript_id=kw.get("id"),
+            expected_revision=kw.get("expected_revision"),
+            updates=updates,
+            project_id=project_id,
+        )
+
+    if op == "upsert_argument_spine":
+        return await _legacy("rka_upsert_argument_spine")(
+            manuscript_id=kw.get("id"),
+            expected_revision=kw.get("expected_revision"),
+            spine=kw.get("spine"),
+            project_id=project_id,
+        )
+
+    if op == "replace_manuscript_reference_manifest":
+        return await _legacy("rka_replace_manuscript_reference_manifest")(
+            manuscript_id=kw.get("id"),
+            expected_revision=kw.get("expected_revision"),
+            members=kw.get("members", []),
+            project_id=project_id,
+        )
+
+    if op == "ratify_manuscript_claim":
+        return await _legacy("rka_ratify_manuscript_claim")(
+            manuscript_id=kw.get("id"),
+            claim_ref=kw.get("claim_ref"),
+            expected_revision=kw.get("expected_revision"),
+            decision_id=kw.get("decision_id"),
+            claim_version=kw.get("claim_version"),
+            ratified_at=kw.get("ratified_at"),
+            project_id=project_id,
+        )
+
+    if op == "transition_manuscript_phase":
+        return await _legacy("rka_transition_manuscript_phase")(
+            manuscript_id=kw.get("id"),
+            expected_revision=kw.get("expected_revision"),
+            target_phase=kw.get("target_phase"),
+            target_state=kw.get("target_state"),
+            project_id=project_id,
+        )
+
+    if op == "create_manuscript_checkpoint":
+        return await _legacy("rka_create_native_manuscript_checkpoint")(
+            manuscript_id=kw.get("id"),
+            expected_revision=kw.get("expected_revision"),
+            kind=kw.get("kind"),
+            unit_id=kw.get("unit_id"),
+            supersedes_id=kw.get("supersedes_id"),
+            project_id=project_id,
+        )
+
+    if op == "resolve_manuscript_checkpoint":
+        return await _legacy("rka_resolve_native_manuscript_checkpoint")(
+            checkpoint_id=kw.get("checkpoint_id"),
+            expected_revision=kw.get("expected_revision"),
+            decision_id=kw.get("decision_id"),
+            status=kw.get("status"),
+            resolved_at=kw.get("resolved_at"),
+            project_id=project_id,
+        )
+
+    if op == "record_verification_attestation":
+        attestation_fields = (
+            "claim_id",
+            "claim_version",
+            "overall_verdict",
+            "grounding_verdict",
+            "evidence_verdict",
+            "contradiction_verdict",
+            "currency_verdict",
+            "ratification_verdict",
+            "unit_coverage_verdict",
+            "changelog_cursor",
+            "dependency_snapshot",
+            "full_json_payload",
+            "validator_version",
+            "started_at",
+            "completed_at",
+        )
+        attestation = {
+            field_name: kw[field_name]
+            for field_name in attestation_fields
+            if field_name in kw
+        }
+        return await _legacy("rka_record_manuscript_verification_attestation")(
+            manuscript_id=kw.get("id"),
+            expected_revision=kw.get("expected_revision"),
+            attestation=attestation,
+            project_id=project_id,
         )
 
     # --- record_note / ingest_document ---
@@ -2297,6 +2552,14 @@ async def dispatch_query_typed(args: "BaseModel") -> str:  # type: ignore[name-d
             limit=kw_all.get("limit"),
             filters=kw_all.get("filters"),
             options=kw_all.get("options"),
+            ids=kw_all.get("ids"),
+            include_sources=kw_all.get("include_sources", False),
+            include_edges=kw_all.get("include_edges", False),
+            target_phase=kw_all.get("target_phase"),
+            cursor=kw_all.get("cursor"),
+            since_cursor=kw_all.get("since_cursor"),
+            manuscript_id=kw_all.get("manuscript_id"),
+            job_id=kw_all.get("job_id"),
         )
     )
 
@@ -2321,7 +2584,15 @@ async def dispatch_execute_typed(args: "BaseModel") -> str:  # type: ignore[name
     # ``model_dump`` returns a plain dict; ``exclude_none=True`` strips
     # None defaults so downstream ``kw.get(...)`` calls behave the same
     # as the legacy raw-kwarg surface.
-    kw_all = args.model_dump(exclude_none=True)
+    if op == "update_manuscript":
+        # Preserve explicit nulls for nullable metadata fields (abstract,
+        # venue, workspace_ref) while retaining omission semantics.  The
+        # service uses Pydantic's fields-set to distinguish "clear" from
+        # "leave unchanged", so the dispatch layer carries that set through.
+        kw_all = args.model_dump(exclude_unset=True)
+        kw_all["_provided_fields"] = sorted(args.model_fields_set)
+    else:
+        kw_all = args.model_dump(exclude_none=True)
     kw_all.pop("operation", None)
     kw_all.pop("project_id", None)
 

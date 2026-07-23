@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 import pytest_asyncio
 from pydantic import ValidationError
 
 from rka.infra.database import Database
 from rka.models.decision_option import DecisionOptionCreate, EvidenceRef
+from rka.services import decision_options as decision_options_module
 from rka.services.decision_options import DecisionOptionsService
 
 
@@ -144,6 +147,30 @@ class TestCreateAndList:
         assert [o.label for o in listed] == ["A", "B", "C"]  # by seed
 
     @pytest.mark.asyncio
+    async def test_create_bulk_failure_rolls_back_all_options(
+        self,
+        svc_and_decision,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        svc, dec_id = svc_and_decision
+        monkeypatch.setattr(
+            decision_options_module,
+            "generate_id",
+            lambda _entity_type: "dop_duplicate",
+        )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            await svc.create_bulk(
+                dec_id,
+                [
+                    _make_option(label="first", seed=1),
+                    _make_option(label="second", seed=2),
+                ],
+            )
+
+        assert await svc.list_for_decision(dec_id) == []
+
+    @pytest.mark.asyncio
     async def test_fk_rejects_unknown_decision(self, svc_and_decision):
         svc, _ = svc_and_decision
         with pytest.raises(Exception):
@@ -189,7 +216,7 @@ class TestParetoFilter:
         svc, dec_id = svc_and_decision
         a = await svc.create(dec_id, _make_option(label="A", seed=1))
         b = await svc.create(dec_id, _make_option(label="B", seed=2))
-        c = await svc.create(dec_id, _make_option(label="C", seed=3))
+        await svc.create(dec_id, _make_option(label="C", seed=3))
         await svc.set_dominated_by(b.id, a.id)  # B dominated by A
         options = await svc.list_for_decision(dec_id)
         filtered = await svc.pareto_filter(options)

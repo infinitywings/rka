@@ -98,3 +98,116 @@ async def test_get_and_lists_project_both_contradiction_endpoints(db) -> None:
     assert [(claim.id, claim.contradicted) for claim in cluster_claims] == [
         (target.id, True)
     ]
+
+
+@pytest.mark.asyncio
+async def test_create_edge_rejects_foreign_project_endpoints(db) -> None:
+    await _seed_source(db, "jrn_edge_scope_owner")
+    owner = ClaimService(db, project_id=PROJECT_ID)
+    owner_claim = await owner.create(
+        ClaimCreate(
+            source_entry_id="jrn_edge_scope_owner",
+            claim_type="observation",
+            content="Owner claim.",
+        )
+    )
+    await db.execute(
+        """INSERT INTO projects (id, name)
+           VALUES ('proj_edge_scope_foreign', 'Foreign edge scope')"""
+    )
+    await db.execute(
+        """INSERT INTO journal
+           (id, project_id, type, content, source, confidence)
+           VALUES ('jrn_edge_scope_foreign', 'proj_edge_scope_foreign',
+                   'note', 'Foreign evidence.', 'executor', 'tested')"""
+    )
+    await db.execute(
+        """INSERT INTO claims
+           (id, source_entry_id, claim_type, content, confidence, project_id)
+           VALUES ('clm_edge_scope_foreign', 'jrn_edge_scope_foreign',
+                   'observation', 'Foreign claim.', 0.5,
+                   'proj_edge_scope_foreign')"""
+    )
+    await db.execute(
+        """INSERT INTO evidence_clusters
+           (id, label, project_id)
+           VALUES ('ecl_edge_scope_foreign', 'Foreign cluster',
+                   'proj_edge_scope_foreign')"""
+    )
+    await db.commit()
+
+    with pytest.raises(ValueError, match="source journal"):
+        await owner.create(
+            ClaimCreate(
+                source_entry_id="jrn_edge_scope_foreign",
+                claim_type="observation",
+                content="Laundered foreign provenance.",
+            )
+        )
+    with pytest.raises(ValueError, match="source claim"):
+        await owner.create_edge(
+            ClaimEdgeCreate(
+                source_claim_id="clm_edge_scope_foreign",
+                target_claim_id=owner_claim.id,
+                relation="supports",
+            )
+        )
+    with pytest.raises(ValueError, match="target claim"):
+        await owner.create_edge(
+            ClaimEdgeCreate(
+                source_claim_id=owner_claim.id,
+                target_claim_id="clm_edge_scope_foreign",
+                relation="supports",
+            )
+        )
+    with pytest.raises(ValueError, match="cluster"):
+        await owner.create_edge(
+            ClaimEdgeCreate(
+                source_claim_id=owner_claim.id,
+                cluster_id="ecl_edge_scope_foreign",
+                relation="member_of",
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_edge_rejects_incomplete_or_self_referential_shape(db) -> None:
+    await _seed_source(db, "jrn_edge_shape")
+    service = ClaimService(db, project_id=PROJECT_ID)
+    claim = await service.create(
+        ClaimCreate(
+            source_entry_id="jrn_edge_shape",
+            claim_type="observation",
+            content="Shape claim.",
+        )
+    )
+
+    with pytest.raises(ValueError, match="member_of"):
+        await service.create_edge(
+            ClaimEdgeCreate(
+                source_claim_id=claim.id,
+                relation="member_of",
+            )
+        )
+    with pytest.raises(ValueError, match="target claim or cluster"):
+        await service.create_edge(
+            ClaimEdgeCreate(
+                source_claim_id=claim.id,
+                relation="contradicts",
+            )
+        )
+    with pytest.raises(ValueError, match="require a target claim"):
+        await service.create_edge(
+            ClaimEdgeCreate(
+                source_claim_id=claim.id,
+                relation="supports",
+            )
+        )
+    with pytest.raises(ValueError, match="cannot target"):
+        await service.create_edge(
+            ClaimEdgeCreate(
+                source_claim_id=claim.id,
+                target_claim_id=claim.id,
+                relation="supports",
+            )
+        )

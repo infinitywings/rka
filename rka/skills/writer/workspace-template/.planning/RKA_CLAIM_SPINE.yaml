@@ -1,27 +1,32 @@
 # RKA_CLAIM_SPINE.yaml
 #
-# Editable Writer projection from canonical RKA records to this manuscript.
-# The Markdown contribution/argument/results views are generated from this
-# file and must not be edited as sources of truth.
+# Read-only Writer projection from the canonical native RKA manuscript.
+# Replace this bootstrap placeholder with `rka writer sync`. Do not edit this
+# file as a source of truth; use dry-run/apply native spine commands.
 
-schema_version: rka-claim-spine/v1
+schema_version: rka-claim-spine/v2
+authoritative_source: rka
 project_id: REPLACE_WITH_PROJECT_ID
 manuscript_id: REPLACE_WITH_MANUSCRIPT_ID
-generated_at: null
+manuscript_revision: null
 changelog_cursor: null
 
-# Populate claims during the contribution substep of the Outline checkpoint.
-# Only status=ratified plus an active PI dec_ may pass the drafting gate.
-# For an empirical claim, evidence/qualifier/counterevidence ids name clm_
-# records that resolve to current terminal source records.
+# Populated only by `rka writer sync`.
 claims: []
 
-# Add claim-sized manuscript units in manuscript order. Each empirical claim
-# requires a result unit; each major result unit must name a contribution.
-# Result units also carry artifact, allowed_interpretation, and
-# prohibited_interpretation fields.
+# Populated only by `rka writer sync`.
 units: []
 
-# Generated after live validation. Do not hand-edit. Currency checking without
-# a usable snapshot returns ERROR, never PASS.
-rka_snapshot: null
+# Populated only by `rka writer sync`. `verify_citations.py` derives approval
+# from member-level validation.current and rejects this unsynchronized
+# placeholder.
+reference_manifest:
+  schema_version: rka.manuscript-reference-manifest/v1
+  authoritative_source: rka
+  project_id: REPLACE_WITH_PROJECT_ID
+  manuscript_id: REPLACE_WITH_MANUSCRIPT_ID
+  manuscript_revision: null
+  members: []
+  active_citation_keys: []
+  approved_citation_keys: []
+  all_members_verified: false

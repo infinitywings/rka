@@ -103,43 +103,44 @@ class DecisionOptionsService(BaseService):
     ) -> list[DecisionOption]:
         """Insert multiple options transactionally (typical: 3 at presentation)."""
         created_ids: list[str] = []
-        # aiosqlite auto-rolls-back uncommitted work on next BEGIN; we just
-        # avoid committing on error so callers see a clean failure.
-        for option in options:
-            opt_id = generate_id("decision_option")
-            await self.db.execute(
-                """INSERT INTO decision_options
-                   (id, decision_id, project_id, label, summary, justification,
-                    expert_archetype, explanation, pros, cons, evidence,
-                    confidence_verbal, confidence_numeric, confidence_evidence_strength,
-                    confidence_known_unknowns, effort_time, effort_cost,
-                    effort_reversibility, presentation_order_seed, is_recommended)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
-                [
-                    opt_id,
-                    decision_id,
-                    self.project_id,
-                    option.label,
-                    option.summary,
-                    option.justification,
-                    option.expert_archetype,
-                    option.explanation,
-                    json.dumps(option.pros),
-                    json.dumps(option.cons),
-                    json.dumps([e.model_dump() for e in option.evidence]),
-                    option.confidence_verbal,
-                    option.confidence_numeric,
-                    option.confidence_evidence_strength,
-                    json.dumps(option.confidence_known_unknowns),
-                    option.effort_time,
-                    option.effort_cost,
-                    option.effort_reversibility,
-                    option.presentation_order_seed,
-                ],
-            )
-            created_ids.append(opt_id)
-        await self.db.commit()
-        return [await self.get(cid) for cid in created_ids]  # type: ignore[misc]
+        async with self.db.transaction():
+            for option in options:
+                opt_id = generate_id("decision_option")
+                await self.db.execute(
+                    """INSERT INTO decision_options
+                       (id, decision_id, project_id, label, summary, justification,
+                        expert_archetype, explanation, pros, cons, evidence,
+                        confidence_verbal, confidence_numeric,
+                        confidence_evidence_strength,
+                        confidence_known_unknowns, effort_time, effort_cost,
+                        effort_reversibility, presentation_order_seed,
+                        is_recommended)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
+                    [
+                        opt_id,
+                        decision_id,
+                        self.project_id,
+                        option.label,
+                        option.summary,
+                        option.justification,
+                        option.expert_archetype,
+                        option.explanation,
+                        json.dumps(option.pros),
+                        json.dumps(option.cons),
+                        json.dumps([e.model_dump() for e in option.evidence]),
+                        option.confidence_verbal,
+                        option.confidence_numeric,
+                        option.confidence_evidence_strength,
+                        json.dumps(option.confidence_known_unknowns),
+                        option.effort_time,
+                        option.effort_cost,
+                        option.effort_reversibility,
+                        option.presentation_order_seed,
+                    ],
+                )
+                created_ids.append(opt_id)
+            await self.db.commit()
+            return [await self.get(cid) for cid in created_ids]  # type: ignore[misc]
 
     # ------------------------------------------------------------------- read
 

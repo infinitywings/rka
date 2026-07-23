@@ -1,246 +1,273 @@
 # Writer Architecture
 
-The Writer is a Claude Code skill (Markdown SKILL.md + Python scripts + workspace template) operating in VSCode per `dec_01KS0AWYDV752AWQRF40CQBRFZ`. It reads from and writes to RKA via the existing `rka` MCP server. It does not introduce new RKA orchestration; it operates on a manuscript working directory and emits provenance edges back into the research graph.
+Writer is an authoring skill over an RKA-managed research project. RKA core is
+the semantic authority; Writer owns files, venue adaptation, drafting,
+rendering, and deterministic human-readable projections.
 
 ## Deployment model
 
-```
-VSCode (PI workspace)
-  +--> Claude Code session (entry point)
-       +--> SKILL.md (this skill) ----> Native tools: Read/Edit/Write/Bash/Grep/Glob/WebSearch/WebFetch
-       |                          +--> MCP servers via .mcp.json:
-       |                                  rka (required)
-       |                                  rka-writer-tools (Phase 2, optional)
-       |
-       +--> Workspace = manuscripts/<project-id>/<venue>/
-            +--> sections/*.tex
-            +--> figures/, tables/, charts/
-            +--> refs.bib
-            +--> main.tex
-            +--> .planning/
-                 +--> RKA_CLAIM_SPINE.yaml (editable Writer projection)
-                 +--> CONTRIBUTION_CONTRACT.md (generated, read-only)
-                 +--> ARGUMENT_SPINE.md (generated, read-only)
-                 +--> RESULTS_TRACE.md (generated, read-only)
-                 +--> other working state
-            +--> .latexmkrc, .mcp.json
-            +--> ai_tic_config.yaml (per-project overrides)
-            +--> styles/ (vendored venue templates)
+```text
+Writer session
+  |
+  +-- rka MCP or trusted local REST
+  |     +-- native man_ manuscript aggregate
+  |     +-- project research graph and entity resolver
+  |     +-- readiness, change cursor, and impact mapping
+  |     +-- durable reference-validation jobs
+  |
+  +-- manuscript workspace
+        +-- .rka/manuscript.json
+        +-- .planning/RKA_CLAIM_SPINE.yaml       generated
+        +-- .planning/CONTRIBUTION_CONTRACT.md   generated
+        +-- .planning/ARGUMENT_SPINE.md          generated
+        +-- .planning/RESULTS_TRACE.md            generated
+        +-- .planning/ACTIVE_WORKFLOW.md          local session state
+        +-- sections/, figures/, tables/, charts/
+        +-- refs.bib, main.tex, styles/
 ```
 
-Two invocation paths land in this skill:
+The portable workspace contains no credential and no default RKA project.
+Every command passes an explicit `project_id`. `.rka/manuscript.json` stores
+the canonical `man_` id returned or resolved by `rka writer init`.
 
-1. **Direct PI invocation.** PI launches `claude` in the manuscript directory; the skill loads on session start when Claude Code detects the workspace.
-2. **Brain-spawned subagent.** Brain creates a revision mission (`rka_create_mission`); a fresh Claude Code subagent picks it up and operates on the manuscript directory.
+## Authority boundary
 
-Same skill content in both paths; the entry point differs.
+| RKA core owns | Writer owns |
+|---|---|
+| `man_` identity, venue, phase, state, revision | authoring files and directory layout |
+| stable `mcl_` claim identity and immutable wording versions | prose and section structure |
+| evidence roles and terminal source provenance | venue-specific citation formatting |
+| exact PI ratifications (`mra_`) | deterministic Markdown/YAML rendering |
+| manuscript units (`mun_`) and result boundaries | figures, tables, and chart source files |
+| checkpoints (`mck_`) and verification attestations (`mva_`) | compilation and layout audit |
+| readiness, change cursors, and impact | disposable local session notes |
 
-## RKA integration
+Local files cannot create semantic truth. A local proposal changes the
+aggregate only through an explicit, revision-guarded command. A generated
+projection is replaced by `rka writer sync`, not repaired by hand.
 
-The Writer reads broadly from RKA at session start and during drafting:
+## Native manuscript aggregate
 
-> **v2.7.0 dispatch translation.** Legacy tool names below (`rka_add_decision`, `rka_record_pi_selection`, `rka_get_research_map`, `rka_add_note`, etc.) are synonyms for `rka_execute(args={"operation": ...})` / `rka_query(args={"operation": ...})` under the v2.7.0+ typed-arg surface. The discipline (`source="pi"` + `verbatim_input`, `related_journal=[...]` on decisions, `project_id` on every call, etc.) carries over verbatim — only the call shape changes. See the role SKILL.md files for the full mapping and `rka_describe(operation="<name>")` for per-operation signatures.
+The canonical manuscript uses `man_`. A legacy tagged `jrn_` may remain linked
+through `legacy_journal_id` and may be accepted as an input alias during the
+compatibility window.
 
-| Tool | When | Purpose |
-|---|---|---|
-| `rka_get_status` | session start | confirm phase/focus for the explicitly passed project_id |
-| `rka_get_changelog` | session start, before every writing gate | refresh dependencies and identify records changed since the saved claim-spine cursor |
-| `rka_get_research_map` | session start, before outline | structural overview of clusters and claims |
-| entity reads | claim planning, session start, before every writing gate | resolve claim-spine dependencies and identify affected claims and manuscript units |
-| `rka_get_journal` | during drafting | quote PI directives, prior findings |
-| `rka_get_literature` | during drafting | citation source for `lit_` entities |
-| `rka_get_decision_tree` | during outline | ratified decisions to cite |
-| `rka_search` | during drafting | targeted retrieval (queries kept to 2 to 4 words) |
-| `rka_get_context` | during drafting | importance-ranked context bundle for a topic |
+The aggregate contains:
 
-The Writer writes back to RKA when an artifact is generated or a checkpoint resolves:
+- `manuscripts`: identity, project, title, abstract, venue, phase, state,
+  workspace reference, optimistic revision, and optional legacy alias;
+- `manuscript_claims`: stable local keys and closed claim kinds;
+- `manuscript_claim_versions`: immutable exact, allowed, and prohibited
+  wording;
+- `manuscript_claim_ratifications`: immutable exact-version bindings to active
+  same-project PI decisions;
+- `manuscript_units`: stable claim-sized locations with explicit result
+  interpretation boundaries;
+- typed claim-evidence, unit-evidence, and claim-unit joins;
+- `manuscript_checkpoints`: six closed checkpoint kinds and explicit decision
+  resolution;
+- `manuscript_claim_verification_attestations`: immutable multidimensional
+  findings with dependency snapshots and tool provenance.
 
-| Tool | When | What is recorded |
-|---|---|---|
-| `rka_add_note` | manuscript manifest creation, checkpoint ratification, session digest | `jrn_` entries with full provenance |
-| `rka_add_decision` | each of 6 PI checkpoints | `dec_` with options, rationale, PI selection |
-| `rka_record_pi_selection` | each checkpoint after PI picks | links PI's choice to a `dec_` |
-| `rka_update_literature` | after reference validation | `validation_status` field on `lit_` |
-| `rka_create_mission` | only for follow-ups Brain or Executor handle | revision missions during the Revision Loop |
+Critical joins carry the project boundary. The service does not infer
+ratification from tags, prose, a filled YAML cell, or an arbitrary decision.
 
-The Writer does **not** call `rka_create_project`, `rka_create_gate`, or any orchestration tool that grows new RKA structure. The bookkeeper invariant for Phase 1 is preserved.
+## Claim and evidence semantics
 
-## Claim-spine representation
+Native manuscript claim kinds are:
 
-The claim spine adds a structured argument projection without changing the RKA
-data model. Its full contract is in [`claim_spine.md`](claim_spine.md).
+- `empirical`;
+- `methodological`;
+- `theoretical`;
+- `survey`;
+- `position`.
+
+Evidence roles are `support`, `qualifier`, and `counterevidence`. These roles
+are manuscript bindings, not new scientific facts. The underlying `clm_`
+records still require:
+
+- source-grounding verification;
+- scientific `evidence_status` of `supported` or `partially_supported` when
+  used as positive support;
+- explicit `contradicted: false`;
+- current same-project state;
+- a current non-manuscript terminal source.
+
+`claims.verified` means extraction fidelity only. It does not establish
+measurement integrity, replication, or scientific truth. An `ecl_` synthesis
+helps discovery but cannot serve as terminal empirical evidence. A `dec_`
+licenses wording or resolves a checkpoint but cannot supply empirical support.
+
+Scientific `supports`, `contradicts`, and `qualifies` edges belong to
+`claim_edges` between `clm_` records. Cross-type provenance uses the
+schema-valid `entity_links` vocabulary. Writer never invents edge types.
+
+## Noise smoothing and candidate discovery
+
+The writing path is hierarchical:
 
 ```text
-live RKA entities and links
-        |
-        | resolve, check project, status, and terminal sources
-        v
-.planning/RKA_CLAIM_SPINE.yaml
-        |
-        | deterministic rendering only
-        +--> CONTRIBUTION_CONTRACT.md
-        +--> ARGUMENT_SPINE.md
-        +--> RESULTS_TRACE.md
-        |
-        | claim/unit dependencies
-        v
-sections/*.tex + hidden provenance comments
+journal -> grounded claim -> reviewed evidence cluster
+-> active research question -> unratified candidate -> native claim and unit
 ```
 
-Canonicality is layered rather than duplicated:
+Each boundary reduces noise without destroying history. Journals are never
+promoted directly. Source claims must pass grounding, scientific-support,
+currency, project, source, and contradiction checks. Duplicate support stays
+linked but does not create extra candidate claims. A cluster must be current,
+Brain-reviewed, sufficiently confident, and bound to an active research
+question.
 
-- RKA is canonical for research observations, literature, claim extraction,
-  decision history, entity status, and provenance.
-- `RKA_CLAIM_SPINE.yaml` is the editable Writer-side map from those records to
-  this manuscript. It is regenerable and cannot make a record true by naming
-  it.
-- The three Markdown files are generated views. They are never authoritative
-  inputs and are never edited to repair the YAML.
-- The manuscript `jrn_` remains the canonical RKA record for the paper itself.
+`manuscript_writing_candidates` is a read-only project-map view. It returns
+both eligible and blocked clusters, excluded claim reasons, duplicate groups,
+and lineage. It deliberately creates neither manuscript records nor PI
+ratifications. The PI/Writer selects in-scope research questions, bounds exact
+and prohibited wording, and then submits a revision-guarded native spine
+change.
 
-The Outline checkpoint owns contribution ratification. The PI chooses exact,
-bounded wording; the active `dec_` records that wording and is referenced by
-the spine's `ratified_by` field. A decision licenses the manuscript framing but
-does not serve as empirical support. Positive evidence, qualifiers, and
-counterevidence resolve through verified `clm_` records to current source
-records. An `ecl_` is useful for discovery but is not terminal evidence.
+See
+[`evidence_to_spine_pipeline.md`](evidence_to_spine_pipeline.md) for the full
+admission and change-handling contract.
 
-The dependency snapshot records all RKA entities used by the spine, including
-sources reached through claim records and their live freshness metadata. On
-session resume, currency comparison maps changed or currently invalid entities
-back to affected claim IDs and manuscript unit IDs. A changed record never
-rewrites PI-ratified wording automatically. Yellow staleness remains a surfaced
-warning; missing, wrong-project, red-stale, temporally invalid, inactive,
-reprocessing-required, retracted, or unresolvable dependencies block the
-relevant writing gate. Unknown freshness metadata or an unavailable resolver
-or snapshot is `ERROR`, never `PASS`.
+## PI ratification
 
-Snapshot creation is itself gated by live validation and accepts only `PASS`.
-Currency checking does not trust the saved snapshot as proof: it revalidates
-the active spine and recursively expands both claim-level and unit-only source
-dependencies before reporting affected units.
+A manuscript claim may have many immutable wording versions. A ratification
+binds exactly one version to one active same-project PI decision whose selected
+wording exactly matches that version.
 
-The claim spine emits no new entity or edge types and requires no service, API,
-MCP, or web change. It uses the existing research-map, changelog, entity,
-decision, and manuscript surfaces. Reviewer-facing output remains advisory and
-contains no aggregate paper score or accept/reject prediction.
+Changing licensed wording requires:
 
-## Option 2 manuscript representation (`dec_01KS0BKJ5ZJKJ4R19GYAK3QN9D` Q1)
+1. append a new claim wording version;
+2. supersede the earlier PI decision when appropriate;
+3. record a new active PI decision with the exact new wording;
+4. bind that decision to the new version;
+5. synchronize Writer projections.
 
-A manuscript is represented by two artifacts: the working-directory tree on disk and a `jrn_` manifest in RKA. There is no new entity type; the `jrn_` manifest serves as the canonical manuscript record.
+The argument-spine upsert deliberately never creates a ratification.
 
-Manifest fields:
+## Units and result trace
 
-```python
-rka_add_note(
-    type="note",
-    source="executor",  # or "pi" if PI directly authored the launch
-    content="""
-# Manuscript: <Title>
+A `mun_` is the smallest meaningful writing unit, not necessarily a section.
+It carries a stable local key, kind, source location, optional artifact, order,
+and drafting status. Claim-unit relationships are `advances`, `tests`,
+`bounds`, or `mentions`.
 
-## Section index
-- §1 Introduction: drafted | revised | submitted
-- §2 Related Work: drafted
-- §3 Method: drafted
-- §4 Evaluation: drafted
-- §5 Discussion: outlined
-- §6 Conclusion: outlined
+Every active empirical claim requires an active result unit. Every result unit
+requires:
 
-## Working directory
-manuscripts/<project-id>/<venue>/
+- an artifact reference;
+- an allowed interpretation;
+- a prohibited interpretation;
+- source-backed evidence;
+- a relationship to at least one manuscript claim.
 
-## Current phase
-draft  # draft | review | final | submitted
-""",
-    verbatim_input="<full PI-authored title + abstract>",
-    provenance={                      # record_note nests linkage under provenance (not top-level)
-        "related_decisions": [
-            "dec_venue_checkpoint",
-            "dec_outline_checkpoint",
-            "dec_table_figure_plan",
-            "dec_reference_set",
-            "dec_draft_approvals",
-            "dec_final_layout",
-        ],
-        "related_literature": ["lit_..."],  # all cited
-    },
-    tags=["manuscript", "venue:CHI", "phase:draft", "writer-session:3"],
-    importance="high",
-    confidence="tested",
-)
+This bidirectional rule prevents unsupported contributions and orphan results.
+
+## Transactions and revisions
+
+Semantic mutations are aggregate-atomic. Row changes, normalized links, audit
+records, and queued follow-up work commit together. Relation updates reconcile
+the complete desired set so removed relations do not survive as stale edges.
+
+Manuscript updates use optimistic concurrency:
+
+1. read the current revision;
+2. prepare a bounded change;
+3. submit `expected_revision`;
+4. on conflict, inspect the new aggregate and rebase;
+5. never retry blindly.
+
+Slow or external work runs after commit through durable jobs. A pending or
+failed job never masquerades as a completed attestation.
+
+## Projections and compatibility
+
+`rka writer sync` exports `rka-claim-spine/v2` plus a conservative integer
+change cursor. It then optionally renders:
+
+- `CONTRIBUTION_CONTRACT.md`;
+- `ARGUMENT_SPINE.md`;
+- `RESULTS_TRACE.md`.
+
+These are caches and review aids. Their authority metadata and manuscript
+revision make accidental use of an unscoped or stale file visible.
+
+`rka-claim-spine/v1` remains readable for migration. `rka writer import-spine`
+is dry-run by default and may apply claim, version, evidence, unit, and binding
+changes only with a revision precondition. It never imports ratifications.
+
+## Currency and impact
+
+RKA records semantic changes in a monotonic project-scoped cursor. Writer saves
+a watermark with each synchronized projection and asks RKA to map later
+changes to:
+
+- affected manuscript claims;
+- affected manuscript units;
+- source file locations;
+- artifact references;
+- changed source entities.
+
+The watermark is captured before the aggregate read. This can rediscover a
+concurrent change but cannot hide it. A partial impact response requires
+pagination or a full resynchronization.
+
+Impact narrows review; readiness decides whether a phase can advance. After
+reviewing relevant changes, Writer synchronizes and asks for readiness again.
+
+## Readiness
+
+Server readiness is categorical and evidence linked. Depending on target
+phase, it checks:
+
+- active manuscript state and venue;
+- active claims with wording versions;
+- current exact PI ratifications;
+- eligible support and source currency;
+- contradiction state;
+- empirical result coverage;
+- unit evidence and result boundaries;
+- resolved checkpoint kinds.
+
+`BLOCK` and `ERROR` stop advancement. A local script can add a stricter
+file-level block but cannot override the server.
+
+## Workspace initialization
+
+`rka writer init`:
+
+1. validates the explicit project and target path;
+2. creates a native manuscript or resolves a supplied `man_`/legacy `jrn_`;
+3. verifies title and venue;
+4. substitutes the workspace template in a staging directory;
+5. writes `.rka/manuscript.json` with `authoritative_source: rka`;
+6. atomically publishes the complete workspace.
+
+If native registration succeeds but publication fails, rerun with the returned
+canonical id. Do not register a duplicate.
+
+## Normal and exceptional flows
+
+Normal flow:
+
+```text
+impact -> inspect affected scope -> sync -> readiness -> draft/review
 ```
 
-The manifest is updated as the manuscript progresses through phases; the `tags` field carries the current phase via `phase:<draft|review|final>`. The `related_decisions` field grows as each of the six PI checkpoints ratifies a `dec_`.
+Semantic revision:
 
-The Outline checkpoint produces the framing decision plus one child
-claim-scope `dec_` per selected contribution. Each child stores one exact claim
-sentence in `chosen`, so `ratified_by` remains unambiguous when a paper has
-multiple contributions. These records implement the PI's explicit Outline
-selection; they do not add a seventh checkpoint. If evidence later supports a
-materially different contribution, a new claim-scope decision supersedes the
-old one; the manifest keeps both in its decision lineage while the spine points
-only to the current decision.
-
-Option 3 (a new `man_` entity type with schema migration) was rejected per Q1 ratification because it would require migration scaffolding in `rka/db/schema.sql` and `rka/services/` (violating the bookkeeper invariant for Phase 1).
-
-## Graph semantics Writer uses
-
-Writer records cross-entity provenance only through the schema-valid
-`entity_links` vocabulary (see `../brain/architecture.md` section "Entity-link
-and claim-edge vocabularies"). Most edges are materialized automatically from
-typed `related_*` fields by core services:
-
-| Edge | From | To | Meaning |
-|---|---|---|---|
-| `cites` | manuscript jrn_ | lit_ | manuscript cites this literature item |
-| `references` | manuscript jrn_ | dec_ | manifest records its checkpoint decisions |
-| `justified_by` | checkpoint dec_ | jrn_ | checkpoint decision rests on this evidence |
-| `informed_by` | lit_ | checkpoint dec_ | literature informed this decision |
-| `motivated` | checkpoint dec_ | revision mission mis_ | checkpoint triggered the rework |
-| `supersedes` | new dec_ | old dec_ | revisited checkpoint replaces prior |
-| `produced` | mission mis_ | manuscript jrn_ | revision mission updated this manuscript |
-
-Scientific support, contradiction, and qualification are represented only as
-`claim_edges` among `clm_` records. The claim spine references those records and
-checks their status; it does not invent cross-type `supports` or `contradicts`
-links. The Writer never invents new edge types or creates orphan entities.
-
-## Bookkeeper invariant (Phase 1)
-
-The original Phase 1 bookkeeper invariant was a delivery boundary, not a permanent architecture rule. Phase 0 reliability now deliberately adds narrow core semantics: `claims.verified` means source grounding only; `claims.evidence_status` separately records scientific support; reference validations are immutable manuscript/project-scoped attestations; and the core CLI owns atomic workspace initialization. Writer still owns prose, files, venue structure, rendering, and derived projections. These core changes must remain typed, migrated, and backward-compatible rather than being re-encoded as Writer tags or YAML conventions.
-
-## Workspace template structure
-
-The package ships a workspace template at `rka/skills/writer/workspace-template/`. Never copy it by hand. `rka writer init` preflights the target, registers or verifies a `jrn_` manuscript, substitutes every core token in a sibling staging directory, writes `.rka/manuscript.json`, and atomically publishes the complete directory:
-
-```
-manuscripts/<project-id>/<venue>/
-  .rka/manuscript.json        # explicit project/manuscript binding from init
-  .mcp.json                   # portable commands; no credentials/project default
-  .latexmkrc                  # TEXINPUTS=./styles//: ; @default_files = ('main.tex')
-  .planning/
-    ACTIVE_WORKFLOW.md        # current_phase, last_checkpoint, next_action
-    PRECIS.md                 # PI-authored title + abstract + venue
-    RKA_CLAIM_SPINE.yaml      # editable mapping from RKA records to claims/units
-    CONTRIBUTION_CONTRACT.md  # generated read-only contribution view
-    ARGUMENT_SPINE.md         # generated read-only unit/claim view
-    RESULTS_TRACE.md          # generated read-only result/claim view
-    OUTLINE.md                # ratified outline (post-Outline checkpoint)
-    REVIEW_STATE.md           # iteration counter for Revision Loop
-    sketches/                 # per-section sketches before drafting
-  styles/                     # vendored venue templates (populated by fetch_template)
-  sections/                   # section .tex files
-  figures/, tables/, charts/  # generated artifacts
-  refs.bib                    # validated bibliography
-  main.tex                    # skeleton, then \input{sections/*}
-  ai_tic_config.yaml          # per-project overrides
+```text
+assist/research -> dry-run import -> PI review -> apply with revision
+-> explicit PI decision -> exact ratification -> sync -> readiness
 ```
 
-## Current reliability boundary
+Evidence change:
 
-- RKA core owns project/manuscript identity, claim grounding, scientific-support status, PI decisions, currency, and reference-validation attestations.
-- Writer owns the editable derived spine, generated Markdown views, prose, citation formatting, venue templates, rendering, and layout checks.
-- `rka writer assist` is read-only and produces candidates; it cannot ratify or write records.
-- `rka writer readiness` requires a fresh project-scoped entity packet and live-valid claim spine before drafting.
-- Missing provenance, missing render artifacts, unsupported claim types, unscoped ratifications, and unavailable resolution evidence fail closed.
-- `rka-writer-tools`, Stages A through G, extended venue specs, and the R1-R4 revision loop are implemented; historical phase labels elsewhere do not override this current boundary.
+```text
+change event -> impact mapping -> claim/unit review
+-> gather evidence or narrow wording -> new version if needed
+-> new PI decision and ratification -> sync -> readiness
+```
+
+The detailed command sequence is in
+[`server_authoritative_workflow.md`](server_authoritative_workflow.md).

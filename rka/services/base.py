@@ -186,50 +186,32 @@ class BaseService:
     async def _sync_fts(self, entity_type: str, entity_id: str, data: dict) -> None:
         """Insert or update an entity's FTS5 index entry.
 
-        Wrapped in a SAVEPOINT so a failure between the DELETE and the
-        INSERT cannot leave an orphaned DELETE pending — a later commit()
-        on the shared connection would otherwise make that DELETE
-        permanent, silently dropping the row from search. On failure we
-        ROLLBACK TO the savepoint (discarding only the FTS delete+insert,
-        preserving any prior work in the transaction) and log at WARNING
-        so the drift is visible. `rka admin reindex` repairs any row that
-        slips through.
+        The managed transaction becomes a savepoint when a caller already
+        owns the connection, so a failure between the DELETE and INSERT
+        restores the previous index row without rolling back the caller's
+        aggregate mutation.  When called on its own, it also owns the shared
+        connection for the full delete/reinsert window, preventing another
+        coroutine from being committed inside a legacy raw savepoint.
         """
         config = self._FTS_CONFIG.get(entity_type)
         if not config:
             return
-        # entity_type is constrained to _FTS_CONFIG keys (alnum), so the
-        # savepoint name is safe to interpolate.
-        savepoint = f"fts_sync_{entity_type}"
         try:
-            await self.db.execute(f"SAVEPOINT {savepoint}")
-        except Exception:  # pragma: no cover — savepoint start should not fail
-            savepoint = ""
-        try:
-            # Delete existing entry
-            await self.db.execute(
-                f"DELETE FROM {config['table']} WHERE id = ?", [entity_id]
-            )
-            # Insert new entry
-            cols = config["columns"]
-            values = [data.get(c, "") or "" for c in cols]
-            values[0] = entity_id  # id column
-            placeholders = ", ".join("?" for _ in cols)
-            col_names = ", ".join(cols)
-            await self.db.execute(
-                f"INSERT INTO {config['table']} ({col_names}) VALUES ({placeholders})",
-                values,
-            )
-            if savepoint:
-                await self.db.execute(f"RELEASE {savepoint}")
-            await self.db.commit()
+            async with self.db.transaction():
+                await self.db.execute(
+                    f"DELETE FROM {config['table']} WHERE id = ?", [entity_id]
+                )
+                cols = config["columns"]
+                values = [data.get(c, "") or "" for c in cols]
+                values[0] = entity_id  # id column
+                placeholders = ", ".join("?" for _ in cols)
+                col_names = ", ".join(cols)
+                await self.db.execute(
+                    f"INSERT INTO {config['table']} "
+                    f"({col_names}) VALUES ({placeholders})",
+                    values,
+                )
         except Exception as exc:
-            if savepoint:
-                try:
-                    await self.db.execute(f"ROLLBACK TO {savepoint}")
-                    await self.db.execute(f"RELEASE {savepoint}")
-                except Exception:  # pragma: no cover
-                    pass
             logger.warning(
                 "FTS5 sync failed for %s/%s: %s — search index NOT updated for "
                 "this entity; run `rka admin reindex` to repair.",
@@ -312,6 +294,133 @@ class BaseService:
             [link_id, source_type, source_id, link_type, target_type, target_id, created_by, resolved_project_id],
         )
         await self.db.commit()
+
+    @staticmethod
+    def _normalized_link_ids(entity_ids: list[str] | None) -> set[str]:
+        """Return a de-duplicated set of non-blank entity IDs."""
+        return {
+            entity_id.strip()
+            for entity_id in (entity_ids or [])
+            if entity_id and entity_id.strip()
+        }
+
+    async def _replace_outgoing_links(
+        self,
+        *,
+        source_type: str,
+        source_id: str,
+        link_type: str,
+        target_type: str,
+        target_ids: list[str] | None,
+        created_by: str = "system",
+        project_id: str | None = None,
+    ) -> None:
+        """Make one outgoing typed-edge set exactly match ``target_ids``.
+
+        Existing matching edges are retained so their IDs and provenance
+        timestamps stay stable. Stale edges are removed and missing edges are
+        inserted. The helper is atomic on its own and nests safely inside a
+        larger aggregate transaction.
+        """
+        resolved_project_id = self._resolve_project_id(project_id)
+        desired = self._normalized_link_ids(target_ids)
+        async with self.db.transaction():
+            rows = await self.db.fetchall(
+                """SELECT target_id
+                   FROM entity_links
+                   WHERE project_id = ?
+                     AND source_type = ? AND source_id = ?
+                     AND link_type = ? AND target_type = ?""",
+                [
+                    resolved_project_id,
+                    source_type,
+                    source_id,
+                    link_type,
+                    target_type,
+                ],
+            )
+            existing = {row["target_id"] for row in rows}
+            for target_id in sorted(existing - desired):
+                await self.db.execute(
+                    """DELETE FROM entity_links
+                       WHERE project_id = ?
+                         AND source_type = ? AND source_id = ?
+                         AND link_type = ? AND target_type = ? AND target_id = ?""",
+                    [
+                        resolved_project_id,
+                        source_type,
+                        source_id,
+                        link_type,
+                        target_type,
+                        target_id,
+                    ],
+                )
+            for target_id in sorted(desired - existing):
+                await self.add_link(
+                    source_type,
+                    source_id,
+                    link_type,
+                    target_type,
+                    target_id,
+                    created_by=created_by,
+                    project_id=resolved_project_id,
+                )
+
+    async def _replace_incoming_links(
+        self,
+        *,
+        target_type: str,
+        target_id: str,
+        link_type: str,
+        source_type: str,
+        source_ids: list[str] | None,
+        created_by: str = "system",
+        project_id: str | None = None,
+    ) -> None:
+        """Make one incoming typed-edge set exactly match ``source_ids``."""
+        resolved_project_id = self._resolve_project_id(project_id)
+        desired = self._normalized_link_ids(source_ids)
+        async with self.db.transaction():
+            rows = await self.db.fetchall(
+                """SELECT source_id
+                   FROM entity_links
+                   WHERE project_id = ?
+                     AND target_type = ? AND target_id = ?
+                     AND link_type = ? AND source_type = ?""",
+                [
+                    resolved_project_id,
+                    target_type,
+                    target_id,
+                    link_type,
+                    source_type,
+                ],
+            )
+            existing = {row["source_id"] for row in rows}
+            for source_id in sorted(existing - desired):
+                await self.db.execute(
+                    """DELETE FROM entity_links
+                       WHERE project_id = ?
+                         AND target_type = ? AND target_id = ?
+                         AND link_type = ? AND source_type = ? AND source_id = ?""",
+                    [
+                        resolved_project_id,
+                        target_type,
+                        target_id,
+                        link_type,
+                        source_type,
+                        source_id,
+                    ],
+                )
+            for source_id in sorted(desired - existing):
+                await self.add_link(
+                    source_type,
+                    source_id,
+                    link_type,
+                    target_type,
+                    target_id,
+                    created_by=created_by,
+                    project_id=resolved_project_id,
+                )
 
     async def _auto_link(
         self,

@@ -10,7 +10,6 @@ import pytest_asyncio
 
 from rka.api.app import create_app
 from rka.config import RKAConfig
-from rka.services.manuscript import ManuscriptService
 
 
 @pytest_asyncio.fixture
@@ -33,7 +32,7 @@ async def api_client(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_route_forwards_authors_and_literature_id(api_client, monkeypatch) -> None:
+async def test_route_queues_authors_and_literature_id(api_client) -> None:
     registered = await api_client.post(
         "/api/manuscripts",
         json={"venue": "CHI", "title": "Route test"},
@@ -45,21 +44,6 @@ async def test_route_forwards_authors_and_literature_id(api_client, monkeypatch)
         json={"title": "A paper", "doi": "10.1234/route"},
     )
     assert literature.status_code == 201
-    captured: dict = {}
-
-    async def fake_validate(self, reference, *, manuscript_id, literature_id=None):
-        captured.update({
-            "reference": reference,
-            "manuscript_id": manuscript_id,
-            "literature_id": literature_id,
-        })
-        return {
-            "status": "VERIFIED",
-            "validation_id": "rvd_route",
-            "retraction_checked": True,
-        }
-
-    monkeypatch.setattr(ManuscriptService, "validate_reference", fake_validate)
     response = await api_client.post(
         f"/api/manuscripts/{manuscript_id}/validate-reference",
         json={
@@ -69,14 +53,67 @@ async def test_route_forwards_authors_and_literature_id(api_client, monkeypatch)
             "literature_id": literature.json()["id"],
         },
     )
-    assert response.status_code == 200
-    assert response.json()["validation_id"] == "rvd_route"
-    assert captured == {
-        "reference": {
-            "DOI": "10.1234/route",
-            "title": "A paper",
-            "author": [{"family": "Smith", "given": "J"}],
+    assert response.status_code == 202
+    pending = response.json()
+    assert pending["status"] == "pending"
+    assert pending["job_id"].startswith("job_")
+    assert pending["requested_manuscript_id"] == manuscript_id
+    assert pending["canonical_manuscript_id"] == registered.json()["canonical_id"]
+
+    status = await api_client.get(
+        f"/api/manuscripts/{manuscript_id}/reference-validations/"
+        f"{pending['job_id']}"
+    )
+    assert status.status_code == 200
+    assert status.json() == pending
+
+
+@pytest.mark.asyncio
+async def test_status_route_hides_job_from_other_manuscript(api_client) -> None:
+    first = await api_client.post(
+        "/api/manuscripts/native",
+        json={"title": "First"},
+    )
+    second = await api_client.post(
+        "/api/manuscripts/native",
+        json={"title": "Second"},
+    )
+    queued = await api_client.post(
+        f"/api/manuscripts/{first.json()['id']}/validate-reference",
+        json={"title": "Scoped paper"},
+    )
+    hidden = await api_client.get(
+        f"/api/manuscripts/{second.json()['id']}/reference-validations/"
+        f"{queued.json()['job_id']}"
+    )
+    assert hidden.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"title": "x" * 2_001},
+        {"title": "Bounded", "unexpected": {"provider": "blob"}},
+        {
+            "title": "Bounded",
+            "author": [{"family": "Smith", "credential": "secret"}],
         },
-        "manuscript_id": manuscript_id,
-        "literature_id": literature.json()["id"],
-    }
+        {"title": "Bounded", "author": [{"given": "Missing identity"}]},
+        {"title": "Bounded", "author": [{"family": "Smith"}] * 101},
+        {"DOI": "   ", "title": "   "},
+    ],
+)
+async def test_route_rejects_unbounded_or_open_reference_payloads(
+    api_client,
+    payload,
+) -> None:
+    manuscript = await api_client.post(
+        "/api/manuscripts/native",
+        json={"title": "Input bounds"},
+    )
+    response = await api_client.post(
+        f"/api/manuscripts/{manuscript.json()['id']}/validate-reference",
+        json=payload,
+    )
+    assert response.status_code == 422

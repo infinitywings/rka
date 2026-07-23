@@ -6,13 +6,13 @@ This guide walks PIs (researchers) through the full setup and research workflow,
 >
 > | Tool | Purpose |
 > |---|---|
-> | `rka_query` | Dispatcher for **42 read operations** (`get_status`, `list_projects`, `search`, `get_research_map`, `get_journal`, `get_report`, `get_context`, `collect_report_context`, `staleness_impact`, `mission_guard`, `belief_as_of`, …). Call with `operation="…"` plus the operation's typed args. |
-> | `rka_execute` | Dispatcher for **49 write/lifecycle operations** (`record_note`, `record_decision`, `create_mission`, `submit_report`, `submit_checkpoint`, …). |
+> | `rka_query` | Dispatcher for **51 read operations** (`status`, `list_projects`, `search`, `research_map`, `journal`, `report`, `context`, `collect_report_context`, `manuscript_spine`, `manuscript_reference_manifest`, `changes_since`, …). Call with `args={"operation": "…", ...}`. |
+> | `rka_execute` | Dispatcher for **58 write/lifecycle operations** (`record_note`, `record_decision`, `create_mission`, `upsert_argument_spine`, `replace_manuscript_reference_manifest`, `submit_report`, `submit_checkpoint`, …). Call with `args={"operation": "…", ...}`. |
 > | `rka_describe` | Introspect operation schemas. `rka_describe("")` returns the operation index (<250 tokens); `rka_describe("record_decision")` returns the full typed schema with required fields, enums, and provenance constraints. |
 > | `rka_load_tools` | Escape hatch — surface deferred legacy tools (the v2.6.x 91-tool surface and the v2.7.0a2 verb surface live at `tier=deferred`). |
 > | `rka_help` | Escape hatch — list available operations or describe a single one (alias for `rka_describe`). |
 >
-> Every operation is backed by a typed Pydantic model — **87 models total** in `rka/mcp/operation_args.py`. FastMCP renders them as `oneOf` branches with per-branch enum and required-field enforcement. Brain hallucinations like `confidence='confirmed'` or `submit_checkpoint(content=…)` (instead of `description=`) are rejected at the inputSchema layer **before the LLM can ship the call** — that's the no-compromise empirical proof that landed v2.7.0 on 2026-06-02. See `docs/v2.6.x-v2.7.0-tool-surface-arc.md` for the full narrative.
+> Every operation is backed by a typed Pydantic model — **109 models total** in `rka/mcp/operation_args.py`. FastMCP renders them as `oneOf` branches with per-branch enum and required-field enforcement. Brain hallucinations like `confidence='confirmed'` or `submit_checkpoint(content=…)` (instead of `description=`) are rejected at the inputSchema layer **before the LLM can ship the call**. See `docs/v2.6.x-v2.7.0-tool-surface-arc.md` for the historical dispatch-design narrative.
 >
 > Set `RKA_LEGACY_TOOLS=1` to restore the pre-v2.7.0 surface (91 legacy tools + 8 v2.7.0a2 verbs always-on). The orchestrator daemon's subprocess does this to preserve per-tool dispatch granularity for the TWO-TAP autonomy-contract gate at `pi_decision_select`; ordinary PI sessions should leave it unset.
 

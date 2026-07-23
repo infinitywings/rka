@@ -18,13 +18,13 @@ The rka MCP server ships a **discriminated-union dispatch surface**. Five tools 
 
 | Always-on tool | Purpose |
 |---|---|
-| `rka_query(args)` | All 38 read operations (status, context, journal, decisions, missions, literature, research-map, etc.) |
-| `rka_execute(args)` | All 49 write/lifecycle operations (notes, decisions, missions, checkpoints, reports, literature, claims, clusters, hooks, maintenance) |
+| `rka_query(args)` | All 51 read operations (status, context, journal, research map, native manuscripts, writing candidates, reference manifests, change impact, etc.) |
+| `rka_execute(args)` | All 58 write/lifecycle operations (notes, decisions, missions, native manuscripts, reference manifests, checkpoints, claims, hooks, maintenance) |
 | `rka_describe(operation)` | Schema lookup + worked example for any operation; `rka_describe('')` returns the <250-token index |
 | `rka_load_tools(names)` | Escape hatch — brings deferred legacy tools online when you specifically need backwards-compat access |
 | `rka_help(topic)` | Deprecated alias for `rka_describe`; retained always-on for cockpits that learned the v2.6.3 navigator vocabulary |
 
-`args` is a **typed Pydantic model** discriminated by `operation`. There are 87 models in `rka/mcp/operation_args.py`. FastMCP renders them as `inputSchema.oneOf` with per-branch enum constraints + required-field arrays. **The schema layer rejects wrong enum values, missing required fields, and missing provenance BEFORE the call is dispatched** — the historical `confidence='confirmed'` hallucination class is structurally impossible at the inputSchema level.
+`args` is a **typed Pydantic model** discriminated by `operation`. There are 109 models in `rka/mcp/operation_args.py`. FastMCP renders them as `inputSchema.oneOf` with per-branch enum constraints + required-field arrays. **The schema layer rejects wrong enum values, missing required fields, and missing provenance BEFORE the call is dispatched** — the historical `confidence='confirmed'` hallucination class is structurally impossible at the inputSchema level.
 
 ### Worked examples
 
@@ -33,8 +33,8 @@ The rka MCP server ships a **discriminated-union dispatch surface**. Five tools 
 rka_query(args={"operation": "status", "project_id": "prj_01..."})
 
 # Read: decision tree
-rka_query(args={"operation": "get_decision_tree", "project_id": "prj_01...",
-                "root_decision_id": "dec_01..."})
+rka_query(args={"operation": "decision_tree", "project_id": "prj_01...",
+                "id": "dec_01..."})
 
 # Write: record a note (note attribution via source/verbatim_input)
 rka_execute(args={"operation": "record_note", "project_id": "prj_01...",
@@ -45,14 +45,16 @@ rka_execute(args={"operation": "record_note", "project_id": "prj_01...",
 # Write: record a decision (provenance enforced — related_journal min_length=1)
 rka_execute(args={"operation": "record_decision", "project_id": "prj_01...",
                   "question": "Adopt MQTT or AMQP for the edge gateway?",
+                  "chosen": "MQTT",
                   "rationale": "MQTT wins on packet-loss tolerance per jrn_01...",
-                  "decided_by": "brain",
+                  "decided_by": "brain", "kind": "design_choice",
+                  "phase": "design",
                   "related_journal": ["jrn_01..."],
-                  "confidence": "high"})
+                  "confidence": "tested"})
 
 # Schema lookup
 rka_describe(operation="record_decision")  # signature + example + enums
-rka_describe(operation="")                 # <250-token index of all 87 ops
+rka_describe(operation="")                 # <250-token index of all 109 ops
 ```
 
 When a workflow below references a legacy tool name like `rka_add_decision`, treat it as a synonym for `rka_execute(args={"operation": "record_decision", ...})`. The mapping is in `rka_describe('')`. The typed-arg surface obviates `rka_load_tools` for normal work; only use it for explicit legacy access (e.g., orchestrator subprocess running with `RKA_LEGACY_TOOLS=1`).
@@ -72,11 +74,11 @@ When a workflow below references a legacy tool name like `rka_add_decision`, tre
 
 1. **Pin the project for the whole conversation.** v2.6+: every project-scoped operation requires `project_id` in `args`. There is NO "active project" session state on the MCP server. Ask the PI (or recall from their first message) which project this conversation is about; call `rka_query(args={"operation": "list_projects"})` once if you need to discover the canonical ID; then thread `"project_id": "prj_..."` on every subsequent `rka_query` / `rka_execute` call. Omitting `project_id` is caught at the inputSchema layer as a missing required field — by design; this replaces the pre-v2.6 silent-fallback-to-`proj_default` failure mode. **Discipline: keep the project_id in working memory; thread it on every call.** The `RKA_PROJECT` env var was removed in v2.6; there is no per-process default.
 2. `rka_query(args={"operation": "status", "project_id": <pinned>})` — current state of the pinned project.
-3. `rka_query(args={"operation": "get_changelog", "project_id": <pinned>, "since": "<last session date>"})` — what changed.
-4. `rka_query(args={"operation": "get_pending_maintenance", "project_id": <pinned>})` — provenance gaps.
+3. `rka_query(args={"operation": "changelog", "project_id": <pinned>, "filters": {"since": "<last session date>"}})` — what changed.
+4. `rka_query(args={"operation": "pending_maintenance", "project_id": <pinned>})` — provenance gaps.
 5. Process up to 10 maintenance items silently. Priority:
    `decisions_without_justified_by` > `missions_without_motivated_by` > `unassigned_clusters` > `entries_missing_cross_refs` > `entries_without_tags`.
-6. `rka_query(args={"operation": "get_research_map", "project_id": <pinned>})` — structural overview.
+6. `rka_query(args={"operation": "research_map", "project_id": <pinned>})` — structural overview.
 7. Greet the user — now begin the actual conversation.
 
 Full worked walkthrough: `workflows.md` § "Session Start".
@@ -253,7 +255,7 @@ Not every task needs all four gates — quick bug fixes need only Gate 1; litera
 
 ## Knowledge Freshness
 
-Knowledge decays. Run `rka_query(args={"operation": "check_freshness", "project_id": <pinned>})` at session start alongside `rka_query(args={"operation": "get_pending_maintenance", ...})`. When new evidence contradicts old claims, `rka_execute(args={"operation": "flag_stale", "project_id": <pinned>, "entity_id": "...", "propagate": True})` cascades staleness through dependent clusters and decisions.
+Knowledge decays. Run `rka_query(args={"operation": "freshness", "project_id": <pinned>})` at session start alongside `rka_query(args={"operation": "pending_maintenance", "project_id": <pinned>})`. When new evidence contradicts old claims, `rka_execute(args={"operation": "flag_stale", "project_id": <pinned>, "entity_id": "...", "propagate": True})` cascades staleness through dependent clusters and decisions.
 
 `staleness` (green/yellow/red) is the Brain's editorial overlay. `valid_until` (v2.2, migration 018) is the ground-truth temporal end-of-validity. Different signals — a claim can be temporally valid but editorially yellow (flagged for review).
 
@@ -263,7 +265,7 @@ Procedures for `rka_check_freshness`, `rka_flag_stale`, `rka_detect_contradictio
 
 ## Research Map Navigation
 
-The three-level hierarchy is RQ → Cluster → Claim. `rka_query(args={"operation": "get_research_map", "project_id": <pinned>})` is the canonical navigation call. Cluster confidence (`emerging` → `moderate` → `strong` → `contested` → `refuted`) summarizes the state of the evidence, not the Brain's endorsement.
+The three-level hierarchy is RQ → Cluster → Claim. `rka_query(args={"operation": "research_map", "project_id": <pinned>})` is the canonical navigation call. Cluster confidence (`emerging` → `moderate` → `strong` → `contested` → `refuted`) summarizes the state of the evidence, not the Brain's endorsement.
 
 Do not promote noisy journal material directly into a paper argument. Follow
 the Record → Extract → Ground → Assess → Synthesize → Answer → Write funnel
@@ -305,7 +307,7 @@ A single search call is not a retrieval strategy. Measured on the rka_developmen
 12. **DON'T** create missions without the structured handoff format — INTENT / BACKGROUND / CONSTRAINTS / ASSUMPTIONS / VERIFICATION in the context field.
 13. **DON'T** skip reviewing the Executor's Backbrief — approve their plan before they begin significant work.
 14. **DON'T** ignore escalation triggers from the Executor — they indicate potential misalignment or invalidated assumptions that need immediate attention.
-15. **DON'T** upgrade RKA without exporting first — run `rka_execute(args={"operation": "export", ...})` to verify the pack includes all expected tables, then `rka_query(args={"operation": "check_integrity", ...})` after import to verify no data was lost.
+15. **DON'T** upgrade RKA without exporting first — use the dashboard export or `GET /api/projects/export`, inspect the pack, then run `rka_query(args={"operation": "integrity", "project_id": <pinned>})` after import to verify no data was lost.
 16. **DON'T** treat `verified=true`, a high numeric confidence, or a strong
     cluster as scientific support — only an explicit current
     `evidence_status` assessment can promote a claim toward a manuscript.

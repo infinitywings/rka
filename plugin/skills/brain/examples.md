@@ -209,7 +209,7 @@ The summary was disposable LLM output. Baking it into a decision rationale canon
 **After:**
 ```python
 # Brain reads the actual clusters + claims.
-rka_query(args={"operation": "get", "project_id": "prj_01...", "id": "ecl_01...broker-limits"})
+rka_query(args={"operation": "entity", "project_id": "prj_01...", "id": "ecl_01...broker-limits"})
 # Then writes rationale with citable claim IDs.
 rka_execute(args={
     "operation": "record_decision",

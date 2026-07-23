@@ -152,7 +152,11 @@ async def test_full_pipeline_persists_complete_immutable_attestation(
     assert json.loads(row["sources_confirmed"]) == ["crossref", "openalex"]
     assert json.loads(row["notes"]) == []
     assert json.loads(row["stage_trace"]) == validator_payload["refs"][0]["stage_trace"]
-    assert json.loads(row["full_json_payload"])["validator_audit"] == validator_payload
+    durable_audit = json.loads(row["full_json_payload"])["validator_audit"]
+    assert durable_audit["pipeline_version"] == "2.1"
+    assert durable_audit["stage_trace_schema"] == STAGE_TRACE_SCHEMA
+    assert durable_audit["summary"] == validator_payload["summary"]
+    assert "refs" not in durable_audit
     assert row["pipeline_version"] == "2.1"
     assert row["started_at"]
     assert row["completed_at"]
@@ -250,7 +254,10 @@ async def test_validation_error_is_attested_when_validator_is_missing(
     )
     assert row is not None
     assert row["status"] == "error"
-    assert json.loads(row["notes"])[0].startswith("validate_references.py not found")
+    assert json.loads(row["notes"]) == []
+    durable = json.loads(row["full_json_payload"])
+    assert durable["result"]["message"] == "reference validator script is unavailable"
+    assert str(tmp_path) not in row["full_json_payload"]
 
 
 @pytest.mark.asyncio

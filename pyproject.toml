@@ -75,6 +75,8 @@ rka = [
     "skills/**/*.py",
     "skills/**/*.tex",
     "skills/**/*.bib",
+    "skills/writer/workspace-template/.planning/*.md",
+    "skills/writer/workspace-template/.planning/*.yaml",
     "skills/**/.mcp.json",
     "skills/**/.latexmkrc",
     "skills/**/.gitkeep",

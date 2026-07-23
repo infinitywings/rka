@@ -6,8 +6,8 @@ Procedural reference for the Executor skill. Loaded on demand when `SKILL.md` po
 >
 > | Legacy shorthand | v2.7.0 dispatch shape |
 > |---|---|
-> | `rka_get_mission(id="mis_...")` | `rka_query(args={"operation": "get_mission", "project_id": <pinned>, "id": "mis_..."})` |
-> | `rka_get_context(topic="...")` | `rka_query(args={"operation": "get_context", "project_id": <pinned>, "topic": "..."})` |
+> | `rka_get_mission(id="mis_...")` | `rka_query(args={"operation": "mission", "project_id": <pinned>, "id": "mis_..."})` |
+> | `rka_get_context(topic="...")` | `rka_query(args={"operation": "context", "project_id": <pinned>, "query": "..."})` |
 > | `rka_search(query="...")` | `rka_query(args={"operation": "search", "project_id": <pinned>, "query": "..."})` |
 > | `rka_add_note(type=..., source="executor", ...)` | `rka_execute(args={"operation": "record_note", "project_id": <pinned>, ...})` |
 > | `rka_submit_checkpoint(type=..., ...)` | `rka_execute(args={"operation": "submit_checkpoint", "project_id": <pinned>, ...})` |

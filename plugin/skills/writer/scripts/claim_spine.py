@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Validate and render an RKA-backed manuscript claim spine.
+"""Validate and render an RKA-backed manuscript claim-spine projection.
 
-The YAML document is a planning projection. RKA remains authoritative for
-evidence, PI decisions, and record currency. Generated Markdown views are
+The native ``rka-claim-spine/v2`` YAML document is a deterministic cache of
+RKA's authoritative manuscript aggregate. Legacy v1 input remains accepted
+for explicit dry-run/import compatibility. Generated Markdown views are
 deliberately deterministic and read-only.
 """
 
@@ -12,6 +13,7 @@ import argparse
 import hashlib
 import json
 import sys
+import tempfile
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -23,6 +25,7 @@ from urllib.request import Request, urlopen
 
 
 SCHEMA_VERSION = "rka-claim-spine/v1"
+NATIVE_SCHEMA_VERSION = "rka-claim-spine/v2"
 SNAPSHOT_VERSION = "rka-claim-spine-snapshot/v1"
 STALE_STATES = {
     "abandoned",
@@ -45,6 +48,13 @@ INACTIVE_VERDICTS = {"historical", "retired", "retracted", "superseded"}
 RATIFIED_STATES = {"ratified"}
 SUPPORTED_EVIDENCE_STATUSES = {"supported", "partially_supported"}
 V1_CLAIM_TYPES = {"empirical"}
+NATIVE_CLAIM_TYPES = {
+    "empirical",
+    "methodological",
+    "theoretical",
+    "survey",
+    "position",
+}
 SEVERITY_RANK = {"PASS": 0, "WARN": 1, "BLOCK": 2, "ERROR": 3}
 Resolver = Callable[[str], Mapping[str, Any] | None]
 
@@ -544,12 +554,30 @@ def validate_spine(
     """Validate structure, evidentiary roles, PI ratification, and currency."""
 
     findings: list[Finding] = []
-    if data.get("schema_version") != SCHEMA_VERSION:
+    schema_version = data.get("schema_version")
+    native_projection = schema_version == NATIVE_SCHEMA_VERSION
+    if schema_version not in {SCHEMA_VERSION, NATIVE_SCHEMA_VERSION}:
         _add(
             findings,
             "UNSUPPORTED_SCHEMA",
-            f"expected schema_version {SCHEMA_VERSION}",
+            f"expected schema_version {SCHEMA_VERSION} or {NATIVE_SCHEMA_VERSION}",
         )
+    if native_projection:
+        if data.get("authoritative_source") != "rka":
+            _add(
+                findings,
+                "AUTHORITY_METADATA_REQUIRED",
+                "native spine projections must declare authoritative_source: rka",
+                severity="ERROR",
+            )
+        revision = data.get("manuscript_revision")
+        if not isinstance(revision, int) or revision < 1:
+            _add(
+                findings,
+                "MANUSCRIPT_REVISION_REQUIRED",
+                "native spine projections require a positive manuscript_revision",
+                severity="ERROR",
+            )
 
     expected_project = project_id or _text(data.get("project_id"))
     if not expected_project:
@@ -619,14 +647,37 @@ def validate_spine(
             manuscript,
             expected_project,
         )
-        if _entity_prefix(manuscript_id) != "jrn":
+        prefix = _entity_prefix(manuscript_id)
+        if native_projection and prefix != "man":
             _add(
                 findings,
                 "INVALID_MANUSCRIPT_ROLE",
-                "manuscript_id must name a jrn_ manuscript manifest",
+                "native manuscript_id must name a canonical man_ aggregate",
                 entity_id=manuscript_id,
             )
-        elif manuscript is not None and not _is_manuscript_manifest(manuscript):
+        elif not native_projection and prefix != "jrn":
+            _add(
+                findings,
+                "INVALID_MANUSCRIPT_ROLE",
+                "legacy manuscript_id must name a jrn_ manuscript manifest",
+                entity_id=manuscript_id,
+            )
+        elif (
+            native_projection
+            and manuscript is not None
+            and _text(manuscript.get("type")) != "manuscript"
+        ):
+            _add(
+                findings,
+                "INVALID_MANUSCRIPT_ROLE",
+                f"entity {manuscript_id} is not a native manuscript aggregate",
+                entity_id=manuscript_id,
+            )
+        elif (
+            not native_projection
+            and manuscript is not None
+            and not _is_manuscript_manifest(manuscript)
+        ):
             _add(
                 findings,
                 "MANUSCRIPT_TAG_REQUIRED",
@@ -647,14 +698,20 @@ def validate_spine(
                 "claim_id, text, claim_type, and status are required",
                 claim_id=claim_id,
             )
-        if claim_type and claim_type not in V1_CLAIM_TYPES:
+        supported_claim_types = (
+            NATIVE_CLAIM_TYPES if native_projection else V1_CLAIM_TYPES
+        )
+        if claim_type and claim_type not in supported_claim_types:
             _add(
                 findings,
                 "UNSUPPORTED_CLAIM_TYPE",
-                "rka-claim-spine/v1 supports only claim_type: empirical",
+                f"{schema_version} does not support claim_type {claim_type!r}",
                 claim_id=claim_id,
             )
-        if status not in RATIFIED_STATES:
+        ratified_state = (
+            status == "active" if native_projection else status in RATIFIED_STATES
+        )
+        if not ratified_state:
             _add(
                 findings,
                 "RATIFICATION_REQUIRED",
@@ -692,7 +749,7 @@ def validate_spine(
 
         decision_id = _text(claim.get("ratified_by"))
         decision = resolved.get(decision_id) if decision_id else None
-        if status in RATIFIED_STATES:
+        if ratified_state:
             decision_freshness = (
                 _freshness_assessment(decision).severity
                 if decision is not None
@@ -723,8 +780,10 @@ def validate_spine(
                     claim_id=claim_id,
                     entity_id=decision_id,
                 )
-            if decision is not None and manuscript_id not in _list(
-                decision.get("related_journal")
+            if (
+                not native_projection
+                and decision is not None
+                and manuscript_id not in _list(decision.get("related_journal"))
             ):
                 _add(
                     findings,
@@ -813,11 +872,19 @@ def validate_spine(
                             )
 
         if claim_type == "empirical":
+            declared_unit_ids = {
+                value
+                for value in _list(claim.get("manuscript_units"))
+                if isinstance(value, str)
+            }
             result_units = [
                 unit
                 for unit in unit_rows
                 if _text(unit.get("kind")).lower() == "result"
-                and claim_id in _list(unit.get("claim_ids"))
+                and (
+                    claim_id in _list(unit.get("claim_ids"))
+                    or _text(unit.get("unit_id")) in declared_unit_ids
+                )
             ]
             if not result_units:
                 _add(
@@ -827,7 +894,7 @@ def validate_spine(
                     claim_id=claim_id,
                 )
 
-        if status in RATIFIED_STATES and counter_ids:
+        if ratified_state and counter_ids and not native_projection:
             for entity_id in counter_ids:
                 _add(
                     findings,
@@ -844,7 +911,10 @@ def validate_spine(
         ]
         for unit_id in declared_units:
             unit = units_by_id.get(unit_id)
-            if unit is None or claim_id not in _list(unit.get("claim_ids")):
+            if unit is None or (
+                not native_projection
+                and claim_id not in _list(unit.get("claim_ids"))
+            ):
                 _add(
                     findings,
                     "UNIT_LINK_MISMATCH",
@@ -859,6 +929,12 @@ def validate_spine(
         linked_claims = [
             value for value in _list(unit.get("claim_ids")) if isinstance(value, str)
         ]
+        if native_projection and not linked_claims and unit_id:
+            linked_claims = [
+                _text(claim.get("claim_id"))
+                for claim in claim_rows
+                if unit_id in _list(claim.get("manuscript_units"))
+            ]
         if kind == "result" and not linked_claims:
             _add(
                 findings,
@@ -1113,14 +1189,23 @@ def _md(value: Any) -> str:
 
 
 def _header(data: Mapping[str, Any], title: str) -> list[str]:
+    native = data.get("schema_version") == NATIVE_SCHEMA_VERSION
+    guidance = (
+        "> Generated, read-only RKA projection. Use `rka writer import-spine "
+        "--dry-run` for proposed semantic changes and `rka writer sync` to refresh."
+        if native
+        else
+        "> Generated, read-only legacy Writer view. Import the YAML into RKA, then sync."
+    )
     return [
         f"# {title}",
         "",
-        "> Generated, read-only RKA view. Edit `RKA_CLAIM_SPINE.yaml`, then regenerate.",
+        guidance,
         "> RKA records and current PI decisions remain authoritative.",
         "",
         f"- Project: `{_md(data.get('project_id'))}`",
         f"- Manuscript: `{_md(data.get('manuscript_id'))}`",
+        f"- Manuscript revision: `{_md(data.get('manuscript_revision'))}`",
         f"- RKA changelog cursor: `{_md(data.get('changelog_cursor'))}`",
         f"- Source generated at: `{_md(data.get('generated_at'))}`",
         "",
@@ -1186,19 +1271,17 @@ def _results_trace(data: Mapping[str, Any]) -> str:
     for unit in _list(data.get("units")):
         if not isinstance(unit, Mapping) or _text(unit.get("kind")).lower() != "result":
             continue
+        artifact = unit.get("artifact_ref", unit.get("artifact"))
         lines.append(
             "| "
-            + " | ".join(
-                _md(unit.get(key))
-                for key in (
-                    "unit_id",
-                    "claim_ids",
-                    "evidence_ids",
-                    "artifact",
-                    "allowed_interpretation",
-                    "prohibited_interpretation",
-                )
-            )
+            + " | ".join([
+                _md(unit.get("unit_id")),
+                _md(unit.get("claim_ids")),
+                _md(unit.get("evidence_ids")),
+                _md(artifact),
+                _md(unit.get("allowed_interpretation")),
+                _md(unit.get("prohibited_interpretation")),
+            ])
             + " |"
         )
     lines.append("")
@@ -1206,7 +1289,12 @@ def _results_trace(data: Mapping[str, Any]) -> str:
 
 
 def render_views(data: Mapping[str, Any], output_dir: str | Path) -> dict[str, Path]:
-    """Render the three deterministic, read-only manuscript planning views."""
+    """Render one integrity-verifiable set of read-only planning views.
+
+    All bytes are staged before publication and the set manifest is replaced
+    last.  Readers can therefore reject a crash-interrupted mixed generation
+    by comparing the manifest hashes instead of silently combining revisions.
+    """
 
     destination = Path(output_dir)
     destination.mkdir(parents=True, exist_ok=True)
@@ -1219,9 +1307,37 @@ def render_views(data: Mapping[str, Any], output_dir: str | Path) -> dict[str, P
         "results_trace": (destination / "RESULTS_TRACE.md", _results_trace(data)),
     }
     paths: dict[str, Path] = {}
-    for key, (path, content) in rendered.items():
-        path.write_text(content, encoding="utf-8")
-        paths[key] = path
+    manifest_path = destination / "RKA_PROJECTION_SET.json"
+    with tempfile.TemporaryDirectory(
+        prefix=".rka-projection-",
+        dir=destination,
+    ) as stage_name:
+        stage = Path(stage_name)
+        manifest_files: dict[str, str] = {}
+        for key, (path, content) in rendered.items():
+            staged_path = stage / path.name
+            staged_path.write_text(content, encoding="utf-8")
+            manifest_files[path.name] = hashlib.sha256(
+                content.encode("utf-8")
+            ).hexdigest()
+            paths[key] = path
+        manifest = {
+            "schema_version": "rka.writer-projection-set/v1",
+            "project_id": data.get("project_id"),
+            "manuscript_id": data.get("manuscript_id"),
+            "manuscript_revision": data.get("manuscript_revision"),
+            "changelog_cursor": data.get("changelog_cursor"),
+            "files": manifest_files,
+        }
+        staged_manifest = stage / manifest_path.name
+        staged_manifest.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        for path, _content in rendered.values():
+            (stage / path.name).replace(path)
+        staged_manifest.replace(manifest_path)
+    paths["projection_manifest"] = manifest_path
     return paths
 
 

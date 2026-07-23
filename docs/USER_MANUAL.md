@@ -714,6 +714,27 @@ Yes. The web dashboard and REST API work independently. You can browse, search, 
 **Q: How do I export and share a project?**
 Use `GET /api/projects/export` or the export button in the dashboard. This creates a `.rka-pack.zip` containing all project data. Import it into another RKA instance with `POST /api/projects/import`. IDs are automatically remapped to avoid conflicts.
 
+Native manuscripts are included with their complete claim-wording history,
+typed evidence and unit links, explicit PI ratifications, checkpoints, and
+immutable validation attestations. Import never infers or creates a
+ratification that was absent from the source pack.
+
+Packs intentionally exclude `change_events`, `jobs`,
+`manuscript_migration_issues`, and
+`reference_validation_migration_issues`. Change cursors, migration
+diagnostics, and worker leases/retries are installation-local; importing the
+semantic rows emits a fresh target-local change ledger, and pending external
+validation must be requested again. Completed validation attestations are
+semantic history and are included. Any attestation-to-worker-job link is
+cleared on import because the producing job does not exist on the target
+installation.
+
+Legacy `jrn_` manuscript bindings remain supported and are remapped together
+with their native `man_` aliases. When an accepted format-v1 or format-v2 pack
+predates native manuscripts, import conservatively creates only an unambiguous
+native identity and metadata binding. It never synthesizes claims, evidence,
+ratifications, units, or checkpoints.
+
 **Q: How do I delete a project?**
 Click the trash icon next to the project selector in the sidebar. A confirmation dialog shows you how many entities will be deleted, recommends exporting first, and requires you to type the project name to confirm. The default project (`proj_default`) cannot be deleted.
 

@@ -13,6 +13,8 @@ last_session: (initial bootstrap)
 | Phase | Trigger to advance |
 |---|---|
 | venue_selection | Venue checkpoint ratified; .planning/PRECIS.md authored |
+| evidence_synthesis | In-scope RQs selected; cluster blockers and counterevidence resolved |
+| contribution_contract | Exact allowed/prohibited contribution boundary accepted for spine import |
 | outline | Outline checkpoint ratified; .planning/OUTLINE.md ratified |
 | table_figure_plan | Table/figure plan checkpoint ratified |
 | reference_set | References ratified; refs.bib populated with VERIFIED entries |
@@ -20,10 +22,10 @@ last_session: (initial bootstrap)
 | review | All sections drafted; PI reviewing |
 | revision | PI returned comments; iteration count in REVIEW_STATE.md |
 | final_layout | Full draft compiles; layout audit PASS or WARN; PI ratifies submit |
-| submitted | Manuscript submitted; manifest tagged phase:final |
+| submitted | Native manuscript transitioned after final readiness and PI approval |
 
 ## Notes
 
 Project: REPLACE_WITH_PROJECT_ID
-Manuscript manifest: REPLACE_WITH_MANUSCRIPT_ID (registered and verified by
+Canonical manuscript: REPLACE_WITH_MANUSCRIPT_ID (created or verified by
 `rka writer init` before this workspace was published).

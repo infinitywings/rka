@@ -52,43 +52,58 @@ class ClaimService(BaseService):
     async def create(self, data: ClaimCreate) -> Claim:
         """Create a new claim."""
         claim_id = generate_id("claim")
-        await self.db.execute(
-            """INSERT INTO claims
-               (id, source_entry_id, claim_type, content, confidence, verified,
-                evidence_status, stale,
-                source_offset_start, source_offset_end, project_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)""",
-            [
-                claim_id, data.source_entry_id, data.claim_type, data.content,
-                data.confidence, int(data.verified), data.evidence_status,
-                data.source_offset_start, data.source_offset_end,
-                self.project_id,
-            ],
-        )
-        await self.db.commit()
-
-        # FTS sync
-        await self._sync_fts("claim", claim_id, {"content": data.content})
-
-        # Entity link: derived_from
-        await self.add_link(
-            "claim", claim_id, "derived_from", "journal", data.source_entry_id,
-            created_by="llm",
-        )
-
-        # Enqueue embedding job
-        if self.embeddings:
-            queue = JobQueue(self.db)
-            await queue.enqueue(
-                "claim_embed",
-                project_id=self.project_id,
-                entity_type="claim",
-                entity_id=claim_id,
-                dedupe_key=self._job_dedupe_key(claim_id, "embed"),
-                priority=125,
+        async with self.db.transaction():
+            source = await self.db.fetchone(
+                """SELECT 1 FROM journal
+                   WHERE id = ? AND project_id = ?""",
+                [data.source_entry_id, self.project_id],
+            )
+            if source is None:
+                raise ValueError(
+                    "source journal entry is not available in this project"
+                )
+            await self.db.execute(
+                """INSERT INTO claims
+                   (id, source_entry_id, claim_type, content, confidence, verified,
+                    evidence_status, stale, source_offset_start, source_offset_end,
+                    project_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)""",
+                [
+                    claim_id,
+                    data.source_entry_id,
+                    data.claim_type,
+                    data.content,
+                    data.confidence,
+                    int(data.verified),
+                    data.evidence_status,
+                    data.source_offset_start,
+                    data.source_offset_end,
+                    self.project_id,
+                ],
             )
 
-        await self.audit("create", "claim", claim_id, "llm")
+            await self._sync_fts("claim", claim_id, {"content": data.content})
+            await self._replace_outgoing_links(
+                source_type="claim",
+                source_id=claim_id,
+                link_type="derived_from",
+                target_type="journal",
+                target_ids=[data.source_entry_id],
+                created_by="llm",
+            )
+
+            if self.embeddings:
+                queue = JobQueue(self.db)
+                await queue.enqueue(
+                    "claim_embed",
+                    project_id=self.project_id,
+                    entity_type="claim",
+                    entity_id=claim_id,
+                    dedupe_key=self._job_dedupe_key(claim_id, "embed"),
+                    priority=125,
+                )
+
+            await self.audit("create", "claim", claim_id, "llm")
         return await self.get(claim_id)
 
     async def get(self, claim_id: str) -> Claim | None:
@@ -176,31 +191,34 @@ class ClaimService(BaseService):
         set_clause = ", ".join(f"{k} = ?" for k in dump)
         values = list(dump.values()) + [claim_id, self.project_id]
 
-        await self.db.execute(
-            f"UPDATE claims SET {set_clause} WHERE id = ? AND project_id = ?",
-            values,
-        )
-        await self.db.commit()
+        async with self.db.transaction():
+            await self.db.execute(
+                f"UPDATE claims SET {set_clause} WHERE id = ? AND project_id = ?",
+                values,
+            )
 
-        # v2.7.0.7 — re-sync derived indexes when the searchable/embeddable
-        # `content` field changed. Prior versions updated the claims row but
-        # never touched fts_claims or re-enqueued the embed job, so edited
-        # claims silently fell out of full-text + vector search (the sibling
-        # services — notes/decisions/literature/clusters — all re-sync here).
-        if "content" in dump:
-            await self._sync_fts("claim", claim_id, {"content": dump["content"]})
-            if self.embeddings:
-                queue = JobQueue(self.db)
-                await queue.enqueue(
-                    "claim_embed",
-                    project_id=self.project_id,
-                    entity_type="claim",
-                    entity_id=claim_id,
-                    dedupe_key=self._job_dedupe_key(claim_id, "embed"),
-                    priority=125,
-                )
+            # v2.7.0.7 — re-sync derived indexes when the searchable/embeddable
+            # `content` field changed.
+            if "content" in dump:
+                await self._sync_fts("claim", claim_id, {"content": dump["content"]})
+                if self.embeddings:
+                    queue = JobQueue(self.db)
+                    await queue.enqueue(
+                        "claim_embed",
+                        project_id=self.project_id,
+                        entity_type="claim",
+                        entity_id=claim_id,
+                        dedupe_key=self._job_dedupe_key(claim_id, "embed"),
+                        priority=125,
+                    )
 
-        await self.audit("update", "claim", claim_id, "system", {"fields": list(dump.keys())})
+            await self.audit(
+                "update",
+                "claim",
+                claim_id,
+                "system",
+                {"fields": list(dump.keys())},
+            )
         return await self.get(claim_id)
 
     async def mark_stale_by_entry(self, entry_id: str) -> int:
@@ -220,47 +238,100 @@ class ClaimService(BaseService):
 
     async def create_edge(self, data: ClaimEdgeCreate) -> ClaimEdge:
         edge_id = generate_id("claim_edge")
-        await self.db.execute(
-            """INSERT INTO claim_edges
-               (id, source_claim_id, target_claim_id, cluster_id, relation, confidence, project_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            [
-                edge_id, data.source_claim_id, data.target_claim_id,
-                data.cluster_id, data.relation, data.confidence, self.project_id,
-            ],
-        )
-        # Update cluster claim_count for member_of edges
-        if data.relation == "member_of" and data.cluster_id:
-            await self.db.execute(
-                "UPDATE evidence_clusters SET claim_count = claim_count + 1, updated_at = ? WHERE id = ? AND project_id = ?",
-                [_now(), data.cluster_id, self.project_id],
-            )
-        # When inserting a contradicts edge, flag any clusters that contain
-        # either endpoint as a member as needing re-synthesis. Brain reviews
-        # via rka_review_cluster which clears the flag. Per
-        # dec_01KQQPE47H56E40A8KBDDT4BZT (Improvement 3, mis_01KQQS3DYQ2EVJV288PNHX0CMY).
-        if data.relation == "contradicts":
-            affected_claims = [c for c in (data.source_claim_id, data.target_claim_id) if c]
-            if affected_claims:
-                claim_placeholders = ",".join("?" for _ in affected_claims)
-                await self.db.execute(
-                    f"""UPDATE evidence_clusters SET needs_reprocessing = 1, updated_at = ?
-                       WHERE id IN (
-                           SELECT DISTINCT cluster_id FROM claim_edges
-                           WHERE source_claim_id IN ({claim_placeholders})
-                             AND relation = 'member_of'
-                             AND project_id = ?
-                       ) AND project_id = ?""",
-                    [_now(), *affected_claims, self.project_id, self.project_id],
+        async with self.db.transaction():
+            if data.relation == "member_of":
+                if data.cluster_id is None or data.target_claim_id is not None:
+                    raise ValueError(
+                        "member_of edges require one cluster and no target claim"
+                    )
+            elif data.relation == "contradicts":
+                if data.target_claim_id is None and data.cluster_id is None:
+                    raise ValueError(
+                        "contradicts edges require a target claim or cluster"
+                    )
+            elif data.target_claim_id is None:
+                raise ValueError(
+                    f"{data.relation} edges require a target claim"
                 )
-            # Atypical but schema-allowed: contradicts edge inserted with a
-            # direct cluster_id rather than via member_of resolution.
-            if data.cluster_id:
+            if data.target_claim_id == data.source_claim_id:
+                raise ValueError("claim edges cannot target their source claim")
+
+            source = await self.db.fetchone(
+                """SELECT 1 FROM claims
+                   WHERE id = ? AND project_id = ?""",
+                [data.source_claim_id, self.project_id],
+            )
+            if source is None:
+                raise ValueError(
+                    "source claim is not available in this project"
+                )
+            if data.target_claim_id is not None:
+                target = await self.db.fetchone(
+                    """SELECT 1 FROM claims
+                       WHERE id = ? AND project_id = ?""",
+                    [data.target_claim_id, self.project_id],
+                )
+                if target is None:
+                    raise ValueError(
+                        "target claim is not available in this project"
+                    )
+            if data.cluster_id is not None:
+                cluster = await self.db.fetchone(
+                    """SELECT 1 FROM evidence_clusters
+                       WHERE id = ? AND project_id = ?""",
+                    [data.cluster_id, self.project_id],
+                )
+                if cluster is None:
+                    raise ValueError(
+                        "cluster is not available in this project"
+                    )
+            await self.db.execute(
+                """INSERT INTO claim_edges
+                   (id, source_claim_id, target_claim_id, cluster_id, relation,
+                    confidence, project_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    edge_id,
+                    data.source_claim_id,
+                    data.target_claim_id,
+                    data.cluster_id,
+                    data.relation,
+                    data.confidence,
+                    self.project_id,
+                ],
+            )
+
+            if data.relation == "member_of" and data.cluster_id:
                 await self.db.execute(
-                    "UPDATE evidence_clusters SET needs_reprocessing = 1, updated_at = ? WHERE id = ? AND project_id = ?",
+                    "UPDATE evidence_clusters SET claim_count = claim_count + 1, "
+                    "updated_at = ? WHERE id = ? AND project_id = ?",
                     [_now(), data.cluster_id, self.project_id],
                 )
-        await self.db.commit()
+            if data.relation == "contradicts":
+                affected_claims = [
+                    claim_id
+                    for claim_id in (data.source_claim_id, data.target_claim_id)
+                    if claim_id
+                ]
+                if affected_claims:
+                    placeholders = ",".join("?" for _ in affected_claims)
+                    await self.db.execute(
+                        f"""UPDATE evidence_clusters
+                            SET needs_reprocessing = 1, updated_at = ?
+                            WHERE id IN (
+                                SELECT DISTINCT cluster_id FROM claim_edges
+                                WHERE source_claim_id IN ({placeholders})
+                                  AND relation = 'member_of'
+                                  AND project_id = ?
+                            ) AND project_id = ?""",
+                        [_now(), *affected_claims, self.project_id, self.project_id],
+                    )
+                if data.cluster_id:
+                    await self.db.execute(
+                        "UPDATE evidence_clusters SET needs_reprocessing = 1, "
+                        "updated_at = ? WHERE id = ? AND project_id = ?",
+                        [_now(), data.cluster_id, self.project_id],
+                    )
         return ClaimEdge(
             id=edge_id,
             source_claim_id=data.source_claim_id,

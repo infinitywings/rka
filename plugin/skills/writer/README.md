@@ -1,6 +1,6 @@
 # RKA Writer Skill
 
-Version 2.6.1. The Writer co-authors manuscripts grounded in the RKA
+Version 2.7.0. The Writer co-authors manuscripts grounded in the RKA
 research graph and is distributed for Claude Code and Codex. It drafts
 but does not assert: manuscript claims must remain traceable to current
 RKA evidence and PI-ratified decisions.
@@ -21,7 +21,7 @@ cd manuscripts/<project-id>/<venue>/
 ```
 
 The command writes a complete, portable workspace only after RKA returns a
-canonical `jrn_` manifest. It stores the explicit binding in
+canonical native `man_` manuscript. It stores the explicit binding in
 `.rka/manuscript.json` and leaves no unresolved core placeholders. Then:
 
 - Edit `.planning/PRECIS.md`: PI authors the title and abstract.
@@ -40,15 +40,14 @@ Start procedure runs:
 1. `rka_query(args={"operation": "status", "project_id": "prj_..."})`
    confirms the project (project_id comes from `list_projects`, not
    session state).
-2. `rka_query(args={"operation": "changelog", "project_id": "prj_...",
-   "filters": {"since": "<ISO-date>"}})` surfaces RKA changes since last
-   session.
-3. `rka_query(args={"operation": "research_map", "project_id": "prj_..."})`
-   provides the structural overview.
-4. `.planning/ACTIVE_WORKFLOW.md` carries resume state.
-5. `rka writer readiness` checks a fresh project-scoped entity packet and the
-   claim spine before drafting.
-6. The Writer greets the PI with the inferred next action.
+2. `rka writer impact --claim-spine .planning/RKA_CLAIM_SPINE.yaml` maps
+   post-cursor changes to affected claims, units, files, and artifacts.
+3. `rka writer sync` refreshes the read-only v2 spine and generated views.
+4. `rka_query(args={"operation": "research_map", ...})` provides retrieval
+   orientation.
+5. `.planning/ACTIVE_WORKFLOW.md` carries disposable local resume state.
+6. `rka writer readiness --target-phase ...` asks RKA for the authoritative
+   mechanical gate.
 
 ### 3. Run scripts via Bash
 
@@ -71,11 +70,11 @@ python3 rka/skills/writer/scripts/bridge_repetition_check.py sections/*.tex
 python3 rka/skills/writer/scripts/layout_audit.py --venue CHI --output audit.json
 ```
 
-## Current v2.6.1 surface
+## Current v2.7.0 surface
 
 | Component | Status |
 |---|---|
-| `SKILL.md` | v2.6.1 role contract, checkpoints, provenance, and review workflow |
+| `SKILL.md` | v2.7.0 server-authoritative role contract, checkpoints, provenance, and review workflow |
 | `references/` | architecture, evidence and citation rules, review guidance, and venue registry |
 | `scripts/` | deterministic provenance, citation, venue, reference, layout, and claim-spine checks |
 | `mcp_tools/` | reference-metadata and discovery backends for Writer workflows |
@@ -106,23 +105,26 @@ for the full tier table and replacement guidance.
 
 ## Architecture overview
 
-The Writer is a role skill, not a separate process or service. It reads
-from and writes to RKA through the existing `rka` MCP server. Canonical
-Writer behavior lives under `rka/skills/writer/` and is mirrored
-byte-for-byte under `plugin/skills/writer/`; its tests live under
-`tests/skills/writer/`. The bookkeeper-not-thinker boundary keeps Writer
-changes out of `rka/services/`, `rka/api/`, `rka/mcp/`, and `web/`.
+Writer is a role skill, not a second orchestrator. It uses RKA through the
+typed MCP surface or a trusted local REST connection. Canonical Writer content
+lives under `rka/skills/writer/` and is mirrored byte-for-byte under
+`plugin/skills/writer/`; tests live under `tests/skills/writer/`.
 
-The manuscript is represented as a `jrn_` manifest in RKA (Option 2 per
-`dec_01KS0BKJ5ZJKJ4R19GYAK3QN9D` Q1), with the working directory tree
-on disk holding the actual `.tex` files. The `jrn_` manifest carries
-`related_decisions` (the six PI checkpoints), `related_literature` (all
-cited `lit_`), and `related_journal` (all quoted `jrn_`).
+RKA core owns the native `man_` manuscript aggregate, stable claims and
+immutable wording versions, evidence roles, exact PI ratifications, units,
+checkpoints, verification attestations, revisions, readiness, and change
+impact. Writer owns `.tex` and other authoring files, venue formatting,
+rendering, and deterministic projections. Legacy tagged `jrn_` manifests are
+compatibility aliases only.
 
-See [`references/architecture.md`](references/architecture.md) for the
-full architecture, [`references/workflows.md`](references/workflows.md)
-for the session-start procedure and seven sub-procedures, and the
-[`SKILL.md`](SKILL.md) frontmatter for the contract.
+See [`references/architecture.md`](references/architecture.md) for the full
+architecture, [`references/workflows.md`](references/workflows.md) for the
+session-start procedure and seven sub-procedures,
+[`references/server_authoritative_workflow.md`](references/server_authoritative_workflow.md)
+for the sync/impact/update loop,
+[`references/evidence_to_spine_pipeline.md`](references/evidence_to_spine_pipeline.md)
+for journal-to-claim-to-cluster noise smoothing, and [`SKILL.md`](SKILL.md)
+for the role contract.
 
 ## Pointers
 

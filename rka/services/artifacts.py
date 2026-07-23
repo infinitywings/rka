@@ -309,19 +309,39 @@ class ArtifactService(BaseService):
         summary: str,
         claims: list[dict],
     ) -> dict:
-        """Store a figure record in the database."""
+        """Store a figure and its provenance link as one database unit."""
         figure_id = generate_id("figure")
-        await self.db.execute(
-            """INSERT INTO figures
-               (id, artifact_id, page, caption, caption_confidence, summary, claims, project_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            [figure_id, artifact_id, page, caption, caption_confidence,
-             summary, json.dumps(claims), self.project_id],
-        )
-        await self.db.commit()
+        async with self.db.transaction():
+            await self.db.execute(
+                """INSERT INTO figures
+                   (id, artifact_id, page, caption, caption_confidence, summary,
+                    claims, project_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    figure_id,
+                    artifact_id,
+                    page,
+                    caption,
+                    caption_confidence,
+                    summary,
+                    json.dumps(claims),
+                    self.project_id,
+                ],
+            )
+            await self.db.commit()
 
-        # Create entity_link from artifact to figure
-        await self.add_link("artifact", artifact_id, "produced", "figure", figure_id, created_by="system")
+            # The figure and its provenance edge must become visible together.
+            await self.add_link(
+                "artifact",
+                artifact_id,
+                "produced",
+                "figure",
+                figure_id,
+                created_by="system",
+            )
+
+        # Embedding may be slow or use an external provider. Keep it outside
+        # the SQLite transaction; the helper is already best-effort.
         await self._embed_figure(
             figure_id=figure_id,
             caption=caption,

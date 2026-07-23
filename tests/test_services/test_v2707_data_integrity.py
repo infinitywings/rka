@@ -12,8 +12,9 @@ Covers the data-integrity fixes from the v2.7.0.6 third-party review:
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
-import pytest_asyncio
 
 from rka.models.claim import ClaimCreate, ClaimUpdate
 from rka.models.decision import DecisionCreate, DecisionSupersedeBody
@@ -89,7 +90,7 @@ async def test_claim_update_non_content_does_not_touch_fts(db):
 
 @pytest.mark.asyncio
 async def test_sync_fts_failure_preserves_existing_row(db, monkeypatch):
-    """If the INSERT half of _sync_fts fails, the SAVEPOINT rollback must
+    """If the INSERT half of _sync_fts fails, managed rollback must
     restore the pre-existing FTS row rather than leaving an orphaned DELETE
     that a later commit makes permanent."""
     await _seed_journal(db, "jrn_e", "findable text")
@@ -115,12 +116,62 @@ async def test_sync_fts_failure_preserves_existing_row(db, monkeypatch):
     await svc.update(claim.id, ClaimUpdate(content="new text that wont index"))
     monkeypatch.setattr(db, "execute", real_execute)
 
-    # The original FTS row must still be present (savepoint rolled back the
+    # The original FTS row must still be present (the nested transaction
+    # rolled back the
     # delete+failed-insert).
     surviving = await db.fetchone("SELECT id FROM fts_claims WHERE id = ?", [claim.id])
     assert surviving is not None, (
-        "savepoint rollback should preserve the prior FTS row on insert failure"
+        "managed rollback should preserve the prior FTS row on insert failure"
     )
+
+
+@pytest.mark.asyncio
+async def test_sync_fts_owns_connection_across_delete_and_insert(db, monkeypatch):
+    """A concurrent coroutine cannot enter the FTS replacement window."""
+    await _seed_journal(db, "jrn_fts_owner", "owned index text")
+    svc = ClaimService(db, project_id=_PROJECT)
+    claim = await svc.create(
+        ClaimCreate(
+            source_entry_id="jrn_fts_owner",
+            claim_type="evidence",
+            content="owned index text",
+            confidence=0.5,
+        )
+    )
+
+    deleted = asyncio.Event()
+    allow_insert = asyncio.Event()
+    reader_finished = asyncio.Event()
+    real_execute = db.execute
+
+    async def pause_after_delete(sql, params=None):
+        cursor = await real_execute(sql, params)
+        if "DELETE FROM fts_claims" in sql:
+            deleted.set()
+            await allow_insert.wait()
+        return cursor
+
+    async def concurrent_reader():
+        await deleted.wait()
+        await db.fetchone("SELECT id FROM claims WHERE id = ?", [claim.id])
+        reader_finished.set()
+
+    monkeypatch.setattr(db, "execute", pause_after_delete)
+    sync_task = asyncio.create_task(
+        svc._sync_fts(
+            "claim",
+            claim.id,
+            {"id": claim.id, "content": "replacement index text"},
+        )
+    )
+    reader_task = asyncio.create_task(concurrent_reader())
+    await deleted.wait()
+    await asyncio.sleep(0)
+    assert not reader_finished.is_set()
+
+    allow_insert.set()
+    await asyncio.gather(sync_task, reader_task)
+    assert reader_finished.is_set()
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +223,7 @@ async def test_reshape_failure_leaves_old_table_intact(db, monkeypatch):
 async def test_backfill_leaves_pending_when_vec_unavailable(db, monkeypatch):
     """When vec_available is False, the claim's embedding_pending flag must
     stay set (post_embed_sql is gated), so backfill retries once vec returns."""
-    from dataclasses import dataclass, field as dc_field
+    from dataclasses import dataclass
     from rka.services.embedding_backfill import BackfillService, register_job
 
     await _seed_journal(db, "jrn_f", "claim source")

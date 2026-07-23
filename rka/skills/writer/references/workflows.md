@@ -18,69 +18,63 @@ rka_query(args={"operation": "list_projects"})  # confirm the prj_... id from th
 
 There is no active-project session state at the MCP layer and the workspace `.mcp.json` intentionally carries no default project. Thread `project_id="prj_01KS..."` explicitly on every call. A missing/malformed metadata file is a setup blocker; do not infer a write target from the directory name.
 
-### Step 2: changelog
+### Step 2: evidence-to-writing impact
 
-```python
-rka_query(args={
-    "operation": "changelog",
-    "project_id": "prj_01KS...",
-    "filters": {"since": "<last writing session date from .planning/ACTIVE_WORKFLOW.md>"},
-})
+If `.planning/RKA_CLAIM_SPINE.yaml` has a synchronized integer cursor, run:
+
+```bash
+rka writer impact \
+  --project-id prj_01KS... \
+  --manuscript-id man_01KS... \
+  --claim-spine .planning/RKA_CLAIM_SPINE.yaml
 ```
 
-Surface any new `lit_`, `jrn_`, `dec_`, or `mis_` entries since the last writing session. New `lit_` items may belong in the current draft's reference set; new `jrn_` may carry PI direction that updates the working outline.
+Inspect the affected claims, units, file locations, artifacts, and changed
+sources. A partial page is not a clean result; continue pagination or perform a
+full synchronization. The legacy date-based changelog may help general
+orientation, but it is not the manuscript invalidation authority.
 
-### Step 3: research map
+### Step 3: synchronize and inspect the research map
+
+Refresh the local projection before treating it as current:
+
+```bash
+rka writer sync \
+  --project-id prj_01KS... \
+  --manuscript-id man_01KS... \
+  --output .planning/RKA_CLAIM_SPINE.yaml \
+  --render-dir .planning
+```
 
 ```python
 rka_query(args={"operation": "research_map", "project_id": "prj_01KS..."})
 ```
 
-Structural overview of clusters and claims. Filter to clusters relevant to the manuscript's topic before quoting. The map is the source of truth for what evidence is available to cite.
+The research map is a retrieval overview. The synchronized native manuscript
+aggregate is the source of truth for which claims and units this paper uses.
 
-### Step 3a: claim-spine currency
+### Step 3a: authoritative readiness
 
-Read `.planning/RKA_CLAIM_SPINE.yaml` when it contains a manuscript id and at
-least one claim. Follow [`claim_spine.md`](claim_spine.md): resolve every
-dependency inside the explicit project, compare the stored `rka_snapshot` with
-the current records, and map any changed entity back to affected claims and
-manuscript units.
+Before substantive work, ask RKA for the target-phase gate:
 
-In a plugin session, retrieve those records through the authenticated RKA MCP
-and create a fresh, temporary entity packet for `claim_spine.py
---entity-packet`. Follow every claim to its `source_entry_id`. Do not commit or
-reuse the packet as evidence, and do not expose the local REST API merely to
-run validation. Preserve the live freshness fields in that packet, including
-`stale`, `staleness`, `valid_from`, `valid_until`, `staleness_verdict`, and a
-cluster's `synthesis_valid_until` / `needs_reprocessing`; stripping them can
-turn a real blocker into an unsafe apparent pass.
+```bash
+rka writer readiness \
+  --project-id prj_01KS... \
+  --manuscript-id man_01KS... \
+  --target-phase drafting
+```
 
-Do not repair a claim from a generated Markdown view. The YAML is the editable
-Writer projection; RKA remains canonical for the records it names. A changed
-entity marks dependent claims for revalidation but never rewrites PI-ratified
-wording automatically.
+Server readiness checks current exact PI ratifications, evidence roles,
+scientific support, terminal source currency, contradiction state, result
+coverage, and phase checkpoints. `BLOCK` or `ERROR` stops the affected gate;
+surface every `WARN` with its claim or unit.
 
-Session-start outcomes:
-
-- `PASS`: dependencies are current; resume the recorded action.
-- `WARN`: show the affected claim/unit and the bounded issue before resuming.
-- `BLOCK`: stop the affected Outline, Draft, or Final Layout gate.
-- `ERROR`: resolver, parse, or snapshot state is unusable. Stop validation;
-  `ERROR` is never treated as `PASS`.
-
-Create or refresh `rka_snapshot` only after exact `PASS`. The snapshot command
-runs the same validation and writes nothing for `WARN`, `BLOCK`, or `ERROR`.
-`check-currency` also re-runs current validation, so an unchanged invalid
-record cannot become valid merely because an earlier snapshot captured it.
-
-An empty bootstrap spine is expected before contribution planning. It is not a
-validated contribution and cannot authorize substantive drafting.
-
-Before substantive drafting, run `rka writer readiness --project-id <prj_...>
---entity-packet <fresh.json> --claim-spine .planning/RKA_CLAIM_SPINE.yaml`.
-Only `ready_for_drafting=true` authorizes the transition. `rka writer assist`
-may propose candidate mappings from the same packet, but never ratifies them or
-writes RKA records.
+Do not repair a claim from generated YAML or Markdown. Prepare a proposal,
+dry-run `rka writer import-spine`, apply it with an expected revision, record
+the PI decision separately, bind the exact version, and synchronize again.
+An empty bootstrap spine is expected before contribution planning but cannot
+authorize drafting. Packet/snapshot validation is a compatibility path for a
+legacy v1 workspace only.
 
 ### Step 4: state resume
 
@@ -149,41 +143,49 @@ Trigger: Venue ratified, no `OUTLINE.md` yet.
 
 Procedure:
 
-1. Read the research map and assemble evidence from several short retrieval
-   angles. For each contribution candidate, resolve positive evidence,
-   qualifiers, counterevidence, terminal source records, current design
-   decisions, and relevant superseded choices that explain the design's
+1. Run server-attested `rka writer assist`. It queries the project research
+   map, groups duplicate support, preserves excluded-claim reason codes, and
+   admits only current Brain-reviewed clusters bound to active research
+   questions. Select which research questions are in manuscript scope.
+2. Resolve every cluster blocker through Brain. Do not promote journal prose,
+   an LLM-only synthesis, stale claims, or unresolved counterevidence.
+3. Read the selected cluster lineage and assemble evidence from several short
+   retrieval angles. For each contribution candidate, resolve positive
+   evidence, qualifiers, counterevidence, terminal source records, current
+   design decisions, and relevant superseded choices that explain the design's
    evolution. Superseded choices may inform lineage but are not current
-   support. An `ecl_` may guide discovery but does not count as terminal
-   empirical support; a `dec_` ratifies wording but does not prove it.
-2. Populate `.planning/RKA_CLAIM_SPINE.yaml` with candidate claim text,
-   source-backed evidence, allowed wording, prohibited wording, and planned
-   manuscript units. Leave claim status as `candidate` until the PI acts.
-3. Generate three bounded claim-and-outline framings with PI preference stripped from context:
+   support. An `ecl_` guides synthesis but does not count as terminal empirical
+   support; a `dec_` ratifies wording but does not prove it.
+4. Build a contribution contract and candidate proposal with exact claim text,
+   source-backed evidence, missing evidence, novelty/significance risks,
+   allowed wording, prohibited wording, and planned manuscript units. The
+   assist result seeds this work but cannot write or ratify it.
+5. Generate three bounded claim-and-outline framings with PI preference stripped from context:
    - Results-led: section ordering driven by the most novel finding.
    - Method-led: section ordering driven by the methodological contribution.
    - Motivation-led: section ordering driven by the problem framing.
-4. For each framing, show the exact contribution wording, its evidence path,
+6. For each framing, show the exact contribution wording, its evidence path,
    conditions, known counterevidence, missing evidence, and a 5-to-8-section
    outline with one-sentence section purposes.
-5. Prune any framing dominated on evidence coverage, scope honesty,
+7. Prune any framing dominated on evidence coverage, scope honesty,
    novelty-positioning, and venue fit. Do not compute an aggregate paper score
    or acceptance prediction.
-6. Re-inject PI preference as opposing-critique; rank surviving framings.
-7. Present three (or fewer if pruned) options to the PI; one carries
+8. Re-inject PI preference as opposing-critique; rank surviving framings.
+9. Present three (or fewer if pruned) options to the PI; one carries
    `is_recommended`. The PI may retain, narrow, or defer a claim and commission
    an evidence-gap mission.
-8. Record the PI's selected framing via `rka_record_pi_selection`. As part of
-   the same Outline checkpoint, create one child claim-scope `dec_` per selected
-   contribution: set `chosen` to that claim's exact text, `decided_by: pi`, and
-   link it to the Outline decision and its evidence. Set the claim to
-   `status: ratified` and `ratified_by` to that claim-scope decision. This is
-   bookkeeping for the PI's explicit selection, not a seventh checkpoint. A
-   later material edit requires a new claim-scope decision that supersedes the
-   old one.
-9. Validate the spine, build its dependency snapshot, and render the read-only
-   `CONTRIBUTION_CONTRACT.md`, `ARGUMENT_SPINE.md`, and `RESULTS_TRACE.md` views.
-   A rendered file does not substitute for live validation.
+10. Dry-run `rka writer import-spine`. Review the evidence roles, result
+   coverage, and proposed revision; apply only with an explicit expected
+   revision. Import never creates ratifications.
+11. Record the PI's selected framing and one child claim-scope `dec_` per
+   selected contribution. Set `chosen` to the exact claim text,
+   `decided_by: pi`, and connect the decision to its evidence and Outline
+   lineage. Bind each exact native claim version through
+   `ratify_manuscript_claim`. A later material edit requires a new version and
+   a superseding PI decision.
+12. Resolve the native Outline checkpoint, run `rka writer sync`, and require
+    server readiness. The generated `CONTRIBUTION_CONTRACT.md`,
+    `ARGUMENT_SPINE.md`, and `RESULTS_TRACE.md` are read-only views.
 
 Output: Outline Decision (`dec_`), one exact-wording claim-scope `dec_` per
 contribution with evidence provenance,
@@ -193,6 +195,10 @@ contribution with evidence provenance,
 Iron Law: **no prose before claim and outline ratification.** The `main.tex`
 stays skeleton-only. Fluent planning text, a decision by itself, or a populated
 table does not satisfy the evidence requirement.
+
+Use
+[`evidence_to_spine_pipeline.md`](evidence_to_spine_pipeline.md) for the
+admission rules, failure states, and change-handling policy.
 
 ### 3. Table, figure, and chart planner
 
@@ -212,9 +218,9 @@ Procedure:
 3. For each framing, propose specific tables (booktabs LaTeX), figures (Paper Banana prompt for diagrams; matplotlib + seaborn code for charts), and chart styling via venue presets (tueplots, SciencePlots).
 4. Paper Banana prompts are stored as `jrn_` entries tagged `figure-prompt` per `dec_01KS0BKJ5ZJKJ4R19GYAK3QN9D` Q6, with the manuscript manifest in `related_journal`.
 5. Present three options. PI selects.
-6. Update claim-spine unit locations and artifacts, revalidate bidirectional
-   claim/result coverage, refresh the snapshot, and regenerate
-   `RESULTS_TRACE.md`.
+6. Apply unit and artifact changes through a revision-guarded native spine
+   update. Synchronize, require bidirectional claim/result coverage, and
+   regenerate `RESULTS_TRACE.md`.
 
 Output: Table-Figure-Chart Plan Decision (`dec_`), `.planning/PLAN.md`, updated
 claim-spine units and generated Results Trace, draft table .tex files, Paper
@@ -225,16 +231,38 @@ Banana prompts as `jrn_`, and chart skeleton .py files referencing
 
 Trigger: PI provides a candidate reference list, OR drafting surfaces a citation gap.
 
-Phase 1 procedure (manual; Stage A only):
+Procedure:
 
-1. For each candidate reference, look up in RKA via `rka_get_literature` or `rka_search`. If present and tagged `validation:VERIFIED`, accept.
-2. For references not in RKA, prompt PI to either add via `rka_add_literature` (tagged `validation:UNVERIFIED` initially) or cite from external metadata.
-3. `scripts/validate_references.py` Stage A converts `rka_get_literature` output (CSL-JSON) to BibTeX via manubot if installed.
-4. Stages B through G are stubbed; manual verification by PI in Phase 1.
+1. Resolve each candidate against same-project `lit_` records. Add a missing
+   candidate as unverified literature; existence in RKA is not validation.
+2. Choose its exact case-sensitive citation key and replace the complete
+   revision-guarded active set with
+   `replace_manuscript_reference_manifest`. Omission retires an old membership;
+   it does not delete history. Cross-project records, duplicate keys, and
+   duplicate active literature bindings fail closed.
+3. Submit Stage A-G validation through the core manuscript operation using
+   both the canonical manuscript ID and the member's exact `literature_id`.
+   The supplied DOI/title must match that literature identity. The
+   request returns a durable pending job because identifier, retraction,
+   author, and rescue-provider checks are slow external work.
+4. Poll the job status. `pending` or `running` never counts as verified.
+   `failed` is a blocking validation failure with preserved error details.
+5. The worker runs the complete native stage trace, including Stage D
+   retraction checks, and appends an immutable project/manuscript-scoped
+   attestation.
+6. Refresh `manuscript_reference_manifest`. Only keys in its
+   `approved_citation_keys` may be cited or enter the drafting bibliography.
+   The latest exact attempt wins: a newer failure, identity mismatch,
+   retraction, exclusion, or later literature update blocks an older pass.
+7. Run `verify_citations.py` with the fresh claim-spine projection plus the
+   expected project and canonical manuscript IDs. A bibliography entry alone
+   never authorizes a citation. Every other terminal status blocks the
+   reference gate or requires an explicit PI disposition that does not rewrite
+   the attestation.
 
-Phase 2 procedure (when `rka-writer-tools` MCP is live): see `reference_pipeline.md`.
-
-Output: `refs.bib` populated, per-reference validation verdict stored as a `validation:<status>` tag on `lit_` entries via `rka_update_literature` (there is no `validation_status` field; use `tags` or `notes`).
+Output: authoritative reference membership, `refs.bib`, durable validation
+job/result metadata, and immutable reference-validation attestations. See
+`reference_pipeline.md`.
 
 ### 5. Section drafter
 
@@ -255,7 +283,9 @@ Procedure (OpenScholar evidence-first per `jrn_01KS0AVZRDA0KPXK61MN9PV5DE`):
    evidence cluster alone is not support.
 5. Subagent self-audits before commit: runs `scripts/ai_tic_lint.py` on the section; iterates until style score reaches 0.85 or three iterations elapse.
 6. If three iterations fail, ESCALATE via the Revision Loop Class R2.
-7. Otherwise commit section to `sections/<section-id>.tex`, mark `drafted` in manifest, and surface to PI for the Draft section checkpoint.
+7. Otherwise commit the section to `sections/<section-id>.tex`, update the
+   corresponding native unit status through a revision-guarded spine update,
+   synchronize, and surface it to the PI for the Draft section checkpoint.
 
 PI ratifies via the Draft section checkpoint (one of the six PI checkpoints). Three options: accept, revise (with PI comments), escalate.
 
@@ -268,20 +298,25 @@ Procedure:
 1. `scripts/render.sh` runs latexmk with the venue's engine (default pdflatex).
 2. If compile fails, parse `.log` for the first BLOCK error (Undefined control sequence, Reference undefined, etc.); surface to PI with the offending line; PI directs the fix.
 3. If compile succeeds, `scripts/layout_audit.py` runs against the rendered PDF plus log files.
-4. Before the Final Layout checkpoint, re-run claim-spine validation and
-   currency comparison plus provenance and citation checks. Any `BLOCK` or
-   `ERROR` prevents the final gate. A `WARN` is surfaced with its affected
-   claim and unit.
+4. Before the Final Layout checkpoint, run impact, synchronize, request server
+   readiness for the final phase, and run provenance/citation checks. Any
+   `BLOCK` or `ERROR` prevents the final gate. Surface each `WARN`.
 5. `audit.json` reports the twelve fields per `latex_audit.md`. Any BLOCK verdict halts progress; WARN verdicts noted for the Final Layout checkpoint.
 
-Output: `main.pdf`, `audit.json`. The manuscript manifest's `related_journal` gains a pointer to the latest `audit.json` snapshot stored as a `jrn_` if the PI requests durable record.
+Output: `main.pdf`, `audit.json`. If the PI requests a durable audit record,
+store it as a provenance-linked `jrn_` and reference it from the relevant
+native unit or checkpoint workflow.
 
 ### 7. Revision-loop handler (Phase 3 implementation)
 
 Trigger paths:
 
-- **Direct PI invocation** (CLI): `python scripts/revision_handler.py --dispatch --comment "..." --section sections/03.tex --manuscript-id jrn_... --review-state .planning/REVIEW_STATE.md`.
-- **Brain-spawned mission**: a `writer-revision` mission lands with `tags=["writer-revision", "comment-class:<r1|r2|r3|r4>", "manuscript:<jrn_id>"]` plus the structured review comment in `context`. The Writer's Claude Code session reads the mission via `rka_get_mission(id)`, extracts the comment-class tag and the comment, then dispatches to the matching handler. Lifecycle: Brain creates -> Writer picks up -> dispatches -> `rka_submit_report` (success) or `rka_submit_checkpoint` (R4 escalation or REVIEW_STATE three-iteration cap).
+- **Direct PI invocation** (CLI): `python scripts/revision_handler.py --dispatch --comment "..." --section sections/03.tex --manuscript-id man_... --review-state .planning/REVIEW_STATE.md`.
+- **Brain-spawned mission**: a `writer-revision` mission lands with
+  `tags=["writer-revision", "comment-class:<r1|r2|r3|r4>",
+  "manuscript:<man_id>"]` plus the structured review comment in `context`.
+  Writer reads the mission, verifies the canonical manuscript binding, and
+  dispatches to the matching handler.
 
 Procedure:
 
@@ -294,10 +329,10 @@ Procedure:
 - **R3 Inconsistency** (cross-section): `handle_inconsistency_r3(comment, section_paths, bridge_check_script=...)` uses `bridge_repetition_check.py` at ratio >= 0.7 to surface near-duplicate sentence pairs across sections; the Writer reasons over each pair to decide if it is an intentional restatement or a contradiction.
 - **R4 Logical gap or unsupported claim**: `handle_logical_r4(comment, section_path, manuscript_id, rka_client=...)` ESCALATES by preparing a `writer_evidence_gap` mission payload addressed to Brain; Writer waits for Brain's evidence-gap response.
 
-An R4 response that adds or changes evidence invalidates the dependent
-claim-spine snapshot. Re-resolve the affected claim and units. Do not strengthen
-the contribution automatically; if the exact wording changes materially, seek
-a new PI decision that supersedes the previous ratification.
+An R4 response that adds or changes evidence emits change events affecting the
+dependent claims and units. Inspect impact and synchronize. Do not strengthen
+the contribution automatically; if exact wording changes materially, append a
+version and seek a PI decision that supersedes the prior ratification.
 
 Classifier discipline (per `dec_01KS2WPKMRVSJ2R0PP74722PEH` Brain ratification 2026-05-20): `classify_comment` is heuristic-only because the Writer is itself a Claude Code session. The Writer's runtime IS the LLM-assisted reasoning layer that reviews comment + heuristic result before invoking any handler. No server-side LLM call.
 
@@ -312,7 +347,8 @@ REVIEW_STATE.md iteration tracking:
 
 Venue-aware overrides: `load_venue_overrides(venue_md_path)` reads per-venue `references/venue/<venue>.md` Forbidden-constructions field for stricter rules. The R2 style handler optionally consults these on top of universal `ai_tic_lint` rules.
 
-Phase 3 ships the implementation. Phase 4+ (manuscript search UI, versioning, multi-author, OpenAlex/arXiv submission, manuscript export) is deferred indefinitely per `mis_01KS2WW6MRN6AXP11EMCSCDFAR` scope_boundaries.
+Manuscript search UI, multi-author coordination, and submission automation
+remain outside this workflow.
 
 ## Checkpoint UX patterns
 
@@ -348,7 +384,7 @@ rka_execute(args={
 - Checkpoints resolved: Draft §3 (PI: accept)
 - Lit added: lit_01KS... (Smith 2024) via record_literature
 - Style score current: 0.91 (target 0.85)
-- Claim spine: PASS at cursor evt_...; C1 and C2 current
+- Claim spine: synchronized at cursor 1284; C1 and C2 current
 - Next action: draft §4 Evaluation
 
 ## Open items

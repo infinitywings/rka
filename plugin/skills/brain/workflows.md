@@ -7,9 +7,9 @@ Procedural reference for the Brain skill. Each section is a self-contained workf
 > | Legacy shorthand | v2.7.0 dispatch shape |
 > |---|---|
 > | `rka_get_status()` | `rka_query(args={"operation": "status", "project_id": <pinned>})` |
-> | `rka_get_changelog(since="...")` | `rka_query(args={"operation": "get_changelog", "project_id": <pinned>, "since": "..."})` |
-> | `rka_get_pending_maintenance()` | `rka_query(args={"operation": "get_pending_maintenance", "project_id": <pinned>})` |
-> | `rka_get_research_map()` | `rka_query(args={"operation": "get_research_map", "project_id": <pinned>})` |
+> | `rka_get_changelog(since="...")` | `rka_query(args={"operation": "changelog", "project_id": <pinned>, "filters": {"since": "..."}})` |
+> | `rka_get_pending_maintenance()` | `rka_query(args={"operation": "pending_maintenance", "project_id": <pinned>})` |
+> | `rka_get_research_map()` | `rka_query(args={"operation": "research_map", "project_id": <pinned>})` |
 > | `rka_search(query="...")` | `rka_query(args={"operation": "search", "project_id": <pinned>, "query": "..."})` |
 > | `rka_add_note(...)` | `rka_execute(args={"operation": "record_note", "project_id": <pinned>, ...})` |
 > | `rka_add_decision(...)` | `rka_execute(args={"operation": "record_decision", "project_id": <pinned>, ...})` |
@@ -17,9 +17,9 @@ Procedural reference for the Brain skill. Each section is a self-contained workf
 > | `rka_create_mission(...)` | `rka_execute(args={"operation": "create_mission", "project_id": <pinned>, ...})` |
 > | `rka_extract_claims(...)` | `rka_execute(args={"operation": "extract_claims", "project_id": <pinned>, ...})` |
 > | `rka_review_cluster(...)` | `rka_execute(args={"operation": "review_cluster", "project_id": <pinned>, ...})` |
-> | `rka_check_freshness()` | `rka_query(args={"operation": "check_freshness", "project_id": <pinned>})` |
+> | `rka_check_freshness()` | `rka_query(args={"operation": "freshness", "project_id": <pinned>})` |
 > | `rka_flag_stale(..., propagate=true)` | `rka_execute(args={"operation": "flag_stale", "project_id": <pinned>, "propagate": True, ...})` |
-> | `rka_detect_contradictions(...)` | `rka_query(args={"operation": "detect_contradictions", "project_id": <pinned>, ...})` |
+> | `rka_detect_contradictions(...)` | `rka_query(args={"operation": "contradictions", "project_id": <pinned>, "id": "...", ...})` |
 > | `rka_set_project(...)` | Deprecated no-op; `project_id` is now passed as a required field on every operation. |
 >
 > Full per-operation signature lookup: `rka_describe(operation="<name>")`. Index of operations: `rka_describe(operation="")`.

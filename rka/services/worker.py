@@ -1,9 +1,10 @@
-"""Background worker for asynchronous enrichment jobs.
+"""Background worker for asynchronous embedding and validation jobs.
 
-Only processes embedding jobs. LLM-dependent enrichment (auto-tag, auto-link,
-auto-summarize, claim extraction, verification, theme synthesis, contradiction
-checks) has been removed — those tasks are now handled by the Brain during
-maintenance sessions.
+Processes local embedding jobs and worker-owned manuscript reference
+validation. LLM-dependent enrichment (auto-tag, auto-link, auto-summarize,
+claim extraction, claim verification, theme synthesis, contradiction checks)
+has been removed — those tasks are handled by the Brain during maintenance
+sessions.
 
 Worker boot reads the persisted embedding config from
 `/data/embedding_config.json` via `EmbeddingConfigService.load_config()`
@@ -23,13 +24,13 @@ from pathlib import Path
 from typing import Any
 
 from rka.infra.database import Database
-from rka.services.jobs import JobQueue
+from rka.services.jobs import JobLeaseLost, JobQueue
 
 logger = logging.getLogger(__name__)
 
 
 class EnrichmentWorker:
-    """Polls the durable queue and processes embedding jobs."""
+    """Poll the durable queue for embeddings and reference validation."""
 
     def __init__(
         self,
@@ -170,10 +171,27 @@ class EnrichmentWorker:
             result = await self._process_job(job)
         except Exception as exc:  # pragma: no cover - failure path tested via queue state
             logger.exception("Worker job %s failed", job["id"])
-            await self.queue.fail(job, str(exc))
+            durable_error = (
+                f"{type(exc).__name__}: reference validation failed"
+                if job.get("job_type") == "reference_validate"
+                else str(exc)
+            )
+            try:
+                await self.queue.fail(job, durable_error)
+            except JobLeaseLost:
+                logger.info(
+                    "Worker job %s failure ignored after lease supersession",
+                    job["id"],
+                )
             return True
 
-        await self.queue.complete(job["id"], result=result)
+        try:
+            await self.queue.complete(job, result=result)
+        except JobLeaseLost:
+            logger.info(
+                "Worker job %s completion ignored after lease supersession",
+                job["id"],
+            )
         return True
 
     async def run_forever(self, stop_event: asyncio.Event | None = None) -> None:
@@ -217,6 +235,16 @@ class EnrichmentWorker:
             from rka.services.literature import LiteratureService
             svc = LiteratureService(self.db, embeddings=self.embeddings, project_id=project_id)
             return await svc.process_embedding_job(entity_id)
+
+        # ── Slow, externally resolved reference validation ───────
+
+        if job_type == "reference_validate":
+            from rka.services.reference_validation import ReferenceValidationRunner
+
+            return await ReferenceValidationRunner(
+                self.db,
+                project_id=project_id,
+            ).run_job(job)
 
         # ── Legacy LLM jobs — skip gracefully ────────────────────
         # These job types may still exist in the queue from before the migration.

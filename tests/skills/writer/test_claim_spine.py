@@ -19,6 +19,7 @@ import pytest
 
 PROJECT_ID = "prj_01PPPPPPPPPPPPPPPPPPPPPPPP"
 MANUSCRIPT_ID = "jrn_01MMMMMMMMMMMMMMMMMMMMMMMM"
+NATIVE_MANUSCRIPT_ID = "man_01MMMMMMMMMMMMMMMMMMMMMMMM"
 DECISION_ID = "dec_01DDDDDDDDDDDDDDDDDDDDDDDD"
 EVIDENCE_CLAIM_ID = "clm_01AAAAAAAAAAAAAAAAAAAAAAAA"
 EVIDENCE_SOURCE_ID = "jrn_01EEEEEEEEEEEEEEEEEEEEEEEE"
@@ -108,6 +109,38 @@ class TestValidation:
         )
         assert report.verdict == "PASS"
         assert not {f for f in report.findings if f.severity == "BLOCK"}
+
+    def test_native_server_projection_passes_without_legacy_manifest_tag(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        data = deepcopy(claim_spine_data)
+        data.update({
+            "schema_version": "rka-claim-spine/v2",
+            "authoritative_source": "rka",
+            "manuscript_id": NATIVE_MANUSCRIPT_ID,
+            "manuscript_revision": 4,
+        })
+        data["claims"][0]["status"] = "active"
+        entities = _copy_entities(claim_spine_entities)
+        entities[NATIVE_MANUSCRIPT_ID] = {
+            "id": NATIVE_MANUSCRIPT_ID,
+            "project_id": PROJECT_ID,
+            "type": "manuscript",
+            "state": "active",
+            "revision": 4,
+        }
+
+        report = claim_spine.validate_spine(
+            data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+
+        assert report.verdict == "PASS"
 
     def test_resolver_absence_never_reports_pass(self, claim_spine, claim_spine_data) -> None:
         report = claim_spine.validate_spine(
@@ -1274,9 +1307,10 @@ class TestRendering:
         "contribution_contract": "CONTRIBUTION_CONTRACT.md",
         "argument_spine": "ARGUMENT_SPINE.md",
         "results_trace": "RESULTS_TRACE.md",
+        "projection_manifest": "RKA_PROJECTION_SET.json",
     }
 
-    def test_render_views_writes_only_three_derived_markdown_files(
+    def test_render_views_writes_three_views_and_integrity_manifest(
         self, claim_spine, claim_spine_data, tmp_path: Path
     ) -> None:
         paths = claim_spine.render_views(claim_spine_data, tmp_path)
@@ -1288,8 +1322,16 @@ class TestRendering:
             assert isinstance(path, Path)
             assert path.name == expected_name
             text = path.read_text(encoding="utf-8")
-            assert "generated" in text.lower()
-            assert "RKA" in text
+            if key != "projection_manifest":
+                assert "generated" in text.lower()
+                assert "RKA" in text
+        manifest = json.loads(paths["projection_manifest"].read_text())
+        assert manifest["schema_version"] == "rka.writer-projection-set/v1"
+        assert set(manifest["files"]) == {
+            "CONTRIBUTION_CONTRACT.md",
+            "ARGUMENT_SPINE.md",
+            "RESULTS_TRACE.md",
+        }
 
     def test_render_is_byte_deterministic_and_preserves_trace_ids(
         self, claim_spine, claim_spine_data, tmp_path: Path
@@ -1299,7 +1341,11 @@ class TestRendering:
         for key in self.EXPECTED:
             assert left[key].read_bytes() == right[key].read_bytes()
 
-        combined = "\n".join(path.read_text(encoding="utf-8") for path in left.values())
+        combined = "\n".join(
+            left[key].read_text(encoding="utf-8")
+            for key in self.EXPECTED
+            if key != "projection_manifest"
+        )
         assert "C1" in combined
         assert DECISION_ID in combined
         assert EVIDENCE_CLAIM_ID in combined

@@ -131,14 +131,10 @@ class TestValidateReference:
         assert "retraction_checked" in result
 
     async def test_validate_reference_handles_subprocess_error(self, manuscript_service) -> None:
-        # Trigger the missing-required-field path: empty reference dict.
-        # The validate_references CLI requires DOI or title.
+        # Reject an empty reference before creating files or a subprocess.
         manuscript = await manuscript_service.register(venue="CHI", title="Error test")
-        result = await manuscript_service.validate_reference(
-            {},
-            manuscript_id=manuscript.id,
-        )
-        assert isinstance(result, dict)
-        # Either error status OR an empty-input UNVERIFIED.
-        assert "status" in result
-        assert result["validation_id"].startswith("rvd_")
+        with pytest.raises(ValueError, match="at least DOI or title"):
+            await manuscript_service.validate_reference(
+                {},
+                manuscript_id=manuscript.id,
+            )

@@ -41,107 +41,129 @@ class NoteService(BaseService):
         entry_id = generate_id("journal")
         source = actor or data.source
 
-        await self.db.execute(
-            """INSERT INTO journal
-               (id, type, content, summary, source, phase, verbatim_input, related_decisions, related_literature,
-                related_mission, supersedes, confidence, importance, status, pinned, project_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            [
-                entry_id, data.type, data.content, data.summary, source, data.phase,
-                data.verbatim_input,
-                self._json_dumps(data.related_decisions),
-                self._json_dumps(data.related_literature),
-                data.related_mission, data.supersedes,
-                data.confidence, data.importance,
-                data.status, int(data.pinned), self.project_id,
-            ],
-        )
-
-        # If superseding another entry, update the back-reference
-        if data.supersedes:
+        async with self.db.transaction():
             await self.db.execute(
-                "UPDATE journal SET superseded_by = ?, confidence = 'superseded', updated_at = ? WHERE id = ? AND project_id = ?",
-                [entry_id, _now(), data.supersedes, self.project_id],
+                """INSERT INTO journal
+                   (id, type, content, summary, source, phase, verbatim_input,
+                    related_decisions, related_literature, related_mission,
+                    supersedes, confidence, importance, status, pinned, project_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    entry_id,
+                    data.type,
+                    data.content,
+                    data.summary,
+                    source,
+                    data.phase,
+                    data.verbatim_input,
+                    self._json_dumps(data.related_decisions),
+                    self._json_dumps(data.related_literature),
+                    data.related_mission,
+                    data.supersedes,
+                    data.confidence,
+                    data.importance,
+                    data.status,
+                    int(data.pinned),
+                    self.project_id,
+                ],
             )
 
-        await self.db.commit()
+            # If superseding another entry, update the back-reference.
+            if data.supersedes:
+                await self.db.execute(
+                    "UPDATE journal SET superseded_by = ?, confidence = 'superseded', "
+                    "updated_at = ? WHERE id = ? AND project_id = ?",
+                    [entry_id, _now(), data.supersedes, self.project_id],
+                )
 
-        # Save user-provided tags immediately; auto-tags are deferred to job queue
-        has_user_tags = bool(data.tags)
-        if has_user_tags:
-            await self._set_tags("journal", entry_id, data.tags)
+            # Save user-provided tags immediately; auto-tags are deferred.
+            if data.tags:
+                await self._set_tags("journal", entry_id, data.tags)
 
-        # Write entity_links for caller-provided related_* fields
-        has_user_links = bool(data.related_decisions or data.related_literature or data.related_mission)
-        if has_user_links:
-            for dec_id in (data.related_decisions or []):
-                await self.add_link("journal", entry_id, "references", "decision", dec_id, created_by=source or "system")
-            for lit_id in (data.related_literature or []):
-                await self.add_link("journal", entry_id, "cites", "literature", lit_id, created_by=source or "system")
-            if data.related_mission:
-                await self.add_link("mission", data.related_mission, "produced", "journal", entry_id, created_by=source or "system")
-
-        # Materialize the supersession as a graph edge — traversal surfaces
-        # (ego_graph, multi_hop, collect_report_context) walk entity_links
-        # only and cannot see the supersedes/superseded_by columns.
-        # Migration 028 backfills historical rows.
-        if data.supersedes:
-            await self.add_link(
-                "journal", entry_id, "supersedes", "journal", data.supersedes,
+            await self._replace_outgoing_links(
+                source_type="journal",
+                source_id=entry_id,
+                link_type="references",
+                target_type="decision",
+                target_ids=data.related_decisions,
+                created_by=source or "system",
+            )
+            await self._replace_outgoing_links(
+                source_type="journal",
+                source_id=entry_id,
+                link_type="cites",
+                target_type="literature",
+                target_ids=data.related_literature,
+                created_by=source or "system",
+            )
+            await self._replace_incoming_links(
+                target_type="journal",
+                target_id=entry_id,
+                link_type="produced",
+                source_type="mission",
+                source_ids=[data.related_mission] if data.related_mission else [],
                 created_by=source or "system",
             )
 
-        # Sync cheap deterministic FTS now; LLM enrichment + embedding are queued
-        await self._sync_fts("journal", entry_id, {
-            "content": data.content, "summary": "",
-        })
+            # Materialize supersession for graph-only traversal surfaces.
+            if data.supersedes:
+                await self.add_link(
+                    "journal",
+                    entry_id,
+                    "supersedes",
+                    "journal",
+                    data.supersedes,
+                    created_by=source or "system",
+                )
 
-        # Enqueue background embedding job
-        await self._enqueue_enrichment_jobs(
-            entry_id,
-            include_embedding=bool(self.embeddings),
-        )
-
-        # Determine event type based on journal type
-        event_type_map = {
-            "note": "finding_recorded",
-            "log": "finding_recorded",
-            "directive": "pi_instruction",
-            # Legacy types (in case any slip through)
-            "finding": "finding_recorded",
-            "insight": "insight_recorded",
-            "pi_instruction": "pi_instruction",
-        }
-        event_type = event_type_map.get(data.type, "finding_recorded")
-
-        await self.emit_event(
-            event_type=event_type,
-            entity_type="journal",
-            entity_id=entry_id,
-            actor=source,
-            summary=f"{data.type}: {data.content[:100]}",
-            phase=data.phase,
-        )
-        await self.audit("create", "journal", entry_id, source)
-
-        # Fire post_journal_create hook (Mission 2). Failures are silent —
-        # HookDispatcher logs them and never raises. Hooks cannot break note
-        # creation.
-        try:
-            from rka.services.hook_dispatcher import HookDispatcher
-            await HookDispatcher(self.db).fire(
-                event="post_journal_create",
-                payload={
-                    "entry_id": entry_id,
-                    "type": data.type,
-                    "importance": data.importance,
-                    "tags": list(data.tags or []),
-                    "source": source,
-                },
-                project_id=self.project_id,
+            # Sync cheap deterministic FTS now; enrichment is queued.
+            await self._sync_fts(
+                "journal",
+                entry_id,
+                {"content": data.content, "summary": ""},
             )
-        except Exception as exc:  # extra defense-in-depth
-            logger.warning("post_journal_create hook fire failed: %s", exc)
+            await self._enqueue_enrichment_jobs(
+                entry_id,
+                include_embedding=bool(self.embeddings),
+            )
+
+            event_type_map = {
+                "note": "finding_recorded",
+                "log": "finding_recorded",
+                "directive": "pi_instruction",
+                "finding": "finding_recorded",
+                "insight": "insight_recorded",
+                "pi_instruction": "pi_instruction",
+            }
+            event_type = event_type_map.get(data.type, "finding_recorded")
+            await self.emit_event(
+                event_type=event_type,
+                entity_type="journal",
+                entity_id=entry_id,
+                actor=source,
+                summary=f"{data.type}: {data.content[:100]}",
+                phase=data.phase,
+            )
+            await self.audit("create", "journal", entry_id, source)
+
+            # Hook failures remain non-fatal, but their successful writes now
+            # share the journal aggregate's transaction.
+            try:
+                from rka.services.hook_dispatcher import HookDispatcher
+
+                await HookDispatcher(self.db).fire(
+                    event="post_journal_create",
+                    payload={
+                        "entry_id": entry_id,
+                        "type": data.type,
+                        "importance": data.importance,
+                        "tags": list(data.tags or []),
+                        "source": source,
+                    },
+                    project_id=self.project_id,
+                )
+            except Exception as exc:  # extra defense-in-depth
+                logger.warning("post_journal_create hook fire failed: %s", exc)
 
         return await self.get(entry_id)
 
@@ -211,6 +233,9 @@ class NoteService(BaseService):
         """Update a journal entry."""
         dump = data.model_dump(exclude_none=True)
         tags = dump.pop("tags", None)
+        replace_related_decisions = "related_decisions" in dump
+        replace_related_literature = "related_literature" in dump
+        replace_related_mission = "related_mission" in dump
 
         updates = {}
         for field, value in dump.items():
@@ -219,50 +244,73 @@ class NoteService(BaseService):
             else:
                 updates[field] = value
 
-        if tags is not None:
-            await self._set_tags("journal", entry_id, tags)
+        async with self.db.transaction():
+            if tags is not None:
+                await self._set_tags("journal", entry_id, tags)
 
-        if not updates:
-            return await self.get(entry_id)
+            if not updates:
+                return await self.get(entry_id)
 
-        updates["updated_at"] = _now()
-        set_clause = ", ".join(f"{k} = ?" for k in updates)
-        values = list(updates.values()) + [entry_id]
-
-        await self.db.execute(
-            f"UPDATE journal SET {set_clause} WHERE id = ? AND project_id = ?",
-            values + [self.project_id],
-        )
-        await self.db.commit()
-
-        # Materialize entity_links for updated cross-reference fields
-        if data.related_decisions:
-            for dec_id in data.related_decisions:
-                await self.add_link("journal", entry_id, "references", "decision", dec_id, created_by="system")
-        if data.related_literature:
-            for lit_id in data.related_literature:
-                await self.add_link("journal", entry_id, "cites", "literature", lit_id, created_by="system")
-
-        # Re-sync FTS on content changes; defer embedding to job queue
-        if "content" in updates or "summary" in updates:
-            row = await self.db.fetchone(
-                "SELECT content, summary FROM journal WHERE id = ? AND project_id = ?",
-                [entry_id, self.project_id],
+            updates["updated_at"] = _now()
+            set_clause = ", ".join(f"{k} = ?" for k in updates)
+            values = list(updates.values()) + [entry_id]
+            await self.db.execute(
+                f"UPDATE journal SET {set_clause} WHERE id = ? AND project_id = ?",
+                values + [self.project_id],
             )
-            if row:
-                await self._sync_fts("journal", entry_id, dict(row))
-                if self.embeddings:
-                    queue = JobQueue(self.db)
-                    await queue.enqueue(
-                        "note_embed",
-                        project_id=self.project_id,
-                        entity_type="journal",
-                        entity_id=entry_id,
-                        dedupe_key=self._job_dedupe_key(entry_id, "embed"),
-                        priority=110,
-                    )
 
-        await self.audit("update", "journal", entry_id, "system", {"fields": list(updates.keys())})
+            if replace_related_decisions:
+                await self._replace_outgoing_links(
+                    source_type="journal",
+                    source_id=entry_id,
+                    link_type="references",
+                    target_type="decision",
+                    target_ids=data.related_decisions,
+                )
+            if replace_related_literature:
+                await self._replace_outgoing_links(
+                    source_type="journal",
+                    source_id=entry_id,
+                    link_type="cites",
+                    target_type="literature",
+                    target_ids=data.related_literature,
+                )
+            if replace_related_mission:
+                await self._replace_incoming_links(
+                    target_type="journal",
+                    target_id=entry_id,
+                    link_type="produced",
+                    source_type="mission",
+                    source_ids=[data.related_mission] if data.related_mission else [],
+                )
+
+            # Re-sync FTS on content changes; defer embedding to job queue.
+            if "content" in updates or "summary" in updates:
+                row = await self.db.fetchone(
+                    "SELECT content, summary FROM journal "
+                    "WHERE id = ? AND project_id = ?",
+                    [entry_id, self.project_id],
+                )
+                if row:
+                    await self._sync_fts("journal", entry_id, dict(row))
+                    if self.embeddings:
+                        queue = JobQueue(self.db)
+                        await queue.enqueue(
+                            "note_embed",
+                            project_id=self.project_id,
+                            entity_type="journal",
+                            entity_id=entry_id,
+                            dedupe_key=self._job_dedupe_key(entry_id, "embed"),
+                            priority=110,
+                        )
+
+            await self.audit(
+                "update",
+                "journal",
+                entry_id,
+                "system",
+                {"fields": list(updates.keys())},
+            )
         return await self.get(entry_id)
 
     async def _row_to_model(self, row: dict) -> JournalEntry:
@@ -342,27 +390,56 @@ class NoteService(BaseService):
         if links.suggested_type and links.suggested_type != row["type"]:
             link_updates["type"] = links.suggested_type
 
-        if link_updates:
-            set_clause = ", ".join(f"{k} = ?" for k in link_updates)
-            await self.db.execute(
-                f"UPDATE journal SET {set_clause} WHERE id = ? AND project_id = ?",
-                list(link_updates.values()) + [entry_id, self.project_id],
-            )
-            await self.db.commit()
-
-        # Write entity_links rows
         source = row.get("source") or "system"
-        final_row = await self.db.fetchone(
-            "SELECT related_decisions, related_literature, related_mission FROM journal WHERE id = ? AND project_id = ?",
-            [entry_id, self.project_id],
-        )
-        if final_row:
-            for dec_id in self._json_loads(final_row.get("related_decisions"), []):
-                await self.add_link("journal", entry_id, "references", "decision", dec_id, created_by=source)
-            for lit_id in self._json_loads(final_row.get("related_literature"), []):
-                await self.add_link("journal", entry_id, "cites", "literature", lit_id, created_by=source)
-            if final_row.get("related_mission"):
-                await self.add_link("mission", final_row["related_mission"], "produced", "journal", entry_id, created_by=source)
+        async with self.db.transaction():
+            if link_updates:
+                set_clause = ", ".join(f"{k} = ?" for k in link_updates)
+                await self.db.execute(
+                    f"UPDATE journal SET {set_clause} "
+                    "WHERE id = ? AND project_id = ?",
+                    list(link_updates.values()) + [entry_id, self.project_id],
+                )
+
+            final_row = await self.db.fetchone(
+                "SELECT related_decisions, related_literature, related_mission "
+                "FROM journal WHERE id = ? AND project_id = ?",
+                [entry_id, self.project_id],
+            )
+            if final_row:
+                await self._replace_outgoing_links(
+                    source_type="journal",
+                    source_id=entry_id,
+                    link_type="references",
+                    target_type="decision",
+                    target_ids=self._json_loads(
+                        final_row.get("related_decisions"),
+                        [],
+                    ),
+                    created_by=source,
+                )
+                await self._replace_outgoing_links(
+                    source_type="journal",
+                    source_id=entry_id,
+                    link_type="cites",
+                    target_type="literature",
+                    target_ids=self._json_loads(
+                        final_row.get("related_literature"),
+                        [],
+                    ),
+                    created_by=source,
+                )
+                await self._replace_incoming_links(
+                    target_type="journal",
+                    target_id=entry_id,
+                    link_type="produced",
+                    source_type="mission",
+                    source_ids=(
+                        [final_row["related_mission"]]
+                        if final_row.get("related_mission")
+                        else []
+                    ),
+                    created_by=source,
+                )
 
         link_count = len(link_updates)
         return {"outcome": "updated" if link_count else "noop", "link_count": link_count}

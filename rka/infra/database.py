@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import re
+import sqlite3
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import AsyncIterator
 
 import aiosqlite
 
@@ -18,10 +23,26 @@ class Database:
         self.db_path = db_path
         self._conn: aiosqlite.Connection | None = None
         self._vec_loaded = False
+        # aiosqlite serializes individual calls on its worker thread, but that
+        # alone does not keep another coroutine from interleaving statements in
+        # a multi-statement transaction.  Hold this lock for the lifetime of a
+        # managed transaction and for each standalone wrapper operation.
+        self._access_lock = asyncio.Lock()
+        self._transaction_owner: asyncio.Task[object] | None = None
+        self._transaction_depth = 0
+        self._savepoint_counter = 0
 
     async def connect(self) -> None:
         """Open database connection and apply PRAGMAs."""
-        self._conn = await aiosqlite.connect(self.db_path)
+        # Standalone statements run in SQLite autocommit mode. Multi-statement
+        # mutations must opt into ``transaction()`` explicitly; otherwise an
+        # implicit transaction could outlive the calling request and an
+        # unrelated coroutine's ``commit()`` could make its partial work
+        # durable.
+        self._conn = await aiosqlite.connect(
+            self.db_path,
+            isolation_level=None,
+        )
         self._conn.row_factory = aiosqlite.Row
         # Enable loading extensions (needed for sqlite-vec)
         await self._conn.execute("PRAGMA journal_mode = WAL")
@@ -50,18 +71,14 @@ class Database:
     async def run_migrations(self) -> int:
         """Run pending SQL migrations from rka/db/migrations/.
 
+        Each migration and its tracking-row insert are committed as one SQLite
+        transaction.  The connection-wide access lock serializes migration
+        runners in this process; ``BEGIN IMMEDIATE`` also serializes writers
+        across processes before any schema change is attempted.
+
         Returns the number of newly applied migrations.
         """
-        # Ensure the tracking table exists
-        await self._conn.execute(
-            "CREATE TABLE IF NOT EXISTS schema_migrations ("
-            "  filename TEXT PRIMARY KEY,"
-            "  applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))"
-            ")"
-        )
-        await self._conn.commit()
-
-        migrations_dir = Path(__file__).parent.parent / "db" / "migrations"
+        migrations_dir = self._migrations_directory()
         if not migrations_dir.exists():
             return 0
 
@@ -70,44 +87,153 @@ class Database:
         if not sql_files:
             return 0
 
-        # Fetch already-applied filenames
-        cursor = await self._conn.execute("SELECT filename FROM schema_migrations")
-        applied = {row[0] for row in await cursor.fetchall()}
+        task = asyncio.current_task()
+        if self._transaction_owner is task:
+            raise RuntimeError(
+                "Cannot run migrations inside an application-managed transaction"
+            )
 
         count = 0
-        for sql_file in sql_files:
-            if sql_file.name in applied:
-                continue
-
-            sql = sql_file.read_text()
-            required_tables = self._migration_required_tables(sql)
-            if required_tables and not await self._tables_exist(required_tables):
-                logger.info(
-                    "Skipping migration %s (waiting for tables: %s)",
-                    sql_file.name,
-                    ", ".join(required_tables),
+        async with self._access_lock:
+            conn = self.conn
+            if conn.in_transaction:
+                raise RuntimeError(
+                    "Cannot run migrations while an unmanaged transaction is active"
                 )
-                continue
 
-            # Skip vec0 virtual tables if sqlite-vec is not loaded
-            if "USING vec0(" in sql and not self._vec_loaded:
-                logger.info(
-                    "Skipping migration %s (sqlite-vec not available)", sql_file.name
-                )
-                continue
-
-            logger.info("Applying migration: %s", sql_file.name)
-            await self._conn.executescript(sql)
-            await self._conn.execute(
-                "INSERT OR IGNORE INTO schema_migrations (filename) VALUES (?)",
-                [sql_file.name],
+            # Ensure the tracking table exists.  Each migration re-reads its
+            # ledger row after BEGIN IMMEDIATE because another process may have
+            # applied the file while this process was waiting for the lock.
+            await conn.execute(
+                "CREATE TABLE IF NOT EXISTS schema_migrations ("
+                "  filename TEXT PRIMARY KEY,"
+                "  applied_at TEXT NOT NULL DEFAULT "
+                "(strftime('%Y-%m-%dT%H:%M:%SZ','now'))"
+                ")"
             )
-            await self._conn.commit()
-            count += 1
+            await conn.commit()
+
+            for sql_file in sql_files:
+                sql = sql_file.read_text()
+                required_tables = self._migration_required_tables(sql)
+                if required_tables and not await self._tables_exist_on_connection(
+                    conn, required_tables
+                ):
+                    logger.info(
+                        "Skipping migration %s (waiting for tables: %s)",
+                        sql_file.name,
+                        ", ".join(required_tables),
+                    )
+                    continue
+
+                # Skip vec0 virtual tables if sqlite-vec is not loaded.
+                if "USING vec0(" in sql and not self._vec_loaded:
+                    logger.info(
+                        "Skipping migration %s (sqlite-vec not available)",
+                        sql_file.name,
+                    )
+                    continue
+
+                # Some legacy table-rebuild migrations explicitly disable FK
+                # enforcement.  SQLite ignores that PRAGMA after BEGIN, so set
+                # it before the atomic script and restore the prior value after
+                # commit or rollback.
+                disables_foreign_keys = bool(
+                    re.search(
+                        r"(?im)^\s*PRAGMA\s+foreign_keys\s*=\s*OFF\s*;",
+                        sql,
+                    )
+                )
+                fk_cursor = await conn.execute("PRAGMA foreign_keys")
+                fk_row = await fk_cursor.fetchone()
+                foreign_keys_were_enabled = bool(fk_row and fk_row[0])
+                if disables_foreign_keys and foreign_keys_were_enabled:
+                    await conn.execute("PRAGMA foreign_keys = OFF")
+
+                logger.info("Applying migration: %s", sql_file.name)
+                try:
+                    await conn.execute("BEGIN IMMEDIATE")
+                    cursor = await conn.execute(
+                        "SELECT 1 FROM schema_migrations WHERE filename = ?",
+                        [sql_file.name],
+                    )
+                    if await cursor.fetchone() is not None:
+                        await conn.rollback()
+                        continue
+
+                    for statement in self._migration_statements(sql):
+                        await conn.execute(statement)
+                    await conn.execute(
+                        "INSERT INTO schema_migrations (filename) VALUES (?)",
+                        [sql_file.name],
+                    )
+                    await conn.commit()
+                except BaseException:
+                    if conn.in_transaction:
+                        await conn.rollback()
+                    raise
+                finally:
+                    if disables_foreign_keys and foreign_keys_were_enabled:
+                        await conn.execute("PRAGMA foreign_keys = ON")
+
+                count += 1
 
         if count:
             logger.info("Applied %d migration(s)", count)
         return count
+
+    @staticmethod
+    def _migrations_directory() -> Path:
+        """Return the migration directory (overridable by isolated tests)."""
+        return Path(__file__).parent.parent / "db" / "migrations"
+
+    @staticmethod
+    async def _tables_exist_on_connection(
+        conn: aiosqlite.Connection, table_names: list[str]
+    ) -> bool:
+        """Check migration prerequisites without re-entering the wrapper lock."""
+        for table_name in table_names:
+            cursor = await conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                [table_name],
+            )
+            if await cursor.fetchone() is None:
+                return False
+        return True
+
+    @staticmethod
+    def _migration_statements(sql: str) -> list[str]:
+        """Split a migration script without breaking trigger bodies.
+
+        ``sqlite3.complete_statement`` understands quoted strings, comments,
+        and ``CREATE TRIGGER ... BEGIN ... END`` blocks.  Unlike
+        ``Connection.executescript``, executing the returned statements does
+        not issue an implicit commit before the script.
+        """
+        statements: list[str] = []
+        start = 0
+        for index, char in enumerate(sql):
+            if char != ";":
+                continue
+            candidate = sql[start : index + 1]
+            if sqlite3.complete_statement(candidate):
+                if candidate.strip():
+                    statements.append(candidate)
+                start = index + 1
+        trailing = sql[start:]
+        if trailing.strip():
+            # SQL migration files normally terminate statements with ';'.
+            # Permit a final complete statement but reject truncated SQL before
+            # entering the transaction so retry cannot inherit partial DDL.
+            if not sqlite3.complete_statement(trailing):
+                if all(
+                    not line.strip() or line.lstrip().startswith("--")
+                    for line in trailing.splitlines()
+                ):
+                    return statements
+                raise ValueError("Migration SQL ends with an incomplete statement")
+            statements.append(trailing)
+        return statements
 
     async def initialize_phase2_schema(self) -> None:
         """Load sqlite-vec extension and create Phase 2 tables (FTS5 + vec)."""
@@ -221,33 +347,176 @@ class Database:
         """Whether sqlite-vec extension is loaded."""
         return self._vec_loaded
 
+    @staticmethod
+    def _reject_raw_transaction_control(sql: str) -> None:
+        """Require every wrapper entry point to use managed transactions."""
+        normalized = re.sub(
+            r"\A(?:\s+|--[^\n]*(?:\n|\Z)|/\*.*?\*/)*",
+            "",
+            sql,
+            flags=re.DOTALL,
+        ).upper()
+        keyword_match = re.match(r"[A-Z]+", normalized)
+        keyword = keyword_match.group(0) if keyword_match else ""
+        if keyword in {
+            "BEGIN",
+            "COMMIT",
+            "END",
+            "ROLLBACK",
+            "SAVEPOINT",
+            "RELEASE",
+        }:
+            raise RuntimeError(
+                "raw transaction control is not allowed; use Database.transaction()"
+            )
+
     async def execute(self, sql: str, params: list | tuple | None = None) -> aiosqlite.Cursor:
-        """Execute a single SQL statement."""
-        if params:
-            return await self._conn.execute(sql, params)
-        return await self._conn.execute(sql)
+        """Execute one statement without permitting raw transaction control.
+
+        Transaction ownership must go through :meth:`transaction`; otherwise
+        another coroutine can interleave and commit or roll back unrelated
+        service work on the shared connection.  Nested managed transactions
+        create their savepoints directly on the owned connection; application
+        callers may not open raw savepoints either.
+        """
+        self._reject_raw_transaction_control(sql)
+        async with self._connection_access() as conn:
+            if params:
+                return await conn.execute(sql, params)
+            return await conn.execute(sql)
 
     async def executemany(self, sql: str, params_list: list) -> aiosqlite.Cursor:
         """Execute SQL with multiple parameter sets."""
-        return await self._conn.executemany(sql, params_list)
+        self._reject_raw_transaction_control(sql)
+        async with self._connection_access() as conn:
+            return await conn.executemany(sql, params_list)
 
     async def fetchone(self, sql: str, params: list | tuple | None = None) -> dict | None:
         """Fetch a single row as a dict."""
-        cursor = await self.execute(sql, params)
-        row = await cursor.fetchone()
+        self._reject_raw_transaction_control(sql)
+        async with self._connection_access() as conn:
+            if params:
+                cursor = await conn.execute(sql, params)
+            else:
+                cursor = await conn.execute(sql)
+            row = await cursor.fetchone()
         if row is None:
             return None
         return dict(row)
 
     async def fetchall(self, sql: str, params: list | tuple | None = None) -> list[dict]:
         """Fetch all rows as dicts."""
-        cursor = await self.execute(sql, params)
-        rows = await cursor.fetchall()
+        self._reject_raw_transaction_control(sql)
+        async with self._connection_access() as conn:
+            if params:
+                cursor = await conn.execute(sql, params)
+            else:
+                cursor = await conn.execute(sql)
+            rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
     async def commit(self) -> None:
-        """Commit the current transaction."""
-        await self._conn.commit()
+        """Commit pending work unless a managed transaction owns the call.
+
+        Service methods historically commit their own work.  Treat those
+        commits as deferred while the same task is inside ``transaction()`` so
+        a caller can compose existing service methods atomically.
+        """
+        if self._transaction_owner is asyncio.current_task():
+            return
+        async with self._connection_access() as conn:
+            await conn.commit()
+
+    @asynccontextmanager
+    async def transaction(self, *, write: bool = True) -> AsyncIterator[Database]:
+        """Run statements atomically, using savepoints for same-task nesting.
+
+        The outermost context owns the connection until it commits or rolls
+        back.  Nested contexts in that task use uniquely named savepoints, so a
+        handled inner failure rolls back only the inner unit.  Calls to
+        :meth:`commit` made by composed service helpers are deferred until the
+        outermost context exits.  Write transactions acquire SQLite's reserved
+        write lock before reading so optimistic revision checks cannot later
+        fail with ``SQLITE_BUSY_SNAPSHOT`` after a competing process commits.
+        Read-only snapshot callers should pass ``write=False`` to avoid
+        unnecessarily serializing writers.
+
+        Managed transactions are task-affine.  Do not spawn a child task that
+        uses this ``Database`` and await it from inside the transaction; the
+        child correctly waits for connection ownership and the parent would
+        therefore deadlock waiting for it.
+        """
+        task = asyncio.current_task()
+        if task is None:
+            raise RuntimeError("Managed transactions require a running asyncio task")
+
+        if self._transaction_owner is task:
+            async with self._nested_transaction():
+                yield self
+            return
+
+        async with self._access_lock:
+            conn = self.conn
+            if conn.in_transaction:
+                raise RuntimeError(
+                    "Cannot start a managed transaction while an unmanaged "
+                    "transaction is active; commit or roll it back first"
+                )
+
+            self._transaction_owner = task
+            self._transaction_depth = 1
+            try:
+                await conn.execute("BEGIN IMMEDIATE" if write else "BEGIN")
+                try:
+                    yield self
+                except BaseException:
+                    await conn.rollback()
+                    raise
+                else:
+                    try:
+                        await conn.commit()
+                    except BaseException:
+                        await conn.rollback()
+                        raise
+            finally:
+                self._transaction_depth = 0
+                self._transaction_owner = None
+
+    @asynccontextmanager
+    async def _nested_transaction(self) -> AsyncIterator[None]:
+        """Create a savepoint inside the transaction owned by this task."""
+        conn = self.conn
+        self._savepoint_counter += 1
+        savepoint = f"rka_sp_{self._savepoint_counter}"
+        await conn.execute(f"SAVEPOINT {savepoint}")
+        self._transaction_depth += 1
+        try:
+            try:
+                yield
+            except BaseException:
+                await conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                await conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+                raise
+            else:
+                try:
+                    await conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+                except BaseException:
+                    # A failed release must not leave the outer transaction
+                    # carrying a partially applied inner unit.
+                    await conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                    await conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+                    raise
+        finally:
+            self._transaction_depth -= 1
+
+    @asynccontextmanager
+    async def _connection_access(self) -> AsyncIterator[aiosqlite.Connection]:
+        """Serialize wrapper calls without re-locking the owning task."""
+        if self._transaction_owner is asyncio.current_task():
+            yield self.conn
+            return
+        async with self._access_lock:
+            yield self.conn
 
     async def _tables_exist(self, table_names: list[str]) -> bool:
         """Return True when all named tables exist."""

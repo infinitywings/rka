@@ -35,6 +35,13 @@ _PREFIXES = {
     "context_snapshot": "ctx",
     "review": "rev",
     "reference_validation": "rvd",
+    "manuscript": "man",
+    "manuscript_claim": "mcl",
+    "manuscript_claim_ratification": "mra",
+    "manuscript_unit": "mun",
+    "manuscript_checkpoint": "mck",
+    "manuscript_verification": "mva",
+    "manuscript_reference": "mrf",
 }
 
 

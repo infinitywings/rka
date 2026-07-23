@@ -46,6 +46,14 @@ from __future__ import annotations
 from typing import Annotated, Any, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from rka.models.reference_validation import (
+    MAX_REFERENCE_AUTHORS,
+    MAX_REFERENCE_DOI_CHARS,
+    MAX_REFERENCE_TITLE_CHARS,
+    ReferenceAuthor,
+    ReferenceValidationInput,
+)
+from rka.models.manuscript_native import ManuscriptReferenceMemberInput
 
 # NOTE: enum aliases from ``rka.mcp._enums`` are imported on a per-batch
 # basis. Batch A (query ops) doesn't directly type any enum field — query
@@ -99,6 +107,20 @@ from rka.mcp._enums import (  # noqa: E402, F811
 from rka.mcp._enums import (  # noqa: E402, F811
     BatchImportActorLit,
     HookCreatedByLit,
+    ManuscriptCheckpointKindLit,
+    ManuscriptCheckpointResolutionStatusLit,
+    ManuscriptClaimKindLit,
+    ManuscriptClaimStateLit,
+    ManuscriptClaimUnitRelationshipLit,
+    ManuscriptEvidenceRoleLit,
+    ManuscriptInitialPhaseLit,
+    ManuscriptInitialStateLit,
+    ManuscriptReadinessPhaseLit,
+    ManuscriptStateLit,
+    ManuscriptUnitKindLit,
+    ManuscriptUnitStatusLit,
+    ManuscriptVerificationDimensionVerdictLit,
+    ManuscriptVerificationVerdictLit,
 )
 
 # ---------------------------------------------------------------------------
@@ -148,7 +170,7 @@ class PaginatedFiltersMixin(BaseModel):
 
 
 # =============================================================================
-# Batch A — QUERY operations (38 models)
+# Batch A — QUERY operations (51 models)
 # =============================================================================
 
 # ---------------------------------------------------------------------------
@@ -422,14 +444,190 @@ class QueryClaimsArgs(ProjectScopedArgs, PaginatedFiltersMixin):
 
 
 class QueryManuscriptArgs(ProjectScopedArgs):
-    """[ANY] Fetch a registered manuscript."""
+    """[ANY] Fetch a manuscript by canonical ``man_`` or legacy ``jrn_`` id."""
 
     operation: Literal["manuscript"] = "manuscript"
 
     id: Annotated[
         str,
-        Field(description="Manuscript journal ID (jrn_...)."),
+        Field(description="Canonical man_ id or compatibility jrn_ alias."),
     ]
+
+
+class QueryReferenceValidationStatusArgs(ProjectScopedArgs):
+    """[ANY] Poll one asynchronous manuscript-reference validation job.
+
+    ``validate_reference`` returns an HTTP 202 pending job envelope rather
+    than an immediate verdict. Pass its ``job_id`` here with the same
+    manuscript scope to observe progress and retrieve the eventual result.
+    """
+
+    operation: Literal["reference_validation_status"] = (
+        "reference_validation_status"
+    )
+
+    manuscript_id: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=128,
+            description="Canonical man_ id or compatibility jrn_ alias.",
+        ),
+    ]
+    job_id: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=128,
+            description="Reference-validation job id returned by validate_reference.",
+        ),
+    ]
+
+
+class ResolveEntitiesArgs(ProjectScopedArgs):
+    """[ANY] Resolve heterogeneous RKA IDs with project attestation.
+
+    The server returns one outcome for every requested ID.  Set
+    ``include_sources`` for direct terminal claim-source closure and
+    ``include_edges`` for same-project edge rows.
+    """
+
+    operation: Literal["resolve_entities"] = "resolve_entities"
+
+    ids: Annotated[
+        list[str],
+        Field(
+            min_length=1,
+            max_length=1000,
+            description="One to 1,000 heterogeneous RKA entity IDs.",
+        ),
+    ]
+    include_sources: Annotated[
+        bool,
+        Field(default=False, description="Include direct claim-source closure."),
+    ] = False
+    include_edges: Annotated[
+        bool,
+        Field(default=False, description="Include same-project typed edges."),
+    ] = False
+
+    @model_validator(mode="after")
+    def _validate_ids(self) -> "ResolveEntitiesArgs":
+        for entity_id in self.ids:
+            if not entity_id or entity_id != entity_id.strip():
+                raise ValueError(
+                    "resolve_entities ids must be non-empty and contain no "
+                    "surrounding whitespace"
+                )
+        return self
+
+
+class QueryManuscriptContextArgs(ProjectScopedArgs):
+    """[ANY] Read the authoritative native manuscript aggregate."""
+
+    operation: Literal["manuscript_context"] = "manuscript_context"
+
+    id: Annotated[
+        str,
+        Field(description="Canonical man_ id or compatibility jrn_ alias."),
+    ]
+
+
+class QueryManuscriptReferenceManifestArgs(ProjectScopedArgs):
+    """[ANY] Read active citation membership and validation currency."""
+
+    operation: Literal["manuscript_reference_manifest"] = (
+        "manuscript_reference_manifest"
+    )
+
+    id: Annotated[
+        str,
+        Field(description="Canonical man_ id or compatibility jrn_ alias."),
+    ]
+
+
+class QueryManuscriptReadinessArgs(ProjectScopedArgs):
+    """[ANY] Evaluate evidence-linked readiness for one lifecycle phase."""
+
+    operation: Literal["manuscript_readiness"] = "manuscript_readiness"
+
+    id: Annotated[
+        str,
+        Field(description="Canonical man_ id or compatibility jrn_ alias."),
+    ]
+    target_phase: Annotated[
+        ManuscriptReadinessPhaseLit,
+        Field(
+            default="drafting",
+            description="Lifecycle phase whose mechanical gates to evaluate.",
+        ),
+    ] = "drafting"
+
+
+class QueryManuscriptSpineArgs(ProjectScopedArgs):
+    """[ANY] Export the deterministic Writer projection of the RKA spine."""
+
+    operation: Literal["manuscript_spine"] = "manuscript_spine"
+
+    id: Annotated[
+        str,
+        Field(description="Canonical man_ id or compatibility jrn_ alias."),
+    ]
+
+
+class QueryManuscriptWritingCandidatesArgs(ProjectScopedArgs):
+    """[ANY] Smooth claims through reviewed clusters and research questions."""
+
+    operation: Literal["manuscript_writing_candidates"] = (
+        "manuscript_writing_candidates"
+    )
+
+    id: Annotated[
+        str,
+        Field(description="Canonical man_ id or compatibility jrn_ alias."),
+    ]
+
+
+class QueryChangesSinceArgs(ProjectScopedArgs):
+    """[ANY] Page the durable project-scoped semantic change ledger."""
+
+    operation: Literal["changes_since"] = "changes_since"
+
+    cursor: Annotated[
+        int,
+        Field(
+            default=0,
+            ge=0,
+            description="Opaque monotonic cursor; return rows strictly after it.",
+        ),
+    ] = 0
+    limit: Annotated[
+        int,
+        Field(default=100, ge=1, le=1000, description="Page size."),
+    ] = 100
+
+
+class QueryManuscriptImpactArgs(ProjectScopedArgs):
+    """[ANY] Map changed dependencies to manuscript claims and units."""
+
+    operation: Literal["manuscript_impact"] = "manuscript_impact"
+
+    id: Annotated[
+        str,
+        Field(description="Canonical man_ id or compatibility jrn_ alias."),
+    ]
+    since_cursor: Annotated[
+        int,
+        Field(
+            default=0,
+            ge=0,
+            description="Opaque cursor from the last synchronized projection.",
+        ),
+    ] = 0
+    limit: Annotated[
+        int,
+        Field(default=100, ge=1, le=1000, description="Change-page size."),
+    ] = 100
 
 
 # ---------------------------------------------------------------------------
@@ -919,6 +1117,15 @@ QueryArgsUnion = Annotated[
         QueryClustersArgs,
         QueryClaimsArgs,
         QueryManuscriptArgs,
+        QueryReferenceValidationStatusArgs,
+        ResolveEntitiesArgs,
+        QueryManuscriptContextArgs,
+        QueryManuscriptReferenceManifestArgs,
+        QueryManuscriptReadinessArgs,
+        QueryManuscriptSpineArgs,
+        QueryManuscriptWritingCandidatesArgs,
+        QueryChangesSinceArgs,
+        QueryManuscriptImpactArgs,
         # Graph
         QueryGraphArgs,
         QueryEgoGraphArgs,
@@ -953,7 +1160,7 @@ QueryArgsUnion = Annotated[
 
 
 # =============================================================================
-# Batch B — RECORD/CREATE write operations (13 models)
+# Batch B — RECORD/CREATE + native manuscript operations (22 models)
 # =============================================================================
 #
 # record_note, ingest_document, record_decision, record_literature,
@@ -1481,7 +1688,12 @@ class BatchImportArgs(ProjectScopedArgs):
 
 
 class RegisterManuscriptArgs(ProjectScopedArgs):
-    """[ANY] Register a manuscript workspace."""
+    """[ANY] Compatibility register for legacy Writer callers.
+
+    The response includes both the deprecated ``jrn_`` manifest ID and the
+    canonical native ``man_`` ID.  New callers should use
+    ``create_manuscript``.
+    """
 
     operation: Literal["register_manuscript"] = "register_manuscript"
 
@@ -1504,6 +1716,343 @@ class RegisterManuscriptArgs(ProjectScopedArgs):
             description="Section names for the manuscript skeleton.",
         ),
     ] = None
+
+
+class _ManuscriptSpineEvidenceArgs(BaseModel):
+    """Typed evidence-role buckets used by claim and unit spine records."""
+
+    model_config = ConfigDict(extra="forbid", use_enum_values=True)
+
+    support: list[str] = Field(default_factory=list)
+    qualifier: list[str] = Field(default_factory=list)
+    counterevidence: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _require_claim_ids(self) -> "_ManuscriptSpineEvidenceArgs":
+        for role in ManuscriptEvidenceRoleLit.__args__:
+            values = getattr(self, role)
+            if len(values) != len(set(values)):
+                raise ValueError(f"duplicate evidence ID in {role}")
+            if any(not value.startswith("clm_") for value in values):
+                raise ValueError(f"{role} evidence must contain only clm_ IDs")
+        return self
+
+
+class _ManuscriptSpineUnitLinkArgs(BaseModel):
+    """Typed claim-to-unit relationship in an argument-spine replacement."""
+
+    model_config = ConfigDict(extra="forbid", use_enum_values=True)
+
+    unit_key: Annotated[str, Field(min_length=1)]
+    relationship: Annotated[
+        ManuscriptClaimUnitRelationshipLit,
+        Field(default="advances"),
+    ] = "advances"
+
+
+class _ManuscriptSpineClaimArgs(BaseModel):
+    """One stable claim identity plus its current immutable wording."""
+
+    model_config = ConfigDict(extra="forbid", use_enum_values=True)
+
+    local_key: Annotated[str, Field(min_length=1)]
+    kind: ManuscriptClaimKindLit
+    state: ManuscriptClaimStateLit = "candidate"
+    exact_wording: Annotated[str, Field(min_length=1)]
+    allowed_wording: Annotated[str, Field(min_length=1)]
+    prohibited_wording: Annotated[list[str], Field(min_length=1)]
+    evidence: _ManuscriptSpineEvidenceArgs = Field(
+        default_factory=_ManuscriptSpineEvidenceArgs
+    )
+    unit_links: list[_ManuscriptSpineUnitLinkArgs] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_wording_and_links(self) -> "_ManuscriptSpineClaimArgs":
+        if any(not value.strip() for value in self.prohibited_wording):
+            raise ValueError("prohibited_wording entries must be non-empty")
+        linked = [
+            (item.unit_key, item.relationship)
+            for item in self.unit_links
+        ]
+        if len(linked) != len(set(linked)):
+            raise ValueError("duplicate claim-to-unit relationship")
+        return self
+
+
+class _ManuscriptSpineUnitArgs(BaseModel):
+    """One claim-sized Writer unit in the authoritative RKA spine."""
+
+    model_config = ConfigDict(extra="forbid", use_enum_values=True)
+
+    local_key: Annotated[str, Field(min_length=1)]
+    kind: ManuscriptUnitKindLit
+    location: Annotated[str, Field(min_length=1)]
+    title: Optional[str] = None
+    artifact_ref: Optional[str] = None
+    allowed_interpretation: Optional[str] = None
+    prohibited_interpretation: Optional[str] = None
+    sequence: Annotated[int, Field(ge=0)] = 0
+    status: ManuscriptUnitStatusLit = "planned"
+    evidence: _ManuscriptSpineEvidenceArgs = Field(
+        default_factory=_ManuscriptSpineEvidenceArgs
+    )
+
+    @model_validator(mode="after")
+    def _require_result_boundaries(self) -> "_ManuscriptSpineUnitArgs":
+        if self.kind != "result":
+            return self
+        for field_name in (
+            "artifact_ref",
+            "allowed_interpretation",
+            "prohibited_interpretation",
+        ):
+            value = getattr(self, field_name)
+            if value is None or not value.strip():
+                raise ValueError(f"result units require {field_name}")
+        return self
+
+
+class _ManuscriptArgumentSpineArgs(BaseModel):
+    """Complete replacement payload for the native argument spine.
+
+    Both lists are required because omission has retirement/removal semantics.
+    An explicit empty list is permitted when the caller intentionally retires
+    every record in that category.
+    """
+
+    model_config = ConfigDict(extra="forbid", use_enum_values=True)
+
+    claims: list[_ManuscriptSpineClaimArgs]
+    units: list[_ManuscriptSpineUnitArgs]
+
+    @model_validator(mode="after")
+    def _require_unique_local_keys(self) -> "_ManuscriptArgumentSpineArgs":
+        for label, records in (("claim", self.claims), ("unit", self.units)):
+            keys = [record.local_key for record in records]
+            if len(keys) != len(set(keys)):
+                raise ValueError(f"duplicate {label} local_key")
+        unit_keys = {unit.local_key for unit in self.units}
+        missing = sorted({
+            link.unit_key
+            for claim in self.claims
+            for link in claim.unit_links
+            if link.unit_key not in unit_keys
+        })
+        if missing:
+            raise ValueError(
+                "claim unit_links reference unknown unit keys: "
+                + ", ".join(missing)
+            )
+        return self
+
+
+class CreateManuscriptArgs(ProjectScopedArgs):
+    """[ANY] Create the canonical native manuscript aggregate."""
+
+    operation: Literal["create_manuscript"] = "create_manuscript"
+
+    title: Annotated[str, Field(min_length=1)]
+    abstract: Optional[str] = None
+    venue: Optional[str] = None
+    phase: ManuscriptInitialPhaseLit = "planning"
+    state: ManuscriptInitialStateLit = "active"
+    workspace_ref: Optional[str] = None
+    legacy_journal_id: Optional[str] = None
+
+
+class UpdateManuscriptArgs(ProjectScopedArgs):
+    """[ANY] Update native manuscript metadata with revision precondition."""
+
+    operation: Literal["update_manuscript"] = "update_manuscript"
+
+    id: Annotated[
+        str,
+        Field(description="Canonical man_ id or compatibility jrn_ alias."),
+    ]
+    expected_revision: Annotated[int, Field(ge=1)]
+    title: Annotated[Optional[str], Field(min_length=1)] = None
+    abstract: Optional[str] = None
+    venue: Optional[str] = None
+    workspace_ref: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _require_metadata_change(self) -> "UpdateManuscriptArgs":
+        changes = self.model_fields_set - {
+            "operation",
+            "project_id",
+            "id",
+            "expected_revision",
+        }
+        if not changes:
+            raise ValueError("update_manuscript requires at least one change")
+        for required_value in ("title",):
+            if required_value in changes and getattr(self, required_value) is None:
+                raise ValueError(f"update_manuscript {required_value} cannot be null")
+        return self
+
+
+class UpsertArgumentSpineArgs(ProjectScopedArgs):
+    """[ANY] Atomically replace the authoritative argument-spine projection."""
+
+    operation: Literal["upsert_argument_spine"] = "upsert_argument_spine"
+
+    id: Annotated[
+        str,
+        Field(description="Canonical man_ id or compatibility jrn_ alias."),
+    ]
+    expected_revision: Annotated[int, Field(ge=1)]
+    spine: _ManuscriptArgumentSpineArgs
+
+
+class ReplaceManuscriptReferenceManifestArgs(ProjectScopedArgs):
+    """[ANY] Replace the active citation-key manifest transactionally."""
+
+    operation: Literal["replace_manuscript_reference_manifest"] = (
+        "replace_manuscript_reference_manifest"
+    )
+
+    id: Annotated[
+        str,
+        Field(description="Canonical man_ id or compatibility jrn_ alias."),
+    ]
+    expected_revision: Annotated[int, Field(ge=1)]
+    members: Annotated[
+        list[ManuscriptReferenceMemberInput],
+        Field(
+            max_length=2_000,
+            description=(
+                "Complete active citation set; omission retires a prior member."
+            ),
+        ),
+    ]
+
+    @model_validator(mode="after")
+    def _require_unique_reference_bindings(
+        self,
+    ) -> "ReplaceManuscriptReferenceManifestArgs":
+        folded_keys: set[str] = set()
+        literature_ids: set[str] = set()
+        for member in self.members:
+            folded_key = member.citation_key.casefold()
+            if folded_key in folded_keys:
+                raise ValueError(
+                    "replace_manuscript_reference_manifest citation keys "
+                    "must be unique case-insensitively"
+                )
+            if member.literature_id in literature_ids:
+                raise ValueError(
+                    "replace_manuscript_reference_manifest may bind each "
+                    "literature record only once"
+                )
+            folded_keys.add(folded_key)
+            literature_ids.add(member.literature_id)
+        return self
+
+
+class RatifyManuscriptClaimArgs(ProjectScopedArgs):
+    """[PI] Bind exact manuscript-claim wording to an active PI decision."""
+
+    operation: Literal["ratify_manuscript_claim"] = "ratify_manuscript_claim"
+
+    id: Annotated[
+        str,
+        Field(description="Canonical man_ id or compatibility jrn_ alias."),
+    ]
+    claim_ref: Annotated[
+        str,
+        Field(
+            min_length=1,
+            description="Stable mcl_ id or manuscript-local claim key.",
+        ),
+    ]
+    expected_revision: Annotated[int, Field(ge=1)]
+    decision_id: Annotated[str, Field(min_length=1)]
+    claim_version: Annotated[Optional[int], Field(default=None, ge=1)] = None
+    ratified_at: Optional[str] = None
+
+
+class TransitionManuscriptPhaseArgs(ProjectScopedArgs):
+    """[ANY] Run readiness gates and transition the manuscript lifecycle."""
+
+    operation: Literal["transition_manuscript_phase"] = (
+        "transition_manuscript_phase"
+    )
+
+    id: Annotated[
+        str,
+        Field(description="Canonical man_ id or compatibility jrn_ alias."),
+    ]
+    expected_revision: Annotated[int, Field(ge=1)]
+    target_phase: ManuscriptReadinessPhaseLit
+    target_state: Optional[ManuscriptStateLit] = None
+
+
+class CreateManuscriptCheckpointArgs(ProjectScopedArgs):
+    """[PI] Create a pending native manuscript checkpoint."""
+
+    operation: Literal["create_manuscript_checkpoint"] = (
+        "create_manuscript_checkpoint"
+    )
+
+    id: Annotated[
+        str,
+        Field(description="Canonical man_ id or compatibility jrn_ alias."),
+    ]
+    expected_revision: Annotated[int, Field(ge=1)]
+    kind: ManuscriptCheckpointKindLit
+    unit_id: Optional[str] = None
+    supersedes_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _validate_checkpoint_scope(self) -> "CreateManuscriptCheckpointArgs":
+        if self.kind == "draft_section" and self.unit_id is None:
+            raise ValueError("draft_section checkpoints require unit_id")
+        if self.kind != "draft_section" and self.unit_id is not None:
+            raise ValueError("only draft_section checkpoints may set unit_id")
+        return self
+
+
+class ResolveManuscriptCheckpointArgs(ProjectScopedArgs):
+    """[PI] Resolve a pending manuscript checkpoint through a PI decision."""
+
+    operation: Literal["resolve_manuscript_checkpoint"] = (
+        "resolve_manuscript_checkpoint"
+    )
+
+    checkpoint_id: Annotated[str, Field(min_length=1)]
+    expected_revision: Annotated[int, Field(ge=1)]
+    decision_id: Annotated[str, Field(min_length=1)]
+    status: ManuscriptCheckpointResolutionStatusLit
+    resolved_at: Annotated[str, Field(min_length=1)]
+
+
+class RecordVerificationAttestationArgs(ProjectScopedArgs):
+    """[ANY] Append one immutable multidimensional claim verification."""
+
+    operation: Literal["record_verification_attestation"] = (
+        "record_verification_attestation"
+    )
+
+    id: Annotated[
+        str,
+        Field(description="Canonical man_ id or compatibility jrn_ alias."),
+    ]
+    expected_revision: Annotated[int, Field(ge=1)]
+    claim_id: Annotated[str, Field(min_length=1)]
+    claim_version: Annotated[int, Field(ge=1)]
+    overall_verdict: ManuscriptVerificationVerdictLit
+    grounding_verdict: ManuscriptVerificationDimensionVerdictLit
+    evidence_verdict: ManuscriptVerificationDimensionVerdictLit
+    contradiction_verdict: ManuscriptVerificationDimensionVerdictLit
+    currency_verdict: ManuscriptVerificationDimensionVerdictLit
+    ratification_verdict: ManuscriptVerificationDimensionVerdictLit
+    unit_coverage_verdict: ManuscriptVerificationDimensionVerdictLit
+    changelog_cursor: Optional[str] = None
+    dependency_snapshot: dict[str, Any] = Field(default_factory=dict)
+    full_json_payload: dict[str, Any]
+    validator_version: Optional[str] = None
+    started_at: Annotated[str, Field(min_length=1)]
+    completed_at: Annotated[str, Field(min_length=1)]
 
 
 # --- missions -------------------------------------------------------------
@@ -1800,10 +2349,10 @@ class HookAddArgs(ProjectScopedArgs):
 
 
 # ---------------------------------------------------------------------------
-# Batch B partial union (for the rka_execute discriminated union)
+# Batch B partial union (record/create + native manuscript domain)
 # ---------------------------------------------------------------------------
 #
-# The full rka_execute union (49 ops) is assembled in the verbs module
+# The full rka_execute union (58 ops) is assembled below
 # from per-batch contributions. This partial union exposes Batch B's
 # slice so unit tests can verify it in isolation.
 
@@ -1816,6 +2365,15 @@ BatchBExecuteUnion = Annotated[
         ImportBibtexArgs,
         BatchImportArgs,
         RegisterManuscriptArgs,
+        CreateManuscriptArgs,
+        UpdateManuscriptArgs,
+        UpsertArgumentSpineArgs,
+        ReplaceManuscriptReferenceManifestArgs,
+        RatifyManuscriptClaimArgs,
+        TransitionManuscriptPhaseArgs,
+        CreateManuscriptCheckpointArgs,
+        ResolveManuscriptCheckpointArgs,
+        RecordVerificationAttestationArgs,
         CreateMissionArgs,
         CreateClusterArgs,
         CreateProjectArgs,
@@ -3268,27 +3826,51 @@ class ProcessPaperArgs(ProjectScopedArgs):
 
 
 class ValidateReferenceArgs(ProjectScopedArgs):
-    """Validate a manuscript reference (by DOI or title)."""
+    """Queue an asynchronous manuscript-reference validation.
+
+    A successful request returns an HTTP 202 pending job envelope containing
+    ``job_id``; it does not return an immediate validation verdict. Poll
+    ``reference_validation_status`` with the same manuscript ID and job ID
+    for the eventual completed result or failure.
+    """
 
     operation: Literal["validate_reference"] = "validate_reference"
 
     manuscript_id: Annotated[
         str,
-        Field(description="Manuscript journal id (jrn_*) whose reference is being validated."),
+        Field(
+            min_length=1,
+            max_length=128,
+            description=(
+                "Canonical man_ id or compatibility jrn_ alias whose "
+                "reference is being validated."
+            )
+        ),
     ]
 
     doi: Annotated[
         Optional[str],
-        Field(default=None, description="DOI to validate."),
+        Field(
+            default=None,
+            min_length=1,
+            max_length=MAX_REFERENCE_DOI_CHARS,
+            description="DOI to validate.",
+        ),
     ] = None
     title: Annotated[
         Optional[str],
-        Field(default=None, description="Title to validate."),
-    ] = None
-    author: Annotated[
-        Optional[list[dict[str, str]]],
         Field(
             default=None,
+            min_length=1,
+            max_length=MAX_REFERENCE_TITLE_CHARS,
+            description="Title to validate.",
+        ),
+    ] = None
+    author: Annotated[
+        Optional[list[ReferenceAuthor]],
+        Field(
+            default=None,
+            max_length=MAX_REFERENCE_AUTHORS,
             description=(
                 "Optional CSL-JSON author list. Supplying authors enables "
                 "Stage E disambiguation."
@@ -3299,16 +3881,22 @@ class ValidateReferenceArgs(ProjectScopedArgs):
         Optional[str],
         Field(
             default=None,
+            min_length=1,
+            max_length=128,
             description="Optional same-project lit_ record to bind to the attestation.",
         ),
     ] = None
 
     @model_validator(mode="after")
     def _require_doi_or_title(self) -> "ValidateReferenceArgs":
-        if self.doi is None and self.title is None:
-            raise ValueError(
-                "validate_reference: at least one of doi or title required."
-            )
+        normalized = ReferenceValidationInput(
+            doi=self.doi,
+            title=self.title,
+            author=self.author,
+        )
+        self.doi = normalized.doi
+        self.title = normalized.title
+        self.author = normalized.author
         return self
 
 
@@ -3657,7 +4245,7 @@ BatchCExecuteUnion = Annotated[
 
 
 # =============================================================================
-# Final ExecuteArgsUnion — composes B + C + D (49 models total)
+# Final ExecuteArgsUnion — composes B + C + D (58 models total)
 # =============================================================================
 #
 # Phase 3 assembly: the discriminated union for `rka_execute`. FastMCP
@@ -3667,7 +4255,7 @@ BatchCExecuteUnion = Annotated[
 
 ExecuteArgsUnion = Annotated[
     Union[
-        # ===== Batch B — RECORD/CREATE (13) =====
+        # ===== Batch B — RECORD/CREATE + NATIVE MANUSCRIPT =====
         RecordNoteArgs,
         IngestDocumentArgs,
         RecordDecisionArgs,
@@ -3675,6 +4263,15 @@ ExecuteArgsUnion = Annotated[
         ImportBibtexArgs,
         BatchImportArgs,
         RegisterManuscriptArgs,
+        CreateManuscriptArgs,
+        UpdateManuscriptArgs,
+        UpsertArgumentSpineArgs,
+        ReplaceManuscriptReferenceManifestArgs,
+        RatifyManuscriptClaimArgs,
+        TransitionManuscriptPhaseArgs,
+        CreateManuscriptCheckpointArgs,
+        ResolveManuscriptCheckpointArgs,
+        RecordVerificationAttestationArgs,
         CreateMissionArgs,
         CreateClusterArgs,
         CreateProjectArgs,
@@ -3749,6 +4346,15 @@ __all__ = [
     "QueryClustersArgs",
     "QueryClaimsArgs",
     "QueryManuscriptArgs",
+    "QueryReferenceValidationStatusArgs",
+    "ResolveEntitiesArgs",
+    "QueryManuscriptContextArgs",
+    "QueryManuscriptReferenceManifestArgs",
+    "QueryManuscriptReadinessArgs",
+    "QueryManuscriptSpineArgs",
+    "QueryManuscriptWritingCandidatesArgs",
+    "QueryChangesSinceArgs",
+    "QueryManuscriptImpactArgs",
     "QueryGraphArgs",
     "QueryEgoGraphArgs",
     "QueryGraphStatsArgs",
@@ -3782,6 +4388,15 @@ __all__ = [
     "ImportBibtexArgs",
     "BatchImportArgs",
     "RegisterManuscriptArgs",
+    "CreateManuscriptArgs",
+    "UpdateManuscriptArgs",
+    "UpsertArgumentSpineArgs",
+    "ReplaceManuscriptReferenceManifestArgs",
+    "RatifyManuscriptClaimArgs",
+    "TransitionManuscriptPhaseArgs",
+    "CreateManuscriptCheckpointArgs",
+    "ResolveManuscriptCheckpointArgs",
+    "RecordVerificationAttestationArgs",
     "CreateMissionArgs",
     "CreateClusterArgs",
     "CreateProjectArgs",

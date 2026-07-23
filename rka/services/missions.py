@@ -55,70 +55,81 @@ class MissionService(BaseService):
         motivated_by = (data.motivated_by_decision or "").strip() or None
         depends_on = (data.depends_on or "").strip() or None
 
-        if motivated_by is not None:
-            dec = await self.db.fetchone(
-                "SELECT id FROM decisions WHERE id = ? AND project_id = ?",
-                [motivated_by, self.project_id],
-            )
-            if not dec:
-                raise ValueError(
-                    f"motivated_by_decision {motivated_by!r} not found in "
-                    f"project {self.project_id}"
-                )
-
         tasks_json = None
         if data.tasks:
             tasks_json = json.dumps([t.model_dump() for t in data.tasks])
 
-        await self.db.execute(
-            """INSERT INTO missions
-               (id, phase, objective, tasks, context, acceptance_criteria,
-                scope_boundaries, checkpoint_triggers, depends_on,
-                motivated_by_decision, project_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            [
-                mis_id, data.phase, data.objective, tasks_json,
-                data.context, data.acceptance_criteria,
-                data.scope_boundaries, data.checkpoint_triggers,
-                depends_on, motivated_by,
-                self.project_id,
-            ],
-        )
-        await self.db.commit()
+        async with self.db.transaction():
+            if motivated_by is not None:
+                dec = await self.db.fetchone(
+                    "SELECT id FROM decisions WHERE id = ? AND project_id = ?",
+                    [motivated_by, self.project_id],
+                )
+                if not dec:
+                    raise ValueError(
+                        f"motivated_by_decision {motivated_by!r} not found in "
+                        f"project {self.project_id}"
+                    )
 
-        # Write entity_link for motivated_by_decision
-        if motivated_by:
-            await self.add_link(
-                "decision", motivated_by,
-                "motivated", "mission", mis_id,
+            await self.db.execute(
+                """INSERT INTO missions
+                   (id, phase, objective, tasks, context, acceptance_criteria,
+                    scope_boundaries, checkpoint_triggers, depends_on,
+                    motivated_by_decision, project_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    mis_id,
+                    data.phase,
+                    data.objective,
+                    tasks_json,
+                    data.context,
+                    data.acceptance_criteria,
+                    data.scope_boundaries,
+                    data.checkpoint_triggers,
+                    depends_on,
+                    motivated_by,
+                    self.project_id,
+                ],
+            )
+
+            await self._replace_incoming_links(
+                target_type="mission",
+                target_id=mis_id,
+                link_type="motivated",
+                source_type="decision",
+                source_ids=[motivated_by] if motivated_by else [],
+                created_by=actor,
+            )
+            await self._replace_incoming_links(
+                target_type="mission",
+                target_id=mis_id,
+                link_type="triggered",
+                source_type="mission",
+                source_ids=[depends_on] if depends_on else [],
                 created_by=actor,
             )
 
-        # Save user-provided tags immediately. Derived tags are eventual.
-        tags = data.tags
-        if tags:
-            await self._set_tags("mission", mis_id, tags)
+            if data.tags:
+                await self._set_tags("mission", mis_id, data.tags)
 
-        # Keep cheap deterministic FTS updates synchronous; derived enrichment is queued.
-        await self._sync_fts(
-            "mission",
-            mis_id,
-            {"objective": data.objective, "context": data.context},
-        )
-        await self._enqueue_enrichment_jobs(
-            mis_id,
-            include_embedding=bool(self.embeddings),
-        )
-
-        await self.emit_event(
-            event_type="mission_created",
-            entity_type="mission",
-            entity_id=mis_id,
-            actor=actor,
-            summary=f"Mission: {data.objective[:100]}",
-            phase=data.phase,
-        )
-        await self.audit("create", "mission", mis_id, actor)
+            await self._sync_fts(
+                "mission",
+                mis_id,
+                {"objective": data.objective, "context": data.context},
+            )
+            await self._enqueue_enrichment_jobs(
+                mis_id,
+                include_embedding=bool(self.embeddings),
+            )
+            await self.emit_event(
+                event_type="mission_created",
+                entity_type="mission",
+                entity_id=mis_id,
+                actor=actor,
+                summary=f"Mission: {data.objective[:100]}",
+                phase=data.phase,
+            )
+            await self.audit("create", "mission", mis_id, actor)
         return await self.get(mis_id)
 
     async def get(self, mis_id: str | None = None) -> Mission | None:
@@ -172,11 +183,15 @@ class MissionService(BaseService):
         by Pydantic at request time (extra="forbid")."""
         dump = data.model_dump(exclude_none=True)
         tags = dump.pop("tags", None)
+        replace_motivated_by = "motivated_by_decision" in dump
+        replace_depends_on = "depends_on" in dump
 
         updates = {}
         for field, value in dump.items():
             if field == "tasks":
                 updates[field] = json.dumps(value)
+            elif field in ("motivated_by_decision", "depends_on"):
+                updates[field] = (value or "").strip() or None
             else:
                 updates[field] = value
 
@@ -184,59 +199,87 @@ class MissionService(BaseService):
         if data.status in ("complete", "partial"):
             updates["completed_at"] = _now()
 
-        if tags is not None:
-            await self._set_tags("mission", mis_id, tags)
+        async with self.db.transaction():
+            if tags is not None:
+                await self._set_tags("mission", mis_id, tags)
 
-        if not updates:
-            return await self.get(mis_id)
+            if not updates:
+                return await self.get(mis_id)
 
-        set_clause = ", ".join(f"{k} = ?" for k in updates)
-        values = list(updates.values()) + [mis_id]
+            if replace_motivated_by and updates["motivated_by_decision"] is not None:
+                dec = await self.db.fetchone(
+                    "SELECT id FROM decisions WHERE id = ? AND project_id = ?",
+                    [updates["motivated_by_decision"], self.project_id],
+                )
+                if not dec:
+                    raise ValueError(
+                        "motivated_by_decision "
+                        f"{updates['motivated_by_decision']!r} not found in "
+                        f"project {self.project_id}"
+                    )
 
-        await self.db.execute(
-            f"UPDATE missions SET {set_clause} WHERE id = ? AND project_id = ?",
-            values + [self.project_id],
-        )
-        await self.db.commit()
-
-        # Materialize the motivated entity_link when the FK is set or changed,
-        # parallel to the behavior in create().
-        if data.motivated_by_decision:
-            await self.add_link(
-                "decision", data.motivated_by_decision,
-                "motivated", "mission", mis_id,
-                created_by=actor,
+            set_clause = ", ".join(f"{k} = ?" for k in updates)
+            values = list(updates.values()) + [mis_id]
+            await self.db.execute(
+                f"UPDATE missions SET {set_clause} WHERE id = ? AND project_id = ?",
+                values + [self.project_id],
             )
 
-        # Emit events for status changes
-        if data.status:
-            event_type_map = {
-                "complete": "mission_completed",
-                "blocked": "mission_blocked",
-            }
-            event_type = event_type_map.get(data.status, "status_updated")
-            await self.emit_event(
-                event_type=event_type,
-                entity_type="mission",
-                entity_id=mis_id,
-                actor=actor,
-                summary=f"Mission status → {data.status}",
-            )
-
-        # Re-sync FTS on content changes; defer embeddings.
-        if "objective" in updates or "context" in updates:
-            row = await self.db.fetchone(
-                "SELECT objective, context FROM missions WHERE id = ? AND project_id = ?",
-                [mis_id, self.project_id],
-            )
-            if row:
-                await self._sync_fts("mission", mis_id, dict(row))
-                await self._enqueue_enrichment_jobs(
-                    mis_id,
-                    include_embedding=bool(self.embeddings),
+            if replace_motivated_by:
+                motivated_by = updates["motivated_by_decision"]
+                await self._replace_incoming_links(
+                    target_type="mission",
+                    target_id=mis_id,
+                    link_type="motivated",
+                    source_type="decision",
+                    source_ids=[motivated_by] if motivated_by else [],
+                    created_by=actor,
+                )
+            if replace_depends_on:
+                depends_on = updates["depends_on"]
+                await self._replace_incoming_links(
+                    target_type="mission",
+                    target_id=mis_id,
+                    link_type="triggered",
+                    source_type="mission",
+                    source_ids=[depends_on] if depends_on else [],
+                    created_by=actor,
                 )
 
-        await self.audit("update", "mission", mis_id, actor, {"fields": list(updates.keys())})
+            if data.status:
+                event_type_map = {
+                    "complete": "mission_completed",
+                    "blocked": "mission_blocked",
+                }
+                event_type = event_type_map.get(data.status, "status_updated")
+                await self.emit_event(
+                    event_type=event_type,
+                    entity_type="mission",
+                    entity_id=mis_id,
+                    actor=actor,
+                    summary=f"Mission status → {data.status}",
+                )
+
+            if "objective" in updates or "context" in updates:
+                row = await self.db.fetchone(
+                    "SELECT objective, context FROM missions "
+                    "WHERE id = ? AND project_id = ?",
+                    [mis_id, self.project_id],
+                )
+                if row:
+                    await self._sync_fts("mission", mis_id, dict(row))
+                    await self._enqueue_enrichment_jobs(
+                        mis_id,
+                        include_embedding=bool(self.embeddings),
+                    )
+
+            await self.audit(
+                "update",
+                "mission",
+                mis_id,
+                actor,
+                {"fields": list(updates.keys())},
+            )
         return await self.get(mis_id)
 
     async def submit_report(
@@ -257,26 +300,32 @@ class MissionService(BaseService):
             submitted_at=_now(),
         )
 
-        await self.db.execute(
-            "UPDATE missions SET report = ?, status = 'complete', completed_at = ? WHERE id = ? AND project_id = ?",
-            [report.model_dump_json(), _now(), mis_id, self.project_id],
-        )
-        await self.db.commit()
+        async with self.db.transaction():
+            await self.db.execute(
+                "UPDATE missions SET report = ?, status = 'complete', completed_at = ? "
+                "WHERE id = ? AND project_id = ?",
+                [report.model_dump_json(), _now(), mis_id, self.project_id],
+            )
+            await self.emit_event(
+                event_type="mission_completed",
+                entity_type="mission",
+                entity_id=mis_id,
+                actor=actor,
+                summary=f"Report submitted with {len(data.findings or [])} findings",
+            )
+            await self.audit(
+                "update",
+                "mission",
+                mis_id,
+                actor,
+                {"action": "submit_report"},
+            )
 
-        await self.emit_event(
-            event_type="mission_completed",
-            entity_type="mission",
-            entity_id=mis_id,
-            actor=actor,
-            summary=f"Report submitted with {len(data.findings or [])} findings",
-        )
-        await self.audit("update", "mission", mis_id, actor, {"action": "submit_report"})
-
-        # Auto-materialize report sections as first-class journal entries
-        # so outcomes are searchable, indexable, and visible in the research map.
-        mission = await self.get(mis_id)
-        phase = mission.phase if mission else None
-        await self._materialize_report(mis_id, phase, data, actor)
+            # Materialized journal entries are part of the report aggregate:
+            # any failure rolls back status, report, event, audit, and notes.
+            mission = await self.get(mis_id)
+            phase = mission.phase if mission else None
+            await self._materialize_report(mis_id, phase, data, actor)
 
         return await self.get(mis_id)
 
@@ -324,17 +373,18 @@ class MissionService(BaseService):
             )
             await note_svc.create(note_in, actor=actor)
 
-        for finding in data.findings or []:
-            await _create("note", finding, confidence="tested")
+        async with self.db.transaction():
+            for finding in data.findings or []:
+                await _create("note", finding, confidence="tested")
 
-        for anomaly in data.anomalies or []:
-            await _create("note", anomaly, confidence="hypothesis")
+            for anomaly in data.anomalies or []:
+                await _create("note", anomaly, confidence="hypothesis")
 
-        for question in data.questions or []:
-            await _create("directive", question, confidence="hypothesis")
+            for question in data.questions or []:
+                await _create("directive", question, confidence="hypothesis")
 
-        if data.recommended_next:
-            await _create("note", data.recommended_next, confidence="hypothesis")
+            if data.recommended_next:
+                await _create("note", data.recommended_next, confidence="hypothesis")
 
     async def get_report(self, mis_id: str | None = None) -> MissionReport | None:
         """Get report for a mission. Defaults to latest complete mission."""

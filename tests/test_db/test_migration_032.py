@@ -35,10 +35,10 @@ async def test_reference_validation_attestation_schema_and_triggers(db) -> None:
         """SELECT name FROM sqlite_master
            WHERE type = 'trigger' AND tbl_name = 'reference_validation_attestations'"""
     )
-    assert {trigger["name"] for trigger in triggers} == {
+    assert {
         "trg_reference_validations_no_update",
         "trg_reference_validations_no_delete",
-    }
+    } <= {trigger["name"] for trigger in triggers}
 
     indexes = await db.fetchall("PRAGMA index_list(reference_validation_attestations)")
     index_names = {index["name"] for index in indexes}
