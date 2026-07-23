@@ -31,6 +31,10 @@ provenance and PI decisions.
 
 ### Fixed
 
+- **Mission task dispatch compatibility.** Typed `create_mission` and
+  `update_mission_status` calls now accept the plain task dictionaries emitted
+  by the v2.7+ dispatch layer while preserving legacy `MissionTask` model
+  support.
 - **Transactional integrity under SQLite autocommit.** Multi-statement
   recommendation, tag, graph, topic, synthesis, QA, embedding, claim, mission,
   and manuscript operations now roll back as coherent units; missing or
