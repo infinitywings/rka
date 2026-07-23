@@ -1,4 +1,5 @@
 {
+  "project_id": "prj_01PPPPPPPPPPPPPPPPPPPPPPPP",
   "entities": {
     "jrn_01MMMMMMMMMMMMMMMMMMMMMMMM": {
       "id": "jrn_01MMMMMMMMMMMMMMMMMMMMMMMM",
@@ -20,6 +21,7 @@
       "decided_by": "pi",
       "status": "active",
       "superseded_by": null,
+      "related_journal": ["jrn_01MMMMMMMMMMMMMMMMMMMMMMMM"],
       "phase": "writing",
       "tags": ["writer-outline", "claim:C1"]
     },
@@ -31,6 +33,7 @@
       "content": "Across platforms A and B, malicious update acceptance decreased under threat models T1 and T2.",
       "confidence": 0.94,
       "verified": true,
+      "evidence_status": "supported",
       "stale": false,
       "contradicted": false
     },
@@ -53,6 +56,7 @@
       "content": "The evaluation covers platforms A and B and does not establish behavior on untested platforms.",
       "confidence": 0.91,
       "verified": true,
+      "evidence_status": "supported",
       "stale": false,
       "contradicted": false
     },
@@ -75,6 +79,7 @@
       "content": "A follow-up run under T2 did not reproduce the reduction on platform B.",
       "confidence": 0.89,
       "verified": true,
+      "evidence_status": "supported",
       "stale": false,
       "contradicted": false
     },

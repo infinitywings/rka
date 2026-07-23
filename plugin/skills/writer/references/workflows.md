@@ -10,13 +10,13 @@ The PI launches `claude` in a manuscript working directory `manuscripts/<project
 
 ### Step 1: project confirmation
 
-The working directory encodes the project: `manuscripts/<project-id>/<venue>/`. Take the `prj_...` id from the directory name (e.g. `manuscripts/prj_01KS.../CHI/`) and confirm it exists:
+Read `.rka/manuscript.json`, which `rka writer init` writes only after registering or verifying the manuscript and atomically publishing the workspace. Treat its `project_id` and `manuscript_id` as the binding, then confirm the project exists:
 
 ```python
 rka_query(args={"operation": "list_projects"})  # confirm the prj_... id from the directory name exists
 ```
 
-There is no active-project session state at the MCP layer — thread the workspace `project_id="prj_01KS..."` explicitly on every `rka_query` / `rka_execute` call. Confirming the id against `list_projects` on every session start prevents writes landing in the wrong project.
+There is no active-project session state at the MCP layer and the workspace `.mcp.json` intentionally carries no default project. Thread `project_id="prj_01KS..."` explicitly on every call. A missing/malformed metadata file is a setup blocker; do not infer a write target from the directory name.
 
 ### Step 2: changelog
 
@@ -76,6 +76,12 @@ record cannot become valid merely because an earlier snapshot captured it.
 An empty bootstrap spine is expected before contribution planning. It is not a
 validated contribution and cannot authorize substantive drafting.
 
+Before substantive drafting, run `rka writer readiness --project-id <prj_...>
+--entity-packet <fresh.json> --claim-spine .planning/RKA_CLAIM_SPINE.yaml`.
+Only `ready_for_drafting=true` authorizes the transition. `rka writer assist`
+may propose candidate mappings from the same packet, but never ratifies them or
+writes RKA records.
+
 ### Step 4: state resume
 
 Read `.planning/ACTIVE_WORKFLOW.md`. Expected structure:
@@ -108,7 +114,7 @@ Verify `.mcp.json` lists the `rka` server:
 cat .mcp.json | jq '.mcpServers | keys'
 ```
 
-Phase 1 does not require `rka-writer-tools`. If absent, `scripts/validate_references.py` Stage A pass-through is used. If `rka` is absent, the workspace is misconfigured; surface to the PI before proceeding.
+Both servers should be listed. If `rka` is absent, the workspace is misconfigured. Missing optional metadata providers in `rka-writer-tools` must appear as explicit degraded audit state; they do not become confirmations. Credentials come from the process environment or credential vault, never from the manuscript workspace.
 
 ### Step 6: greet PI
 

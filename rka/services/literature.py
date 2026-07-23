@@ -193,6 +193,7 @@ class LiteratureService(BaseService):
         enrichment_status = await self._get_enrichment_status("literature", row["id"])
         return Literature(
             id=row["id"],
+            project_id=row["project_id"],
             title=row["title"],
             authors=self._json_loads(row.get("authors")),
             year=row.get("year"),

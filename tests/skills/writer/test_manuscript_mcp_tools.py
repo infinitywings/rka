@@ -161,7 +161,12 @@ class TestRkaValidateReference:
                 manuscript_id="jrn_01_X",
                 title="A Title",
                 author=[{"family": "Smith"}],
+                literature_id="lit_01_X",
                 project_id="proj_default",
         )
         _, payload = fake_client.post_calls[0]
-        assert payload == {"title": "A Title", "author": [{"family": "Smith"}]}
+        assert payload == {
+            "title": "A Title",
+            "author": [{"family": "Smith"}],
+            "literature_id": "lit_01_X",
+        }

@@ -2,6 +2,8 @@
 
 Concrete examples for the Executor skill. Load when you need to see the shape of a good Backbrief or report, or compare good-vs-bad escalation timing.
 
+> **v2.7.0 dispatch translation.** Legacy tool names below (`rka_add_note`, `rka_submit_checkpoint`, `rka_submit_report`, etc.) are synonyms for `rka_execute(args={"operation": ...})` / `rka_query(args={"operation": ...})` under the v2.7.0+ typed-arg surface. The Backbrief discipline, escalation timing, and report-shape examples carry over verbatim — only the call shape changes. See `SKILL.md` § "Tool Surface" for the full mapping and `rka_describe(operation="<name>")` for per-operation signatures.
+
 ---
 
 ## Backbrief — Bug B URL Fix

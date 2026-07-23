@@ -13,16 +13,17 @@ Decisions: `dec_01KS0AWYDV752AWQRF40CQBRFZ` (deployment),
 
 ## Quickstart
 
-### 1. Copy the workspace template to your manuscript directory
+### 1. Register the manuscript and atomically create its workspace
 
 ```
-cp -R rka/skills/writer/workspace-template manuscripts/<project-id>/<venue>/
+rka writer init --project-id <prj_...> --venue <venue> --title "<PI-authored title>"
 cd manuscripts/<project-id>/<venue>/
 ```
 
-Then customize:
+The command writes a complete, portable workspace only after RKA returns a
+canonical `jrn_` manifest. It stores the explicit binding in
+`.rka/manuscript.json` and leaves no unresolved core placeholders. Then:
 
-- Edit `.mcp.json`: replace `<your-username>` and `prj_REPLACE_WITH_PROJECT_ID`.
 - Edit `.planning/PRECIS.md`: PI authors the title and abstract.
 - Edit `main.tex` after the Venue checkpoint resolves: replace
   `\documentclass{article}` with the venue class.
@@ -45,7 +46,9 @@ Start procedure runs:
 3. `rka_query(args={"operation": "research_map", "project_id": "prj_..."})`
    provides the structural overview.
 4. `.planning/ACTIVE_WORKFLOW.md` carries resume state.
-5. The Writer greets the PI with the inferred next action.
+5. `rka writer readiness` checks a fresh project-scoped entity packet and the
+   claim spine before drafting.
+6. The Writer greets the PI with the inferred next action.
 
 ### 3. Run scripts via Bash
 

@@ -37,6 +37,22 @@ def _copy_entities(entities: dict[str, dict]) -> dict[str, dict]:
     return deepcopy(entities)
 
 
+def _place_entity_in_role(data: dict, role: str, entity_id: str) -> None:
+    """Place a claim record in one exact v1 evidentiary role."""
+
+    if role == "claim_evidence":
+        data["claims"][0]["evidence_ids"] = [entity_id]
+    elif role == "claim_qualifier":
+        data["claims"][0]["qualifier_ids"] = [entity_id]
+    elif role == "claim_counterevidence":
+        data["claims"][0]["counterevidence_ids"] = [entity_id]
+    elif role == "result_unit":
+        result_unit = next(unit for unit in data["units"] if unit["kind"] == "result")
+        result_unit["evidence_ids"].append(entity_id)
+    else:  # pragma: no cover - protects future parameter additions
+        raise AssertionError(f"unknown test role {role}")
+
+
 def _legacy_snapshot_without_validation(claim_spine, data: dict, resolver) -> dict:
     """Simulate a pre-gate or externally forged snapshot for fail-closed tests."""
 
@@ -128,6 +144,105 @@ class TestValidation:
         )
         assert report.verdict == "BLOCK"
         assert "UNSUPPORTED_SCHEMA" in _codes(report)
+
+    @pytest.mark.parametrize("claim_type", ["method", "result", "novelty"])
+    def test_v1_rejects_non_empirical_claim_type(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_resolver,
+        claim_type: str,
+    ) -> None:
+        data = deepcopy(claim_spine_data)
+        data["claims"][0]["claim_type"] = claim_type
+
+        report = claim_spine.validate_spine(
+            data,
+            resolver=claim_spine_resolver,
+            project_id=PROJECT_ID,
+        )
+
+        assert report.verdict == "BLOCK"
+        assert "UNSUPPORTED_CLAIM_TYPE" in _codes(report)
+
+    @pytest.mark.parametrize("invalid_id", [DECISION_ID, EVIDENCE_CLAIM_ID])
+    def test_non_journal_entity_cannot_be_the_manuscript(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_resolver,
+        invalid_id: str,
+    ) -> None:
+        data = deepcopy(claim_spine_data)
+        data["manuscript_id"] = invalid_id
+
+        report = claim_spine.validate_spine(
+            data,
+            resolver=claim_spine_resolver,
+            project_id=PROJECT_ID,
+        )
+
+        assert report.verdict == "BLOCK"
+        assert "INVALID_MANUSCRIPT_ROLE" in _codes(report)
+
+    def test_ordinary_journal_cannot_be_the_manuscript(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        data = deepcopy(claim_spine_data)
+        data["manuscript_id"] = EVIDENCE_SOURCE_ID
+        entities = _copy_entities(claim_spine_entities)
+        entities[DECISION_ID]["related_journal"] = [EVIDENCE_SOURCE_ID]
+
+        report = claim_spine.validate_spine(
+            data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+
+        assert report.verdict == "BLOCK"
+        assert "MANUSCRIPT_TAG_REQUIRED" in _codes(report)
+
+    def test_declared_manuscript_requires_exact_manuscript_tag(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[MANUSCRIPT_ID]["tags"] = ["phase:draft"]
+
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+
+        assert report.verdict == "BLOCK"
+        assert "MANUSCRIPT_TAG_REQUIRED" in _codes(report)
+
+    def test_manuscript_tagged_journal_cannot_be_terminal_empirical_evidence(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[EVIDENCE_SOURCE_ID]["tags"].append("manuscript")
+
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+
+        assert report.verdict == "BLOCK"
+        assert "MANUSCRIPT_AS_EVIDENCE" in _codes(report)
 
     def test_duplicate_claim_ids_block(
         self, claim_spine, claim_spine_data, claim_spine_resolver
@@ -352,7 +467,7 @@ class TestValidation:
         assert "STALE_SOURCE" in _codes(report)
         assert any(f.entity_id == EVIDENCE_SOURCE_ID for f in report.findings)
 
-    def test_unverified_claim_cannot_support_ratified_empirical_claim(
+    def test_ungrounded_claim_cannot_support_ratified_empirical_claim(
         self,
         claim_spine,
         claim_spine_data,
@@ -368,7 +483,174 @@ class TestValidation:
             project_id=PROJECT_ID,
         )
         assert report.verdict == "BLOCK"
-        assert "UNVERIFIED_EVIDENCE" in _codes(report)
+        assert "GROUNDING_REQUIRED" in _codes(report)
+
+    @pytest.mark.parametrize(
+        ("role", "entity_id"),
+        [
+            ("claim_evidence", EVIDENCE_CLAIM_ID),
+            ("claim_qualifier", QUALIFIER_CLAIM_ID),
+            ("claim_counterevidence", COUNTER_CLAIM_ID),
+            ("result_unit", COUNTER_CLAIM_ID),
+        ],
+    )
+    def test_every_v1_claim_record_role_requires_grounding_fidelity(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+        role: str,
+        entity_id: str,
+    ) -> None:
+        data = deepcopy(claim_spine_data)
+        _place_entity_in_role(data, role, entity_id)
+        entities = _copy_entities(claim_spine_entities)
+        entities[entity_id]["verified"] = False
+
+        report = claim_spine.validate_spine(
+            data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+
+        assert report.verdict == "BLOCK"
+        assert any(
+            finding.code == "GROUNDING_REQUIRED"
+            and finding.entity_id == entity_id
+            for finding in report.findings
+        )
+
+    @pytest.mark.parametrize(
+        ("role", "entity_id"),
+        [
+            ("claim_evidence", EVIDENCE_CLAIM_ID),
+            ("claim_qualifier", QUALIFIER_CLAIM_ID),
+            ("claim_counterevidence", COUNTER_CLAIM_ID),
+            ("result_unit", COUNTER_CLAIM_ID),
+        ],
+    )
+    def test_every_v1_claim_record_role_requires_scientific_support_status(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+        role: str,
+        entity_id: str,
+    ) -> None:
+        data = deepcopy(claim_spine_data)
+        _place_entity_in_role(data, role, entity_id)
+        entities = _copy_entities(claim_spine_entities)
+        entities[entity_id]["evidence_status"] = "unassessed"
+
+        report = claim_spine.validate_spine(
+            data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+
+        assert report.verdict == "BLOCK"
+        assert any(
+            finding.code == "SUPPORTED_EVIDENCE_REQUIRED"
+            and finding.entity_id == entity_id
+            for finding in report.findings
+        )
+
+    @pytest.mark.parametrize(
+        ("role", "entity_id"),
+        [
+            ("claim_evidence", EVIDENCE_CLAIM_ID),
+            ("claim_qualifier", QUALIFIER_CLAIM_ID),
+            ("claim_counterevidence", COUNTER_CLAIM_ID),
+            ("result_unit", COUNTER_CLAIM_ID),
+        ],
+    )
+    def test_every_v1_claim_record_role_must_be_explicitly_uncontested(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+        role: str,
+        entity_id: str,
+    ) -> None:
+        data = deepcopy(claim_spine_data)
+        _place_entity_in_role(data, role, entity_id)
+        entities = _copy_entities(claim_spine_entities)
+        entities[entity_id]["contradicted"] = True
+
+        report = claim_spine.validate_spine(
+            data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+
+        assert report.verdict == "BLOCK"
+        assert any(
+            finding.code == "UNCONTESTED_EVIDENCE_REQUIRED"
+            and finding.entity_id == entity_id
+            for finding in report.findings
+        )
+
+    def test_missing_contradiction_attestation_fails_closed(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[EVIDENCE_CLAIM_ID].pop("contradicted")
+
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+
+        assert report.verdict == "BLOCK"
+        assert "UNCONTESTED_EVIDENCE_REQUIRED" in _codes(report)
+
+    def test_legacy_verified_is_grounding_only_not_scientific_support(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[EVIDENCE_CLAIM_ID].pop("evidence_status")
+
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+
+        assert entities[EVIDENCE_CLAIM_ID]["verified"] is True
+        assert report.verdict == "BLOCK"
+        assert "SUPPORTED_EVIDENCE_REQUIRED" in _codes(report)
+        assert "GROUNDING_REQUIRED" not in _codes(report)
+
+    def test_partially_supported_is_an_eligible_scientific_support_status(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[EVIDENCE_CLAIM_ID]["evidence_status"] = "partially_supported"
+        entities[QUALIFIER_CLAIM_ID]["evidence_status"] = "partially_supported"
+
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+
+        assert report.verdict == "PASS"
 
     @pytest.mark.parametrize("bad_evidence_id", [DECISION_ID, SYNTHESIS_ID])
     def test_decision_or_synthesis_alone_is_not_empirical_evidence(
@@ -458,6 +740,84 @@ class TestValidation:
         )
         assert report.verdict == "BLOCK"
         assert "RATIFICATION_REQUIRED" in _codes(report)
+
+    def test_ratification_must_be_authored_by_pi(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[DECISION_ID]["decided_by"] = "brain"
+
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+
+        assert report.verdict == "BLOCK"
+        assert "RATIFICATION_REQUIRED" in _codes(report)
+
+    def test_ratification_must_belong_to_the_same_project(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[DECISION_ID]["project_id"] = "prj_01OTHERPROJECTXXXXXXXXXXXX"
+
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+
+        assert report.verdict == "BLOCK"
+        assert {"WRONG_PROJECT", "RATIFICATION_REQUIRED"}.issubset(_codes(report))
+
+    def test_ratification_must_explicitly_scope_this_manuscript(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[DECISION_ID]["related_journal"] = [EVIDENCE_SOURCE_ID]
+
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+
+        assert report.verdict == "BLOCK"
+        assert "RATIFICATION_SCOPE_REQUIRED" in _codes(report)
+
+    def test_soft_stale_decision_is_not_current_ratification(
+        self,
+        claim_spine,
+        claim_spine_data,
+        claim_spine_entities,
+        make_claim_spine_resolver,
+    ) -> None:
+        entities = _copy_entities(claim_spine_entities)
+        entities[DECISION_ID]["staleness"] = "yellow"
+
+        report = claim_spine.validate_spine(
+            claim_spine_data,
+            resolver=make_claim_spine_resolver(entities),
+            project_id=PROJECT_ID,
+        )
+
+        assert report.verdict == "BLOCK"
+        assert {"FRESHNESS_REVIEW_REQUIRED", "RATIFICATION_REQUIRED"}.issubset(
+            _codes(report)
+        )
 
     def test_propagated_decision_staleness_in_assumptions_blocks_ratification(
         self,
@@ -857,7 +1217,7 @@ class TestSnapshotAndCurrency:
         )
 
         assert report.verdict == "BLOCK"
-        assert "UNVERIFIED_EVIDENCE" in _codes(report)
+        assert "GROUNDING_REQUIRED" in _codes(report)
         assert report.affected_claims == ["C1"]
 
     def test_unit_only_terminal_source_change_targets_that_unit(
@@ -881,6 +1241,7 @@ class TestSnapshotAndCurrency:
             "content": "A unit-specific robustness measurement was positive.",
             "confidence": 0.9,
             "verified": True,
+            "evidence_status": "supported",
             "stale": False,
             "contradicted": False,
         }
@@ -1032,7 +1393,7 @@ class TestCli:
 
 
 class TestRestResolver:
-    def test_scopes_requests_and_restores_project_id(
+    def test_scopes_requests_and_requires_server_attested_project_id(
         self, claim_spine, monkeypatch
     ) -> None:
         captured = {}
@@ -1046,7 +1407,10 @@ class TestRestResolver:
 
             @staticmethod
             def read() -> bytes:
-                return b'{"id":"jrn_01EXAMPLE","status":"active"}'
+                return (
+                    b'{"id":"jrn_01EXAMPLE","status":"active",'
+                    b'"project_id":"prj_01PPPPPPPPPPPPPPPPPPPPPPPP"}'
+                )
 
         def fake_urlopen(request, timeout):
             captured["request"] = request
@@ -1067,6 +1431,28 @@ class TestRestResolver:
         assert headers["x-rka-project"] == PROJECT_ID
         assert captured["timeout"] == 4.0
         assert entity["project_id"] == PROJECT_ID
+
+    def test_missing_server_project_attestation_fails_closed(
+        self, claim_spine, monkeypatch
+    ) -> None:
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            @staticmethod
+            def read() -> bytes:
+                return b'{"id":"jrn_01EXAMPLE","status":"active"}'
+
+        monkeypatch.setattr(claim_spine, "urlopen", lambda *_args, **_kwargs: Response())
+        resolver = claim_spine._rest_resolver(
+            "http://127.0.0.1:9712",
+            project_id=PROJECT_ID,
+        )
+        with pytest.raises(RuntimeError, match="did not attest"):
+            resolver("jrn_01EXAMPLE")
 
 
 class TestEntityPacketResolver:

@@ -270,6 +270,7 @@ class NoteService(BaseService):
         enrichment_status = await self._get_enrichment_status("journal", row["id"])
         return JournalEntry(
             id=row["id"],
+            project_id=row["project_id"],
             type=row["type"],
             content=row["content"],
             summary=row.get("summary"),

@@ -43,6 +43,8 @@ STALENESS_VERDICTS = {
 }
 INACTIVE_VERDICTS = {"historical", "retired", "retracted", "superseded"}
 RATIFIED_STATES = {"ratified"}
+SUPPORTED_EVIDENCE_STATUSES = {"supported", "partially_supported"}
+V1_CLAIM_TYPES = {"empirical"}
 SEVERITY_RANK = {"PASS": 0, "WARN": 1, "BLOCK": 2, "ERROR": 3}
 Resolver = Callable[[str], Mapping[str, Any] | None]
 
@@ -259,16 +261,42 @@ def _freshness_assessment(
     return FreshnessAssessment("PASS", "CURRENT", "the RKA record is current")
 
 
-def _is_stale(entity: Mapping[str, Any]) -> bool:
-    return _freshness_assessment(entity).severity in {"BLOCK", "ERROR"}
+def _is_grounding_verified(entity: Mapping[str, Any]) -> bool:
+    """Return whether a claim is faithfully grounded in its source record.
+
+    ``verified`` is the legacy RKA extraction-fidelity field.  It never means
+    that the proposition is scientifically supported.  A future-native
+    ``grounding_verified`` field takes precedence when present.
+    """
+
+    if "grounding_verified" in entity:
+        return entity.get("grounding_verified") is True
+    return entity.get("verified") is True
 
 
-def _is_verified(entity: Mapping[str, Any]) -> bool:
-    verified = entity.get("verified")
-    if verified is not None:
-        return verified is True
-    confidence = entity.get("confidence")
-    return isinstance(confidence, str) and confidence.lower() == "verified"
+def _evidence_status(entity: Mapping[str, Any]) -> str:
+    return _text(entity.get("evidence_status")).lower()
+
+
+def _is_uncontested(entity: Mapping[str, Any]) -> bool:
+    """Fail closed unless RKA explicitly reports no unresolved contradiction."""
+
+    return entity.get("contradicted") is False
+
+
+def _entity_tags(entity: Mapping[str, Any]) -> set[str]:
+    raw = entity.get("tags")
+    if isinstance(raw, str):
+        values = [raw]
+    elif isinstance(raw, Sequence) and not isinstance(raw, (bytes, bytearray)):
+        values = list(raw)
+    else:
+        values = []
+    return {_text(value).lower() for value in values if _text(value)}
+
+
+def _is_manuscript_manifest(entity: Mapping[str, Any]) -> bool:
+    return "manuscript" in _entity_tags(entity)
 
 
 def _stable_payload(entity: Mapping[str, Any]) -> dict[str, Any]:
@@ -310,7 +338,9 @@ def _entity_snapshot(
         "source_entry_id": entity.get("source_entry_id"),
         "status": entity.get("status"),
         "confidence": entity.get("confidence"),
+        "grounding_verified": entity.get("grounding_verified"),
         "verified": entity.get("verified"),
+        "evidence_status": entity.get("evidence_status"),
         "stale": freshness.severity in {"BLOCK", "ERROR"},
         "staleness": _explicit_staleness(entity),
         "staleness_verdict": entity.get("staleness_verdict"),
@@ -466,6 +496,46 @@ def _validate_entity(
         )
 
 
+def _validate_claim_evidence_attestations(
+    findings: list[Finding],
+    entity_id: str,
+    entity: Mapping[str, Any] | None,
+    *,
+    role: str,
+    claim_id: str | None = None,
+) -> None:
+    """Require independent grounding, support, and contradiction attestations."""
+
+    if entity is None or _entity_prefix(entity_id) != "clm":
+        return
+    if not _is_grounding_verified(entity):
+        _add(
+            findings,
+            "GROUNDING_REQUIRED",
+            f"{role} {entity_id} is not grounding-verified against its source",
+            claim_id=claim_id,
+            entity_id=entity_id,
+        )
+    evidence_status = _evidence_status(entity)
+    if evidence_status not in SUPPORTED_EVIDENCE_STATUSES:
+        _add(
+            findings,
+            "SUPPORTED_EVIDENCE_REQUIRED",
+            f"{role} {entity_id} has evidence_status "
+            f"{evidence_status or '<missing>'}; expected supported or partially_supported",
+            claim_id=claim_id,
+            entity_id=entity_id,
+        )
+    if not _is_uncontested(entity):
+        _add(
+            findings,
+            "UNCONTESTED_EVIDENCE_REQUIRED",
+            f"{role} {entity_id} is not explicitly uncontested",
+            claim_id=claim_id,
+            entity_id=entity_id,
+        )
+
+
 def validate_spine(
     data: Mapping[str, Any],
     resolver: Resolver | None = None,
@@ -542,12 +612,27 @@ def validate_spine(
     if not manuscript_id:
         _add(findings, "MANUSCRIPT_REQUIRED", "manuscript_id is required")
     else:
+        manuscript = resolved.get(manuscript_id)
         _validate_entity(
             findings,
             manuscript_id,
-            resolved.get(manuscript_id),
+            manuscript,
             expected_project,
         )
+        if _entity_prefix(manuscript_id) != "jrn":
+            _add(
+                findings,
+                "INVALID_MANUSCRIPT_ROLE",
+                "manuscript_id must name a jrn_ manuscript manifest",
+                entity_id=manuscript_id,
+            )
+        elif manuscript is not None and not _is_manuscript_manifest(manuscript):
+            _add(
+                findings,
+                "MANUSCRIPT_TAG_REQUIRED",
+                f"journal {manuscript_id} is not tagged manuscript",
+                entity_id=manuscript_id,
+            )
 
     units_by_id = {_text(unit.get("unit_id")): unit for unit in unit_rows}
     for claim in claim_rows:
@@ -560,6 +645,13 @@ def validate_spine(
                 findings,
                 "CLAIM_FIELDS_REQUIRED",
                 "claim_id, text, claim_type, and status are required",
+                claim_id=claim_id,
+            )
+        if claim_type and claim_type not in V1_CLAIM_TYPES:
+            _add(
+                findings,
+                "UNSUPPORTED_CLAIM_TYPE",
+                "rka-claim-spine/v1 supports only claim_type: empirical",
                 claim_id=claim_id,
             )
         if status not in RATIFIED_STATES:
@@ -601,11 +693,17 @@ def validate_spine(
         decision_id = _text(claim.get("ratified_by"))
         decision = resolved.get(decision_id) if decision_id else None
         if status in RATIFIED_STATES:
+            decision_freshness = (
+                _freshness_assessment(decision).severity
+                if decision is not None
+                else "BLOCK"
+            )
             valid_ratification = (
                 bool(decision_id)
                 and _entity_prefix(decision_id) == "dec"
                 and decision is not None
-                and not _is_stale(decision)
+                and decision_freshness == "PASS"
+                and _text(decision.get("project_id")) == expected_project
                 and _text(decision.get("decided_by")).lower() == "pi"
                 and _text(decision.get("status")).lower() == "active"
             )
@@ -617,11 +715,21 @@ def validate_spine(
                     claim_id=claim_id,
                     entity_id=decision_id or None,
                 )
-            elif _text(decision.get("chosen")) != claim_text:
+            if decision is not None and _text(decision.get("chosen")) != claim_text:
                 _add(
                     findings,
                     "RATIFICATION_MISMATCH",
                     "claim text differs from the exact wording ratified by the PI",
+                    claim_id=claim_id,
+                    entity_id=decision_id,
+                )
+            if decision is not None and manuscript_id not in _list(
+                decision.get("related_journal")
+            ):
+                _add(
+                    findings,
+                    "RATIFICATION_SCOPE_REQUIRED",
+                    "PI ratification must explicitly name this manuscript in related_journal",
                     claim_id=claim_id,
                     entity_id=decision_id,
                 )
@@ -669,6 +777,13 @@ def validate_spine(
                     entity = resolved.get(entity_id)
                     if entity is None:
                         continue
+                    _validate_claim_evidence_attestations(
+                        findings,
+                        entity_id,
+                        entity,
+                        role=f"empirical {role}",
+                        claim_id=claim_id,
+                    )
                     source_id = _text(entity.get("source_entry_id"))
                     if not source_id:
                         _add(
@@ -686,20 +801,18 @@ def validate_spine(
                             claim_id=claim_id,
                             entity_id=source_id,
                         )
+                    else:
+                        source = resolved.get(source_id)
+                        if source is not None and _is_manuscript_manifest(source):
+                            _add(
+                                findings,
+                                "MANUSCRIPT_AS_EVIDENCE",
+                                f"manuscript journal {source_id} cannot be terminal empirical {role}",
+                                claim_id=claim_id,
+                                entity_id=source_id,
+                            )
 
         if claim_type == "empirical":
-            for entity_id in evidence_ids:
-                entity = resolved.get(entity_id)
-                if entity is not None and _entity_prefix(entity_id) == "clm":
-                    if not _is_verified(entity) or entity.get("contradicted") is True:
-                        _add(
-                            findings,
-                            "UNVERIFIED_EVIDENCE",
-                            f"empirical support {entity_id} is not verified and uncontested",
-                            claim_id=claim_id,
-                            entity_id=entity_id,
-                        )
-
             result_units = [
                 unit
                 for unit in unit_rows
@@ -813,6 +926,15 @@ def validate_spine(
                         f"Results evidence {entity_id} must resolve to a jrn_ source",
                         entity_id=source_id,
                     )
+                else:
+                    source = resolved.get(source_id)
+                    if source is not None and _is_manuscript_manifest(source):
+                        _add(
+                            findings,
+                            "MANUSCRIPT_AS_EVIDENCE",
+                            f"manuscript journal {source_id} cannot be terminal Results evidence",
+                            entity_id=source_id,
+                        )
                 _validate_entity(
                     findings,
                     source_id,
@@ -820,14 +942,12 @@ def validate_spine(
                     expected_project,
                     source=True,
                 )
-            if kind == "result" and (
-                not _is_verified(entity) or entity.get("contradicted") is True
-            ):
-                _add(
+            if kind == "result":
+                _validate_claim_evidence_attestations(
                     findings,
-                    "UNVERIFIED_EVIDENCE",
-                    f"Results evidence {entity_id} is not verified and uncontested",
-                    entity_id=entity_id,
+                    entity_id,
+                    entity,
+                    role="Results evidence",
                 )
 
     return ValidationReport(findings)
@@ -1143,12 +1263,16 @@ def _rest_resolver(
                 nested = payload.get(key)
                 if isinstance(nested, Mapping):
                     entity = dict(nested)
-                    if project_id:
-                        entity.setdefault("project_id", project_id)
+                    if project_id and _text(entity.get("project_id")) != project_id:
+                        raise RuntimeError(
+                            f"RKA did not attest {entity_id} to project {project_id}"
+                        )
                     return entity
             entity = dict(payload)
-            if project_id:
-                entity.setdefault("project_id", project_id)
+            if project_id and _text(entity.get("project_id")) != project_id:
+                raise RuntimeError(
+                    f"RKA did not attest {entity_id} to project {project_id}"
+                )
             return entity
         return None
 
@@ -1176,7 +1300,10 @@ def _packet_resolver(path: Path, expected_project: str) -> Resolver:
         if not isinstance(record, Mapping):
             return None
         entity = deepcopy(dict(record))
-        entity.setdefault("project_id", packet_project)
+        if _text(entity.get("project_id")) != packet_project:
+            raise ValueError(
+                f"entity packet did not attest {entity_id} to project {packet_project}"
+            )
         return entity
 
     return resolve

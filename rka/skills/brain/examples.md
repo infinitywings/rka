@@ -244,6 +244,7 @@ Keep queries to 2–4 words. Long queries behave worse than intuitive.
 ## Related
 
 - Top-level rules: `SKILL.md`.
-- Three-actor model + 12-type provenance vocabulary: `architecture.md`.
+- Three-actor model plus provenance and claim-edge vocabularies:
+  `architecture.md`.
 - Procedures (session start, claim extraction, cluster mgmt, gates, freshness): `workflows.md`.
 - Multi-choice decision UX + Confirmation Brief template: `decision_ux.md`.

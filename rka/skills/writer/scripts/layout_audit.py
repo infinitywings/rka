@@ -50,7 +50,7 @@ def _resolve_page_limit(venue: str) -> int:
     """Resolve page_limit_main for `venue` from (in priority order):
       1. venue.yaml via venue_loader (preferred — the Phase W1 path)
       2. VENUE_PAGE_LIMITS_LEGACY (fallback for short-track variants)
-      3. 0 (unknown venue; pages_over_limit check becomes a no-op)
+      3. 0 (unknown venue; the page-limit gate fails closed)
     """
     try:
         # Phase W1: ensure the sibling venue_loader.py is importable
@@ -146,7 +146,7 @@ class FieldVerdict:
 
 @dataclass
 class AuditReport:
-    """Full audit result over all 12 fields."""
+    """Full audit result over the input gate plus 12 layout fields."""
     manuscript: str
     rendered_at: str
     pdf_path: str
@@ -187,7 +187,49 @@ def get_pdf_page_count(pdf_path: Path) -> int:
     return 0
 
 
+def check_audit_inputs(
+    pdf_path: Optional[Path],
+    log_path: Optional[Path],
+    tex_path: Optional[Path],
+    pages: int,
+) -> FieldVerdict:
+    """Fail closed unless the render artifacts needed by the audit exist.
+
+    A missing input is not equivalent to an empty, warning-free artifact.  The
+    old behavior silently converted absent PDF/log/TeX inputs to empty values
+    and could therefore report PASS without auditing a render at all.
+    """
+    missing = [
+        name
+        for name, path in (("pdf", pdf_path), ("log", log_path), ("tex", tex_path))
+        if path is None or not path.is_file()
+    ]
+    unreadable: list[str] = []
+    for name, path in (("log", log_path), ("tex", tex_path)):
+        if path is None or not path.is_file():
+            continue
+        try:
+            path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            unreadable.append(name)
+    if pdf_path is not None and pdf_path.is_file() and pages <= 0:
+        unreadable.append("pdf_pages")
+
+    failures = [*(f"missing:{name}" for name in missing),
+                *(f"unreadable:{name}" for name in unreadable)]
+    verdict = "BLOCK" if failures else "PASS"
+    return FieldVerdict("audit_inputs", verdict, len(failures), 0, failures)
+
+
 def check_pages_over_limit(pages: int, limit: int) -> FieldVerdict:
+    if limit <= 0:
+        return FieldVerdict(
+            "pages_over_limit",
+            "BLOCK",
+            pages,
+            limit,
+            ["page_limit_unresolved"],
+        )
     if pages > limit:
         return FieldVerdict("pages_over_limit", "BLOCK", pages, limit)
     return FieldVerdict("pages_over_limit", "PASS", pages, limit)
@@ -305,7 +347,7 @@ def audit(
     venue: str,
     page_limit_override: Optional[int] = None,
 ) -> AuditReport:
-    """Run all 12 field checks and return an AuditReport.
+    """Run the required-input gate and all 12 checks.
 
     Phase W1: page_limit_override lets the caller (or
     --manuscript-yaml CLI path) supply a per-manuscript override that
@@ -326,17 +368,18 @@ def audit(
     rendered_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     verdicts = [
+        check_audit_inputs(pdf_path, log_path, tex_path, pages),
         check_pages_over_limit(pages, page_limit),
         check_undefined_citations(log_text),
         check_undefined_refs(log_text),
         check_missing_bib_keys(blg_text),
-        check_question_mark_citations(pdf_path) if pdf_path else FieldVerdict("question_mark_citations", "PASS", 0, 0),
+        check_question_mark_citations(pdf_path),
         check_orphan_refs(aux_text, tex_text),
         check_overfull_hboxes_over_10pt(log_text),
         check_overfull_vboxes(log_text),
         check_float_too_large(log_text),
         check_underfull_badness_over_5000(log_text),
-        check_chktex_warnings_over_10(tex_path) if tex_path else FieldVerdict("chktex_warnings_over_10", "PASS", 0, 10),
+        check_chktex_warnings_over_10(tex_path),
         check_pages_equals_limit(pages, page_limit),
     ]
 
@@ -366,7 +409,10 @@ def audit(
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="LaTeX layout audit: 12-field PASS/WARN/BLOCK report."
+        description=(
+            "LaTeX layout audit: required-input gate plus 12-field "
+            "PASS/WARN/BLOCK report."
+        )
     )
     parser.add_argument(
         "--venue",
@@ -418,16 +464,17 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"layout_audit: {e}", file=sys.stderr)
             return 4
 
-    # Page-limit resolution is lenient — an unknown venue yields
-    # page_limit=0 (the pages_over_limit check becomes a no-op) rather
-    # than blocking the audit at the CLI surface.
+    # An unknown venue yields page_limit=0; check_pages_over_limit turns that
+    # into an explicit BLOCK so a missing or stale venue policy cannot pass.
 
     report = audit(
-        pdf_path=args.pdf if args.pdf.exists() else None,
-        log_path=args.log if args.log.exists() else None,
-        blg_path=args.blg if args.blg.exists() else None,
-        aux_path=args.aux if args.aux.exists() else None,
-        tex_path=args.tex if args.tex.exists() else None,
+        # Preserve the requested paths even when absent so the report can name
+        # the missing prerequisites rather than silently replacing them.
+        pdf_path=args.pdf,
+        log_path=args.log,
+        blg_path=args.blg,
+        aux_path=args.aux,
+        tex_path=args.tex,
         venue=args.venue,
         page_limit_override=page_limit_override,
     )

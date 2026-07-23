@@ -1,11 +1,18 @@
-"""Claim extraction, verification, and CRUD service (v2.0)."""
+"""Claim extraction, grounding verification, evidence status, and CRUD service."""
 
 from __future__ import annotations
 
 import logging
 
 from rka.infra.ids import generate_id
-from rka.models.claim import Claim, ClaimCreate, ClaimUpdate, ClaimEdge, ClaimEdgeCreate
+from rka.models.claim import (
+    Claim,
+    ClaimCreate,
+    ClaimEdge,
+    ClaimEdgeCreate,
+    ClaimUpdate,
+    EvidenceStatus,
+)
 from rka.services.base import BaseService, _now
 from rka.services.jobs import JobQueue
 
@@ -20,6 +27,23 @@ class ClaimService(BaseService):
         "claim": {"table": "fts_claims", "columns": ["id", "content"]},
     }
 
+    # Keep contradiction state as a read-time graph projection rather than a
+    # second mutable flag on ``claims``.  The correlated EXISTS avoids an N+1
+    # query while project equality prevents a malformed cross-project edge
+    # from contaminating the response.
+    _CONTRADICTED_PROJECTION = """
+        EXISTS (
+            SELECT 1
+            FROM claim_edges AS contradiction
+            WHERE contradiction.project_id = c.project_id
+              AND contradiction.relation = 'contradicts'
+              AND (
+                  contradiction.source_claim_id = c.id
+                  OR contradiction.target_claim_id = c.id
+              )
+        ) AS contradicted
+    """
+
     def _job_dedupe_key(self, entity_id: str, operation: str) -> str:
         return f"{self.project_id}:claim:{entity_id}:{operation}"
 
@@ -30,12 +54,13 @@ class ClaimService(BaseService):
         claim_id = generate_id("claim")
         await self.db.execute(
             """INSERT INTO claims
-               (id, source_entry_id, claim_type, content, confidence, verified, stale,
+               (id, source_entry_id, claim_type, content, confidence, verified,
+                evidence_status, stale,
                 source_offset_start, source_offset_end, project_id)
-               VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)""",
             [
                 claim_id, data.source_entry_id, data.claim_type, data.content,
-                data.confidence, int(data.verified),
+                data.confidence, int(data.verified), data.evidence_status,
                 data.source_offset_start, data.source_offset_end,
                 self.project_id,
             ],
@@ -68,7 +93,9 @@ class ClaimService(BaseService):
 
     async def get(self, claim_id: str) -> Claim | None:
         row = await self.db.fetchone(
-            "SELECT * FROM claims WHERE id = ? AND project_id = ?",
+            f"""SELECT c.*, {self._CONTRADICTED_PROJECTION}
+                FROM claims AS c
+                WHERE c.id = ? AND c.project_id = ?""",
             [claim_id, self.project_id],
         )
         if row is None:
@@ -81,40 +108,56 @@ class ClaimService(BaseService):
         cluster_id: str | None = None,
         claim_type: str | None = None,
         verified: bool | None = None,
+        evidence_status: EvidenceStatus | None = None,
         stale: bool | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[Claim]:
-        conditions = ["project_id = ?"]
-        params: list = [self.project_id]
+        if cluster_id:
+            conditions = [
+                "membership.cluster_id = ?",
+                "membership.project_id = ?",
+                "c.project_id = ?",
+            ]
+            params: list = [cluster_id, self.project_id, self.project_id]
+        else:
+            conditions = ["c.project_id = ?"]
+            params = [self.project_id]
 
         if source_entry_id:
-            conditions.append("source_entry_id = ?")
+            conditions.append("c.source_entry_id = ?")
             params.append(source_entry_id)
         if claim_type:
-            conditions.append("claim_type = ?")
+            conditions.append("c.claim_type = ?")
             params.append(claim_type)
         if verified is not None:
-            conditions.append("verified = ?")
+            conditions.append("c.verified = ?")
             params.append(int(verified))
+        if evidence_status is not None:
+            conditions.append("c.evidence_status = ?")
+            params.append(evidence_status)
         if stale is not None:
-            conditions.append("stale = ?")
+            conditions.append("c.stale = ?")
             params.append(int(stale))
 
         where = " AND ".join(conditions)
         params.extend([limit, offset])
 
-        sql = f"SELECT * FROM claims WHERE {where} ORDER BY created_at DESC LIMIT ? OFFSET ?"
-
-        # If filtering by cluster, join through claim_edges
         if cluster_id:
             sql = f"""
-                SELECT c.* FROM claims c
-                JOIN claim_edges ce ON ce.source_claim_id = c.id AND ce.relation = 'member_of'
-                WHERE ce.cluster_id = ? AND c.project_id = ?
+                SELECT c.*, {self._CONTRADICTED_PROJECTION}
+                FROM claims AS c
+                JOIN claim_edges AS membership
+                  ON membership.source_claim_id = c.id
+                 AND membership.relation = 'member_of'
+                WHERE {where}
                 ORDER BY c.created_at DESC LIMIT ? OFFSET ?
             """
-            params = [cluster_id, self.project_id, limit, offset]
+        else:
+            sql = f"""SELECT c.*, {self._CONTRADICTED_PROJECTION}
+                FROM claims AS c
+                WHERE {where}
+                ORDER BY c.created_at DESC LIMIT ? OFFSET ?"""
 
         rows = await self.db.fetchall(sql, params)
         return [self._row_to_model(row) for row in rows]
@@ -272,7 +315,12 @@ class ClaimService(BaseService):
         return {"outcome": "updated", "claims_created": len(created_ids), "claim_ids": created_ids}
 
     async def process_verify_claim_job(self, claim_id: str) -> dict:
-        """Verify a claim against its source text."""
+        """Verify extraction fidelity against source text.
+
+        This job checks source presence, numeric accuracy, and directional
+        accuracy. It intentionally does not update ``evidence_status`` because
+        grounding a proposition is distinct from scientifically supporting it.
+        """
         claim_row = await self.db.fetchone(
             "SELECT * FROM claims WHERE id = ? AND project_id = ?",
             [claim_id, self.project_id],
@@ -353,10 +401,12 @@ class ClaimService(BaseService):
             content=row["content"],
             confidence=row.get("confidence", 0.5),
             verified=bool(row.get("verified", 0)),
+            evidence_status=row.get("evidence_status", "unassessed"),
+            contradicted=bool(row["contradicted"]),
             stale=bool(row.get("stale", 0)),
             source_offset_start=row.get("source_offset_start"),
             source_offset_end=row.get("source_offset_end"),
-            project_id=row.get("project_id", "proj_default"),
+            project_id=row["project_id"],
             created_at=row.get("created_at"),
             updated_at=row.get("updated_at"),
         )

@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from rka.models.claim import Claim, ClaimCreate, ClaimUpdate, ClaimEdge, ClaimEdgeCreate
+from rka.models.claim import (
+    Claim,
+    ClaimCreate,
+    ClaimEdge,
+    ClaimEdgeCreate,
+    ClaimUpdate,
+    EvidenceStatus,
+)
 from rka.services.claims import ClaimService
 from rka.api.deps import get_scoped_claim_service
 
@@ -25,6 +32,7 @@ async def list_claims(
     cluster_id: str | None = None,
     claim_type: str | None = None,
     verified: bool | None = None,
+    evidence_status: EvidenceStatus | None = None,
     stale: bool | None = None,
     limit: int = Query(50, le=200),
     offset: int = 0,
@@ -35,6 +43,7 @@ async def list_claims(
         cluster_id=cluster_id,
         claim_type=claim_type,
         verified=verified,
+        evidence_status=evidence_status,
         stale=stale,
         limit=limit,
         offset=offset,

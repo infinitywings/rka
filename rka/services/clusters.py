@@ -147,7 +147,7 @@ class ClusterService(BaseService):
     # ── Background job handlers ──────────────────────────────
 
     async def process_cluster_update_job(self, claim_id: str) -> dict:
-        """Assign a verified claim to a cluster and score inter-claim relations."""
+        """Assign a source-grounded claim to a cluster and score relations."""
         claim_row = await self.db.fetchone(
             "SELECT * FROM claims WHERE id = ? AND project_id = ?",
             [claim_id, self.project_id],
@@ -163,7 +163,8 @@ class ClusterService(BaseService):
             [self.project_id],
         )
 
-        # Get nearby claims (most recent verified claims)
+        # Get nearby claims whose extraction is grounded in their source. This
+        # does not imply that their scientific evidence_status is supported.
         nearby = await self.db.fetchall(
             """SELECT id, claim_type, content FROM claims
                WHERE project_id = ? AND verified = 1 AND stale = 0 AND id != ?
@@ -357,7 +358,7 @@ class ClusterService(BaseService):
             gap_count=row.get("gap_count", 0),
             needs_reprocessing=bool(row.get("needs_reprocessing", 0)),
             synthesized_by=row.get("synthesized_by", "llm"),
-            project_id=row.get("project_id", "proj_default"),
+            project_id=row["project_id"],
             created_at=row.get("created_at"),
             updated_at=row.get("updated_at"),
         )

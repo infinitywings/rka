@@ -183,45 +183,40 @@ only to the current decision.
 
 Option 3 (a new `man_` entity type with schema migration) was rejected per Q1 ratification because it would require migration scaffolding in `rka/db/schema.sql` and `rka/services/` (violating the bookkeeper invariant for Phase 1).
 
-## Provenance edges Writer emits
+## Graph semantics Writer uses
 
-Across the 12-type `entity_links` vocabulary (see `../brain/architecture.md` section "The 12-Type Provenance Vocabulary" for the full taxonomy), the Writer emits:
+Writer records cross-entity provenance only through the schema-valid
+`entity_links` vocabulary (see `../brain/architecture.md` section "Entity-link
+and claim-edge vocabularies"). Most edges are materialized automatically from
+typed `related_*` fields by core services:
 
 | Edge | From | To | Meaning |
 |---|---|---|---|
 | `cites` | manuscript jrn_ | lit_ | manuscript cites this literature item |
-| `references` | manuscript jrn_ | jrn_ | manuscript quotes or paraphrases this journal entry |
+| `references` | manuscript jrn_ | dec_ | manifest records its checkpoint decisions |
 | `justified_by` | checkpoint dec_ | jrn_ | checkpoint decision rests on this evidence |
-| `supports` | jrn_ (claim) | lit_ | claim is supported by this paper |
-| `contradicts` | jrn_ (claim) | lit_ | claim contradicts this paper |
-| `derived_from` | revision mission mis_ | dec_ (checkpoint) | mission spawned from this checkpoint |
+| `informed_by` | lit_ | checkpoint dec_ | literature informed this decision |
+| `motivated` | checkpoint dec_ | revision mission mis_ | checkpoint triggered the rework |
 | `supersedes` | new dec_ | old dec_ | revisited checkpoint replaces prior |
 | `produced` | mission mis_ | manuscript jrn_ | revision mission updated this manuscript |
-| `informed_by` | manuscript jrn_ | research_map cluster | manuscript draws on this evidence cluster |
 
-The Writer never invents new edge types and never creates orphan entities. Every manifest entry has the required upstream links per the table above.
+Scientific support, contradiction, and qualification are represented only as
+`claim_edges` among `clm_` records. The claim spine references those records and
+checks their status; it does not invent cross-type `supports` or `contradicts`
+links. The Writer never invents new edge types or creates orphan entities.
 
 ## Bookkeeper invariant (Phase 1)
 
-The Writer's Phase 1 scope adds files only under `rka/skills/writer/` and `tests/skills/writer/` (plus optional minimal touch of `rka/skills/SKILL.md` for the top-level skills index). It modifies zero files under `rka/services/`, `rka/api/`, `rka/mcp/`, or `web/`.
-
-Verification at every commit boundary:
-
-```bash
-git diff main -- rka/services/ rka/api/ rka/mcp/ web/  # must be empty
-```
-
-If this command produces any output, the commit violates the bookkeeper invariant and must be reworked before push.
-
-Phase 2 may introduce the `rka-writer-tools` MCP server as a separate sibling MCP (not a modification of the existing `rka` server). The manuscript capabilities themselves already shipped on the existing `rka` server (available at v2.5.7+) as live dispatch operations — `manuscript` (via `rka_query`), and `validate_reference` / `register_manuscript` (via `rka_execute`); the legacy bare names `rka_get_manuscript` / `rka_validate_reference` / `rka_register_manuscript` remain in the deferred tier, loadable via `rka_load_tools`. Phase 1 stays out of `rka/mcp/`.
+The original Phase 1 bookkeeper invariant was a delivery boundary, not a permanent architecture rule. Phase 0 reliability now deliberately adds narrow core semantics: `claims.verified` means source grounding only; `claims.evidence_status` separately records scientific support; reference validations are immutable manuscript/project-scoped attestations; and the core CLI owns atomic workspace initialization. Writer still owns prose, files, venue structure, rendering, and derived projections. These core changes must remain typed, migrated, and backward-compatible rather than being re-encoded as Writer tags or YAML conventions.
 
 ## Workspace template structure
 
-Phase 1 ships a workspace template at `rka/skills/writer/workspace-template/`. The PI copies it to `manuscripts/<project-id>/<venue>/` to bootstrap a new manuscript:
+The package ships a workspace template at `rka/skills/writer/workspace-template/`. Never copy it by hand. `rka writer init` preflights the target, registers or verifies a `jrn_` manuscript, substitutes every core token in a sibling staging directory, writes `.rka/manuscript.json`, and atomically publishes the complete directory:
 
 ```
 manuscripts/<project-id>/<venue>/
-  .mcp.json                   # rka required; rka-writer-tools commented (Phase 2)
+  .rka/manuscript.json        # explicit project/manuscript binding from init
+  .mcp.json                   # portable commands; no credentials/project default
   .latexmkrc                  # TEXINPUTS=./styles//: ; @default_files = ('main.tex')
   .planning/
     ACTIVE_WORKFLOW.md        # current_phase, last_checkpoint, next_action
@@ -241,32 +236,11 @@ manuscripts/<project-id>/<venue>/
   ai_tic_config.yaml          # per-project overrides
 ```
 
-## Phase boundaries
+## Current reliability boundary
 
-Phase 1 (this mission):
-
-- SKILL.md, references/, scripts/ (with stubs for Phase 2 items), workspace-template/, tests/skills/writer/, docs.
-- RKA-backed claim-spine planning files, resolver-injected validation, and
-  deterministic rendering remain within the Writer tree and use the existing
-  RKA surface.
-- Two seed venues: CHI, EMNLP.
-- Anti-AI-tic enforcement live and tested.
-- Local LaTeX render plus layout audit live and tested.
-- Reference validation Stage A (CSL-JSON pass-through) live; Stages B through G stubbed.
-- Manual reference handling acceptable in Phase 1.
-
-Phase 2 (separate future mission):
-
-- `rka-writer-tools` MCP server (habanero plus pyalex plus semanticscholar plus arxiv plus serpapi).
-- Reference validation Stages B through G live.
-- SerpAPI integration with credit budget.
-- Five additional venue files (USENIX, IEEE-SP, NeurIPS, OSDI, Nature).
-- Author disambiguation with ORCID + SerpAPI.
-
-Phase 3 (separate future mission):
-
-- Revision Loop with four `comment_class` mission shapes (R1, R2, R3, R4).
-- Brain mission integration for Writer revisions (Brain spawns a Writer subagent on a Revision Mission).
-- Manuscript operations `manuscript` (`rka_query`), `validate_reference` and `register_manuscript` (`rka_execute`) — already shipped on the `rka` server at v2.5.7+; legacy names `rka_get_manuscript` / `rka_validate_reference` / `rka_register_manuscript` loadable via `rka_load_tools`.
-
-The phasing rationale: Phase 1 ships a usable Writer for PI's solo drafting workflow (manual reference assembly is acceptable). Phase 2 makes reference validation automated. Phase 3 closes the loop with Brain-spawned revisions.
+- RKA core owns project/manuscript identity, claim grounding, scientific-support status, PI decisions, currency, and reference-validation attestations.
+- Writer owns the editable derived spine, generated Markdown views, prose, citation formatting, venue templates, rendering, and layout checks.
+- `rka writer assist` is read-only and produces candidates; it cannot ratify or write records.
+- `rka writer readiness` requires a fresh project-scoped entity packet and live-valid claim spine before drafting.
+- Missing provenance, missing render artifacts, unsupported claim types, unscoped ratifications, and unavailable resolution evidence fail closed.
+- `rka-writer-tools`, Stages A through G, extended venue specs, and the R1-R4 revision loop are implemented; historical phase labels elsewhere do not override this current boundary.

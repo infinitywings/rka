@@ -1,6 +1,6 @@
 # LaTeX Layout Audit
 
-`scripts/layout_audit.py` runs after a successful latexmk render and emits `audit.json` over twelve fields. Each field returns `PASS`, `WARN`, or `BLOCK`. Any `BLOCK` halts progress until resolved; `WARN` verdicts are surfaced for the Final Layout PI checkpoint.
+`scripts/layout_audit.py` runs after a successful latexmk render and emits `audit.json` with a required-input gate plus twelve layout fields. The PDF, LaTeX log, and source TeX must exist, be readable, and the PDF must have a readable positive page count; absence never counts as an empty, warning-free artifact. Each field returns `PASS`, `WARN`, or `BLOCK`. Any `BLOCK` halts progress until resolved; `WARN` verdicts are surfaced for the Final Layout PI checkpoint.
 
 ## The twelve fields
 

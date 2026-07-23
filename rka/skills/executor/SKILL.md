@@ -107,6 +107,16 @@ When you receive a mission:
 4. Call `rka_query(args={"operation": "get_context", "project_id": <pinned>, "topic": "<mission objective>"})` for relevant prior knowledge.
 5. If significant work: present a Backbrief (see below). If trivial: just do it.
 
+## Evidence-recording boundary
+
+Record findings with the exact setup, conditions, units, uncertainty, failed
+runs, and anomalies needed for later review. Extraction may create `clm_`
+records, but new claims remain `evidence_status=unassessed`. The Executor does
+not promote its own result to `supported`; the Brain performs that assessment
+against current positive evidence, qualifiers, and counterevidence. Never use
+`verified=true` as shorthand for scientific validity—it records source-grounding
+fidelity only.
+
 ## Backbrief — Confirm Your Plan
 
 For significant missions, BEFORE implementing, present a Backbrief with:

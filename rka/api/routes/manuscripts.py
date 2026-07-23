@@ -64,6 +64,10 @@ class ReferenceValidationRequest(BaseModel):
         default=None,
         description="CSL-JSON author list: [{'family': 'Smith', 'given': 'J'}, ...]",
     )
+    literature_id: str | None = Field(
+        default=None,
+        description="Optional same-project lit_ record linked to this validation.",
+    )
 
 
 def get_scoped_manuscript_service(
@@ -90,6 +94,7 @@ async def register_manuscript(
     )
     return {
         "id": entry.id,
+        "project_id": entry.project_id,
         "title": data.title,
         "venue": data.venue,
         "phase": "draft",
@@ -136,12 +141,17 @@ async def validate_reference(
             detail=f"Manuscript {manuscript_id} not found",
         )
     reference_dict = data.model_dump(exclude_none=True)
+    literature_id = reference_dict.pop("literature_id", None)
     if not reference_dict.get("DOI") and not reference_dict.get("title"):
         raise HTTPException(
             status_code=422,
             detail="Reference must carry at least DOI or title.",
         )
-    return await svc.validate_reference(
-        reference_dict,
-        manuscript_id=manuscript_id,
-    )
+    try:
+        return await svc.validate_reference(
+            reference_dict,
+            manuscript_id=manuscript_id,
+            literature_id=literature_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc

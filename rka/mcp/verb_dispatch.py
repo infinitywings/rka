@@ -121,6 +121,8 @@ async def dispatch_record_literature(
     limit: int,
     import_top_n: int | None = None,
     year: int | None = None,
+    author: list[dict[str, str]] | None = None,
+    literature_id: str | None = None,
 ) -> str:
     """Route to one of the literature sub-modes by kwarg presence + action.
 
@@ -248,6 +250,8 @@ async def dispatch_record_literature(
             manuscript_id=manuscript_id,
             doi=doi,
             title=title,
+            author=author,
+            literature_id=literature_id,
             project_id=project_id,
         )
 
@@ -722,6 +726,7 @@ async def dispatch_review(target: str, *, project_id: str, payload: dict[str, An
             claim_ids=p["claim_ids"],
             action=p.get("action", "approve"),
             confidence_override=p.get("confidence_override"),
+            evidence_status=p.get("evidence_status"),
             project_id=project_id,
         )
 
@@ -1161,6 +1166,7 @@ async def dispatch_query(
             cluster_id=f.get("cluster_id"),
             claim_type=f.get("claim_type") or f.get("type"),
             verified=f.get("verified"),
+            evidence_status=f.get("evidence_status"),
             stale=f.get("stale"),
             limit=limit or f.get("limit", 20),
             project_id=project_id,
@@ -1989,6 +1995,8 @@ async def dispatch_execute(
             import_top_n=kw.get("import_top_n"),
             limit=kw.get("limit", 10),
             year=kw.get("year"),
+            author=kw.get("author"),
+            literature_id=kw.get("literature_id"),
         )
 
     # --- mission ops ---

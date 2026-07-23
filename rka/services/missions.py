@@ -370,6 +370,7 @@ class MissionService(BaseService):
 
         return Mission(
             id=row["id"],
+            project_id=row["project_id"],
             phase=row["phase"],
             objective=row["objective"],
             tasks=tasks,

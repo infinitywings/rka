@@ -177,6 +177,14 @@ ClaimTypeLit = Literal[
     "hypothesis", "evidence", "method", "result", "observation", "assumption",
 ]
 
+# Scientific evidence assessment on a claim. This is intentionally
+# independent from ``claims.verified``, which records extraction/grounding
+# fidelity against the source entry.
+EvidenceStatusLit = Literal[
+    "unassessed", "supported", "partially_supported", "inconclusive",
+    "contradicted",
+]
+
 # Cluster confidence — ``rka/models/claim.py`` ``ClusterConfidence``.
 ClusterConfLit = Literal[
     "strong", "moderate", "emerging", "contested", "refuted",

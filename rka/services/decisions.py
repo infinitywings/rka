@@ -478,6 +478,7 @@ class DecisionService(BaseService):
 
         return Decision(
             id=row["id"],
+            project_id=row["project_id"],
             parent_id=row.get("parent_id"),
             phase=row["phase"],
             question=row["question"],

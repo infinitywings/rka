@@ -34,6 +34,7 @@ _PREFIXES = {
     "entity_topic": "etp",
     "context_snapshot": "ctx",
     "review": "rev",
+    "reference_validation": "rvd",
 }
 
 

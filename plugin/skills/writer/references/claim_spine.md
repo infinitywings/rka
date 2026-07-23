@@ -17,8 +17,9 @@ records. Its Markdown views are generated, read-only explanations of that YAML.
 2. **Ratification is not proof.** A `dec_` records the PI's chosen wording and
    scope. It cannot serve as empirical evidence for that wording.
 3. **Synthesis is not terminal evidence.** An `ecl_` helps discover evidence,
-   but an empirical claim must resolve through a verified `clm_` to its current
-   source record.
+   but an empirical claim must resolve through a grounding-verified,
+   scientifically supported `clm_` to its current source record. Legacy
+   `verified` records extraction fidelity only; it is never scientific support.
 4. **The PI owns claim strength.** The Writer may propose bounded alternatives,
    but only an active PI decision ratifies the exact text. Editing ratified text
    requires a new decision that supersedes the old one.
@@ -43,9 +44,9 @@ last evidentiary link in a manuscript claim.
 | Entity | Claim-spine role | May it prove an empirical manuscript claim? |
 |---|---|---|
 | `prj_` | Project isolation boundary. Every resolved entity must belong to it. | No |
-| manuscript `jrn_` | Manifest for the paper and its checkpoint lineage. | No; it describes the manuscript. |
-| research `jrn_` | Terminal record of an experiment, observation, limitation, or scope condition. | Yes, through a verified `clm_` whose `source_entry_id` points to it. |
-| `clm_` | Claim-level evidence or qualifier extracted from a source record. | Yes, when verified, current, in-project, and backed by a current source. |
+| manuscript `jrn_` | Journal tagged `manuscript`; manifest for the paper and its checkpoint lineage. | No; neither the manifest nor any manuscript-tagged journal is terminal empirical evidence. |
+| research `jrn_` | Terminal record of an experiment, observation, limitation, or scope condition, without the `manuscript` tag. | Yes, through an eligible `clm_` whose `source_entry_id` points to it. |
+| `clm_` | Claim-level evidence or qualifier extracted from a source record. | Yes, when grounding-verified, `evidence_status` is `supported` or `partially_supported`, explicitly uncontested, current, in-project, and backed by a current research source. |
 | `lit_` | Prior-work fact, comparison, or limitation used in related-work and positioning prose. | It supports literature statements, not a new result produced by this project. |
 | `ecl_` | Discovery and synthesis view over claims. | No. Follow it to constituent claims and their sources. |
 | `dec_` | PI ratification of exact contribution wording, scope, and manuscript choices. | No. It licenses the wording; it does not establish the result. |
@@ -121,7 +122,7 @@ rka_snapshot: null
 |---|---|
 | `schema_version` | Exact parser contract. Unknown versions block rather than being guessed. |
 | `project_id` | RKA project boundary used for every resolution. |
-| `manuscript_id` | Existing manuscript manifest `jrn_`. |
+| `manuscript_id` | Existing in-project `jrn_` carrying the exact `manuscript` tag. No other entity type or ordinary journal is valid. |
 | `generated_at` | UTC time at which the Writer assembled or refreshed the spine. It is not evidence currency by itself. |
 | `changelog_cursor` | Last RKA change cursor considered by the Writer. |
 | `claims` | Stable manuscript claim identifiers and their evidence, boundaries, and ratification. |
@@ -134,18 +135,26 @@ rka_snapshot: null
   RKA entity identifier and must be unique within the spine.
 - `text` is the exact wording selected by the PI. For `status: ratified`, it
   must match the active `dec_` selection.
-- `claim_type: empirical` identifies a result-backed contribution. Other claim
-  categories require equally explicit evidence rules before they can become
-  hard gates; relabeling a claim must never be used to bypass empirical checks.
+- `claim_type: empirical` identifies a result-backed contribution and is the
+  only contribution type supported by schema v1. Every other value blocks.
+  Relabeling a claim must never bypass empirical checks.
 - `status` is `candidate` while being assembled and `ratified` only after PI
   selection. Only a current ratified claim may advance to substantive drafting.
-- `ratified_by` is an active, in-project PI `dec_`. It governs wording and scope
-  but is not included in `evidence_ids`.
+- `ratified_by` is an active, current, in-project PI `dec_` whose `chosen`
+  exactly matches `text` and whose `related_journal` explicitly includes this
+  spine's `manuscript_id`. It governs wording and scope but is not included in
+  `evidence_ids`.
 - `evidence_ids` identifies positive, source-backed support.
 - `qualifier_ids` identifies scope conditions, limitations, and negative
   observations that control how the claim is phrased.
 - `counterevidence_ids` identifies evidence that challenges the claim. It may
   not be silently omitted or treated as support.
+- Every `clm_` in `evidence_ids`, `qualifier_ids`, or `counterevidence_ids`
+  independently requires grounding fidelity (`grounding_verified: true`, or
+  legacy `verified: true`), `evidence_status: supported|partially_supported`,
+  explicit `contradicted: false`, current status, and a current non-manuscript
+  terminal research journal. A legacy `verified: true` without an eligible
+  `evidence_status` remains grounded but scientifically unassessed and blocks.
 - `allowed_wording` is the strongest wording currently licensed by the resolved
   evidence and its conditions. The PI ratifies any material strengthening.
 - `prohibited_wording` records tempting extensions that the current evidence
@@ -210,7 +219,8 @@ For each candidate, identify:
 
 1. the prior limitation or open problem;
 2. the project's response and the decision lineage behind it;
-3. verified positive evidence;
+3. grounding-verified positive evidence with `evidence_status` of `supported`
+   or `partially_supported`;
 4. qualifiers, failed branches, and counterevidence;
 5. the conditions under which the evidence holds; and
 6. a claim that says no more than those records support.
@@ -230,7 +240,8 @@ The PI may retain the bounded claim, narrow it, or commission an evidence-gap
 mission. Within the same Outline checkpoint, record each selected contribution
 as a child claim-scope `dec_`: its `chosen` field is exactly one claim sentence,
 its `decided_by` field is `pi`, and its provenance names the relevant RKA
-records. This creates no extra checkpoint; it makes multi-claim ratification
+records. Its `related_journal` must explicitly include the manuscript manifest,
+not merely an unrelated project journal. This creates no extra checkpoint; it makes multi-claim ratification
 unambiguous. Set `status: ratified` and `ratified_by` only after that decision
 is active.
 
@@ -397,7 +408,14 @@ Required hard failures include:
 - a `clm_` whose terminal source is missing or stale;
 - direct `jrn_`, decision, or evidence-cluster records used in place of the
   required `clm_`-to-`jrn_` empirical evidence chain;
+- a non-`empirical` contribution in schema v1;
+- a `manuscript_id` that is not an in-project manuscript-tagged `jrn_`, or a
+  manuscript-tagged journal used as a terminal empirical source;
+- a grounded `clm_` whose `evidence_status` is missing or is not `supported` or
+  `partially_supported`, or whose contradiction state is not explicitly clear;
 - a ratified claim whose text no longer matches the active PI decision;
+- a ratification decision that is not explicitly scoped to this manuscript via
+  `related_journal`;
 - unresolved counterevidence hidden behind a strong claim;
 - fluent wording with no source-backed evidence;
 - an empirical claim without a result unit;

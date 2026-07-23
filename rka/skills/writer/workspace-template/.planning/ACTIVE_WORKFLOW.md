@@ -24,5 +24,6 @@ last_session: (initial bootstrap)
 
 ## Notes
 
-Manuscript manifest: jrn_REPLACE_WITH_MANIFEST_ID (created when first session
-ratifies the Venue checkpoint).
+Project: REPLACE_WITH_PROJECT_ID
+Manuscript manifest: REPLACE_WITH_MANUSCRIPT_ID (registered and verified by
+`rka writer init` before this workspace was published).

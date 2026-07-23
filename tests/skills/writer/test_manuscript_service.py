@@ -120,21 +120,25 @@ class TestValidateReference:
 
     async def test_validate_reference_returns_verdict_dict(self, manuscript_service) -> None:
         # Use a clearly fake DOI so all backends return None (offline-deterministic).
+        manuscript = await manuscript_service.register(venue="CHI", title="Validation test")
         result = await manuscript_service.validate_reference(
             {"DOI": "10.9999/totally-fake-doi-for-test"},
-            manuscript_id="jrn_test_01",
+            manuscript_id=manuscript.id,
         )
         assert isinstance(result, dict)
-        # Either the subprocess produced a verdict dict OR returned an
-        # error dict; in both cases manuscript_id should be threaded back.
-        assert result.get("manuscript_id") == "jrn_test_01" or "error" in result.get("status", "")
+        assert result["manuscript_id"] == manuscript.id
+        assert result["validation_id"].startswith("rvd_")
+        assert "retraction_checked" in result
 
     async def test_validate_reference_handles_subprocess_error(self, manuscript_service) -> None:
         # Trigger the missing-required-field path: empty reference dict.
         # The validate_references CLI requires DOI or title.
+        manuscript = await manuscript_service.register(venue="CHI", title="Error test")
         result = await manuscript_service.validate_reference(
             {},
+            manuscript_id=manuscript.id,
         )
         assert isinstance(result, dict)
         # Either error status OR an empty-input UNVERIFIED.
         assert "status" in result
+        assert result["validation_id"].startswith("rvd_")

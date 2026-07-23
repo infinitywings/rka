@@ -6,7 +6,7 @@
 
 schema_version: rka-claim-spine/v1
 project_id: REPLACE_WITH_PROJECT_ID
-manuscript_id: REPLACE_WITH_MANUSCRIPT_MANIFEST_ID
+manuscript_id: REPLACE_WITH_MANUSCRIPT_ID
 generated_at: null
 changelog_cursor: null
 

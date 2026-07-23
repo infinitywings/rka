@@ -110,10 +110,13 @@ Journal entries get distilled into structured claims during maintenance. This is
 - Has a clear type: `hypothesis`, `evidence`, `method`, `result`, `observation`, `assumption`.
 
 **Confidence ranges:**
-- `0.0–0.3` — speculative, uncertain, needs investigation.
-- `0.3–0.6` — preliminary evidence, first analysis, not yet replicated.
-- `0.6–0.8` — solid evidence, multiple sources or controlled experiment.
-- `0.8–1.0` — verified, replicated, high confidence.
+- `0.0–0.3` — weak or ambiguous extraction from the source.
+- `0.3–0.6` — plausible wording from partial context.
+- `0.6–0.8` — well grounded in the source record.
+- `0.8–1.0` — explicit full-text grounding with precise offsets/quotation.
+
+This is extraction confidence only. It must not encode replication or evidence
+strength; those belong in the separate categorical `evidence_status` review.
 
 **Example extraction:**
 
@@ -135,10 +138,30 @@ rka_extract_claims(
 )
 ```
 
+Extraction leaves `evidence_status=unassessed`. First approve or adjust the
+grounding, then make an explicit evidence assessment only after inspecting
+current supporting, qualifying, and contradictory records:
+
+```python
+rka_execute(args={
+    "operation": "review_claims",
+    "project_id": "prj_01...",
+    "claim_ids": ["clm_01..."],
+    "action": "adjust",
+    "evidence_status": "partially_supported",
+})
+```
+
+Use `partially_supported` only with the limiting conditions preserved in the
+claim or linked qualifiers. Use `inconclusive` when the available record cannot
+resolve the proposition, and `contradicted` when current counterevidence wins.
+Never bulk-promote unrelated claims merely because they share a source entry.
+
 **Cluster assignment heuristic:**
 - Claim fits an existing cluster's theme → assign to it.
 - Claim introduces a genuinely new sub-topic → create a new cluster with `rka_create_cluster`.
-- Unsure → assign to the closest cluster; split later.
+- Unsure → leave it unassigned for review; never force noisy evidence into the
+  closest cluster merely to make the map look complete.
 - Use `rka_list_clusters()` to see what exists before deciding.
 
 ## Parsing PI Instructions Into Missions
@@ -246,7 +269,9 @@ rka_get_research_map()
 - `rka_list_clusters(research_question_id="dec_01...")` — all clusters under an RQ.
 - `rka_get(id="ecl_01...")` — cluster detail with synthesis + inline claim summaries.
 - `rka_review_cluster(cluster_id="ecl_01...", synthesis="...", confidence="moderate")` — write authoritative synthesis.
-- `rka_review_claims(claim_ids=["clm_01..."], action="approve")` — approve or reject claims.
+- `rka_review_claims(claim_ids=["clm_01..."], action="approve")` — approve
+  source grounding only; use `action="adjust", evidence_status="..."` for the
+  independent scientific assessment.
 - `rka_trace_provenance(entity_id="ecl_01...", direction="upstream")` — see where evidence came from.
 
 ### Changelog — Efficient Session Catch-Up
@@ -521,6 +546,7 @@ The CLI command opens the DB, fires `periodic` once per project, exits. v1 keeps
 ## Related
 
 - Top-level rules, session protocol, anti-patterns: `SKILL.md`.
-- Three-actor model, 12-type vocabulary, research-map structure: `architecture.md`.
+- Three-actor model, provenance/claim-edge vocabularies, evidence-promotion
+  funnel, and research-map structure: `architecture.md`.
 - Multi-choice decision UX + Confirmation Brief template: `decision_ux.md`.
 - Worked examples for PI attribution and common mistakes: `examples.md`.

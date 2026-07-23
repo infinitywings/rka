@@ -2,6 +2,22 @@
 
 Procedural reference for the Executor skill. Loaded on demand when `SKILL.md` points here. Keeps every-mission discipline at the top-level and the detailed procedures here.
 
+> **v2.7.0 dispatch translation.** The legacy tool names used in this file (`rka_add_note`, `rka_submit_report`, `rka_submit_checkpoint`, `rka_get_mission`, `rka_search`, etc.) are synonyms for `rka_query` / `rka_execute` operations under the v2.7.0+ typed-arg surface. Treat any `rka_X(arg=val, ...)` example as shorthand for the discriminated-union call:
+>
+> | Legacy shorthand | v2.7.0 dispatch shape |
+> |---|---|
+> | `rka_get_mission(id="mis_...")` | `rka_query(args={"operation": "get_mission", "project_id": <pinned>, "id": "mis_..."})` |
+> | `rka_get_context(topic="...")` | `rka_query(args={"operation": "get_context", "project_id": <pinned>, "topic": "..."})` |
+> | `rka_search(query="...")` | `rka_query(args={"operation": "search", "project_id": <pinned>, "query": "..."})` |
+> | `rka_add_note(type=..., source="executor", ...)` | `rka_execute(args={"operation": "record_note", "project_id": <pinned>, ...})` |
+> | `rka_submit_checkpoint(type=..., ...)` | `rka_execute(args={"operation": "submit_checkpoint", "project_id": <pinned>, ...})` |
+> | `rka_submit_report(mission_id=..., ...)` | `rka_execute(args={"operation": "submit_report", "project_id": <pinned>, ...})` |
+> | `rka_update_mission_status(id=..., status=...)` | `rka_execute(args={"operation": "update_mission_status", "project_id": <pinned>, "id": "...", "status": "..."})` |
+> | `rka_ingest_document(...)` | `rka_execute(args={"operation": "ingest_document", "project_id": <pinned>, ...})` |
+> | `rka_link_literature_to_zotero(lit_id=...)` | `rka_execute(args={"operation": "link_literature_to_zotero", "project_id": <pinned>, "lit_id": "..."})` |
+>
+> When this Executor runs as the orchestrator's `claude-agent-sdk` subprocess with `RKA_LEGACY_TOOLS=1`, the legacy names are the live tool surface (typed dispatch is deferred). When running directly in Claude Desktop / Claude Code, the dispatch shape is the live surface. The discipline is identical either way. Index of operations: `rka_describe(operation="")`.
+
 ---
 
 ## Backbrief Format — Full Template

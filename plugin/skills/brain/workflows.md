@@ -2,6 +2,28 @@
 
 Procedural reference for the Brain skill. Each section is a self-contained workflow loaded on demand when the top-level `SKILL.md` points here.
 
+> **v2.7.0 dispatch translation.** The legacy tool names used in this file (`rka_get_status`, `rka_add_decision`, `rka_create_mission`, `rka_extract_claims`, `rka_review_cluster`, etc.) are synonyms for `rka_query` / `rka_execute` operations under the v2.7.0+ typed-arg surface. Treat any `rka_X(arg=val, ...)` example as shorthand for the discriminated-union call, e.g.:
+>
+> | Legacy shorthand | v2.7.0 dispatch shape |
+> |---|---|
+> | `rka_get_status()` | `rka_query(args={"operation": "status", "project_id": <pinned>})` |
+> | `rka_get_changelog(since="...")` | `rka_query(args={"operation": "get_changelog", "project_id": <pinned>, "since": "..."})` |
+> | `rka_get_pending_maintenance()` | `rka_query(args={"operation": "get_pending_maintenance", "project_id": <pinned>})` |
+> | `rka_get_research_map()` | `rka_query(args={"operation": "get_research_map", "project_id": <pinned>})` |
+> | `rka_search(query="...")` | `rka_query(args={"operation": "search", "project_id": <pinned>, "query": "..."})` |
+> | `rka_add_note(...)` | `rka_execute(args={"operation": "record_note", "project_id": <pinned>, ...})` |
+> | `rka_add_decision(...)` | `rka_execute(args={"operation": "record_decision", "project_id": <pinned>, ...})` |
+> | `rka_update_decision(id=..., ...)` | `rka_execute(args={"operation": "update_decision", "project_id": <pinned>, "id": "...", ...})` |
+> | `rka_create_mission(...)` | `rka_execute(args={"operation": "create_mission", "project_id": <pinned>, ...})` |
+> | `rka_extract_claims(...)` | `rka_execute(args={"operation": "extract_claims", "project_id": <pinned>, ...})` |
+> | `rka_review_cluster(...)` | `rka_execute(args={"operation": "review_cluster", "project_id": <pinned>, ...})` |
+> | `rka_check_freshness()` | `rka_query(args={"operation": "check_freshness", "project_id": <pinned>})` |
+> | `rka_flag_stale(..., propagate=true)` | `rka_execute(args={"operation": "flag_stale", "project_id": <pinned>, "propagate": True, ...})` |
+> | `rka_detect_contradictions(...)` | `rka_query(args={"operation": "detect_contradictions", "project_id": <pinned>, ...})` |
+> | `rka_set_project(...)` | Deprecated no-op; `project_id` is now passed as a required field on every operation. |
+>
+> Full per-operation signature lookup: `rka_describe(operation="<name>")`. Index of operations: `rka_describe(operation="")`.
+
 ---
 
 ## Session Start — Full Walkthrough
@@ -88,10 +110,13 @@ Journal entries get distilled into structured claims during maintenance. This is
 - Has a clear type: `hypothesis`, `evidence`, `method`, `result`, `observation`, `assumption`.
 
 **Confidence ranges:**
-- `0.0–0.3` — speculative, uncertain, needs investigation.
-- `0.3–0.6` — preliminary evidence, first analysis, not yet replicated.
-- `0.6–0.8` — solid evidence, multiple sources or controlled experiment.
-- `0.8–1.0` — verified, replicated, high confidence.
+- `0.0–0.3` — weak or ambiguous extraction from the source.
+- `0.3–0.6` — plausible wording from partial context.
+- `0.6–0.8` — well grounded in the source record.
+- `0.8–1.0` — explicit full-text grounding with precise offsets/quotation.
+
+This is extraction confidence only. It must not encode replication or evidence
+strength; those belong in the separate categorical `evidence_status` review.
 
 **Example extraction:**
 
@@ -113,10 +138,30 @@ rka_extract_claims(
 )
 ```
 
+Extraction leaves `evidence_status=unassessed`. First approve or adjust the
+grounding, then make an explicit evidence assessment only after inspecting
+current supporting, qualifying, and contradictory records:
+
+```python
+rka_execute(args={
+    "operation": "review_claims",
+    "project_id": "prj_01...",
+    "claim_ids": ["clm_01..."],
+    "action": "adjust",
+    "evidence_status": "partially_supported",
+})
+```
+
+Use `partially_supported` only with the limiting conditions preserved in the
+claim or linked qualifiers. Use `inconclusive` when the available record cannot
+resolve the proposition, and `contradicted` when current counterevidence wins.
+Never bulk-promote unrelated claims merely because they share a source entry.
+
 **Cluster assignment heuristic:**
 - Claim fits an existing cluster's theme → assign to it.
 - Claim introduces a genuinely new sub-topic → create a new cluster with `rka_create_cluster`.
-- Unsure → assign to the closest cluster; split later.
+- Unsure → leave it unassigned for review; never force noisy evidence into the
+  closest cluster merely to make the map look complete.
 - Use `rka_list_clusters()` to see what exists before deciding.
 
 ## Parsing PI Instructions Into Missions
@@ -224,7 +269,9 @@ rka_get_research_map()
 - `rka_list_clusters(research_question_id="dec_01...")` — all clusters under an RQ.
 - `rka_get(id="ecl_01...")` — cluster detail with synthesis + inline claim summaries.
 - `rka_review_cluster(cluster_id="ecl_01...", synthesis="...", confidence="moderate")` — write authoritative synthesis.
-- `rka_review_claims(claim_ids=["clm_01..."], action="approve")` — approve or reject claims.
+- `rka_review_claims(claim_ids=["clm_01..."], action="approve")` — approve
+  source grounding only; use `action="adjust", evidence_status="..."` for the
+  independent scientific assessment.
 - `rka_trace_provenance(entity_id="ecl_01...", direction="upstream")` — see where evidence came from.
 
 ### Changelog — Efficient Session Catch-Up
@@ -349,11 +396,13 @@ Use `rka_detect_contradictions(entity_id="clm_01...")` to find similar claims th
 When creating decisions, record assumptions explicitly:
 
 ```python
-rka_add_decision(
-    question="Should we use MQTT for sensor data?",
-    ...,
-    assumptions=["Network latency <50ms", "Sensor count stays under 500"],
-)
+rka_execute(args={
+    "operation": "record_decision",
+    "project_id": "prj_01...",
+    "question": "Should we use MQTT for sensor data?",
+    "assumptions": ["Network latency <50ms", "Sensor count stays under 500"],
+    # ... other fields (chosen, rationale, related_journal, ...)
+})
 ```
 
 Periodically review assumption health: are recorded assumptions still valid given new evidence?
@@ -469,7 +518,7 @@ Per `dec_01KPM1M58F0ARXCM0W0GZ476VD`: the `mcp_tool` handler logs intent (`sched
 
 After hooks fire on the first tool call per project per session, brain_notifications accumulate. Best practice: at session start, after `rka_get_pending_maintenance`, also call `rka_get_brain_notifications` and surface a digest to the PI. After acting on findings, call `rka_clear_brain_notifications(ids=[...])` to mark them as processed.
 
-`rka_set_project` clears the session-start fired marker for the new project, so re-setting refires.
+(Legacy note: pre-v2.6, calling `rka_set_project` cleared the session-start fired marker for the new project. v2.6 removed the per-process active-project concept; the fired-marker is now keyed off the `project_id` field passed on each operation.)
 
 ### Periodic hooks
 
@@ -497,6 +546,7 @@ The CLI command opens the DB, fires `periodic` once per project, exits. v1 keeps
 ## Related
 
 - Top-level rules, session protocol, anti-patterns: `SKILL.md`.
-- Three-actor model, 12-type vocabulary, research-map structure: `architecture.md`.
+- Three-actor model, provenance/claim-edge vocabularies, evidence-promotion
+  funnel, and research-map structure: `architecture.md`.
 - Multi-choice decision UX + Confirmation Brief template: `decision_ux.md`.
 - Worked examples for PI attribution and common mistakes: `examples.md`.

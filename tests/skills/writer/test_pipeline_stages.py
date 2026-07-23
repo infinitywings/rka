@@ -9,10 +9,6 @@ Per mis_01KS2S871YPQ3D5RVY5K3PSQY6 T6 acceptance criteria.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
-
-
 class _FakeBackend:
     """Module-attribute-style fake; replaces _crossref / _openalex / _s2 / _arxiv / _serpapi."""
 
@@ -115,6 +111,27 @@ class TestStageDRetraction:
         assert is_retracted is True
         assert len(updates) == 1
 
+    def test_enabled_retraction_backend_unavailable_blocks(
+        self,
+        validate_references,
+    ) -> None:
+        vr = validate_references
+        hit = {"DOI": "10.1/a", "title": "Paper"}
+        vr._crossref = _FakeBackend(available=False, doi_hits={"10.1/a": hit})
+        vr._openalex = _FakeBackend(doi_hits={"10.1/a": hit})
+        vr._s2 = _FakeBackend(doi_hits={"10.1/a": hit})
+
+        verdict = vr.validate_reference(doi="10.1/a", check_retraction=True)
+
+        assert verdict.status == vr.Status.FIELD_ERROR
+        assert verdict.stage_trace["D_retraction"] == {
+            "enabled": True,
+            "reached": True,
+            "completed": False,
+            "outcome": "unavailable",
+        }
+        assert "stage_d_retraction_backend_unavailable" in verdict.notes
+
 
 class TestStageEDisambiguation:
     """Stage E uses OpenAlex; escalates to SerpAPI on demand."""
@@ -144,6 +161,40 @@ class TestStageEDisambiguation:
         status, notes, credits = vr.stage_e_disambiguate_authors(["Smith"], budget=None)
         assert status == vr.Status.LOW_CONFIDENCE
         assert "openalex_unavailable" in notes
+
+    def test_pipeline_enables_conditional_serpapi_fallback(
+        self,
+        validate_references,
+        monkeypatch,
+    ) -> None:
+        vr = validate_references
+        hit = {"DOI": "10.1/a", "title": "Paper"}
+        vr._crossref = _FakeBackend(doi_hits={"10.1/a": hit})
+        vr._openalex = _FakeBackend(doi_hits={"10.1/a": hit})
+        vr._s2 = _FakeBackend(doi_hits={"10.1/a": hit})
+        observed: dict[str, bool] = {}
+
+        def fake_disambiguate(
+            authors,
+            affiliation_hints=None,
+            *,
+            budget=None,
+            escalate_to_serpapi=False,
+        ):
+            observed["enabled"] = escalate_to_serpapi
+            return vr.Status.VERIFIED, [], 0
+
+        monkeypatch.setattr(vr, "stage_e_disambiguate_authors", fake_disambiguate)
+        verdict = vr.validate_reference(
+            doi="10.1/a",
+            authors=["Smith"],
+            budget=object(),
+            check_retraction=False,
+            check_disambiguation=True,
+        )
+
+        assert verdict.status == vr.Status.VERIFIED
+        assert observed == {"enabled": True}
 
 
 class TestStageGNicheRescue:
@@ -209,11 +260,147 @@ class TestAuditReportHelpers:
             vr.Status.RETRACTED,
             vr.Status.AUTHOR_MISMATCH,
             vr.Status.FIELD_ERROR,
+            vr.Status.LOW_CONFIDENCE,
         ):
             rpt = vr.AuditReport()
             rpt.refs.append(vr.ReferenceVerdict("x", blocking_status))
             assert rpt.has_any_blocking() is True, f"{blocking_status} should block"
-        # LOW_CONFIDENCE does not block compile per design (suggestive only).
-        rpt = vr.AuditReport()
-        rpt.refs.append(vr.ReferenceVerdict("y", vr.Status.LOW_CONFIDENCE))
-        assert rpt.has_any_blocking() is False
+
+
+class TestNativeStageTrace:
+    """Every reference carries a closed, truthful A-G execution trace."""
+
+    def test_single_reference_trace_records_disabled_and_completed_stages(
+        self,
+        validate_references,
+    ) -> None:
+        vr = validate_references
+        hit = {"DOI": "10.1/a", "title": "Paper"}
+        vr._crossref = _FakeBackend(doi_hits={"10.1/a": hit})
+        vr._openalex = _FakeBackend(doi_hits={"10.1/a": hit})
+        vr._s2 = _FakeBackend()
+
+        verdict = vr.validate_reference(
+            doi="10.1/a",
+            check_retraction=False,
+            check_disambiguation=False,
+        )
+
+        assert set(verdict.stage_trace) == set(vr.STAGE_KEYS)
+        for record in verdict.stage_trace.values():
+            assert set(record) == {"enabled", "reached", "completed", "outcome"}
+            assert isinstance(record["enabled"], bool)
+            assert isinstance(record["reached"], bool)
+            assert isinstance(record["completed"], bool)
+            assert record["outcome"] in {outcome.value for outcome in vr.StageOutcome}
+        assert verdict.stage_trace["A_extraction"] == {
+            "enabled": True,
+            "reached": True,
+            "completed": True,
+            "outcome": "passed",
+        }
+        assert verdict.stage_trace["C_cross_source_confirmation"]["outcome"] == "passed"
+        assert verdict.stage_trace["D_retraction"]["outcome"] == "disabled"
+        assert verdict.stage_trace["E_author_disambiguation"]["outcome"] == "disabled"
+        assert verdict.stage_trace["F_bibliography_compile"]["outcome"] == "not_reached"
+
+    def test_multi_reference_stage_f_does_not_hide_uncompiled_reference(
+        self,
+        validate_references,
+        monkeypatch,
+        tmp_path,
+    ) -> None:
+        vr = validate_references
+        trace_one = vr._new_stage_trace(
+            check_retraction=False,
+            check_disambiguation=False,
+        )
+        trace_two = vr._new_stage_trace(
+            check_retraction=False,
+            check_disambiguation=False,
+        )
+        report = vr.AuditReport(refs=[
+            vr.ReferenceVerdict(
+                "10.1/a",
+                vr.Status.VERIFIED,
+                csl_json={"DOI": "10.1/a", "title": "Resolvable"},
+                stage_trace=trace_one,
+            ),
+            vr.ReferenceVerdict(
+                "Title only",
+                vr.Status.VERIFIED,
+                csl_json={"title": "Title only"},
+                stage_trace=trace_two,
+            ),
+        ])
+
+        def fake_compile(refs, out_bib):
+            out_bib.write_text("@article{a}", encoding="utf-8")
+            return 0, []
+
+        monkeypatch.setattr(vr, "stage_f_compile_bibliography", fake_compile)
+        exit_code, batch_trace = vr._apply_stage_f(report, tmp_path / "refs.bib")
+
+        assert exit_code == 1
+        assert batch_trace["outcome"] == "inconclusive"
+        assert report.refs[0].stage_trace["F_bibliography_compile"]["outcome"] == "passed"
+        assert report.refs[1].stage_trace["F_bibliography_compile"] == {
+            "enabled": True,
+            "reached": True,
+            "completed": False,
+            "outcome": "inconclusive",
+        }
+        assert "stage_f_reference_missing_resolvable_id" in report.refs[1].notes
+
+    def test_batch_invalid_inputs_still_receive_complete_traces(
+        self,
+        validate_references,
+    ) -> None:
+        vr = validate_references
+        report = vr.validate_all(
+            [{}, "not-an-object"],
+            budget=None,
+            check_retraction=True,
+            check_disambiguation=True,
+        )
+        assert len(report.refs) == 2
+        assert all(set(verdict.stage_trace) == set(vr.STAGE_KEYS) for verdict in report.refs)
+        assert all(verdict.status == vr.Status.FIELD_ERROR for verdict in report.refs)
+        assert all(
+            verdict.stage_trace["A_extraction"]["outcome"] == "rejected"
+            for verdict in report.refs
+        )
+
+    def test_cli_audit_serializes_trace_for_every_reference(
+        self,
+        validate_references,
+        tmp_path,
+    ) -> None:
+        import json
+
+        vr = validate_references
+        input_path = tmp_path / "refs.json"
+        audit_path = tmp_path / "refs.audit.json"
+        bib_path = tmp_path / "refs.bib"
+        input_path.write_text(json.dumps([{}, "not-an-object"]), encoding="utf-8")
+
+        exit_code = vr.main([
+            "--validate", str(input_path),
+            "--audit-out", str(audit_path),
+            "--bib-out", str(bib_path),
+            "--no-retraction",
+            "--check-disambiguation",
+        ])
+
+        assert exit_code == 1
+        payload = json.loads(audit_path.read_text(encoding="utf-8"))
+        assert payload["stage_trace_schema"] == vr.STAGE_TRACE_SCHEMA
+        assert payload["summary"]["blocking"] == 2
+        assert len(payload["refs"]) == 2
+        assert all(set(ref["stage_trace"]) == set(vr.STAGE_KEYS) for ref in payload["refs"])
+        assert payload["batch_stage_trace"]["F_bibliography_compile"] == {
+            "enabled": True,
+            "reached": False,
+            "completed": False,
+            "outcome": "not_reached",
+        }

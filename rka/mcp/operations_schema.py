@@ -88,6 +88,10 @@ _ENUMS = {
         "hypothesis", "evidence", "method", "result", "observation",
         "assumption",
     ],
+    "evidence_status": [
+        "unassessed", "supported", "partially_supported", "inconclusive",
+        "contradicted",
+    ],
     "cluster_confidence": [
         "strong", "moderate", "emerging", "contested", "refuted",
     ],
@@ -589,11 +593,11 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "signature": (
             "rka_query(operation='claims', *, project_id, limit=20, "
             "filters={'source_entry_id', 'cluster_id', 'claim_type', "
-            "'verified', 'stale'})"
+            "'verified', 'evidence_status', 'stale'})"
         ),
         "required_fields": ["project_id"],
         "optional_fields": ["limit", "filters"],
-        "enums": _e("claim_type"),
+        "enums": _e("claim_type", "evidence_status"),
         "examples": [
             {
                 "description": "Claims from a journal entry.",
@@ -607,7 +611,10 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": [
             "clusters", "extract_claims", "review_claims",
         ],
-        "notes": None,
+        "notes": (
+            "verified filters source-grounding fidelity. evidence_status "
+            "filters the independent scientific evidence assessment."
+        ),
     },
 
     "manuscript": {
@@ -626,7 +633,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
                 "call": {
                     "operation": "manuscript",
                     "project_id": "prj_01ABC...",
-                    "id": "msc_01XYZ...",
+                    "id": "jrn_01XYZ...",
                 },
             },
         ],
@@ -1823,10 +1830,11 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "summary": "Validate a manuscript reference (by DOI or title).",
         "signature": (
             "rka_execute(operation='validate_reference', *, project_id, "
-            "manuscript_id, doi=None, title=None)"
+            "manuscript_id, doi=None, title=None, author=None, "
+            "literature_id=None)"
         ),
         "required_fields": ["project_id", "manuscript_id"],
-        "optional_fields": ["doi", "title"],
+        "optional_fields": ["doi", "title", "author", "literature_id"],
         "enums": {},
         "examples": [
             {
@@ -1834,13 +1842,16 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
                 "call": {
                     "operation": "validate_reference",
                     "project_id": "prj_01ABC...",
-                    "manuscript_id": "msc_01XYZ...",
+                    "manuscript_id": "jrn_01XYZ...",
                     "doi": "10.48550/arXiv.1706.03762",
                 },
             },
         ],
         "related_operations": ["register_manuscript", "record_literature"],
-        "notes": "At least one of `doi` or `title` is required.",
+        "notes": (
+            "At least one of `doi` or `title` is required. Every returned "
+            "verdict is persisted as an immutable rvd_ attestation."
+        ),
     },
 
     "batch_import": {
@@ -2319,14 +2330,15 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "tool": "rka_execute",
         "category": "claims",
         "role_tag": "BRAIN",
-        "summary": "Approve, reject, or adjust a set of claims.",
+        "summary": "Curate claim grounding and explicit evidence assessment.",
         "signature": (
             "rka_execute(operation='review_claims', *, project_id, "
-            "claim_ids, action='approve', confidence_override=None)"
+            "claim_ids, action='approve', confidence_override=None, "
+            "evidence_status=None)"
         ),
         "required_fields": ["project_id", "claim_ids"],
-        "optional_fields": ["action", "confidence_override"],
-        "enums": _e("review_action", "confidence"),
+        "optional_fields": ["action", "confidence_override", "evidence_status"],
+        "enums": _e("review_action", "evidence_status"),
         "examples": [
             {
                 "description": "Approve a batch of claims.",
@@ -2339,7 +2351,10 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": ["claims", "review_cluster"],
-        "notes": None,
+        "notes": (
+            "verified records source-grounding fidelity only. Set evidence_status "
+            "explicitly for scientific support; approve/reject never infer it."
+        ),
     },
 
     "create_cluster": {

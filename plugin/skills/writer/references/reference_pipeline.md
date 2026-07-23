@@ -1,12 +1,12 @@
 # Reference Validation Pipeline
 
-Seven stages (A through G). Phase 1 implements only Stage A; Stages B through G are documented architecture here and stubbed in `scripts/validate_references.py` (raise `NotImplementedError` with this file referenced).
+Seven stages (A through G) are implemented in `scripts/validate_references.py`. Optional providers degrade explicitly; an unavailable provider never counts as a confirmation. The core manuscript operation enables retraction checking and persists an immutable project/manuscript-scoped attestation.
 
 ## Architectural rationale
 
 Citation fabrication is the most common LLM failure in manuscript drafting. Cross-study average is 51 percent across six published studies covering 732 LLM-generated citations (`jrn_01KS0AVZRDA0KPXK61MN9PV5DE` captures the empirical anchors). Multi-source cross-check is the only working defense; a single-source check is insufficient.
 
-The pipeline is structured as seven stages with explicit verdict statuses. A reference advances through stages; any stage may set a terminal status. Compile-time enforcement at the Writer layer blocks `UNVERIFIED` and `HALLUCINATED` citations unless overridden via `dec_`.
+The pipeline is structured as seven stages with explicit verdict statuses. A reference advances through stages; any stage may set a terminal status. Only `VERIFIED` references are eligible for bibliography compilation; every other status blocks the CLI gate unless a separate, explicit PI-governed workflow handles the exception.
 
 ## Stage A: Extraction
 
@@ -19,33 +19,33 @@ Outputs:
 - A working set of candidate references in CSL-JSON form.
 - Each candidate carries `source_origin` (RKA-resident `lit_`, free-text parse, or direct identifier).
 
-Phase 1 status: **implemented**. `scripts/validate_references.py` Stage A converts CSL-JSON from `rka_query` `literature` output to BibTeX via the `manubot` Python package if installed. Free-text anystyle parsing requires the anystyle Ruby gem and is a Phase 2 deliverable.
+Current status: **implemented** for CSL-JSON/direct identifiers and manubot conversion. Free-text anystyle parsing remains an optional external preprocessing path.
 
 ## Stage B: Identifier resolution
 
-Resolution waterfall (preferred to fallback):
+Current provider calls:
 
-1. **Crossref via habanero** (`habanero.Crossref.works(ids=[doi])`). Canonical for DOI to BibTeX.
-2. **manubot** (`manubot cite doi:...`). Multi-source identifier resolver; fallback for non-DOI identifiers (PubMed, PMC, arXiv, ISBN, Wikidata).
-3. **OpenAlex via pyalex**. Title-to-DOI resolution if only a title is available.
-4. **Semantic Scholar via semanticscholar Python package**. Coverage strength: CS and AI. Multi-format IDs: `DOI:`, `ARXIV:`, `CorpusId:`.
-5. **arXiv via the arxiv Python package**. Preprint resolution. Built-in rate limit one request per three seconds.
+1. **DOI input:** Crossref, OpenAlex, and Semantic Scholar are queried so Stage C can count independent provider hits.
+2. **Title-only input:** Crossref, OpenAlex, Semantic Scholar, and arXiv are searched.
+3. **manubot:** used by Stage A's standalone identifier-to-BibTeX path and by Stage F compilation; it is not counted as a Stage C provider hit.
 
 Never query Google Scholar directly. Direct scraping is forbidden per `dec_01KS0AXXASJ5GXV7M0SS39Y066` and anti-pattern 8 in SKILL.md.
 
-Phase 1 status: **stubbed**. Stage B requires `rka-writer-tools` MCP server (Phase 2 deliverable) or local Python packages installed in the workspace. The stub in `scripts/validate_references.py` raises `NotImplementedError` and points the PI to this file.
+Current status: **implemented** through the installed `rka-writer-tools` backends. Each attempted and confirming source is recorded.
 
 ## Stage C: Cross-source existence validation
 
-A reference is `VERIFIED` only when at least two independent sources confirm its existence with consistent metadata (title, authors, year, venue). Conflicting metadata produces `FIELD_ERROR` with the conflict surfaced.
+A reference is `VERIFIED` at Stage C only when at least two independent providers return a hit. The current deterministic gate counts provider hits; it does not reconcile title, author, year, or venue fields. Detailed cross-provider field reconciliation remains a PI-visible follow-up and must not be inferred from `VERIFIED` alone.
 
 Statuses set by Stage C:
 
-- `VERIFIED`: at least two sources concur on title plus first author plus year.
-- `FIELD_ERROR`: one or more sources found but metadata diverges.
-- `UNVERIFIED`: zero or one sources found; advance to Stage G niche-citation rescue.
+- `VERIFIED`: at least two independent providers return a hit.
+- `LOW_CONFIDENCE`: exactly one provider returns a hit; this is blocking.
+- `UNVERIFIED`: no provider returns a hit; advance to Stage G niche-citation rescue.
 
-Phase 1 status: **stubbed**.
+`FIELD_ERROR` is not a metadata-disagreement verdict in the current implementation. It records malformed input or a provider/stage failure that prevents a trustworthy conclusion.
+
+Current status: **implemented** for source-count confirmation.
 
 ## Stage D: Retraction check
 
@@ -55,31 +55,25 @@ Retraction Watch was acquired by Crossref in September 2023. The Retraction Watc
 GET /v1/works/{DOI} -> updated-by array -> filter source="retraction-watch"
 ```
 
-Secondary check: CSV mirror at `api.labs.crossref.org/data/retractionwatch` or `git clone gitlab.com/crossref/retraction-watch-data`.
+The implemented core check inspects Crossref update metadata. A local Retraction Watch CSV mirror is a possible secondary source, not a claim made by the current attestation.
 
 OpenAlex `is_retracted` is a tertiary check; the field had pipeline issues from December 2023 through March 2024 (Hauschke and Nazarovets 2024, arXiv:2403.13339) and is not authoritative on its own.
 
 R retractcheck was archived in 2022; do not use.
 
-Statuses set by Stage D:
+Statuses set or preserved by Stage D:
 
-- `VERIFIED`: passes retraction check.
+- `VERIFIED`: the enabled DOI retraction check completed and found no retraction.
 - `RETRACTED`: Crossref `updated-by` includes a retraction record. Compile blocks unless PI overrides with retraction-discussion citation rationale stored as `dec_`.
+- `FIELD_ERROR`: the enabled retraction backend was unavailable or failed; the gate fails closed.
 
-Phase 1 status: **stubbed**.
+Current status: **implemented** for DOI-bearing references via Crossref update metadata. Core manuscript validation does not disable this stage.
 
 ## Stage E: Author disambiguation
 
-Two-step:
+The current implementation searches OpenAlex author candidates and uses optional affiliation hints. An unmatched author conditionally triggers the budgeted SerpAPI author fallback; no ORCID lookup is currently implemented. A mismatch triggers `AUTHOR_MISMATCH`; partial or unavailable coverage triggers `LOW_CONFIDENCE`.
 
-1. OpenAlex Author IDs (W ID system).
-2. ORCID via `python-orcid` package.
-
-Sources concur on the same author entity. Mismatch triggers `AUTHOR_MISMATCH`. Low coverage triggers `LOW_CONFIDENCE`.
-
-Third source on `AUTHOR_MISMATCH` or `LOW_CONFIDENCE`: SerpAPI `google_scholar_author` endpoint, per `dec_01KS0AXXASJ5GXV7M0SS39Y066`. Used only conditionally; not on every disambiguation.
-
-Phase 1 status: **stubbed**.
+Current status: **implemented when authors are supplied and author checking is requested**. The audit records whether this optional stage ran.
 
 ## Stage F: Bibliography compilation
 
@@ -89,7 +83,7 @@ Once all references are `VERIFIED`, compile `refs.bib`:
 2. bibtex-tidy (Node CLI, MIT) applies hygiene: `--curly --numeric --sort=key --duplicates=key,doi --escape --tidy-comments --remove-empty-fields --enclosing-braces=title`.
 3. Optional: betterbib (GPL-3.0) cross-source field sync via subprocess. betterbib is **never vendored** due to its GPL license; only subprocess invocation is permitted.
 
-Phase 1 status: Stage A output feeds Stage F directly without B-E validation. Phase 2 wires the full chain.
+Current status: **implemented** for entries whose preceding validation verdict permits compilation.
 
 ## Stage G: Niche-citation rescue
 
@@ -97,36 +91,27 @@ When Stages B through C return empty across all primary sources (Crossref, OpenA
 
 SerpAPI budget: 200 searches per manuscript (counted across Stages E and G), tracked in `refs.audit.json`. `SERPAPI_KEY` is an env var, never committed; if unset, Stage G silently skips and the reference proceeds to `HALLUCINATED`.
 
-Phase 1 status: **stubbed**; SerpAPI integration is a Phase 2 deliverable.
+Current status: **implemented when a SerpAPI budget/provider is available**. Absence is recorded and never converted to confirmation.
 
 ## Status reference
 
 | Status | Set by | Compile block? | Resolution path |
 |---|---|---|---|
 | `VERIFIED` | Stage C (two sources concur) | no | proceed |
-| `FIELD_ERROR` | Stage C (metadata conflict) | yes | PI reviews; reconcile metadata or override |
+| `FIELD_ERROR` | malformed input or provider/stage failure | yes | repair input or restore the failed stage; do not infer a metadata conflict |
 | `UNVERIFIED` | Stage C (insufficient sources) or Stage G hit | yes | proceed to Stage G; on Stage G hit, PI checkpoint |
 | `RETRACTED` | Stage D | yes | PI override with retraction-discussion rationale |
 | `HALLUCINATED` | Stage G empty | yes | remove citation or PI ratifies as non-existent claim |
 | `AUTHOR_MISMATCH` | Stage E | yes | Stage E rerun with SerpAPI; PI reconciles |
 | `LOW_CONFIDENCE` | Stage E | yes | Stage E rerun with SerpAPI; PI ratifies |
 
-## Phase 2 implementation notes
+## Runtime and audit boundary
 
-The Phase 2 mission will:
+The `rka-writer-tools` MCP exposes `validate_reference`, `disambiguate_author`, `find_citation`, and `check_retraction`. Provider packages and credentials are runtime concerns and are never stored in a manuscript workspace. SerpAPI is optional and budgeted; its absence is explicit in the audit. The core `validate_reference` operation stores the input identity, manuscript/project scope, stages run, sources attempted and confirmed, categorical status, notes, and complete returned payload. Re-running creates another immutable attestation rather than overwriting history.
 
-1. Install `habanero`, `pyalex`, `semanticscholar`, `arxiv`, `manubot`, `python-orcid`, `bibtex-tidy` (Node), `anystyle` (Ruby gem) at the workspace level.
-2. Build the `rka-writer-tools` MCP server exposing high-level operations `validate_reference`, `disambiguate_author`, `find_citation`, `check_retraction`. Each operation orchestrates the stages above.
-3. Wire `scripts/validate_references.py` from stub to full implementation.
-4. Add `SERPAPI_KEY` env var support; default None silently skips Stages E (third source) and G.
-5. Add nightly RWDB CSV refresh as a cron-managed sidecar.
-6. Extend `ai_tic_config.yaml` with per-project SerpAPI budget overrides.
+## Library version reference
 
-Estimated Phase 2 scope: 3 engineer-weeks plus ~5 PI hours (per design doc Section 16).
-
-## Library version pins (Phase 2 reference)
-
-These will be re-verified at Phase 2 Backbrief per the version-drift discipline:
+Re-verify installed versions when reproducing an audit; the following are design-time references, not live-policy pins:
 
 | Package | Version at design-time | License |
 |---|---|---|
@@ -140,7 +125,7 @@ These will be re-verified at Phase 2 Backbrief per the version-drift discipline:
 | anystyle (Ruby gem) | (latest) | BSD-2 |
 | betterbib | (subprocess only) | GPL-3.0 (never vendored) |
 
-The actual installed versions at Phase 2 may diverge; the Backbrief at that mission's start will re-verify each pin against the current PyPI / RubyGems / npm registry and flag any line silent over six months.
+Installed versions may diverge. Record the actual environment for reproducibility rather than treating this table as authoritative current package guidance.
 
 ## References
 

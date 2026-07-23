@@ -24,6 +24,7 @@ from rka.mcp._enums import (
     ConfidenceLit,
     DecidedByLit,
     DecisionKindLit,
+    EvidenceStatusLit,
     ImportanceLit,
     IngestSourceLit,
     MissionStatusLit,
@@ -66,7 +67,8 @@ ConfidenceLiteral = Annotated[
     ConfidenceLit,
     Field(
         description=(
-            "Confidence level for the journal entry / claim. The Brain "
+            "Confidence level for the journal entry. Claim confidence is a "
+            "numeric 0.0-1.0 field on the claim API. The Brain "
             "LLM commonly hallucinates 'confirmed' — that value is NOT "
             "in the allowed set. Use 'verified' for cross-checked "
             "findings or 'tested' for empirically probed findings."
@@ -2261,6 +2263,7 @@ async def rka_get(
                     "type": cl.get("claim_type"),
                     "confidence": cl.get("confidence"),
                     "verified": v,
+                    "evidence_status": cl.get("evidence_status", "unassessed"),
                     "content": content,
                 })
             data["claims"] = claim_summaries
@@ -4281,6 +4284,7 @@ async def rka_get_claims(
     cluster_id: str | None = None,
     claim_type: str | None = None,
     verified: bool | None = None,
+    evidence_status: EvidenceStatusLit | None = None,
     stale: bool | None = None,
     limit: int = 20,
     *,
@@ -4294,7 +4298,8 @@ async def rka_get_claims(
         source_entry_id: Filter by source journal entry ID
         cluster_id: Filter by evidence cluster ID
         claim_type: Filter by type: hypothesis, evidence, method, result, observation, assumption
-        verified: Filter by verification status
+        verified: Filter by source-grounding/extraction-fidelity status
+        evidence_status: Filter by independent scientific evidence assessment
         stale: Filter by stale status (true = needs re-distillation)
         limit: Max results (default 20)
     """
@@ -4307,6 +4312,8 @@ async def rka_get_claims(
         params["claim_type"] = claim_type
     if verified is not None:
         params["verified"] = verified
+    if evidence_status is not None:
+        params["evidence_status"] = evidence_status
     if stale is not None:
         params["stale"] = stale
     async with _client(project_id) as c:
@@ -4318,9 +4325,17 @@ async def rka_get_claims(
     lines = [f"Found {len(claims)} claims:"]
     for cl in claims:
         v = "✓" if cl.get("verified") else "○"
+        evidence = cl.get("evidence_status", "unassessed")
+        contradiction_state = cl.get("contradicted")
+        contradicted = (
+            "yes" if contradiction_state is True
+            else "no" if contradiction_state is False
+            else "unknown"
+        )
         s = " [STALE]" if cl.get("stale") else ""
         lines.append(
-            f"  {v} [{cl['id']}] ({cl['claim_type']}) "
+            f"  [{cl['id']}] ({cl['claim_type']}) "
+            f"grounded={v} evidence={evidence} contradicted={contradicted} "
             f"conf={cl.get('confidence', '?'):.2f}{s}"
         )
         lines.append(f"    {cl['content'][:500]}")
@@ -4967,15 +4982,19 @@ async def rka_review_claims(
     claim_ids: list[str],
     action: str = "approve",
     confidence_override: float | None = None,
+    evidence_status: EvidenceStatusLit | None = None,
     *,
     project_id: str,
 ) -> str:
-    """Brain reviews extracted claims — approve, adjust confidence, or reject.
+    """Brain reviews claim grounding and explicit evidence assessments.
 
     Args:
         claim_ids: List of claim IDs to review
-        action: approve (mark verified), reject (mark stale), adjust (set confidence)
+        action: approve (mark source-grounded), reject (mark stale and ungrounded),
+            adjust (set numeric confidence and/or evidence_status)
         confidence_override: New confidence value (0.0-1.0), used with action=adjust
+        evidence_status: Explicit scientific evidence assessment. This is never
+            inferred from approve/reject and is independent from verified.
     """
     results = []
     async with _client(project_id) as c:
@@ -4984,11 +5003,17 @@ async def rka_review_claims(
                 payload = {"verified": True}
             elif action == "reject":
                 payload = {"stale": True, "verified": False}
-            elif action == "adjust" and confidence_override is not None:
-                payload = {"confidence": confidence_override}
+            elif action == "adjust" and (
+                confidence_override is not None or evidence_status is not None
+            ):
+                payload = {}
             else:
                 results.append(f"{cid}: invalid action")
                 continue
+            if action == "adjust" and confidence_override is not None:
+                payload["confidence"] = confidence_override
+            if evidence_status is not None:
+                payload["evidence_status"] = evidence_status
             r = await c.put(f"/api/claims/{cid}", json=payload)
             if r.is_success:
                 results.append(f"{cid}: {action}d")
@@ -5560,6 +5585,7 @@ async def rka_validate_reference(
     doi: str | None = None,
     title: str | None = None,
     author: list[dict] | None = None,
+    literature_id: str | None = None,
     *,
     project_id: str,
 ) -> str:
@@ -5579,6 +5605,8 @@ async def rka_validate_reference(
         title: Reference title; fallback search key when DOI absent.
         author: Optional CSL-JSON author list:
             [{"family": "Smith", "given": "J"}, ...].
+        literature_id: Optional same-project lit_ record linked to the
+            immutable validation attestation.
     """
     if not doi and not title:
         return json.dumps({
@@ -5592,6 +5620,8 @@ async def rka_validate_reference(
         payload["title"] = title
     if author is not None:
         payload["author"] = author
+    if literature_id is not None:
+        payload["literature_id"] = literature_id
     async with _client(project_id) as c:
         r = await c.post(
             f"/api/manuscripts/{manuscript_id}/validate-reference",

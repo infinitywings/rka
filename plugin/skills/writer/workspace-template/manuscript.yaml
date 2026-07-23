@@ -19,11 +19,12 @@ venue_id: REPLACE_WITH_VENUE_ID  # e.g., NeurIPS, CHI, JoF, NSF-PAPPG
 # fetches + parses it and writes any field-level deltas into
 # `cfp_overrides.yaml` in this directory. layout_audit.py + ai_tic_lint.py
 # read overrides on top of the base venue spec.
-cfp_url: null                    # e.g., https://neurips.cc/Conferences/2025/CallForPapers
+cfp_url: REPLACE_WITH_CFP_URL_YAML  # null or the current call URL
 
 # === Project linkage ===
 project_id: REPLACE_WITH_PROJECT_ID    # RKA prj_… that this manuscript belongs to
-title: REPLACE_WITH_MANUSCRIPT_TITLE
+manuscript_id: REPLACE_WITH_MANUSCRIPT_ID  # registered jrn_ manuscript manifest
+title: REPLACE_WITH_MANUSCRIPT_TITLE_YAML
 target_track: null                     # nullable; e.g., "long", "short", "industry"
 target_deadline: null                  # ISO date; informational
 
@@ -37,4 +38,4 @@ overrides:
 # === Provenance ===
 provenance:
   created_at: REPLACE_WITH_ISO_DATE
-  created_by: rka-start-manuscript
+  created_by: rka-writer-init

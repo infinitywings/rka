@@ -58,6 +58,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rka.mcp._enums import (  # noqa: E402  (intentional post-docstring batch import)
     ClusterConfLit,
     ConfidenceLit,
+    EvidenceStatusLit,
     ReviewActionLit,
     StalenessLit,
 )
@@ -413,7 +414,8 @@ class QueryClaimsArgs(ProjectScopedArgs, PaginatedFiltersMixin):
     """[ANY] List claims.
 
     Filter keys: ``source_entry_id``, ``cluster_id``, ``claim_type``,
-    ``verified``, ``stale``.
+    ``verified`` (source-grounding fidelity), ``evidence_status``
+    (scientific evidence assessment), ``stale``.
     """
 
     operation: Literal["claims"] = "claims"
@@ -426,7 +428,7 @@ class QueryManuscriptArgs(ProjectScopedArgs):
 
     id: Annotated[
         str,
-        Field(description="Manuscript ID (msc_...)."),
+        Field(description="Manuscript journal ID (jrn_...)."),
     ]
 
 
@@ -1954,13 +1956,13 @@ class MergeClustersArgs(ProjectScopedArgs):
 
 
 class ReviewClaimsArgs(ProjectScopedArgs):
-    """[BRAIN] Approve, reject, or adjust a batch of claims.
+    """[BRAIN] Curate grounding and/or evidence assessment for claims.
 
     ``action`` is the newly-promoted ``ReviewActionLit`` (``approve`` /
-    ``reject`` / ``adjust``). ``confidence_override`` reuses the journal
-    ``ConfidenceLit`` set — note that ``'confirmed'`` is NOT a valid
-    value (the Run-5 Brain hallucination is rejected by the typed
-    surface).
+    ``reject`` / ``adjust``). Legacy ``approve`` and ``reject`` retain
+    their extraction-curation behavior on ``verified``/``stale``.
+    Scientific support is never inferred from those actions; callers must
+    set ``evidence_status`` explicitly.
 
     Related: ``claims``, ``review_cluster``.
     """
@@ -1982,23 +1984,49 @@ class ReviewClaimsArgs(ProjectScopedArgs):
         Field(
             default="approve",
             description=(
-                "Review action. ``approve`` confirms the claim, "
-                "``reject`` retires it, ``adjust`` flags it for "
-                "``confidence_override`` follow-up."
+                "Review action. ``approve`` confirms the claim is grounded "
+                "in its source, ``reject`` retires the "
+                "extraction, and ``adjust`` applies one or both explicit "
+                "overrides. None of these actions implicitly asserts "
+                "scientific evidence support."
             ),
         ),
     ] = "approve"
     confidence_override: Annotated[
-        Optional[ConfidenceLit],
+        Optional[float],
         Field(
             default=None,
+            ge=0.0,
+            le=1.0,
             description=(
-                "Override the claim's confidence to one of the canonical "
-                "values. ``'confirmed'`` is NOT a valid value (common "
-                "Brain hallucination)."
+                "Override the claim's numeric confidence (0.0-1.0). "
+                "Used with action='adjust'."
             ),
         ),
     ] = None
+    evidence_status: Annotated[
+        Optional[EvidenceStatusLit],
+        Field(
+            default=None,
+            description=(
+                "Explicit scientific evidence assessment. Independent from "
+                "verified, which only records source-grounding fidelity."
+            ),
+        ),
+    ] = None
+
+    @model_validator(mode="after")
+    def require_adjustment(self) -> "ReviewClaimsArgs":
+        """An adjust action must carry at least one concrete change."""
+        if (
+            self.action == "adjust"
+            and self.confidence_override is None
+            and self.evidence_status is None
+        ):
+            raise ValueError(
+                "action='adjust' requires confidence_override or evidence_status"
+            )
+        return self
 
 
 class ReviewClusterArgs(ProjectScopedArgs):
@@ -3246,7 +3274,7 @@ class ValidateReferenceArgs(ProjectScopedArgs):
 
     manuscript_id: Annotated[
         str,
-        Field(description="Manuscript id (msc_*) whose reference is being validated."),
+        Field(description="Manuscript journal id (jrn_*) whose reference is being validated."),
     ]
 
     doi: Annotated[
@@ -3256,6 +3284,23 @@ class ValidateReferenceArgs(ProjectScopedArgs):
     title: Annotated[
         Optional[str],
         Field(default=None, description="Title to validate."),
+    ] = None
+    author: Annotated[
+        Optional[list[dict[str, str]]],
+        Field(
+            default=None,
+            description=(
+                "Optional CSL-JSON author list. Supplying authors enables "
+                "Stage E disambiguation."
+            ),
+        ),
+    ] = None
+    literature_id: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description="Optional same-project lit_ record to bind to the attestation.",
+        ),
     ] = None
 
     @model_validator(mode="after")

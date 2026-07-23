@@ -1,16 +1,15 @@
 ---
-description: "Search the RKA knowledge base. Pass 2-4 keyword terms (longer queries return empty). Searches journal entries, decisions, literature, missions, claims, and clusters by default."
-argument-hint: "<2-4 keyword terms>"
+description: "Search one explicit RKA project across journal, decisions, literature, missions, claims, and clusters."
+argument-hint: "<project_id> <2-4 keyword terms>"
 ---
 
-Use the user's query (the text after the slash command) as the search query. If the user provided no query, ask them for 2-4 keyword terms before searching.
+Require both an explicit canonical project id and a short query. If either is
+missing, ask for it before searching. Call:
 
-Call `rka_search(query="<user query>", limit=10)` to retrieve matching entities across the knowledge base.
+```python
+rka_query(args={"operation": "search", "project_id": "<id>",
+                "query": "<terms>", "limit": 10})
+```
 
-Present the results as a numbered list:
-1. **[entity_type] entity_id** — one-line summary or first 80 chars of content
-2. ...
-
-If `rka_search` returns empty, suggest the user try shorter (2-3 word) or different keywords; long natural-language queries often return no matches.
-
-Do not call additional tools to expand on individual results unless the user asks. Keep the response under 20 lines.
+Present a numbered list with entity type, id, and one-line summary. If empty,
+suggest shorter/different keywords. Do not silently search `proj_default`.

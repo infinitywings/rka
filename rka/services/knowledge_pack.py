@@ -69,6 +69,7 @@ _TABLE_CATEGORIES: dict[str, list[str]] = {
         "tags",
         "decision_options",
         "calibration_outcomes",
+        "reference_validation_attestations",
         "hooks",
         "brain_notifications",
     ],
@@ -116,6 +117,7 @@ _INSERT_ORDER = (
     "decision_options",
     "missions",
     "journal",
+    "reference_validation_attestations",
     "checkpoints",
     "evidence_clusters",
     "claims",
@@ -162,6 +164,7 @@ _ID_ENTITY_TYPES = {
     "claim_edges": "claim_edge",
     "decision_options": "decision_option",
     "calibration_outcomes": "calibration_outcome",
+    "reference_validation_attestations": "reference_validation",
     "hooks": "hook",
     "hook_executions": "hook_execution",
     "brain_notifications": "brain_notification",
@@ -187,6 +190,9 @@ _DIRECT_ID_COLUMNS = {
     "claim_edges": ("id", "source_claim_id", "target_claim_id", "cluster_id"),
     "decision_options": ("id", "decision_id", "dominated_by"),
     "calibration_outcomes": ("id", "decision_id"),
+    "reference_validation_attestations": (
+        "id", "manuscript_id", "literature_id",
+    ),
     "hooks": ("id",),
     "hook_executions": ("id", "hook_id"),
     "brain_notifications": ("id", "hook_id"),
@@ -218,6 +224,7 @@ _FK_COLUMNS: dict[str, set[str]] = {
     "events": {"caused_by_event"},
     "qa_logs": {"session_id"},
     "figures": {"artifact_id"},
+    "reference_validation_attestations": {"manuscript_id", "literature_id"},
 }
 # Matches entity-ID-shaped tokens embedded in prose/JSON strings (lowercase
 # prefix + ULID-style Crockford-base32 tail). Deliberately permissive: a
@@ -249,6 +256,7 @@ _JSON_ID_COLUMNS = {
     "qa_logs": ("answer_structured", "sources"),
     "events": ("details",),
     "audit_log": ("details",),
+    "reference_validation_attestations": ("full_json_payload",),
     "keynodes": ("node_refs",),
     "graph_views": ("nodes", "edges"),
 }
