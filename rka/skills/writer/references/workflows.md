@@ -97,7 +97,10 @@ last_session: 2026-04-11
 If `ACTIVE_WORKFLOW.md` is absent, infer from the working directory:
 
 - `.planning/PRECIS.md` absent: phase = venue selection.
-- `PRECIS.md` present, claim spine not ratified: phase = contribution and outline.
+- Venue ratified and `FRAMING_SESSION.yaml` absent or incomplete: phase =
+  framing elicitation.
+- Framing session complete, claim spine not ratified: phase = contribution and
+  outline.
 - Claim spine ratified, `OUTLINE.md` absent: phase = outline completion.
 - `OUTLINE.md` present, `sections/` empty: phase = table and figure planning.
 - `sections/` populated: phase = drafting; next section is the first one with status `outlined` rather than `drafted`.
@@ -127,6 +130,12 @@ Greet the PI with the inferred state and the next action. Example:
 ## The Seven Sub-Procedures
 
 The seven sub-procedures map to the six PI checkpoints plus the Revision Loop.
+Most PI exchanges inside them use the choice-first interaction contract in
+[`framing_elicitation.md`](framing_elicitation.md): one decision per turn, two
+to four bounded options, concrete pros and cons, explicit single-select or
+multi-select mode, and a recommendation when justified. Use free text only for
+a custom alternative, missing evidence, unresolved disagreement, or exact
+wording correction.
 
 ### 1. Venue handler
 
@@ -154,14 +163,28 @@ Procedure:
    questions. Select which research questions are in manuscript scope.
 2. Resolve every cluster blocker through Brain. Do not promote journal prose,
    an LLM-only synthesis, stale claims, or unresolved counterevidence.
-3. Read the selected cluster lineage and assemble evidence from several short
+3. Start or resume `.planning/FRAMING_SESSION.yaml` using
+   [`framing_elicitation.md`](framing_elicitation.md). Identify whether each
+   participant is supplying author voice, researcher judgment, PI authority,
+   or more than one role. Ask one choice at a time and update the artifact
+   after each selection.
+4. Run the needed elicitation rounds for reader outcome, problem or gap,
+   contribution portfolio, novelty axis, evidence anchors, claim calibration,
+   narrative architecture, and reviewer-sensitive boundaries. Use
+   single-select for mutually exclusive choices and multi-select for compatible
+   contribution, result, or defense choices. Every option shows pros, cons,
+   evidence, missing evidence, and its effect on the paper.
+5. If author and researcher selections conflict, propose two to four
+   reconciliation paths. Do not silently average their positions. Escalate an
+   unresolved authority conflict to the PI.
+6. Read the selected cluster lineage and assemble evidence from several short
    retrieval angles. For each contribution candidate, resolve positive
    evidence, qualifiers, counterevidence, terminal source records, current
    design decisions, and relevant superseded choices that explain the design's
    evolution. Superseded choices may inform lineage but are not current
    support. An `ecl_` guides synthesis but does not count as terminal empirical
    support; a `dec_` ratifies wording but does not prove it.
-4. Build a contribution contract and candidate proposal with exact claim text,
+7. Build a contribution contract and candidate proposal with exact claim text,
    source-backed evidence, missing evidence, novelty/significance risks,
    allowed wording, prohibited wording, and planned manuscript units. The
    assist result seeds this work but cannot write or ratify it. Treat risks,
@@ -169,36 +192,43 @@ Procedure:
    record, not as text that must all appear in the public manuscript. Classify
    their public treatment through
    [`persuasive_framing.md`](persuasive_framing.md).
-5. Generate three bounded claim-and-outline framings with PI preference stripped from context:
+8. Generate two to four bounded claim-and-outline framings with PI preference
+   stripped from context. Use these defaults when they are genuinely distinct:
    - Results-led: section ordering driven by the most novel finding.
    - Method-led: section ordering driven by the methodological contribution.
    - Motivation-led: section ordering driven by the problem framing.
-6. For each framing, show the exact contribution wording, its evidence path,
+   Add a hybrid only when it has a coherent reading path that the defaults do
+   not represent.
+9. For each framing, show the exact contribution wording, its evidence path,
    conditions, known counterevidence, missing evidence, and a 5-to-8-section
-   outline with one-sentence section purposes.
-7. Prune any framing dominated on evidence coverage, scope accuracy,
+   outline with one-sentence section purposes. Include concrete pros, cons,
+   reviewer advantage, reviewer risk, and venue fit.
+10. Prune any framing dominated on evidence coverage, scope accuracy,
    novelty-positioning, venue fit, quick-reader comprehension, strongest-
    evidence visibility, and narrative momentum. Do not compute an aggregate
    paper score or acceptance prediction.
-8. Re-inject PI preference as opposing-critique; rank surviving framings.
-9. Present three (or fewer if pruned) options to the PI; one carries
-   `is_recommended`. The PI may retain, narrow, or defer a claim and commission
-   an evidence-gap mission.
-10. Dry-run `rka writer import-spine`. Review the evidence roles, result
+11. Re-inject PI preference as opposing-critique; rank surviving framings.
+12. Present the surviving options as the final F9 single-select choice; one
+   carries `is_recommended` when justified. The PI may select one, combine
+   named parts, request revised options, or defer and commission an evidence
+   mission. Show the complete proposed contribution contract and outline, then
+   obtain explicit final confirmation.
+13. Dry-run `rka writer import-spine`. Review the evidence roles, result
    coverage, and proposed revision; apply only with an explicit expected
    revision. Import never creates ratifications.
-11. Record the PI's selected framing and one child claim-scope `dec_` per
+14. Record the PI's selected framing and one child claim-scope `dec_` per
    selected contribution. Set `chosen` to the exact claim text,
    `decided_by: pi`, and connect the decision to its evidence and Outline
    lineage. Bind each exact native claim version through
    `ratify_manuscript_claim`. A later material edit requires a new version and
    a superseding PI decision.
-12. Resolve the native Outline checkpoint, run `rka writer sync`, and require
+15. Resolve the native Outline checkpoint, run `rka writer sync`, and require
     server readiness. The generated `CONTRIBUTION_CONTRACT.md`,
     `ARGUMENT_SPINE.md`, and `RESULTS_TRACE.md` are read-only views.
 
 Output: Outline Decision (`dec_`), one exact-wording claim-scope `dec_` per
 contribution with evidence provenance,
+`.planning/FRAMING_SESSION.yaml`,
 `.planning/RKA_CLAIM_SPINE.yaml`, its three generated views,
 `.planning/OUTLINE.md`, and `.planning/sketches/<section-id>.md` per section.
 
@@ -379,11 +409,23 @@ remain outside this workflow.
 
 ## Checkpoint UX patterns
 
-All six PI checkpoints use the strip-then-re-inject decision UX inherited from Brain (`../brain/decision_ux.md` is the canonical reference). Three ratified options per checkpoint; opposing-critique ranking; PI selection via `rka_record_pi_selection`.
+All six PI checkpoints use the strip-then-re-inject decision UX inherited from
+Brain (`../brain/decision_ux.md` is the canonical reference). Present two to
+four credible options, use opposing-critique ranking, and identify one
+recommendation when justified. Every option includes concrete pros, cons,
+evidence status, material risk, and manuscript consequence. Formal checkpoint
+resolution is single-select via `rka_record_pi_selection`.
+
+Preparatory decisions default to the choice-first contract in
+[`framing_elicitation.md`](framing_elicitation.md). Use multi-select only when
+the options can coexist, such as contribution inclusion, primary/supporting
+results, or independent reviewer defenses. Record those micro-selections in
+the framing session, not as RKA decisions. Use the host's structured selector
+when available; otherwise ask for option IDs.
 
 Per-checkpoint specifics:
 
-| Checkpoint | Three option framings | Pareto axes |
+| Checkpoint | Typical option framings | Pareto axes |
 |---|---|---|
 | Venue | venue A / venue B / venue C | venue fit, deadline, audience reach |
 | Outline | results-led / method-led / motivation-led, each with bounded claim wording | evidence coverage, claim boundary, novelty positioning, venue fit |
