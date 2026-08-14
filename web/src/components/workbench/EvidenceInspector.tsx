@@ -1,4 +1,5 @@
-import { ArrowRight, Eye, Fingerprint } from "lucide-react"
+import { ArrowRight, Eye, Fingerprint, SquareArrowOutUpRight } from "lucide-react"
+import { Link } from "react-router-dom"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 
@@ -11,6 +12,10 @@ export interface WorkbenchTraceItem {
   ids: string[]
   status?: string
   trace?: string[]
+  links?: Array<{
+    label: string
+    to: string
+  }>
 }
 
 export function EvidenceInspector({ item }: { item: WorkbenchTraceItem }) {
@@ -57,6 +62,20 @@ export function EvidenceInspector({ item }: { item: WorkbenchTraceItem }) {
                   {index > 0 && <ArrowRight className="h-3 w-3" />}
                   <span className="rounded border px-1.5 py-0.5">{node}</span>
                 </span>
+              ))}
+            </div>
+          )}
+          {item.links && item.links.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {item.links.map((link) => (
+                <Link
+                  key={`${link.to}-${link.label}`}
+                  to={link.to}
+                  className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-medium transition-colors hover:border-primary/40 hover:bg-muted"
+                >
+                  {link.label}
+                  <SquareArrowOutUpRight className="h-3 w-3" />
+                </Link>
               ))}
             </div>
           )}
