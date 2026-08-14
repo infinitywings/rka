@@ -17,7 +17,7 @@ from rka.infra.ids import generate_id
 from rka.models.knowledge_pack import KnowledgePackImportResult
 from rka.services.base import BaseService, _now
 
-PACK_SCHEMA_VERSION = 3
+PACK_SCHEMA_VERSION = 4
 PACK_FILE_SUFFIX = ".rka-pack.zip"
 _IMPORT_PROJECT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
@@ -29,8 +29,7 @@ _IMPORT_PROJECT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 # immutable attestation tables in ``core_data``.
 _PORTABILITY_EXCLUSIONS: dict[str, str] = {
     "change_events": (
-        "Target-local cursor ledger; import emits fresh events with target-local "
-        "watermarks."
+        "Target-local cursor ledger; import emits fresh events with target-local watermarks."
     ),
     "jobs": (
         "Worker queue state, retries, leases, and pending external work are "
@@ -56,13 +55,18 @@ _PORTABILITY_EXCLUSIONS: dict[str, str] = {
 # matching against this set; the set is preserved for backward-
 # compatibility with any external caller importing the symbol, but
 # new code SHOULD prefer the severity field.
-_CRITICAL_INTEGRITY_CATEGORIES: frozenset[str] = frozenset({
-    "orphaned_entity_link_sources",
-    "orphaned_entity_link_targets",
-    "orphaned_claim_edge_sources",
-    "orphaned_claim_edge_targets",
-    "orphaned_claim_edge_clusters",
-})
+_CRITICAL_INTEGRITY_CATEGORIES: frozenset[str] = frozenset(
+    {
+        "orphaned_entity_link_sources",
+        "orphaned_entity_link_targets",
+        "orphaned_claim_edge_sources",
+        "orphaned_claim_edge_targets",
+        "orphaned_claim_edge_clusters",
+        "claim_scope_pointer_mismatch",
+        "claim_scope_revision_chain_invalid",
+        "claim_scope_disconfirming_refs_invalid",
+    }
+)
 
 
 class KnowledgePackIntegrityError(RuntimeError):
@@ -77,9 +81,8 @@ class KnowledgePackIntegrityError(RuntimeError):
     def __init__(self, issues: list[dict]):
         self.issues = issues
         cats = sorted({issue["category"] for issue in issues})
-        super().__init__(
-            "Pack import rejected: critical integrity issues — " + ", ".join(cats)
-        )
+        super().__init__("Pack import rejected: critical integrity issues — " + ", ".join(cats))
+
 
 # Categorized table registry — all tables with project_id MUST be listed here.
 # Export validation will FAIL if any uncategorized table has data.
@@ -95,6 +98,7 @@ _TABLE_CATEGORIES: dict[str, list[str]] = {
         "interpretation_candidate_hints",
         "interpretation_review_events",
         "claims",
+        "claim_scope_versions",
         "interpretation_promotions",
         "evidence_clusters",
         "claim_edges",
@@ -174,6 +178,7 @@ _INSERT_ORDER = (
     "interpretation_candidate_hints",
     "interpretation_review_events",
     "claims",
+    "claim_scope_versions",
     "interpretation_promotions",
     "claim_edges",
     "entity_links",
@@ -212,9 +217,7 @@ _INSERT_ORDER = (
     "qa_logs",
     "hook_executions",
 )
-_IMPORT_INSERT_TABLES = frozenset(
-    ("projects", "project_states", *_INSERT_ORDER)
-)
+_IMPORT_INSERT_TABLES = frozenset(("projects", "project_states", *_INSERT_ORDER))
 _IMPORT_TRANSIENT_COLUMNS: dict[str, frozenset[str]] = {
     # Bundled-file metadata is consumed by ``_restore_artifact_files`` and is
     # deliberately not a column in the destination artifacts table.
@@ -229,6 +232,7 @@ _SELF_REFERENTIAL_TABLES: dict[str, str | list[str]] = {
     "missions": ["depends_on", "parent_mission_id"],
     "decisions": ["parent_id", "superseded_by"],
     "journal": "supersedes",
+    "claim_scope_versions": "supersedes_scope_id",
     "events": "caused_by_event",
     "manuscript_checkpoints": "supersedes_id",
     "topics": "parent_id",
@@ -240,6 +244,7 @@ _ID_ENTITY_TYPES = {
     "journal": "journal",
     "checkpoints": "checkpoint",
     "claims": "claim",
+    "claim_scope_versions": "claim_scope",
     "interpretation_candidates": "interpretation_candidate",
     "interpretation_candidate_hints": "interpretation_hint",
     "interpretation_review_events": "interpretation_review",
@@ -275,16 +280,32 @@ _ID_ENTITY_TYPES = {
 _DIRECT_ID_COLUMNS = {
     "literature": ("id",),
     "missions": ("id", "depends_on", "parent_mission_id", "motivated_by_decision"),
-    "decisions": ("id", "parent_id", "superseded_by", "recommended_option_id", "pi_selected_option_id"),
+    "decisions": (
+        "id",
+        "parent_id",
+        "superseded_by",
+        "recommended_option_id",
+        "pi_selected_option_id",
+    ),
     "journal": ("id", "related_mission", "supersedes", "superseded_by"),
     "checkpoints": ("id", "mission_id", "linked_decision_id"),
     "claims": ("id", "source_entry_id"),
+    "claim_scope_versions": (
+        "id",
+        "claim_id",
+        "source_candidate_id",
+        "supersedes_scope_id",
+    ),
     "interpretation_candidates": ("id", "source_id", "disposition_target_id"),
     "interpretation_candidate_hints": (
-        "id", "candidate_id", "related_candidate_id",
+        "id",
+        "candidate_id",
+        "related_candidate_id",
     ),
     "interpretation_review_events": (
-        "id", "candidate_id", "target_id",
+        "id",
+        "candidate_id",
+        "target_id",
     ),
     "interpretation_promotions": ("id", "candidate_id", "claim_id"),
     "evidence_clusters": ("id", "research_question_id"),
@@ -304,28 +325,45 @@ _DIRECT_ID_COLUMNS = {
     ),
     "manuscripts": ("id", "legacy_journal_id"),
     "manuscript_reference_members": (
-        "id", "manuscript_id", "literature_id",
+        "id",
+        "manuscript_id",
+        "literature_id",
     ),
     "manuscript_claims": ("id", "manuscript_id"),
     "manuscript_claim_versions": ("claim_id", "manuscript_id"),
     "manuscript_claim_ratifications": (
-        "id", "manuscript_id", "claim_id", "decision_id",
+        "id",
+        "manuscript_id",
+        "claim_id",
+        "decision_id",
     ),
     "manuscript_units": ("id", "manuscript_id", "artifact_ref"),
     "manuscript_claim_evidence": (
-        "manuscript_id", "manuscript_claim_id", "evidence_claim_id",
+        "manuscript_id",
+        "manuscript_claim_id",
+        "evidence_claim_id",
     ),
     "manuscript_unit_evidence": (
-        "manuscript_id", "unit_id", "evidence_claim_id",
+        "manuscript_id",
+        "unit_id",
+        "evidence_claim_id",
     ),
     "manuscript_claim_units": (
-        "manuscript_id", "manuscript_claim_id", "unit_id",
+        "manuscript_id",
+        "manuscript_claim_id",
+        "unit_id",
     ),
     "manuscript_checkpoints": (
-        "id", "manuscript_id", "unit_id", "decision_id", "supersedes_id",
+        "id",
+        "manuscript_id",
+        "unit_id",
+        "decision_id",
+        "supersedes_id",
     ),
     "manuscript_claim_verification_attestations": (
-        "id", "manuscript_id", "claim_id",
+        "id",
+        "manuscript_id",
+        "claim_id",
     ),
     "hooks": ("id",),
     "hook_executions": ("id", "hook_id"),
@@ -356,8 +394,14 @@ _FK_COLUMNS: dict[str, set[str]] = {
     "journal": {"supersedes"},
     "checkpoints": {"mission_id", "linked_decision_id"},
     "claims": {"source_entry_id"},
+    "claim_scope_versions": {
+        "claim_id",
+        "source_candidate_id",
+        "supersedes_scope_id",
+    },
     "interpretation_candidate_hints": {
-        "candidate_id", "related_candidate_id",
+        "candidate_id",
+        "related_candidate_id",
     },
     "interpretation_review_events": {"candidate_id"},
     "interpretation_promotions": {"candidate_id", "claim_id"},
@@ -377,23 +421,35 @@ _FK_COLUMNS: dict[str, set[str]] = {
     "manuscript_claims": {"manuscript_id"},
     "manuscript_claim_versions": {"claim_id", "manuscript_id"},
     "manuscript_claim_ratifications": {
-        "manuscript_id", "claim_id", "decision_id",
+        "manuscript_id",
+        "claim_id",
+        "decision_id",
     },
     "manuscript_units": {"manuscript_id"},
     "manuscript_claim_evidence": {
-        "manuscript_id", "manuscript_claim_id", "evidence_claim_id",
+        "manuscript_id",
+        "manuscript_claim_id",
+        "evidence_claim_id",
     },
     "manuscript_unit_evidence": {
-        "manuscript_id", "unit_id", "evidence_claim_id",
+        "manuscript_id",
+        "unit_id",
+        "evidence_claim_id",
     },
     "manuscript_claim_units": {
-        "manuscript_id", "manuscript_claim_id", "unit_id",
+        "manuscript_id",
+        "manuscript_claim_id",
+        "unit_id",
     },
     "manuscript_checkpoints": {
-        "manuscript_id", "unit_id", "decision_id", "supersedes_id",
+        "manuscript_id",
+        "unit_id",
+        "decision_id",
+        "supersedes_id",
     },
     "manuscript_claim_verification_attestations": {
-        "manuscript_id", "claim_id",
+        "manuscript_id",
+        "claim_id",
     },
     "topics": {"parent_id"},
     "entity_topics": {"topic_id"},
@@ -415,8 +471,17 @@ _PROSE_TEXT_COLUMNS: dict[str, tuple[str, ...]] = {
     "missions": ("objective", "context", "tasks", "acceptance_criteria"),
     "literature": ("abstract", "notes"),
     "claims": ("content",),
+    "claim_scope_versions": (
+        "uncertainty_note",
+        "falsifier",
+        "falsifier_rationale",
+        "reason",
+    ),
     "interpretation_candidates": (
-        "statement", "uncertainty_note", "falsifier", "disposition_reason",
+        "statement",
+        "uncertainty_note",
+        "falsifier",
+        "disposition_reason",
     ),
     "interpretation_candidate_hints": ("rationale",),
     "interpretation_review_events": ("reason",),
@@ -426,7 +491,8 @@ _PROSE_TEXT_COLUMNS: dict[str, tuple[str, ...]] = {
     "events": ("summary",),
     "manuscript_claim_versions": ("exact_wording", "allowed_wording"),
     "manuscript_units": (
-        "allowed_interpretation", "prohibited_interpretation",
+        "allowed_interpretation",
+        "prohibited_interpretation",
     ),
 }
 
@@ -435,6 +501,12 @@ _JSON_ID_COLUMNS = {
     "decisions": ("related_missions", "related_literature", "related_journal"),
     "journal": ("related_decisions", "related_literature"),
     "interpretation_candidates": ("scope_conditions",),
+    "claim_scope_versions": (
+        "conditions",
+        "allowed_extensions",
+        "prohibited_extensions",
+        "disconfirming_claim_ids",
+    ),
     "exploration_summaries": ("source_refs",),
     "qa_logs": ("answer_structured", "sources"),
     "events": ("details",),
@@ -442,7 +514,8 @@ _JSON_ID_COLUMNS = {
     "reference_validation_attestations": ("full_json_payload",),
     "manuscript_claim_versions": ("prohibited_wording",),
     "manuscript_claim_verification_attestations": (
-        "dependency_snapshot", "full_json_payload",
+        "dependency_snapshot",
+        "full_json_payload",
     ),
     "context_snapshots": ("entry_ids",),
     "keynodes": ("node_refs",),
@@ -457,6 +530,7 @@ _ENTITY_LINK_ENDPOINT_TABLES: dict[str, str] = {
     "artifact": "artifacts",
     "checkpoint": "checkpoints",
     "claim": "claims",
+    "claim_scope": "claim_scope_versions",
     "interpretation_candidate": "interpretation_candidates",
     "interpretation_hint": "interpretation_candidate_hints",
     "interpretation_promotion": "interpretation_promotions",
@@ -474,9 +548,7 @@ _ENTITY_LINK_ENDPOINT_TABLES: dict[str, str] = {
     "manuscript_checkpoint": "manuscript_checkpoints",
     "manuscript_claim": "manuscript_claims",
     "manuscript_claim_ratification": "manuscript_claim_ratifications",
-    "manuscript_claim_verification": (
-        "manuscript_claim_verification_attestations"
-    ),
+    "manuscript_claim_verification": ("manuscript_claim_verification_attestations"),
     "manuscript_reference": "manuscript_reference_members",
     "manuscript_unit": "manuscript_units",
     "mission": "missions",
@@ -490,7 +562,9 @@ _ENTITY_LINK_ENDPOINT_TABLES: dict[str, str] = {
 class KnowledgePackService(BaseService):
     """Export and import a full project-scoped knowledge pack."""
 
-    async def export_pack(self, project_id: str | None = None, include_logs: bool = False) -> tuple[str, str]:
+    async def export_pack(
+        self, project_id: str | None = None, include_logs: bool = False
+    ) -> tuple[str, str]:
         """Export one transactionally consistent project snapshot."""
         async with self.db.transaction(write=False):
             return await self._export_pack(project_id, include_logs)
@@ -531,7 +605,8 @@ class KnowledgePackService(BaseService):
             "pack_format_version": PACK_SCHEMA_VERSION,
             "exported_at": _now(),
             "rka_version": __version__,
-            "categories_exported": ["core_data", "derived_data"] + (["bulk_logs"] if include_logs else []),
+            "categories_exported": ["core_data", "derived_data"]
+            + (["bulk_logs"] if include_logs else []),
             "project": dict(project),
             "project_state": dict(project_state) if project_state else None,
             "portability": {
@@ -592,18 +667,13 @@ class KnowledgePackService(BaseService):
             source_project = manifest["project"]
             source_state = manifest.get("project_state")
             source_tables: dict[str, list[dict[str, Any]]] = manifest.get("tables", {})
-            pack_format = (
-                manifest.get("pack_format_version")
-                or manifest.get("schema_version")
-            )
+            pack_format = manifest.get("pack_format_version") or manifest.get("schema_version")
 
             raw_target_project_id = (
                 project_id if project_id is not None else source_project.get("id")
             )
             raw_target_project_name = (
-                project_name
-                if project_name is not None
-                else source_project.get("name")
+                project_name if project_name is not None else source_project.get("name")
             )
             if not isinstance(raw_target_project_id, str):
                 raise ValueError("Imported project ID must be a string")
@@ -644,8 +714,7 @@ class KnowledgePackService(BaseService):
             if tables.get("artifacts"):
                 if artifact_project_root.exists():
                     raise ValueError(
-                        "Artifact storage for imported project already exists: "
-                        f"{target_project_id}"
+                        f"Artifact storage for imported project already exists: {target_project_id}"
                     )
                 artifact_storage_root.mkdir(parents=True, exist_ok=True)
                 staging_project_root = Path(
@@ -688,9 +757,7 @@ class KnowledgePackService(BaseService):
 
                     for table in _INSERT_ORDER:
                         rows = [dict(row) for row in tables.get(table, [])]
-                        rows = self._prepare_rows_for_insert(
-                            table, rows, target_project_id
-                        )
+                        rows = self._prepare_rows_for_insert(table, rows, target_project_id)
 
                         if table == "artifacts":
                             staging_artifact_root = (
@@ -708,6 +775,16 @@ class KnowledgePackService(BaseService):
 
                         for row in rows:
                             await self._insert_row(table, row)
+                            if table == "claim_scope_versions":
+                                await self.db.execute(
+                                    """UPDATE claims SET scope_revision = ?
+                                       WHERE id = ? AND project_id = ?""",
+                                    [
+                                        row["revision"],
+                                        row["claim_id"],
+                                        target_project_id,
+                                    ],
+                                )
 
                         imported_counts[table] = len(rows)
 
@@ -717,20 +794,14 @@ class KnowledgePackService(BaseService):
                     # This creates identity/metadata only: never claims,
                     # evidence links, ratifications, or checkpoints.
                     if pack_format in (1, 2):
-                        imported_counts["manuscripts"] += (
-                            await self._backfill_legacy_manuscripts(
-                                target_project_id
-                            )
+                        imported_counts["manuscripts"] += await self._backfill_legacy_manuscripts(
+                            target_project_id
                         )
 
                     # The integrity gate runs inside the managed transaction so
                     # critical issues roll back the complete imported graph.
                     integrity_issues = await self.check_integrity(target_project_id)
-                    critical = [
-                        i
-                        for i in integrity_issues
-                        if i.get("severity") == "critical"
-                    ]
+                    critical = [i for i in integrity_issues if i.get("severity") == "critical"]
                     if critical:
                         raise KnowledgePackIntegrityError(critical)
 
@@ -743,10 +814,7 @@ class KnowledgePackService(BaseService):
                         staging_project_root.replace(artifact_project_root)
                         published_project_root = True
             except BaseException:
-                if (
-                    staging_project_root is not None
-                    and staging_project_root.exists()
-                ):
+                if staging_project_root is not None and staging_project_root.exists():
                     shutil.rmtree(staging_project_root, ignore_errors=True)
                 if published_project_root and artifact_project_root.exists():
                     shutil.rmtree(artifact_project_root, ignore_errors=True)
@@ -756,8 +824,7 @@ class KnowledgePackService(BaseService):
         # non-critical findings so the import doesn't land with stale derived
         # counts (Brain-ratified addition during the upfront Backbrief).
         await self._sync_imported_indexes(tables, target_project_id)
-        if any(i.get("category") == "claim_count_mismatch"
-               for i in integrity_issues):
+        if any(i.get("category") == "claim_count_mismatch" for i in integrity_issues):
             await self._recompute_cluster_claim_counts(target_project_id)
 
         return KnowledgePackImportResult(
@@ -808,12 +875,10 @@ class KnowledgePackService(BaseService):
                 [legacy_id],
             )
             manuscript_tags = [
-                tag for tag in tag_rows
-                if str(tag.get("tag") or "").casefold() == "manuscript"
+                tag for tag in tag_rows if str(tag.get("tag") or "").casefold() == "manuscript"
             ]
             scoped_manuscript_tags = [
-                tag for tag in manuscript_tags
-                if tag.get("project_id") == project_id
+                tag for tag in manuscript_tags if tag.get("project_id") == project_id
             ]
             venue_tags = [
                 str(tag.get("tag") or "")[6:].strip()
@@ -827,9 +892,7 @@ class KnowledgePackService(BaseService):
                 if tag.get("project_id") == project_id
                 and str(tag.get("tag") or "")[:6].casefold() == "phase:"
             ]
-            normalized_input = str(row.get("verbatim_input") or "").replace(
-                "\r", ""
-            )
+            normalized_input = str(row.get("verbatim_input") or "").replace("\r", "")
             title, separator, remainder = normalized_input.partition("\n\n")
             title = title.strip()
             abstract = (remainder.strip() or None) if separator else None
@@ -841,9 +904,7 @@ class KnowledgePackService(BaseService):
                         "tag_project_mismatch",
                         {
                             "manuscript_tag_count": len(manuscript_tags),
-                            "same_project_tag_count": len(
-                                scoped_manuscript_tags
-                            ),
+                            "same_project_tag_count": len(scoped_manuscript_tags),
                         },
                     )
                 )
@@ -861,33 +922,17 @@ class KnowledgePackService(BaseService):
                 issues.append(
                     (
                         "missing_title",
-                        {
-                            "source": (
-                                "journal.verbatim_input:first_paragraph"
-                            )
-                        },
+                        {"source": ("journal.verbatim_input:first_paragraph")},
                     )
                 )
-            if len(venue_tags) == 0 or (
-                len(venue_tags) == 1 and not venue_tags[0]
-            ):
-                issues.append(
-                    ("missing_venue", {"venue_tag_count": len(venue_tags)})
-                )
+            if len(venue_tags) == 0 or (len(venue_tags) == 1 and not venue_tags[0]):
+                issues.append(("missing_venue", {"venue_tag_count": len(venue_tags)}))
             elif len(venue_tags) > 1:
-                issues.append(
-                    ("ambiguous_venue", {"venue_tag_count": len(venue_tags)})
-                )
-            if len(phase_tags) == 0 or (
-                len(phase_tags) == 1 and not phase_tags[0]
-            ):
-                issues.append(
-                    ("missing_phase", {"phase_tag_count": len(phase_tags)})
-                )
+                issues.append(("ambiguous_venue", {"venue_tag_count": len(venue_tags)}))
+            if len(phase_tags) == 0 or (len(phase_tags) == 1 and not phase_tags[0]):
+                issues.append(("missing_phase", {"phase_tag_count": len(phase_tags)}))
             elif len(phase_tags) > 1:
-                issues.append(
-                    ("ambiguous_phase", {"phase_tag_count": len(phase_tags)})
-                )
+                issues.append(("ambiguous_phase", {"phase_tag_count": len(phase_tags)}))
             elif phase_tags[0] not in {"draft", "drafting", "review", "final"}:
                 issues.append(
                     (
@@ -932,9 +977,7 @@ class KnowledgePackService(BaseService):
                         "deterministic_id_conflict",
                         {
                             "candidate_id": candidate_id,
-                            "existing_legacy_journal_id": collision.get(
-                                "legacy_journal_id"
-                            ),
+                            "existing_legacy_journal_id": collision.get("legacy_journal_id"),
                             "existing_project_id": collision.get("project_id"),
                         },
                     )
@@ -1040,9 +1083,7 @@ class KnowledgePackService(BaseService):
                 )
             safe_name = self._safe_filename(path.name)
             pack_file = f"artifacts/{artifact['id']}/{safe_name}"
-            with path.open("rb") as src, archive.open(
-                pack_file, "w"
-            ) as dst:
+            with path.open("rb") as src, archive.open(pack_file, "w") as dst:
                 actual_hash = self._copy_and_hash(src, dst)
             self._assert_artifact_content_hash(
                 artifact,
@@ -1064,10 +1105,8 @@ class KnowledgePackService(BaseService):
             raise ValueError("Knowledge pack manifest is not valid JSON") from exc
 
         pack_format = manifest.get("pack_format_version") or manifest.get("schema_version")
-        if pack_format not in (1, 2, PACK_SCHEMA_VERSION):
-            raise ValueError(
-                f"Unsupported knowledge pack format version: {pack_format}"
-            )
+        if pack_format not in (1, 2, 3, PACK_SCHEMA_VERSION):
+            raise ValueError(f"Unsupported knowledge pack format version: {pack_format}")
         if not manifest.get("project"):
             raise ValueError("Knowledge pack manifest is missing project metadata")
         return manifest
@@ -1077,7 +1116,9 @@ class KnowledgePackService(BaseService):
         if existing_id:
             raise ValueError(f"Project '{project_id}' already exists")
 
-        existing_name = await self.db.fetchone("SELECT id FROM projects WHERE name = ?", [project_name])
+        existing_name = await self.db.fetchone(
+            "SELECT id FROM projects WHERE name = ?", [project_name]
+        )
         if existing_name:
             raise ValueError(
                 f"Project name '{project_name}' already exists. Choose a different import name."
@@ -1088,9 +1129,7 @@ class KnowledgePackService(BaseService):
         duplicate_dois = sorted(doi for doi, count in Counter(dois).items() if count > 1)
         if duplicate_dois:
             sample = ", ".join(duplicate_dois[:5])
-            raise ValueError(
-                f"Knowledge pack contains duplicate literature DOI(s): {sample}"
-            )
+            raise ValueError(f"Knowledge pack contains duplicate literature DOI(s): {sample}")
 
     @staticmethod
     def _validate_portable_child_links(
@@ -1110,10 +1149,7 @@ class KnowledgePackService(BaseService):
                 str(row["id"])
                 for row in tables.get(table, [])
                 if row.get("id")
-                and (
-                    "project_id" not in row
-                    or row.get("project_id") == project_id
-                )
+                and ("project_id" not in row or row.get("project_id") == project_id)
             }
         endpoint_ids["project"] = {project_id}
 
@@ -1123,13 +1159,11 @@ class KnowledgePackService(BaseService):
             entity_id = str(membership.get("entity_id") or "")
             if topic_id not in topic_ids:
                 raise ValueError(
-                    "Knowledge pack entity_topics contains a topic outside "
-                    f"project {project_id!r}"
+                    f"Knowledge pack entity_topics contains a topic outside project {project_id!r}"
                 )
             if entity_type not in endpoint_ids:
                 raise ValueError(
-                    "Knowledge pack entity_topics contains unsupported "
-                    f"entity type {entity_type!r}"
+                    f"Knowledge pack entity_topics contains unsupported entity type {entity_type!r}"
                 )
             if entity_id not in endpoint_ids[entity_type]:
                 raise ValueError(
@@ -1211,17 +1245,12 @@ class KnowledgePackService(BaseService):
 
         for column in _JSON_ID_COLUMNS.get(table, ()):
             if remapped.get(column):
-                if (
-                    table == "reference_validation_attestations"
-                    and column == "full_json_payload"
-                ):
-                    remapped[column] = (
-                        self._rewrite_reference_validation_payload(
-                            remapped[column],
-                            id_map=id_map,
-                            source_project_id=source_project_id,
-                            target_project_id=target_project_id,
-                        )
+                if table == "reference_validation_attestations" and column == "full_json_payload":
+                    remapped[column] = self._rewrite_reference_validation_payload(
+                        remapped[column],
+                        id_map=id_map,
+                        source_project_id=source_project_id,
+                        target_project_id=target_project_id,
                     )
                 else:
                     remapped[column] = self._rewrite_json_refs(
@@ -1265,7 +1294,14 @@ class KnowledgePackService(BaseService):
         if table == "exploration_summaries" and column == "scope_id":
             if scope_type == "project" and value == source_project_id:
                 return target_project_id
-            if scope_type in {"mission", "decision", "journal", "literature", "checkpoint", "summary"}:
+            if scope_type in {
+                "mission",
+                "decision",
+                "journal",
+                "literature",
+                "checkpoint",
+                "summary",
+            }:
                 return id_map.get(value, value)
             return value
 
@@ -1330,9 +1366,7 @@ class KnowledgePackService(BaseService):
             preserved_source_job_id = source_result.get("source_job_id")
             preserved_source_project_id = source_result.get("source_project_id")
 
-        rewritten = self._rewrite_nested_refs(
-            payload, id_map, source_project_id, target_project_id
-        )
+        rewritten = self._rewrite_nested_refs(payload, id_map, source_project_id, target_project_id)
         if isinstance(rewritten, dict):
             result = rewritten.get("result")
             if isinstance(result, dict) and "job_id" in result:
@@ -1382,14 +1416,16 @@ class KnowledgePackService(BaseService):
         if source_state:
             phases = source_state.get("phases_config")
         if not phases:
-            phases = json.dumps([
-                "literature",
-                "planning",
-                "data_collection",
-                "implementation",
-                "evaluation",
-                "paper_writing",
-            ])
+            phases = json.dumps(
+                [
+                    "literature",
+                    "planning",
+                    "data_collection",
+                    "implementation",
+                    "evaluation",
+                    "paper_writing",
+                ]
+            )
         return {
             "project_id": target_project_id,
             "project_name": target_project_name,
@@ -1399,8 +1435,12 @@ class KnowledgePackService(BaseService):
             "summary": (source_state or {}).get("summary"),
             "blockers": (source_state or {}).get("blockers"),
             "metrics": (source_state or {}).get("metrics"),
-            "created_at": (source_state or {}).get("created_at") or source_project.get("created_at") or _now(),
-            "updated_at": (source_state or {}).get("updated_at") or source_project.get("updated_at") or _now(),
+            "created_at": (source_state or {}).get("created_at")
+            or source_project.get("created_at")
+            or _now(),
+            "updated_at": (source_state or {}).get("updated_at")
+            or source_project.get("updated_at")
+            or _now(),
         }
 
     def _prepare_rows_for_insert(
@@ -1420,6 +1460,13 @@ class KnowledgePackService(BaseService):
         if table == "audit_log" or table == "bootstrap_log":
             for row in prepared:
                 row.pop("id", None)
+        if table == "claims":
+            # Scope rows are inserted after claims. Rebuild the monotonic head
+            # pointer as each immutable version is imported so migration 041's
+            # append triggers remain active during untrusted pack ingestion.
+            for row in prepared:
+                if "scope_revision" in row:
+                    row["scope_revision"] = 0
         return prepared
 
     def _rewrite_project_scope(
@@ -1474,9 +1521,7 @@ class KnowledgePackService(BaseService):
 
         resolved_artifact_root = artifact_root.resolve()
         resolved_persisted_root = (
-            persisted_root.resolve()
-            if persisted_root is not None
-            else resolved_artifact_root
+            persisted_root.resolve() if persisted_root is not None else resolved_artifact_root
         )
         prepared: list[dict[str, Any]] = []
         for row in rows:
@@ -1487,12 +1532,8 @@ class KnowledgePackService(BaseService):
                     f"Knowledge pack artifact '{artifact.get('id') or '<unknown>'}' "
                     "has no bundled file"
                 )
-            safe_filename = self._safe_filename(
-                artifact.get("filename") or "artifact.bin"
-            )
-            destination = (
-                resolved_artifact_root / artifact["id"] / safe_filename
-            ).resolve()
+            safe_filename = self._safe_filename(artifact.get("filename") or "artifact.bin")
+            destination = (resolved_artifact_root / artifact["id"] / safe_filename).resolve()
             if not destination.is_relative_to(resolved_artifact_root):
                 raise ValueError("Unsafe artifact destination in knowledge pack")
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -1507,12 +1548,8 @@ class KnowledgePackService(BaseService):
                 persisted_destination = (
                     resolved_persisted_root / artifact["id"] / safe_filename
                 ).resolve()
-                if not persisted_destination.is_relative_to(
-                    resolved_persisted_root
-                ):
-                    raise ValueError(
-                        "Unsafe persisted artifact destination in knowledge pack"
-                    )
+                if not persisted_destination.is_relative_to(resolved_persisted_root):
+                    raise ValueError("Unsafe persisted artifact destination in knowledge pack")
                 artifact["filepath"] = str(persisted_destination)
                 restored += 1
             except KeyError as exc:
@@ -1526,9 +1563,7 @@ class KnowledgePackService(BaseService):
     async def _table_columns(self, table: str) -> frozenset[str]:
         """Return the live column allowlist for a fixed import table."""
         if table not in _IMPORT_INSERT_TABLES:
-            raise ValueError(
-                f"Knowledge pack targets unsupported table {table!r}"
-            )
+            raise ValueError(f"Knowledge pack targets unsupported table {table!r}")
         cache: dict[str, frozenset[str]] = getattr(
             self,
             "_import_table_columns_cache",
@@ -1539,9 +1574,7 @@ class KnowledgePackService(BaseService):
         columns = await self.db.fetchall(f"PRAGMA table_info([{table}])")
         names = frozenset(str(column["name"]) for column in columns)
         if not names:
-            raise ValueError(
-                f"Knowledge pack target table {table!r} is unavailable"
-            )
+            raise ValueError(f"Knowledge pack target table {table!r} is unavailable")
         cache[table] = names
         self._import_table_columns_cache = cache
         return names
@@ -1554,8 +1587,7 @@ class KnowledgePackService(BaseService):
         unknown_tables = sorted(set(tables) - set(_INSERT_ORDER))
         if unknown_tables:
             raise ValueError(
-                "Knowledge pack contains unsupported table(s): "
-                + ", ".join(unknown_tables)
+                "Knowledge pack contains unsupported table(s): " + ", ".join(unknown_tables)
             )
 
         for table, rows in tables.items():
@@ -1563,9 +1595,7 @@ class KnowledgePackService(BaseService):
             transient = _IMPORT_TRANSIENT_COLUMNS.get(table, frozenset())
             for index, row in enumerate(rows):
                 if not isinstance(row, dict):
-                    raise ValueError(
-                        f"Knowledge pack {table}[{index}] must be an object"
-                    )
+                    raise ValueError(f"Knowledge pack {table}[{index}] must be an object")
                 unknown_columns = sorted(
                     str(column)
                     for column in row
@@ -1574,27 +1604,21 @@ class KnowledgePackService(BaseService):
                 if unknown_columns:
                     raise ValueError(
                         f"Knowledge pack {table}[{index}] contains unsupported "
-                        "column(s): "
-                        + ", ".join(unknown_columns)
+                        "column(s): " + ", ".join(unknown_columns)
                     )
 
     async def _insert_row(self, table: str, row: dict[str, Any]) -> None:
         """Insert one already-remapped row using schema-approved identifiers."""
         allowed = await self._table_columns(table)
         columns = list(row.keys())
-        unknown_columns = [
-            str(column) for column in columns if column not in allowed
-        ]
+        unknown_columns = [str(column) for column in columns if column not in allowed]
         if unknown_columns:
             raise ValueError(
                 f"Knowledge pack row for {table!r} contains unsupported "
-                "column(s): "
-                + ", ".join(sorted(unknown_columns))
+                "column(s): " + ", ".join(sorted(unknown_columns))
             )
         if not columns:
-            raise ValueError(
-                f"Knowledge pack row for {table!r} cannot be empty"
-            )
+            raise ValueError(f"Knowledge pack row for {table!r} cannot be empty")
         placeholders = ", ".join("?" for _ in columns)
         # Identifiers come only from PRAGMA table_info above. Bracket quoting
         # keeps approved names syntactically isolated from uploaded content.
@@ -1655,15 +1679,12 @@ class KnowledgePackService(BaseService):
         """Fail closed when bundled bytes disagree with artifact metadata."""
         expected_hash = artifact.get("content_hash")
         normalized_expected = (
-            expected_hash.removeprefix("sha256:").lower()
-            if isinstance(expected_hash, str)
-            else ""
+            expected_hash.removeprefix("sha256:").lower() if isinstance(expected_hash, str) else ""
         )
         if normalized_expected != actual_hash:
             artifact_id = artifact.get("id") or "<unknown>"
             raise ValueError(
-                f"Artifact '{artifact_id}' content hash mismatch during "
-                f"knowledge pack {operation}"
+                f"Artifact '{artifact_id}' content hash mismatch during knowledge pack {operation}"
             )
 
     async def _recompute_cluster_claim_counts(self, project_id: str) -> None:
@@ -1698,10 +1719,7 @@ class KnowledgePackService(BaseService):
     @staticmethod
     def _validate_import_project_id(project_id: str) -> None:
         """Require one bounded, filesystem-safe path component for imports."""
-        if (
-            project_id in {".", ".."}
-            or not _IMPORT_PROJECT_ID_RE.fullmatch(project_id)
-        ):
+        if project_id in {".", ".."} or not _IMPORT_PROJECT_ID_RE.fullmatch(project_id):
             raise ValueError(
                 "Imported project ID must use only letters, numbers, '.', "
                 "'_', or '-' and cannot contain path separators"
@@ -1718,9 +1736,7 @@ class KnowledgePackService(BaseService):
 
     async def _validate_registry(self, project_id: str) -> None:
         """Fail if any table with project_id data exists but isn't categorized."""
-        all_tables = await self.db.fetchall(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )
+        all_tables = await self.db.fetchall("SELECT name FROM sqlite_master WHERE type='table'")
         for row in all_tables:
             table_name = row["name"]
             if table_name.startswith(("vec_", "fts_", "sqlite_")):
@@ -1767,6 +1783,9 @@ class KnowledgePackService(BaseService):
         "orphaned_claim_edge_sources": "critical",
         "orphaned_claim_edge_targets": "critical",
         "orphaned_claim_edge_clusters": "critical",
+        "claim_scope_pointer_mismatch": "critical",
+        "claim_scope_revision_chain_invalid": "critical",
+        "claim_scope_disconfirming_refs_invalid": "critical",
         "claim_count_mismatch": "warning",
     }
 
@@ -1805,17 +1824,19 @@ class KnowledgePackService(BaseService):
         )
         if orphaned_source:
             cat = "orphaned_entity_link_sources"
-            issues.append({
-                "category": cat,
-                "severity": self._severity_for(cat),
-                "count": len(orphaned_source),
-                "ids": [r["id"] for r in orphaned_source[:10]],
-                "description": (
-                    "entity_links whose declared source type/id is missing "
-                    "from the edge project"
-                ),
-                "fix_action": "Delete orphaned edges or re-import missing entities",
-            })
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(orphaned_source),
+                    "ids": [r["id"] for r in orphaned_source[:10]],
+                    "description": (
+                        "entity_links whose declared source type/id is missing "
+                        "from the edge project"
+                    ),
+                    "fix_action": "Delete orphaned edges or re-import missing entities",
+                }
+            )
 
         # 2. Same invariant for target endpoints.
         orphaned_target = await self.db.fetchall(
@@ -1827,17 +1848,19 @@ class KnowledgePackService(BaseService):
         )
         if orphaned_target:
             cat = "orphaned_entity_link_targets"
-            issues.append({
-                "category": cat,
-                "severity": self._severity_for(cat),
-                "count": len(orphaned_target),
-                "ids": [r["id"] for r in orphaned_target[:10]],
-                "description": (
-                    "entity_links whose declared target type/id is missing "
-                    "from the edge project"
-                ),
-                "fix_action": "Delete orphaned edges or re-import missing entities",
-            })
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(orphaned_target),
+                    "ids": [r["id"] for r in orphaned_target[:10]],
+                    "description": (
+                        "entity_links whose declared target type/id is missing "
+                        "from the edge project"
+                    ),
+                    "fix_action": "Delete orphaned edges or re-import missing entities",
+                }
+            )
 
         # 3. claim_edges with orphaned source_claim_id
         orphaned_claims = await self.db.fetchall(
@@ -1853,14 +1876,16 @@ class KnowledgePackService(BaseService):
         )
         if orphaned_claims:
             cat = "orphaned_claim_edge_sources"
-            issues.append({
-                "category": cat,
-                "severity": self._severity_for(cat),
-                "count": len(orphaned_claims),
-                "ids": [r["id"] for r in orphaned_claims[:10]],
-                "description": "claim_edges referencing non-existent claims",
-                "fix_action": "Delete orphaned claim edges",
-            })
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(orphaned_claims),
+                    "ids": [r["id"] for r in orphaned_claims[:10]],
+                    "description": "claim_edges referencing non-existent claims",
+                    "fix_action": "Delete orphaned claim edges",
+                }
+            )
 
         # 4. Non-membership claim edges need a same-project target claim.
         orphaned_targets = await self.db.fetchall(
@@ -1886,17 +1911,19 @@ class KnowledgePackService(BaseService):
         )
         if orphaned_targets:
             cat = "orphaned_claim_edge_targets"
-            issues.append({
-                "category": cat,
-                "severity": self._severity_for(cat),
-                "count": len(orphaned_targets),
-                "ids": [r["id"] for r in orphaned_targets[:10]],
-                "description": (
-                    "non-membership claim_edges whose target claim is missing "
-                    "from the edge project"
-                ),
-                "fix_action": "Delete orphaned claim edges or restore target claims",
-            })
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(orphaned_targets),
+                    "ids": [r["id"] for r in orphaned_targets[:10]],
+                    "description": (
+                        "non-membership claim_edges whose target claim is missing "
+                        "from the edge project"
+                    ),
+                    "fix_action": "Delete orphaned claim edges or restore target claims",
+                }
+            )
 
         # 5. Any declared cluster must be same-project; membership requires one.
         orphaned_clusters = await self.db.fetchall(
@@ -1918,14 +1945,16 @@ class KnowledgePackService(BaseService):
         )
         if orphaned_clusters:
             cat = "orphaned_claim_edge_clusters"
-            issues.append({
-                "category": cat,
-                "severity": self._severity_for(cat),
-                "count": len(orphaned_clusters),
-                "ids": [r["id"] for r in orphaned_clusters[:10]],
-                "description": "claim_edges referencing non-existent clusters",
-                "fix_action": "Delete orphaned claim edges or re-create clusters",
-            })
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(orphaned_clusters),
+                    "ids": [r["id"] for r in orphaned_clusters[:10]],
+                    "description": "claim_edges referencing non-existent clusters",
+                    "fix_action": "Delete orphaned claim edges or re-create clusters",
+                }
+            )
 
         # 6. evidence_clusters.claim_count mismatch
         mismatched = await self.db.fetchall(
@@ -1945,21 +1974,114 @@ class KnowledgePackService(BaseService):
         )
         if mismatched:
             cat = "claim_count_mismatch"
-            issues.append({
-                "category": cat,
-                "severity": self._severity_for(cat),
-                "count": len(mismatched),
-                "ids": [r["id"] for r in mismatched[:10]],
-                "description": "evidence_clusters with claim_count != actual claim_edges count",
-                "fix_action": "Run migration 016 to recompute claim counts",
-            })
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(mismatched),
+                    "ids": [r["id"] for r in mismatched[:10]],
+                    "description": "evidence_clusters with claim_count != actual claim_edges count",
+                    "fix_action": "Run migration 016 to recompute claim counts",
+                }
+            )
+
+        # 7. Every claim head points to the latest immutable scope version, or
+        # remains zero when no contract exists. This also detects a missing
+        # imported history row without relying on a mutable ready flag.
+        bad_scope_pointers = await self.db.fetchall(
+            """SELECT c.id FROM claims AS c
+               WHERE c.project_id = ?
+                 AND c.scope_revision <> COALESCE((
+                     SELECT MAX(scope.revision)
+                     FROM claim_scope_versions AS scope
+                     WHERE scope.claim_id = c.id
+                       AND scope.project_id = c.project_id
+                 ), 0)
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_scope_pointers:
+            cat = "claim_scope_pointer_mismatch"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_scope_pointers),
+                    "ids": [row["id"] for row in bad_scope_pointers[:10]],
+                    "description": "claims whose scope head does not match immutable history",
+                    "fix_action": "Restore the missing history or reset the claim scope through reviewed repair",
+                }
+            )
+
+        # 8. Revisions must form one explicit predecessor chain per claim.
+        broken_scope_chains = await self.db.fetchall(
+            """SELECT scope.id FROM claim_scope_versions AS scope
+               WHERE scope.project_id = ?
+                 AND (
+                     (scope.revision = 1 AND scope.supersedes_scope_id IS NOT NULL)
+                     OR (
+                         scope.revision > 1
+                         AND NOT EXISTS (
+                             SELECT 1 FROM claim_scope_versions AS previous
+                             WHERE previous.claim_id = scope.claim_id
+                               AND previous.project_id = scope.project_id
+                               AND previous.revision = scope.revision - 1
+                               AND previous.id = scope.supersedes_scope_id
+                         )
+                     )
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if broken_scope_chains:
+            cat = "claim_scope_revision_chain_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(broken_scope_chains),
+                    "ids": [row["id"] for row in broken_scope_chains[:10]],
+                    "description": "claim scope versions with a missing or incorrect predecessor",
+                    "fix_action": "Restore the immutable predecessor chain",
+                }
+            )
+
+        # 9. JSON-carried disconfirming references remain same-project and
+        # cannot point back to the scoped claim itself.
+        bad_disconfirming_refs = await self.db.fetchall(
+            """SELECT DISTINCT scope.id
+               FROM claim_scope_versions AS scope,
+                    json_each(scope.disconfirming_claim_ids) AS reference
+               WHERE scope.project_id = ?
+                 AND (
+                     reference.type <> 'text'
+                     OR reference.value = scope.claim_id
+                     OR NOT EXISTS (
+                         SELECT 1 FROM claims AS target
+                         WHERE target.id = reference.value
+                           AND target.project_id = scope.project_id
+                     )
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_disconfirming_refs:
+            cat = "claim_scope_disconfirming_refs_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_disconfirming_refs),
+                    "ids": [row["id"] for row in bad_disconfirming_refs[:10]],
+                    "description": "claim scope versions with invalid disconfirming claim references",
+                    "fix_action": "Restore same-project canonical references or append a corrected scope version",
+                }
+            )
 
         return issues
 
     @staticmethod
-    def _typed_entity_link_endpoint_sql(
-        *, type_column: str, id_column: str
-    ) -> str:
+    def _typed_entity_link_endpoint_sql(*, type_column: str, id_column: str) -> str:
         """Return a trusted SQL predicate for a typed, project-local endpoint."""
         clauses = []
         for entity_type, table in _ENTITY_LINK_ENDPOINT_TABLES.items():

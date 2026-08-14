@@ -731,6 +731,11 @@ function ClaimCard({ claim }: { claim: Claim }) {
               <Badge className={claimTypeColors[claim.claim_type] || ""}>{claim.claim_type}</Badge>
               {claim.verified && <CheckCircle className="h-4 w-4 text-green-500" />}
               {claim.stale && <Badge variant="destructive">stale</Badge>}
+              <Link to="/claim-scopes">
+                <Badge variant={claim.scope_readiness === "ready" ? "default" : "secondary"}>
+                  scope {claim.scope_readiness.replaceAll("_", " ")}
+                </Badge>
+              </Link>
               <span className="text-xs text-muted-foreground">
                 conf: {(claim.confidence * 100).toFixed(0)}%
               </span>
@@ -749,6 +754,7 @@ function ClaimCard({ claim }: { claim: Claim }) {
           )}
           {claim.source_type && <Badge variant="secondary">{claim.source_type}</Badge>}
           {claim.source_actor && <Badge variant="outline">{claim.source_actor}</Badge>}
+          <span>scope rev {claim.scope_revision}</span>
         </div>
       </CardContent>
     </Card>

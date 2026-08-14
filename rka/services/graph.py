@@ -58,12 +58,14 @@ class GraphService:
                 etype = row[f"{prefix}_type"]
                 eid = row[f"{prefix}_id"]
                 entity_ids.setdefault(etype, set()).add(eid)
-            edges.append({
-                "source": row["source_id"],
-                "target": row["target_id"],
-                "link_type": row["link_type"],
-                "created_at": row["created_at"],
-            })
+            edges.append(
+                {
+                    "source": row["source_id"],
+                    "target": row["target_id"],
+                    "link_type": row["link_type"],
+                    "created_at": row["created_at"],
+                }
+            )
 
         # Also include entities that have no links yet (orphans)
         for etype, table, label_col, status_col, has_phase in [
@@ -236,8 +238,7 @@ class GraphService:
         params = {"top_per_kind": top_per_kind, "min_importance": min_importance}
         async with self.db.transaction():
             await self.db.execute(
-                f"DELETE FROM keynodes "
-                f"WHERE blessed = 0 AND {self._project_clause()}",
+                f"DELETE FROM keynodes WHERE blessed = 0 AND {self._project_clause()}",
                 [project_id],
             )
             for row in keynode_rows:
@@ -275,7 +276,9 @@ class GraphService:
     # Ego graph (neighborhood of a single entity)
     # ------------------------------------------------------------------
 
-    async def get_ego_graph(self, entity_id: str, depth: int = 1, project_id: str = "proj_default") -> dict[str, Any]:
+    async def get_ego_graph(
+        self, entity_id: str, depth: int = 1, project_id: str = "proj_default"
+    ) -> dict[str, Any]:
         """Return the subgraph centered on entity_id up to `depth` hops."""
         visited: set[str] = set()
         frontier: set[str] = {entity_id}
@@ -310,12 +313,14 @@ class GraphService:
             visited |= frontier
             next_frontier: set[str] = set()
             for row in rows:
-                all_edges.append({
-                    "source": row["source_id"],
-                    "target": row["target_id"],
-                    "link_type": row["link_type"],
-                    "created_at": row["created_at"],
-                })
+                all_edges.append(
+                    {
+                        "source": row["source_id"],
+                        "target": row["target_id"],
+                        "link_type": row["link_type"],
+                        "created_at": row["created_at"],
+                    }
+                )
                 for eid in (row["source_id"], row["target_id"]):
                     if eid not in visited:
                         next_frontier.add(eid)
@@ -323,15 +328,19 @@ class GraphService:
                 src = row["source_claim_id"]
                 # member_of edges point claim -> cluster (target_claim_id is NULL).
                 # All other relations point claim -> claim.
-                tgt = row["cluster_id"] if row["relation"] == "member_of" else row["target_claim_id"]
+                tgt = (
+                    row["cluster_id"] if row["relation"] == "member_of" else row["target_claim_id"]
+                )
                 if not src or not tgt:
                     continue
-                all_edges.append({
-                    "source": src,
-                    "target": tgt,
-                    "link_type": row["relation"],
-                    "created_at": row["created_at"],
-                })
+                all_edges.append(
+                    {
+                        "source": src,
+                        "target": tgt,
+                        "link_type": row["relation"],
+                        "created_at": row["created_at"],
+                    }
+                )
                 for eid in (src, tgt):
                     if eid not in visited:
                         next_frontier.add(eid)
@@ -427,7 +436,9 @@ class GraphService:
         # Step 1: seed selection
         if seeds is None:
             if search_service is None:
-                raise ValueError("multi_hop_retrieval requires either explicit seeds or a search_service")
+                raise ValueError(
+                    "multi_hop_retrieval requires either explicit seeds or a search_service"
+                )
             hits = await search_service.with_project(project_id).search(query, limit=10)
             seeds = [h.entity_id for h in hits]
         if not seeds:
@@ -477,13 +488,15 @@ class GraphService:
                 edge_key = (src, tgt, link)
                 if edge_key not in edges_seen:
                     edges_seen.add(edge_key)
-                    all_edges.append({
-                        "source": src,
-                        "target": tgt,
-                        "link_type": link,
-                        "weight": w,
-                        "created_at": row["created_at"],
-                    })
+                    all_edges.append(
+                        {
+                            "source": src,
+                            "target": tgt,
+                            "link_type": link,
+                            "weight": w,
+                            "created_at": row["created_at"],
+                        }
+                    )
                 # Propagate score across the edge (both directions count for
                 # relevance; an edge from a high-score seed to a neighbor
                 # makes that neighbor relevant).
@@ -508,13 +521,15 @@ class GraphService:
                 edge_key = (src, tgt, relation)
                 if edge_key not in edges_seen:
                     edges_seen.add(edge_key)
-                    all_edges.append({
-                        "source": src,
-                        "target": tgt,
-                        "link_type": relation,
-                        "weight": w,
-                        "created_at": row["created_at"],
-                    })
+                    all_edges.append(
+                        {
+                            "source": src,
+                            "target": tgt,
+                            "link_type": relation,
+                            "weight": w,
+                            "created_at": row["created_at"],
+                        }
+                    )
                 for parent, child in ((src, tgt), (tgt, src)):
                     parent_score = scores.get(parent)
                     if parent_score is None:
@@ -538,12 +553,14 @@ class GraphService:
         # budget. Final order remains score-descending.
         expansion_ranked = sorted(
             (nid for nid in scores if nid not in seeds_set),
-            key=lambda nid: scores[nid], reverse=True,
+            key=lambda nid: scores[nid],
+            reverse=True,
         )
         budget = max(max_nodes - len(seeds_set), 0)
         ranked_ids = sorted(
             list(seeds_set) + expansion_ranked[:budget],
-            key=lambda nid: scores[nid], reverse=True,
+            key=lambda nid: scores[nid],
+            reverse=True,
         )
         ranked_set = set(ranked_ids)
 
@@ -563,7 +580,9 @@ class GraphService:
             result_nodes.append(n)
 
         # Filter edges to those connecting two ranked nodes (drops noise)
-        result_edges = [e for e in all_edges if e["source"] in ranked_set and e["target"] in ranked_set]
+        result_edges = [
+            e for e in all_edges if e["source"] in ranked_set and e["target"] in ranked_set
+        ]
 
         return {
             "nodes": result_nodes,
@@ -642,11 +661,12 @@ class GraphService:
         import re as _re
 
         desc_terms = [
-            t for t in _re.findall(r"[a-zA-Z0-9][a-zA-Z0-9_-]+", description.lower())
+            t
+            for t in _re.findall(r"[a-zA-Z0-9][a-zA-Z0-9_-]+", description.lower())
             if t not in self._REPORT_STOPWORDS and len(t) > 2
         ]
         queries: list[str] = []
-        for q in (angle_queries or []):
+        for q in angle_queries or []:
             q = q.strip()
             if q and q.lower() not in {x.lower() for x in queries}:
                 queries.append(q)
@@ -655,8 +675,13 @@ class GraphService:
             if norm.lower() not in {x.lower() for x in queries}:
                 queries.append(norm)
         if not queries:
-            return {"nodes": [], "queries": [], "seed_count": 0,
-                    "expanded_count": 0, "truncated": False}
+            return {
+                "nodes": [],
+                "queries": [],
+                "seed_count": 0,
+                "expanded_count": 0,
+                "truncated": False,
+            }
 
         # Step 2: seed from every angle. Seed score = best (highest) rank
         # score across angles; rank 0 → 1.0, decaying to 0.5 at seed_limit.
@@ -672,12 +697,19 @@ class GraphService:
                     scores[h.entity_id] = s
                     depths[h.entity_id] = 0
                     included_via[h.entity_id] = {
-                        "via": "search", "query": q, "rank": rank,
+                        "via": "search",
+                        "query": q,
+                        "rank": rank,
                     }
         seeds_set = set(scores.keys())
         if not seeds_set:
-            return {"nodes": [], "queries": queries, "seed_count": 0,
-                    "expanded_count": 0, "truncated": False}
+            return {
+                "nodes": [],
+                "queries": queries,
+                "seed_count": 0,
+                "expanded_count": 0,
+                "truncated": False,
+            }
 
         # Step 3: BFS expansion (same edge sources as multi_hop_retrieval,
         # plus inclusion-provenance tracking on every score improvement).
@@ -721,7 +753,9 @@ class GraphService:
                         scores[child] = new_score
                         depths[child] = hop + 1
                         included_via[child] = {
-                            "via": "link", "from": parent, "link_type": link,
+                            "via": "link",
+                            "from": parent,
+                            "link_type": link,
                         }
                         next_frontier.add(child)
 
@@ -740,12 +774,14 @@ class GraphService:
         # nodes fill the remaining budget by score.
         expansion_ranked = sorted(
             (nid for nid in scores if nid not in seeds_set),
-            key=lambda nid: scores[nid], reverse=True,
+            key=lambda nid: scores[nid],
+            reverse=True,
         )
         budget = max(max_nodes - len(seeds_set), 0)
         truncated = len(expansion_ranked) > budget
-        kept = sorted(seeds_set, key=lambda nid: scores[nid], reverse=True) \
-            + expansion_ranked[:budget]
+        kept = (
+            sorted(seeds_set, key=lambda nid: scores[nid], reverse=True) + expansion_ranked[:budget]
+        )
 
         # Step 5: hydrate metadata + tags.
         node_ids: dict[str, set[str]] = {}
@@ -784,7 +820,9 @@ class GraphService:
     # Decision tree (hierarchical)
     # ------------------------------------------------------------------
 
-    async def get_decision_tree(self, root_id: str | None = None, project_id: str = "proj_default") -> list[dict]:
+    async def get_decision_tree(
+        self, root_id: str | None = None, project_id: str = "proj_default"
+    ) -> list[dict]:
         """Return decisions as a tree structure.
 
         If root_id is given, return only that subtree.
@@ -827,14 +865,22 @@ class GraphService:
             for link in links:
                 for dec_id in dec_ids:
                     if link["source_id"] == dec_id or link["target_id"] == dec_id:
-                        other_id = link["target_id"] if link["source_id"] == dec_id else link["source_id"]
-                        other_type = link["target_type"] if link["source_id"] == dec_id else link["source_type"]
+                        other_id = (
+                            link["target_id"] if link["source_id"] == dec_id else link["source_id"]
+                        )
+                        other_type = (
+                            link["target_type"]
+                            if link["source_id"] == dec_id
+                            else link["source_type"]
+                        )
                         if dec_id in by_id:
-                            by_id[dec_id]["linked_entities"].append({
-                                "id": other_id,
-                                "type": other_type,
-                                "link_type": link["link_type"],
-                            })
+                            by_id[dec_id]["linked_entities"].append(
+                                {
+                                    "id": other_id,
+                                    "type": other_type,
+                                    "link_type": link["link_type"],
+                                }
+                            )
 
         # Build tree
         roots: list[dict] = []
@@ -915,11 +961,25 @@ class GraphService:
         )
         edge_counts = {r["link_type"]: r["cnt"] for r in edge_type_rows}
 
+        # Canonical claim scope is metadata on claim nodes, not a competing
+        # graph node type. Count the derived readiness projection separately.
+        from rka.services.claims import ClaimService
+
+        scope_readiness_counts: dict[str, int] = {}
+        for claim in await ClaimService(
+            self.db,
+            project_id=project_id,
+        ).list(limit=1_000_000):
+            scope_readiness_counts[claim.scope_readiness] = (
+                scope_readiness_counts.get(claim.scope_readiness, 0) + 1
+            )
+
         return {
             "node_counts": node_counts,
             "total_nodes": sum(node_counts.values()),
             "total_edges": total_edges,
             "edge_counts_by_type": edge_counts,
+            "claim_scope_readiness_counts": scope_readiness_counts,
         }
 
     # ------------------------------------------------------------------
@@ -959,7 +1019,14 @@ class GraphService:
             info = table_map.get(etype)
             if not info:
                 for eid in missing:
-                    nodes[eid] = {"id": eid, "type": etype, "label": eid, "status": None, "phase": "", "created_at": ""}
+                    nodes[eid] = {
+                        "id": eid,
+                        "type": etype,
+                        "label": eid,
+                        "status": None,
+                        "phase": "",
+                        "created_at": "",
+                    }
                 continue
             table, label_col, status_col, has_phase = info
             placeholders = ",".join("?" for _ in missing)
@@ -976,9 +1043,9 @@ class GraphService:
                 if etype == "cluster":
                     # Apply STALE prefix BEFORE the 120-char truncation so
                     # the prefix isn't truncated off long cluster labels.
-                    label_text = with_staleness_prefix(
-                        label_text, r.get("needs_reprocessing")
-                    ) or ""
+                    label_text = (
+                        with_staleness_prefix(label_text, r.get("needs_reprocessing")) or ""
+                    )
                 nodes[r["id"]] = {
                     "id": r["id"],
                     "type": etype,
@@ -991,7 +1058,53 @@ class GraphService:
             fetched = {r["id"] for r in rows}
             for eid in missing:
                 if eid not in fetched:
-                    nodes[eid] = {"id": eid, "type": etype, "label": eid, "status": None, "phase": "", "created_at": ""}
+                    nodes[eid] = {
+                        "id": eid,
+                        "type": etype,
+                        "label": eid,
+                        "status": None,
+                        "phase": "",
+                        "created_at": "",
+                    }
+
+        await self._augment_claim_scope_nodes(nodes, project_id)
+
+    async def _augment_claim_scope_nodes(
+        self,
+        nodes: dict[str, dict],
+        project_id: str,
+    ) -> None:
+        """Attach the current canonical scope projection to claim nodes."""
+        claim_ids = sorted(
+            node_id for node_id, node in nodes.items() if node.get("type") == "claim"
+        )
+        if not claim_ids:
+            return
+
+        from rka.services.claims import ClaimService
+
+        placeholders = ",".join("?" for _ in claim_ids)
+        rows = await self.db.fetchall(
+            f"""SELECT c.*, {ClaimService._CONTRADICTED_PROJECTION},
+                       {ClaimService._SCOPE_PROJECTION}
+                FROM claims AS c
+                {ClaimService._SCOPE_JOIN}
+                WHERE c.project_id = ? AND c.id IN ({placeholders})""",
+            [project_id, *claim_ids],
+        )
+        for row in rows:
+            claim = ClaimService._row_to_model(row)
+            node = nodes.get(claim.id)
+            if node is None:
+                continue
+            node["scope_revision"] = claim.scope_revision
+            node["scope_readiness"] = claim.scope_readiness
+            node["scope_findings"] = [
+                finding.model_dump(mode="json") for finding in claim.scope_findings
+            ]
+            node["scope_contract"] = (
+                claim.scope_contract.model_dump(mode="json") if claim.scope_contract else None
+            )
 
     async def _collect_keynode_candidates(
         self,
@@ -1057,7 +1170,13 @@ class GraphService:
                LIMIT ?""",
             [project_id, top_per_kind * 5],
         )
-        dec_bonus = {"active": 0.30, "merged": 0.20, "revisit": 0.16, "superseded": 0.10, "abandoned": 0.08}
+        dec_bonus = {
+            "active": 0.30,
+            "merged": 0.20,
+            "revisit": 0.16,
+            "superseded": 0.10,
+            "abandoned": 0.08,
+        }
         for row in dec_rows:
             imp = 0.52 + dec_bonus.get((row.get("status") or "").lower(), 0.1)
             candidates.append(
@@ -1094,7 +1213,12 @@ class GraphService:
                 }
             )
 
-        per_kind: dict[str, list[dict[str, Any]]] = {"finding": [], "literature": [], "decision": [], "milestone": []}
+        per_kind: dict[str, list[dict[str, Any]]] = {
+            "finding": [],
+            "literature": [],
+            "decision": [],
+            "milestone": [],
+        }
         for candidate in candidates:
             per_kind[candidate["kind"]].append(candidate)
 
@@ -1140,7 +1264,8 @@ class GraphService:
                     "target": tgt_keynode,
                     "link_type": row["link_type"],
                     "weight": max(0.2, weight),
-                    "reason": row.get("link_reason") or "Aggregated from linked supporting entities.",
+                    "reason": row.get("link_reason")
+                    or "Aggregated from linked supporting entities.",
                 }
             else:
                 current["weight"] = max(current["weight"], weight)
@@ -1188,20 +1313,20 @@ class GraphService:
     #   contradicts  -- disagreement, not dependency.
     _IMPACT_DEPENDENT: dict[str, str] = {
         # dependent = source (source depends on target)
-        "derived_from": "source",   # claim depends on its source journal
-        "justified_by": "source",   # decision depends on its evidence
-        "cites": "source",          # journal depends on cited literature
-        "references": "source",     # weak contextual dependency
-        "answers": "source",        # cluster depends on its parent RQ
+        "derived_from": "source",  # claim depends on its source journal
+        "justified_by": "source",  # decision depends on its evidence
+        "cites": "source",  # journal depends on cited literature
+        "references": "source",  # weak contextual dependency
+        "answers": "source",  # cluster depends on its parent RQ
         "builds_on": "source",
         # dependent = target (target depends on source)
-        "informed_by": "target",    # decision depends on informing literature
-        "motivated": "target",      # mission depends on motivating decision
+        "informed_by": "target",  # decision depends on informing literature
+        "motivated": "target",  # mission depends on motivating decision
         "supports": "target",
         "evidence_for": "target",
         "qualifies": "target",
         # claim_edges relations
-        "member_of": "target",      # cluster depends on member claims
+        "member_of": "target",  # cluster depends on member claims
     }
 
     _STALE_STATUSES = ("superseded", "retracted", "abandoned")

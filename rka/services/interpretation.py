@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 from rka.infra.ids import generate_id
-from rka.models.claim import ClaimCreate
+from rka.models.claim import ClaimCreate, ClaimScopeCondition, ClaimScopeWrite
 from rka.models.interpretation import (
     InterpretationCandidate,
     InterpretationCandidateCreate,
@@ -173,7 +173,7 @@ class InterpretationService(BaseService):
         params.extend([limit, offset])
         rows = await self.db.fetchall(
             f"""{self._candidate_select()}
-                WHERE {' AND '.join(conditions)}
+                WHERE {" AND ".join(conditions)}
                 ORDER BY CASE c.review_status
                     WHEN 'in_review' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END,
                     c.created_at ASC, c.id ASC
@@ -191,9 +191,7 @@ class InterpretationService(BaseService):
             raise ValueError("a candidate cannot hint against itself")
         hint_id = generate_id("interpretation_hint")
         async with self.db.transaction():
-            source = await self._require_candidate_revision(
-                candidate_id, data.expected_revision
-            )
+            source = await self._require_candidate_revision(candidate_id, data.expected_revision)
             target = await self._candidate_row(data.related_candidate_id)
             if target is None:
                 raise InterpretationNotFoundError(
@@ -250,9 +248,7 @@ class InterpretationService(BaseService):
             row = await self._require_candidate_revision(candidate_id, data.expected_revision)
             if data.action == "start_review":
                 self._require_status(row, {"pending"}, data.action)
-                await self._transition(
-                    row, data, status="in_review", disposition=None
-                )
+                await self._transition(row, data, status="in_review", disposition=None)
             elif data.action == "promote":
                 self._require_status(row, {"pending", "in_review"}, data.action)
                 await self._promote(row, data)
@@ -289,9 +285,7 @@ class InterpretationService(BaseService):
                 raise ValueError("a candidate cannot merge into itself")
             target = await self._candidate_row(data.target_candidate_id or "")
             if target is None:
-                raise InterpretationNotFoundError(
-                    "merge target is not available in this project"
-                )
+                raise InterpretationNotFoundError("merge target is not available in this project")
             target_type = "interpretation_candidate"
             target_id = data.target_candidate_id
         elif data.action == "request_evidence_mission":
@@ -349,17 +343,41 @@ class InterpretationService(BaseService):
                 verified=True,
                 evidence_status="unassessed",
                 source_offset_start=(
-                    row["locator_start"]
-                    if row["locator_kind"] == "text_offset"
-                    else None
+                    row["locator_start"] if row["locator_kind"] == "text_offset" else None
                 ),
                 source_offset_end=(
-                    row["locator_end"]
-                    if row["locator_kind"] == "text_offset"
-                    else None
+                    row["locator_end"] if row["locator_kind"] == "text_offset" else None
                 ),
             ),
             actor=data.actor,
+        )
+        source_conditions = json.loads(row.get("scope_conditions") or "[]")
+        await claim_service.append_scope(
+            claim.id,
+            ClaimScopeWrite(
+                expected_revision=0,
+                actor=data.actor,
+                reason=(
+                    f"Transferred source-bounded fields from {row['id']} during "
+                    f"explicit promotion: {data.reason}"
+                ),
+                conditions=[
+                    ClaimScopeCondition(
+                        kind="other",
+                        key="source_condition",
+                        operator="described_by",
+                        value=condition,
+                    )
+                    for condition in source_conditions
+                    if isinstance(condition, str) and condition.strip()
+                ],
+                uncertainty=row.get("uncertainty") or "unknown",
+                uncertainty_note=row.get("uncertainty_note"),
+                falsifier_status=("applicable" if row.get("falsifier") else "unknown"),
+                falsifier=row.get("falsifier"),
+                review_status="draft",
+                source_candidate_id=row["id"],
+            ),
         )
         promotion_id = generate_id("interpretation_promotion")
         await self.db.execute(
@@ -517,9 +535,7 @@ class InterpretationService(BaseService):
         table = self._SOURCE_TABLES[source_type]
         await self._require_entity(table, source_id)
 
-    async def _validate_locator_grounding(
-        self, data: InterpretationCandidateCreate
-    ) -> None:
+    async def _validate_locator_grounding(self, data: InterpretationCandidateCreate) -> None:
         """Reject journal offsets that cannot identify a real source span."""
         if data.source_type != "journal" or data.locator_kind != "text_offset":
             return
@@ -636,10 +652,6 @@ class InterpretationService(BaseService):
         except json.JSONDecodeError:
             scope = []
         return InterpretationCandidate(
-            **{
-                key: value
-                for key, value in dict(row).items()
-                if key != "scope_conditions"
-            },
+            **{key: value for key, value in dict(row).items() if key != "scope_conditions"},
             scope_conditions=scope if isinstance(scope, list) else [],
         )

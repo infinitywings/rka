@@ -18,8 +18,8 @@ The rka MCP server ships a **discriminated-union dispatch surface**. Five tools 
 
 | Always-on tool | Purpose |
 |---|---|
-| `rka_query(args)` | All 51 read operations (status, context, journal, research map, native manuscripts, writing candidates, reference manifests, change impact, etc.) |
-| `rka_execute(args)` | All 58 write/lifecycle operations (notes, decisions, missions, native manuscripts, reference manifests, checkpoints, claims, hooks, maintenance) |
+| `rka_query(args)` | All 53 read operations (status, context, journal, research map, claim scope, native manuscripts, writing candidates, reference manifests, change impact, etc.) |
+| `rka_execute(args)` | All 62 write/lifecycle operations (notes, decisions, missions, interpretation promotion, claim-scope review, native manuscripts, checkpoints, hooks, maintenance) |
 | `rka_describe(operation)` | Schema lookup + worked example for any operation; `rka_describe('')` returns the <250-token index |
 | `rka_load_tools(names)` | Escape hatch — brings deferred legacy tools online when you specifically need backwards-compat access |
 | `rka_help(name)` | Deprecated alias for `rka_describe`; retained always-on for cockpits that learned the v2.6.3 navigator vocabulary |
@@ -190,6 +190,18 @@ support. `verified` records the categorical grounding review;
 **Confidence cap without full text**: claims extracted from abstracts or search snippets cap at **0.65**. To exceed that, you need full-text grounding with a direct quote.
 
 Full procedure with worked examples and cluster-assignment heuristic: `workflows.md` § "Claim Extraction".
+
+### Canonical claim-scope review
+
+Do not cluster or offer a `clm_` as manuscript support merely because its
+source grounding is verified. Inspect its canonical research boundary with
+`rka_query(args={"operation": "claim_scope", "project_id": <pinned>, "id":
+"clm_..."})`. If scope is missing, stale, incomplete, or unreviewed, append a
+revision with `set_claim_scope`; never infer a legacy boundary from claim prose.
+A reviewed contract records typed conditions, resolved uncertainty, an exact or
+bounded extension policy, prohibited extensions, and resolved falsifier
+applicability. Keep `scope_readiness`, `evidence_status`, contradiction, and
+staleness as separate review axes.
 
 ## Literature ingestion + Zotero linkage
 

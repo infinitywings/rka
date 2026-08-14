@@ -139,6 +139,7 @@ RKA stores research knowledge in seven entity types. Each has a type-prefixed UL
 | **Checkpoint** | `chk_` | Escalation points where the Executor needs Brain/PI input. |
 | **Interpretation Candidate** | `icd_` | Reviewable, source-located interpretation that is not yet canonical knowledge. |
 | **Claim** | `clm_` | Atomic, source-grounded statement explicitly promoted from a reviewed candidate or intentionally recorded through the canonical claim API. |
+| **Claim Scope Version** | `csc_` | Immutable research-level applicability boundary for a canonical claim, including typed conditions, uncertainty, extension limits, and falsifier/disconfirmation information. |
 | **Evidence Cluster** | `ecl_` | Groups of related claims with a Brain-written synthesis. |
 
 ### 4.2 — Journal Entry Types
@@ -167,6 +168,32 @@ Each promoted claim has a type that describes what kind of knowledge it represen
 | `result` | An experiment outcome | "Throughput improved 3x after sharding" |
 | `observation` | Something noticed (not from controlled experiment) | "The LLM includes its prompt in the synthesis" |
 | `assumption` | Something taken as given without proof | "Network latency is negligible at this scale" |
+
+### 4.3.1 — Canonical Claim Scope
+
+Candidate scope (`icd_`) describes what a source-located interpretation appears
+to mean. Canonical scope (`csc_`) governs where a promoted `clm_` may be reused
+as research knowledge. Manuscript wording (`mcl_`) is a third, paper-specific
+boundary. They are intentionally separate.
+
+Open **Claim Scope Review** at `/claim-scopes` to inspect missing, stale,
+incomplete, unreviewed, and ready contracts. A reviewed contract requires at
+least one typed applicability condition, resolved uncertainty, an exact or
+bounded extension policy, prohibited extensions, and resolved falsifier
+applicability. Every edit appends an immutable revision using optimistic
+revision control. Editing claim wording later makes the older contract stale
+until it is reviewed again.
+
+MCP equivalents:
+
+```text
+rka_query(args={"operation": "claim_scope", "project_id": "prj_...", "id": "clm_..."})
+rka_execute(args={"operation": "set_claim_scope", "project_id": "prj_...", ...})
+```
+
+`scope_readiness=ready` does not mean that a claim is scientifically supported
+or uncontested. Check grounding, `evidence_status`, contradictions, and
+staleness independently.
 
 ### 4.4 — Confidence Levels
 
@@ -624,6 +651,9 @@ The web dashboard at `http://localhost:9712` provides a visual interface for bro
 | **Timeline** | `/timeline` | Event stream with causal chain visualization |
 | **Knowledge Graph** | `/graph` | Entity relationship network (low-level debugging view) |
 | **Research Map** | `/research-map` | Three-level drill-down: RQs → clusters → claims |
+| **Interpretation Review** | `/interpretations` | Review source-located `icd_` candidates before canonical promotion |
+| **Claim Scope Review** | `/claim-scopes` | Append and audit canonical `csc_` applicability contracts; resolve Writer scope blockers |
+| **Manuscript Workbench** | `/workbench` | Navigate manuscript stages, scope contracts, evidence lineage, and current readiness |
 | **Notebook** | `/notebook` | (historical) Q&A chat and summary generation — the LLM-backed Q&A/summary features were removed in v2.4.0 |
 | **Audit Log** | `/audit` | System audit trail with action/entity/actor filters |
 | **Context Inspector** | `/context` | Generate and inspect context packages |

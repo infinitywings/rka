@@ -66,11 +66,12 @@ flowchart LR
     Journal["Journal<br/>observations · procedures · directives"]
     Candidates["Interpretation candidates<br/>source locator · uncertainty · falsifier"]
     Claims["Claims<br/>typed assertions with source spans"]
+    Scope["Claim scope versions<br/>conditions · extension policy · falsifier"]
     Clusters["Evidence clusters<br/>related claims + synthesis"]
     Questions["Research map<br/>questions · gaps · contradictions"]
     Writing["Claim spine<br/>argument · contribution · evaluation"]
 
-    Journal --> Candidates --> Claims --> Clusters --> Questions --> Writing
+    Journal --> Candidates --> Claims --> Scope --> Clusters --> Questions --> Writing
 ```
 
 Raw records remain available even when later interpretations change. Candidate
@@ -78,6 +79,12 @@ interpretations must be reviewed explicitly before promotion; they can be
 deferred, rejected, merged, or classified without silently becoming scientific
 claims. Derived claims and clusters can be reviewed, superseded, or rebuilt
 without rewriting history.
+
+Each canonical claim has a separate, immutable applicability contract. Scope
+reviews record typed conditions, uncertainty, allowed and prohibited
+extensions, and falsifiers. Missing or stale scope stays visible rather than
+being inferred, and manuscript admission also continues to check grounding,
+scientific evidence status, contradictions, and freshness independently.
 
 ### Provenance by construction
 
@@ -112,6 +119,7 @@ Zotero, repositories, notebooks, and experimental platforms remain important sou
 
 - **Persistent, multi-project research records** for journals, literature, decisions, missions, reports, checkpoints, and artifacts.
 - **Interpretation staging** with exact source locators, uncertainty, falsifiers, immutable review history, and explicit promotion or revocation.
+- **Canonical claim-scope contracts** with immutable revisions, typed applicability conditions, extension policy, falsifiers, and fail-closed manuscript readiness.
 - **Claims and evidence clusters** with source-span provenance, confidence states, contradictions, and review workflows.
 - **Research maps** connecting research questions to clusters and individual claims.
 - **Decision and freshness lifecycles** with supersession, staleness propagation, assumption tracking, and historical belief queries.

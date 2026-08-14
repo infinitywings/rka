@@ -9,17 +9,19 @@ The M0 authority, stage, proposal, and provider decisions are recorded in
 [ADR 0001](docs/adr/0001-manuscript-workbench-authority-stage-and-ai-boundary.md).
 The M1 interpretation boundary is recorded in
 [ADR 0002](docs/adr/0002-interpretation-staging-and-experiment-boundary.md).
+The canonical-claim applicability boundary is recorded in
+[ADR 0003](docs/adr/0003-canonical-claim-scope-contracts.md).
 
 The roadmap is ordered by dependency, not by invented delivery dates. Every
 milestone must satisfy its exit gate before dependent work is treated as ready.
 
 ## Now
 
-**M0 is merged. M1 / PR 1 Interpretation Staging is implemented on its feature
-branch and pending review and merge.** The choice-first Writer delta is
-reconciled, the authority and AI boundary is recorded in ADR 0001, and the
-read-only workbench has been walked through with DelaySteer and a
-full-manuscript control.
+**M0 and M1 / PR 1 are merged. M1 / PR 2 Claim Scope Contracts is implemented
+and fully validated on its feature branch, pending review and merge.** The
+choice-first Writer delta is reconciled, the authority and AI boundary is
+recorded in ADR 0001, and the read-only workbench has been walked through with
+DelaySteer and a full-manuscript control.
 
 The walkthrough and its design revisions are recorded in
 [`2026-08-14-delaysteer-workbench-walkthrough.md`](docs/superpowers/specs/2026-08-14-delaysteer-workbench-walkthrough.md).
@@ -27,10 +29,20 @@ The authority and stage contracts have researcher approval. PR 1 now includes
 the candidate schema and immutable audit history, exact source locators,
 duplicate/conflict hints, explicit promotion and revocation, deterministic
 review UI, REST/MCP/knowledge-pack parity, a full-suite release gate, an
-isolated Docker smoke test, and a disposable DelaySteer browser pilot. The
-next implementation target after this slice merges is **M1 / PR 2 claim scope
-contracts**; the PR 3 experiment boundary remains explicitly deferred until
-its schema is designed and reviewed.
+isolated Docker smoke test, and a disposable DelaySteer browser pilot. PR 2
+adds immutable canonical scope revisions, typed applicability conditions,
+explicit extension and falsifier policy, independent scope/evidence/source/
+contradiction axes, stale-content detection, fail-closed Writer eligibility,
+and complete REST/MCP/pack/graph/workbench projections. This rebased slice
+passed the full Python suite, production web build, isolated container smoke
+test, revision-conflict check, and browser walkthrough of missing, incomplete,
+ready, and stale states.
+
+After this slice merges, the immediate target is **M2 / PR 4 workbench shell
+and Context Capsule hardening over the authoritative interpretation and scope
+contracts**. PR 3 remains explicitly deferred until the experiment/run/result
+schema is separately designed and reviewed; the workbench must label that
+missing semantic layer rather than infer experiments from journal entries.
 
 ## Dependency map
 

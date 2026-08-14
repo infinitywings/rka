@@ -157,6 +157,9 @@ import type {
   InterpretationCandidateDetail,
   InterpretationReviewStatus,
   InterpretationTriageRequest,
+  ClaimScopeHistory,
+  ClaimScopeReadiness,
+  ClaimScopeWrite,
 } from "./types"
 
 export const api = {
@@ -398,15 +401,32 @@ export const api = {
     put<EvidenceClusterData>(`/clusters/${clusterId}`, data),
 
   // v2.0: Claims
-  listClaims: (params?: { source_entry_id?: string; cluster_id?: string; claim_type?: string; limit?: number }) => {
+  listClaims: (params?: {
+    source_entry_id?: string
+    cluster_id?: string
+    claim_type?: string
+    limit?: number
+    scope_readiness?: ClaimScopeReadiness
+  }) => {
     const search = new URLSearchParams()
     if (params?.source_entry_id) search.set("source_entry_id", params.source_entry_id)
     if (params?.cluster_id) search.set("cluster_id", params.cluster_id)
     if (params?.claim_type) search.set("claim_type", params.claim_type)
     if (params?.limit) search.set("limit", String(params.limit))
     const qs = search.toString()
-    return get<ClaimData[]>(`/claims${qs ? `?${qs}` : ""}`)
+    return get<ClaimData[]>(`/claims${qs ? `?${qs}` : ""}`).then((claims) => (
+      params?.scope_readiness
+        ? claims.filter((claim) => claim.scope_readiness === params.scope_readiness)
+        : claims
+    ))
   },
+  getClaimScope: (claimId: string) =>
+    get<ClaimScopeHistory>(`/claims/${encodeURIComponent(claimId)}/scope`),
+  appendClaimScope: (claimId: string, data: ClaimScopeWrite) =>
+    post<ClaimScopeHistory>(
+      `/claims/${encodeURIComponent(claimId)}/scope`,
+      data,
+    ),
 
   // M1: reviewable source interpretations. A candidate is not a claim until
   // the explicit, revision-guarded promote action succeeds.
