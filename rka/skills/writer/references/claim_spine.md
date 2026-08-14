@@ -140,7 +140,14 @@ authorize drafting.
 
 ### 2. Assemble candidates
 
-Use multi-angle RKA retrieval. For each candidate identify:
+Use multi-angle RKA retrieval and the choice-first session in
+[`framing_elicitation.md`](framing_elicitation.md). The Writer proposes
+evidence-bounded alternatives with pros and cons; the author supplies narrative
+intent; the researcher supplies scientific scope judgment. Record provisional
+selections in `.planning/FRAMING_SESSION.yaml`. They do not modify the native
+manuscript aggregate and do not count as evidence or ratification.
+
+For each candidate identify:
 
 1. the prior limitation or open problem;
 2. the project's response;
@@ -151,7 +158,10 @@ Use multi-angle RKA retrieval. For each candidate identify:
 7. the result and non-result units that will carry the claim.
 
 `rka writer assist` may accelerate discovery but returns unratified candidates
-only.
+only. Present contribution inclusion as a multi-select choice, claim
+calibration as a single-select choice per contribution, and the final whole
+paper spine as a single-select choice. Offer revise/combine and defer/gather
+evidence paths where appropriate.
 
 ### 3. Dry-run and apply
 
@@ -181,8 +191,10 @@ decision, or creates PI authority.
 
 ### 4. Ratify exact wording
 
-Present bounded alternatives during the existing Outline checkpoint. For each
-selected contribution:
+Present the surviving alternatives with concrete pros, cons, evidence coverage,
+missing evidence, scope boundaries, and outline consequences during the
+existing Outline checkpoint. Obtain one explicit final PI confirmation after
+the advisory framing session. For each selected contribution:
 
 1. record an active PI decision whose `chosen` text exactly matches the claim
    version;

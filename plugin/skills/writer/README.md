@@ -24,7 +24,9 @@ The command writes a complete, portable workspace only after RKA returns a
 canonical native `man_` manuscript. It stores the explicit binding in
 `.rka/manuscript.json` and leaves no unresolved core placeholders. Then:
 
-- Edit `.planning/PRECIS.md`: PI authors the title and abstract.
+- Run the choice-first framing session. The Writer proposes evidence-bounded
+  options with pros and cons; the PI selects or edits the final title,
+  abstract, claims, and paper spine recorded in `.planning/PRECIS.md`.
 - Edit `main.tex` after the Venue checkpoint resolves: replace
   `\documentclass{article}` with the venue class.
 
@@ -45,7 +47,8 @@ Start procedure runs:
 3. `rka writer sync` refreshes the read-only v2 spine and generated views.
 4. `rka_query(args={"operation": "research_map", ...})` provides retrieval
    orientation.
-5. `.planning/ACTIVE_WORKFLOW.md` carries disposable local resume state.
+5. `.planning/FRAMING_SESSION.yaml` resumes the advisory author/researcher
+   interview; `.planning/ACTIVE_WORKFLOW.md` carries disposable local state.
 6. `rka writer readiness --target-phase ...` asks RKA for the authoritative
    mechanical gate.
 7. The Writer greets the PI with the inferred next action.
@@ -75,7 +78,7 @@ python3 rka/skills/writer/scripts/layout_audit.py --venue CHI --output audit.jso
 
 | Component | Status |
 |---|---|
-| `SKILL.md` | v2.7.0 server-authoritative role contract, checkpoints, provenance, and review workflow |
+| `SKILL.md` | v2.7.2 server-authoritative role contract, choice-first framing, checkpoints, provenance, and review workflow |
 | `references/` | architecture, evidence and citation rules, review guidance, and venue registry |
 | `scripts/` | deterministic provenance, citation, venue, reference, layout, and claim-spine checks |
 | `mcp_tools/` | reference-metadata and discovery backends for Writer workflows |

@@ -636,6 +636,13 @@ export interface ResearchQuestion {
   gap_count: number
   contradiction_count: number
   created_at: string | null
+  clusters?: Array<{
+    id: string
+    label: string
+    confidence: string
+    claim_count: number
+    staleness: string
+  }>
 }
 
 export interface ResearchMapData {
@@ -654,6 +661,232 @@ export interface ResearchMapData {
     total_contradictions: number
     pending_review: number
   }
+}
+
+// ---- Native manuscript workbench (read-only prototype) ----
+
+export interface NativeManuscript {
+  id: string
+  project_id: string
+  title: string
+  abstract: string | null
+  venue: string | null
+  phase: string
+  state: string
+  workspace_ref: string | null
+  revision: number
+  legacy_journal_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ManuscriptEvidenceBinding {
+  role: "support" | "qualifier" | "counterevidence"
+  evidence_claim_id: string
+  content?: string | null
+  source_entry_id?: string | null
+  confidence?: number | null
+  verified?: number | boolean | null
+  evidence_status?: string | null
+  stale?: number | boolean | null
+  staleness?: string | null
+  contradicted?: number | boolean | null
+  source_current?: number | boolean | null
+  source_is_manuscript?: number | boolean | null
+}
+
+export interface ManuscriptClaimContext {
+  id: string
+  local_key: string
+  kind: string
+  state: string
+  version: number | null
+  exact_wording: string | null
+  allowed_wording: string | null
+  prohibited_wording: string[]
+  evidence: ManuscriptEvidenceBinding[]
+  ratifications: Array<{
+    decision_id: string
+    claim_version: number
+    decision_status: string
+    decided_by: string
+    chosen: string | null
+    superseded_by: string | null
+  }>
+  unit_links: Array<{
+    unit_id: string
+    unit_local_key: string
+    unit_kind: string
+    unit_location: string
+    relationship: string
+  }>
+}
+
+export interface ManuscriptUnitContext {
+  id: string
+  local_key: string
+  kind: string
+  location: string
+  title: string | null
+  artifact_ref: string | null
+  allowed_interpretation: string | null
+  prohibited_interpretation: string | null
+  sequence: number
+  status: string
+  evidence: ManuscriptEvidenceBinding[]
+  artifact_binding?: Record<string, unknown>
+}
+
+export interface ManuscriptContext {
+  schema_version: "rka.manuscript-context/v1"
+  project_id: string
+  manuscript: NativeManuscript
+  claims: ManuscriptClaimContext[]
+  units: ManuscriptUnitContext[]
+  checkpoints: Array<Record<string, unknown>>
+  verification_attestations: Array<Record<string, unknown>>
+  reference_validations: Array<Record<string, unknown>>
+  reference_manifest: Record<string, unknown>
+  authoritative_source: "rka"
+}
+
+export interface ManuscriptSpineClaim {
+  claim_id: string
+  rka_manuscript_claim_id: string
+  version: number | null
+  claim_type: string
+  status: string
+  text: string | null
+  allowed_wording: string | null
+  prohibited_wording: string[]
+  ratified_by: string | null
+  evidence_ids: string[]
+  qualifier_ids: string[]
+  counterevidence_ids: string[]
+  manuscript_units: string[]
+}
+
+export interface ManuscriptSpineUnit {
+  unit_id: string
+  rka_manuscript_unit_id: string
+  kind: string
+  location: string
+  artifact_ref: string | null
+  allowed_interpretation: string | null
+  prohibited_interpretation: string | null
+  status: string
+  evidence_ids: string[]
+  claim_ids: string[]
+}
+
+export interface ManuscriptSpine {
+  schema_version: "rka-claim-spine/v2"
+  authoritative_source: "rka"
+  project_id: string
+  manuscript_id: string
+  manuscript_revision: number
+  claims: ManuscriptSpineClaim[]
+  units: ManuscriptSpineUnit[]
+  reference_manifest: Record<string, unknown>
+}
+
+export interface WritingCandidateClaim {
+  claim_id: string
+  claim_type: string
+  status: "candidate"
+  text: string
+  allowed_wording: string
+  prohibited_wording: string[]
+  ratified_by: null
+  evidence_ids: string[]
+  qualifier_ids: string[]
+  counterevidence_ids: string[]
+  manuscript_units: string[]
+}
+
+export interface WritingCandidateCluster {
+  cluster_id: string
+  research_question_id: string | null
+  research_question: string | null
+  rq_lifecycle: string | null
+  label: string
+  synthesis: string | null
+  confidence: string
+  synthesized_by: string
+  support_claim_ids: string[]
+  representative_claim_ids: string[]
+  qualifier_claim_ids: string[]
+  counterevidence_claim_ids: string[]
+  duplicate_support_groups: string[][]
+  disposition: "eligible" | "needs_review"
+  blockers: string[]
+}
+
+export interface ManuscriptWritingCandidates {
+  schema_version: "rka.writing-evidence-candidates/v1"
+  project_id: string
+  manuscript_id: string
+  manuscript_revision: number
+  policy: Record<string, unknown>
+  clusters: WritingCandidateCluster[]
+  excluded_claims: Array<{
+    claim_id: string
+    cluster_id: string
+    reasons: string[]
+  }>
+  candidate_spine: {
+    claims: WritingCandidateClaim[]
+    units: unknown[]
+  }
+  candidate_lineage: Record<
+    string,
+    {
+      cluster_id: string
+      research_question_id: string | null
+      representative_claim_ids: string[]
+    }
+  >
+  summary: {
+    clusters_total: number
+    clusters_eligible: number
+    clusters_needing_review: number
+    claims_excluded: number
+  }
+  required_human_actions: string[]
+  mode: "server_attested_read_only_proposal"
+}
+
+export interface ManuscriptReadinessFinding {
+  verdict: "PASS" | "WARN" | "BLOCK" | "ERROR"
+  code: string
+  message: string
+  claim_id?: string
+  unit_id?: string
+  citation_key?: string
+  literature_id?: string
+}
+
+export interface ManuscriptReadiness {
+  schema_version?: string
+  project_id: string
+  manuscript_id: string
+  target_phase: string
+  ready: boolean
+  verdict: "PASS" | "WARN" | "BLOCK" | "ERROR"
+  findings: ManuscriptReadinessFinding[]
+}
+
+export interface ManuscriptImpact {
+  project_id: string
+  manuscript_id: string
+  requested_since_cursor: number
+  next_cursor: number
+  has_more: boolean
+  relevant_changes: Array<Record<string, unknown>>
+  affected_claims: Array<Record<string, unknown>>
+  affected_units: Array<Record<string, unknown>>
+  changed_sources: Array<Record<string, unknown>>
+  [key: string]: unknown
 }
 
 export interface ClusterContradiction {
