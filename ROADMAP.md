@@ -45,13 +45,19 @@ covers deep links, Back recovery, mismatched filter recovery, independent
 epistemic labels, and browser console health. The evidence is recorded in
 [`2026-08-14-workbench-scope-navigation-walkthrough.md`](docs/superpowers/specs/2026-08-14-workbench-scope-navigation-walkthrough.md).
 
-The immediate target remains **M2 / PR 4**: validate and merge this slice, then
-run the hardened shell against DelaySteer and a mature positive-path project
-and close any accessibility, empty-state, or traceability gaps before declaring
-the M2 exit gate complete. PR 3 remains explicitly deferred until the
-experiment/run/result schema is
-separately designed and reviewed; the workbench must label that missing
-semantic layer rather than infer experiments from journal entries.
+The real-project admission pass now covers DelaySteer, InvarLLM, CPSEval, and
+detectability through an online database backup. Project isolation passed, and
+the workbench correctly refused to invent scopes or spines: the first two
+projects have no native manuscript, while CPSEval and detectability have native
+manuscripts but empty spines; all four still contain only legacy claims with
+missing canonical scopes. After this slice is validated and merged, the
+immediate target remains **M2 / PR 4**: run a bounded positive-path migration on
+a disposable CPSEval database copy because it already has a native manuscript
+and fewer legacy claims than detectability. No live semantic record will be
+changed for that pilot. PR 3 remains explicitly deferred until the
+experiment/run/result schema is separately designed and reviewed; the
+workbench must label that missing semantic layer rather than infer experiments
+from journal entries.
 
 ## Dependency map
 
