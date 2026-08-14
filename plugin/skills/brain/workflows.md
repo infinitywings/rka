@@ -100,47 +100,75 @@ rka_add_note(
 
 **Periodic protocol review**: when significant results arrive or the research direction feels uncertain, search for `tags:research-protocol` in the current project, re-read, and check whether current work still aligns. If assumptions have been invalidated by evidence, flag with a Confirmation Brief rather than silently adapting.
 
-## Claim Extraction
+## Interpretation Staging and Claim Promotion
 
-Journal entries get distilled into structured claims during maintenance. This is where raw observations become queryable knowledge.
+Journal entries are first distilled into reviewable interpretation candidates.
+This staging boundary prevents noisy notes, plans, speculation, and model
+inference from silently entering the canonical claim graph.
 
-**What makes a good claim:**
-- ONE atomic fact per claim (not a paragraph).
-- Directly quotable from the source entry.
-- Has a clear type: `hypothesis`, `evidence`, `method`, `result`, `observation`, `assumption`.
+**What makes a good candidate:**
+- ONE atomic statement (not a paragraph).
+- An exact source locator (`text_offset`, page, line range, section, fragment, or full record).
+- A clear epistemic kind: observation, reported fact, inference, hypothesis, plan, or author intent.
+- Scope conditions, uncertainty, and a falsifier when applicable.
+- An optional proposed canonical claim type; the proposal is not promotion.
 
-**Confidence ranges:**
-- `0.0–0.3` — weak or ambiguous extraction from the source.
-- `0.3–0.6` — plausible wording from partial context.
-- `0.6–0.8` — well grounded in the source record.
-- `0.8–1.0` — explicit full-text grounding with precise offsets/quotation.
-
-This is extraction confidence only. It must not encode replication or evidence
-strength; those belong in the separate categorical `evidence_status` review.
+Use `uncertainty=none|low|medium|high|unknown` for interpretation uncertainty.
+The later `claim_confidence` records source-grounding fidelity only. Neither
+field encodes replication or scientific evidence strength; that belongs in the
+separate categorical `evidence_status` review.
 
 **Example extraction:**
 
 Entry: *"The stress test showed 12% packet loss above 400 connections. We used MQTT with QoS 1."*
 
-Claims:
-1. type: `evidence`, text: `"12% packet loss above 400 connections"`, confidence: `0.8`.
-2. type: `method`, text: `"Stress test used MQTT with QoS 1"`, confidence: `0.95`.
+Candidates:
+1. reported fact: `"12% packet loss above 400 connections"`, proposed type `evidence`.
+2. reported fact: `"Stress test used MQTT with QoS 1"`, proposed type `method`.
 
 ```python
-rka_extract_claims(
-    entry_id="jrn_01...",
-    claims=[
+rka_execute(args={
+    "operation": "extract_claims",
+    "project_id": "prj_01...",
+    "entry_id": "jrn_01...",
+    "claims": [
         {"claim_type": "evidence", "text": "12% packet loss above 400 connections",
-         "confidence": 0.8, "cluster_id": "ecl_01..."},
+         "epistemic_kind": "reported_fact", "uncertainty": "low"},
         {"claim_type": "method", "text": "Stress test used MQTT with QoS 1",
-         "confidence": 0.95, "cluster_id": "ecl_01..."},
+         "epistemic_kind": "reported_fact", "uncertainty": "none"},
     ],
-)
+})
 ```
 
-Extraction leaves `evidence_status=unassessed`. First approve or adjust the
-grounding, then make an explicit evidence assessment only after inspecting
-current supporting, qualifying, and contradictory records:
+The response contains `icd_` IDs, not `clm_` IDs. Inspect each candidate and
+its source, then explicitly promote, merge, defer, reject, classify, or request
+new evidence. Promotion requires an expected revision, reason, and explicit
+grounding confirmation:
+
+```python
+rka_query(args={
+    "operation": "interpretation_candidates",
+    "project_id": "prj_01...",
+    "id": "icd_01...",
+})
+rka_execute(args={
+    "operation": "triage_interpretation_candidate",
+    "project_id": "prj_01...",
+    "id": "icd_01...",
+    "action": "promote",
+    "expected_revision": 1,
+    "actor": "brain",
+    "reason": "Checked the exact journal locator and preserved its scope.",
+    "grounding_verified": True,
+    "claim_confidence": 0.8,
+})
+```
+
+M1 promotion is journal-backed; literature and artifact interpretations remain
+staged until generalized multi-source claim grounding is implemented. A
+promotion creates a claim with `evidence_status=unassessed`. Make an explicit
+scientific evidence assessment only after inspecting current supporting,
+qualifying, and contradictory records:
 
 ```python
 rka_execute(args={

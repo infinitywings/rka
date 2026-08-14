@@ -73,6 +73,13 @@ class GraphService:
             ("literature", "literature", "title", "status", False),
             ("checkpoint", "checkpoints", "description", "status", False),
             ("claim", "claims", "content", "claim_type", False),
+            (
+                "interpretation_candidate",
+                "interpretation_candidates",
+                "statement",
+                "review_status",
+                False,
+            ),
             ("cluster", "evidence_clusters", "label", "confidence", False),
         ]:
             if include_types and etype not in include_types:
@@ -887,6 +894,7 @@ class GraphService:
             ("literature", "literature"),
             ("checkpoint", "checkpoints"),
             ("claim", "claims"),
+            ("interpretation_candidate", "interpretation_candidates"),
             ("cluster", "evidence_clusters"),
         ]:
             row = await self.db.fetchone(
@@ -936,6 +944,12 @@ class GraphService:
             "literature": ("literature", "title", "status", False),
             "checkpoint": ("checkpoints", "description", "status", False),
             "claim": ("claims", "content", "claim_type", False),
+            "interpretation_candidate": (
+                "interpretation_candidates",
+                "statement",
+                "review_status",
+                False,
+            ),
             "cluster": ("evidence_clusters", "label", "confidence", False),
         }
         for etype, ids in entity_ids.items():

@@ -20,6 +20,7 @@ import ResearchMap from "@/pages/ResearchMap"
 import ResearchHealth from "@/pages/ResearchHealth"
 import ReportContext from "@/pages/ReportContext"
 import ManuscriptWorkbench from "@/pages/ManuscriptWorkbench"
+import InterpretationStaging from "@/pages/InterpretationStaging"
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -47,6 +48,7 @@ export default function App() {
               <Route path="timeline" element={<Timeline />} />
               <Route path="graph" element={<KnowledgeGraph />} />
               <Route path="research-map" element={<ResearchMap />} />
+              <Route path="interpretations" element={<InterpretationStaging />} />
               <Route path="health" element={<ResearchHealth />} />
               <Route path="report-context" element={<ReportContext />} />
               <Route path="workbench" element={<ManuscriptWorkbench />} />

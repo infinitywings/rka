@@ -7,24 +7,29 @@ substrate with a researcher-facing manuscript drafting workbench.
 
 The M0 authority, stage, proposal, and provider decisions are recorded in
 [ADR 0001](docs/adr/0001-manuscript-workbench-authority-stage-and-ai-boundary.md).
+The M1 interpretation boundary is recorded in
+[ADR 0002](docs/adr/0002-interpretation-staging-and-experiment-boundary.md).
 
 The roadmap is ordered by dependency, not by invented delivery dates. Every
 milestone must satisfy its exit gate before dependent work is treated as ready.
 
 ## Now
 
-**M0 / PR 0A and PR 0B are implemented and technically validated in the local
-working tree.** The choice-first Writer delta is reconciled, the authority and
-AI boundary is recorded in ADR 0001, and the read-only workbench has been
-walked through with DelaySteer and a full-manuscript control.
+**M0 is complete and committed. M1 / PR 1 Interpretation Staging is locally
+complete and ready for review.** The choice-first Writer delta is reconciled,
+the authority and AI boundary is recorded in ADR 0001, and the read-only
+workbench has been walked through with DelaySteer and a full-manuscript control.
 
 The walkthrough and its design revisions are recorded in
 [`2026-08-14-delaysteer-workbench-walkthrough.md`](docs/superpowers/specs/2026-08-14-delaysteer-workbench-walkthrough.md).
-The remaining M0 gate is researcher approval of the authority and stage
-contracts. After approval, the immediate implementation target is **M1 / PR 1
-Interpretation Staging and experiment-contract schema design**. M2 / PR 4 may
-expand the read-only workbench in parallel, but no migration should land before
-the M1 schema ADR is approved.
+The authority and stage contracts have researcher approval. PR 1 now includes
+the candidate schema and immutable audit history, exact source locators,
+duplicate/conflict hints, explicit promotion and revocation, deterministic
+review UI, REST/MCP/knowledge-pack parity, a full-suite release gate, an
+isolated Docker smoke test, and a disposable DelaySteer browser pilot. The
+immediate target is **M1 / PR 2 claim scope contracts**; the PR 3 experiment
+boundary remains explicitly deferred until its schema is designed and
+reviewed.
 
 ## Dependency map
 

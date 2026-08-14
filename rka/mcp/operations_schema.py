@@ -30,7 +30,7 @@ Design choices (decision #3 in the project locked-decisions list):
   hints, and the Phase-X²' canonical-field-name lessons (e.g. the
   `description=` vs `content=` checkpoint pitfall from the 2026-06-01
   hyperscaler-auditing PA-2 bug).
-- Single dict, one entry per operation. Total 109 entries.
+- Single dict, one entry per operation. Total 113 entries.
 - Enum value-sets reference rka.mcp._enums for drift-detection — the
   enums dict here cites the values directly (mirror of _enums.py) so
   consumers don't need to import _enums. The lock-test in
@@ -87,6 +87,28 @@ _ENUMS = {
     "claim_type": [
         "hypothesis", "evidence", "method", "result", "observation",
         "assumption",
+    ],
+    "interpretation_source": ["journal", "literature", "artifact"],
+    "interpretation_locator": [
+        "text_offset", "page", "line_range", "section", "url_fragment", "record",
+    ],
+    "epistemic_kind": [
+        "observation", "reported_fact", "inference", "hypothesis", "plan",
+        "author_intent",
+    ],
+    "interpretation_uncertainty": ["none", "low", "medium", "high", "unknown"],
+    "interpretation_actor": ["pi", "brain", "executor", "web_ui", "llm", "import"],
+    "interpretation_review_actor": ["pi", "brain", "executor", "web_ui"],
+    "interpretation_review_status": ["pending", "in_review", "resolved"],
+    "interpretation_disposition": [
+        "promoted", "merged", "deferred", "rejected", "classified_decision",
+        "classified_plan", "classified_author_intent", "evidence_mission_requested",
+    ],
+    "interpretation_hint_kind": ["duplicate", "conflict"],
+    "interpretation_triage_action": [
+        "start_review", "promote", "merge", "defer", "reject",
+        "classify_decision", "classify_plan", "classify_author_intent",
+        "request_evidence_mission", "reopen", "revoke_promotion",
     ],
     "evidence_status": [
         "unassessed", "supported", "partially_supported", "inconclusive",
@@ -651,6 +673,52 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "verified filters source-grounding fidelity. evidence_status "
             "filters the independent scientific evidence assessment."
         ),
+    },
+
+    "interpretation_candidates": {
+        "operation": "interpretation_candidates",
+        "tool": "rka_query",
+        "category": "claims",
+        "role_tag": "ANY",
+        "summary": "List reviewable interpretations or fetch one detailed candidate.",
+        "signature": (
+            "rka_query(operation='interpretation_candidates', *, project_id, "
+            "id=None, limit=50, filters={'review_status', 'disposition', "
+            "'epistemic_kind', 'source_type', 'source_id'})"
+        ),
+        "required_fields": ["project_id"],
+        "optional_fields": ["limit", "filters", "id"],
+        "enums": _e(
+            "interpretation_review_status",
+            "interpretation_disposition",
+            "epistemic_kind",
+            "interpretation_source",
+        ),
+        "examples": [
+            {
+                "description": "Load pending candidate review work.",
+                "call": {
+                    "operation": "interpretation_candidates",
+                    "project_id": "prj_01ABC...",
+                    "filters": {"review_status": "pending"},
+                },
+            },
+            {
+                "description": "Inspect one candidate and its immutable history.",
+                "call": {
+                    "operation": "interpretation_candidates",
+                    "project_id": "prj_01ABC...",
+                    "id": "icd_01XYZ...",
+                },
+            },
+        ],
+        "related_operations": [
+            "create_interpretation_candidate",
+            "add_interpretation_hint",
+            "triage_interpretation_candidate",
+            "claims",
+        ],
+        "notes": "Candidates are not canonical claims or scientific support.",
     },
 
     "manuscript": {
@@ -3069,7 +3137,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "tool": "rka_execute",
         "category": "claims",
         "role_tag": "BRAIN",
-        "summary": "Extract claims from an existing entry.",
+        "summary": "Stage atomic interpretations from an existing entry.",
         "signature": (
             "rka_execute(operation='extract_claims', *, project_id, "
             "entry_id, claims)"
@@ -3091,8 +3159,140 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
                 },
             },
         ],
-        "related_operations": ["claims", "review_claims", "create_cluster"],
-        "notes": None,
+        "related_operations": [
+            "interpretation_candidates", "triage_interpretation_candidate",
+            "claims",
+        ],
+        "notes": (
+            "Compatibility name retained. This operation creates icd_ candidates, "
+            "not clm_ records; explicit reviewed promotion is required."
+        ),
+    },
+
+    "create_interpretation_candidate": {
+        "operation": "create_interpretation_candidate",
+        "tool": "rka_execute",
+        "category": "claims",
+        "role_tag": "BRAIN",
+        "summary": "Stage one source-grounded atomic interpretation for review.",
+        "signature": (
+            "rka_execute(operation='create_interpretation_candidate', *, "
+            "project_id, source_type, source_id, locator_kind, statement, "
+            "epistemic_kind, created_by, extraction_tool, ...)"
+        ),
+        "required_fields": [
+            "project_id", "source_type", "source_id", "locator_kind",
+            "statement", "epistemic_kind", "created_by", "extraction_tool",
+        ],
+        "optional_fields": [
+            "locator_start", "locator_end", "locator_value", "scope_conditions",
+            "uncertainty", "uncertainty_note", "falsifier",
+            "proposed_claim_type", "extraction_model",
+        ],
+        "enums": _e(
+            "interpretation_source", "interpretation_locator", "epistemic_kind",
+            "interpretation_actor", "interpretation_uncertainty", "claim_type",
+        ),
+        "examples": [
+            {
+                "description": "Stage an exact journal observation.",
+                "call": {
+                    "operation": "create_interpretation_candidate",
+                    "project_id": "prj_01ABC...",
+                    "source_type": "journal",
+                    "source_id": "jrn_01XYZ...",
+                    "locator_kind": "text_offset",
+                    "locator_start": 40,
+                    "locator_end": 78,
+                    "statement": "The run measured 42 ms.",
+                    "epistemic_kind": "observation",
+                    "created_by": "brain",
+                    "extraction_tool": "manual_review",
+                    "proposed_claim_type": "result",
+                },
+            },
+        ],
+        "related_operations": [
+            "interpretation_candidates", "add_interpretation_hint",
+            "triage_interpretation_candidate",
+        ],
+        "notes": "Creation never promotes a canonical claim.",
+    },
+
+    "add_interpretation_hint": {
+        "operation": "add_interpretation_hint",
+        "tool": "rka_execute",
+        "category": "claims",
+        "role_tag": "BRAIN",
+        "summary": "Record a typed duplicate or conflict hint between candidates.",
+        "signature": (
+            "rka_execute(operation='add_interpretation_hint', *, project_id, "
+            "id, related_candidate_id, kind, rationale, created_by, "
+            "expected_revision, confidence=0.5)"
+        ),
+        "required_fields": [
+            "project_id", "id", "related_candidate_id", "kind", "rationale",
+            "created_by", "expected_revision",
+        ],
+        "optional_fields": ["confidence"],
+        "enums": _e("interpretation_hint_kind", "interpretation_actor"),
+        "examples": [
+            {
+                "description": "Flag two candidates as likely duplicates.",
+                "call": {
+                    "operation": "add_interpretation_hint",
+                    "project_id": "prj_01ABC...",
+                    "id": "icd_01A...",
+                    "related_candidate_id": "icd_01B...",
+                    "kind": "duplicate",
+                    "rationale": "Same measurement and scope.",
+                    "created_by": "brain",
+                    "expected_revision": 1,
+                },
+            },
+        ],
+        "related_operations": ["interpretation_candidates"],
+        "notes": "Hints inform review; they do not merge or reject candidates.",
+    },
+
+    "triage_interpretation_candidate": {
+        "operation": "triage_interpretation_candidate",
+        "tool": "rka_execute",
+        "category": "claims",
+        "role_tag": "BRAIN",
+        "summary": "Review, promote, reopen, or revoke one candidate.",
+        "signature": (
+            "rka_execute(operation='triage_interpretation_candidate', *, "
+            "project_id, id, action, expected_revision, actor, reason=None, ...)"
+        ),
+        "required_fields": [
+            "project_id", "id", "action", "expected_revision", "actor",
+        ],
+        "optional_fields": [
+            "reason", "target_candidate_id", "target_entity_id",
+            "grounding_verified", "claim_confidence",
+        ],
+        "enums": _e("interpretation_triage_action", "interpretation_review_actor"),
+        "examples": [
+            {
+                "description": "Promote after checking the exact source span.",
+                "call": {
+                    "operation": "triage_interpretation_candidate",
+                    "project_id": "prj_01ABC...",
+                    "id": "icd_01XYZ...",
+                    "action": "promote",
+                    "expected_revision": 2,
+                    "actor": "brain",
+                    "reason": "Checked exact grounding.",
+                    "grounding_verified": True,
+                },
+            },
+        ],
+        "related_operations": ["interpretation_candidates", "claims"],
+        "notes": (
+            "Promotion sets grounding fidelity but leaves scientific evidence "
+            "status unassessed. Revoke preserves the claim and marks it stale."
+        ),
     },
 
     "review_claims": {

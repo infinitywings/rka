@@ -177,6 +177,30 @@ ClaimTypeLit = Literal[
     "hypothesis", "evidence", "method", "result", "observation", "assumption",
 ]
 
+# Interpretation Staging (rka/models/interpretation.py).
+InterpretationSourceLit = Literal["journal", "literature", "artifact"]
+InterpretationLocatorLit = Literal[
+    "text_offset", "page", "line_range", "section", "url_fragment", "record",
+]
+EpistemicKindLit = Literal[
+    "observation", "reported_fact", "inference", "hypothesis", "plan",
+    "author_intent",
+]
+InterpretationUncertaintyLit = Literal["none", "low", "medium", "high", "unknown"]
+InterpretationActorLit = Literal["pi", "brain", "executor", "web_ui", "llm", "import"]
+InterpretationReviewActorLit = Literal["pi", "brain", "executor", "web_ui"]
+InterpretationReviewStatusLit = Literal["pending", "in_review", "resolved"]
+InterpretationDispositionLit = Literal[
+    "promoted", "merged", "deferred", "rejected", "classified_decision",
+    "classified_plan", "classified_author_intent", "evidence_mission_requested",
+]
+InterpretationHintKindLit = Literal["duplicate", "conflict"]
+InterpretationTriageActionLit = Literal[
+    "start_review", "promote", "merge", "defer", "reject",
+    "classify_decision", "classify_plan", "classify_author_intent",
+    "request_evidence_mission", "reopen", "revoke_promotion",
+]
+
 # Scientific evidence assessment on a claim. This is intentionally
 # independent from ``claims.verified``, which records extraction/grounding
 # fidelity against the source entry.

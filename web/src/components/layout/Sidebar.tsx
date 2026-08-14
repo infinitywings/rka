@@ -21,6 +21,7 @@ import {
   Moon,
   Monitor,
   PanelsTopLeft,
+  ListChecks,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useTheme } from "@/hooks/useTheme"
@@ -56,6 +57,7 @@ const navItems = [
   { to: "/timeline", icon: Clock, label: "Timeline" },
   { to: "/graph", icon: Share2, label: "Knowledge Graph" },
   { to: "/research-map", icon: Map, label: "Research Map" },
+  { to: "/interpretations", icon: ListChecks, label: "Interpretation Review" },
   { to: "/health", icon: Activity, label: "Research Health" },
   { to: "/report-context", icon: FileSearch, label: "Report Context" },
   { to: "/workbench", icon: PanelsTopLeft, label: "Manuscript Workbench" },

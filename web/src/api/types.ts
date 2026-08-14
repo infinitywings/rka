@@ -602,6 +602,139 @@ export interface Claim {
   updated_at?: string | null
 }
 
+// ---- M1: Interpretation staging upstream of canonical claims ----
+
+export type InterpretationSourceType = "journal" | "literature" | "artifact"
+export type InterpretationLocatorKind =
+  | "text_offset"
+  | "page"
+  | "line_range"
+  | "section"
+  | "url_fragment"
+  | "record"
+export type EpistemicKind =
+  | "observation"
+  | "reported_fact"
+  | "inference"
+  | "hypothesis"
+  | "plan"
+  | "author_intent"
+export type InterpretationReviewStatus = "pending" | "in_review" | "resolved"
+export type InterpretationDisposition =
+  | "promoted"
+  | "merged"
+  | "deferred"
+  | "rejected"
+  | "classified_decision"
+  | "classified_plan"
+  | "classified_author_intent"
+  | "evidence_mission_requested"
+export type InterpretationTriageAction =
+  | "start_review"
+  | "promote"
+  | "merge"
+  | "defer"
+  | "reject"
+  | "classify_decision"
+  | "classify_plan"
+  | "classify_author_intent"
+  | "request_evidence_mission"
+  | "reopen"
+  | "revoke_promotion"
+
+export interface InterpretationCandidate {
+  id: string
+  project_id: string
+  source_type: InterpretationSourceType
+  source_id: string
+  locator_kind: InterpretationLocatorKind
+  locator_start: number | null
+  locator_end: number | null
+  locator_value: string | null
+  statement: string
+  epistemic_kind: EpistemicKind
+  scope_conditions: string[]
+  uncertainty: "none" | "low" | "medium" | "high" | "unknown"
+  uncertainty_note: string | null
+  falsifier: string | null
+  proposed_claim_type: ClaimType | null
+  created_by: string
+  extraction_tool: string
+  extraction_model: string | null
+  review_status: InterpretationReviewStatus
+  disposition: InterpretationDisposition | null
+  disposition_reason: string | null
+  disposition_target_type: string | null
+  disposition_target_id: string | null
+  reviewed_by: string | null
+  reviewed_at: string | null
+  revision: number
+  duplicate_hint_count: number
+  conflict_hint_count: number
+  active_claim_id: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface InterpretationHint {
+  id: string
+  project_id: string
+  candidate_id: string
+  related_candidate_id: string
+  kind: "duplicate" | "conflict"
+  confidence: number
+  rationale: string
+  created_by: string
+  created_at: string | null
+}
+
+export interface InterpretationReviewEvent {
+  id: string
+  project_id: string
+  candidate_id: string
+  action: string
+  from_status: InterpretationReviewStatus | null
+  to_status: InterpretationReviewStatus
+  disposition: InterpretationDisposition | null
+  actor: string
+  reason: string | null
+  target_type: string | null
+  target_id: string | null
+  candidate_revision: number
+  created_at: string | null
+}
+
+export interface InterpretationPromotion {
+  id: string
+  project_id: string
+  candidate_id: string
+  claim_id: string
+  status: "active" | "revoked"
+  promoted_by: string
+  promotion_reason: string
+  promoted_at: string | null
+  revoked_by: string | null
+  revocation_reason: string | null
+  revoked_at: string | null
+}
+
+export interface InterpretationCandidateDetail extends InterpretationCandidate {
+  hints: InterpretationHint[]
+  review_events: InterpretationReviewEvent[]
+  promotions: InterpretationPromotion[]
+}
+
+export interface InterpretationTriageRequest {
+  action: InterpretationTriageAction
+  expected_revision: number
+  actor: "pi" | "brain" | "executor" | "web_ui"
+  reason?: string
+  target_candidate_id?: string
+  target_entity_id?: string
+  grounding_verified?: boolean
+  claim_confidence?: number
+}
+
 export interface EvidenceCluster {
   id: string
   research_question_id: string | null

@@ -264,14 +264,14 @@ Detailed operating guidance is available via MCP prompts:
 Use these prompts to load role-specific guidance at session start.
 
 ## Tool Surface (v2.7.0+) — Typed Dispatch Architecture
-RKA ships 5 always-on tools: 3 dispatch tools that route to 109 typed
+RKA ships 5 always-on tools: 3 dispatch tools that route to 113 typed
 operations, plus 2 escape hatches into the legacy surface.
 
 - **Dispatch (always-on):**
-- `rka_query(args={"operation": ..., "project_id": ..., ...})` — 51 read
+- `rka_query(args={"operation": ..., "project_id": ..., ...})` — 52 read
     operations (status, context, journal, decisions, missions, literature,
     research map, etc.). Returns structured data.
-- `rka_execute(args={"operation": ..., "project_id": ..., ...})` — 58
+- `rka_execute(args={"operation": ..., "project_id": ..., ...})` — 61
     write/lifecycle operations (record_note, record_decision, create_mission,
     submit_report, submit_checkpoint, etc.). Returns the created/updated entity.
   - `rka_describe(operation="" | "<op_name>")` — schema lookup. With no
@@ -283,7 +283,7 @@ operations, plus 2 escape hatches into the legacy surface.
     the live tool surface. Useful only for back-compat with old transcripts.
   - `rka_help(name=...)` — deprecated alias for `rka_describe`.
 
-The 109 operations are typed Pydantic models with per-branch enum constraints
+The 113 operations are typed Pydantic models with per-branch enum constraints
 and required-field enforcement at the FastMCP schema layer — illegal values
 (e.g. `confidence="confirmed"`) are rejected at the inputSchema boundary
 before the call goes out.
@@ -4466,52 +4466,240 @@ async def rka_get_claims(
 
 
 @tool(category="claims")
+async def rka_get_interpretation_candidates(
+    candidate_id: str | None = None,
+    review_status: str | None = None,
+    disposition: str | None = None,
+    epistemic_kind: str | None = None,
+    source_type: str | None = None,
+    source_id: str | None = None,
+    limit: int = 50,
+    *,
+    project_id: str,
+) -> str:
+    """List staged interpretations or fetch one detailed candidate."""
+    async with _client(project_id) as c:
+        if candidate_id:
+            response = await c.get(f"/api/interpretations/{candidate_id}")
+        else:
+            response = await c.get(
+                "/api/interpretations",
+                params=_strip_none(
+                    {
+                        "review_status": review_status,
+                        "disposition": disposition,
+                        "epistemic_kind": epistemic_kind,
+                        "source_type": source_type,
+                        "source_id": source_id,
+                        "limit": limit,
+                    }
+                ),
+            )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="claims")
+async def rka_create_interpretation_candidate(
+    source_type: str,
+    source_id: str,
+    locator_kind: str,
+    statement: str,
+    epistemic_kind: str,
+    created_by: str,
+    extraction_tool: str,
+    locator_start: int | None = None,
+    locator_end: int | None = None,
+    locator_value: str | None = None,
+    scope_conditions: list[str] | None = None,
+    uncertainty: str = "unknown",
+    uncertainty_note: str | None = None,
+    falsifier: str | None = None,
+    proposed_claim_type: str | None = None,
+    extraction_model: str | None = None,
+    *,
+    project_id: str,
+) -> str:
+    """Create one reviewable interpretation without creating a claim."""
+    payload = _strip_none(
+        {
+            "source_type": source_type,
+            "source_id": source_id,
+            "locator_kind": locator_kind,
+            "locator_start": locator_start,
+            "locator_end": locator_end,
+            "locator_value": locator_value,
+            "statement": statement,
+            "epistemic_kind": epistemic_kind,
+            "scope_conditions": scope_conditions or [],
+            "uncertainty": uncertainty,
+            "uncertainty_note": uncertainty_note,
+            "falsifier": falsifier,
+            "proposed_claim_type": proposed_claim_type,
+            "created_by": created_by,
+            "extraction_tool": extraction_tool,
+            "extraction_model": extraction_model,
+        }
+    )
+    async with _client(project_id) as c:
+        response = await c.post("/api/interpretations", json=payload)
+        _raise_with_detail(response)
+    candidate = response.json()
+    _record_entity(
+        "interpretation_candidate",
+        candidate["id"],
+        candidate["statement"][:80],
+    )
+    return json.dumps(candidate, indent=2)
+
+
+@tool(category="claims")
+async def rka_triage_interpretation_candidate(
+    candidate_id: str,
+    action: str,
+    expected_revision: int,
+    actor: str,
+    reason: str | None = None,
+    target_candidate_id: str | None = None,
+    target_entity_id: str | None = None,
+    grounding_verified: bool = False,
+    claim_confidence: float = 0.5,
+    *,
+    project_id: str,
+) -> str:
+    """Apply one revision-guarded review or promotion action."""
+    payload = _strip_none(
+        {
+            "action": action,
+            "expected_revision": expected_revision,
+            "actor": actor,
+            "reason": reason,
+            "target_candidate_id": target_candidate_id,
+            "target_entity_id": target_entity_id,
+            "grounding_verified": grounding_verified,
+            "claim_confidence": claim_confidence,
+        }
+    )
+    async with _client(project_id) as c:
+        response = await c.post(
+            f"/api/interpretations/{candidate_id}/triage",
+            json=payload,
+        )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="claims")
+async def rka_add_interpretation_hint(
+    candidate_id: str,
+    related_candidate_id: str,
+    kind: str,
+    rationale: str,
+    created_by: str,
+    expected_revision: int,
+    confidence: float = 0.5,
+    *,
+    project_id: str,
+) -> str:
+    """Record a typed duplicate/conflict hint between candidates."""
+    async with _client(project_id) as c:
+        response = await c.post(
+            f"/api/interpretations/{candidate_id}/hints",
+            json={
+                "related_candidate_id": related_candidate_id,
+                "kind": kind,
+                "confidence": confidence,
+                "rationale": rationale,
+                "created_by": created_by,
+                "expected_revision": expected_revision,
+            },
+        )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="claims")
 async def rka_extract_claims(
     entry_id: str,
     claims: list[dict],
     *,
     project_id: str,
 ) -> str:
-    """Brain creates claims extracted from a journal entry.
+    """Brain stages atomic interpretations from a journal entry.
 
-    The Brain reads an entry, identifies atomic claims, and writes them back.
-    Each claim gets a derived_from link to the source entry.
+    This compatibility operation no longer writes canonical ``clm_`` rows.
+    It creates reviewable ``icd_`` candidates. Promote each candidate through
+    ``triage_interpretation_candidate`` after checking its exact grounding.
 
     Args:
         entry_id: Source journal entry ID (e.g. jnl_...)
         claims: List of claim objects, each with:
             - claim_type: hypothesis, evidence, method, result, observation, assumption
-            - content: The atomic claim text
+            - text or content: The atomic candidate statement
             - confidence: 0.0-1.0 (default 0.5)
-            - cluster_id: Optional cluster ID to assign this claim to (e.g. ecl_...)
+            - epistemic_kind: Optional explicit epistemic kind
     """
     created = []
-    assigned = 0
+    if any(cl.get("cluster_id") for cl in claims):
+        return json.dumps(
+            {
+                "error": "candidate_not_claim",
+                "message": (
+                    "cluster_id cannot be assigned during interpretation staging; "
+                    "promote the candidate, then assign the resulting clm_ id"
+                ),
+            },
+            indent=2,
+        )
     async with _client(project_id) as c:
         for cl in claims:
+            claim_type = cl["claim_type"]
+            start = cl.get("source_offset_start")
+            statement = cl.get("content") or cl.get("text")
+            if not statement or not str(statement).strip():
+                return json.dumps(
+                    {
+                        "error": "missing_field",
+                        "message": "each extract_claims item requires non-empty text or content",
+                    },
+                    indent=2,
+                )
+            statement = str(statement).strip()
+            epistemic_kind = cl.get("epistemic_kind") or {
+                "hypothesis": "hypothesis",
+                "observation": "observation",
+                "evidence": "reported_fact",
+                "result": "reported_fact",
+                "method": "reported_fact",
+                "assumption": "hypothesis",
+            }.get(claim_type, "inference")
             payload = {
-                "source_entry_id": entry_id,
-                "claim_type": cl["claim_type"],
-                "content": cl["content"],
-                "confidence": cl.get("confidence", 0.5),
+                "source_type": "journal",
+                "source_id": entry_id,
+                "locator_kind": "text_offset" if start is not None else "record",
+                "locator_start": start,
+                "locator_end": cl.get("source_offset_end"),
+                "locator_value": None if start is not None else "full_record",
+                "statement": statement,
+                "epistemic_kind": epistemic_kind,
+                "scope_conditions": cl.get("scope_conditions", []),
+                "uncertainty": cl.get("uncertainty", "unknown"),
+                "uncertainty_note": cl.get("uncertainty_note"),
+                "falsifier": cl.get("falsifier"),
+                "proposed_claim_type": claim_type,
+                "created_by": "brain",
+                "extraction_tool": "rka_execute.extract_claims",
+                "extraction_model": cl.get("extraction_model"),
             }
-            r = await c.post("/api/claims", json=payload)
+            r = await c.post("/api/interpretations", json=_strip_none(payload))
             _raise_with_detail(r)
             result = r.json()
             created.append(result)
-            _record_entity("claim", result["id"], f"{cl['claim_type']}: {cl['content'][:60]}")
-
-            # Inline cluster assignment if cluster_id provided
-            cluster_id = cl.get("cluster_id")
-            if cluster_id:
-                edge_payload = {
-                    "source_claim_id": result["id"],
-                    "cluster_id": cluster_id,
-                    "relation": "member_of",
-                }
-                r2 = await c.post("/api/claims/edges", json=edge_payload)
-                _raise_with_detail(r2)
-                assigned += 1
+            _record_entity(
+                "interpretation_candidate",
+                result["id"],
+                f"{epistemic_kind}: {statement[:60]}",
+            )
 
     # Mission 2 — fire post_claim_extract via the server-side hook endpoint.
     # Composite event: payload carries entry_id + claim_ids[] (the spec shape).
@@ -4524,7 +4712,8 @@ async def rka_extract_claims(
                     "event": "post_claim_extract",
                     "payload": {
                         "entry_id": entry_id,
-                        "claim_ids": [cl["id"] for cl in created],
+                        "claim_ids": [],
+                        "candidate_ids": [cl["id"] for cl in created],
                         "source": "brain",
                     },
                 },
@@ -4532,12 +4721,13 @@ async def rka_extract_claims(
     except Exception:
         pass
 
-    lines = [f"Created {len(created)} claims from {entry_id}:"]
-    if assigned:
-        lines[0] += f" ({assigned} assigned to clusters)"
+    lines = [f"Staged {len(created)} interpretation candidates from {entry_id}:"]
     for cl in created:
-        lines.append(f"  [{cl['id']}] ({cl['claim_type']}) conf={cl.get('confidence', 0.5):.2f}")
-        lines.append(f"    {cl['content'][:200]}")
+        lines.append(
+            f"  [{cl['id']}] ({cl['epistemic_kind']}; proposed "
+            f"{cl.get('proposed_claim_type') or 'unclassified'}) rev={cl['revision']}"
+        )
+        lines.append(f"    {cl['statement'][:200]}")
     return "\n".join(lines)
 
 
@@ -6463,7 +6653,7 @@ QueryScopeLit = _Literal[
     "status", "context", "search", "entity", "journal", "literature",
     "mission", "report", "checkpoints", "decision_tree", "calibration_metrics",
     "hooks", "hook_executions", "brain_notifications", "research_map",
-    "review_queue", "clusters", "claims", "manuscript",
+    "review_queue", "clusters", "claims", "interpretation_candidates", "manuscript",
     "resolve_entities", "changes_since", "manuscript_context",
     "manuscript_reference_manifest",
     "manuscript_readiness", "manuscript_spine",
@@ -7980,7 +8170,7 @@ before using `rka_query` or `rka_execute`.
 # ============================================================
 # Companion to rka_query (reads) and rka_describe (schema lookup).
 #
-# This verb collapses the entire write/lifecycle surface (58
+# This verb collapses the entire write/lifecycle surface (61
 # operations) behind one Annotated[Literal] discriminator so the LLM
 # sees the full enum in its inputSchema. Dispatch lives in
 # rka/mcp/verb_dispatch.py::dispatch_execute, which routes to the
@@ -8017,7 +8207,7 @@ async def rka_execute(args: _ExecuteArgsUnion) -> str:
 
     v2.7.0 NO-COMPROMISE typed-arg surface. The ``args`` parameter is a
     Pydantic discriminated union (keyed by ``operation``) covering all
-    58 write/lifecycle operations. FastMCP renders the union as JSON
+    61 write/lifecycle operations. FastMCP renders the union as JSON
     Schema ``oneOf`` with per-branch ``required`` arrays + per-branch
     ``enum`` constraints on every Literal-typed field. The LLM CANNOT
     emit ``confidence='confirmed'``, ``decided_by='SUPERVISOR'``,
@@ -8162,11 +8352,11 @@ support; the Skill is authoritative.
 Always begin a session by loading context:
 
 0. **Tool surface (v2.7.0+ typed dispatch).** RKA ships 3 always-on dispatch
-   tools — `rka_query` (51 read ops), `rka_execute` (58 write/lifecycle ops),
+   tools — `rka_query` (52 read ops), `rka_execute` (61 write/lifecycle ops),
    and `rka_describe` (schema lookup) — plus 2 escape hatches (`rka_load_tools`
    for legacy compat and `rka_help` as a deprecated alias of `rka_describe`).
    No activation step is required: every operation is reachable from
-   `rka_query` / `rka_execute` on the first call. To browse the 109 operations
+   `rka_query` / `rka_execute` on the first call. To browse the 113 operations
    call `rka_describe("")`; for one operation's full schema call
    `rka_describe("record_decision")`. Per-branch enum + required-field
    enforcement at the FastMCP schema layer guarantees values like
@@ -8250,7 +8440,9 @@ Process high-priority items before starting new work:
 - `rka_execute(args={"operation": "review_claims", "claim_ids": [...], "action": "..."})` — approve, reject, or adjust claims
 - `rka_execute(args={"operation": "resolve_contradiction", "cluster_id": "...", "resolution": "..."})` — resolve flagged conflicts
 
-Your syntheses are marked `synthesized_by: brain` — they are the authoritative interpretation.
+Your reviewed syntheses are marked `synthesized_by: brain`. They are current
+working interpretations, not empirical proof, and they never erase staged,
+rejected, conflicting, or superseded history.
 
 ## Decision Lifecycle
 
@@ -8308,7 +8500,7 @@ Skill is authoritative.
 ## Session Start Protocol
 
 0. **Tool surface (v2.7.0+ typed dispatch).** RKA ships 3 always-on dispatch
-   tools — `rka_query` (51 read ops), `rka_execute` (58 write/lifecycle ops),
+   tools — `rka_query` (52 read ops), `rka_execute` (61 write/lifecycle ops),
    and `rka_describe` (schema lookup) — plus 2 escape hatches (`rka_load_tools`
    for legacy compat and `rka_help` as a deprecated alias of `rka_describe`).
    No activation step is required: every operation is reachable from

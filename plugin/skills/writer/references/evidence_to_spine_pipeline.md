@@ -260,7 +260,7 @@ authorizing new semantics.
 
 | Condition | Action |
 |---|---|
-| journal only, no grounded claim | return to Brain extraction |
+| journal only, no grounded claim | inspect pending `icd_` candidates; return to Brain staging/review and explicit promotion |
 | unverified or weak claim | keep excluded with reason |
 | duplicate claim | group; preserve all lineage |
 | stale cluster | Brain reprocesses cluster |

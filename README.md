@@ -307,12 +307,19 @@ Legacy types from v1 (`finding`, `insight`, `idea`, `observation`, `hypothesis`,
 
 ### Progressive Distillation Pipeline
 
-The distillation pipeline is Brain-driven. The Brain extracts claims, clusters evidence, and writes syntheses during maintenance sessions:
+The distillation pipeline is Brain-driven. Extraction first creates reviewable
+interpretations; only an explicit, revision-guarded review promotes a grounded
+candidate into a canonical claim:
 
 ```
 Journal Entries (note / log / directive)
     |
-    | [Brain: claim extraction during maintenance]
+    | [Brain or extractor: candidate extraction]
+    v
+Interpretation Candidates (icd_)
+  exact source locator | epistemic kind | scope | uncertainty | falsifier
+    |
+    | [Brain/PI: explicit promotion, merge, defer, reject, or classify]
     v
 Claims (clm_)
   hypothesis | evidence | method | result | observation | assumption
@@ -328,7 +335,7 @@ Research Map
   Research Questions --> Clusters --> Claims
 ```
 
-`rka_query(operation="pending_maintenance", project_id="prj_…")` detects entries needing distillation and other provenance gaps. The Brain processes these at session start using `rka_execute(operation="extract_claims", …)`, `rka_execute(operation="create_cluster", …)`, and `rka_execute(operation="assign_claims_to_cluster", …)`.
+`rka_query(operation="pending_maintenance", project_id="prj_…")` detects entries needing distillation and other provenance gaps. `rka_execute(operation="extract_claims", …)` stages `icd_` candidates rather than claims. The Brain reviews them with `rka_query(operation="interpretation_candidates", …)` and `rka_execute(operation="triage_interpretation_candidate", …)`. Only returned `clm_` IDs may then be clustered.
 
 ### ULID-Based IDs
 
@@ -845,7 +852,9 @@ Below: the operation catalog grouped semantically. Operation names map to the `o
 | --------------------------- | ------------------------------------------------------------------------------------------------- |
 | `research_map`              | Get the three-level research map: research questions, evidence clusters, and claims               |
 | `claims`                    | Query extracted claims with filters (type, confidence, cluster, entry_id)                         |
-| `extract_claims`            | Brain creates claims from a journal entry (takes entry_id + list of claim objects)                |
+| `extract_claims`            | Compatibility operation that stages reviewable `icd_` interpretations from a journal entry      |
+| `interpretation_candidates` | List candidates or inspect exact provenance, hints, promotion lineage, and review history         |
+| `triage_interpretation_candidate` | Explicitly promote, merge, defer, reject, classify, reopen, or revoke a candidate          |
 | `create_cluster`            | Brain creates an evidence cluster, optionally assigning claims in one call                        |
 | `assign_claims_to_cluster`  | Brain wires existing claims to an existing cluster via member_of edges                            |
 | `supersede_decision`        | Mark a decision as superseded by a new decision, with optional re-distillation of affected claims |
