@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react"
+import { useSearchParams } from "react-router-dom"
 import {
   AlertTriangle,
   CheckCircle2,
@@ -97,16 +98,23 @@ function formatDate(value: string | null) {
 
 export default function ClaimScopeReview() {
   const queue = useClaimScopeQueue()
-  const [filter, setFilter] = useState<ReadinessFilter>("missing")
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedFilter = searchParams.get("scope")
   const claims = useMemo(() => queue.data ?? [], [queue.data])
+  const requestedClaimId = searchParams.get("claim_id")
+  const requestedClaim = claims.find((claim) => claim.id === requestedClaimId)
+  const filter: ReadinessFilter = requestedClaim?.scope_readiness
+    ?? (readinessOrder.includes(requestedFilter as ClaimScopeReadiness)
+      ? requestedFilter as ClaimScopeReadiness
+      : requestedFilter === "all" ? "all" : "missing")
   const filtered = useMemo(
     () => claims.filter((claim) => filter === "all" || claim.scope_readiness === filter),
     [claims, filter],
   )
-  const activeId = selectedId && filtered.some((claim) => claim.id === selectedId)
-    ? selectedId
+  const activeId = requestedClaimId
+    ? requestedClaim?.id ?? null
     : filtered[0]?.id ?? null
+  const requestedClaimMissing = Boolean(requestedClaimId && !queue.isLoading && !requestedClaim)
   const history = useClaimScope(activeId)
   const activeClaim = claims.find((claim) => claim.id === activeId) ?? null
   const counts = useMemo(
@@ -119,6 +127,21 @@ export default function ClaimScopeReview() {
     ]) as Record<ReadinessFilter, number>,
     [claims],
   )
+
+  const selectFilter = (next: ReadinessFilter) => {
+    const params = new URLSearchParams(searchParams)
+    if (next === "missing") params.delete("scope")
+    else params.set("scope", next)
+    params.delete("claim_id")
+    setSearchParams(params)
+  }
+
+  const selectClaim = (claim: Claim) => {
+    const params = new URLSearchParams(searchParams)
+    params.set("claim_id", claim.id)
+    params.set("scope", claim.scope_readiness)
+    setSearchParams(params)
+  }
 
   return (
     <div className="space-y-4">
@@ -151,7 +174,7 @@ export default function ClaimScopeReview() {
           <button
             key={state}
             type="button"
-            onClick={() => setFilter(state)}
+            onClick={() => selectFilter(state)}
             className={cn(
               "rounded-lg border px-3 py-2 text-left transition-colors",
               filter === state ? "border-primary bg-muted" : "hover:bg-muted/50",
@@ -185,7 +208,7 @@ export default function ClaimScopeReview() {
                 key={claim.id}
                 claim={claim}
                 selected={claim.id === activeId}
-                onSelect={() => setSelectedId(claim.id)}
+                onSelect={() => selectClaim(claim)}
               />
             ))}
           </CardContent>
@@ -200,7 +223,12 @@ export default function ClaimScopeReview() {
             history={history.data}
           />
         )}
-        {!activeId && !queue.isLoading && (
+        {requestedClaimMissing && (
+          <Card><CardContent className="flex h-48 items-center justify-center p-5 text-sm text-muted-foreground">
+            Claim <code className="mx-1">{requestedClaimId}</code> is unavailable in the active project. No fallback claim was selected.
+          </CardContent></Card>
+        )}
+        {!activeId && !queue.isLoading && !requestedClaimMissing && (
           <Card><CardContent className="flex h-48 items-center justify-center text-sm text-muted-foreground">
             Select a scope state with claims to review.
           </CardContent></Card>

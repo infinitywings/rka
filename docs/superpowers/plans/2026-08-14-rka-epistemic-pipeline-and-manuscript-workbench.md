@@ -1,8 +1,8 @@
 # RKA Epistemic Pipeline and Manuscript Drafting Workbench
 
-Status: roadmap design source; M0 complete; M1 PR 1 Interpretation Staging
-committed; M1 PR 2 Claim Scope Contracts implemented and fully validated
-locally; M2 PR 4 workbench hardening is next.
+Status: roadmap design source; M0 complete; M1 PR 1 Interpretation Staging and
+M1 PR 2 Claim Scope Contracts committed; the first M2 PR 4 workbench-hardening
+slice is implemented and validated locally.
 
 Date: 2026-08-14
 
@@ -1240,19 +1240,24 @@ through REST, MCP, packs, graph, Writer gating, and the web; and passed its
 full-suite, production-build, isolated-container, concurrency, and browser
 acceptance gates.
 
-The next implementation slice is **M2 / PR 4 Workbench Shell and Context
-Capsule hardening**:
+The active milestone is **M2 / PR 4 Workbench Shell and Context Capsule
+hardening**. The first slice now provides scope-aware capsule summaries,
+URL-resumable stage and review selection, and evidence-to-review trace links.
+Its disposable production-browser acceptance path is recorded in
+[`2026-08-14-workbench-scope-navigation-walkthrough.md`](../specs/2026-08-14-workbench-scope-navigation-walkthrough.md).
 
-1. make the Context Capsule summarize interpretation and canonical-scope
-   readiness without collapsing independent evidence axes;
-2. deep-link workbench evidence and blockers into the relevant interpretation,
-   claim-scope, source, and manuscript views;
-3. make route and selection state resumable without creating a second semantic
-   store;
+The remaining PR 4 work is:
+
+1. validate the hardened shell against DelaySteer and a mature positive-path
+   project;
+2. close accessibility, narrow-viewport, loading, empty, and partial-count
+   gaps found in those walkthroughs;
+3. verify that every displayed spine/evidence item has a useful forward and
+   reverse trace exit;
 4. surface localized stale-impact paths and explicitly label the still-missing
    experiment/result layer;
-5. validate read-only navigation on DelaySteer and a mature positive-path
-   project before any deliberation or mutation UI is enabled.
+5. freeze the M2 exit evidence before any deliberation or mutation UI is
+   enabled.
 
 PR 3 remains deferred until the experiment/run/result schema is separately
 designed and reviewed. Interpretation candidates and ordinary journal entries

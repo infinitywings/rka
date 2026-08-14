@@ -17,8 +17,8 @@ milestone must satisfy its exit gate before dependent work is treated as ready.
 
 ## Now
 
-**M0 and M1 / PR 1 are committed. M1 / PR 2 Claim Scope Contracts is locally
-complete, fully validated, and ready for review.** The choice-first Writer
+**M0, M1 / PR 1, and M1 / PR 2 are committed. The first M2 / PR 4 workbench
+hardening slice is locally complete and validated.** The choice-first Writer
 delta is reconciled, the authority and AI boundary is recorded in ADR 0001,
 and the read-only workbench has been walked through with DelaySteer and a
 full-manuscript control.
@@ -38,9 +38,17 @@ the full Python suite, production web build, isolated container smoke test,
 revision-conflict check, and browser walkthrough of missing, incomplete, ready,
 and stale states.
 
-The immediate target is **M2 / PR 4 workbench shell and Context Capsule
-hardening over the now-authoritative interpretation and scope contracts**. PR 3
-remains explicitly deferred until the experiment/run/result schema is
+PR 4 now projects interpretation and scope readiness in the Context Capsule,
+stores workbench stage and review selection in shareable URLs, and provides
+direct evidence-to-scope/source/interpretation trace exits. Its disposable
+production-browser walkthrough verified deep links, Back recovery, mismatched
+filter recovery, and independent epistemic labels. The evidence is recorded in
+[`2026-08-14-workbench-scope-navigation-walkthrough.md`](docs/superpowers/specs/2026-08-14-workbench-scope-navigation-walkthrough.md).
+
+The immediate target remains **M2 / PR 4**: run the hardened shell against
+DelaySteer and a mature positive-path project, then close any accessibility,
+empty-state, or traceability gaps before declaring the M2 exit gate complete.
+PR 3 remains explicitly deferred until the experiment/run/result schema is
 separately designed and reviewed; the workbench must label that missing
 semantic layer rather than infer experiments from journal entries.
 

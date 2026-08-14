@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react"
+import { useSearchParams } from "react-router-dom"
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -150,16 +151,25 @@ function CandidateButton({
 
 export default function InterpretationStaging() {
   const candidatesQuery = useInterpretationCandidates()
-  const [filter, setFilter] = useState<StatusFilter>("pending")
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [searchParams, setSearchParams] = useSearchParams()
   const candidates = useMemo(() => candidatesQuery.data ?? [], [candidatesQuery.data])
+  const requestedCandidateId = searchParams.get("candidate_id")
+  const requestedCandidate = candidates.find((candidate) => candidate.id === requestedCandidateId)
+  const requestedFilter = searchParams.get("review_status")
+  const filter: StatusFilter = requestedCandidate?.review_status
+    ?? (["pending", "in_review", "resolved"].includes(requestedFilter ?? "")
+      ? requestedFilter as InterpretationReviewStatus
+      : requestedFilter === "all" ? "all" : "pending")
   const filtered = useMemo(
     () => candidates.filter((candidate) => filter === "all" || candidate.review_status === filter),
     [candidates, filter],
   )
-  const activeId = selectedId && filtered.some((item) => item.id === selectedId)
-    ? selectedId
+  const activeId = requestedCandidateId
+    ? requestedCandidate?.id ?? null
     : filtered[0]?.id ?? null
+  const requestedCandidateMissing = Boolean(
+    requestedCandidateId && !candidatesQuery.isLoading && !requestedCandidate,
+  )
   const detailQuery = useInterpretationCandidate(activeId)
 
   const counts = useMemo(
@@ -171,6 +181,21 @@ export default function InterpretationStaging() {
     }),
     [candidates],
   )
+
+  const selectFilter = (next: StatusFilter) => {
+    const params = new URLSearchParams(searchParams)
+    if (next === "pending") params.delete("review_status")
+    else params.set("review_status", next)
+    params.delete("candidate_id")
+    setSearchParams(params)
+  }
+
+  const selectCandidate = (candidate: InterpretationCandidate) => {
+    const params = new URLSearchParams(searchParams)
+    params.set("candidate_id", candidate.id)
+    params.set("review_status", candidate.review_status)
+    setSearchParams(params)
+  }
 
   return (
     <div className="space-y-4">
@@ -206,7 +231,7 @@ export default function InterpretationStaging() {
           <button
             key={status}
             type="button"
-            onClick={() => setFilter(status)}
+            onClick={() => selectFilter(status)}
             className={cn(
               "rounded-lg border px-4 py-3 text-left transition-colors",
               filter === status ? "border-primary bg-muted" : "hover:bg-muted/50",
@@ -250,7 +275,7 @@ export default function InterpretationStaging() {
                 key={candidate.id}
                 candidate={candidate}
                 selected={candidate.id === activeId}
-                onSelect={() => setSelectedId(candidate.id)}
+                onSelect={() => selectCandidate(candidate)}
               />
             ))}
           </CardContent>
@@ -267,7 +292,12 @@ export default function InterpretationStaging() {
           </CardContent></Card>
         )}
         {detailQuery.data && <CandidateDetail candidate={detailQuery.data} />}
-        {!activeId && !candidatesQuery.isLoading && (
+        {requestedCandidateMissing && (
+          <Card><CardContent className="flex h-48 items-center justify-center p-5 text-sm text-muted-foreground">
+            Candidate <code className="mx-1">{requestedCandidateId}</code> is unavailable in the active project. No fallback candidate was selected.
+          </CardContent></Card>
+        )}
+        {!activeId && !candidatesQuery.isLoading && !requestedCandidateMissing && (
           <Card><CardContent className="flex h-48 items-center justify-center text-sm text-muted-foreground">
             Select a status with candidates to inspect its provenance and review history.
           </CardContent></Card>

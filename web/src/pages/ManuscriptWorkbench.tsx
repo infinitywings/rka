@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react"
 import type { FormEvent, ReactNode } from "react"
-import { useNavigate, useParams } from "react-router-dom"
+import { useNavigate, useParams, useSearchParams } from "react-router-dom"
 import {
   AlertCircle,
   ArrowRight,
@@ -29,12 +29,15 @@ import {
   type WorkbenchStageId,
 } from "@/components/workbench/stages"
 import { useManuscriptWorkbench } from "@/hooks/useManuscriptWorkbench"
+import { useClaimScopeQueue } from "@/hooks/useClaimScopes"
+import { useInterpretationCandidates } from "@/hooks/useInterpretationStaging"
 import { useProjectStatus } from "@/hooks/useProject"
 import { useActiveProjectId } from "@/hooks/useProjectSelection"
 import { useResearchMap } from "@/hooks/useResearchMap"
 import type {
   ManuscriptClaimContext,
   ManuscriptContext,
+  ManuscriptEvidenceBinding,
   ManuscriptReadiness,
   ManuscriptSpine,
   ManuscriptUnitContext,
@@ -112,15 +115,20 @@ export default function ManuscriptWorkbench() {
   const { manuscriptId: routeManuscriptId } = useParams<WorkbenchParams>()
   const manuscriptId = routeManuscriptId?.trim() || null
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const projectId = useActiveProjectId()
-  const [idInput, setIdInput] = useState(manuscriptId ?? "")
-  const [stage, setStage] = useState<WorkbenchStageId>("seed")
   const [selectedTrace, setSelectedTrace] = useState<ScopedTraceSelection | null>(null)
+  const requestedStage = searchParams.get("stage")
+  const stage = WORKBENCH_STAGES.some((item) => item.id === requestedStage)
+    ? requestedStage as WorkbenchStageId
+    : "seed"
 
   const project = useProjectStatus()
   const researchMap = useResearchMap()
+  const interpretations = useInterpretationCandidates()
+  const claimScopes = useClaimScopeQueue()
   const workbench = useManuscriptWorkbench(manuscriptId)
-  const traceScopeKey = `${projectId}:${manuscriptId ?? "project-only"}`
+  const traceScopeKey = `${projectId}:${manuscriptId ?? "project-only"}:${stage}`
 
   const context = workbench.context.data
   const spine = workbench.spine.data
@@ -132,10 +140,11 @@ export default function ManuscriptWorkbench() {
     [researchMap.data, context, candidates, readiness],
   )
 
-  const handleLoad = (event: FormEvent) => {
+  const handleLoad = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    const next = idInput.trim()
-    navigate(next ? `/manuscripts/${encodeURIComponent(next)}/workbench` : "/workbench")
+    const next = String(new FormData(event.currentTarget).get("manuscript_id") ?? "").trim()
+    const stageQuery = stage === "seed" ? "" : `?stage=${encodeURIComponent(stage)}`
+    navigate(next ? `/manuscripts/${encodeURIComponent(next)}/workbench${stageQuery}` : `/workbench${stageQuery}`)
   }
 
   const stageMeta = WORKBENCH_STAGES.find((item) => item.id === stage)!
@@ -151,6 +160,34 @@ export default function ManuscriptWorkbench() {
   }
 
   const impactCount = impact?.relevant_changes?.length ?? 0
+  const interpretationSummary = useMemo(() => {
+    if (!interpretations.data) return undefined
+    const attention = interpretations.data.filter((item) => item.review_status !== "resolved").length
+    return {
+      total: interpretations.data.length,
+      attention,
+      ready: interpretations.data.length - attention,
+      partial: interpretations.data.length >= 200,
+    }
+  }, [interpretations.data])
+  const scopeSummary = useMemo(() => {
+    if (!claimScopes.data) return undefined
+    const ready = claimScopes.data.filter((claim) => claim.scope_readiness === "ready").length
+    return {
+      total: claimScopes.data.length,
+      attention: claimScopes.data.length - ready,
+      ready,
+      partial: claimScopes.data.length >= 200,
+    }
+  }, [claimScopes.data])
+
+  const selectStage = (next: WorkbenchStageId) => {
+    const params = new URLSearchParams(searchParams)
+    if (next === "seed") params.delete("stage")
+    else params.set("stage", next)
+    setSearchParams(params)
+    setSelectedTrace(null)
+  }
 
   return (
     <div className="space-y-4">
@@ -158,7 +195,7 @@ export default function ManuscriptWorkbench() {
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-semibold tracking-tight">Manuscript Workbench</h1>
-            <Badge variant="outline">M0 read-only</Badge>
+            <Badge variant="outline">M2 read-only</Badge>
           </div>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
             Navigate the argument from seed to outline while preserving the distinction between RKA evidence,
@@ -166,10 +203,10 @@ export default function ManuscriptWorkbench() {
           </p>
         </div>
 
-        <form onSubmit={handleLoad} className="flex w-full gap-2 lg:w-[34rem]">
+        <form key={manuscriptId ?? "project-only"} onSubmit={handleLoad} className="flex w-full gap-2 lg:w-[34rem]">
           <Input
-            value={idInput}
-            onChange={(event) => setIdInput(event.target.value)}
+            name="manuscript_id"
+            defaultValue={manuscriptId ?? ""}
             placeholder="Canonical manuscript id (man_...)"
             aria-label="Canonical manuscript id"
           />
@@ -181,8 +218,8 @@ export default function ManuscriptWorkbench() {
               type="button"
               variant="ghost"
               onClick={() => {
-                setIdInput("")
-                navigate("/workbench")
+                const stageQuery = stage === "seed" ? "" : `?stage=${encodeURIComponent(stage)}`
+                navigate(`/workbench${stageQuery}`)
               }}
             >
               Project only
@@ -215,6 +252,8 @@ export default function ManuscriptWorkbench() {
         map={researchMap.data}
         impactCount={impactCount}
         impactPartial={Boolean(impact?.has_more)}
+        interpretationSummary={interpretationSummary}
+        scopeSummary={scopeSummary}
       />
 
       <div className="grid gap-4 xl:grid-cols-[17rem_minmax(0,1fr)]">
@@ -227,10 +266,7 @@ export default function ManuscriptWorkbench() {
             <StageRail
               selected={stage}
               verdicts={verdicts}
-              onSelect={(next) => {
-                setStage(next)
-                setSelectedTrace(null)
-              }}
+              onSelect={selectStage}
             />
           </CardContent>
         </Card>
@@ -457,6 +493,7 @@ function ScopeView({
             ],
             status: statusForClaim(claim),
             trace: ["mcl_ version", "scope boundary", "manuscript units"],
+            links: claim.evidence.flatMap(evidenceTraceLinks),
           }}
           onInspect={onInspect}
         >
@@ -483,6 +520,10 @@ function ScopeView({
             derivation: "Brain-reviewed cluster synthesis; not a native claim or PI ratification.",
             ids: [...claim.evidence_ids, ...claim.scope_contract_ids],
             status: claim.prohibited_wording.length ? "Bounded candidate" : "Needs prohibited wording",
+            links: claim.evidence_ids.map((claimId) => ({
+              label: `Review ${claimId}`,
+              to: `/claim-scopes?claim_id=${encodeURIComponent(claimId)}`,
+            })),
           }}
           onInspect={onInspect}
         >
@@ -493,6 +534,26 @@ function ScopeView({
       ))}
     </>
   )
+}
+
+function evidenceTraceLinks(evidence: ManuscriptEvidenceBinding) {
+  const links = [{
+    label: `Review ${evidence.evidence_claim_id}`,
+    to: `/claim-scopes?claim_id=${encodeURIComponent(evidence.evidence_claim_id)}`,
+  }]
+  if (evidence.source_entry_id) {
+    links.push({
+      label: `Open source ${evidence.source_entry_id}`,
+      to: `/journal?search=${encodeURIComponent(evidence.source_entry_id)}`,
+    })
+  }
+  if (evidence.scope_contract?.source_candidate_id) {
+    links.push({
+      label: `Open interpretation ${evidence.scope_contract.source_candidate_id}`,
+      to: `/interpretations?candidate_id=${encodeURIComponent(evidence.scope_contract.source_candidate_id)}`,
+    })
+  }
+  return links
 }
 
 function ResearchQuestionsView({
