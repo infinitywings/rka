@@ -204,6 +204,10 @@ class ProjectService(BaseService):
         "reference_validation_migration_issues",
         # Research graph and operational records.
         "review_queue",
+        "interpretation_review_events",
+        "interpretation_candidate_hints",
+        "interpretation_promotions",
+        "interpretation_candidates",
         "claim_edges",
         "claims",
         "evidence_clusters",

@@ -929,6 +929,7 @@ _QUERY_DISPATCH: dict[str, str] = {
     # claims / clusters
     "clusters": "rka_list_clusters",
     "claims": "rka_get_claims",
+    "interpretation_candidates": "rka_get_interpretation_candidates",
 
     # provenance / multi-hop
     "provenance": "rka_trace_provenance",
@@ -1198,6 +1199,18 @@ async def dispatch_query(
             evidence_status=f.get("evidence_status"),
             stale=f.get("stale"),
             limit=limit or f.get("limit", 20),
+            project_id=project_id,
+        )
+
+    if scope == "interpretation_candidates":
+        return await legacy(
+            candidate_id=id,
+            review_status=f.get("review_status"),
+            disposition=f.get("disposition"),
+            epistemic_kind=f.get("epistemic_kind"),
+            source_type=f.get("source_type"),
+            source_id=f.get("source_id"),
+            limit=limit or f.get("limit", 50),
             project_id=project_id,
         )
 
@@ -1840,7 +1853,7 @@ async def dispatch_session(
 # v2.7.0a3 — rka_execute dispatch (the unified write/lifecycle surface)
 # ---------------------------------------------------------------------------
 #
-# Routes all 58 write/lifecycle operations to the appropriate existing
+# Routes all 61 write/lifecycle operations to the appropriate existing
 # dispatcher above (or to a legacy @tool function for ops that aren't
 # already covered by one of the 8 v2.7.0a2 verbs). The goal: one
 # always-on tool for ALL writes, with an Annotated[Literal] operation
@@ -1893,6 +1906,9 @@ EXECUTE_OPERATIONS = (
     "ratify_manuscript_claim", "transition_manuscript_phase",
     "create_manuscript_checkpoint", "resolve_manuscript_checkpoint",
     "record_verification_attestation",
+    # interpretation staging
+    "create_interpretation_candidate", "add_interpretation_hint",
+    "triage_interpretation_candidate",
     # update
     "update_note", "update_decision", "update_literature",
     "update_status", "bulk_update", "supersede_decision",
@@ -1980,6 +1996,54 @@ async def dispatch_execute(
             f"rka_execute(operation={op!r}) requires project_id "
             "(every project-scoped write needs explicit project pinning "
             "in v2.6+).",
+        )
+
+    # --- canonical native manuscript aggregate ---
+    if op == "create_interpretation_candidate":
+        return await _legacy("rka_create_interpretation_candidate")(
+            source_type=kw.get("source_type"),
+            source_id=kw.get("source_id"),
+            locator_kind=kw.get("locator_kind"),
+            locator_start=kw.get("locator_start"),
+            locator_end=kw.get("locator_end"),
+            locator_value=kw.get("locator_value"),
+            statement=kw.get("statement"),
+            epistemic_kind=kw.get("epistemic_kind"),
+            scope_conditions=kw.get("scope_conditions"),
+            uncertainty=kw.get("uncertainty", "unknown"),
+            uncertainty_note=kw.get("uncertainty_note"),
+            falsifier=kw.get("falsifier"),
+            proposed_claim_type=kw.get("proposed_claim_type"),
+            created_by=kw.get("created_by"),
+            extraction_tool=kw.get("extraction_tool"),
+            extraction_model=kw.get("extraction_model"),
+            project_id=project_id,
+        )
+
+    if op == "add_interpretation_hint":
+        return await _legacy("rka_add_interpretation_hint")(
+            candidate_id=kw.get("id"),
+            related_candidate_id=kw.get("related_candidate_id"),
+            kind=kw.get("kind"),
+            rationale=kw.get("rationale"),
+            created_by=kw.get("created_by"),
+            expected_revision=kw.get("expected_revision"),
+            confidence=kw.get("confidence", 0.5),
+            project_id=project_id,
+        )
+
+    if op == "triage_interpretation_candidate":
+        return await _legacy("rka_triage_interpretation_candidate")(
+            candidate_id=kw.get("id"),
+            action=kw.get("action"),
+            expected_revision=kw.get("expected_revision"),
+            actor=kw.get("actor"),
+            reason=kw.get("reason"),
+            target_candidate_id=kw.get("target_candidate_id"),
+            target_entity_id=kw.get("target_entity_id"),
+            grounding_verified=kw.get("grounding_verified", False),
+            claim_confidence=kw.get("claim_confidence", 0.5),
+            project_id=project_id,
         )
 
     # --- canonical native manuscript aggregate ---

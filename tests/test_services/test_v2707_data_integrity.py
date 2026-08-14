@@ -23,6 +23,7 @@ from rka.models.topic import TopicCreate
 from rka.services.claims import ClaimService
 from rka.services.clusters import ClusterService
 from rka.services.decisions import DecisionService
+from rka.services.interpretation import InterpretationService
 from rka.services.notes import NoteService
 from rka.services.reindex import reindex_fts
 from rka.services.topics import TopicService
@@ -98,11 +99,11 @@ async def test_auto_summary_projection_failure_rolls_back_source_update(
 
 
 @pytest.mark.asyncio
-async def test_claim_extraction_batch_rolls_back_if_later_claim_fails(
+async def test_interpretation_extraction_batch_rolls_back_if_later_candidate_fails(
     db,
     monkeypatch,
 ):
-    """One extracted batch is durable only when every claim persists."""
+    """One extracted batch is durable only when every candidate persists."""
     await _seed_journal(db, "jrn_claim_batch", "two extractable observations")
 
     class LLM:
@@ -125,22 +126,26 @@ async def test_claim_extraction_batch_rolls_back_if_later_claim_fails(
             )
 
     service = ClaimService(db, llm=LLM(), project_id=_PROJECT)
-    real_create = service.create
+    real_create = InterpretationService.create
     attempts = 0
 
-    async def fail_second(data):
+    async def fail_second(candidate_service, data):
         nonlocal attempts
         attempts += 1
         if attempts == 2:
-            raise RuntimeError("injected second claim failure")
-        return await real_create(data)
+            raise RuntimeError("injected second candidate failure")
+        return await real_create(candidate_service, data)
 
-    monkeypatch.setattr(service, "create", fail_second)
-    with pytest.raises(RuntimeError, match="injected second claim failure"):
+    monkeypatch.setattr(InterpretationService, "create", fail_second)
+    with pytest.raises(RuntimeError, match="injected second candidate failure"):
         await service.process_extract_claims_job("jrn_claim_batch")
 
     assert await db.fetchall(
         "SELECT id FROM claims WHERE source_entry_id = ?",
+        ["jrn_claim_batch"],
+    ) == []
+    assert await db.fetchall(
+        "SELECT id FROM interpretation_candidates WHERE source_id = ?",
         ["jrn_claim_batch"],
     ) == []
 

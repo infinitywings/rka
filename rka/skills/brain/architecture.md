@@ -55,7 +55,7 @@ are not legal `entity_links` values.
 - **`justified_by`** — the journal evidence a decision rests on. `dec_X justified_by jrn_Y` means decision X was made because of evidence Y. **Required** on every decision (per session-start maintenance check).
 - **`motivated`** — the decision that triggered a mission. `dec_X motivated mis_Y`. **Required** on every mission.
 - **`produced`** — output of work. `mis_X produced jrn_Y` means the mission produced that journal entry. Created automatically by mission reports.
-- **`derived_from`** — a claim's lineage to its source entry. `clm_X derived_from jrn_Y` means the claim was extracted from that journal entry. Automatic during `rka_extract_claims`.
+- **`derived_from`** — staged interpretation and claim lineage. Candidate creation records `icd_X derived_from jrn_Y|lit_Y|art_Y`. `rka_extract_claims` stops at this candidate boundary. After exact grounding review, explicit promotion records `clm_X derived_from icd_X`; journal-backed claims also retain `clm_X derived_from jrn_Y` and exact offsets.
 
 ### Cross-entity association
 

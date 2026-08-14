@@ -137,7 +137,8 @@ RKA stores research knowledge in seven entity types. Each has a type-prefixed UL
 | **Literature** | `lit_` | Papers, articles, books. Tracked through a reading pipeline. |
 | **Mission** | `mis_` | Task packages assigned to the Executor with objectives and acceptance criteria. |
 | **Checkpoint** | `chk_` | Escalation points where the Executor needs Brain/PI input. |
-| **Claim** | `clm_` | Atomic facts extracted from journal entries by the Brain. |
+| **Interpretation Candidate** | `icd_` | Reviewable, source-located interpretation that is not yet canonical knowledge. |
+| **Claim** | `clm_` | Atomic, source-grounded statement explicitly promoted from a reviewed candidate or intentionally recorded through the canonical claim API. |
 | **Evidence Cluster** | `ecl_` | Groups of related claims with a Brain-written synthesis. |
 
 ### 4.2 — Journal Entry Types
@@ -150,7 +151,13 @@ RKA stores research knowledge in seven entity types. Each has a type-prefixed UL
 
 ### 4.3 — Claim Types
 
-Claims are atomic facts extracted from journal entries. Each claim has a type that describes what kind of knowledge it represents:
+Candidate extraction does not create a claim. It creates an `icd_` record with
+an exact source locator, epistemic kind, scope conditions, uncertainty, and an
+optional falsifier. A Brain or PI review must explicitly promote it before it
+becomes a canonical `clm_` record. Rejection, deferral, merging, classification,
+and promotion revocation preserve append-only history.
+
+Each promoted claim has a type that describes what kind of knowledge it represents:
 
 | Claim Type | What It Means | Example |
 |------------|---------------|---------|
@@ -194,6 +201,8 @@ Entities are connected by typed links that form provenance chains:
 | `motivated` | decision → mission | This decision motivated creating this mission |
 | `produced` | mission → journal | This mission produced this journal entry |
 | `derived_from` | claim ← journal | This claim was extracted from this entry |
+| `derived_from` | candidate ← source | This candidate interprets the located journal, literature, or artifact record |
+| `derived_from` | claim ← candidate | This claim was explicitly promoted from this reviewed candidate |
 | `cites` | journal → literature | This entry cites this paper |
 | `references` | any → any | General reference link |
 | `supports` | claim → claim | This claim supports that claim |
@@ -420,7 +429,7 @@ Groups of related claims under each research question. Each cluster has a Brain-
 
 ### Level 3: Claims
 
-The atomic facts extracted from journal entries. Each claim has a type (hypothesis/evidence/method/result/observation/assumption) and links back to its source entry with character offsets.
+Atomic, canonical statements promoted after source-grounding review. Each claim has a type (hypothesis/evidence/method/result/observation/assumption) and links through its candidate to the exact source record; journal-backed claims also retain their direct source offsets.
 
 **Example:** *"12% packet loss above 400 connections" — an evidence claim extracted from jrn_01KK..., characters 54–139.*
 

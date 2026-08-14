@@ -53,8 +53,15 @@ class ClaimService(BaseService):
 
     # ── CRUD ─────────────────────────────────────────────────
 
-    async def create(self, data: ClaimCreate) -> Claim:
-        """Create a new claim."""
+    async def create(self, data: ClaimCreate, *, actor: str = "llm") -> Claim:
+        """Create a new claim through an explicit canonical write.
+
+        ``actor`` is provenance only. Automated extraction now stops in
+        Interpretation Staging; direct callers retain this method for
+        intentionally canonical claims and candidate promotion composes it
+        transactionally.
+        """
+        self._validate_actor(actor)
         claim_id = generate_id("claim")
         async with self.db.transaction():
             source = await self.db.fetchone(
@@ -93,7 +100,7 @@ class ClaimService(BaseService):
                 link_type="derived_from",
                 target_type="journal",
                 target_ids=[data.source_entry_id],
-                created_by="llm",
+                created_by=actor,
             )
 
             if self.embeddings:
@@ -107,7 +114,7 @@ class ClaimService(BaseService):
                     priority=125,
                 )
 
-            await self.audit("create", "claim", claim_id, "llm")
+            await self.audit("create", "claim", claim_id, actor)
         return await self.get(claim_id)
 
     async def get(self, claim_id: str) -> Claim | None:
@@ -367,7 +374,7 @@ class ClaimService(BaseService):
     # ── Background job handlers ──────────────────────────────
 
     async def process_extract_claims_job(self, entry_id: str) -> dict:
-        """Extract claims from a journal entry using the LLM."""
+        """Extract reviewable interpretation candidates from a journal entry."""
         row = await self.db.fetchone(
             "SELECT content FROM journal WHERE id = ? AND project_id = ?",
             [entry_id, self.project_id],
@@ -377,29 +384,76 @@ class ClaimService(BaseService):
         if not self.llm:
             return {"outcome": "skipped", "reason": "llm_disabled"}
 
-        # Get existing claims for dedup
-        existing = await self.db.fetchall(
+        # Give the model both canonical and staged statements as duplicate
+        # context. The model output is still only a hint; no row is promoted.
+        existing_claims = await self.db.fetchall(
             "SELECT content FROM claims WHERE source_entry_id = ? AND project_id = ? AND stale = 0",
             [entry_id, self.project_id],
         )
-        existing_contents = [r["content"] for r in existing]
+        existing_candidates = await self.db.fetchall(
+            """SELECT statement FROM interpretation_candidates
+               WHERE source_type = 'journal' AND source_id = ?
+                 AND project_id = ?""",
+            [entry_id, self.project_id],
+        )
+        existing_contents = [r["content"] for r in existing_claims]
+        existing_contents.extend(r["statement"] for r in existing_candidates)
 
         # Extract claims via LLM
         result = await self.llm.extract_claims(row["content"], existing_contents or None)
 
+        from rka.models.interpretation import InterpretationCandidateCreate
+        from rka.services.interpretation import InterpretationService
+
+        interpretation = InterpretationService(self.db, project_id=self.project_id)
+        extraction_model = getattr(
+            getattr(self.llm, "config", None), "llm_model", None
+        ) or self.llm.__class__.__name__
+
         created_ids = []
         async with self.db.transaction():
             for extracted in result.claims:
-                claim = await self.create(ClaimCreate(
-                    source_entry_id=entry_id,
-                    claim_type=extracted.claim_type,
-                    content=extracted.content,
-                    source_offset_start=extracted.source_offset_start,
-                    source_offset_end=extracted.source_offset_end,
-                ))
-                created_ids.append(claim.id)
+                start = extracted.source_offset_start
+                end = extracted.source_offset_end
+                if start is None:
+                    locator_kind = "record"
+                    locator_value = "full_record"
+                else:
+                    locator_kind = "text_offset"
+                    locator_value = None
+                epistemic_kind = {
+                    "hypothesis": "hypothesis",
+                    "observation": "observation",
+                    "evidence": "reported_fact",
+                    "result": "reported_fact",
+                    "method": "reported_fact",
+                    "assumption": "hypothesis",
+                }.get(extracted.claim_type, "inference")
+                candidate = await interpretation.create(
+                    InterpretationCandidateCreate(
+                        source_type="journal",
+                        source_id=entry_id,
+                        locator_kind=locator_kind,
+                        locator_start=start,
+                        locator_end=end,
+                        locator_value=locator_value,
+                        statement=extracted.content,
+                        epistemic_kind=epistemic_kind,
+                        proposed_claim_type=extracted.claim_type,
+                        created_by="llm",
+                        extraction_tool="rka_background_claim_extractor",
+                        extraction_model=extraction_model,
+                    )
+                )
+                created_ids.append(candidate.id)
 
-        return {"outcome": "updated", "claims_created": len(created_ids), "claim_ids": created_ids}
+        return {
+            "outcome": "updated",
+            "candidates_created": len(created_ids),
+            "candidate_ids": created_ids,
+            "claims_created": 0,
+            "claim_ids": [],
+        }
 
     async def process_verify_claim_job(self, claim_id: str) -> dict:
         """Verify extraction fidelity against source text.
