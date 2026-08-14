@@ -185,7 +185,7 @@ class PaginatedFiltersMixin(BaseModel):
 
 
 # =============================================================================
-# Batch A — QUERY operations (51 models)
+# Batch A — QUERY operations (53 models)
 # =============================================================================
 
 # ---------------------------------------------------------------------------
@@ -1175,7 +1175,7 @@ QueryArgsUnion = Annotated[
 
 
 # =============================================================================
-# Batch B — RECORD/CREATE + native manuscript operations (22 models)
+# Batch B — RECORD/CREATE + native manuscript operations (26 models)
 # =============================================================================
 #
 # record_note, ingest_document, record_decision, record_literature,
@@ -4365,7 +4365,7 @@ BatchCExecuteUnion = Annotated[
 
 
 # =============================================================================
-# Final ExecuteArgsUnion — composes B + C + D (58 models total)
+# Final ExecuteArgsUnion — composes B + C + D (62 models total)
 # =============================================================================
 #
 # Phase 3 assembly: the discriminated union for `rka_execute`. FastMCP
