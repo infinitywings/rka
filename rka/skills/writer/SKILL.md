@@ -109,11 +109,15 @@ writer readiness` asks RKA for the authoritative target-phase gate.
    every operation. Native manuscript work uses `manuscript_context`,
    `manuscript_spine`, `manuscript_readiness`, `upsert_argument_spine`,
    `ratify_manuscript_claim`, checkpoint operations, and change/impact reads.
-7. Run `rka writer readiness --target-phase <phase>`. `BLOCK` or `ERROR`
+7. For every load-bearing `clm_`, inspect `claim_scope`. Resolve any
+   `missing`, `stale`, `incomplete`, or `needs_review` contract through the
+   Brain/PI before using it as positive support. Do not copy preliminary
+   candidate scope into a canonical boundary without review.
+8. Run `rka writer readiness --target-phase <phase>`. `BLOCK` or `ERROR`
    stops advancement. A changed dependency never rewrites PI-ratified wording;
    revalidate the claim and record a superseding PI decision before binding a
    materially changed version.
-8. Greet the PI (path a) or surface the mission state (path b) with the inferred next checkpoint or handler dispatch.
+9. Greet the PI (path a) or surface the mission state (path b) with the inferred next checkpoint or handler dispatch.
 
 Full worked walkthrough: [`references/workflows.md`](references/workflows.md) section "Session Start".
 
@@ -270,8 +274,11 @@ the current RKA graph:
    prohibited wording, and planned manuscript units.
 4. For an empirical claim, require one or more current, verified `clm_`
    records whose `source_entry_id` resolves to a current terminal `jrn_` or
-   `lit_`. A `dec_` ratifies wording but is not empirical evidence. An `ecl_`
-   guides synthesis and discovery but is not empirical evidence.
+   `lit_`, and require each supporting claim's canonical `csc_` contract to be
+   current, complete, and reviewed. Carry `csc_` IDs into candidate lineage and
+   union their prohibited extensions into candidate prohibited wording. A
+   `dec_` ratifies wording but is not empirical evidence. An `ecl_` guides
+   synthesis and discovery but is not empirical evidence.
 5. Dry-run the proposal with `rka writer import-spine`; inspect its evidence
    roles, result coverage, and revision. Apply only with `--apply` and an
    explicit expected revision. Import never creates ratifications.

@@ -21,6 +21,7 @@ import ResearchHealth from "@/pages/ResearchHealth"
 import ReportContext from "@/pages/ReportContext"
 import ManuscriptWorkbench from "@/pages/ManuscriptWorkbench"
 import InterpretationStaging from "@/pages/InterpretationStaging"
+import ClaimScopeReview from "@/pages/ClaimScopeReview"
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -49,6 +50,7 @@ export default function App() {
               <Route path="graph" element={<KnowledgeGraph />} />
               <Route path="research-map" element={<ResearchMap />} />
               <Route path="interpretations" element={<InterpretationStaging />} />
+              <Route path="claim-scopes" element={<ClaimScopeReview />} />
               <Route path="health" element={<ResearchHealth />} />
               <Route path="report-context" element={<ReportContext />} />
               <Route path="workbench" element={<ManuscriptWorkbench />} />

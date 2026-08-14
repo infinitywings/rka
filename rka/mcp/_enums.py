@@ -49,13 +49,21 @@ from typing import Literal
 # ``journal.confidence`` and ``rka/models/journal.py``. Run-5's empirical
 # Brain hallucination was ``'confirmed'`` — NOT in this set.
 ConfidenceLit = Literal[
-    "hypothesis", "tested", "verified", "superseded", "retracted",
+    "hypothesis",
+    "tested",
+    "verified",
+    "superseded",
+    "retracted",
 ]
 
 # Importance on journal entries — ``rka/db/schema.sql`` CHECK on
 # ``journal.importance``.
 ImportanceLit = Literal[
-    "critical", "high", "normal", "low", "archived",
+    "critical",
+    "high",
+    "normal",
+    "low",
+    "archived",
 ]
 
 # Actor-of-record across journal / decision / literature writes —
@@ -69,10 +77,19 @@ SourceLit = Literal["brain", "executor", "pi", "web_ui", "llm"]
 # ``AnyJournalType``.
 NoteTypeLit = Literal[
     # v2 canonical
-    "note", "log", "directive",
+    "note",
+    "log",
+    "directive",
     # Legacy (accepted; normalized to one of the v2 set above)
-    "finding", "insight", "pi_instruction", "exploration",
-    "idea", "observation", "hypothesis", "methodology", "summary",
+    "finding",
+    "insight",
+    "pi_instruction",
+    "exploration",
+    "idea",
+    "observation",
+    "hypothesis",
+    "methodology",
+    "summary",
 ]
 
 
@@ -89,7 +106,10 @@ DecidedByLit = Literal["pi", "brain", "executor"]
 # ``research_question`` is reserved for advanceable RQs (see
 # ``rka_advance_rq``); most decisions are ``decision`` or ``design_choice``.
 DecisionKindLit = Literal[
-    "research_question", "design_choice", "decision", "operational",
+    "research_question",
+    "design_choice",
+    "decision",
+    "operational",
 ]
 
 # Decision lifecycle status — ``rka/db/schema.sql`` CHECK on
@@ -100,7 +120,11 @@ DecisionKindLit = Literal[
 # CHECK constraint at INSERT time (HTTP 500). Phase-X²' polish promotes
 # this to a Literal alias so the typed-args layer rejects pre-dispatch.
 DecisionStatusLit = Literal[
-    "active", "abandoned", "superseded", "merged", "revisit",
+    "active",
+    "abandoned",
+    "superseded",
+    "merged",
+    "revisit",
 ]
 
 
@@ -111,7 +135,11 @@ DecisionStatusLit = Literal[
 # Reading lifecycle on a literature entry — ``rka/db/schema.sql`` CHECK
 # on ``literature.status``.
 LitStatusLit = Literal[
-    "to_read", "reading", "read", "cited", "excluded",
+    "to_read",
+    "reading",
+    "read",
+    "cited",
+    "excluded",
 ]
 
 
@@ -122,7 +150,12 @@ LitStatusLit = Literal[
 # Mission lifecycle status — ``rka/db/schema.sql`` CHECK on
 # ``missions.status``.
 MissionStatusLit = Literal[
-    "pending", "active", "complete", "partial", "blocked", "cancelled",
+    "pending",
+    "active",
+    "complete",
+    "partial",
+    "blocked",
+    "cancelled",
 ]
 
 
@@ -136,7 +169,10 @@ MissionStatusLit = Literal[
 # to include ``'gate'`` for the validation-gate subtype). The v2.7.0
 # verb surface accepts the Pydantic-level set.
 ChkTypeLit = Literal[
-    "decision", "clarification", "inspection", "gate",
+    "decision",
+    "clarification",
+    "inspection",
+    "gate",
 ]
 
 # Checkpoint resolver — ``rka/db/schema.sql`` CHECK on
@@ -151,14 +187,19 @@ CheckpointResolvedByLit = Literal["pi", "brain"]
 # line 24 CHECK on ``journal.status`` AND ``rka/models/journal.py``
 # ``JournalEntryCreate.status`` / ``JournalEntryUpdate.status``.
 JournalStatusLit = Literal[
-    "draft", "active", "superseded", "retracted",
+    "draft",
+    "active",
+    "superseded",
+    "retracted",
 ]
 
 # Validation-gate subtype — string-set validated in
 # ``rka/services/researcher_tools.py`` and the legacy
 # ``rka_create_gate`` MCP tool.
 GateTypeLit = Literal[
-    "problem_framing", "plan_validation", "evidence_review",
+    "problem_framing",
+    "plan_validation",
+    "evidence_review",
     "synthesis_validation",
 ]
 
@@ -174,16 +215,70 @@ VerdictLit = Literal["go", "kill", "hold", "recycle"]
 
 # Claim type — ``rka/models/claim.py`` ``ClaimType``.
 ClaimTypeLit = Literal[
-    "hypothesis", "evidence", "method", "result", "observation", "assumption",
+    "hypothesis",
+    "evidence",
+    "method",
+    "result",
+    "observation",
+    "assumption",
+]
+
+# Canonical claim-scope contracts (rka/models/claim.py). These are research-
+# level applicability bounds on clm_ claims, distinct from source-bounded
+# interpretation scope and manuscript-specific wording boundaries.
+ClaimScopeUncertaintyLit = Literal["none", "low", "medium", "high", "unknown"]
+ClaimScopeExtensionPolicyLit = Literal["exact_only", "bounded"]
+ClaimFalsifierStatusLit = Literal["unknown", "applicable", "not_applicable"]
+ClaimScopeReviewStatusLit = Literal["draft", "reviewed"]
+ClaimScopeReadinessLit = Literal[
+    "missing",
+    "stale",
+    "incomplete",
+    "needs_review",
+    "ready",
+]
+ClaimScopeActorLit = Literal["pi", "brain", "executor", "web_ui", "llm"]
+ClaimConditionKindLit = Literal[
+    "dataset",
+    "population",
+    "platform",
+    "environment",
+    "threat_model",
+    "baseline",
+    "workload",
+    "metric",
+    "parameter",
+    "assumption",
+    "time_window",
+    "other",
+]
+ClaimConditionOperatorLit = Literal[
+    "equals",
+    "one_of",
+    "range",
+    "at_least",
+    "at_most",
+    "present",
+    "absent",
+    "described_by",
 ]
 
 # Interpretation Staging (rka/models/interpretation.py).
 InterpretationSourceLit = Literal["journal", "literature", "artifact"]
 InterpretationLocatorLit = Literal[
-    "text_offset", "page", "line_range", "section", "url_fragment", "record",
+    "text_offset",
+    "page",
+    "line_range",
+    "section",
+    "url_fragment",
+    "record",
 ]
 EpistemicKindLit = Literal[
-    "observation", "reported_fact", "inference", "hypothesis", "plan",
+    "observation",
+    "reported_fact",
+    "inference",
+    "hypothesis",
+    "plan",
     "author_intent",
 ]
 InterpretationUncertaintyLit = Literal["none", "low", "medium", "high", "unknown"]
@@ -191,27 +286,48 @@ InterpretationActorLit = Literal["pi", "brain", "executor", "web_ui", "llm", "im
 InterpretationReviewActorLit = Literal["pi", "brain", "executor", "web_ui"]
 InterpretationReviewStatusLit = Literal["pending", "in_review", "resolved"]
 InterpretationDispositionLit = Literal[
-    "promoted", "merged", "deferred", "rejected", "classified_decision",
-    "classified_plan", "classified_author_intent", "evidence_mission_requested",
+    "promoted",
+    "merged",
+    "deferred",
+    "rejected",
+    "classified_decision",
+    "classified_plan",
+    "classified_author_intent",
+    "evidence_mission_requested",
 ]
 InterpretationHintKindLit = Literal["duplicate", "conflict"]
 InterpretationTriageActionLit = Literal[
-    "start_review", "promote", "merge", "defer", "reject",
-    "classify_decision", "classify_plan", "classify_author_intent",
-    "request_evidence_mission", "reopen", "revoke_promotion",
+    "start_review",
+    "promote",
+    "merge",
+    "defer",
+    "reject",
+    "classify_decision",
+    "classify_plan",
+    "classify_author_intent",
+    "request_evidence_mission",
+    "reopen",
+    "revoke_promotion",
 ]
 
 # Scientific evidence assessment on a claim. This is intentionally
 # independent from ``claims.verified``, which records extraction/grounding
 # fidelity against the source entry.
 EvidenceStatusLit = Literal[
-    "unassessed", "supported", "partially_supported", "inconclusive",
+    "unassessed",
+    "supported",
+    "partially_supported",
+    "inconclusive",
     "contradicted",
 ]
 
 # Cluster confidence — ``rka/models/claim.py`` ``ClusterConfidence``.
 ClusterConfLit = Literal[
-    "strong", "moderate", "emerging", "contested", "refuted",
+    "strong",
+    "moderate",
+    "emerging",
+    "contested",
+    "refuted",
 ]
 
 
@@ -224,7 +340,11 @@ ClusterConfLit = Literal[
 # on the underlying decision row (the ``decisions.status`` column owns
 # the decision-level lifecycle and is a different CHECK set).
 RQStatusLit = Literal[
-    "open", "partially_answered", "answered", "reframed", "closed",
+    "open",
+    "partially_answered",
+    "answered",
+    "reframed",
+    "closed",
 ]
 
 
@@ -306,7 +426,11 @@ HookCreatedByLit = Literal["pi", "brain", "executor", "system"]
 # string, but readiness checks and phase transitions are deliberately closed
 # to this set.
 ManuscriptReadinessPhaseLit = Literal[
-    "planning", "drafting", "review", "final", "submitted",
+    "planning",
+    "drafting",
+    "review",
+    "final",
+    "submitted",
 ]
 
 # Native manuscript creation is intentionally narrower than later lifecycle
@@ -351,13 +475,22 @@ ManuscriptUnitKindLit = Literal[
     "other",
 ]
 ManuscriptUnitStatusLit = Literal[
-    "planned", "drafted", "reviewed", "final", "removed",
+    "planned",
+    "drafted",
+    "reviewed",
+    "final",
+    "removed",
 ]
 ManuscriptEvidenceRoleLit = Literal[
-    "support", "qualifier", "counterevidence",
+    "support",
+    "qualifier",
+    "counterevidence",
 ]
 ManuscriptClaimUnitRelationshipLit = Literal[
-    "advances", "tests", "bounds", "mentions",
+    "advances",
+    "tests",
+    "bounds",
+    "mentions",
 ]
 
 # PI checkpoint lifecycle.
@@ -370,11 +503,16 @@ ManuscriptCheckpointKindLit = Literal[
     "final_layout",
 ]
 ManuscriptCheckpointResolutionStatusLit = Literal[
-    "resolved", "rejected",
+    "resolved",
+    "rejected",
 ]
 
 # Immutable multidimensional verification attestation verdicts.
 ManuscriptVerificationVerdictLit = Literal["pass", "warn", "block", "error"]
 ManuscriptVerificationDimensionVerdictLit = Literal[
-    "pass", "warn", "block", "error", "not_checked",
+    "pass",
+    "warn",
+    "block",
+    "error",
+    "not_checked",
 ]

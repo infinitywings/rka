@@ -324,6 +324,11 @@ Interpretation Candidates (icd_)
 Claims (clm_)
   hypothesis | evidence | method | result | observation | assumption
     |
+    | [Brain/PI: append and review canonical applicability contract]
+    v
+Claim Scope Versions (csc_)
+  typed conditions | uncertainty | allowed/prohibited extension | falsifier
+    |
     | [Brain: clustering and synthesis]
     v
 Evidence Clusters (ecl_)
@@ -336,6 +341,14 @@ Research Map
 ```
 
 `rka_query(operation="pending_maintenance", project_id="prj_…")` detects entries needing distillation and other provenance gaps. `rka_execute(operation="extract_claims", …)` stages `icd_` candidates rather than claims. The Brain reviews them with `rka_query(operation="interpretation_candidates", …)` and `rka_execute(operation="triage_interpretation_candidate", …)`. Only returned `clm_` IDs may then be clustered.
+
+Canonical claim scope is a separate, immutable contract. Inspect it with
+`rka_query(operation="claim_scope", project_id="prj_…", id="clm_…")` and
+append a revision with `rka_execute(operation="set_claim_scope", …)`. Legacy
+claims remain visibly `scope_readiness=missing`; RKA never fabricates a
+boundary. The Writer admits positive support only when scope is current,
+complete, and reviewed. Scope readiness does not replace source grounding,
+scientific `evidence_status`, contradiction, or staleness checks.
 
 ### ULID-Based IDs
 
@@ -1036,6 +1049,8 @@ The eight core entity update models (`DecisionUpdate`, `MissionUpdate`, `Journal
 | `POST` | `/claims`       | Create a claim manually or trigger extraction from a journal entry            |
 | `GET`  | `/claims`       | List claims (filters: type, confidence, cluster_id, entry_id)                 |
 | `GET`  | `/claims/{id}`  | Get a single claim with provenance links                                      |
+| `GET`  | `/claims/{id}/scope` | Get current canonical scope readiness and immutable `csc_` history        |
+| `POST` | `/claims/{id}/scope` | Append a revision-guarded draft or reviewed canonical scope contract       |
 | `POST` | `/claims/edges` | Create a claim edge (member_of, supports, contradicts, qualifies, supersedes) |
 
 ### Evidence Clusters (v2.0)

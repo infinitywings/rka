@@ -450,7 +450,11 @@ function ScopeView({
             kind: "native claim scope",
             origin: "/api/manuscripts/:id/context",
             derivation: "Latest immutable wording version on the active manuscript claim.",
-            ids: [claim.id, ...claim.evidence.map((item) => item.evidence_claim_id)],
+            ids: [
+              claim.id,
+              ...claim.evidence.map((item) => item.evidence_claim_id),
+              ...claim.evidence.flatMap((item) => item.scope_contract ? [item.scope_contract.id] : []),
+            ],
             status: statusForClaim(claim),
             trace: ["mcl_ version", "scope boundary", "manuscript units"],
           }}
@@ -458,6 +462,13 @@ function ScopeView({
         >
           <p><span className="font-medium text-foreground">Allowed:</span> {claim.allowed_wording ?? "Missing"}</p>
           <p className="mt-1"><span className="font-medium text-foreground">Prohibited:</span> {claim.prohibited_wording.length > 0 ? claim.prohibited_wording.join(" · ") : "Missing, so scope is not ready"}</p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {claim.evidence.map((evidence) => (
+              <Badge key={evidence.evidence_claim_id} variant={evidence.scope_readiness === "ready" ? "default" : "secondary"}>
+                {evidence.evidence_claim_id}: scope {evidence.scope_readiness ?? "missing"}
+              </Badge>
+            ))}
+          </div>
         </TraceCard>
       ))}
       {activeClaims.length === 0 && candidateClaims.map((claim) => (
@@ -470,13 +481,14 @@ function ScopeView({
             kind: "candidate scope",
             origin: "/api/manuscripts/:id/writing-candidates",
             derivation: "Brain-reviewed cluster synthesis; not a native claim or PI ratification.",
-            ids: claim.evidence_ids,
+            ids: [...claim.evidence_ids, ...claim.scope_contract_ids],
             status: claim.prohibited_wording.length ? "Bounded candidate" : "Needs prohibited wording",
           }}
           onInspect={onInspect}
         >
           <p><span className="font-medium text-foreground">Allowed:</span> {claim.allowed_wording}</p>
           <p className="mt-1"><span className="font-medium text-foreground">Prohibited:</span> {claim.prohibited_wording.length ? claim.prohibited_wording.join(" · ") : "Not yet bounded"}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{claim.scope_contract_ids.length} canonical scope contract(s)</p>
         </TraceCard>
       ))}
     </>
@@ -725,7 +737,7 @@ function CandidateClaimCard({
         kind: "writing candidate",
         origin: "/api/manuscripts/:id/writing-candidates",
         derivation: "Current Brain-reviewed cluster bound to an active RQ, with duplicate grouping and admission checks.",
-        ids: [...lineageIds, ...claim.evidence_ids],
+        ids: [...lineageIds, ...claim.evidence_ids, ...claim.scope_contract_ids],
         status: "Provisional",
         trace: ["jrn_", "clm_", lineage?.cluster_id ?? "ecl_", lineage?.research_question_id ?? "RQ", "candidate"],
       }}
@@ -735,6 +747,7 @@ function CandidateClaimCard({
       <div className="mt-2 flex flex-wrap gap-1.5">
         <Badge variant="outline">{claim.claim_type}</Badge>
         <Badge variant="outline">{claim.evidence_ids.length} admitted claims</Badge>
+        <Badge variant="outline">{claim.scope_contract_ids.length} scope contracts</Badge>
         <Badge variant="outline">not ratified</Badge>
       </div>
     </TraceCard>

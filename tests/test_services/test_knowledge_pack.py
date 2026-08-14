@@ -19,6 +19,7 @@ from rka.models.literature import LiteratureCreate
 from rka.models.mission import MissionCreate
 from rka.models.project import ProjectCreate
 from rka.services.artifacts import ArtifactService
+from rka.services.claims import ClaimService
 from rka.services.decisions import DecisionService
 from rka.services.knowledge_pack import KnowledgePackService
 from rka.services.literature import LiteratureService
@@ -268,6 +269,17 @@ async def test_knowledge_pack_round_trip_preserves_interpretation_promotion_line
         assert imported_claim["source_entry_id"] == imported.source_id
         assert imported_claim["verified"] == 1
         assert imported_claim["evidence_status"] == "unassessed"
+        assert imported_claim["scope_revision"] == 1
+        imported_scope = await ClaimService(
+            db,
+            project_id=result.project_id,
+        ).get_scope_history(imported.active_claim_id)
+        assert imported_scope is not None
+        assert imported_scope.scope_readiness == "incomplete"
+        assert imported_scope.current is not None
+        assert imported_scope.current.source_candidate_id == imported.id
+        assert imported_scope.current.conditions[0].value == "configured workload"
+        assert imported_scope.current.falsifier_status == "applicable"
         assert await db.fetchall("PRAGMA foreign_key_check") == []
     finally:
         await db.close()

@@ -523,6 +523,7 @@ export interface GraphStats {
   total_nodes: number
   total_edges: number
   edge_counts_by_type: Record<string, number>
+  claim_scope_readiness_counts: Partial<Record<ClaimScopeReadiness, number>>
 }
 
 // ---- Summaries ----
@@ -584,6 +585,99 @@ export interface QASession {
 
 export type ClaimType = "hypothesis" | "evidence" | "method" | "result" | "observation" | "assumption"
 export type ClusterConfidence = "strong" | "moderate" | "emerging" | "contested" | "refuted"
+export type ClaimScopeUncertainty = "none" | "low" | "medium" | "high" | "unknown"
+export type ClaimScopeExtensionPolicy = "exact_only" | "bounded"
+export type ClaimFalsifierStatus = "unknown" | "applicable" | "not_applicable"
+export type ClaimScopeReviewStatus = "draft" | "reviewed"
+export type ClaimScopeReadiness = "missing" | "stale" | "incomplete" | "needs_review" | "ready"
+export type ClaimConditionKind =
+  | "dataset"
+  | "population"
+  | "platform"
+  | "environment"
+  | "threat_model"
+  | "baseline"
+  | "workload"
+  | "metric"
+  | "parameter"
+  | "assumption"
+  | "time_window"
+  | "other"
+export type ClaimConditionOperator =
+  | "equals"
+  | "one_of"
+  | "range"
+  | "at_least"
+  | "at_most"
+  | "present"
+  | "absent"
+  | "described_by"
+
+export interface ClaimScopeCondition {
+  kind: ClaimConditionKind
+  key: string
+  operator: ClaimConditionOperator
+  value: string | number | boolean | Array<string | number | boolean>
+  unit?: string | null
+  note?: string | null
+}
+
+export interface ClaimScopeVersion {
+  id: string
+  claim_id: string
+  project_id: string
+  revision: number
+  claim_content_hash: string
+  conditions: ClaimScopeCondition[]
+  uncertainty: ClaimScopeUncertainty
+  uncertainty_note: string | null
+  extension_policy: ClaimScopeExtensionPolicy | null
+  allowed_extensions: string[]
+  prohibited_extensions: string[]
+  falsifier_status: ClaimFalsifierStatus
+  falsifier: string | null
+  falsifier_rationale: string | null
+  disconfirming_claim_ids: string[]
+  review_status: ClaimScopeReviewStatus
+  created_by: string
+  reason: string
+  source_candidate_id: string | null
+  supersedes_scope_id: string | null
+  created_at: string | null
+}
+
+export interface ClaimScopeFinding {
+  code: string
+  severity: "block" | "warn" | "info"
+  message: string
+}
+
+export interface ClaimScopeHistory {
+  claim_id: string
+  project_id: string
+  current_revision: number
+  scope_readiness: ClaimScopeReadiness
+  findings: ClaimScopeFinding[]
+  current: ClaimScopeVersion | null
+  versions: ClaimScopeVersion[]
+}
+
+export interface ClaimScopeWrite {
+  expected_revision: number
+  actor: "pi" | "brain" | "executor" | "web_ui" | "llm"
+  reason: string
+  conditions: ClaimScopeCondition[]
+  uncertainty: ClaimScopeUncertainty
+  uncertainty_note?: string
+  extension_policy?: ClaimScopeExtensionPolicy
+  allowed_extensions: string[]
+  prohibited_extensions: string[]
+  falsifier_status: ClaimFalsifierStatus
+  falsifier?: string
+  falsifier_rationale?: string
+  disconfirming_claim_ids: string[]
+  review_status: ClaimScopeReviewStatus
+}
 
 export interface Claim {
   id: string
@@ -592,11 +686,17 @@ export interface Claim {
   content: string
   confidence: number
   verified: boolean
+  evidence_status: string
+  contradicted: boolean
   stale: boolean
   source_offset_start: number | null
   source_offset_end: number | null
   source_type?: string | null
   source_actor?: string | null
+  scope_revision: number
+  scope_readiness: ClaimScopeReadiness
+  scope_contract: ClaimScopeVersion | null
+  scope_findings: ClaimScopeFinding[]
   project_id?: string
   created_at?: string | null
   updated_at?: string | null
@@ -826,6 +926,9 @@ export interface ManuscriptEvidenceBinding {
   contradicted?: number | boolean | null
   source_current?: number | boolean | null
   source_is_manuscript?: number | boolean | null
+  scope_readiness?: ClaimScopeReadiness
+  scope_contract?: ClaimScopeVersion | null
+  scope_findings?: ClaimScopeFinding[]
 }
 
 export interface ManuscriptClaimContext {
@@ -935,6 +1038,7 @@ export interface WritingCandidateClaim {
   qualifier_ids: string[]
   counterevidence_ids: string[]
   manuscript_units: string[]
+  scope_contract_ids: string[]
 }
 
 export interface WritingCandidateCluster {
@@ -977,6 +1081,7 @@ export interface ManuscriptWritingCandidates {
       cluster_id: string
       research_question_id: string | null
       representative_claim_ids: string[]
+      scope_contract_ids: string[]
     }
   >
   summary: {

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from rka.infra.ids import generate_id
+from rka.models.claim import ClaimScopeCondition, ClaimScopeWrite
 from rka.models.manuscript_native import (
     ManuscriptCheckpointCreate,
     ManuscriptCheckpointResolve,
@@ -16,6 +17,29 @@ from rka.services.manuscript_native import (
     ManuscriptRevisionConflict,
     NativeManuscriptService,
 )
+from rka.services.claims import ClaimService
+
+
+def _reviewed_scope(expected_revision: int = 0) -> ClaimScopeWrite:
+    return ClaimScopeWrite(
+        expected_revision=expected_revision,
+        actor="brain",
+        reason="Test fixture reviewed the bounded operating context.",
+        conditions=[
+            ClaimScopeCondition(
+                kind="environment",
+                key="testbed",
+                operator="equals",
+                value="local evaluated testbed",
+            )
+        ],
+        uncertainty="low",
+        extension_policy="exact_only",
+        prohibited_extensions=["Do not generalize beyond the evaluated testbed."],
+        falsifier_status="applicable",
+        falsifier="Repeated evaluation does not reproduce the direction.",
+        review_status="reviewed",
+    )
 
 
 async def _seed_ready_claim(db, *, project_id: str = "proj_default") -> str:
@@ -37,6 +61,10 @@ async def _seed_ready_claim(db, *, project_id: str = "proj_default") -> str:
         [claim_id, journal_id, project_id],
     )
     await db.commit()
+    await ClaimService(db, project_id=project_id).append_scope(
+        claim_id,
+        _reviewed_scope(),
+    )
     return claim_id
 
 
@@ -818,6 +846,10 @@ async def test_writing_candidates_smooth_claims_through_reviewed_cluster_and_rq(
         )
     await db_with_project.commit()
 
+    claims_service = ClaimService(db_with_project, project_id="proj_default")
+    for claim_id in claim_ids:
+        await claims_service.append_scope(claim_id, _reviewed_scope())
+
     proposal = await service.get_writing_candidates(manuscript.id)
     assert proposal["summary"] == {
         "clusters_total": 1,
@@ -829,6 +861,10 @@ async def test_writing_candidates_smooth_claims_through_reviewed_cluster_and_rq(
     assert candidate["status"] == "candidate"
     assert candidate["ratified_by"] is None
     assert candidate["evidence_ids"] == sorted(claim_ids)
+    assert len(candidate["scope_contract_ids"]) == 2
+    assert candidate["prohibited_wording"] == [
+        "Do not generalize beyond the evaluated testbed."
+    ]
     cluster = proposal["clusters"][0]
     assert cluster["disposition"] == "eligible"
     assert cluster["duplicate_support_groups"] == [sorted(claim_ids)]
