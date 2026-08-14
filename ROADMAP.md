@@ -5,22 +5,27 @@ plan](docs/superpowers/plans/2026-08-14-rka-epistemic-pipeline-and-manuscript-wo
 into implementation milestones. It combines the ARA-inspired research-artifact
 substrate with a researcher-facing manuscript drafting workbench.
 
+The M0 authority, stage, proposal, and provider decisions are recorded in
+[ADR 0001](docs/adr/0001-manuscript-workbench-authority-stage-and-ai-boundary.md).
+
 The roadmap is ordered by dependency, not by invented delivery dates. Every
 milestone must satisfy its exit gate before dependent work is treated as ready.
 
 ## Now
 
-**M0 / PR 0A — Reconcile the choice-first Writer workflow onto current
-`main`.**
+**M0 / PR 0A and PR 0B are implemented and technically validated on the
+workbench feature branch.** The choice-first Writer delta is reconciled, the
+authority and AI boundary is recorded in ADR 0001, and the read-only workbench
+has been walked through with DelaySteer and a full-manuscript control.
 
-This is the next implementation step because the installed Writer behavior and
-the repository implementation have diverged. Resolve that delta and prove that
-the packaged and repository Writer bundles match before freezing new workbench
-contracts.
-
-After PR 0A, complete PR 0B: document the authority and schema decisions, build
-a read-only clickable workbench prototype, and walk the DelaySteer project
-through it. Do not begin database migrations before this walkthrough.
+The walkthrough and its design revisions are recorded in
+[`2026-08-14-delaysteer-workbench-walkthrough.md`](docs/superpowers/specs/2026-08-14-delaysteer-workbench-walkthrough.md).
+The authority and stage contracts have researcher approval. The remaining M0
+gate is review and merge of this feature slice. After merge, the immediate
+implementation target is **M1 / PR 1 Interpretation Staging and
+experiment-contract schema design**. M2 / PR 4 may expand the read-only
+workbench in parallel, but no migration should land before the M1 schema ADR is
+approved.
 
 ## Dependency map
 

@@ -54,7 +54,7 @@ async function parseApiError(res: Response): Promise<never> {
 
 function getFilenameFromDisposition(disposition: string | null, fallback: string): string {
   if (!disposition) return fallback
-  const match = disposition.match(/filename=\"?([^\";]+)\"?/)
+  const match = disposition.match(/filename="?([^";]+)"?/)
   return match?.[1] ?? fallback
 }
 
@@ -148,6 +148,11 @@ import type {
   ReportContextResult,
   StalenessReviewFiling,
   LinkSupportAudit,
+  ManuscriptContext,
+  ManuscriptImpact,
+  ManuscriptReadiness,
+  ManuscriptSpine,
+  ManuscriptWritingCandidates,
 } from "./types"
 
 export const api = {
@@ -425,6 +430,25 @@ export const api = {
     post<StalenessReviewFiling>("/verification/file-staleness-reviews"),
   auditLinkSupport: (limit = 200) =>
     get<LinkSupportAudit>(`/verification/link-support?limit=${limit}`),
+
+  // Native manuscript workbench reads. These endpoints are projections over
+  // RKA's canonical aggregate; the prototype intentionally exposes no writes.
+  getManuscriptContext: (manuscriptId: string) =>
+    get<ManuscriptContext>(`/manuscripts/${encodeURIComponent(manuscriptId)}/context`),
+  getManuscriptSpine: (manuscriptId: string) =>
+    get<ManuscriptSpine>(`/manuscripts/${encodeURIComponent(manuscriptId)}/spine`),
+  getManuscriptWritingCandidates: (manuscriptId: string) =>
+    get<ManuscriptWritingCandidates>(
+      `/manuscripts/${encodeURIComponent(manuscriptId)}/writing-candidates`,
+    ),
+  getManuscriptReadiness: (manuscriptId: string, targetPhase = "drafting") =>
+    get<ManuscriptReadiness>(
+      `/manuscripts/${encodeURIComponent(manuscriptId)}/readiness?target_phase=${encodeURIComponent(targetPhase)}`,
+    ),
+  getManuscriptImpact: (manuscriptId: string, sinceCursor = 0, limit = 100) =>
+    get<ManuscriptImpact>(
+      `/manuscripts/${encodeURIComponent(manuscriptId)}/impact?since_cursor=${sinceCursor}&limit=${limit}`,
+    ),
 }
 
 export { ApiError }

@@ -21,6 +21,7 @@ Writer session
         +-- .planning/CONTRIBUTION_CONTRACT.md   generated
         +-- .planning/ARGUMENT_SPINE.md          generated
         +-- .planning/RESULTS_TRACE.md            generated
+        +-- .planning/FRAMING_SESSION.yaml        advisory interaction state
         +-- .planning/ACTIVE_WORKFLOW.md          local session state
         +-- sections/, figures/, tables/, charts/
         +-- refs.bib, main.tex, styles/

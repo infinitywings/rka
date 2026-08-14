@@ -20,6 +20,7 @@ import {
   Sun,
   Moon,
   Monitor,
+  PanelsTopLeft,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useTheme } from "@/hooks/useTheme"
@@ -57,6 +58,7 @@ const navItems = [
   { to: "/research-map", icon: Map, label: "Research Map" },
   { to: "/health", icon: Activity, label: "Research Health" },
   { to: "/report-context", icon: FileSearch, label: "Report Context" },
+  { to: "/workbench", icon: PanelsTopLeft, label: "Manuscript Workbench" },
   { to: "/audit", icon: Shield, label: "Audit Log" },
   { to: "/context", icon: Telescope, label: "Context" },
   { to: "/settings", icon: Settings, label: "Settings" },
