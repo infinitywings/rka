@@ -1246,18 +1246,28 @@ URL-resumable stage and review selection, and evidence-to-review trace links.
 Its disposable production-browser acceptance path is recorded in
 [`2026-08-14-workbench-scope-navigation-walkthrough.md`](../specs/2026-08-14-workbench-scope-navigation-walkthrough.md).
 
+The real-project admission pass now covers DelaySteer, InvarLLM, CPSEval, and
+detectability. Project isolation passed, but no project has a complete positive
+path under the new semantics: all canonical scopes are missing, and the two
+existing native manuscripts have empty spines. This is an honest migration
+gate, not a reason to auto-backfill meaning.
+
 The remaining PR 4 work is:
 
-1. validate the hardened shell against DelaySteer and a mature positive-path
-   project;
-2. close accessibility, narrow-viewport, loading, empty, and partial-count
-   gaps found in those walkthroughs;
-3. verify that every displayed spine/evidence item has a useful forward and
-   reverse trace exit;
-4. surface localized stale-impact paths and explicitly label the still-missing
-   experiment/result layer;
+1. obtain PI authorization for a bounded semantic-migration pilot; CPSEval is
+   the recommended smallest case because its native manuscript already exists;
+2. review and scope only the pilot claims needed for a minimal claim-sized
+   spine, preserving every legacy record and uncertainty boundary;
+3. rerun the positive scope-to-spine, trace, impact, and resume path;
+4. close accessibility, narrow-viewport, loading, empty, and partial-count gaps
+   found in that walkthrough;
 5. freeze the M2 exit evidence before any deliberation or mutation UI is
    enabled.
+
+The live pack exporter also emits agentic-branch staleness fields that current
+`main` cannot import losslessly. The importer correctly rejects those unknown
+semantic columns. Cross-branch pack migration belongs to the intake/hardening
+milestone and must not be solved by dropping them.
 
 PR 3 remains deferred until the experiment/run/result schema is separately
 designed and reviewed. Interpretation candidates and ordinary journal entries
