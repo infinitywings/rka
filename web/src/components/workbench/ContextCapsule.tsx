@@ -1,7 +1,15 @@
-import { AlertTriangle, Database, FileText, GitCommitHorizontal, ShieldCheck } from "lucide-react"
+import { AlertTriangle, ArrowRight, Database, FileText, GitCommitHorizontal, ShieldCheck } from "lucide-react"
+import { Link } from "react-router-dom"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
 import type { ManuscriptContext, ManuscriptReadiness, ResearchMapData } from "@/api/types"
+
+export interface WorkbenchQueueSummary {
+  total: number
+  attention: number
+  ready: number
+  partial: boolean
+}
 
 function CapsuleFact({
   label,
@@ -21,6 +29,37 @@ function CapsuleFact({
   )
 }
 
+function ReviewQueueFact({
+  label,
+  value,
+  detail,
+  source,
+  to,
+}: {
+  label: string
+  value: string
+  detail: string
+  source: string
+  to: string
+}) {
+  return (
+    <Link
+      to={to}
+      className="group rounded-md border bg-background/70 px-3 py-2 transition-colors hover:border-primary/40 hover:bg-muted/30"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+          <p className="mt-0.5 text-sm font-medium">{value}</p>
+          <p className="mt-1 text-[10px] leading-4 text-muted-foreground">{detail}</p>
+          <p className="mt-1 truncate text-[10px] text-muted-foreground" title={source}>Source: {source}</p>
+        </div>
+        <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+      </div>
+    </Link>
+  )
+}
+
 export function ContextCapsule({
   projectId,
   projectName,
@@ -29,6 +68,8 @@ export function ContextCapsule({
   map,
   impactCount,
   impactPartial,
+  interpretationSummary,
+  scopeSummary,
 }: {
   projectId: string
   projectName: string
@@ -37,6 +78,8 @@ export function ContextCapsule({
   map?: ResearchMapData
   impactCount: number
   impactPartial: boolean
+  interpretationSummary?: WorkbenchQueueSummary
+  scopeSummary?: WorkbenchQueueSummary
 }) {
   const manuscript = context?.manuscript
   const readinessLabel = readiness
@@ -84,6 +127,27 @@ export function ContextCapsule({
             source="/api/research-map"
           />
           <CapsuleFact label="Readiness" value={readinessLabel} source="/api/manuscripts/:id/readiness?target_phase=drafting" />
+        </div>
+
+        <div className="grid gap-2 lg:grid-cols-2">
+          <ReviewQueueFact
+            label="Interpretation staging"
+            value={interpretationSummary
+              ? `${interpretationSummary.attention} awaiting review · ${interpretationSummary.ready} resolved${interpretationSummary.partial ? ` · first ${interpretationSummary.total}+ records` : ""}`
+              : "Loading review queue"}
+            detail="Source-bounded candidates only; review does not establish scientific support."
+            source="/api/interpretation-candidates?limit=200"
+            to="/interpretations?review_status=pending"
+          />
+          <ReviewQueueFact
+            label="Canonical claim scope"
+            value={scopeSummary
+              ? `${scopeSummary.attention} blocking scope · ${scopeSummary.ready} ready${scopeSummary.partial ? ` · first ${scopeSummary.total}+ records` : ""}`
+              : "Loading scope queue"}
+            detail="Applicability only; evidence support, contradictions, and source grounding remain independent."
+            source="/api/claims?limit=200"
+            to="/claim-scopes?scope=missing"
+          />
         </div>
 
         {(impactCount > 0 || impactPartial) && (
