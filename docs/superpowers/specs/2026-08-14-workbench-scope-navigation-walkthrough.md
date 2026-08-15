@@ -115,16 +115,14 @@ That fail-closed behavior is correct, but a lossless migration design is needed
 in the later intake/hardening milestone before these packs are portable across
 the branches.
 
-## Remaining M2 gate
+## Follow-up M2 gate
 
-A real project cannot yet demonstrate the positive scope-to-spine path because
-the required PI-reviewed semantic records do not exist. The next controlled
-step is to copy the live database online, isolate CPSEval in a disposable
-instance, review a bounded subset of its claims, append canonical scopes, and
-create a minimal claim-sized spine through the normal revision-guarded
-interfaces. CPSEval is the smallest current pilot (81 claims and an existing
-native manuscript), so it is the recommended case.
-
-The disposable pilot must preserve the live database and all live semantic
-records unchanged. It exists to validate the workflow, not to manufacture a
-positive result in the research system.
+The bounded positive scope-to-spine path subsequently passed on an online
+backup of CPSEval. The pilot used one concrete method claim, preserved its
+unverified and unassessed evidence state, appended one exact reviewed scope,
+and created one native manuscript claim and method unit through the normal
+revision-guarded interfaces. It also exposed and closed a narrow-viewport
+navigation defect. See
+[`2026-08-15-cpseval-m2-positive-path.md`](2026-08-15-cpseval-m2-positive-path.md)
+for the isolation evidence, identifiers, browser results, and remaining M2 exit
+checks.
