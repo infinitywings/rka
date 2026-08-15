@@ -279,9 +279,14 @@ the current RKA graph:
    union their prohibited extensions into candidate prohibited wording. A
    `dec_` ratifies wording but is not empirical evidence. An `ecl_` guides
    synthesis and discovery but is not empirical evidence.
-5. Dry-run the proposal with `rka writer import-spine`; inspect its evidence
-   roles, result coverage, and revision. Apply only with `--apply` and an
-   explicit expected revision. Import never creates ratifications.
+5. Dry-run candidate spine material with `rka writer import-spine` and inspect
+   evidence roles, result coverage, and revision. On a server with semantic
+   patch operations, submit the final `argument_spine_replace` through
+   `create_semantic_patch_proposal`, inspect its semantic diff and warnings,
+   and use a separate `apply_semantic_patch_proposal` call with the proposal
+   revision. The CLI `--apply` path is legacy/local compatibility only and
+   still requires explicit PI authorization and an expected manuscript
+   revision. Neither path creates ratifications.
 6. As part of the Outline checkpoint, create one child claim-scope `dec_` per
    selected contribution with `chosen` exactly equal to the selected wording
    and `decided_by: pi`. Bind that decision to the exact `mcl_` version through
@@ -550,8 +555,9 @@ When a revised draft is available, compare it against the prior review comments 
 16. **DON'T** gate on the pre-submission review or the revision-check. Both are advisory: they surface gaps to the PI, and only the mechanical gates (provenance, citations, layout, reference-validation) block.
 17. **DON'T** compute or report an accept/reject or numeric quality score. `overclaim_lint.py` is WARN-only; the review writes a gaps list, not a grade (see `quality_review.md` for why LLM-reviewer scores are not gates).
 18. **DON'T** edit synchronized claim-spine or Markdown projections as if they
-   were authoritative. Prepare an explicit proposal, dry-run it, apply with a
-   revision precondition, and synchronize again.
+   were authoritative. Prepare an explicit semantic patch proposal, review its
+   diff and warnings, apply it in a separate call with both proposal and target
+   revision preconditions, and synchronize again.
 19. **DON'T** use a `dec_`, `ecl_`, or filled YAML cell as empirical evidence. A decision ratifies wording; empirical support resolves through current verified claims and their terminal sources.
 20. **DON'T** silently strengthen a claim beyond its allowed wording, erase qualifiers or counterevidence, or broaden a result beyond tested conditions. Gather evidence or obtain a new PI decision.
 21. **DON'T** treat claim-spine `ERROR` as advisory or convert it to `PASS`. Missing resolution or currency evidence blocks advancement until repaired.

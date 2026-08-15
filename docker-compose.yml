@@ -83,6 +83,11 @@ services:
       TOKENIZERS_PARALLELISM: "false"
       RKA_EMBEDDING_THREADS: "${RKA_EMBEDDING_THREADS:-2}"
       RKA_EMBEDDING_CACHE_DIR: "/data/fastembed_cache"
+      # Manuscript-workbench suggestions may use an LM Studio server on the
+      # Docker host. The adapter accepts only loopback or this exact gateway;
+      # it never falls back to a cloud provider.
+      RKA_WORKBENCH_LM_STUDIO_BASE_URL: "${RKA_WORKBENCH_LM_STUDIO_BASE_URL:-http://host.docker.internal:1234/v1}"
+      RKA_WORKBENCH_LM_STUDIO_MODEL: "${RKA_WORKBENCH_LM_STUDIO_MODEL:-}"
     # v2.7.0.1: bound container RAM. App-level thread cap should make this
     # never fire; if it does, container OOM-kills cleanly with
     # OOMKilled=true (proper signal) rather than the silent SIGKILL we

@@ -59,6 +59,11 @@ _PREFIXES = {
     "manuscript_planning_artifact": "pla",
     "manuscript_planning_artifact_version": "plv",
     "manuscript_planning_evidence_binding": "plb",
+    "semantic_patch_context_manifest": "pcm",
+    "semantic_patch_proposal": "spp",
+    "semantic_patch_proposal_event": "spe",
+    "semantic_patch_provider_call": "spc",
+    "semantic_patch_provider_event": "pce",
 }
 
 

@@ -7,13 +7,32 @@ All notable changes to RKA are documented here. Format loosely follows
 
 ### Added
 
+- **Unified semantic patch proposals.** Human workbench edits, host-agent
+  suggestions, and local-machine LM Studio suggestions now produce the same
+  immutable proposal envelope, semantic preview, validation findings, and
+  explicit apply/reject lifecycle. Optimistic bases are captured and checked
+  transactionally; stale proposals preserve both the proposal and newer
+  canonical state as a conflict instead of retrying blindly.
+- **Auditable AI context boundaries.** Immutable context manifests record exact
+  selected entities, resolved source closure, target snapshots, constraints,
+  omissions, provider/model boundaries, and start/success/failure call events
+  without storing provider credentials. Proposal history is portable in
+  knowledge-pack schema v7 and participates in project deletion and change
+  cursors. AI proposals fail closed when they address an undisclosed aggregate,
+  use an undisclosed evidence entity, or outlive the target revision captured
+  before generation.
+- **Semantic proposal REST, MCP, and workbench surfaces.** The typed dispatch
+  surface now exposes 139 operations (62 reads + 77 writes). The manuscript
+  workbench previews diffs and warnings and requires a separate user action to
+  apply or reject each proposal.
+
 - **Versioned manuscript planning branches.** Project-only or manuscript-bound
   deliberation can now evolve through typed planning stages without mutating
   canonical evidence or manuscript records. Branch alternatives preserve
   frozen ancestry, immutable artifact versions, actor/model provenance,
   evidence bindings, deterministic comparison, and resumable selection state.
 - **Planning REST, MCP, and workbench surfaces.** The API and typed dispatch
-  surface now expose 132 operations (60 reads + 72 writes). The manuscript
+  surface exposed 132 operations (60 reads + 72 writes). The manuscript
   workbench can create, fork, select, compare, archive, reactivate, and resume
   provisional branches while keeping canonical projections visibly separate.
 - **Portable planning provenance.** Knowledge-pack schema v6 re-keys planning

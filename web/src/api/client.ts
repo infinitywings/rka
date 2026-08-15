@@ -165,6 +165,10 @@ import type {
   PlanningBranchCreate,
   PlanningBranchTransition,
   PlanningContext,
+  SemanticPatchProposal,
+  SemanticPatchProposalCreate,
+  SemanticPatchTransition,
+  LMStudioSemanticPatchRequest,
 } from "./types"
 
 export const api = {
@@ -537,6 +541,24 @@ export const api = {
     })
     return get<PlanningBranchComparison>(`/planning/branches/compare?${search.toString()}`)
   },
+
+  // Human, host-agent, and local-model edits converge on this proposal ledger.
+  listSemanticPatchProposals: (status?: string) => {
+    const query = status ? `?status=${encodeURIComponent(status)}` : ""
+    return get<SemanticPatchProposal[]>(`/semantic-patches/proposals${query}`)
+  },
+  createSemanticPatchProposal: (data: SemanticPatchProposalCreate) =>
+    post<SemanticPatchProposal>("/semantic-patches/proposals", data),
+  applySemanticPatchProposal: (proposalId: string, data: SemanticPatchTransition) =>
+    post<SemanticPatchProposal>(
+      `/semantic-patches/proposals/${encodeURIComponent(proposalId)}/apply`, data,
+    ),
+  rejectSemanticPatchProposal: (proposalId: string, data: SemanticPatchTransition) =>
+    post<SemanticPatchProposal>(
+      `/semantic-patches/proposals/${encodeURIComponent(proposalId)}/reject`, data,
+    ),
+  generateLMStudioSemanticPatch: (data: LMStudioSemanticPatchRequest) =>
+    post<SemanticPatchProposal>("/semantic-patches/providers/lm-studio/proposals", data),
 }
 
 export { ApiError }

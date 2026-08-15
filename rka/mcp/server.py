@@ -264,14 +264,14 @@ Detailed operating guidance is available via MCP prompts:
 Use these prompts to load role-specific guidance at session start.
 
 ## Tool Surface (v2.7.0+) — Typed Dispatch Architecture
-RKA ships 5 always-on tools: 3 dispatch tools that route to 132 typed
+RKA ships 5 always-on tools: 3 dispatch tools that route to 139 typed
 operations, plus 2 escape hatches into the legacy surface.
 
 - **Dispatch (always-on):**
-- `rka_query(args={"operation": ..., "project_id": ..., ...})` — 60 read
+- `rka_query(args={"operation": ..., "project_id": ..., ...})` — 62 read
     operations (status, context, journal, decisions, missions, literature,
     research map, etc.). Returns structured data.
-- `rka_execute(args={"operation": ..., "project_id": ..., ...})` — 72
+- `rka_execute(args={"operation": ..., "project_id": ..., ...})` — 77
     write/lifecycle operations (record_note, record_decision, create_mission,
     submit_report, submit_checkpoint, etc.). Returns the created/updated entity.
   - `rka_describe(operation="" | "<op_name>")` — schema lookup. With no
@@ -283,7 +283,7 @@ operations, plus 2 escape hatches into the legacy surface.
     the live tool surface. Useful only for back-compat with old transcripts.
   - `rka_help(name=...)` — deprecated alias for `rka_describe`.
 
-The 132 operations are typed Pydantic models with per-branch enum constraints
+The 139 operations are typed Pydantic models with per-branch enum constraints
 and required-field enforcement at the FastMCP schema layer — illegal values
 (e.g. `confidence="confirmed"`) are rejected at the inputSchema boundary
 before the call goes out.
@@ -4937,6 +4937,97 @@ async def rka_append_planning_artifact_version(
     return json.dumps(response.json(), indent=2)
 
 
+@tool(category="semantic_patches")
+async def rka_get_semantic_patch_proposals(
+    proposal_id: str | None = None,
+    status: str | None = None,
+    limit: int = 100,
+    *,
+    project_id: str,
+) -> str:
+    """List semantic proposals or fetch one exact proposal, diff, and history."""
+    async with _client(project_id) as c:
+        if proposal_id:
+            response = await c.get(f"/api/semantic-patches/proposals/{proposal_id}")
+        else:
+            response = await c.get(
+                "/api/semantic-patches/proposals",
+                params=_strip_none({"status": status, "limit": limit}),
+            )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="semantic_patches")
+async def rka_get_semantic_patch_schema(*, project_id: str) -> str:
+    """Get the exact host-agent JSON schema for a generated proposal draft."""
+    async with _client(project_id) as c:
+        response = await c.get("/api/semantic-patches/schema")
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="semantic_patches")
+async def rka_prepare_semantic_patch_context(payload: dict, *, project_id: str) -> str:
+    """Persist the exact AI disclosure manifest before host or local generation."""
+    async with _client(project_id) as c:
+        response = await c.post("/api/semantic-patches/context-manifests", json=payload)
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="semantic_patches")
+async def rka_create_semantic_patch_proposal(payload: dict, *, project_id: str) -> str:
+    """Create and validate a proposal without mutating its targets."""
+    async with _client(project_id) as c:
+        response = await c.post("/api/semantic-patches/proposals", json=payload)
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="semantic_patches")
+async def rka_apply_semantic_patch_proposal(
+    proposal_id: str,
+    payload: dict,
+    *,
+    project_id: str,
+) -> str:
+    """Explicitly apply a reviewed proposal under all captured revision guards."""
+    async with _client(project_id) as c:
+        response = await c.post(
+            f"/api/semantic-patches/proposals/{proposal_id}/apply", json=payload
+        )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="semantic_patches")
+async def rka_reject_semantic_patch_proposal(
+    proposal_id: str,
+    payload: dict,
+    *,
+    project_id: str,
+) -> str:
+    """Reject a reviewed proposal without changing its targets."""
+    async with _client(project_id) as c:
+        response = await c.post(
+            f"/api/semantic-patches/proposals/{proposal_id}/reject", json=payload
+        )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="semantic_patches")
+async def rka_generate_lm_studio_semantic_patch(payload: dict, *, project_id: str) -> str:
+    """Ask configured local LM Studio for a proposal; never auto-apply it."""
+    async with _client(project_id) as c:
+        response = await c.post(
+            "/api/semantic-patches/providers/lm-studio/proposals", json=payload
+        )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
 @tool(category="claims")
 async def rka_add_interpretation_hint(
     candidate_id: str,
@@ -8556,7 +8647,7 @@ async def rka_execute(args: _ExecuteArgsUnion) -> str:
 
     v2.7.0 NO-COMPROMISE typed-arg surface. The ``args`` parameter is a
     Pydantic discriminated union (keyed by ``operation``) covering all
-    72 write/lifecycle operations. FastMCP renders the union as JSON
+    77 write/lifecycle operations. FastMCP renders the union as JSON
     Schema ``oneOf`` with per-branch ``required`` arrays + per-branch
     ``enum`` constraints on every Literal-typed field. The LLM CANNOT
     emit ``confidence='confirmed'``, ``decided_by='SUPERVISOR'``,
@@ -8701,11 +8792,11 @@ support; the Skill is authoritative.
 Always begin a session by loading context:
 
 0. **Tool surface (v2.7.0+ typed dispatch).** RKA ships 3 always-on dispatch
-   tools — `rka_query` (60 read ops), `rka_execute` (72 write/lifecycle ops),
+   tools — `rka_query` (62 read ops), `rka_execute` (77 write/lifecycle ops),
    and `rka_describe` (schema lookup) — plus 2 escape hatches (`rka_load_tools`
    for legacy compat and `rka_help` as a deprecated alias of `rka_describe`).
    No activation step is required: every operation is reachable from
-   `rka_query` / `rka_execute` on the first call. To browse the 132 operations
+   `rka_query` / `rka_execute` on the first call. To browse the 139 operations
    call `rka_describe("")`; for one operation's full schema call
    `rka_describe("record_decision")`. Per-branch enum + required-field
    enforcement at the FastMCP schema layer guarantees values like
@@ -8849,7 +8940,7 @@ Skill is authoritative.
 ## Session Start Protocol
 
 0. **Tool surface (v2.7.0+ typed dispatch).** RKA ships 3 always-on dispatch
-   tools — `rka_query` (60 read ops), `rka_execute` (72 write/lifecycle ops),
+   tools — `rka_query` (62 read ops), `rka_execute` (77 write/lifecycle ops),
    and `rka_describe` (schema lookup) — plus 2 escape hatches (`rka_load_tools`
    for legacy compat and `rka_help` as a deprecated alias of `rka_describe`).
    No activation step is required: every operation is reachable from

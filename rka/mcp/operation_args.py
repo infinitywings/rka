@@ -61,6 +61,12 @@ from rka.models.planning import (
     PlanningBranchCreate,
     PlanningBranchTransition,
 )
+from rka.models.semantic_patch import (
+    ContextManifestCreate,
+    LMStudioProposalRequest,
+    SemanticPatchProposalCreate,
+    SemanticPatchProposalTransition,
+)
 
 # NOTE: enum aliases from ``rka.mcp._enums`` are imported on a per-batch
 # basis. Batch A (query ops) doesn't directly type any enum field — query
@@ -122,6 +128,12 @@ from rka.mcp._enums import (  # noqa: E402, F811
     LitStatusLit,
     NoteTypeLit,
     SourceLit,
+    SemanticPatchAIOriginLit,
+    SemanticPatchAIBoundaryLit,
+    SemanticPatchActorLit,
+    SemanticPatchBoundaryLit,
+    SemanticPatchOriginLit,
+    SemanticPatchStatusLit,
 )
 
 # Batch C imports — Update/Lifecycle/Submit enums.
@@ -564,6 +576,24 @@ class QueryPlanningArtifactVersionsArgs(ProjectScopedArgs):
 
     operation: Literal["planning_artifact_versions"] = "planning_artifact_versions"
     id: Annotated[str, Field(min_length=1, description="Canonical pla_ id.")]
+
+
+class QuerySemanticPatchProposalsArgs(ProjectScopedArgs):
+    """[ANY] List proposals or fetch one exact semantic diff and event history."""
+
+    operation: Literal["semantic_patch_proposals"] = "semantic_patch_proposals"
+    id: Annotated[Optional[str], Field(default=None, description="Optional spp_ id.")] = None
+    status: Annotated[
+        Optional[SemanticPatchStatusLit],
+        Field(default=None, description="Optional lifecycle filter."),
+    ] = None
+    limit: Annotated[int, Field(default=100, ge=1, le=500)] = 100
+
+
+class QuerySemanticPatchSchemaArgs(ProjectScopedArgs):
+    """[ANY] Get the exact host-agent generated-proposal JSON schema."""
+
+    operation: Literal["semantic_patch_schema"] = "semantic_patch_schema"
 
 
 class QueryManuscriptArgs(ProjectScopedArgs):
@@ -1227,6 +1257,8 @@ QueryArgsUnion = Annotated[
         QueryPlanningResumeArgs,
         QueryPlanningCompareArgs,
         QueryPlanningArtifactVersionsArgs,
+        QuerySemanticPatchProposalsArgs,
+        QuerySemanticPatchSchemaArgs,
         QueryManuscriptArgs,
         QueryReferenceValidationStatusArgs,
         ResolveEntitiesArgs,
@@ -2572,6 +2604,52 @@ class AppendPlanningArtifactVersionArgs(
     created_by: Annotated[PlanningActorLit, Field(description="Version author.")]
 
 
+class PrepareSemanticPatchContextArgs(ProjectScopedArgs, ContextManifestCreate):
+    """[ANY] Persist the exact context disclosure before an AI call."""
+
+    operation: Literal["prepare_semantic_patch_context"] = "prepare_semantic_patch_context"
+    origin: Annotated[SemanticPatchAIOriginLit, Field(description="AI provider path.")]
+    boundary: Annotated[
+        SemanticPatchAIBoundaryLit, Field(description="Outbound data boundary.")
+    ]
+
+
+class CreateSemanticPatchProposalArgs(ProjectScopedArgs, SemanticPatchProposalCreate):
+    """[ANY] Validate and persist a proposal without mutating its targets."""
+
+    operation: Literal["create_semantic_patch_proposal"] = "create_semantic_patch_proposal"
+    origin: Annotated[SemanticPatchOriginLit, Field(description="Proposal origin.")]
+    created_by: Annotated[SemanticPatchActorLit, Field(description="Proposal author.")]
+    boundary: Annotated[
+        SemanticPatchBoundaryLit, Field(description="Provider boundary.")
+    ] = "none"
+
+
+class ApplySemanticPatchProposalArgs(ProjectScopedArgs, SemanticPatchProposalTransition):
+    """[PI/WEB_UI] Explicitly apply one reviewed, current proposal."""
+
+    operation: Literal["apply_semantic_patch_proposal"] = "apply_semantic_patch_proposal"
+    id: Annotated[str, Field(min_length=1, description="Canonical spp_ id.")]
+    actor: Annotated[SemanticPatchActorLit, Field(description="Applying reviewer.")]
+
+
+class RejectSemanticPatchProposalArgs(ProjectScopedArgs, SemanticPatchProposalTransition):
+    """[PI/WEB_UI] Reject a proposal without mutating its targets."""
+
+    operation: Literal["reject_semantic_patch_proposal"] = "reject_semantic_patch_proposal"
+    id: Annotated[str, Field(min_length=1, description="Canonical spp_ id.")]
+    actor: Annotated[SemanticPatchActorLit, Field(description="Rejecting reviewer.")]
+
+
+class GenerateLMStudioSemanticPatchArgs(ProjectScopedArgs, LMStudioProposalRequest):
+    """[ANY] Generate a local-machine proposal; never auto-apply it."""
+
+    operation: Literal["generate_lm_studio_semantic_patch"] = (
+        "generate_lm_studio_semantic_patch"
+    )
+    created_by: Annotated[SemanticPatchActorLit, Field(description="Proposal author.")]
+
+
 class SetClaimScopeArgs(ProjectScopedArgs):
     """[BRAIN/PI] Append a revision-guarded canonical claim-scope contract."""
 
@@ -2757,7 +2835,7 @@ class HookAddArgs(ProjectScopedArgs):
 # Batch B partial union (record/create + native manuscript domain)
 # ---------------------------------------------------------------------------
 #
-# The full rka_execute union (58 ops) is assembled below
+# The full rka_execute union is assembled below
 # from per-batch contributions. This partial union exposes Batch B's
 # slice so unit tests can verify it in isolation.
 
@@ -2799,6 +2877,11 @@ BatchBExecuteUnion = Annotated[
         CreatePlanningBranchArgs,
         TransitionPlanningBranchArgs,
         AppendPlanningArtifactVersionArgs,
+        PrepareSemanticPatchContextArgs,
+        CreateSemanticPatchProposalArgs,
+        ApplySemanticPatchProposalArgs,
+        RejectSemanticPatchProposalArgs,
+        GenerateLMStudioSemanticPatchArgs,
     ],
     Field(discriminator="operation"),
 ]
@@ -4635,7 +4718,7 @@ BatchCExecuteUnion = Annotated[
 
 
 # =============================================================================
-# Final ExecuteArgsUnion — composes B + C + D (72 models total)
+# Final ExecuteArgsUnion — composes B + C + D (77 models total)
 # =============================================================================
 #
 # Phase 3 assembly: the discriminated union for `rka_execute`. FastMCP
@@ -4682,6 +4765,11 @@ ExecuteArgsUnion = Annotated[
         CreatePlanningBranchArgs,
         TransitionPlanningBranchArgs,
         AppendPlanningArtifactVersionArgs,
+        PrepareSemanticPatchContextArgs,
+        CreateSemanticPatchProposalArgs,
+        ApplySemanticPatchProposalArgs,
+        RejectSemanticPatchProposalArgs,
+        GenerateLMStudioSemanticPatchArgs,
         # ===== Batch C — UPDATE/LIFECYCLE/SUBMIT (22) =====
         UpdateNoteArgs,
         UpdateDecisionArgs,
@@ -4758,6 +4846,8 @@ __all__ = [
     "QueryPlanningResumeArgs",
     "QueryPlanningCompareArgs",
     "QueryPlanningArtifactVersionsArgs",
+    "QuerySemanticPatchProposalsArgs",
+    "QuerySemanticPatchSchemaArgs",
     "QueryManuscriptArgs",
     "QueryReferenceValidationStatusArgs",
     "ResolveEntitiesArgs",
@@ -4830,6 +4920,11 @@ __all__ = [
     "CreatePlanningBranchArgs",
     "TransitionPlanningBranchArgs",
     "AppendPlanningArtifactVersionArgs",
+    "PrepareSemanticPatchContextArgs",
+    "CreateSemanticPatchProposalArgs",
+    "ApplySemanticPatchProposalArgs",
+    "RejectSemanticPatchProposalArgs",
+    "GenerateLMStudioSemanticPatchArgs",
     # Batch B partial union
     "BatchBExecuteUnion",
     # Batch D — Review / Maintenance / Hooks / Workspace write models

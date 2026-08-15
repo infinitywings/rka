@@ -1472,3 +1472,75 @@ export interface PlanningBranchTransition {
   actor: "pi" | "brain" | "executor" | "web_ui" | "llm" | "import"
   reason: string
 }
+
+// ---- Unified semantic edit proposals ----
+
+export type SemanticPatchStatus =
+  | "proposed" | "applied" | "rejected" | "conflicted" | "superseded" | "expired"
+export type SemanticPatchOrigin = "human" | "host_agent" | "lm_studio"
+
+export interface SemanticPatchDiffChange {
+  path: string
+  change: "added" | "removed" | "changed"
+  before: unknown
+  after: unknown
+}
+
+export interface SemanticPatchDiff {
+  operation_index: number
+  operation: string
+  target: Record<string, unknown>
+  changes: SemanticPatchDiffChange[]
+}
+
+export interface SemanticPatchFinding {
+  severity: string
+  code: string
+  message: string
+  [key: string]: unknown
+}
+
+export interface SemanticPatchProposal {
+  schema_version: string
+  id: string
+  project_id: string
+  origin: SemanticPatchOrigin
+  status: SemanticPatchStatus
+  revision: number
+  intent: string
+  reason: string
+  created_by: string
+  operations: Array<Record<string, unknown>>
+  target_bases: Array<Record<string, unknown>>
+  semantic_diff: SemanticPatchDiff[]
+  validation_findings: SemanticPatchFinding[]
+  context_manifest_id: string | null
+  provider: string | null
+  model: string | null
+  boundary: "none" | "host_conversation" | "local_loopback"
+  created_at: string
+  updated_at: string
+}
+
+export interface SemanticPatchProposalCreate {
+  origin: "human"
+  intent: string
+  reason: string
+  created_by: "web_ui"
+  operations: Array<Record<string, unknown>>
+}
+
+export interface SemanticPatchTransition {
+  expected_revision: number
+  actor: "web_ui"
+  reason: string
+}
+
+export interface LMStudioSemanticPatchRequest {
+  instruction: string
+  created_by: "web_ui"
+  targets: Array<{ target_type: "manuscript" | "planning_branch"; target_id: string }>
+  constraints?: string[]
+  omissions?: string[]
+  model?: string
+}

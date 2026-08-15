@@ -16,9 +16,10 @@ from rka import __version__
 from rka.infra.ids import generate_id
 from rka.models.knowledge_pack import KnowledgePackImportResult
 from rka.models.planning import validate_planning_payload
+from rka.models.semantic_patch import SemanticPatchProposalCreate
 from rka.services.base import BaseService, _now
 
-PACK_SCHEMA_VERSION = 6
+PACK_SCHEMA_VERSION = 7
 PACK_FILE_SUFFIX = ".rka-pack.zip"
 _IMPORT_PROJECT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
@@ -80,6 +81,11 @@ _CRITICAL_INTEGRITY_CATEGORIES: frozenset[str] = frozenset(
         "planning_artifact_chain_invalid",
         "planning_evidence_binding_invalid",
         "planning_payload_invalid",
+        "semantic_patch_manifest_hash_invalid",
+        "semantic_patch_proposal_context_invalid",
+        "semantic_patch_proposal_event_head_mismatch",
+        "semantic_patch_provider_event_chain_invalid",
+        "semantic_patch_payload_invalid",
     }
 )
 
@@ -134,6 +140,10 @@ _TABLE_CATEGORIES: dict[str, list[str]] = {
         "manuscript_planning_artifacts",
         "manuscript_planning_artifact_versions",
         "manuscript_planning_evidence_bindings",
+        "semantic_patch_context_manifests",
+        "semantic_patch_proposals",
+        "semantic_patch_proposal_events",
+        "semantic_patch_provider_events",
         "manuscript_reference_members",
         "manuscript_claims",
         "manuscript_claim_versions",
@@ -227,6 +237,10 @@ _INSERT_ORDER = (
     "manuscript_planning_artifact_versions",
     "manuscript_planning_evidence_bindings",
     "manuscript_planning_branch_events",
+    "semantic_patch_context_manifests",
+    "semantic_patch_proposals",
+    "semantic_patch_proposal_events",
+    "semantic_patch_provider_events",
     "manuscript_reference_members",
     "manuscript_claims",
     "manuscript_claim_versions",
@@ -280,6 +294,7 @@ _SELF_REFERENTIAL_TABLES: dict[str, str | list[str]] = {
         "supersedes_version_id",
         "derived_from_version_id",
     ],
+    "semantic_patch_proposals": "supersedes_proposal_id",
     "topics": "parent_id",
 }
 _ID_ENTITY_TYPES = {
@@ -312,6 +327,10 @@ _ID_ENTITY_TYPES = {
     "manuscript_planning_artifacts": "manuscript_planning_artifact",
     "manuscript_planning_artifact_versions": "manuscript_planning_artifact_version",
     "manuscript_planning_evidence_bindings": "manuscript_planning_evidence_binding",
+    "semantic_patch_context_manifests": "semantic_patch_context_manifest",
+    "semantic_patch_proposals": "semantic_patch_proposal",
+    "semantic_patch_proposal_events": "semantic_patch_proposal_event",
+    "semantic_patch_provider_events": "semantic_patch_provider_event",
     "manuscript_reference_members": "manuscript_reference",
     "manuscript_claims": "manuscript_claim",
     "manuscript_claim_ratifications": "manuscript_claim_ratification",
@@ -419,6 +438,14 @@ _DIRECT_ID_COLUMNS = {
         "artifact_id",
         "entity_id",
     ),
+    "semantic_patch_context_manifests": ("id",),
+    "semantic_patch_proposals": (
+        "id",
+        "context_manifest_id",
+        "supersedes_proposal_id",
+    ),
+    "semantic_patch_proposal_events": ("id", "proposal_id"),
+    "semantic_patch_provider_events": ("id", "call_id", "context_manifest_id"),
     "manuscript_reference_members": (
         "id",
         "manuscript_id",
@@ -535,6 +562,9 @@ _FK_COLUMNS: dict[str, set[str]] = {
         "artifact_version_id",
         "artifact_id",
     },
+    "semantic_patch_proposals": {"context_manifest_id", "supersedes_proposal_id"},
+    "semantic_patch_proposal_events": {"proposal_id"},
+    "semantic_patch_provider_events": {"context_manifest_id"},
     "manuscript_reference_members": {"manuscript_id", "literature_id"},
     "manuscript_claims": {"manuscript_id"},
     "manuscript_claim_versions": {"claim_id", "manuscript_id"},
@@ -636,6 +666,8 @@ _PROSE_TEXT_COLUMNS: dict[str, tuple[str, ...]] = {
         "reason",
     ),
     "manuscript_planning_evidence_bindings": ("locator_value", "note"),
+    "semantic_patch_proposals": ("intent", "reason"),
+    "semantic_patch_proposal_events": ("reason",),
 }
 
 _JSON_ID_COLUMNS = {
@@ -674,6 +706,22 @@ _JSON_ID_COLUMNS = {
         "dependency_snapshot",
         "full_json_payload",
     ),
+    "semantic_patch_context_manifests": (
+        "selected_context",
+        "resolved_context",
+        "target_bases",
+        "constraints",
+        "omissions",
+        "truncation_notes",
+    ),
+    "semantic_patch_proposals": (
+        "operations",
+        "target_bases",
+        "semantic_diff",
+        "validation_findings",
+    ),
+    "semantic_patch_proposal_events": ("details",),
+    "semantic_patch_provider_events": ("details",),
     "context_snapshots": ("entry_ids",),
     "keynodes": ("node_refs",),
     "graph_views": ("nodes", "edges"),
@@ -714,6 +762,10 @@ _ENTITY_LINK_ENDPOINT_TABLES: dict[str, str] = {
     "manuscript_planning_artifact": "manuscript_planning_artifacts",
     "manuscript_planning_artifact_version": "manuscript_planning_artifact_versions",
     "manuscript_planning_evidence_binding": "manuscript_planning_evidence_bindings",
+    "semantic_patch_context_manifest": "semantic_patch_context_manifests",
+    "semantic_patch_proposal": "semantic_patch_proposals",
+    "semantic_patch_proposal_event": "semantic_patch_proposal_events",
+    "semantic_patch_provider_event": "semantic_patch_provider_events",
     "manuscript_checkpoint": "manuscript_checkpoints",
     "manuscript_claim": "manuscript_claims",
     "manuscript_claim_ratification": "manuscript_claim_ratifications",
@@ -1401,6 +1453,10 @@ class KnowledgePackService(BaseService):
                 row_id = row.get("id")
                 if row_id:
                     id_map[str(row_id)] = generate_id(entity_type)
+        for row in tables.get("semantic_patch_provider_events", []):
+            call_id = row.get("call_id")
+            if call_id and str(call_id) not in id_map:
+                id_map[str(call_id)] = generate_id("semantic_patch_provider_call")
         return id_map
 
     def _remap_row(
@@ -1461,6 +1517,30 @@ class KnowledgePackService(BaseService):
                 remapped[column] = _EMBEDDED_ID_RE.sub(
                     lambda m: id_map.get(m.group(0), m.group(0)), value
                 )
+
+        if table == "semantic_patch_context_manifests":
+            manifest_payload = {
+                "schema_version": "rka.context-manifest/v1",
+                "project_id": target_project_id,
+                "origin": remapped["origin"],
+                "provider": remapped.get("provider"),
+                "model": remapped.get("model"),
+                "boundary": remapped["boundary"],
+                "selected_context": json.loads(remapped["selected_context"]),
+                "resolved_context": json.loads(remapped["resolved_context"]),
+                "target_bases": json.loads(remapped["target_bases"]),
+                "constraints": json.loads(remapped["constraints"]),
+                "omissions": json.loads(remapped["omissions"]),
+                "truncation_notes": json.loads(remapped["truncation_notes"]),
+            }
+            remapped["manifest_hash"] = hashlib.sha256(
+                json.dumps(
+                    manifest_payload,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ).encode("utf-8")
+            ).hexdigest()
 
         return remapped
 
@@ -2000,6 +2080,11 @@ class KnowledgePackService(BaseService):
         "planning_artifact_chain_invalid": "critical",
         "planning_evidence_binding_invalid": "critical",
         "planning_payload_invalid": "critical",
+        "semantic_patch_manifest_hash_invalid": "critical",
+        "semantic_patch_proposal_context_invalid": "critical",
+        "semantic_patch_proposal_event_head_mismatch": "critical",
+        "semantic_patch_provider_event_chain_invalid": "critical",
+        "semantic_patch_payload_invalid": "critical",
         "claim_count_mismatch": "warning",
     }
 
@@ -2775,6 +2860,240 @@ class KnowledgePackService(BaseService):
                     "ids": bad_planning_payload_ids[:10],
                     "description": "planning artifact payloads violate their closed stage schema",
                     "fix_action": "Restore a payload that validates against the declared planning stage",
+                }
+            )
+
+        # 24. Context manifests remain exact after export/import re-keying.
+        manifest_rows = await self.db.fetchall(
+            """SELECT * FROM semantic_patch_context_manifests
+               WHERE project_id = ? ORDER BY id""",
+            [pid],
+        )
+        bad_manifest_hashes: list[str] = []
+        for row in manifest_rows:
+            try:
+                payload = {
+                    "schema_version": "rka.context-manifest/v1",
+                    "project_id": pid,
+                    "origin": row["origin"],
+                    "provider": row.get("provider"),
+                    "model": row.get("model"),
+                    "boundary": row["boundary"],
+                    "selected_context": json.loads(row["selected_context"]),
+                    "resolved_context": json.loads(row["resolved_context"]),
+                    "target_bases": json.loads(row["target_bases"]),
+                    "constraints": json.loads(row["constraints"]),
+                    "omissions": json.loads(row["omissions"]),
+                    "truncation_notes": json.loads(row["truncation_notes"]),
+                }
+                expected_hash = hashlib.sha256(
+                    json.dumps(
+                        payload,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        ensure_ascii=False,
+                    ).encode("utf-8")
+                ).hexdigest()
+            except (TypeError, ValueError, json.JSONDecodeError, KeyError):
+                expected_hash = ""
+            if row.get("manifest_hash") != expected_hash:
+                bad_manifest_hashes.append(str(row["id"]))
+        if bad_manifest_hashes:
+            cat = "semantic_patch_manifest_hash_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_manifest_hashes),
+                    "ids": bad_manifest_hashes[:10],
+                    "description": "semantic patch context manifest hashes do not match content",
+                    "fix_action": "Restore the exact immutable context manifest",
+                }
+            )
+
+        # 25. AI proposals bind to a matching provider/model disclosure.
+        bad_manifest_context = await self.db.fetchall(
+            """SELECT id FROM semantic_patch_context_manifests
+               WHERE project_id = ?
+                 AND (origin NOT IN ('host_agent', 'lm_studio')
+                      OR provider IS NULL OR length(trim(provider)) = 0
+                      OR model IS NULL OR length(trim(model)) = 0
+                      OR (origin = 'host_agent' AND boundary <> 'host_conversation')
+                      OR (origin = 'lm_studio' AND boundary <> 'local_loopback'))
+               LIMIT 50""",
+            [pid],
+        )
+        bad_proposal_context = await self.db.fetchall(
+            """SELECT proposal.id
+               FROM semantic_patch_proposals AS proposal
+               LEFT JOIN semantic_patch_context_manifests AS manifest
+                 ON manifest.id = proposal.context_manifest_id
+                AND manifest.project_id = proposal.project_id
+               WHERE proposal.project_id = ?
+                 AND (
+                     (proposal.origin = 'human' AND proposal.context_manifest_id IS NOT NULL)
+                     OR (proposal.origin <> 'human'
+                         AND (manifest.id IS NULL
+                              OR manifest.origin <> proposal.origin
+                              OR manifest.provider <> proposal.provider
+                              OR manifest.model <> proposal.model
+                              OR manifest.boundary <> proposal.boundary))
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        bad_context_ids = [row["id"] for row in bad_manifest_context]
+        bad_context_ids.extend(row["id"] for row in bad_proposal_context)
+        if bad_context_ids:
+            cat = "semantic_patch_proposal_context_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_context_ids),
+                    "ids": bad_context_ids[:10],
+                    "description": "AI proposals do not match their immutable provider manifest",
+                    "fix_action": "Restore the proposal and its exact provider context",
+                }
+            )
+
+        # 26. Proposal heads agree with a complete immutable event history.
+        bad_proposal_heads = await self.db.fetchall(
+            """SELECT proposal.id
+               FROM semantic_patch_proposals AS proposal
+               WHERE proposal.project_id = ?
+                 AND (
+                     proposal.revision <> COALESCE((
+                         SELECT MAX(event.proposal_revision)
+                         FROM semantic_patch_proposal_events AS event
+                         WHERE event.proposal_id = proposal.id
+                           AND event.project_id = proposal.project_id
+                     ), 0)
+                     OR proposal.revision <> (
+                         SELECT COUNT(*) FROM semantic_patch_proposal_events AS event
+                         WHERE event.proposal_id = proposal.id
+                           AND event.project_id = proposal.project_id
+                     )
+                     OR NOT EXISTS (
+                         SELECT 1 FROM semantic_patch_proposal_events AS event
+                         WHERE event.proposal_id = proposal.id
+                           AND event.project_id = proposal.project_id
+                           AND event.proposal_revision = proposal.revision
+                           AND event.action = proposal.status
+                     )
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_proposal_heads:
+            cat = "semantic_patch_proposal_event_head_mismatch"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_proposal_heads),
+                    "ids": [row["id"] for row in bad_proposal_heads[:10]],
+                    "description": "semantic proposal heads disagree with immutable events",
+                    "fix_action": "Restore the complete one-event-per-revision history",
+                }
+            )
+
+        # 27. Provider calls start once, terminate at most once, keep one
+        # boundary, and successfully close every persisted AI proposal.
+        bad_provider_calls = await self.db.fetchall(
+            """SELECT event.call_id
+               FROM semantic_patch_provider_events AS event
+               WHERE event.project_id = ?
+               GROUP BY event.call_id
+               HAVING SUM(event.event = 'started') <> 1
+                   OR SUM(event.event IN ('succeeded', 'failed')) > 1
+                   OR COUNT(DISTINCT event.context_manifest_id) <> 1
+                   OR COUNT(DISTINCT event.provider) <> 1
+                   OR COUNT(DISTINCT event.model) <> 1
+                   OR COUNT(DISTINCT event.boundary) <> 1
+               LIMIT 50""",
+            [pid],
+        )
+        bad_provider_boundaries = await self.db.fetchall(
+            """SELECT event.id
+               FROM semantic_patch_provider_events AS event
+               LEFT JOIN semantic_patch_context_manifests AS manifest
+                 ON manifest.id = event.context_manifest_id
+                AND manifest.project_id = event.project_id
+               WHERE event.project_id = ?
+                 AND (manifest.id IS NULL
+                      OR event.provider <> manifest.provider
+                      OR event.model <> manifest.model
+                      OR event.boundary <> manifest.boundary)
+               LIMIT 50""",
+            [pid],
+        )
+        bad_provider_proposals = await self.db.fetchall(
+            """SELECT proposal.id
+               FROM semantic_patch_proposals AS proposal
+               WHERE proposal.project_id = ? AND proposal.origin <> 'human'
+                 AND NOT EXISTS (
+                     SELECT 1 FROM semantic_patch_provider_events AS event
+                     WHERE event.project_id = proposal.project_id
+                       AND event.context_manifest_id = proposal.context_manifest_id
+                       AND event.event = 'succeeded'
+                       AND json_extract(event.details, '$.proposal_id') = proposal.id
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        bad_provider_ids = [row["call_id"] for row in bad_provider_calls]
+        bad_provider_ids.extend(row["id"] for row in bad_provider_boundaries)
+        bad_provider_ids.extend(row["id"] for row in bad_provider_proposals)
+        if bad_provider_ids:
+            cat = "semantic_patch_provider_event_chain_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_provider_ids),
+                    "ids": bad_provider_ids[:10],
+                    "description": "semantic provider-call history is incomplete or ambiguous",
+                    "fix_action": "Restore the exact provider start and terminal event chain",
+                }
+            )
+
+        # 28. JSON-valid operation arrays must also satisfy the closed semantic
+        # proposal model and its per-origin invariants.
+        proposal_rows = await self.db.fetchall(
+            """SELECT * FROM semantic_patch_proposals
+               WHERE project_id = ? ORDER BY id""",
+            [pid],
+        )
+        bad_proposal_payloads: list[str] = []
+        for row in proposal_rows:
+            try:
+                SemanticPatchProposalCreate.model_validate(
+                    {
+                        "origin": row["origin"],
+                        "intent": row["intent"],
+                        "reason": row["reason"],
+                        "created_by": row["created_by"],
+                        "operations": json.loads(row["operations"]),
+                        "provider": row.get("provider"),
+                        "model": row.get("model"),
+                        "boundary": row["boundary"],
+                        "context_manifest_id": row.get("context_manifest_id"),
+                        "supersedes_proposal_id": row.get("supersedes_proposal_id"),
+                    }
+                )
+            except (TypeError, ValueError, json.JSONDecodeError, KeyError):
+                bad_proposal_payloads.append(str(row["id"]))
+        if bad_proposal_payloads:
+            cat = "semantic_patch_payload_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_proposal_payloads),
+                    "ids": bad_proposal_payloads[:10],
+                    "description": "semantic proposal operations violate their closed schema",
+                    "fix_action": "Restore a proposal that validates against semantic patch v1",
                 }
             )
 
