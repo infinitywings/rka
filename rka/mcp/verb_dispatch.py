@@ -918,6 +918,9 @@ _QUERY_DISPATCH: dict[str, str] = {
     "claims": "rka_get_claims",
     "claim_scope": "rka_get_claim_scope",
     "interpretation_candidates": "rka_get_interpretation_candidates",
+    "experiments": "rka_get_experiments",
+    "experiment_runs": "rka_get_experiment_runs",
+    "experiment_observations": "rka_get_experiment_observations",
     # provenance / multi-hop
     "provenance": "rka_trace_provenance",
     "multi_hop": "rka_multi_hop_retrieval",
@@ -1203,6 +1206,34 @@ async def dispatch_query(
             epistemic_kind=f.get("epistemic_kind"),
             source_type=f.get("source_type"),
             source_id=f.get("source_id"),
+            limit=limit or f.get("limit", 50),
+            project_id=project_id,
+        )
+
+    if scope == "experiments":
+        return await legacy(
+            experiment_id=id,
+            status=f.get("status"),
+            limit=limit or f.get("limit", 50),
+            project_id=project_id,
+        )
+
+    if scope == "experiment_runs":
+        return await legacy(
+            run_id=id,
+            experiment_id=f.get("experiment_id"),
+            status=f.get("status"),
+            limit=limit or f.get("limit", 50),
+            project_id=project_id,
+        )
+
+    if scope == "experiment_observations":
+        return await legacy(
+            observation_id=id,
+            run_id=f.get("run_id"),
+            direction=f.get("direction"),
+            kind=f.get("kind"),
+            claim_id=f.get("claim_id"),
             limit=limit or f.get("limit", 50),
             project_id=project_id,
         )
@@ -1934,6 +1965,14 @@ EXECUTE_OPERATIONS = (
     "add_interpretation_hint",
     "triage_interpretation_candidate",
     "set_claim_scope",
+    # experiment evidence substrate
+    "create_experiment",
+    "append_experiment_plan",
+    "transition_experiment",
+    "create_experiment_run",
+    "transition_experiment_run",
+    "record_experiment_observation",
+    "add_evidence_locator",
     # update
     "update_note",
     "update_decision",
@@ -2083,16 +2122,64 @@ async def dispatch_execute(
         )
 
     if op == "triage_interpretation_candidate":
-        return await _legacy("rka_triage_interpretation_candidate")(
-            candidate_id=kw.get("id"),
-            action=kw.get("action"),
-            expected_revision=kw.get("expected_revision"),
-            actor=kw.get("actor"),
-            reason=kw.get("reason"),
-            target_candidate_id=kw.get("target_candidate_id"),
-            target_entity_id=kw.get("target_entity_id"),
-            grounding_verified=kw.get("grounding_verified", False),
-            claim_confidence=kw.get("claim_confidence", 0.5),
+        triage_kwargs = {
+            "candidate_id": kw.get("id"),
+            "action": kw.get("action"),
+            "expected_revision": kw.get("expected_revision"),
+            "actor": kw.get("actor"),
+            "reason": kw.get("reason"),
+            "target_candidate_id": kw.get("target_candidate_id"),
+            "target_entity_id": kw.get("target_entity_id"),
+            "grounding_verified": kw.get("grounding_verified", False),
+            "claim_confidence": kw.get("claim_confidence", 0.5),
+            "project_id": project_id,
+        }
+        if kw.get("evidence_role") is not None:
+            triage_kwargs["evidence_role"] = kw["evidence_role"]
+        return await _legacy("rka_triage_interpretation_candidate")(**triage_kwargs)
+
+    if op == "create_experiment":
+        return await _legacy("rka_create_experiment")(
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "append_experiment_plan":
+        return await _legacy("rka_append_experiment_plan")(
+            experiment_id=kw.pop("id", None),
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "transition_experiment":
+        return await _legacy("rka_transition_experiment")(
+            experiment_id=kw.pop("id", None),
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "create_experiment_run":
+        return await _legacy("rka_create_experiment_run")(
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "transition_experiment_run":
+        return await _legacy("rka_transition_experiment_run")(
+            run_id=kw.pop("id", None),
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "record_experiment_observation":
+        return await _legacy("rka_record_experiment_observation")(
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "add_evidence_locator":
+        return await _legacy("rka_add_evidence_locator")(
+            payload=kw,
             project_id=project_id,
         )
 

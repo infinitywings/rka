@@ -13,7 +13,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rka.models.claim import ClaimType
 
 
-InterpretationSourceType = Literal["journal", "literature", "artifact"]
+InterpretationSourceType = Literal[
+    "journal", "literature", "artifact", "experiment_observation"
+]
 LocatorKind = Literal[
     "text_offset", "page", "line_range", "section", "url_fragment", "record"
 ]
@@ -33,6 +35,7 @@ CandidateDisposition = Literal[
     "classified_plan",
     "classified_author_intent",
     "evidence_mission_requested",
+    "classified_evidence",
 ]
 HintKind = Literal["duplicate", "conflict"]
 TriageAction = Literal[
@@ -47,7 +50,10 @@ TriageAction = Literal[
     "request_evidence_mission",
     "reopen",
     "revoke_promotion",
+    "classify_evidence",
+    "revoke_evidence",
 ]
+EvidenceRole = Literal["support", "qualifier", "counterevidence", "context"]
 
 
 class InterpretationCandidateCreate(BaseModel):
@@ -161,6 +167,7 @@ class InterpretationTriage(BaseModel):
     reason: str | None = Field(default=None, max_length=10_000)
     target_candidate_id: str | None = Field(default=None, max_length=128)
     target_entity_id: str | None = Field(default=None, max_length=128)
+    evidence_role: EvidenceRole | None = None
     grounding_verified: bool = False
     claim_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
 
@@ -174,6 +181,13 @@ class InterpretationTriage(BaseModel):
             raise ValueError("merge requires target_candidate_id")
         if self.action == "promote" and not self.grounding_verified:
             raise ValueError("promote requires grounding_verified=true")
+        if self.action == "classify_evidence":
+            if not self.target_entity_id:
+                raise ValueError("classify_evidence requires target_entity_id (claim id)")
+            if self.evidence_role is None:
+                raise ValueError("classify_evidence requires evidence_role")
+        elif self.evidence_role is not None:
+            raise ValueError("evidence_role is only valid for classify_evidence")
         return self
 
 

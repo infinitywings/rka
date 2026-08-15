@@ -11,6 +11,8 @@ The M1 interpretation boundary is recorded in
 [ADR 0002](docs/adr/0002-interpretation-staging-and-experiment-boundary.md).
 The canonical-claim applicability boundary is recorded in
 [ADR 0003](docs/adr/0003-canonical-claim-scope-contracts.md).
+The experiment/run/observation and exact-locator boundary is recorded in
+[ADR 0004](docs/adr/0004-experiment-run-observation-and-evidence-locator-contracts.md).
 
 The roadmap is ordered by dependency, not by invented delivery dates. Every
 milestone must satisfy its exit gate before dependent work is treated as ready.
@@ -61,10 +63,12 @@ loading, unavailable, empty, and capped-count states; keyboard stage
 navigation; a skip link; live-region semantics; and a responsive 390 by 844
 check. The evidence is recorded in
 [`2026-08-15-workbench-m2-exit-evidence.md`](docs/superpowers/specs/2026-08-15-workbench-m2-exit-evidence.md).
-The immediate target is now **M1 / PR 3**. Its
-experiment/run/result schema must be separately designed and reviewed; the
-workbench must continue to label that missing semantic layer rather than infer
-experiments from journal entries.
+The immediate target is now **M1 / PR 3 implementation**. Its
+experiment/run/observation and exact-locator contract is frozen in ADR 0004 and
+the [implementation specification](docs/superpowers/specs/2026-08-15-experiment-substrate-design.md).
+The workbench must continue to label that semantic layer as missing until the
+migration, REST/MCP, pack, change-impact, and disposable real-project release
+gates pass.
 
 ## Dependency map
 

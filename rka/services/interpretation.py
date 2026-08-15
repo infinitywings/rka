@@ -36,6 +36,7 @@ class InterpretationService(BaseService):
         "journal": "journal",
         "literature": "literature",
         "artifact": "artifacts",
+        "experiment_observation": "experiment_observations",
     }
     _DISPOSITION_BY_ACTION = {
         "merge": "merged",
@@ -259,8 +260,22 @@ class InterpretationService(BaseService):
                         "only a promoted candidate can revoke its promotion"
                     )
                 await self._revoke_promotion(row, data)
+            elif data.action == "classify_evidence":
+                self._require_status(row, {"pending", "in_review"}, data.action)
+                await self._classify_evidence(row, data)
+            elif data.action == "revoke_evidence":
+                self._require_status(row, {"resolved"}, data.action)
+                if row["disposition"] != "classified_evidence":
+                    raise InterpretationConflictError(
+                        "only classified evidence can revoke its claim relation"
+                    )
+                await self._revoke_evidence(row, data)
             elif data.action == "reopen":
                 self._require_status(row, {"resolved"}, data.action)
+                if row["disposition"] == "classified_evidence":
+                    raise InterpretationConflictError(
+                        "classified evidence must use revoke_evidence before reopening"
+                    )
                 await self._transition(
                     row,
                     data,
@@ -441,6 +456,104 @@ class InterpretationService(BaseService):
             target_id=promotion["claim_id"],
         )
 
+    async def _classify_evidence(
+        self,
+        row: dict,
+        data: InterpretationTriage,
+    ) -> None:
+        """Resolve one observation interpretation as a reviewed claim relation."""
+        if row["source_type"] != "experiment_observation":
+            raise ValueError(
+                "classify_evidence requires an experiment_observation source"
+            )
+        claim_id = data.target_entity_id or ""
+        await self._require_entity("claims", claim_id)
+        active = await self.db.fetchone(
+            """SELECT id FROM claim_evidence_relations
+               WHERE candidate_id = ? AND project_id = ?""",
+            [row["id"], self.project_id],
+        )
+        if active is not None:
+            raise InterpretationConflictError(
+                "candidate already has a claim evidence relation"
+            )
+
+        relation_id = generate_id("claim_evidence_relation")
+        await self.db.execute(
+            """INSERT INTO claim_evidence_relations (
+                   id, project_id, claim_id, observation_id, candidate_id,
+                   role, reviewed_by, review_reason
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                relation_id,
+                self.project_id,
+                claim_id,
+                row["source_id"],
+                row["id"],
+                data.evidence_role,
+                data.actor,
+                data.reason,
+            ],
+        )
+        await self._transition(
+            row,
+            data,
+            status="resolved",
+            disposition="classified_evidence",
+            target_type="claim",
+            target_id=claim_id,
+        )
+        await self.audit(
+            "create",
+            "claim_evidence_relation",
+            relation_id,
+            data.actor,
+            {
+                "candidate_id": row["id"],
+                "observation_id": row["source_id"],
+                "claim_id": claim_id,
+                "role": data.evidence_role,
+            },
+        )
+
+    async def _revoke_evidence(
+        self,
+        row: dict,
+        data: InterpretationTriage,
+    ) -> None:
+        relation = await self.db.fetchone(
+            """SELECT * FROM claim_evidence_relations
+               WHERE candidate_id = ? AND project_id = ? AND status = 'active'""",
+            [row["id"], self.project_id],
+        )
+        if relation is None:
+            raise InterpretationConflictError(
+                "candidate has no active claim evidence relation to revoke"
+            )
+        now = _precise_now()
+        await self.db.execute(
+            """UPDATE claim_evidence_relations
+               SET status = 'revoked', revoked_by = ?, revocation_reason = ?,
+                   revoked_at = ?
+               WHERE id = ? AND project_id = ? AND status = 'active'""",
+            [data.actor, data.reason, now, relation["id"], self.project_id],
+        )
+        await self._transition(
+            row,
+            data,
+            status="pending",
+            disposition=None,
+            target_type="claim",
+            target_id=relation["claim_id"],
+        )
+        await self.audit(
+            "update",
+            "claim_evidence_relation",
+            relation["id"],
+            data.actor,
+            {"operation": "revoke", "reason": data.reason},
+        )
+
     async def _transition(
         self,
         row: dict,
@@ -537,6 +650,12 @@ class InterpretationService(BaseService):
 
     async def _validate_locator_grounding(self, data: InterpretationCandidateCreate) -> None:
         """Reject journal offsets that cannot identify a real source span."""
+        if data.source_type == "experiment_observation":
+            if data.locator_kind != "record" or data.locator_value != "full_record":
+                raise ValueError(
+                    "experiment_observation candidates require record: full_record"
+                )
+            return
         if data.source_type != "journal" or data.locator_kind != "text_offset":
             return
         row = await self.db.fetchone(

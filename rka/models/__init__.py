@@ -58,6 +58,25 @@ from rka.models.reference_validation import (
     ReferenceAuthor,
     ReferenceValidationInput,
 )
+from rka.models.experiment import (
+    Experiment,
+    ExperimentCreate,
+    ExperimentDetail,
+    ExperimentObservation,
+    ExperimentObservationCreate,
+    ExperimentObservationDetail,
+    ExperimentPlanAppend,
+    ExperimentPlanVersion,
+    ExperimentRun,
+    ExperimentRunCreate,
+    ExperimentRunDetail,
+    ExperimentRunEvent,
+    ExperimentRunTransition,
+    ExperimentTransition,
+    EvidenceLocator,
+    EvidenceLocatorCreate,
+    ClaimEvidenceRelation,
+)
 
 __all__ = [
     "ProjectState", "ProjectStateUpdate",
@@ -89,4 +108,11 @@ __all__ = [
     "ManuscriptClaimVerificationAttestation",
     "ManuscriptClaimVerificationAttestationCreate",
     "ReferenceAuthor", "ReferenceValidationInput",
+    "Experiment", "ExperimentCreate", "ExperimentDetail",
+    "ExperimentPlanAppend", "ExperimentPlanVersion", "ExperimentTransition",
+    "ExperimentRun", "ExperimentRunCreate", "ExperimentRunDetail",
+    "ExperimentRunEvent", "ExperimentRunTransition",
+    "ExperimentObservation", "ExperimentObservationCreate",
+    "ExperimentObservationDetail", "EvidenceLocator", "EvidenceLocatorCreate",
+    "ClaimEvidenceRelation",
 ]

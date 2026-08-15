@@ -98,6 +98,16 @@ from rka.mcp._enums import (  # noqa: E402, F811
     InterpretationSourceLit,
     InterpretationTriageActionLit,
     InterpretationUncertaintyLit,
+    ClaimEvidenceRoleLit,
+    EvidenceLocatorKindLit,
+    EvidenceSourceKindLit,
+    ExperimentActorLit,
+    ExperimentObservationDirectionLit,
+    ExperimentObservationKindLit,
+    ExperimentRunActionLit,
+    ExperimentRunKindLit,
+    ExperimentStatusLit,
+    WorkingTreeStateLit,
     LitStatusLit,
     NoteTypeLit,
     SourceLit,
@@ -185,7 +195,7 @@ class PaginatedFiltersMixin(BaseModel):
 
 
 # =============================================================================
-# Batch A — QUERY operations (53 models)
+# Batch A — QUERY operations (56 models)
 # =============================================================================
 
 # ---------------------------------------------------------------------------
@@ -475,6 +485,37 @@ class QueryInterpretationCandidatesArgs(ProjectScopedArgs, PaginatedFiltersMixin
         Optional[str],
         Field(default=None, description="Optional icd_ id for detailed history."),
     ] = None
+
+
+class QueryExperimentsArgs(ProjectScopedArgs, PaginatedFiltersMixin):
+    """[ANY] List experiments or fetch one experiment with plan and run history.
+
+    ``id`` selects a detailed experiment. Filter key: ``status``.
+    """
+
+    operation: Literal["experiments"] = "experiments"
+    id: Annotated[Optional[str], Field(default=None, description="Optional exp_ id.")] = None
+
+
+class QueryExperimentRunsArgs(ProjectScopedArgs, PaginatedFiltersMixin):
+    """[ANY] List experiment runs or fetch one run with events and observations.
+
+    ``id`` selects a detailed run. Filter keys: ``experiment_id`` and ``status``.
+    """
+
+    operation: Literal["experiment_runs"] = "experiment_runs"
+    id: Annotated[Optional[str], Field(default=None, description="Optional run_ id.")] = None
+
+
+class QueryExperimentObservationsArgs(ProjectScopedArgs, PaginatedFiltersMixin):
+    """[ANY] List immutable observations or fetch one with evidence lineage.
+
+    ``id`` selects a detailed observation. Filter keys: ``run_id``, ``direction``,
+    ``kind``, and ``claim_id``.
+    """
+
+    operation: Literal["experiment_observations"] = "experiment_observations"
+    id: Annotated[Optional[str], Field(default=None, description="Optional obs_ id.")] = None
 
 
 class QueryManuscriptArgs(ProjectScopedArgs):
@@ -1131,6 +1172,9 @@ QueryArgsUnion = Annotated[
         QueryClaimsArgs,
         QueryClaimScopeArgs,
         QueryInterpretationCandidatesArgs,
+        QueryExperimentsArgs,
+        QueryExperimentRunsArgs,
+        QueryExperimentObservationsArgs,
         QueryManuscriptArgs,
         QueryReferenceValidationStatusArgs,
         ResolveEntitiesArgs,
@@ -2300,6 +2344,7 @@ class TriageInterpretationCandidateArgs(ProjectScopedArgs):
     target_entity_id: Annotated[Optional[str], Field(default=None, max_length=128)] = None
     grounding_verified: Annotated[bool, Field(default=False)] = False
     claim_confidence: Annotated[float, Field(default=0.5, ge=0.0, le=1.0)] = 0.5
+    evidence_role: Annotated[Optional[ClaimEvidenceRoleLit], Field(default=None)] = None
 
     @model_validator(mode="after")
     def _validate_triage(self) -> "TriageInterpretationCandidateArgs":
@@ -2309,7 +2354,134 @@ class TriageInterpretationCandidateArgs(ProjectScopedArgs):
             raise ValueError("merge requires target_candidate_id")
         if self.action == "promote" and not self.grounding_verified:
             raise ValueError("promote requires grounding_verified=true")
+        if self.action == "classify_evidence":
+            if not self.target_entity_id:
+                raise ValueError("classify_evidence requires target_entity_id")
+            if not self.evidence_role:
+                raise ValueError("classify_evidence requires evidence_role")
+        if self.action == "revoke_evidence" and not self.target_entity_id:
+            raise ValueError("revoke_evidence requires target_entity_id")
         return self
+
+
+class _ExperimentPlanArgs(BaseModel):
+    """Shared exact plan and repository-snapshot fields."""
+
+    objective: Annotated[str, Field(min_length=1, max_length=20_000)]
+    hypothesis: Annotated[Optional[str], Field(default=None, max_length=20_000)] = None
+    protocol: Annotated[str, Field(min_length=1, max_length=100_000)]
+    conditions: Annotated[list[str], Field(default_factory=list, max_length=500)]
+    variables: Annotated[list[str], Field(default_factory=list, max_length=500)]
+    metrics: Annotated[list[str], Field(default_factory=list, max_length=500)]
+    baselines: Annotated[list[str], Field(default_factory=list, max_length=500)]
+    success_criteria: Annotated[list[str], Field(default_factory=list, max_length=500)]
+    failure_criteria: Annotated[list[str], Field(default_factory=list, max_length=500)]
+    repository_url: Annotated[Optional[str], Field(default=None, max_length=2048)] = None
+    commit_sha: Annotated[Optional[str], Field(default=None, max_length=64)] = None
+    working_tree_state: Annotated[Optional[WorkingTreeStateLit], Field(default=None)] = None
+
+
+class CreateExperimentArgs(ProjectScopedArgs, _ExperimentPlanArgs):
+    """[BRAIN/EXECUTOR/PI] Create an experiment with immutable plan version 1."""
+
+    operation: Literal["create_experiment"] = "create_experiment"
+    title: Annotated[str, Field(min_length=1, max_length=1000)]
+    created_by: Annotated[ExperimentActorLit, Field(description="Experiment author.")]
+    reason: Annotated[str, Field(min_length=1, max_length=10_000)]
+
+
+class AppendExperimentPlanArgs(ProjectScopedArgs, _ExperimentPlanArgs):
+    """[BRAIN/EXECUTOR/PI] Append a revision-guarded immutable plan version."""
+
+    operation: Literal["append_experiment_plan"] = "append_experiment_plan"
+    id: Annotated[str, Field(description="Canonical exp_ id.")]
+    expected_revision: Annotated[int, Field(ge=1)]
+    created_by: Annotated[ExperimentActorLit, Field(description="Plan author.")]
+    reason: Annotated[str, Field(min_length=1, max_length=10_000)]
+
+
+class TransitionExperimentArgs(ProjectScopedArgs):
+    """[BRAIN/EXECUTOR/PI] Transition an experiment lifecycle state."""
+
+    operation: Literal["transition_experiment"] = "transition_experiment"
+    id: Annotated[str, Field(description="Canonical exp_ id.")]
+    expected_revision: Annotated[int, Field(ge=1)]
+    target_status: Annotated[ExperimentStatusLit, Field(description="Target lifecycle state.")]
+    actor: Annotated[ExperimentActorLit, Field(description="Transition actor.")]
+    reason: Annotated[str, Field(min_length=1, max_length=10_000)]
+
+
+class CreateExperimentRunArgs(ProjectScopedArgs):
+    """[EXECUTOR] Queue a run bound to one immutable experiment plan version."""
+
+    operation: Literal["create_experiment_run"] = "create_experiment_run"
+    experiment_id: Annotated[str, Field(description="Canonical exp_ id.")]
+    plan_version: Annotated[int, Field(ge=1)]
+    label: Annotated[str, Field(min_length=1, max_length=1000)]
+    runner: Annotated[ExperimentRunKindLit, Field(description="Execution environment kind.")]
+    command: Annotated[Optional[str], Field(default=None, max_length=100_000)] = None
+    config: Annotated[dict[str, Any], Field(default_factory=dict)]
+    environment: Annotated[dict[str, Any], Field(default_factory=dict)]
+    repository_url: Annotated[Optional[str], Field(default=None, max_length=2048)] = None
+    commit_sha: Annotated[Optional[str], Field(default=None, max_length=64)] = None
+    working_tree_state: Annotated[Optional[WorkingTreeStateLit], Field(default=None)] = None
+    created_by: Annotated[ExperimentActorLit, Field(description="Run creator.")]
+    reason: Annotated[str, Field(min_length=1, max_length=10_000)]
+
+
+class TransitionExperimentRunArgs(ProjectScopedArgs):
+    """[EXECUTOR] Append a revision-guarded run lifecycle event."""
+
+    operation: Literal["transition_experiment_run"] = "transition_experiment_run"
+    id: Annotated[str, Field(description="Canonical run_ id.")]
+    expected_revision: Annotated[int, Field(ge=1)]
+    action: Annotated[ExperimentRunActionLit, Field(description="Lifecycle action.")]
+    actor: Annotated[ExperimentActorLit, Field(description="Transition actor.")]
+    reason: Annotated[str, Field(min_length=1, max_length=10_000)]
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    exit_code: Optional[int] = None
+    failure_summary: Annotated[Optional[str], Field(default=None, max_length=20_000)] = None
+
+
+class RecordExperimentObservationArgs(ProjectScopedArgs):
+    """[EXECUTOR/BRAIN/PI] Record one immutable observation from a run."""
+
+    operation: Literal["record_experiment_observation"] = "record_experiment_observation"
+    run_id: Annotated[str, Field(description="Canonical run_ id.")]
+    name: Annotated[str, Field(min_length=1, max_length=1000)]
+    kind: Annotated[ExperimentObservationKindLit, Field(description="Observation shape.")]
+    direction: Annotated[
+        ExperimentObservationDirectionLit,
+        Field(description="Observed direction; independent from run success."),
+    ]
+    summary: Annotated[str, Field(min_length=1, max_length=50_000)]
+    value_real: Optional[float] = None
+    value_text: Annotated[Optional[str], Field(default=None, max_length=100_000)] = None
+    unit: Annotated[Optional[str], Field(default=None, max_length=256)] = None
+    sample_size: Annotated[Optional[int], Field(default=None, ge=0)] = None
+    uncertainty_note: Annotated[Optional[str], Field(default=None, max_length=20_000)] = None
+    observed_at: Annotated[str, Field(min_length=1)]
+    recorded_by: Annotated[ExperimentActorLit, Field(description="Observation recorder.")]
+
+
+class AddEvidenceLocatorArgs(ProjectScopedArgs):
+    """[EXECUTOR/BRAIN/PI] Bind an observation to exact immutable evidence bytes."""
+
+    operation: Literal["add_evidence_locator"] = "add_evidence_locator"
+    observation_id: Annotated[str, Field(description="Canonical obs_ id.")]
+    source_kind: Annotated[EvidenceSourceKindLit, Field(description="Artifact or repository.")]
+    artifact_id: Optional[str] = None
+    repository_url: Optional[str] = None
+    commit_sha: Optional[str] = None
+    relative_path: Optional[str] = None
+    locator_kind: Annotated[EvidenceLocatorKindLit, Field(description="Exact sub-resource locator.")]
+    locator_start: Annotated[Optional[int], Field(default=None, ge=0)] = None
+    locator_end: Annotated[Optional[int], Field(default=None, ge=0)] = None
+    locator_value: Optional[str] = None
+    content_hash: Optional[str] = None
+    label: Optional[str] = None
+    created_by: Annotated[ExperimentActorLit, Field(description="Locator author.")]
 
 
 class SetClaimScopeArgs(ProjectScopedArgs):
@@ -2529,6 +2701,13 @@ BatchBExecuteUnion = Annotated[
         AddInterpretationHintArgs,
         TriageInterpretationCandidateArgs,
         SetClaimScopeArgs,
+        CreateExperimentArgs,
+        AppendExperimentPlanArgs,
+        TransitionExperimentArgs,
+        CreateExperimentRunArgs,
+        TransitionExperimentRunArgs,
+        RecordExperimentObservationArgs,
+        AddEvidenceLocatorArgs,
     ],
     Field(discriminator="operation"),
 ]
@@ -4365,7 +4544,7 @@ BatchCExecuteUnion = Annotated[
 
 
 # =============================================================================
-# Final ExecuteArgsUnion — composes B + C + D (62 models total)
+# Final ExecuteArgsUnion — composes B + C + D (69 models total)
 # =============================================================================
 #
 # Phase 3 assembly: the discriminated union for `rka_execute`. FastMCP
@@ -4402,6 +4581,13 @@ ExecuteArgsUnion = Annotated[
         AddInterpretationHintArgs,
         TriageInterpretationCandidateArgs,
         SetClaimScopeArgs,
+        CreateExperimentArgs,
+        AppendExperimentPlanArgs,
+        TransitionExperimentArgs,
+        CreateExperimentRunArgs,
+        TransitionExperimentRunArgs,
+        RecordExperimentObservationArgs,
+        AddEvidenceLocatorArgs,
         # ===== Batch C — UPDATE/LIFECYCLE/SUBMIT (22) =====
         UpdateNoteArgs,
         UpdateDecisionArgs,
@@ -4471,6 +4657,9 @@ __all__ = [
     "QueryClaimsArgs",
     "QueryClaimScopeArgs",
     "QueryInterpretationCandidatesArgs",
+    "QueryExperimentsArgs",
+    "QueryExperimentRunsArgs",
+    "QueryExperimentObservationsArgs",
     "QueryManuscriptArgs",
     "QueryReferenceValidationStatusArgs",
     "ResolveEntitiesArgs",
@@ -4533,6 +4722,13 @@ __all__ = [
     "AddInterpretationHintArgs",
     "TriageInterpretationCandidateArgs",
     "SetClaimScopeArgs",
+    "CreateExperimentArgs",
+    "AppendExperimentPlanArgs",
+    "TransitionExperimentArgs",
+    "CreateExperimentRunArgs",
+    "TransitionExperimentRunArgs",
+    "RecordExperimentObservationArgs",
+    "AddEvidenceLocatorArgs",
     # Batch B partial union
     "BatchBExecuteUnion",
     # Batch D — Review / Maintenance / Hooks / Workspace write models

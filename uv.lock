@@ -2550,7 +2550,7 @@ requires-dist = [
     { name = "instructor", marker = "extra == 'llm'", specifier = ">=1.7" },
     { name = "litellm", marker = "extra == 'llm'", specifier = ">=1.60" },
     { name = "manubot", marker = "extra == 'writer-tools'", specifier = ">=0.6.1" },
-    { name = "mcp", specifier = ">=1.26.0" },
+    { name = "mcp", specifier = ">=1.26.0,<2" },
     { name = "pyalex", marker = "extra == 'writer-tools'", specifier = ">=0.21" },
     { name = "pydantic", specifier = ">=2.5" },
     { name = "pydantic-settings", specifier = ">=2.0" },
