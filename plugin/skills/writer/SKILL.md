@@ -1,7 +1,8 @@
 ---
 name: rka-writer
-description: "Manuscript-drafting AI for RKA-managed research projects. Produces persuasive, reviewer-resilient prose while keeping every substantive block grounded in current RKA evidence and decisions. Load when initializing or resuming a manuscript, checking Writer readiness, handling a revision mission, reviewing a submission, framing contributions or limitations, or building and validating a claim spine, argument spine, results trace, references, figures, or layout."
-version: 2.7.1
+description: "Manuscript-drafting AI for RKA-managed research projects. Interactively elicits paper framing through AI-proposed choices, then produces persuasive, reviewer-resilient prose while keeping every substantive block grounded in current RKA evidence and decisions. Load when initializing or resuming a manuscript, checking Writer readiness, handling a revision mission, reviewing a submission, framing contributions or limitations, or building and validating a claim spine, argument spine, results trace, references, figures, or layout."
+metadata:
+  version: "2.7.2"
 ---
 
 # Writer Skill
@@ -19,6 +20,15 @@ channel, then use materiality triage for public prose. Disclose material or
 venue-required limitations accurately; frame ordinary scope boundaries
 neutrally; do not volunteer speculative or irrelevant imperfections. Follow
 [`references/persuasive_framing.md`](references/persuasive_framing.md).
+
+Interaction Law: **propose choices before requesting composition.** During
+framing and spine work, ask one decision at a time and normally offer two to
+four evidence-bounded options with concrete pros, cons, evidence, risks, and
+paper-level consequences. State whether each question is single-select or
+multi-select and mark a recommendation when justified. Use focused free text
+only for custom alternatives, missing evidence, disagreements not covered by
+the choices, or exact wording corrections. Follow
+[`references/framing_elicitation.md`](references/framing_elicitation.md).
 
 The native claim spine is part of RKA's manuscript aggregate, not a second
 knowledge base or orchestrator. RKA is authoritative for manuscript identity,
@@ -45,6 +55,9 @@ commands.
 - [`references/persuasive_framing.md`](references/persuasive_framing.md):
   two-channel author/manuscript discipline, limitation materiality triage,
   strength-first defense patterns, and the quick-reader path.
+- [`references/framing_elicitation.md`](references/framing_elicitation.md):
+  choice-first author/researcher interview, adaptive framing rounds,
+  disagreement handling, and final spine confirmation.
 - [`references/reference_pipeline.md`](references/reference_pipeline.md): implemented seven-stage validation pipeline, categorical verdicts, retraction checks, and explicit backend degradation.
 - [`references/ai_tics.md`](references/ai_tics.md): banned-term tiers with primary-source citations (PI verbatim list, Kobak et al. 2025, Matsui 2025), replacement table, structural detectors, per-project override mechanism. Sources cited directly per `dec_01KS12H9KT1T03DHX2Q6FKTXHH`; no third-party content vendored in Phase 1.
 - [`references/venue/CHI.md`](references/venue/CHI.md) and [`references/venue/EMNLP.md`](references/venue/EMNLP.md): seed venue files for HCI and NLP (Phase 1 scope per `dec_01KS0BKJ5ZJKJ4R19GYAK3QN9D` Q3).
@@ -89,7 +102,9 @@ writer readiness` asks RKA for the authoritative target-phase gate.
 4. Run `rka writer sync` to refresh the `rka-claim-spine/v2` projection and
    generated planning views from RKA. The projection is read-only.
 5. Call `rka_query(args={"operation": "research_map", "project_id": "prj_..."})` for a structural overview,
-   then read `.planning/ACTIVE_WORKFLOW.md` and resume its `next_action`.
+   then read `.planning/ACTIVE_WORKFLOW.md` and resume its `next_action`. If
+   `.planning/FRAMING_SESSION.yaml` is incomplete, resume the first unresolved
+   choice round instead of restarting the interview.
 6. Verify `.mcp.json` lists `rka` plus `rka-writer-tools`. Pass `project_id` on
    every operation. Native manuscript work uses `manuscript_context`,
    `manuscript_spine`, `manuscript_readiness`, `upsert_argument_spine`,
@@ -220,6 +235,14 @@ mechanism, not the authority for a native manuscript.
 
 Before any prose is written, you co-author an outline with the PI as a Decision (`rka_add_decision`). The Iron Law is **no prose before outline ratification.** The `main.tex` stays skeleton-only until the Outline checkpoint passes: `\documentclass{...}`, `\begin{document}`, `\input{sections/...}`, `\end{document}` and nothing in `sections/*.tex` yet.
 
+Before generating the final outline options, run the choice-first framing
+session in [`references/framing_elicitation.md`](references/framing_elicitation.md).
+The Writer proposes options; the author supplies narrative intent; the
+researcher supplies evidence and scope judgment; the PI confirms final
+authority. One person may hold all roles. Record micro-selections in
+`.planning/FRAMING_SESSION.yaml`, not as RKA decisions. They remain advisory
+until the final framing and exact contribution wording are ratified.
+
 The outline brief uses the strip-then-re-inject pattern that Brain uses for any multi-choice decision (see `../brain/decision_ux.md`):
 
 1. Generate three candidate outline framings (results-led, method-led, motivation-led) with PI preference stripped from context.
@@ -276,7 +299,17 @@ Full procedure with checkpoint UX: [`references/workflows.md`](references/workfl
 
 ## PI Checkpoints
 
-Six in-session checkpoints. All use the strip-then-re-inject pattern. Each produces a `dec_` with three ratified options, opposing-critique ranking, and the PI's selection.
+Six in-session checkpoints. All use the strip-then-re-inject pattern. Each
+produces a `dec_` with bounded options, opposing-critique ranking, and the PI's
+selection. Formal checkpoint resolution is normally single-select. Preparatory
+questions may be multi-select when choices can coexist, but remain advisory
+until the checkpoint is ratified.
+
+Use structured choice controls when the host provides them. Otherwise show
+option IDs and ask the PI to reply with one ID or an allowed set. Every option
+must show concrete pros and cons, evidence status, material risk, and the
+effect on the manuscript. Do not force exactly three options when only two are
+credible, and do not invent a weak option to fill the menu.
 
 | Number | Checkpoint | Fires when | What is at stake |
 |---|---|---|---|
@@ -518,6 +551,11 @@ When a revised draft is available, compare it against the prior review comments 
 22. **DON'T** paste the private reviewer-risk register into manuscript prose. Triage each concern by materiality and public relevance first.
 23. **DON'T** use persuasive framing to conceal claim-relevant negative results, unresolved contradictions, material validity or security issues, or venue-required disclosures.
 24. **DON'T** weaken every defensible claim with generic caveats. Preserve semantic qualifiers, then lead with the bounded contribution, evidence, and defense.
+25. **DON'T** ask the author to invent a framing from a blank page when current
+   evidence supports bounded choices. Propose options with pros and cons first.
+26. **DON'T** record a framing micro-selection as evidence, claim ratification,
+   or a formal PI decision. Persist it in `FRAMING_SESSION.yaml` until final
+   confirmation.
 
 ---
 
@@ -527,6 +565,8 @@ When a revised draft is available, compare it against the prior review comments 
 - Server-authoritative sync, impact, readiness, update, and migration loop:
   [`references/server_authoritative_workflow.md`](references/server_authoritative_workflow.md).
 - Session-start walkthrough, sub-procedures, checkpoint UX: [`references/workflows.md`](references/workflows.md).
+- Choice-first author/researcher interview and framing-session schema:
+  [`references/framing_elicitation.md`](references/framing_elicitation.md).
 - Persuasive framing, limitation triage, and quick-reader guidance:
   [`references/persuasive_framing.md`](references/persuasive_framing.md).
 - Implemented reference validation pipeline: [`references/reference_pipeline.md`](references/reference_pipeline.md).

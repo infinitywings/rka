@@ -1,12 +1,18 @@
 # RKA Epistemic Pipeline and Manuscript Drafting Workbench
 
-Status: roadmap design source; no implementation has started.
+Status: roadmap design source; M0 implementation technically validated and
+researcher-approved, feature review and merge pending.
 
 Date: 2026-08-14
 
 Roadmap: [`ROADMAP.md`](../../../ROADMAP.md). The roadmap defines milestone
 order and the immediate implementation target; this document remains the
 normative detailed design and acceptance-criteria source.
+
+M0 authority, stage, proposal, and AI-provider decisions are frozen in
+[`ADR 0001`](../../adr/0001-manuscript-workbench-authority-stage-and-ai-boundary.md).
+The real-project validation and resulting design revisions are recorded in the
+[`M0 walkthrough`](../specs/2026-08-14-delaysteer-workbench-walkthrough.md).
 
 ## 1. Baseline and source snapshots
 
@@ -18,17 +24,17 @@ This plan targets the clean default RKA branch at:
 - RKA package version: `2.9.0`
 - latest migration: `039`
 
-The Writer behavior also has a relevant, not-yet-merged delta:
+The Writer behavior had a relevant delta that the M0 implementation now
+reconciles onto the current baseline:
 
 - remote branch: `origin/codex/writer-framing-elicitation`
 - commit: `a00bc8b77511d7dae3676cbcc3cf5e04b78eee5a`
 - installed personal Writer metadata: `2.7.2`
 - key addition: choice-first framing and resumable `FRAMING_SESSION.yaml`
 
-The feature branch and `main` have diverged by one commit each. The workbench
-must therefore be implemented on `main`, with an explicit reconciliation or
-port of the choice-first Writer behavior. It must not assume that the installed
-plugin is already part of RKA `main`.
+The implementation ports the choice-first behavior rather than assuming that
+the installed plugin is part of RKA `main`. Repository and plugin mirrors are
+tested together.
 
 External design inputs inspected for this plan:
 
@@ -601,8 +607,9 @@ Record:
 - Ignore common secret, credential, cache, model, binary, and dependency
   directories by default.
 - Preview exactly which snippets will be sent to a model.
-- Default to the configured local LM Studio model when practical. For an
-  external model, require an explicit context-disclosure confirmation.
+- Keep provider selection visible and task-aware. Require local inference for
+  local-only material, and require an explicit context-disclosure confirmation
+  before an external provider receives a new data scope.
 - Do not automatically promote an extracted sentence into a supported claim.
 
 ## 11. AI interaction contract
@@ -1012,7 +1019,8 @@ PR 6 - Unified human/AI patch proposals
 - semantic diff;
 - apply/reject/supersede;
 - optimistic conflict handling;
-- configured local LM Studio adapter plus host-agent MCP path;
+- provider-neutral loopback broker with Codex App Server, Claude Agent SDK, LM
+  Studio, and optional direct API-key adapters;
 - context manifest and outbound-data boundary.
 
 ### Phase 4: spine, RQ, contribution, and evaluation editing
@@ -1161,7 +1169,7 @@ These are evaluation measures, not automated manuscript-quality scores.
 | Guided vs free-form | Guided entry, freely navigable afterward | lowers blank-page load without trapping expert users |
 | Planning persistence | generic typed, versioned planning artifacts | supports all stages without a parallel claim system |
 | Raw chat persistence | ephemeral; explicit capture only | prevents conversational noise from entering research history |
-| AI provider | configured local LM Studio first; pluggable host/external adapters | privacy, availability, and user choice |
+| AI provider | visible task/disclosure-aware broker; LM Studio for local-only context; Codex, Claude, or direct API adapters by explicit policy | privacy, capability, availability, and user choice |
 | AI mutation | proposal only; separate explicit apply | preserves authority and makes diffs reviewable |
 | Canonical spine | native RKA manuscript aggregate | avoids projection drift |
 | Draft editor MVP | structured cards plus Markdown/LaTeX split view | lower synchronization risk than full WYSIWYG |

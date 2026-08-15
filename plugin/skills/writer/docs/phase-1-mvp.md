@@ -86,8 +86,8 @@ PATCH 2).
 `manuscripts/<project-id>/<venue>/`:
 
 - `.mcp.json`, `.latexmkrc`, `ai_tic_config.yaml`, `main.tex`, `refs.bib`.
-- `.planning/`: `ACTIVE_WORKFLOW.md`, `PRECIS.md`, `OUTLINE.md`,
-  `REVIEW_STATE.md`.
+- `.planning/`: `ACTIVE_WORKFLOW.md`, `FRAMING_SESSION.yaml`, `PRECIS.md`,
+  `OUTLINE.md`, `REVIEW_STATE.md`.
 - Directory placeholders: `sections/`, `figures/`, `tables/`, `charts/`,
   `styles/`.
 

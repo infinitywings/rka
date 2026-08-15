@@ -13,6 +13,7 @@ last_session: (initial bootstrap)
 | Phase | Trigger to advance |
 |---|---|
 | venue_selection | Venue checkpoint ratified; .planning/PRECIS.md authored |
+| framing_elicitation | Choice rounds complete; PI confirms one provisional spine |
 | evidence_synthesis | In-scope RQs selected; cluster blockers and counterevidence resolved |
 | contribution_contract | Exact allowed/prohibited contribution boundary accepted for spine import |
 | outline | Outline checkpoint ratified; .planning/OUTLINE.md ratified |
