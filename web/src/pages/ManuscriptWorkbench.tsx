@@ -17,6 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { ContextCapsule } from "@/components/workbench/ContextCapsule"
 import { PlanningBranchPanel } from "@/components/workbench/PlanningBranchPanel"
+import { SemanticPatchPanel } from "@/components/workbench/SemanticPatchPanel"
 import {
   EvidenceInspector,
   type WorkbenchTraceItem,
@@ -303,6 +304,8 @@ export default function ManuscriptWorkbench() {
       />
 
       <PlanningBranchPanel manuscriptId={manuscriptId} />
+
+      <SemanticPatchPanel manuscriptId={manuscriptId} context={context} />
 
       <div className="grid gap-4 xl:grid-cols-[17rem_minmax(0,1fr)]">
         <Card className="h-fit">

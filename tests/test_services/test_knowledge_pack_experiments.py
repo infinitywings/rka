@@ -145,7 +145,7 @@ async def test_current_pack_round_trip_preserves_experiment_evidence_lineage(
             project_name="Imported Experiment Evidence",
         )
 
-    assert PACK_SCHEMA_VERSION == 6
+    assert PACK_SCHEMA_VERSION == 7
     for table in (
         "experiments",
         "experiment_plan_versions",

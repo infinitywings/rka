@@ -163,7 +163,7 @@ calibration as a single-select choice per contribution, and the final whole
 paper spine as a single-select choice. Offer revise/combine and defer/gather
 evidence paths where appropriate.
 
-### 3. Dry-run and apply
+### 3. Dry-run and propose
 
 Prepare a proposal file, then:
 
@@ -174,7 +174,15 @@ rka writer import-spine \
   --input proposal.yaml
 ```
 
-Dry-run is the default. Review the proposed counts and diff. Apply only with:
+Dry-run is the default. Review the proposed counts, evidence roles, and diff.
+When the semantic patch service is available, use the dry-run result to create
+an `argument_spine_replace` operation through
+`create_semantic_patch_proposal`. Human and AI candidates use that same
+envelope. Inspect `semantic_diff` and `validation_findings`, then apply through
+the separate `apply_semantic_patch_proposal` operation with the `spp_`
+revision. A stale target becomes a preserved conflict.
+
+The direct CLI apply form remains a local compatibility path:
 
 ```bash
 rka writer import-spine \
@@ -185,7 +193,9 @@ rka writer import-spine \
   --apply
 ```
 
-The update may create or modify claim identities, immutable wording versions,
+Use direct `--apply` only when the proposal service is unavailable and the PI
+explicitly authorizes the compatibility path. The update may create or modify
+claim identities, immutable wording versions,
 evidence roles, units, and bindings. It never imports `ratified_by`, guesses a
 decision, or creates PI authority.
 

@@ -1,8 +1,7 @@
 # RKA Epistemic Pipeline and Manuscript Drafting Workbench
 
-Status: roadmap design source; M0, M1, and M2 are complete on `main`. M3 PR 5
-versioned planning artifacts and branches is implementation-complete and
-release-validated on its feature branch; PR 6 follows after review and merge.
+Status: roadmap design source; M0, M1, M2, and M3 PR 5 are complete on `main`.
+M3 PR 6 unified semantic patch proposals is the active implementation slice.
 
 Date: 2026-08-14
 
@@ -24,6 +23,8 @@ The M3 provisional-planning and frozen-branch boundary is frozen in
 [`ADR 0005`](../../adr/0005-versioned-manuscript-planning-branches.md).
 The PR 5 release evidence is recorded in the
 [`M3 planning-branch exit record`](../specs/2026-08-15-workbench-m3-pr5-exit-evidence.md).
+The PR 6 proposal and provider boundary is frozen in
+[`ADR 0006`](../../adr/0006-unified-semantic-patch-proposals.md).
 
 ## 1. Baseline and source snapshots
 
@@ -31,10 +32,10 @@ This plan targets the clean default RKA branch at:
 
 - repository: `infinitywings/rka`
 - branch: `main`
-- current implementation baseline: `ba687721b9632a4a12c864100d9690ca428ac005`
+- current implementation baseline: `5ec717fca5936853ae80e71d5594e2557f37a1be`
 - original plan baseline: `edb1e6f170025a77ddcb5b89038d0e1a34af4857`
 - RKA package version: `2.9.0`
-- latest migration on baseline: `042`
+- latest migration on baseline: `043`
 
 The Writer behavior had a relevant delta that the local M0 implementation now
 reconciles onto the current baseline:
@@ -1031,9 +1032,12 @@ PR 6 - Unified human/AI patch proposals
 - semantic diff;
 - apply/reject/supersede;
 - optimistic conflict handling;
-- provider-neutral loopback broker with Codex App Server, Claude Agent SDK, LM
-  Studio, and optional direct API-key adapters;
+- host-agent proposal path over the existing MCP conversation and an optional
+  local-machine-only LM Studio adapter, both using the same proposal schema;
 - context manifest and outbound-data boundary.
+
+Implementation and release-gate evidence is recorded in
+[`2026-08-15-workbench-m3-pr6-exit-evidence.md`](../specs/2026-08-15-workbench-m3-pr6-exit-evidence.md).
 
 ### Phase 4: spine, RQ, contribution, and evaluation editing
 
@@ -1278,11 +1282,8 @@ The live pack exporter also emits agentic-branch staleness fields that current
 semantic columns. Cross-branch pack migration belongs to the intake/hardening
 milestone and must not be solved by dropping them.
 
-The next dependency-ordered target is **M1 / PR 3 implementation**. Its
-experiment/run/observation, exact-locator, and reviewed claim-relation contract
-is frozen in ADR 0004 and the
-[`2026-08-15 experiment-substrate design`](../specs/2026-08-15-experiment-substrate-design.md).
-Interpretation candidates and ordinary journal entries must not be treated as
-experiment results while the migration, REST/MCP, pack, change-impact, and
-disposable real-project gates remain open. M3 mutation UI remains blocked until
-the substrate is accepted.
+M1 / PR 3 and M3 / PR 5 are now complete on `main`. The active
+dependency-ordered target is **M3 / PR 6**. Its proposal authority and provider
+boundary are frozen in ADR 0006. After its migration, REST/MCP, pack,
+change-impact, concurrency, UI, and disposable-project gates pass and merge,
+the next target is **M4 / PR 7: seed-through-contribution guided workflow**.

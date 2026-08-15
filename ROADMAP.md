@@ -15,16 +15,16 @@ The experiment/run/observation and exact-locator boundary is recorded in
 [ADR 0004](docs/adr/0004-experiment-run-observation-and-evidence-locator-contracts.md).
 The provisional planning and frozen-branch boundary is recorded in
 [ADR 0005](docs/adr/0005-versioned-manuscript-planning-branches.md).
+The unified human/AI proposal, conflict, and provider boundary is recorded in
+[ADR 0006](docs/adr/0006-unified-semantic-patch-proposals.md).
 
 The roadmap is ordered by dependency, not by invented delivery dates. Every
 milestone must satisfy its exit gate before dependent work is treated as ready.
 
 ## Now
 
-**M0, M1, and M2 are complete on `main`. M3 / PR 5 (issue #56), versioned
-planning artifacts and branches, is implemented and release-validated on its
-feature branch. After review and merge, M3 / PR 6 is the next dependency-ordered
-target.**
+**M0, M1, M2, and M3 / PR 5 are complete on `main`. M3 / PR 6 (issue #57),
+unified semantic patch proposals, is the current dependency-ordered target.**
 The choice-first Writer delta is reconciled, the authority and AI boundary is
 recorded in ADR 0001, the read-only workbench has passed its real-project exit
 gate, and first-class experiment/run/observation/evidence-locator semantics
@@ -78,6 +78,15 @@ provisional workbench branch surface. It does not promote planning into
 canonical manuscript semantics and does not yet add the PR 6 AI broker or
 unified proposal/apply path. Its validation record is
 [`2026-08-15-workbench-m3-pr5-exit-evidence.md`](docs/superpowers/specs/2026-08-15-workbench-m3-pr5-exit-evidence.md).
+The **M3 / PR 6 implementation** has satisfied its feature-branch release gate.
+ADR 0006 freezes one immutable proposal envelope for human, host-agent, and
+local LM suggestions; explicit apply/reject/supersede; transactional stale-base
+conflicts; exact context manifests and provider-call events; and REST, MCP,
+workbench, knowledge-pack, deletion, and change-cursor parity. No proposal
+mutates its target before an explicit apply, and AI proposals fail closed when
+they exceed their disclosed target, evidence, or revision boundary. The
+validation record is
+[`2026-08-15-workbench-m3-pr6-exit-evidence.md`](docs/superpowers/specs/2026-08-15-workbench-m3-pr6-exit-evidence.md).
 
 ## Dependency map
 

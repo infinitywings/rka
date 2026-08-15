@@ -74,9 +74,12 @@ scientific support, terminal source currency, contradiction state, result
 coverage, and phase checkpoints. `BLOCK` or `ERROR` stops the affected gate;
 surface every `WARN` with its claim or unit.
 
-Do not repair a claim from generated YAML or Markdown. Prepare a proposal,
-dry-run `rka writer import-spine`, apply it with an expected revision, record
-the PI decision separately, bind the exact version, and synchronize again.
+Do not repair a claim from generated YAML or Markdown. Dry-run candidate
+material with `rka writer import-spine`, create a server-side semantic patch,
+review its diff and warnings, then apply it separately with proposal and target
+revision guards. Record the PI decision separately, bind the exact version,
+and synchronize again. Direct CLI `--apply` is a PI-authorized local
+compatibility path, not the normal workbench or host-agent route.
 An empty bootstrap spine is expected before contribution planning but cannot
 authorize drafting. Packet/snapshot validation is a compatibility path for a
 legacy v1 workspace only.

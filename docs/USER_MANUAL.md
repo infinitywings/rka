@@ -575,9 +575,35 @@ The Brain processes up to 10 maintenance items per session, prioritized by impor
 
 # Part V — Reference
 
+### 15.3 — Reviewing manuscript edit proposals
+
+Workbench edits do not change planning or manuscript state immediately. A
+human edit, a host-agent suggestion, and an LM Studio suggestion all create an
+immutable `spp_` proposal containing target revision guards, a semantic diff,
+and validation findings. Review the preview, then explicitly apply or reject
+it. If any target changed after preview, apply records a `conflicted` event and
+preserves both the proposal and the newer canonical state.
+
+For a host-agent suggestion, first call `semantic_patch_schema`, then
+`prepare_semantic_patch_context` with the exact selected RKA entities, target,
+provider, model, constraints, and any omissions. Submit the generated candidate
+through `create_semantic_patch_proposal`. Local LM Studio uses
+`generate_lm_studio_semantic_patch`; its configured URL must be loopback or
+Docker's exact `host.docker.internal` gateway, and
+it produces the same unapplied proposal schema. Neither route stores a provider
+credential or silently falls back to another provider.
+
+Use `semantic_patch_proposals` to inspect proposals and their immutable event
+history. Only after reviewing the diff and warnings should the PI or workbench
+call `apply_semantic_patch_proposal` with the proposal revision. Use
+`reject_semantic_patch_proposal` when the candidate should remain in history
+without changing its target.
+
+---
+
 ## Chapter 16: MCP Tools Quick Reference
 
-> **v2.7.0+ dispatch surface.** RKA broadcasts exactly 5 always-on tools: 3 dispatch tools (`rka_query`, `rka_execute`, `rka_describe`) plus 2 escape hatches (`rka_load_tools`, `rka_help`). The tables below list the **operation names** — the values you pass as `operation`: 60 read operations go through `rka_query(args={"operation": ...})` and 72 write/lifecycle operations through `rka_execute(args={"operation": ...})`. There are 132 typed operations total. The pre-v2.7 per-tool names (`rka_add_note`, `rka_get_status`, `rka_trace_provenance`, …) are `tier=deferred` legacy synonyms: they resolve to these operations (typically drop the `rka_`/`get_`/`add_` prefix, e.g. `rka_get_status` → `status`, `rka_add_note` → `record_note`, `rka_trace_provenance` → `provenance`), but on the default surface you call the operation through the dispatch tools rather than the legacy name. The discipline (`source="pi"` + `verbatim_input`, `related_journal=[...]` on decisions, `motivated_by_decision=...` on missions, `project_id` on every call) is unchanged. See `rka_describe(operation="<name>")` for per-operation signatures, or `rka_describe(operation="")` for the full 132-operation index. `rka_set_project` was removed in v2.6 (deprecated no-op) — pin `project_id` at conversation start and thread it on every operation. The LLM-backed `rka_ask` / `rka_generate_summary` features were removed in v2.4.0 and are no longer part of the surface.
+> **v2.7.0+ dispatch surface.** RKA broadcasts exactly 5 always-on tools: 3 dispatch tools (`rka_query`, `rka_execute`, `rka_describe`) plus 2 escape hatches (`rka_load_tools`, `rka_help`). The tables below list the **operation names** — the values you pass as `operation`: 62 read operations go through `rka_query(args={"operation": ...})` and 77 write/lifecycle operations through `rka_execute(args={"operation": ...})`. There are 139 typed operations total. The pre-v2.7 per-tool names (`rka_add_note`, `rka_get_status`, `rka_trace_provenance`, …) are `tier=deferred` legacy synonyms: they resolve to these operations (typically drop the `rka_`/`get_`/`add_` prefix, e.g. `rka_get_status` → `status`, `rka_add_note` → `record_note`, `rka_trace_provenance` → `provenance`), but on the default surface you call the operation through the dispatch tools rather than the legacy name. The discipline (`source="pi"` + `verbatim_input`, `related_journal=[...]` on decisions, `motivated_by_decision=...` on missions, `project_id` on every call) is unchanged. See `rka_describe(operation="<name>")` for per-operation signatures, or `rka_describe(operation="")` for the full 139-operation index. `rka_set_project` was removed in v2.6 (deprecated no-op) — pin `project_id` at conversation start and thread it on every operation. The LLM-backed `rka_ask` / `rka_generate_summary` features were removed in v2.4.0 and are no longer part of the surface.
 
 ### Knowledge Management (`rka_execute`)
 
@@ -750,9 +776,27 @@ The Settings page shows API health status, database statistics, embedding backen
 
 In v2.4 the context engine has no tunable settings. Ranking is deterministic SQL-time: `journal.importance` (CASE: critical=4 → archived=0) × `entity_links` centrality × `created_at` DESC, with a +0.5 lift for PI-sourced entries. The legacy `RKA_CONTEXT_HOT_DAYS`, `RKA_CONTEXT_WARM_DAYS`, and `RKA_CONTEXT_DEFAULT_MAX_TOKENS` env vars were removed (see `dec_01KQQPD6Y6B362T3K08368BDMP`). For multi-hop questions, use `rka_query(operation="multi_hop")` instead of `rka_query(operation="context")`.
 
-### 18.4 — LLM Settings (Removed in v2.4.0)
+### 18.4 — General LLM removed; optional LM Studio proposal adapter
 
-> **Historical.** Earlier versions exposed server-side LLM features (`rka_ask`, `rka_generate_summary`, and the web-UI Q&A page) configured through `RKA_LLM_*` environment variables. These features were **removed in v2.4.0** and `/api/capabilities` no longer returns an `llm` field. There is no LLM configuration to set: all intelligent enrichment (tagging, claim extraction, cluster synthesis, contradiction resolution) is now performed by the Brain during sessions. The removed `RKA_LLM_ENABLED` / `RKA_LLM_MODEL` / `RKA_LLM_API_BASE` / `RKA_LLM_API_KEY` variables have no effect on current builds.
+> **Historical.** Earlier versions exposed general server-side LLM features
+> (`rka_ask`, `rka_generate_summary`, and web-UI Q&A) through `RKA_LLM_*`.
+> Those features remain removed: enrichment is performed by the Brain.
+
+The manuscript workbench has one narrow optional adapter that asks a local LM
+Studio model for a schema-constrained, unapplied semantic proposal:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RKA_WORKBENCH_LM_STUDIO_BASE_URL` | Docker: `http://host.docker.internal:1234/v1`; non-Docker: `http://127.0.0.1:1234/v1` | Local-machine OpenAI-compatible endpoint |
+| `RKA_WORKBENCH_LM_STUDIO_MODEL` | empty | Exact served model ID; required to use the adapter |
+| `RKA_WORKBENCH_LM_STUDIO_TIMEOUT` | `120` | Request timeout in seconds (1–600) |
+
+This adapter is not a background enrichment engine. It receives an explicit
+context manifest, records provider-call provenance, cannot use credentials or
+a non-local URL, never falls back to cloud, and never applies its own output.
+The manifest must disclose every target and referenced evidence entity. A
+target revision change during generation, an undisclosed target, or an
+undisclosed evidence binding causes the proposal to fail closed.
 
 ---
 
@@ -774,7 +818,10 @@ In v2.4 the context engine has no tunable settings. Ranking is deterministic SQL
 ### Frequently Asked Questions
 
 **Q: Do I need a local LLM (LM Studio, Ollama)?**
-No. RKA v2.0+ removed the local LLM requirement, and v2.4.0 removed the remaining server-side LLM features (`rka_ask`, `rka_generate_summary`, web-UI Q&A) entirely. All intelligent enrichment is now handled by the Brain (Claude) during sessions. The only local models are embeddings (FastEmbed, ~130MB, no GPU needed) for semantic search.
+No. General knowledge enrichment is handled by the Brain, and FastEmbed covers
+semantic search. LM Studio is optional only for the manuscript workbench's
+schema-constrained **Ask LM Studio** proposal action; it is never required for
+ordinary RKA operation.
 
 **Q: Do I need to tell the Brain to maintain the knowledge base?**
 No. The Brain's MCP instructions include a maintenance protocol that runs automatically at session start. It checks for provenance gaps, untagged entries, and orphaned clusters, then silently processes up to 10 items before greeting you. You only need to ask explicitly after large batch operations (e.g., importing 30 papers).

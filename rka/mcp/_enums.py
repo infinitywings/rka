@@ -573,3 +573,13 @@ ManuscriptVerificationDimensionVerdictLit = Literal[
     "error",
     "not_checked",
 ]
+
+# Unified manuscript-workbench proposal lifecycle.
+SemanticPatchOriginLit = Literal["human", "host_agent", "lm_studio"]
+SemanticPatchAIOriginLit = Literal["host_agent", "lm_studio"]
+SemanticPatchBoundaryLit = Literal["none", "host_conversation", "local_loopback"]
+SemanticPatchAIBoundaryLit = Literal["host_conversation", "local_loopback"]
+SemanticPatchActorLit = Literal["pi", "brain", "executor", "web_ui"]
+SemanticPatchStatusLit = Literal[
+    "proposed", "applied", "rejected", "conflicted", "superseded", "expired"
+]

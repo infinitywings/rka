@@ -64,6 +64,24 @@ class RKAConfig(BaseSettings):
     llm_context_window: int = Field(default=0, description="Model context window in tokens (0 = unknown/auto)")
     llm_request_timeout: int = Field(default=120, description="Timeout for LLM requests in seconds")
 
+    # Manuscript workbench local suggestion adapter. This is intentionally
+    # separate from the legacy general-purpose LLM settings: semantic proposal
+    # generation is local-machine-only and never receives a cloud credential.
+    workbench_lm_studio_base_url: str = Field(
+        default="http://127.0.0.1:1234/v1",
+        description="Local-machine OpenAI-compatible LM Studio base URL",
+    )
+    workbench_lm_studio_model: str = Field(
+        default="",
+        description="LM Studio model id used for semantic patch suggestions",
+    )
+    workbench_lm_studio_timeout: int = Field(
+        default=120,
+        ge=1,
+        le=600,
+        description="LM Studio proposal request timeout in seconds",
+    )
+
     # Embeddings — v2.4.0 (Mission D) flips the default to ON. Persistent
     # backend config lives at /data/embedding_config.json; this env var
     # remains the master enable/disable switch for the in-process

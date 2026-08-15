@@ -18,13 +18,13 @@ The rka MCP server ships a **discriminated-union dispatch surface**. Five tools 
 
 | Always-on tool | Purpose |
 |---|---|
-| `rka_query(args)` | All 60 read operations (missions, status, context, experiments, planning branches, interpretations, claim scope, native manuscripts, change impact, reports, search, etc.) |
-| `rka_execute(args)` | All 72 write/lifecycle operations (notes, experiment plans/runs/evidence, planning artifacts, manuscript updates, checkpoints, document ingest, interpretation staging, claim-scope review, etc.) |
+| `rka_query(args)` | All 62 read operations (missions, status, context, experiments, planning branches, semantic proposals, interpretations, claim scope, native manuscripts, change impact, reports, search, etc.) |
+| `rka_execute(args)` | All 77 write/lifecycle operations (notes, experiment plans/runs/evidence, planning artifacts, semantic proposals, manuscript updates, checkpoints, document ingest, interpretation staging, claim-scope review, etc.) |
 | `rka_describe(operation)` | Schema lookup + worked example; `rka_describe('')` returns the <250-token index |
 | `rka_load_tools(names)` | Escape hatch — brings deferred legacy tools online when you specifically need backwards-compat access |
 | `rka_help(name)` | Deprecated alias for `rka_describe` |
 
-`args` is a **typed Pydantic model** discriminated by `operation`. FastMCP renders the 132-model union as `inputSchema.oneOf` with per-branch enum + required-field constraints. The schema layer rejects wrong enum values, missing required fields, and missing provenance BEFORE the call is dispatched.
+`args` is a **typed Pydantic model** discriminated by `operation`. FastMCP renders the 139-model union as `inputSchema.oneOf` with per-branch enum + required-field constraints. The schema layer rejects wrong enum values, missing required fields, and missing provenance BEFORE the call is dispatched.
 
 > **Orchestrator subprocess note.** When this Executor instance is the LangGraph orchestrator's `claude-agent-sdk` subprocess (daemon under `orchestrator/docker-compose.yml`), it runs with `RKA_LEGACY_TOOLS=1`, restoring the v2.7.0a2 always-on surface (the 12-tool legacy baseline + the 8 v2.7.0a2 intent verbs) alongside the always-on dispatch tools (`rka_query` / `rka_execute` / `rka_describe`, which are never deferred); the remaining legacy tools stay `tier='deferred'` and are reachable via `rka_load_tools`. This preserves the parent-side TWO-TAP autonomy contract at `pi_decision_select` (per-tool ratification granularity in `WRITE_TOOLS`). Cockpit Executor sessions (Claude Desktop / Claude Code talking directly to the PI) see the typed dispatch surface described above.
 

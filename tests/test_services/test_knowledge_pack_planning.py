@@ -27,7 +27,7 @@ from rka.services.planning import ManuscriptPlanningService
 
 
 @pytest.mark.asyncio
-async def test_pack_v6_round_trip_preserves_frozen_planning_lineage(
+async def test_pack_v7_round_trip_preserves_frozen_planning_lineage(
     db_with_project,
 ) -> None:
     db = db_with_project
@@ -130,7 +130,7 @@ async def test_pack_v6_round_trip_preserves_frozen_planning_lineage(
             project_name="Imported Planning Workbench",
         )
 
-    assert PACK_SCHEMA_VERSION == 6
+    assert PACK_SCHEMA_VERSION == 7
     for table in (
         "manuscript_planning_branches",
         "manuscript_planning_branch_events",
@@ -194,7 +194,7 @@ async def test_pack_v6_round_trip_preserves_frozen_planning_lineage(
 
 
 @pytest.mark.asyncio
-async def test_pack_v6_rejects_invalid_typed_planning_payload(
+async def test_pack_v7_rejects_invalid_typed_planning_payload(
     tmp_path: Path,
 ) -> None:
     source_project = "proj_invalid_planning_source"

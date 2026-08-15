@@ -30,7 +30,7 @@ Design choices (decision #3 in the project locked-decisions list):
   hints, and the Phase-X²' canonical-field-name lessons (e.g. the
   `description=` vs `content=` checkpoint pitfall from the 2026-06-01
   hyperscaler-auditing PA-2 bug).
-- Single dict, one entry per operation. Total 132 entries.
+- Single dict, one entry per operation. Total 139 entries.
 - Enum value-sets reference rka.mcp._enums for drift-detection — the
   enums dict here cites the values directly (mirror of _enums.py) so
   consumers don't need to import _enums. The lock-test in
@@ -246,6 +246,14 @@ _ENUMS = {
     ],
     "planning_origin": ["user", "ai_suggested", "imported", "user_revised"],
     "planning_readiness": ["blocked", "in_progress", "ready"],
+    "semantic_patch_origin": ["human", "host_agent", "lm_studio"],
+    "semantic_patch_ai_origin": ["host_agent", "lm_studio"],
+    "semantic_patch_boundary": ["none", "host_conversation", "local_loopback"],
+    "semantic_patch_ai_boundary": ["host_conversation", "local_loopback"],
+    "semantic_patch_actor": ["pi", "brain", "executor", "web_ui"],
+    "semantic_patch_status": [
+        "proposed", "applied", "rejected", "conflicted", "superseded", "expired"
+    ],
     "evidence_status": [
         "unassessed",
         "supported",
@@ -4672,6 +4680,216 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "notes": (
             "origin='ai_suggested' additionally requires provider, model, and context_hash. "
             "Use lifecycle='parked' for the recoverable parking lot."
+        ),
+    },
+    # --- unified semantic patch proposals ------------------------------
+    "semantic_patch_proposals": {
+        "operation": "semantic_patch_proposals",
+        "tool": "rka_query",
+        "category": "semantic_patches",
+        "role_tag": "ANY",
+        "summary": "List semantic proposals or fetch one exact diff and event history.",
+        "signature": (
+            "rka_query(operation='semantic_patch_proposals', *, project_id, "
+            "id=None, status=None, limit=100)"
+        ),
+        "required_fields": ["project_id"],
+        "optional_fields": ["id", "status", "limit"],
+        "enums": {"status": list(_ENUMS["semantic_patch_status"])},
+        "examples": [{
+            "description": "List proposals waiting for review.",
+            "call": {
+                "operation": "semantic_patch_proposals",
+                "project_id": "prj_01ABC...",
+                "status": "proposed",
+            },
+        }],
+        "related_operations": [
+            "create_semantic_patch_proposal", "apply_semantic_patch_proposal",
+            "reject_semantic_patch_proposal",
+        ],
+        "notes": "A proposed record has not mutated planning or manuscript state.",
+    },
+    "semantic_patch_schema": {
+        "operation": "semantic_patch_schema",
+        "tool": "rka_query",
+        "category": "semantic_patches",
+        "role_tag": "ANY",
+        "summary": "Return the exact JSON schema expected from a host-agent suggestion.",
+        "signature": "rka_query(operation='semantic_patch_schema', *, project_id)",
+        "required_fields": ["project_id"],
+        "optional_fields": [],
+        "enums": {},
+        "examples": [{
+            "description": "Load the schema before generating a host-agent draft.",
+            "call": {"operation": "semantic_patch_schema", "project_id": "prj_01ABC..."},
+        }],
+        "related_operations": ["prepare_semantic_patch_context"],
+        "notes": None,
+    },
+    "prepare_semantic_patch_context": {
+        "operation": "prepare_semantic_patch_context",
+        "tool": "rka_execute",
+        "category": "semantic_patches",
+        "role_tag": "ANY",
+        "summary": "Persist an exact disclosure manifest before an AI provider call.",
+        "signature": (
+            "rka_execute(operation='prepare_semantic_patch_context', *, project_id, "
+            "origin, provider, model, boundary, ...)"
+        ),
+        "required_fields": ["origin", "provider", "model", "boundary", "project_id"],
+        "optional_fields": [
+            "selected_context", "include_source_closure", "targets", "constraints",
+            "omissions", "truncation_notes",
+        ],
+        "enums": {
+            "origin": list(_ENUMS["semantic_patch_ai_origin"]),
+            "boundary": list(_ENUMS["semantic_patch_ai_boundary"]),
+        },
+        "examples": [{
+            "description": "Prepare selected RKA context for the current host conversation.",
+            "call": {
+                "operation": "prepare_semantic_patch_context",
+                "project_id": "prj_01ABC...",
+                "origin": "host_agent",
+                "provider": "chatgpt",
+                "model": "host-model",
+                "boundary": "host_conversation",
+                "selected_context": [{"entity_id": "clm_01XYZ...", "role": "support"}],
+                "targets": [{"target_type": "manuscript", "target_id": "man_01ABC..."}],
+            },
+        }],
+        "related_operations": ["semantic_patch_schema", "create_semantic_patch_proposal"],
+        "notes": (
+            "Call this before generation and disclose every mutable target and referenced "
+            "evidence entity; credentials are never included."
+        ),
+    },
+    "create_semantic_patch_proposal": {
+        "operation": "create_semantic_patch_proposal",
+        "tool": "rka_execute",
+        "category": "semantic_patches",
+        "role_tag": "ANY",
+        "summary": "Validate and store a human or AI semantic edit without applying it.",
+        "signature": (
+            "rka_execute(operation='create_semantic_patch_proposal', *, project_id, "
+            "origin, intent, reason, created_by, operations, ...)"
+        ),
+        "required_fields": [
+            "origin", "intent", "reason", "created_by", "operations", "project_id"
+        ],
+        "optional_fields": [
+            "provider", "model", "boundary", "context_manifest_id",
+            "supersedes_proposal_id",
+        ],
+        "enums": {
+            "origin": list(_ENUMS["semantic_patch_origin"]),
+            "created_by": list(_ENUMS["semantic_patch_actor"]),
+            "boundary": list(_ENUMS["semantic_patch_boundary"]),
+        },
+        "examples": [{
+            "description": "Propose a metadata change for review.",
+            "call": {
+                "operation": "create_semantic_patch_proposal",
+                "project_id": "prj_01ABC...",
+                "origin": "human",
+                "intent": "Clarify the title.",
+                "reason": "Improve quick-reader comprehension.",
+                "created_by": "pi",
+                "operations": [{
+                    "operation": "manuscript_metadata_update",
+                    "manuscript_id": "man_01XYZ...",
+                    "expected_revision": 3,
+                    "title": "A clearer title",
+                }],
+            },
+        }],
+        "related_operations": ["semantic_patch_proposals", "apply_semantic_patch_proposal"],
+        "notes": "No target is mutated until a separate explicit apply.",
+    },
+    "apply_semantic_patch_proposal": {
+        "operation": "apply_semantic_patch_proposal",
+        "tool": "rka_execute",
+        "category": "semantic_patches",
+        "role_tag": "PI",
+        "summary": "Explicitly apply one reviewed proposal under optimistic guards.",
+        "signature": (
+            "rka_execute(operation='apply_semantic_patch_proposal', *, project_id, "
+            "id, expected_revision, actor, reason)"
+        ),
+        "required_fields": ["expected_revision", "actor", "reason", "project_id", "id"],
+        "optional_fields": [],
+        "enums": {"actor": list(_ENUMS["semantic_patch_actor"])},
+        "examples": [{
+            "description": "Apply after reviewing the semantic diff and warnings.",
+            "call": {
+                "operation": "apply_semantic_patch_proposal",
+                "project_id": "prj_01ABC...",
+                "id": "spp_01XYZ...",
+                "expected_revision": 1,
+                "actor": "pi",
+                "reason": "Approved after preview.",
+            },
+        }],
+        "related_operations": ["semantic_patch_proposals"],
+        "notes": "A stale base becomes a preserved conflict; no target is partially changed.",
+    },
+    "reject_semantic_patch_proposal": {
+        "operation": "reject_semantic_patch_proposal",
+        "tool": "rka_execute",
+        "category": "semantic_patches",
+        "role_tag": "PI",
+        "summary": "Reject a proposal without changing any target.",
+        "signature": (
+            "rka_execute(operation='reject_semantic_patch_proposal', *, project_id, "
+            "id, expected_revision, actor, reason)"
+        ),
+        "required_fields": ["expected_revision", "actor", "reason", "project_id", "id"],
+        "optional_fields": [],
+        "enums": {"actor": list(_ENUMS["semantic_patch_actor"])},
+        "examples": [{
+            "description": "Reject while preserving the audit record.",
+            "call": {
+                "operation": "reject_semantic_patch_proposal",
+                "project_id": "prj_01ABC...",
+                "id": "spp_01XYZ...",
+                "expected_revision": 1,
+                "actor": "pi",
+                "reason": "The framing is not suitable.",
+            },
+        }],
+        "related_operations": ["semantic_patch_proposals"],
+        "notes": None,
+    },
+    "generate_lm_studio_semantic_patch": {
+        "operation": "generate_lm_studio_semantic_patch",
+        "tool": "rka_execute",
+        "category": "semantic_patches",
+        "role_tag": "ANY",
+        "summary": "Generate a schema-validated proposal through local LM Studio.",
+        "signature": (
+            "rka_execute(operation='generate_lm_studio_semantic_patch', *, project_id, "
+            "instruction, created_by, ...)"
+        ),
+        "required_fields": ["instruction", "created_by", "project_id"],
+        "optional_fields": [
+            "selected_context", "targets", "include_source_closure", "constraints",
+            "omissions", "truncation_notes", "model",
+        ],
+        "enums": {"created_by": list(_ENUMS["semantic_patch_actor"])},
+        "examples": [{
+            "description": "Ask a local model for a proposal, not a direct edit.",
+            "call": {
+                "operation": "generate_lm_studio_semantic_patch",
+                "project_id": "prj_01ABC...",
+                "instruction": "Suggest a clearer one-paragraph spine.",
+                "created_by": "pi",
+            },
+        }],
+        "related_operations": ["semantic_patch_proposals"],
+        "notes": (
+            "The endpoint must be loopback or Docker's exact host gateway; "
+            "generation never applies the result."
         ),
     },
     # --- session (unscoped + project lifecycle) ------------------------

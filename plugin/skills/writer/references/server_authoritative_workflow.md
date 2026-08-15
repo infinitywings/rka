@@ -90,7 +90,7 @@ Semantic changes follow this order:
    blockers. Resolve stale clusters and counterevidence through Brain.
 2. Select in-scope research questions and assemble a bounded contribution
    contract, exact claim wording, prohibited wording, and claim-sized units.
-3. Dry-run a local proposal:
+3. Dry-run candidate spine material locally:
 
    ```bash
    rka writer import-spine \
@@ -100,7 +100,13 @@ Semantic changes follow this order:
    ```
 
 4. Review the diff, evidence roles, result coverage, and prohibited wording.
-5. Apply with an explicit revision precondition:
+5. On a server exposing semantic patches, create an
+   `argument_spine_replace` through `create_semantic_patch_proposal`. Review
+   its immutable diff and findings, then separately call
+   `apply_semantic_patch_proposal` with the `spp_` revision. Human and AI
+   suggestions follow this same path; stale bases become conflicts.
+6. The direct CLI form below is a local compatibility path only. Use it only
+   with explicit PI authorization and an expected manuscript revision:
 
    ```bash
    rka writer import-spine \
@@ -111,9 +117,9 @@ Semantic changes follow this order:
      --apply
    ```
 
-6. Record the PI decision separately, then bind the exact active claim version
+7. Record the PI decision separately, then bind the exact active claim version
    through `ratify_manuscript_claim`.
-7. Synchronize again before drafting.
+8. Synchronize again before drafting.
 
 An import may create or update claim identities, wording versions, evidence
 roles, units, and unit bindings. It never imports or synthesizes PI

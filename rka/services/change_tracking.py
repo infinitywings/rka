@@ -32,6 +32,7 @@ _NATIVE_ENTITY_TYPES = {
     "manuscript_planning_branch",
     "manuscript_planning_artifact",
     "manuscript_planning_artifact_version",
+    "semantic_patch_proposal",
 }
 
 

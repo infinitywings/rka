@@ -49,6 +49,7 @@ from rka.api.routes import (
     interpretations as interpretations_routes,
     experiments as experiments_routes,
     planning as planning_routes,
+    semantic_patches as semantic_patch_routes,
     zotero_config as zotero_config_routes,
 )
 from rka.config import RKAConfig
@@ -330,6 +331,11 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
         planning_routes.router,
         prefix="/api",
         tags=["manuscript-planning"],
+    )
+    app.include_router(
+        semantic_patch_routes.router,
+        prefix="/api",
+        tags=["semantic-patches"],
     )
     app.include_router(clusters_routes.router, prefix="/api", tags=["clusters"])
     app.include_router(topics_routes.router, prefix="/api", tags=["topics"])

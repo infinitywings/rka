@@ -925,6 +925,8 @@ _QUERY_DISPATCH: dict[str, str] = {
     "planning_resume": "rka_resume_planning",
     "planning_compare": "rka_compare_planning_branches",
     "planning_artifact_versions": "rka_get_planning_artifact_versions",
+    "semantic_patch_proposals": "rka_get_semantic_patch_proposals",
+    "semantic_patch_schema": "rka_get_semantic_patch_schema",
     # provenance / multi-hop
     "provenance": "rka_trace_provenance",
     "multi_hop": "rka_multi_hop_retrieval",
@@ -1272,6 +1274,17 @@ async def dispatch_query(
         if not id:
             return _err("missing_field", "planning_artifact_versions requires id")
         return await legacy(artifact_id=id, project_id=project_id)
+
+    if scope == "semantic_patch_proposals":
+        return await legacy(
+            proposal_id=id,
+            status=f.get("status"),
+            limit=limit or f.get("limit", 100),
+            project_id=project_id,
+        )
+
+    if scope == "semantic_patch_schema":
+        return await legacy(project_id=project_id)
 
     if scope == "provenance":
         if not id:
@@ -2011,6 +2024,11 @@ EXECUTE_OPERATIONS = (
     "create_planning_branch",
     "transition_planning_branch",
     "append_planning_artifact_version",
+    "prepare_semantic_patch_context",
+    "create_semantic_patch_proposal",
+    "apply_semantic_patch_proposal",
+    "reject_semantic_patch_proposal",
+    "generate_lm_studio_semantic_patch",
     # update
     "update_note",
     "update_decision",
@@ -2257,6 +2275,36 @@ async def dispatch_execute(
     if op == "append_planning_artifact_version":
         return await _legacy("rka_append_planning_artifact_version")(
             branch_id=kw.pop("id", None),
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "prepare_semantic_patch_context":
+        return await _legacy("rka_prepare_semantic_patch_context")(
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "create_semantic_patch_proposal":
+        return await _legacy("rka_create_semantic_patch_proposal")(
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op in {"apply_semantic_patch_proposal", "reject_semantic_patch_proposal"}:
+        tool_name = (
+            "rka_apply_semantic_patch_proposal"
+            if op == "apply_semantic_patch_proposal"
+            else "rka_reject_semantic_patch_proposal"
+        )
+        return await _legacy(tool_name)(
+            proposal_id=kw.pop("id", None),
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "generate_lm_studio_semantic_patch":
+        return await _legacy("rka_generate_lm_studio_semantic_patch")(
             payload=kw,
             project_id=project_id,
         )
@@ -2828,6 +2876,10 @@ async def dispatch_query_typed(args: "BaseModel") -> str:  # type: ignore[name-d
     kw_all.pop("operation", None)
     kw_all.pop("project_id", None)
 
+    typed_filters = dict(kw_all.get("filters") or {})
+    if op == "semantic_patch_proposals" and "status" in kw_all:
+        typed_filters["status"] = kw_all["status"]
+
     return _coerce_result_to_str(
         await dispatch_query(
             op,
@@ -2835,7 +2887,7 @@ async def dispatch_query_typed(args: "BaseModel") -> str:  # type: ignore[name-d
             id=kw_all.get("id"),
             query=kw_all.get("query"),
             limit=kw_all.get("limit"),
-            filters=kw_all.get("filters"),
+            filters=typed_filters or None,
             options=kw_all.get("options"),
             ids=kw_all.get("ids"),
             include_sources=kw_all.get("include_sources", False),
