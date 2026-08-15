@@ -29,6 +29,9 @@ _NATIVE_ENTITY_TYPES = {
     "manuscript_checkpoint",
     "manuscript_claim_verification",
     "manuscript_reference",
+    "manuscript_planning_branch",
+    "manuscript_planning_artifact",
+    "manuscript_planning_artifact_version",
 }
 
 

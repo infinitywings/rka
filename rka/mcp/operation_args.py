@@ -56,6 +56,11 @@ from rka.models.reference_validation import (
     ReferenceValidationInput,
 )
 from rka.models.manuscript_native import ManuscriptReferenceMemberInput
+from rka.models.planning import (
+    PlanningArtifactVersionAppend,
+    PlanningBranchCreate,
+    PlanningBranchTransition,
+)
 
 # NOTE: enum aliases from ``rka.mcp._enums`` are imported on a per-batch
 # basis. Batch A (query ops) doesn't directly type any enum field — query
@@ -108,6 +113,12 @@ from rka.mcp._enums import (  # noqa: E402, F811
     ExperimentRunKindLit,
     ExperimentStatusLit,
     WorkingTreeStateLit,
+    PlanningActorLit,
+    PlanningBranchStateLit,
+    PlanningLifecycleLit,
+    PlanningOriginLit,
+    PlanningReadinessLit,
+    PlanningStageLit,
     LitStatusLit,
     NoteTypeLit,
     SourceLit,
@@ -516,6 +527,43 @@ class QueryExperimentObservationsArgs(ProjectScopedArgs, PaginatedFiltersMixin):
 
     operation: Literal["experiment_observations"] = "experiment_observations"
     id: Annotated[Optional[str], Field(default=None, description="Optional obs_ id.")] = None
+
+
+class QueryPlanningBranchesArgs(ProjectScopedArgs):
+    """[ANY] List planning branches or fetch one effective branch snapshot."""
+
+    operation: Literal["planning_branches"] = "planning_branches"
+    id: Annotated[Optional[str], Field(default=None, description="Optional mpb_ id.")] = None
+    manuscript_id: Annotated[
+        Optional[str],
+        Field(default=None, description="Optional canonical man_ context; omit for project-only."),
+    ] = None
+    include_archived: bool = True
+
+
+class QueryPlanningResumeArgs(ProjectScopedArgs):
+    """[ANY] Resume the exact selected planning branch for one context."""
+
+    operation: Literal["planning_resume"] = "planning_resume"
+    manuscript_id: Annotated[
+        Optional[str],
+        Field(default=None, description="Optional canonical man_ context; omit for project-only."),
+    ] = None
+
+
+class QueryPlanningCompareArgs(ProjectScopedArgs):
+    """[ANY] Compare two planning branches in the same context."""
+
+    operation: Literal["planning_compare"] = "planning_compare"
+    base_branch_id: Annotated[str, Field(min_length=1, description="Base mpb_ id.")]
+    other_branch_id: Annotated[str, Field(min_length=1, description="Comparison mpb_ id.")]
+
+
+class QueryPlanningArtifactVersionsArgs(ProjectScopedArgs):
+    """[ANY] Read every immutable version of one planning artifact."""
+
+    operation: Literal["planning_artifact_versions"] = "planning_artifact_versions"
+    id: Annotated[str, Field(min_length=1, description="Canonical pla_ id.")]
 
 
 class QueryManuscriptArgs(ProjectScopedArgs):
@@ -1175,6 +1223,10 @@ QueryArgsUnion = Annotated[
         QueryExperimentsArgs,
         QueryExperimentRunsArgs,
         QueryExperimentObservationsArgs,
+        QueryPlanningBranchesArgs,
+        QueryPlanningResumeArgs,
+        QueryPlanningCompareArgs,
+        QueryPlanningArtifactVersionsArgs,
         QueryManuscriptArgs,
         QueryReferenceValidationStatusArgs,
         ResolveEntitiesArgs,
@@ -2484,6 +2536,42 @@ class AddEvidenceLocatorArgs(ProjectScopedArgs):
     created_by: Annotated[ExperimentActorLit, Field(description="Locator author.")]
 
 
+class CreatePlanningBranchArgs(ProjectScopedArgs, PlanningBranchCreate):
+    """[BRAIN/EXECUTOR/PI] Create a revision-pinned manuscript-planning branch."""
+
+    operation: Literal["create_planning_branch"] = "create_planning_branch"
+    created_by: Annotated[PlanningActorLit, Field(description="Branch author.")]
+
+
+class TransitionPlanningBranchArgs(ProjectScopedArgs, PlanningBranchTransition):
+    """[BRAIN/EXECUTOR/PI] Select, activate, archive, or supersede a branch."""
+
+    operation: Literal["transition_planning_branch"] = "transition_planning_branch"
+    id: Annotated[str, Field(min_length=1, description="Canonical mpb_ id.")]
+    target_state: Annotated[PlanningBranchStateLit, Field(description="Target branch state.")]
+    actor: Annotated[PlanningActorLit, Field(description="Transition actor.")]
+
+
+class AppendPlanningArtifactVersionArgs(
+    ProjectScopedArgs, PlanningArtifactVersionAppend
+):
+    """[BRAIN/EXECUTOR/PI] Append one immutable typed planning-artifact version."""
+
+    operation: Literal["append_planning_artifact_version"] = (
+        "append_planning_artifact_version"
+    )
+    id: Annotated[str, Field(min_length=1, description="Canonical mpb_ branch id.")]
+    stage_type: Annotated[PlanningStageLit, Field(description="Closed planning stage.")]
+    lifecycle: Annotated[PlanningLifecycleLit, Field(description="Artifact lifecycle.")] = (
+        "candidate"
+    )
+    origin: Annotated[PlanningOriginLit, Field(description="Version origin.")]
+    readiness_state: Annotated[
+        PlanningReadinessLit, Field(description="Mechanical readiness state.")
+    ] = "in_progress"
+    created_by: Annotated[PlanningActorLit, Field(description="Version author.")]
+
+
 class SetClaimScopeArgs(ProjectScopedArgs):
     """[BRAIN/PI] Append a revision-guarded canonical claim-scope contract."""
 
@@ -2708,6 +2796,9 @@ BatchBExecuteUnion = Annotated[
         TransitionExperimentRunArgs,
         RecordExperimentObservationArgs,
         AddEvidenceLocatorArgs,
+        CreatePlanningBranchArgs,
+        TransitionPlanningBranchArgs,
+        AppendPlanningArtifactVersionArgs,
     ],
     Field(discriminator="operation"),
 ]
@@ -4544,7 +4635,7 @@ BatchCExecuteUnion = Annotated[
 
 
 # =============================================================================
-# Final ExecuteArgsUnion — composes B + C + D (69 models total)
+# Final ExecuteArgsUnion — composes B + C + D (72 models total)
 # =============================================================================
 #
 # Phase 3 assembly: the discriminated union for `rka_execute`. FastMCP
@@ -4588,6 +4679,9 @@ ExecuteArgsUnion = Annotated[
         TransitionExperimentRunArgs,
         RecordExperimentObservationArgs,
         AddEvidenceLocatorArgs,
+        CreatePlanningBranchArgs,
+        TransitionPlanningBranchArgs,
+        AppendPlanningArtifactVersionArgs,
         # ===== Batch C — UPDATE/LIFECYCLE/SUBMIT (22) =====
         UpdateNoteArgs,
         UpdateDecisionArgs,
@@ -4660,6 +4754,10 @@ __all__ = [
     "QueryExperimentsArgs",
     "QueryExperimentRunsArgs",
     "QueryExperimentObservationsArgs",
+    "QueryPlanningBranchesArgs",
+    "QueryPlanningResumeArgs",
+    "QueryPlanningCompareArgs",
+    "QueryPlanningArtifactVersionsArgs",
     "QueryManuscriptArgs",
     "QueryReferenceValidationStatusArgs",
     "ResolveEntitiesArgs",
@@ -4729,6 +4827,9 @@ __all__ = [
     "TransitionExperimentRunArgs",
     "RecordExperimentObservationArgs",
     "AddEvidenceLocatorArgs",
+    "CreatePlanningBranchArgs",
+    "TransitionPlanningBranchArgs",
+    "AppendPlanningArtifactVersionArgs",
     # Batch B partial union
     "BatchBExecuteUnion",
     # Batch D — Review / Maintenance / Hooks / Workspace write models

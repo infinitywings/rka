@@ -264,14 +264,14 @@ Detailed operating guidance is available via MCP prompts:
 Use these prompts to load role-specific guidance at session start.
 
 ## Tool Surface (v2.7.0+) — Typed Dispatch Architecture
-RKA ships 5 always-on tools: 3 dispatch tools that route to 125 typed
+RKA ships 5 always-on tools: 3 dispatch tools that route to 132 typed
 operations, plus 2 escape hatches into the legacy surface.
 
 - **Dispatch (always-on):**
-- `rka_query(args={"operation": ..., "project_id": ..., ...})` — 56 read
+- `rka_query(args={"operation": ..., "project_id": ..., ...})` — 60 read
     operations (status, context, journal, decisions, missions, literature,
     research map, etc.). Returns structured data.
-- `rka_execute(args={"operation": ..., "project_id": ..., ...})` — 69
+- `rka_execute(args={"operation": ..., "project_id": ..., ...})` — 72
     write/lifecycle operations (record_note, record_decision, create_mission,
     submit_report, submit_checkpoint, etc.). Returns the created/updated entity.
   - `rka_describe(operation="" | "<op_name>")` — schema lookup. With no
@@ -283,7 +283,7 @@ operations, plus 2 escape hatches into the legacy surface.
     the live tool surface. Useful only for back-compat with old transcripts.
   - `rka_help(name=...)` — deprecated alias for `rka_describe`.
 
-The 125 operations are typed Pydantic models with per-branch enum constraints
+The 132 operations are typed Pydantic models with per-branch enum constraints
 and required-field enforcement at the FastMCP schema layer — illegal values
 (e.g. `confidence="confirmed"`) are rejected at the inputSchema boundary
 before the call goes out.
@@ -4819,6 +4819,124 @@ async def rka_add_evidence_locator(payload: dict, *, project_id: str) -> str:
     return json.dumps(response.json(), indent=2)
 
 
+@tool(category="manuscript_planning")
+async def rka_get_planning_branches(
+    branch_id: str | None = None,
+    manuscript_id: str | None = None,
+    include_archived: bool = True,
+    *,
+    project_id: str,
+) -> str:
+    """List planning branches or fetch one exact effective snapshot."""
+    async with _client(project_id) as c:
+        if branch_id:
+            response = await c.get(f"/api/planning/branches/{branch_id}")
+        else:
+            response = await c.get(
+                "/api/planning/branches",
+                params=_strip_none(
+                    {
+                        "manuscript_id": manuscript_id,
+                        "include_archived": include_archived,
+                    }
+                ),
+            )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="manuscript_planning")
+async def rka_resume_planning(
+    manuscript_id: str | None = None,
+    *,
+    project_id: str,
+) -> str:
+    """Resume the exact selected branch for a project or manuscript context."""
+    async with _client(project_id) as c:
+        response = await c.get(
+            "/api/planning/resume",
+            params=_strip_none({"manuscript_id": manuscript_id}),
+        )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="manuscript_planning")
+async def rka_compare_planning_branches(
+    base_branch_id: str,
+    other_branch_id: str,
+    *,
+    project_id: str,
+) -> str:
+    """Compare two same-context planning branches without mutating either."""
+    async with _client(project_id) as c:
+        response = await c.get(
+            "/api/planning/branches/compare",
+            params={
+                "base_branch_id": base_branch_id,
+                "other_branch_id": other_branch_id,
+            },
+        )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="manuscript_planning")
+async def rka_get_planning_artifact_versions(
+    artifact_id: str,
+    *,
+    project_id: str,
+) -> str:
+    """Read every immutable version of one planning artifact."""
+    async with _client(project_id) as c:
+        response = await c.get(f"/api/planning/artifacts/{artifact_id}/versions")
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="manuscript_planning")
+async def rka_create_planning_branch(payload: dict, *, project_id: str) -> str:
+    """Create a project- or manuscript-scoped planning branch."""
+    async with _client(project_id) as c:
+        response = await c.post("/api/planning/branches", json=payload)
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="manuscript_planning")
+async def rka_transition_planning_branch(
+    branch_id: str,
+    payload: dict,
+    *,
+    project_id: str,
+) -> str:
+    """Select, activate, archive, or supersede one planning branch."""
+    async with _client(project_id) as c:
+        response = await c.post(
+            f"/api/planning/branches/{branch_id}/transition",
+            json=payload,
+        )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="manuscript_planning")
+async def rka_append_planning_artifact_version(
+    branch_id: str,
+    payload: dict,
+    *,
+    project_id: str,
+) -> str:
+    """Append an immutable typed planning-artifact version."""
+    async with _client(project_id) as c:
+        response = await c.post(
+            f"/api/planning/branches/{branch_id}/artifacts",
+            json=payload,
+        )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
 @tool(category="claims")
 async def rka_add_interpretation_hint(
     candidate_id: str,
@@ -8438,7 +8556,7 @@ async def rka_execute(args: _ExecuteArgsUnion) -> str:
 
     v2.7.0 NO-COMPROMISE typed-arg surface. The ``args`` parameter is a
     Pydantic discriminated union (keyed by ``operation``) covering all
-    69 write/lifecycle operations. FastMCP renders the union as JSON
+    72 write/lifecycle operations. FastMCP renders the union as JSON
     Schema ``oneOf`` with per-branch ``required`` arrays + per-branch
     ``enum`` constraints on every Literal-typed field. The LLM CANNOT
     emit ``confidence='confirmed'``, ``decided_by='SUPERVISOR'``,
@@ -8583,11 +8701,11 @@ support; the Skill is authoritative.
 Always begin a session by loading context:
 
 0. **Tool surface (v2.7.0+ typed dispatch).** RKA ships 3 always-on dispatch
-   tools — `rka_query` (56 read ops), `rka_execute` (69 write/lifecycle ops),
+   tools — `rka_query` (60 read ops), `rka_execute` (72 write/lifecycle ops),
    and `rka_describe` (schema lookup) — plus 2 escape hatches (`rka_load_tools`
    for legacy compat and `rka_help` as a deprecated alias of `rka_describe`).
    No activation step is required: every operation is reachable from
-   `rka_query` / `rka_execute` on the first call. To browse the 125 operations
+   `rka_query` / `rka_execute` on the first call. To browse the 132 operations
    call `rka_describe("")`; for one operation's full schema call
    `rka_describe("record_decision")`. Per-branch enum + required-field
    enforcement at the FastMCP schema layer guarantees values like
@@ -8731,7 +8849,7 @@ Skill is authoritative.
 ## Session Start Protocol
 
 0. **Tool surface (v2.7.0+ typed dispatch).** RKA ships 3 always-on dispatch
-   tools — `rka_query` (56 read ops), `rka_execute` (69 write/lifecycle ops),
+   tools — `rka_query` (60 read ops), `rka_execute` (72 write/lifecycle ops),
    and `rka_describe` (schema lookup) — plus 2 escape hatches (`rka_load_tools`
    for legacy compat and `rka_help` as a deprecated alias of `rka_describe`).
    No activation step is required: every operation is reachable from

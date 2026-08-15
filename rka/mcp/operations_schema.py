@@ -30,7 +30,7 @@ Design choices (decision #3 in the project locked-decisions list):
   hints, and the Phase-X²' canonical-field-name lessons (e.g. the
   `description=` vs `content=` checkpoint pitfall from the 2026-06-01
   hyperscaler-auditing PA-2 bug).
-- Single dict, one entry per operation. Total 125 entries.
+- Single dict, one entry per operation. Total 132 entries.
 - Enum value-sets reference rka.mcp._enums for drift-detection — the
   enums dict here cites the values directly (mirror of _enums.py) so
   consumers don't need to import _enums. The lock-test in
@@ -234,6 +234,18 @@ _ENUMS = {
         "record",
     ],
     "claim_evidence_role": ["support", "qualifier", "counterevidence", "context"],
+    "planning_actor": ["pi", "brain", "executor", "web_ui", "llm", "import"],
+    "planning_branch_state": ["active", "selected", "archived", "superseded"],
+    "planning_stage": [
+        "seed", "paragraph_spine", "problem_scope", "landscape_gap",
+        "response_mechanism", "challenge_innovation", "rq_contribution",
+        "evaluation", "outline", "review",
+    ],
+    "planning_lifecycle": [
+        "candidate", "reviewed", "selected", "parked", "superseded", "archived"
+    ],
+    "planning_origin": ["user", "ai_suggested", "imported", "user_revised"],
+    "planning_readiness": ["blocked", "in_progress", "ready"],
     "evidence_status": [
         "unassessed",
         "supported",
@@ -4469,6 +4481,198 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ],
         "related_operations": ["flag_stale", "freshness"],
         "notes": None,
+    },
+    # --- provisional manuscript planning -------------------------------
+    "planning_branches": {
+        "operation": "planning_branches",
+        "tool": "rka_query",
+        "category": "manuscript_planning",
+        "role_tag": "ANY",
+        "summary": "List planning branches or fetch one exact effective snapshot.",
+        "signature": (
+            "rka_query(operation='planning_branches', *, project_id, id=None, "
+            "manuscript_id=None, include_archived=True)"
+        ),
+        "required_fields": ["project_id"],
+        "optional_fields": ["id", "manuscript_id", "include_archived"],
+        "enums": {},
+        "examples": [{
+            "description": "List project-only planning branches.",
+            "call": {"operation": "planning_branches", "project_id": "prj_01ABC..."},
+        }],
+        "related_operations": ["planning_resume", "planning_compare"],
+        "notes": "These provisional artifacts never ratify canonical manuscript semantics.",
+    },
+    "planning_resume": {
+        "operation": "planning_resume",
+        "tool": "rka_query",
+        "category": "manuscript_planning",
+        "role_tag": "ANY",
+        "summary": "Resume the selected branch at its exact persisted head.",
+        "signature": (
+            "rka_query(operation='planning_resume', *, project_id, manuscript_id=None)"
+        ),
+        "required_fields": ["project_id"],
+        "optional_fields": ["manuscript_id"],
+        "enums": {},
+        "examples": [{
+            "description": "Resume project-only planning.",
+            "call": {"operation": "planning_resume", "project_id": "prj_01ABC..."},
+        }],
+        "related_operations": ["planning_branches"],
+        "notes": "Returns null when no selected branch exists for the context.",
+    },
+    "planning_compare": {
+        "operation": "planning_compare",
+        "tool": "rka_query",
+        "category": "manuscript_planning",
+        "role_tag": "ANY",
+        "summary": "Compare two revision-pinned planning branches deterministically.",
+        "signature": (
+            "rka_query(operation='planning_compare', *, project_id, "
+            "base_branch_id, other_branch_id)"
+        ),
+        "required_fields": ["project_id", "base_branch_id", "other_branch_id"],
+        "optional_fields": [],
+        "enums": {},
+        "examples": [{
+            "description": "Compare an alternative against the primary framing.",
+            "call": {
+                "operation": "planning_compare",
+                "project_id": "prj_01ABC...",
+                "base_branch_id": "mpb_01BASE...",
+                "other_branch_id": "mpb_01OTHER...",
+            },
+        }],
+        "related_operations": ["planning_branches", "transition_planning_branch"],
+        "notes": "Comparison never selects or mutates either branch.",
+    },
+    "planning_artifact_versions": {
+        "operation": "planning_artifact_versions",
+        "tool": "rka_query",
+        "category": "manuscript_planning",
+        "role_tag": "ANY",
+        "summary": "Read all immutable versions and bindings for one planning artifact.",
+        "signature": (
+            "rka_query(operation='planning_artifact_versions', *, project_id, id)"
+        ),
+        "required_fields": ["project_id", "id"],
+        "optional_fields": [],
+        "enums": {},
+        "examples": [{
+            "description": "Inspect recoverable artifact history.",
+            "call": {
+                "operation": "planning_artifact_versions",
+                "project_id": "prj_01ABC...",
+                "id": "pla_01XYZ...",
+            },
+        }],
+        "related_operations": ["append_planning_artifact_version"],
+        "notes": None,
+    },
+    "create_planning_branch": {
+        "operation": "create_planning_branch",
+        "tool": "rka_execute",
+        "category": "manuscript_planning",
+        "role_tag": "BRAIN",
+        "summary": "Create a project- or manuscript-scoped revision-pinned branch.",
+        "signature": (
+            "rka_execute(operation='create_planning_branch', *, project_id, "
+            "name, purpose, created_by, reason, ...)"
+        ),
+        "required_fields": ["project_id", "name", "purpose", "created_by", "reason"],
+        "optional_fields": ["manuscript_id", "parent_branch_id"],
+        "enums": _e("planning_actor"),
+        "examples": [{
+            "description": "Fork a framing alternative.",
+            "call": {
+                "operation": "create_planning_branch",
+                "project_id": "prj_01ABC...",
+                "name": "mechanism-first",
+                "purpose": "Explore a mechanism-first paper framing.",
+                "created_by": "pi",
+                "reason": "Keep the alternative recoverable.",
+            },
+        }],
+        "related_operations": ["planning_branches", "append_planning_artifact_version"],
+        "notes": "The first branch in a context becomes selected; later branches start active.",
+    },
+    "transition_planning_branch": {
+        "operation": "transition_planning_branch",
+        "tool": "rka_execute",
+        "category": "manuscript_planning",
+        "role_tag": "PI",
+        "summary": "Select, activate, archive, or supersede a planning branch.",
+        "signature": (
+            "rka_execute(operation='transition_planning_branch', *, project_id, id, "
+            "expected_revision, target_state, actor, reason)"
+        ),
+        "required_fields": [
+            "project_id", "id", "expected_revision", "target_state", "actor", "reason"
+        ],
+        "optional_fields": [],
+        "enums": _e("planning_branch_state", "planning_actor"),
+        "examples": [{
+            "description": "Select a reviewed alternative.",
+            "call": {
+                "operation": "transition_planning_branch",
+                "project_id": "prj_01ABC...",
+                "id": "mpb_01XYZ...",
+                "expected_revision": 4,
+                "target_state": "selected",
+                "actor": "pi",
+                "reason": "This branch has the clearest argument.",
+            },
+        }],
+        "related_operations": ["planning_compare", "planning_resume"],
+        "notes": "Select a replacement before archiving the currently selected branch.",
+    },
+    "append_planning_artifact_version": {
+        "operation": "append_planning_artifact_version",
+        "tool": "rka_execute",
+        "category": "manuscript_planning",
+        "role_tag": "BRAIN",
+        "summary": "Append a schema-validated immutable planning-artifact version.",
+        "signature": (
+            "rka_execute(operation='append_planning_artifact_version', *, project_id, "
+            "id, expected_branch_revision, local_key, stage_type, summary, payload, "
+            "origin, created_by, reason, ...)"
+        ),
+        "required_fields": [
+            "project_id", "id", "expected_branch_revision", "local_key", "stage_type",
+            "summary", "payload", "origin", "created_by", "reason",
+        ],
+        "optional_fields": [
+            "expected_previous_version", "lifecycle", "provider", "model",
+            "context_hash", "unresolved_items", "readiness_state",
+            "readiness_missing", "readiness_notes", "promotion_target_type",
+            "promotion_target_id", "evidence_bindings",
+        ],
+        "enums": _e(
+            "planning_stage", "planning_lifecycle", "planning_origin",
+            "planning_readiness", "planning_actor",
+        ),
+        "examples": [{
+            "description": "Record the one-sentence insight with no evidence laundering.",
+            "call": {
+                "operation": "append_planning_artifact_version",
+                "project_id": "prj_01ABC...",
+                "id": "mpb_01XYZ...",
+                "expected_branch_revision": 1,
+                "local_key": "core-insight",
+                "stage_type": "seed",
+                "summary": "A composable timing primitive changes the security trade-off.",
+                "payload": {"insight": "Treat timing as a composable security primitive."},
+                "origin": "user",
+                "created_by": "pi",
+                "reason": "Preserve the initial insight before expansion.",
+            },
+        }],
+        "related_operations": ["planning_artifact_versions", "planning_compare"],
+        "notes": (
+            "origin='ai_suggested' additionally requires provider, model, and context_hash. "
+            "Use lifecycle='parked' for the recoverable parking lot."
+        ),
     },
     # --- session (unscoped + project lifecycle) ------------------------
     "create_project": {

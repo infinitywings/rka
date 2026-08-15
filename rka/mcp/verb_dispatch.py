@@ -921,6 +921,10 @@ _QUERY_DISPATCH: dict[str, str] = {
     "experiments": "rka_get_experiments",
     "experiment_runs": "rka_get_experiment_runs",
     "experiment_observations": "rka_get_experiment_observations",
+    "planning_branches": "rka_get_planning_branches",
+    "planning_resume": "rka_resume_planning",
+    "planning_compare": "rka_compare_planning_branches",
+    "planning_artifact_versions": "rka_get_planning_artifact_versions",
     # provenance / multi-hop
     "provenance": "rka_trace_provenance",
     "multi_hop": "rka_multi_hop_retrieval",
@@ -979,6 +983,9 @@ async def dispatch_query(
     since_cursor: int | None = None,
     manuscript_id: str | None = None,
     job_id: str | None = None,
+    include_archived: bool = True,
+    base_branch_id: str | None = None,
+    other_branch_id: str | None = None,
 ) -> str:
     """[ANY] Universal read dispatcher.
 
@@ -1237,6 +1244,34 @@ async def dispatch_query(
             limit=limit or f.get("limit", 50),
             project_id=project_id,
         )
+
+    if scope == "planning_branches":
+        return await legacy(
+            branch_id=id,
+            manuscript_id=manuscript_id,
+            include_archived=include_archived,
+            project_id=project_id,
+        )
+
+    if scope == "planning_resume":
+        return await legacy(manuscript_id=manuscript_id, project_id=project_id)
+
+    if scope == "planning_compare":
+        if not base_branch_id or not other_branch_id:
+            return _err(
+                "missing_field",
+                "planning_compare requires base_branch_id and other_branch_id",
+            )
+        return await legacy(
+            base_branch_id=base_branch_id,
+            other_branch_id=other_branch_id,
+            project_id=project_id,
+        )
+
+    if scope == "planning_artifact_versions":
+        if not id:
+            return _err("missing_field", "planning_artifact_versions requires id")
+        return await legacy(artifact_id=id, project_id=project_id)
 
     if scope == "provenance":
         if not id:
@@ -1973,6 +2008,9 @@ EXECUTE_OPERATIONS = (
     "transition_experiment_run",
     "record_experiment_observation",
     "add_evidence_locator",
+    "create_planning_branch",
+    "transition_planning_branch",
+    "append_planning_artifact_version",
     # update
     "update_note",
     "update_decision",
@@ -2200,6 +2238,26 @@ async def dispatch_execute(
             falsifier_rationale=kw.get("falsifier_rationale"),
             disconfirming_claim_ids=kw.get("disconfirming_claim_ids") or [],
             review_status=kw.get("review_status", "draft"),
+            project_id=project_id,
+        )
+
+    if op == "create_planning_branch":
+        return await _legacy("rka_create_planning_branch")(
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "transition_planning_branch":
+        return await _legacy("rka_transition_planning_branch")(
+            branch_id=kw.pop("id", None),
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "append_planning_artifact_version":
+        return await _legacy("rka_append_planning_artifact_version")(
+            branch_id=kw.pop("id", None),
+            payload=kw,
             project_id=project_id,
         )
 
@@ -2787,6 +2845,9 @@ async def dispatch_query_typed(args: "BaseModel") -> str:  # type: ignore[name-d
             since_cursor=kw_all.get("since_cursor"),
             manuscript_id=kw_all.get("manuscript_id"),
             job_id=kw_all.get("job_id"),
+            include_archived=kw_all.get("include_archived", True),
+            base_branch_id=kw_all.get("base_branch_id"),
+            other_branch_id=kw_all.get("other_branch_id"),
         )
     )
 

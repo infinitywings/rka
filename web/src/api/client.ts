@@ -160,6 +160,11 @@ import type {
   ClaimScopeHistory,
   ClaimScopeReadiness,
   ClaimScopeWrite,
+  PlanningBranch,
+  PlanningBranchComparison,
+  PlanningBranchCreate,
+  PlanningBranchTransition,
+  PlanningContext,
 } from "./types"
 
 export const api = {
@@ -505,6 +510,33 @@ export const api = {
     get<ManuscriptImpact>(
       `/manuscripts/${encodeURIComponent(manuscriptId)}/impact?since_cursor=${sinceCursor}&limit=${limit}`,
     ),
+
+  // Versioned, provisional workbench deliberation. These writes never mutate
+  // canonical manuscript claims or authoring files.
+  listPlanningBranches: (manuscriptId: string | null, includeArchived = true) => {
+    const search = new URLSearchParams()
+    if (manuscriptId) search.set("manuscript_id", manuscriptId)
+    search.set("include_archived", String(includeArchived))
+    return get<PlanningBranch[]>(`/planning/branches?${search.toString()}`)
+  },
+  resumePlanningBranch: (manuscriptId: string | null) => {
+    const query = manuscriptId ? `?manuscript_id=${encodeURIComponent(manuscriptId)}` : ""
+    return get<PlanningContext | null>(`/planning/resume${query}`)
+  },
+  createPlanningBranch: (data: PlanningBranchCreate) =>
+    post<PlanningContext>("/planning/branches", data),
+  transitionPlanningBranch: (branchId: string, data: PlanningBranchTransition) =>
+    post<PlanningContext>(
+      `/planning/branches/${encodeURIComponent(branchId)}/transition`,
+      data,
+    ),
+  comparePlanningBranches: (baseBranchId: string, otherBranchId: string) => {
+    const search = new URLSearchParams({
+      base_branch_id: baseBranchId,
+      other_branch_id: otherBranchId,
+    })
+    return get<PlanningBranchComparison>(`/planning/branches/compare?${search.toString()}`)
+  },
 }
 
 export { ApiError }

@@ -3,6 +3,23 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [Unreleased]
+
+### Added
+
+- **Versioned manuscript planning branches.** Project-only or manuscript-bound
+  deliberation can now evolve through typed planning stages without mutating
+  canonical evidence or manuscript records. Branch alternatives preserve
+  frozen ancestry, immutable artifact versions, actor/model provenance,
+  evidence bindings, deterministic comparison, and resumable selection state.
+- **Planning REST, MCP, and workbench surfaces.** The API and typed dispatch
+  surface now expose 132 operations (60 reads + 72 writes). The manuscript
+  workbench can create, fork, select, compare, archive, reactivate, and resume
+  provisional branches while keeping canonical projections visibly separate.
+- **Portable planning provenance.** Knowledge-pack schema v6 re-keys planning
+  lineage and polymorphic evidence bindings, validates typed stage payloads and
+  immutable heads, and rolls back atomically on integrity failure.
+
 ## [2.9.0] — 2026-07-23 (Native claim spine + provenance-gated Writer)
 
 This release integrates the native manuscript/claim-spine branch with the

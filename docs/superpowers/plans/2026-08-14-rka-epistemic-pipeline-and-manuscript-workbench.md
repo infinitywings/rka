@@ -1,9 +1,8 @@
 # RKA Epistemic Pipeline and Manuscript Drafting Workbench
 
-Status: roadmap design source; M0, M1 PR 1 Interpretation Staging, M1 PR 2
-Claim Scope Contracts, and M2 PR 4 are complete in the current tree. M1 PR 3
-experiment, run, observation, and exact evidence-locator design is frozen and
-implementation is the next dependency-ordered target.
+Status: roadmap design source; M0, M1, and M2 are complete on `main`. M3 PR 5
+versioned planning artifacts and branches is implementation-complete and
+release-validated on its feature branch; PR 6 follows after review and merge.
 
 Date: 2026-08-14
 
@@ -21,6 +20,10 @@ The M1 canonical-claim applicability boundary is frozen in
 [`ADR 0003`](../../adr/0003-canonical-claim-scope-contracts.md).
 The M1 experiment/run/observation and exact-locator boundary is frozen in
 [`ADR 0004`](../../adr/0004-experiment-run-observation-and-evidence-locator-contracts.md).
+The M3 provisional-planning and frozen-branch boundary is frozen in
+[`ADR 0005`](../../adr/0005-versioned-manuscript-planning-branches.md).
+The PR 5 release evidence is recorded in the
+[`M3 planning-branch exit record`](../specs/2026-08-15-workbench-m3-pr5-exit-evidence.md).
 
 ## 1. Baseline and source snapshots
 
@@ -28,10 +31,10 @@ This plan targets the clean default RKA branch at:
 
 - repository: `infinitywings/rka`
 - branch: `main`
-- current implementation baseline: `9a9ef74f40909b58b217b6692f6bf0c03b590bc3`
+- current implementation baseline: `ba687721b9632a4a12c864100d9690ca428ac005`
 - original plan baseline: `edb1e6f170025a77ddcb5b89038d0e1a34af4857`
 - RKA package version: `2.9.0`
-- latest migration: `041`
+- latest migration on baseline: `042`
 
 The Writer behavior had a relevant delta that the local M0 implementation now
 reconciles onto the current baseline:
@@ -710,8 +713,8 @@ researcher's current selection determine the smallest useful action.
 
 ### 12.2 Recommended new server objects
 
-Names and prefixes are provisional until the schema ADR, but the model should
-support:
+ADR 0005 freezes the PR 5 names and prefixes below. Patch-proposal identifiers
+remain provisional until PR 6.
 
 #### Manuscript planning branch
 
@@ -729,7 +732,7 @@ support:
 - stage type: seed, paragraph spine, problem/scope, landscape/gap,
   response/mechanism, challenge/innovation, RQ/contribution, evaluation,
   outline, or review;
-- lifecycle: candidate, reviewed, selected, superseded, archived;
+- lifecycle: candidate, reviewed, selected, parked, superseded, archived;
 - current version;
 - optional promotion target such as `dec_`, `mcl_`, or `mun_`.
 
@@ -1188,12 +1191,10 @@ These are evaluation measures, not automated manuscript-quality scores.
 | ARA integration | deterministic export profile | gains portability without replacing RKA semantics |
 | Workspace Git | visible status only; no automatic commits | preserves researcher control and dirty worktrees |
 
-Open decisions for the ADR/prototype stage:
+Open decisions for later milestones:
 
-- whether planning artifacts need dedicated subtype tables or one validated
-  typed payload table;
-- whether Context Capsules are stored snapshots or reproducible queries plus a
-  content hash;
+- how Context Capsules should be materialized for AI proposal provenance beyond
+  the PR 5 required content hash;
 - how much AI discussion history should be retained locally for resume without
   contaminating RKA;
 - the exact boundary between a provisional RQ in planning and a formal RKA
