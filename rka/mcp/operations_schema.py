@@ -30,7 +30,7 @@ Design choices (decision #3 in the project locked-decisions list):
   hints, and the Phase-X²' canonical-field-name lessons (e.g. the
   `description=` vs `content=` checkpoint pitfall from the 2026-06-01
   hyperscaler-auditing PA-2 bug).
-- Single dict, one entry per operation. Total 113 entries.
+- Single dict, one entry per operation. Total 115 entries.
 - Enum value-sets reference rka.mcp._enums for drift-detection — the
   enums dict here cites the values directly (mirror of _enums.py) so
   consumers don't need to import _enums. The lock-test in
@@ -56,44 +56,123 @@ from typing import Any
 
 _ENUMS = {
     "confidence": [
-        "hypothesis", "tested", "verified", "superseded", "retracted",
+        "hypothesis",
+        "tested",
+        "verified",
+        "superseded",
+        "retracted",
     ],
     "importance": [
-        "critical", "high", "normal", "low", "archived",
+        "critical",
+        "high",
+        "normal",
+        "low",
+        "archived",
     ],
     "source": ["brain", "executor", "pi", "web_ui", "llm"],
     "note_type": [
-        "note", "log", "directive",
-        "finding", "insight", "pi_instruction", "exploration",
-        "idea", "observation", "hypothesis", "methodology", "summary",
+        "note",
+        "log",
+        "directive",
+        "finding",
+        "insight",
+        "pi_instruction",
+        "exploration",
+        "idea",
+        "observation",
+        "hypothesis",
+        "methodology",
+        "summary",
     ],
     "decided_by": ["pi", "brain", "executor"],
     "decision_kind": [
-        "research_question", "design_choice", "decision", "operational",
+        "research_question",
+        "design_choice",
+        "decision",
+        "operational",
     ],
     "lit_status": ["to_read", "reading", "read", "cited", "excluded"],
     "lit_added_by": ["brain", "executor", "pi", "import", "web_ui"],
     "mission_status": [
-        "pending", "active", "complete", "partial", "blocked", "cancelled",
+        "pending",
+        "active",
+        "complete",
+        "partial",
+        "blocked",
+        "cancelled",
     ],
     "checkpoint_type": [
-        "decision", "clarification", "inspection", "gate",
+        "decision",
+        "clarification",
+        "inspection",
+        "gate",
     ],
     "gate_type": [
-        "problem_framing", "plan_validation", "evidence_review",
+        "problem_framing",
+        "plan_validation",
+        "evidence_review",
         "synthesis_validation",
     ],
     "verdict": ["go", "kill", "hold", "recycle"],
     "claim_type": [
-        "hypothesis", "evidence", "method", "result", "observation",
+        "hypothesis",
+        "evidence",
+        "method",
+        "result",
+        "observation",
         "assumption",
+    ],
+    "claim_scope_uncertainty": ["none", "low", "medium", "high", "unknown"],
+    "claim_scope_extension_policy": ["exact_only", "bounded"],
+    "claim_falsifier_status": ["unknown", "applicable", "not_applicable"],
+    "claim_scope_review_status": ["draft", "reviewed"],
+    "claim_scope_readiness": [
+        "missing",
+        "stale",
+        "incomplete",
+        "needs_review",
+        "ready",
+    ],
+    "claim_scope_actor": ["pi", "brain", "executor", "web_ui", "llm"],
+    "claim_condition_kind": [
+        "dataset",
+        "population",
+        "platform",
+        "environment",
+        "threat_model",
+        "baseline",
+        "workload",
+        "metric",
+        "parameter",
+        "assumption",
+        "time_window",
+        "other",
+    ],
+    "claim_condition_operator": [
+        "equals",
+        "one_of",
+        "range",
+        "at_least",
+        "at_most",
+        "present",
+        "absent",
+        "described_by",
     ],
     "interpretation_source": ["journal", "literature", "artifact"],
     "interpretation_locator": [
-        "text_offset", "page", "line_range", "section", "url_fragment", "record",
+        "text_offset",
+        "page",
+        "line_range",
+        "section",
+        "url_fragment",
+        "record",
     ],
     "epistemic_kind": [
-        "observation", "reported_fact", "inference", "hypothesis", "plan",
+        "observation",
+        "reported_fact",
+        "inference",
+        "hypothesis",
+        "plan",
         "author_intent",
     ],
     "interpretation_uncertainty": ["none", "low", "medium", "high", "unknown"],
@@ -101,24 +180,49 @@ _ENUMS = {
     "interpretation_review_actor": ["pi", "brain", "executor", "web_ui"],
     "interpretation_review_status": ["pending", "in_review", "resolved"],
     "interpretation_disposition": [
-        "promoted", "merged", "deferred", "rejected", "classified_decision",
-        "classified_plan", "classified_author_intent", "evidence_mission_requested",
+        "promoted",
+        "merged",
+        "deferred",
+        "rejected",
+        "classified_decision",
+        "classified_plan",
+        "classified_author_intent",
+        "evidence_mission_requested",
     ],
     "interpretation_hint_kind": ["duplicate", "conflict"],
     "interpretation_triage_action": [
-        "start_review", "promote", "merge", "defer", "reject",
-        "classify_decision", "classify_plan", "classify_author_intent",
-        "request_evidence_mission", "reopen", "revoke_promotion",
+        "start_review",
+        "promote",
+        "merge",
+        "defer",
+        "reject",
+        "classify_decision",
+        "classify_plan",
+        "classify_author_intent",
+        "request_evidence_mission",
+        "reopen",
+        "revoke_promotion",
     ],
     "evidence_status": [
-        "unassessed", "supported", "partially_supported", "inconclusive",
+        "unassessed",
+        "supported",
+        "partially_supported",
+        "inconclusive",
         "contradicted",
     ],
     "cluster_confidence": [
-        "strong", "moderate", "emerging", "contested", "refuted",
+        "strong",
+        "moderate",
+        "emerging",
+        "contested",
+        "refuted",
     ],
     "rq_status": [
-        "open", "partially_answered", "answered", "reframed", "closed",
+        "open",
+        "partially_answered",
+        "answered",
+        "reframed",
+        "closed",
     ],
     "outcome": ["succeeded", "failed", "mixed", "unresolved"],
     "staleness": ["yellow", "red"],
@@ -126,40 +230,80 @@ _ENUMS = {
     "resolved_by": ["pi", "brain", "executor"],
     "review_action": ["approve", "reject", "adjust"],
     "manuscript_phase": [
-        "planning", "drafting", "review", "final", "submitted",
+        "planning",
+        "drafting",
+        "review",
+        "final",
+        "submitted",
     ],
     "manuscript_state": [
-        "active", "on_hold", "submitted", "accepted", "rejected",
-        "withdrawn", "archived",
+        "active",
+        "on_hold",
+        "submitted",
+        "accepted",
+        "rejected",
+        "withdrawn",
+        "archived",
     ],
     "manuscript_claim_kind": [
-        "empirical", "methodological", "theoretical", "survey", "position",
+        "empirical",
+        "methodological",
+        "theoretical",
+        "survey",
+        "position",
     ],
     "manuscript_claim_state": ["candidate", "active", "retired"],
     "manuscript_unit_kind": [
-        "abstract", "introduction", "related_work", "background", "method",
-        "result", "discussion", "limitation", "conclusion", "caption",
-        "appendix", "other",
+        "abstract",
+        "introduction",
+        "related_work",
+        "background",
+        "method",
+        "result",
+        "discussion",
+        "limitation",
+        "conclusion",
+        "caption",
+        "appendix",
+        "other",
     ],
     "manuscript_unit_status": [
-        "planned", "drafted", "reviewed", "final", "removed",
+        "planned",
+        "drafted",
+        "reviewed",
+        "final",
+        "removed",
     ],
     "manuscript_evidence_role": [
-        "support", "qualifier", "counterevidence",
+        "support",
+        "qualifier",
+        "counterevidence",
     ],
     "manuscript_claim_unit_relationship": [
-        "advances", "tests", "bounds", "mentions",
+        "advances",
+        "tests",
+        "bounds",
+        "mentions",
     ],
     "manuscript_checkpoint_kind": [
-        "venue", "outline", "table_figure_plan", "reference_set",
-        "draft_section", "final_layout",
+        "venue",
+        "outline",
+        "table_figure_plan",
+        "reference_set",
+        "draft_section",
+        "final_layout",
     ],
     "manuscript_checkpoint_resolution_status": [
-        "resolved", "rejected",
+        "resolved",
+        "rejected",
     ],
     "manuscript_verification_verdict": ["pass", "warn", "block", "error"],
     "manuscript_verification_dimension_verdict": [
-        "pass", "warn", "block", "error", "not_checked",
+        "pass",
+        "warn",
+        "block",
+        "error",
+        "not_checked",
     ],
 }
 
@@ -178,11 +322,9 @@ def _e(*names: str) -> dict[str, list[str]]:
 # rka_query/rka_execute Literal enums is detected by the lock-tests.
 
 OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
-
     # =====================================================================
     # rka_query — read operations
     # =====================================================================
-
     "status": {
         "operation": "status",
         "tool": "rka_query",
@@ -202,7 +344,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["context", "pending_maintenance", "checkpoints"],
         "notes": None,
     },
-
     "context": {
         "operation": "context",
         "tool": "rka_query",
@@ -234,7 +375,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["status", "summarize", "search"],
         "notes": None,
     },
-
     "search": {
         "operation": "search",
         "tool": "rka_query",
@@ -249,8 +389,13 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "optional_fields": ["limit", "filters"],
         "enums": {
             "entity_types": [
-                "journal", "decision", "literature", "mission",
-                "claim", "cluster", "checkpoint",
+                "journal",
+                "decision",
+                "literature",
+                "mission",
+                "claim",
+                "cluster",
+                "checkpoint",
             ],
         },
         "examples": [
@@ -267,7 +412,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["multi_hop", "context", "entity"],
         "notes": "Pass 2-4 keyword terms; longer queries reduce recall.",
     },
-
     "entity": {
         "operation": "entity",
         "tool": "rka_query",
@@ -291,7 +435,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["provenance", "search"],
         "notes": "Entity prefix is auto-routed (jrn_, dec_, lit_, mis_, clm_, ecl_, chk_).",
     },
-
     "journal": {
         "operation": "journal",
         "tool": "rka_query",
@@ -326,7 +469,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["entity", "search", "record_note"],
         "notes": None,
     },
-
     "literature": {
         "operation": "literature",
         "tool": "rka_query",
@@ -353,7 +495,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["entity", "record_literature"],
         "notes": None,
     },
-
     "mission": {
         "operation": "mission",
         "tool": "rka_query",
@@ -381,7 +522,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["report", "create_mission", "update_mission"],
         "notes": "Omit `id` to auto-locate the most recent active or pending mission.",
     },
-
     "report": {
         "operation": "report",
         "tool": "rka_query",
@@ -405,7 +545,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["mission", "submit_report"],
         "notes": "`id` is the mission_id, not a report_id.",
     },
-
     "checkpoints": {
         "operation": "checkpoints",
         "tool": "rka_query",
@@ -430,11 +569,12 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "submit_checkpoint", "resolve_checkpoint", "entity",
+            "submit_checkpoint",
+            "resolve_checkpoint",
+            "entity",
         ],
         "notes": None,
     },
-
     "decision_tree": {
         "operation": "decision_tree",
         "tool": "rka_query",
@@ -461,7 +601,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["entity", "graph", "research_map"],
         "notes": None,
     },
-
     "calibration_metrics": {
         "operation": "calibration_metrics",
         "tool": "rka_query",
@@ -484,7 +623,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["record_outcome"],
         "notes": None,
     },
-
     "hooks": {
         "operation": "hooks",
         "tool": "rka_query",
@@ -492,8 +630,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "role_tag": "ANY",
         "summary": "List configured hooks.",
         "signature": (
-            "rka_query(operation='hooks', *, project_id, "
-            "filters={'event', 'enabled_only'})"
+            "rka_query(operation='hooks', *, project_id, filters={'event', 'enabled_only'})"
         ),
         "required_fields": ["project_id"],
         "optional_fields": ["filters"],
@@ -505,11 +642,13 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "hook_executions", "hook_add", "hook_enable", "hook_disable",
+            "hook_executions",
+            "hook_add",
+            "hook_enable",
+            "hook_disable",
         ],
         "notes": None,
     },
-
     "hook_executions": {
         "operation": "hook_executions",
         "tool": "rka_query",
@@ -535,7 +674,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["hooks"],
         "notes": None,
     },
-
     "brain_notifications": {
         "operation": "brain_notifications",
         "tool": "rka_query",
@@ -561,7 +699,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["brain_notifications_clear"],
         "notes": None,
     },
-
     "research_map": {
         "operation": "research_map",
         "tool": "rka_query",
@@ -584,7 +721,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["clusters", "claims", "decision_tree"],
         "notes": None,
     },
-
     "review_queue": {
         "operation": "review_queue",
         "tool": "rka_query",
@@ -611,7 +747,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["review_claims", "review_cluster"],
         "notes": None,
     },
-
     "clusters": {
         "operation": "clusters",
         "tool": "rka_query",
@@ -636,12 +771,13 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "claims", "create_cluster", "review_cluster",
+            "claims",
+            "create_cluster",
+            "review_cluster",
             "assign_claims_to_cluster",
         ],
         "notes": None,
     },
-
     "claims": {
         "operation": "claims",
         "tool": "rka_query",
@@ -667,14 +803,38 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "clusters", "extract_claims", "review_claims",
+            "clusters",
+            "extract_claims",
+            "review_claims",
         ],
         "notes": (
             "verified filters source-grounding fidelity. evidence_status "
             "filters the independent scientific evidence assessment."
         ),
     },
-
+    "claim_scope": {
+        "operation": "claim_scope",
+        "tool": "rka_query",
+        "category": "claims",
+        "role_tag": "ANY",
+        "summary": "Fetch immutable scope history and readiness for one claim.",
+        "signature": "rka_query(operation='claim_scope', *, project_id, id)",
+        "required_fields": ["project_id", "id"],
+        "optional_fields": [],
+        "enums": _e("claim_scope_readiness"),
+        "examples": [
+            {
+                "description": "Inspect the current scope and prior revisions.",
+                "call": {
+                    "operation": "claim_scope",
+                    "project_id": "prj_01ABC...",
+                    "id": "clm_01XYZ...",
+                },
+            },
+        ],
+        "related_operations": ["claims", "set_claim_scope"],
+        "notes": "Legacy claims return readiness=missing; no scope is invented.",
+    },
     "interpretation_candidates": {
         "operation": "interpretation_candidates",
         "tool": "rka_query",
@@ -720,7 +880,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ],
         "notes": "Candidates are not canonical claims or scientific support.",
     },
-
     "manuscript": {
         "operation": "manuscript",
         "tool": "rka_query",
@@ -742,26 +901,22 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "register_manuscript", "create_manuscript", "manuscript_context",
+            "register_manuscript",
+            "create_manuscript",
+            "manuscript_context",
         ],
         "notes": (
             "Accepts canonical man_ IDs and compatibility jrn_ aliases. "
             "Legacy-ID responses include canonical_id and deprecation metadata."
         ),
     },
-
     "manuscript_reference_manifest": {
         "operation": "manuscript_reference_manifest",
         "tool": "rka_query",
         "category": "manuscript",
         "role_tag": "ANY",
-        "summary": (
-            "Read the authoritative citation-key membership and validation state."
-        ),
-        "signature": (
-            "rka_query(operation='manuscript_reference_manifest', *, "
-            "project_id, id)"
-        ),
+        "summary": ("Read the authoritative citation-key membership and validation state."),
+        "signature": ("rka_query(operation='manuscript_reference_manifest', *, project_id, id)"),
         "required_fields": ["project_id", "id"],
         "optional_fields": [],
         "enums": {},
@@ -787,7 +942,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "cannot authorize a citation."
         ),
     },
-
     "reference_validation_status": {
         "operation": "reference_validation_status",
         "tool": "rka_query",
@@ -819,7 +973,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "cross-scope jobs return 404."
         ),
     },
-
     "resolve_entities": {
         "operation": "resolve_entities",
         "tool": "rka_query",
@@ -850,17 +1003,13 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "records are reported opaquely and never returned as resolved."
         ),
     },
-
     "changes_since": {
         "operation": "changes_since",
         "tool": "rka_query",
         "category": "maintenance",
         "role_tag": "ANY",
         "summary": "Page the durable project-scoped semantic change ledger.",
-        "signature": (
-            "rka_query(operation='changes_since', *, project_id, cursor=0, "
-            "limit=100)"
-        ),
+        "signature": ("rka_query(operation='changes_since', *, project_id, cursor=0, limit=100)"),
         "required_fields": ["project_id"],
         "optional_fields": ["cursor", "limit"],
         "enums": {},
@@ -881,16 +1030,13 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "next_cursor while has_more is true; cursors are project scoped."
         ),
     },
-
     "manuscript_context": {
         "operation": "manuscript_context",
         "tool": "rka_query",
         "category": "manuscript",
         "role_tag": "ANY",
         "summary": "Read the authoritative native manuscript aggregate.",
-        "signature": (
-            "rka_query(operation='manuscript_context', *, project_id, id)"
-        ),
+        "signature": ("rka_query(operation='manuscript_context', *, project_id, id)"),
         "required_fields": ["project_id", "id"],
         "optional_fields": [],
         "enums": {},
@@ -905,12 +1051,13 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "manuscript", "manuscript_readiness", "manuscript_spine",
+            "manuscript",
+            "manuscript_readiness",
+            "manuscript_spine",
             "manuscript_writing_candidates",
         ],
         "notes": "RKA is authoritative; Writer files are projections.",
     },
-
     "manuscript_readiness": {
         "operation": "manuscript_readiness",
         "tool": "rka_query",
@@ -936,23 +1083,21 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "transition_manuscript_phase", "manuscript_context",
+            "transition_manuscript_phase",
+            "manuscript_context",
         ],
         "notes": (
             "Readiness is mechanical and evidence-linked; it does not infer "
             "scientific validity or PI ratification."
         ),
     },
-
     "manuscript_spine": {
         "operation": "manuscript_spine",
         "tool": "rka_query",
         "category": "manuscript",
         "role_tag": "ANY",
         "summary": "Export the deterministic Writer projection of the RKA spine.",
-        "signature": (
-            "rka_query(operation='manuscript_spine', *, project_id, id)"
-        ),
+        "signature": ("rka_query(operation='manuscript_spine', *, project_id, id)"),
         "required_fields": ["project_id", "id"],
         "optional_fields": [],
         "enums": {},
@@ -967,32 +1112,27 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "upsert_argument_spine", "manuscript_context",
+            "upsert_argument_spine",
+            "manuscript_context",
         ],
         "notes": "The export is a cache projection, not an independent store.",
     },
-
     "manuscript_writing_candidates": {
         "operation": "manuscript_writing_candidates",
         "tool": "rka_query",
         "category": "manuscript",
         "role_tag": "ANY",
         "summary": (
-            "Discover writing candidates through reviewed clusters and "
-            "research questions."
+            "Discover writing candidates through reviewed clusters and research questions."
         ),
-        "signature": (
-            "rka_query(operation='manuscript_writing_candidates', *, "
-            "project_id, id)"
-        ),
+        "signature": ("rka_query(operation='manuscript_writing_candidates', *, project_id, id)"),
         "required_fields": ["project_id", "id"],
         "optional_fields": [],
         "enums": {},
         "examples": [
             {
                 "description": (
-                    "Inspect smoothed, unratified candidates before building "
-                    "the manuscript spine."
+                    "Inspect smoothed, unratified candidates before building the manuscript spine."
                 ),
                 "call": {
                     "operation": "manuscript_writing_candidates",
@@ -1013,7 +1153,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "still requires PI selection, exact wording, and ratification."
         ),
     },
-
     "manuscript_impact": {
         "operation": "manuscript_impact",
         "tool": "rka_query",
@@ -1021,8 +1160,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "role_tag": "ANY",
         "summary": "Map changed dependencies to manuscript claims and units.",
         "signature": (
-            "rka_query(operation='manuscript_impact', *, project_id, id, "
-            "since_cursor=0, limit=100)"
+            "rka_query(operation='manuscript_impact', *, project_id, id, since_cursor=0, limit=100)"
         ),
         "required_fields": ["project_id", "id"],
         "optional_fields": ["since_cursor", "limit"],
@@ -1040,14 +1178,15 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "changes_since", "manuscript_context", "manuscript_spine",
+            "changes_since",
+            "manuscript_context",
+            "manuscript_spine",
         ],
         "notes": (
             "Returns next_cursor/latest_cursor/has_more even when one page has "
             "no relevant changes. Continue until has_more is false."
         ),
     },
-
     "graph": {
         "operation": "graph",
         "tool": "rka_query",
@@ -1072,11 +1211,12 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "ego_graph", "graph_stats", "graph_mermaid",
+            "ego_graph",
+            "graph_stats",
+            "graph_mermaid",
         ],
         "notes": None,
     },
-
     "ego_graph": {
         "operation": "ego_graph",
         "tool": "rka_query",
@@ -1084,8 +1224,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "role_tag": "ANY",
         "summary": "Local neighborhood graph centered on one entity.",
         "signature": (
-            "rka_query(operation='ego_graph', *, project_id, id, "
-            "filters={'depth': int})"
+            "rka_query(operation='ego_graph', *, project_id, id, filters={'depth': int})"
         ),
         "required_fields": ["project_id", "id"],
         "optional_fields": ["filters"],
@@ -1104,7 +1243,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["graph", "provenance"],
         "notes": None,
     },
-
     "graph_stats": {
         "operation": "graph_stats",
         "tool": "rka_query",
@@ -1127,7 +1265,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["graph"],
         "notes": None,
     },
-
     "graph_mermaid": {
         "operation": "graph_mermaid",
         "tool": "rka_query",
@@ -1135,8 +1272,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "role_tag": "ANY",
         "summary": "Render the decision tree as Mermaid graph syntax.",
         "signature": (
-            "rka_query(operation='graph_mermaid', *, project_id, "
-            "filters={'phase', 'active_only'})"
+            "rka_query(operation='graph_mermaid', *, project_id, filters={'phase', 'active_only'})"
         ),
         "required_fields": ["project_id"],
         "optional_fields": ["filters"],
@@ -1154,7 +1290,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["graph", "decision_tree"],
         "notes": None,
     },
-
     "provenance": {
         "operation": "provenance",
         "tool": "rka_query",
@@ -1182,7 +1317,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["ego_graph", "entity"],
         "notes": None,
     },
-
     "multi_hop": {
         "operation": "multi_hop",
         "tool": "rka_query",
@@ -1210,7 +1344,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["search", "provenance"],
         "notes": "Pass `filters.seeds=[...]` to override the query-based seeding.",
     },
-
     "collect_report_context": {
         "operation": "collect_report_context",
         "tool": "rka_query",
@@ -1246,10 +1379,13 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
                     ),
                     "filters": {
                         "angle_queries": [
-                            "pluggable embeddings", "fastembed",
-                            "embedding config", "dimension mismatch",
+                            "pluggable embeddings",
+                            "fastembed",
+                            "embedding config",
+                            "dimension mismatch",
                         ],
-                        "max_depth": 2, "max_nodes": 60,
+                        "max_depth": 2,
+                        "max_nodes": 60,
                     },
                 },
             },
@@ -1261,7 +1397,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "verify borderline nodes by content, re-search thin dimensions."
         ),
     },
-
     "staleness_impact": {
         "operation": "staleness_impact",
         "tool": "rka_query",
@@ -1272,8 +1407,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "reasoning rests on it, via dependent-direction links."
         ),
         "signature": (
-            "rka_query(operation='staleness_impact', *, project_id, id, "
-            "filters={'max_depth': 3})"
+            "rka_query(operation='staleness_impact', *, project_id, id, filters={'max_depth': 3})"
         ),
         "required_fields": ["project_id", "id"],
         "optional_fields": ["filters"],
@@ -1291,7 +1425,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["ego_graph", "multi_hop", "freshness"],
         "notes": "Raw observations (produced links) are immutable and excluded.",
     },
-
     "mission_guard": {
         "operation": "mission_guard",
         "tool": "rka_query",
@@ -1318,7 +1451,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["mission", "context", "contradictions"],
         "notes": "Call alongside mission context; warnings list approaches already falsified.",
     },
-
     "belief_as_of": {
         "operation": "belief_as_of",
         "tool": "rka_query",
@@ -1348,7 +1480,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "retraction transitions are approximated by updated_at."
         ),
     },
-
     "summarize": {
         "operation": "summarize",
         "tool": "rka_query",
@@ -1375,7 +1506,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["generate_summary", "context"],
         "notes": None,
     },
-
     "generate_summary": {
         "operation": "generate_summary",
         "tool": "rka_query",
@@ -1409,7 +1539,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "until it is rewired through the orchestrator."
         ),
     },
-
     "evidence": {
         "operation": "evidence",
         "tool": "rka_query",
@@ -1439,7 +1568,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["clusters", "claims", "advance_rq"],
         "notes": "`id` is the research_question_id (stored as a decision id with kind='research_question').",
     },
-
     "freshness": {
         "operation": "freshness",
         "tool": "rka_query",
@@ -1447,8 +1575,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "role_tag": "BRAIN",
         "summary": "Check freshness/staleness of claims and clusters.",
         "signature": (
-            "rka_query(operation='freshness', *, project_id, "
-            "filters={'days_threshold': int})"
+            "rka_query(operation='freshness', *, project_id, filters={'days_threshold': int})"
         ),
         "required_fields": ["project_id"],
         "optional_fields": ["filters"],
@@ -1466,7 +1593,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["flag_stale", "pending_maintenance"],
         "notes": None,
     },
-
     "contradictions": {
         "operation": "contradictions",
         "tool": "rka_query",
@@ -1493,7 +1619,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["resolve_contradiction"],
         "notes": None,
     },
-
     "integrity": {
         "operation": "integrity",
         "tool": "rka_query",
@@ -1516,7 +1641,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["pending_maintenance"],
         "notes": None,
     },
-
     "pending_maintenance": {
         "operation": "pending_maintenance",
         "tool": "rka_query",
@@ -1539,7 +1663,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["integrity", "freshness", "contradictions"],
         "notes": None,
     },
-
     "changelog": {
         "operation": "changelog",
         "tool": "rka_query",
@@ -1547,8 +1670,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "role_tag": "ANY",
         "summary": "Project changelog since a given date.",
         "signature": (
-            "rka_query(operation='changelog', *, project_id, limit=50, "
-            "filters={'since': ISO8601})"
+            "rka_query(operation='changelog', *, project_id, limit=50, filters={'since': ISO8601})"
         ),
         "required_fields": ["project_id", "filters"],
         "optional_fields": ["limit"],
@@ -1566,7 +1688,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["status"],
         "notes": "`filters.since` is REQUIRED.",
     },
-
     "bootstrap_review": {
         "operation": "bootstrap_review",
         "tool": "rka_query",
@@ -1590,7 +1711,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["bootstrap_workspace", "workspace_scan"],
         "notes": "`id` is the scan_id (scn_...).",
     },
-
     "workspace_tree": {
         "operation": "workspace_tree",
         "tool": "rka_query",
@@ -1620,7 +1740,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["workspace_scan"],
         "notes": None,
     },
-
     "workspace_scan": {
         "operation": "workspace_scan",
         "tool": "rka_query",
@@ -1634,7 +1753,9 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "required_fields": ["project_id", "filters"],
         "optional_fields": [
-            "ignore_patterns", "max_file_size_mb", "use_llm",
+            "ignore_patterns",
+            "max_file_size_mb",
+            "use_llm",
         ],
         "enums": {},
         "examples": [
@@ -1653,7 +1774,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["workspace_tree", "bootstrap_workspace"],
         "notes": None,
     },
-
     "list_projects": {
         "operation": "list_projects",
         "tool": "rka_query",
@@ -1673,7 +1793,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["status", "create_project"],
         "notes": "UNSCOPED — does not require project_id.",
     },
-
     "health": {
         "operation": "health",
         "tool": "rka_query",
@@ -1693,13 +1812,10 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["status"],
         "notes": "UNSCOPED.",
     },
-
     # =====================================================================
     # rka_execute — write/lifecycle operations
     # =====================================================================
-
     # --- journal / notes ------------------------------------------------
-
     "record_note": {
         "operation": "record_note",
         "tool": "rka_execute",
@@ -1716,9 +1832,17 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "required_fields": ["project_id", "content"],
         "optional_fields": [
-            "source", "type", "confidence", "importance",
-            "verbatim_input", "phase", "tags", "summary", "status",
-            "pinned", "provenance",
+            "source",
+            "type",
+            "confidence",
+            "importance",
+            "verbatim_input",
+            "phase",
+            "tags",
+            "summary",
+            "status",
+            "pinned",
+            "provenance",
         ],
         "enums": _e("source", "note_type", "confidence", "importance"),
         "examples": [
@@ -1747,14 +1871,15 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "update_note", "ingest_document", "record_decision",
+            "update_note",
+            "ingest_document",
+            "record_decision",
         ],
         "notes": (
             "Phase-X²' rule: source='pi' REQUIRES verbatim_input. The "
             "verb rejects calls without it pre-flight."
         ),
     },
-
     "ingest_document": {
         "operation": "ingest_document",
         "tool": "rka_execute",
@@ -1768,8 +1893,12 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "required_fields": ["project_id", "content"],
         "optional_fields": [
-            "source", "default_type", "split_by_headings",
-            "phase", "tags", "provenance",
+            "source",
+            "default_type",
+            "split_by_headings",
+            "phase",
+            "tags",
+            "provenance",
         ],
         "enums": _e("ingest_source", "note_type"),
         "examples": [
@@ -1787,7 +1916,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["record_note", "batch_import"],
         "notes": None,
     },
-
     "update_note": {
         "operation": "update_note",
         "tool": "rka_execute",
@@ -1802,9 +1930,17 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "required_fields": ["project_id", "id"],
         "optional_fields": [
-            "content", "type", "confidence", "importance",
-            "tags", "phase", "verbatim_input", "source",
-            "related_decisions", "related_literature", "related_mission",
+            "content",
+            "type",
+            "confidence",
+            "importance",
+            "tags",
+            "phase",
+            "verbatim_input",
+            "source",
+            "related_decisions",
+            "related_literature",
+            "related_mission",
         ],
         "enums": _e("confidence", "importance", "source", "note_type"),
         "examples": [
@@ -1821,9 +1957,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["record_note", "bulk_update"],
         "notes": None,
     },
-
     # --- decisions ------------------------------------------------------
-
     "record_decision": {
         "operation": "record_decision",
         "tool": "rka_execute",
@@ -1838,12 +1972,24 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "related_literature=None, assumptions=None)"
         ),
         "required_fields": [
-            "project_id", "question", "chosen", "rationale",
-            "decided_by", "kind", "related_journal", "phase",
+            "project_id",
+            "question",
+            "chosen",
+            "rationale",
+            "decided_by",
+            "kind",
+            "related_journal",
+            "phase",
         ],
         "optional_fields": [
-            "options", "supersedes_decision_id", "confidence", "tags",
-            "parent_id", "related_literature", "related_missions", "status",
+            "options",
+            "supersedes_decision_id",
+            "confidence",
+            "tags",
+            "parent_id",
+            "related_literature",
+            "related_missions",
+            "status",
             "assumptions",
         ],
         "enums": _e("decided_by", "decision_kind", "confidence"),
@@ -1864,7 +2010,9 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "update_decision", "supersede_decision", "present_decision",
+            "update_decision",
+            "supersede_decision",
+            "present_decision",
             "record_pi_selection",
         ],
         "notes": (
@@ -1873,7 +2021,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "valid; use 'verified' or 'tested'."
         ),
     },
-
     "update_decision": {
         "operation": "update_decision",
         "tool": "rka_execute",
@@ -1889,9 +2036,18 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "required_fields": ["project_id", "id"],
         "optional_fields": [
-            "status", "chosen", "rationale", "kind", "related_journal",
-            "parent_id", "related_literature", "related_missions",
-            "phase", "tags", "assumptions", "abandonment_reason",
+            "status",
+            "chosen",
+            "rationale",
+            "kind",
+            "related_journal",
+            "parent_id",
+            "related_literature",
+            "related_missions",
+            "phase",
+            "tags",
+            "assumptions",
+            "abandonment_reason",
         ],
         "enums": _e("decision_kind"),
         "examples": [
@@ -1906,11 +2062,11 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "record_decision", "supersede_decision",
+            "record_decision",
+            "supersede_decision",
         ],
         "notes": None,
     },
-
     "supersede_decision": {
         "operation": "supersede_decision",
         "tool": "rka_execute",
@@ -1923,8 +2079,12 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "decided_by='brain', phase='', kind='decision')"
         ),
         "required_fields": [
-            "project_id", "old_decision_id",
-            "question", "chosen", "rationale", "related_journal",
+            "project_id",
+            "old_decision_id",
+            "question",
+            "chosen",
+            "rationale",
+            "related_journal",
         ],
         "optional_fields": ["decided_by", "phase", "kind"],
         "enums": _e("decided_by", "decision_kind"),
@@ -1950,7 +2110,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "supersedes_decision_id='dec_...')."
         ),
     },
-
     "present_decision": {
         "operation": "present_decision",
         "tool": "rka_execute",
@@ -1962,7 +2121,10 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "decision_id, confirmation_brief, options, pi_preference=None)"
         ),
         "required_fields": [
-            "project_id", "decision_id", "confirmation_brief", "options",
+            "project_id",
+            "decision_id",
+            "confirmation_brief",
+            "options",
         ],
         "optional_fields": ["pi_preference"],
         "enums": {},
@@ -1988,7 +2150,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "direct presentation."
         ),
     },
-
     "record_pi_selection": {
         "operation": "record_pi_selection",
         "tool": "rka_execute",
@@ -2017,7 +2178,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["present_decision"],
         "notes": None,
     },
-
     "record_outcome": {
         "operation": "record_outcome",
         "tool": "rka_execute",
@@ -2046,9 +2206,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["calibration_metrics", "record_decision"],
         "notes": None,
     },
-
     # --- literature -----------------------------------------------------
-
     "record_literature": {
         "operation": "record_literature",
         "tool": "rka_execute",
@@ -2063,8 +2221,16 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "required_fields": ["project_id"],
         "optional_fields": [
-            "title", "authors", "year", "venue", "doi", "url", "abstract",
-            "status", "tags", "related_decisions",
+            "title",
+            "authors",
+            "year",
+            "venue",
+            "doi",
+            "url",
+            "abstract",
+            "status",
+            "tags",
+            "related_decisions",
         ],
         "enums": _e("lit_status"),
         "examples": [
@@ -2080,12 +2246,13 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "update_literature", "import_bibtex", "enrich_doi",
+            "update_literature",
+            "import_bibtex",
+            "enrich_doi",
             "link_literature_to_zotero",
         ],
         "notes": "At least one of `title` or `doi` is required.",
     },
-
     "update_literature": {
         "operation": "update_literature",
         "tool": "rka_execute",
@@ -2102,10 +2269,23 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "required_fields": ["project_id", "id"],
         "optional_fields": [
-            "title", "authors", "year", "venue", "doi", "url",
-            "bibtex", "pdf_path", "abstract", "status", "key_findings",
-            "methodology_notes", "relevance", "relevance_score",
-            "related_decisions", "notes", "tags",
+            "title",
+            "authors",
+            "year",
+            "venue",
+            "doi",
+            "url",
+            "bibtex",
+            "pdf_path",
+            "abstract",
+            "status",
+            "key_findings",
+            "methodology_notes",
+            "relevance",
+            "relevance_score",
+            "related_decisions",
+            "notes",
+            "tags",
         ],
         "enums": _e("lit_status"),
         "examples": [
@@ -2123,7 +2303,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["record_literature", "process_paper"],
         "notes": None,
     },
-
     "import_bibtex": {
         "operation": "import_bibtex",
         "tool": "rka_execute",
@@ -2150,16 +2329,13 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["record_literature", "batch_import"],
         "notes": None,
     },
-
     "enrich_doi": {
         "operation": "enrich_doi",
         "tool": "rka_execute",
         "category": "literature",
         "role_tag": "ANY",
         "summary": "Enrich a literature entry's metadata from its DOI.",
-        "signature": (
-            "rka_execute(operation='enrich_doi', *, project_id, lit_id)"
-        ),
+        "signature": ("rka_execute(operation='enrich_doi', *, project_id, lit_id)"),
         "required_fields": ["project_id", "lit_id"],
         "optional_fields": [],
         "enums": {},
@@ -2176,7 +2352,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["record_literature", "update_literature"],
         "notes": None,
     },
-
     "link_literature_to_zotero": {
         "operation": "link_literature_to_zotero",
         "tool": "rka_execute",
@@ -2203,7 +2378,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["record_literature", "update_literature"],
         "notes": None,
     },
-
     "process_paper": {
         "operation": "process_paper",
         "tool": "rka_execute",
@@ -2232,7 +2406,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["update_literature", "extract_claims"],
         "notes": None,
     },
-
     "validate_reference": {
         "operation": "validate_reference",
         "tool": "rka_execute",
@@ -2270,7 +2443,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "a completed job carries the immutable validation result."
         ),
     },
-
     "batch_import": {
         "operation": "batch_import",
         "tool": "rka_execute",
@@ -2278,8 +2450,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "role_tag": "ANY",
         "summary": "Bulk import mixed entity types in one call.",
         "signature": (
-            "rka_execute(operation='batch_import', *, project_id, "
-            "entries, actor='system')"
+            "rka_execute(operation='batch_import', *, project_id, entries, actor='system')"
         ),
         "required_fields": ["project_id", "entries"],
         "optional_fields": ["actor"],
@@ -2301,7 +2472,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "(system is the canonical value for programmatic ingestion)."
         ),
     },
-
     "register_manuscript": {
         "operation": "register_manuscript",
         "tool": "rka_execute",
@@ -2327,14 +2497,15 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "manuscript", "create_manuscript", "validate_reference",
+            "manuscript",
+            "create_manuscript",
+            "validate_reference",
         ],
         "notes": (
             "Compatibility operation. The response contains deprecated jrn_ "
             "id plus canonical man_ id; new callers should create_manuscript."
         ),
     },
-
     "create_manuscript": {
         "operation": "create_manuscript",
         "tool": "rka_execute",
@@ -2349,7 +2520,11 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "required_fields": ["project_id", "title"],
         "optional_fields": [
-            "abstract", "venue", "phase", "state", "workspace_ref",
+            "abstract",
+            "venue",
+            "phase",
+            "state",
+            "workspace_ref",
             "legacy_journal_id",
         ],
         "enums": {
@@ -2368,7 +2543,9 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "update_manuscript", "upsert_argument_spine", "manuscript_context",
+            "update_manuscript",
+            "upsert_argument_spine",
+            "manuscript_context",
         ],
         "notes": (
             "phase and state are explicit typed fields whose only accepted "
@@ -2376,7 +2553,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "PI ratification."
         ),
     },
-
     "update_manuscript": {
         "operation": "update_manuscript",
         "tool": "rka_execute",
@@ -2389,7 +2565,10 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "required_fields": ["project_id", "id", "expected_revision"],
         "optional_fields": [
-            "title", "abstract", "venue", "workspace_ref",
+            "title",
+            "abstract",
+            "venue",
+            "workspace_ref",
         ],
         "enums": {},
         "examples": [
@@ -2411,7 +2590,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "Lifecycle phase/state changes require transition_manuscript_phase."
         ),
     },
-
     "upsert_argument_spine": {
         "operation": "upsert_argument_spine",
         "tool": "rka_execute",
@@ -2423,7 +2601,10 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "id, expected_revision, spine={'claims': [...], 'units': [...]})"
         ),
         "required_fields": [
-            "project_id", "id", "expected_revision", "spine",
+            "project_id",
+            "id",
+            "expected_revision",
+            "spine",
         ],
         "optional_fields": [],
         "enums": _e(
@@ -2474,7 +2655,8 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "ratify_manuscript_claim", "manuscript_spine",
+            "ratify_manuscript_claim",
+            "manuscript_spine",
             "manuscript_readiness",
         ],
         "notes": (
@@ -2482,7 +2664,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "omitted units are removed. Both claims and units lists are required."
         ),
     },
-
     "replace_manuscript_reference_manifest": {
         "operation": "replace_manuscript_reference_manifest",
         "tool": "rka_execute",
@@ -2495,7 +2676,10 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "{'citation_key', 'literature_id'}, ...])"
         ),
         "required_fields": [
-            "project_id", "id", "expected_revision", "members",
+            "project_id",
+            "id",
+            "expected_revision",
+            "members",
         ],
         "optional_fields": [],
         "enums": {},
@@ -2532,7 +2716,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "literature row must belong to the manuscript project."
         ),
     },
-
     "ratify_manuscript_claim": {
         "operation": "ratify_manuscript_claim",
         "tool": "rka_execute",
@@ -2545,7 +2728,11 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "ratified_at=None)"
         ),
         "required_fields": [
-            "project_id", "id", "claim_ref", "expected_revision", "decision_id",
+            "project_id",
+            "id",
+            "claim_ref",
+            "expected_revision",
+            "decision_id",
         ],
         "optional_fields": ["claim_version", "ratified_at"],
         "enums": {},
@@ -2563,7 +2750,8 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "record_decision", "upsert_argument_spine",
+            "record_decision",
+            "upsert_argument_spine",
             "record_verification_attestation",
         ],
         "notes": (
@@ -2571,7 +2759,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "Ratification is never inferred from notes or legacy tags."
         ),
     },
-
     "transition_manuscript_phase": {
         "operation": "transition_manuscript_phase",
         "tool": "rka_execute",
@@ -2584,7 +2771,10 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "target_state=None)"
         ),
         "required_fields": [
-            "project_id", "id", "expected_revision", "target_phase",
+            "project_id",
+            "id",
+            "expected_revision",
+            "target_phase",
         ],
         "optional_fields": ["target_state"],
         "enums": {
@@ -2604,11 +2794,11 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "manuscript_readiness", "create_manuscript_checkpoint",
+            "manuscript_readiness",
+            "create_manuscript_checkpoint",
         ],
         "notes": "The server rejects transitions with BLOCK or ERROR findings.",
     },
-
     "create_manuscript_checkpoint": {
         "operation": "create_manuscript_checkpoint",
         "tool": "rka_execute",
@@ -2621,7 +2811,10 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "supersedes_id=None)"
         ),
         "required_fields": [
-            "project_id", "id", "expected_revision", "kind",
+            "project_id",
+            "id",
+            "expected_revision",
+            "kind",
         ],
         "optional_fields": ["unit_id", "supersedes_id"],
         "enums": {"kind": list(_ENUMS["manuscript_checkpoint_kind"])},
@@ -2638,11 +2831,11 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "resolve_manuscript_checkpoint", "manuscript_readiness",
+            "resolve_manuscript_checkpoint",
+            "manuscript_readiness",
         ],
         "notes": "draft_section checkpoints require unit_id; other kinds forbid it.",
     },
-
     "resolve_manuscript_checkpoint": {
         "operation": "resolve_manuscript_checkpoint",
         "tool": "rka_execute",
@@ -2655,14 +2848,16 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "status, resolved_at)"
         ),
         "required_fields": [
-            "project_id", "checkpoint_id", "expected_revision", "decision_id",
-            "status", "resolved_at",
+            "project_id",
+            "checkpoint_id",
+            "expected_revision",
+            "decision_id",
+            "status",
+            "resolved_at",
         ],
         "optional_fields": [],
         "enums": {
-            "status": list(
-                _ENUMS["manuscript_checkpoint_resolution_status"]
-            ),
+            "status": list(_ENUMS["manuscript_checkpoint_resolution_status"]),
         },
         "examples": [
             {
@@ -2679,11 +2874,11 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "create_manuscript_checkpoint", "record_decision",
+            "create_manuscript_checkpoint",
+            "record_decision",
         ],
         "notes": "Only pending checkpoints can be resolved.",
     },
-
     "record_verification_attestation": {
         "operation": "record_verification_attestation",
         "tool": "rka_execute",
@@ -2700,22 +2895,30 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "validator_version=None)"
         ),
         "required_fields": [
-            "project_id", "id", "expected_revision", "claim_id",
-            "claim_version", "overall_verdict", "grounding_verdict",
-            "evidence_verdict", "contradiction_verdict", "currency_verdict",
-            "ratification_verdict", "unit_coverage_verdict",
-            "full_json_payload", "started_at", "completed_at",
+            "project_id",
+            "id",
+            "expected_revision",
+            "claim_id",
+            "claim_version",
+            "overall_verdict",
+            "grounding_verdict",
+            "evidence_verdict",
+            "contradiction_verdict",
+            "currency_verdict",
+            "ratification_verdict",
+            "unit_coverage_verdict",
+            "full_json_payload",
+            "started_at",
+            "completed_at",
         ],
         "optional_fields": [
-            "changelog_cursor", "dependency_snapshot", "validator_version",
+            "changelog_cursor",
+            "dependency_snapshot",
+            "validator_version",
         ],
         "enums": {
-            "overall_verdict": list(
-                _ENUMS["manuscript_verification_verdict"]
-            ),
-            "dimension_verdicts": list(
-                _ENUMS["manuscript_verification_dimension_verdict"]
-            ),
+            "overall_verdict": list(_ENUMS["manuscript_verification_verdict"]),
+            "dimension_verdicts": list(_ENUMS["manuscript_verification_dimension_verdict"]),
         },
         "examples": [
             {
@@ -2741,14 +2944,14 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "manuscript_readiness", "ratify_manuscript_claim",
+            "manuscript_readiness",
+            "ratify_manuscript_claim",
         ],
         "notes": (
             "Attestations are append-only. Per-dimension verdicts remain "
             "separate so a single pass/fail flag cannot hide the blocking cause."
         ),
     },
-
     "update_status": {
         "operation": "update_status",
         "tool": "rka_execute",
@@ -2761,7 +2964,10 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "required_fields": ["project_id"],
         "optional_fields": [
-            "current_phase", "summary", "blockers", "metrics",
+            "current_phase",
+            "summary",
+            "blockers",
+            "metrics",
         ],
         "enums": {},
         "examples": [
@@ -2778,16 +2984,13 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["status"],
         "notes": None,
     },
-
     "bulk_update": {
         "operation": "bulk_update",
         "tool": "rka_execute",
         "category": "core",
         "role_tag": "BRAIN",
         "summary": "Update many entities in one atomic call.",
-        "signature": (
-            "rka_execute(operation='bulk_update', *, project_id, updates)"
-        ),
+        "signature": ("rka_execute(operation='bulk_update', *, project_id, updates)"),
         "required_fields": ["project_id", "updates"],
         "optional_fields": [],
         "enums": {},
@@ -2807,9 +3010,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["update_note", "update_decision"],
         "notes": None,
     },
-
     # --- missions -------------------------------------------------------
-
     "create_mission": {
         "operation": "create_mission",
         "tool": "rka_execute",
@@ -2824,12 +3025,19 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "depends_on=None, tags=None)"
         ),
         "required_fields": [
-            "project_id", "objective", "motivated_by_decision",
+            "project_id",
+            "objective",
+            "motivated_by_decision",
         ],
         "optional_fields": [
-            "phase", "tasks", "context", "acceptance_criteria",
-            "scope_boundaries", "checkpoint_triggers",
-            "depends_on", "tags",
+            "phase",
+            "tasks",
+            "context",
+            "acceptance_criteria",
+            "scope_boundaries",
+            "checkpoint_triggers",
+            "depends_on",
+            "tags",
         ],
         "enums": {},
         "examples": [
@@ -2845,15 +3053,16 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "update_mission", "update_mission_status",
-            "submit_report", "mission",
+            "update_mission",
+            "update_mission_status",
+            "submit_report",
+            "mission",
         ],
         "notes": (
             "Provenance discipline: motivated_by_decision is REQUIRED "
             "to preserve the decision -> mission causality chain."
         ),
     },
-
     "update_mission": {
         "operation": "update_mission",
         "tool": "rka_execute",
@@ -2869,9 +3078,16 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "required_fields": ["project_id", "mission_id"],
         "optional_fields": [
-            "phase", "objective", "context", "acceptance_criteria",
-            "scope_boundaries", "checkpoint_triggers", "depends_on",
-            "parent_mission_id", "motivated_by_decision", "tags",
+            "phase",
+            "objective",
+            "context",
+            "acceptance_criteria",
+            "scope_boundaries",
+            "checkpoint_triggers",
+            "depends_on",
+            "parent_mission_id",
+            "motivated_by_decision",
+            "tags",
         ],
         "enums": {},
         "examples": [
@@ -2888,7 +3104,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["create_mission", "update_mission_status"],
         "notes": None,
     },
-
     "update_mission_status": {
         "operation": "update_mission_status",
         "tool": "rka_execute",
@@ -2919,7 +3134,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "Also: partial, blocked, cancelled."
         ),
     },
-
     "submit_report": {
         "operation": "submit_report",
         "tool": "rka_execute",
@@ -2933,11 +3147,17 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "recommended_next=None)"
         ),
         "required_fields": [
-            "project_id", "mission_id",
+            "project_id",
+            "mission_id",
         ],
         "optional_fields": [
-            "summary", "content", "findings", "anomalies", "questions",
-            "codebase_state", "recommended_next",
+            "summary",
+            "content",
+            "findings",
+            "anomalies",
+            "questions",
+            "codebase_state",
+            "recommended_next",
         ],
         "enums": {},
         "examples": [
@@ -2959,7 +3179,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "Phase-X²' adapter also accepts `content` as an alias."
         ),
     },
-
     "advance_rq": {
         "operation": "advance_rq",
         "tool": "rka_execute",
@@ -2988,9 +3207,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["evidence", "clusters"],
         "notes": None,
     },
-
     # --- checkpoints + gates -------------------------------------------
-
     "submit_checkpoint": {
         "operation": "submit_checkpoint",
         "tool": "rka_execute",
@@ -3004,11 +3221,18 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "recommendation=None, blocking=True)"
         ),
         "required_fields": [
-            "project_id", "mission_id", "type",
+            "project_id",
+            "mission_id",
+            "type",
         ],
         "optional_fields": [
-            "description", "content", "task_reference", "context", "options",
-            "recommendation", "blocking",
+            "description",
+            "content",
+            "task_reference",
+            "context",
+            "options",
+            "recommendation",
+            "blocking",
         ],
         "enums": _e("checkpoint_type"),
         "examples": [
@@ -3025,14 +3249,15 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "resolve_checkpoint", "checkpoints", "create_gate",
+            "resolve_checkpoint",
+            "checkpoints",
+            "create_gate",
         ],
         "notes": (
             "One of `description` or `content` is required. `description` is "
             "canonical; `content` is the legacy alias."
         ),
     },
-
     "resolve_checkpoint": {
         "operation": "resolve_checkpoint",
         "tool": "rka_execute",
@@ -3044,7 +3269,10 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "resolution, resolved_by, rationale=None, create_decision=False)"
         ),
         "required_fields": [
-            "project_id", "id", "resolution", "resolved_by",
+            "project_id",
+            "id",
+            "resolution",
+            "resolved_by",
         ],
         "optional_fields": ["rationale", "create_decision"],
         "enums": _e("resolved_by"),
@@ -3064,7 +3292,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["submit_checkpoint", "checkpoints"],
         "notes": None,
     },
-
     "create_gate": {
         "operation": "create_gate",
         "tool": "rka_execute",
@@ -3077,8 +3304,11 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "assumptions_to_verify=None)"
         ),
         "required_fields": [
-            "project_id", "mission_id", "gate_type",
-            "deliverables", "pass_criteria",
+            "project_id",
+            "mission_id",
+            "gate_type",
+            "deliverables",
+            "pass_criteria",
         ],
         "optional_fields": ["assumptions_to_verify"],
         "enums": _e("gate_type"),
@@ -3098,7 +3328,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["evaluate_gate"],
         "notes": None,
     },
-
     "evaluate_gate": {
         "operation": "evaluate_gate",
         "tool": "rka_execute",
@@ -3110,7 +3339,10 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "gate_id, verdict, notes, assumption_status=None)"
         ),
         "required_fields": [
-            "project_id", "gate_id", "verdict", "notes",
+            "project_id",
+            "gate_id",
+            "verdict",
+            "notes",
         ],
         "optional_fields": ["assumption_status"],
         "enums": _e("verdict"),
@@ -3129,19 +3361,14 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["create_gate"],
         "notes": None,
     },
-
     # --- claims / clusters ---------------------------------------------
-
     "extract_claims": {
         "operation": "extract_claims",
         "tool": "rka_execute",
         "category": "claims",
         "role_tag": "BRAIN",
         "summary": "Stage atomic interpretations from an existing entry.",
-        "signature": (
-            "rka_execute(operation='extract_claims', *, project_id, "
-            "entry_id, claims)"
-        ),
+        "signature": ("rka_execute(operation='extract_claims', *, project_id, entry_id, claims)"),
         "required_fields": ["project_id", "entry_id", "claims"],
         "optional_fields": [],
         "enums": _e("claim_type"),
@@ -3153,14 +3380,14 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
                     "project_id": "prj_01ABC...",
                     "entry_id": "jrn_01XYZ...",
                     "claims": [
-                        {"text": "Latency improves linearly.",
-                         "claim_type": "evidence"},
+                        {"text": "Latency improves linearly.", "claim_type": "evidence"},
                     ],
                 },
             },
         ],
         "related_operations": [
-            "interpretation_candidates", "triage_interpretation_candidate",
+            "interpretation_candidates",
+            "triage_interpretation_candidate",
             "claims",
         ],
         "notes": (
@@ -3168,7 +3395,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "not clm_ records; explicit reviewed promotion is required."
         ),
     },
-
     "create_interpretation_candidate": {
         "operation": "create_interpretation_candidate",
         "tool": "rka_execute",
@@ -3181,17 +3407,33 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "epistemic_kind, created_by, extraction_tool, ...)"
         ),
         "required_fields": [
-            "project_id", "source_type", "source_id", "locator_kind",
-            "statement", "epistemic_kind", "created_by", "extraction_tool",
+            "project_id",
+            "source_type",
+            "source_id",
+            "locator_kind",
+            "statement",
+            "epistemic_kind",
+            "created_by",
+            "extraction_tool",
         ],
         "optional_fields": [
-            "locator_start", "locator_end", "locator_value", "scope_conditions",
-            "uncertainty", "uncertainty_note", "falsifier",
-            "proposed_claim_type", "extraction_model",
+            "locator_start",
+            "locator_end",
+            "locator_value",
+            "scope_conditions",
+            "uncertainty",
+            "uncertainty_note",
+            "falsifier",
+            "proposed_claim_type",
+            "extraction_model",
         ],
         "enums": _e(
-            "interpretation_source", "interpretation_locator", "epistemic_kind",
-            "interpretation_actor", "interpretation_uncertainty", "claim_type",
+            "interpretation_source",
+            "interpretation_locator",
+            "epistemic_kind",
+            "interpretation_actor",
+            "interpretation_uncertainty",
+            "claim_type",
         ),
         "examples": [
             {
@@ -3213,12 +3455,12 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "interpretation_candidates", "add_interpretation_hint",
+            "interpretation_candidates",
+            "add_interpretation_hint",
             "triage_interpretation_candidate",
         ],
         "notes": "Creation never promotes a canonical claim.",
     },
-
     "add_interpretation_hint": {
         "operation": "add_interpretation_hint",
         "tool": "rka_execute",
@@ -3231,8 +3473,13 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "expected_revision, confidence=0.5)"
         ),
         "required_fields": [
-            "project_id", "id", "related_candidate_id", "kind", "rationale",
-            "created_by", "expected_revision",
+            "project_id",
+            "id",
+            "related_candidate_id",
+            "kind",
+            "rationale",
+            "created_by",
+            "expected_revision",
         ],
         "optional_fields": ["confidence"],
         "enums": _e("interpretation_hint_kind", "interpretation_actor"),
@@ -3254,7 +3501,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["interpretation_candidates"],
         "notes": "Hints inform review; they do not merge or reject candidates.",
     },
-
     "triage_interpretation_candidate": {
         "operation": "triage_interpretation_candidate",
         "tool": "rka_execute",
@@ -3266,11 +3512,18 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "project_id, id, action, expected_revision, actor, reason=None, ...)"
         ),
         "required_fields": [
-            "project_id", "id", "action", "expected_revision", "actor",
+            "project_id",
+            "id",
+            "action",
+            "expected_revision",
+            "actor",
         ],
         "optional_fields": [
-            "reason", "target_candidate_id", "target_entity_id",
-            "grounding_verified", "claim_confidence",
+            "reason",
+            "target_candidate_id",
+            "target_entity_id",
+            "grounding_verified",
+            "claim_confidence",
         ],
         "enums": _e("interpretation_triage_action", "interpretation_review_actor"),
         "examples": [
@@ -3294,7 +3547,79 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "status unassessed. Revoke preserves the claim and marks it stale."
         ),
     },
-
+    "set_claim_scope": {
+        "operation": "set_claim_scope",
+        "tool": "rka_execute",
+        "category": "claims",
+        "role_tag": "BRAIN",
+        "summary": "Append a versioned applicability contract to a canonical claim.",
+        "signature": (
+            "rka_execute(operation='set_claim_scope', *, project_id, claim_id, "
+            "expected_revision, actor, reason, conditions=[], ...)"
+        ),
+        "required_fields": [
+            "project_id",
+            "claim_id",
+            "expected_revision",
+            "actor",
+            "reason",
+        ],
+        "optional_fields": [
+            "conditions",
+            "uncertainty",
+            "uncertainty_note",
+            "extension_policy",
+            "allowed_extensions",
+            "prohibited_extensions",
+            "falsifier_status",
+            "falsifier",
+            "falsifier_rationale",
+            "disconfirming_claim_ids",
+            "review_status",
+        ],
+        "enums": _e(
+            "claim_scope_actor",
+            "claim_scope_uncertainty",
+            "claim_scope_extension_policy",
+            "claim_falsifier_status",
+            "claim_scope_review_status",
+            "claim_condition_kind",
+            "claim_condition_operator",
+        ),
+        "examples": [
+            {
+                "description": "Ratify a bounded empirical result scope.",
+                "call": {
+                    "operation": "set_claim_scope",
+                    "project_id": "prj_01ABC...",
+                    "claim_id": "clm_01XYZ...",
+                    "expected_revision": 0,
+                    "actor": "brain",
+                    "reason": "Reviewed against the source and evaluation design.",
+                    "conditions": [
+                        {
+                            "kind": "dataset",
+                            "key": "evaluation_dataset",
+                            "operator": "equals",
+                            "value": "Dataset A",
+                        },
+                    ],
+                    "uncertainty": "low",
+                    "extension_policy": "exact_only",
+                    "prohibited_extensions": ["other datasets without evidence"],
+                    "falsifier_status": "applicable",
+                    "falsifier": "Independent replication fails on Dataset A.",
+                    "review_status": "reviewed",
+                },
+            },
+        ],
+        "related_operations": ["claim_scope", "claims", "review_claims"],
+        "notes": (
+            "Reviewed contracts require typed conditions, resolved uncertainty, "
+            "an extension policy, prohibited extensions, and resolved falsifier "
+            "applicability. expected_revision prevents stale writes."
+        ),
+    },
     "review_claims": {
         "operation": "review_claims",
         "tool": "rka_execute",
@@ -3326,7 +3651,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "explicitly for scientific support; approve/reject never infer it."
         ),
     },
-
     "create_cluster": {
         "operation": "create_cluster",
         "tool": "rka_execute",
@@ -3340,7 +3664,10 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "required_fields": ["project_id", "label"],
         "optional_fields": [
-            "research_question_id", "synthesis", "confidence", "claim_ids",
+            "research_question_id",
+            "synthesis",
+            "confidence",
+            "claim_ids",
         ],
         "enums": _e("cluster_confidence"),
         "examples": [
@@ -3356,11 +3683,12 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "clusters", "assign_claims_to_cluster", "review_cluster",
+            "clusters",
+            "assign_claims_to_cluster",
+            "review_cluster",
         ],
         "notes": None,
     },
-
     "assign_claims_to_cluster": {
         "operation": "assign_claims_to_cluster",
         "tool": "rka_execute",
@@ -3386,11 +3714,12 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "create_cluster", "split_cluster", "merge_clusters",
+            "create_cluster",
+            "split_cluster",
+            "merge_clusters",
         ],
         "notes": None,
     },
-
     "split_cluster": {
         "operation": "split_cluster",
         "tool": "rka_execute",
@@ -3398,8 +3727,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "role_tag": "BRAIN",
         "summary": "Split a cluster into multiple smaller clusters.",
         "signature": (
-            "rka_execute(operation='split_cluster', *, project_id, "
-            "source_id, new_clusters)"
+            "rka_execute(operation='split_cluster', *, project_id, source_id, new_clusters)"
         ),
         "required_fields": ["project_id", "source_id", "new_clusters"],
         "optional_fields": [],
@@ -3419,11 +3747,11 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "merge_clusters", "assign_claims_to_cluster",
+            "merge_clusters",
+            "assign_claims_to_cluster",
         ],
         "notes": None,
     },
-
     "merge_clusters": {
         "operation": "merge_clusters",
         "tool": "rka_execute",
@@ -3452,7 +3780,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["split_cluster", "create_cluster"],
         "notes": None,
     },
-
     "review_cluster": {
         "operation": "review_cluster",
         "tool": "rka_execute",
@@ -3466,10 +3793,15 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "research_question_id=None)"
         ),
         "required_fields": [
-            "project_id", "cluster_id", "confidence", "synthesis",
+            "project_id",
+            "cluster_id",
+            "confidence",
+            "synthesis",
         ],
         "optional_fields": [
-            "gaps", "contradictions", "resolve_queue_items",
+            "gaps",
+            "contradictions",
+            "resolve_queue_items",
             "research_question_id",
         ],
         "enums": _e("cluster_confidence"),
@@ -3486,11 +3818,12 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "clusters", "review_claims", "resolve_contradiction",
+            "clusters",
+            "review_claims",
+            "resolve_contradiction",
         ],
         "notes": None,
     },
-
     "resolve_contradiction": {
         "operation": "resolve_contradiction",
         "tool": "rka_execute",
@@ -3521,9 +3854,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["review_cluster", "contradictions"],
         "notes": None,
     },
-
     # --- hooks ----------------------------------------------------------
-
     "hook_add": {
         "operation": "hook_add",
         "tool": "rka_execute",
@@ -3536,8 +3867,11 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "enabled=True, created_by='pi')"
         ),
         "required_fields": [
-            "project_id", "event", "handler_type",
-            "handler_config", "name",
+            "project_id",
+            "event",
+            "handler_type",
+            "handler_config",
+            "name",
         ],
         "optional_fields": ["enabled", "created_by"],
         "enums": {},
@@ -3555,20 +3889,20 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "hooks", "hook_enable", "hook_disable", "hook_delete",
+            "hooks",
+            "hook_enable",
+            "hook_disable",
+            "hook_delete",
         ],
         "notes": None,
     },
-
     "hook_enable": {
         "operation": "hook_enable",
         "tool": "rka_execute",
         "category": "hooks",
         "role_tag": "PI",
         "summary": "Enable a hook.",
-        "signature": (
-            "rka_execute(operation='hook_enable', *, project_id, hook_id)"
-        ),
+        "signature": ("rka_execute(operation='hook_enable', *, project_id, hook_id)"),
         "required_fields": ["project_id", "hook_id"],
         "optional_fields": [],
         "enums": {},
@@ -3585,16 +3919,13 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["hook_add", "hook_disable"],
         "notes": None,
     },
-
     "hook_disable": {
         "operation": "hook_disable",
         "tool": "rka_execute",
         "category": "hooks",
         "role_tag": "PI",
         "summary": "Disable a hook (preserves config).",
-        "signature": (
-            "rka_execute(operation='hook_disable', *, project_id, hook_id)"
-        ),
+        "signature": ("rka_execute(operation='hook_disable', *, project_id, hook_id)"),
         "required_fields": ["project_id", "hook_id"],
         "optional_fields": [],
         "enums": {},
@@ -3611,16 +3942,13 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["hook_enable", "hook_delete"],
         "notes": None,
     },
-
     "hook_delete": {
         "operation": "hook_delete",
         "tool": "rka_execute",
         "category": "hooks",
         "role_tag": "PI",
         "summary": "Permanently delete a hook.",
-        "signature": (
-            "rka_execute(operation='hook_delete', *, project_id, hook_id)"
-        ),
+        "signature": ("rka_execute(operation='hook_delete', *, project_id, hook_id)"),
         "required_fields": ["project_id", "hook_id"],
         "optional_fields": [],
         "enums": {},
@@ -3637,17 +3965,13 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["hook_disable"],
         "notes": None,
     },
-
     "brain_notifications_clear": {
         "operation": "brain_notifications_clear",
         "tool": "rka_execute",
         "category": "notifications",
         "role_tag": "BRAIN",
         "summary": "Clear Brain notifications by ID.",
-        "signature": (
-            "rka_execute(operation='brain_notifications_clear', *, "
-            "project_id, ids)"
-        ),
+        "signature": ("rka_execute(operation='brain_notifications_clear', *, project_id, ids)"),
         "required_fields": ["project_id", "ids"],
         "optional_fields": [],
         "enums": {},
@@ -3664,9 +3988,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["brain_notifications"],
         "notes": None,
     },
-
     # --- workspace + maintenance ---------------------------------------
-
     "bootstrap_workspace": {
         "operation": "bootstrap_workspace",
         "tool": "rka_execute",
@@ -3680,7 +4002,11 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "required_fields": ["project_id", "folder_path"],
         "optional_fields": [
-            "phase", "override_tags", "skip_files", "use_llm", "dry_run",
+            "phase",
+            "override_tags",
+            "skip_files",
+            "use_llm",
+            "dry_run",
         ],
         "enums": {},
         "examples": [
@@ -3695,11 +4021,12 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
-            "workspace_scan", "workspace_tree", "bootstrap_review",
+            "workspace_scan",
+            "workspace_tree",
+            "bootstrap_review",
         ],
         "notes": None,
     },
-
     "scan_workspace": {
         "operation": "scan_workspace",
         "tool": "rka_execute",
@@ -3713,7 +4040,9 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "required_fields": ["project_id", "folder_path"],
         "optional_fields": [
-            "ignore_patterns", "max_file_size_mb", "use_llm",
+            "ignore_patterns",
+            "max_file_size_mb",
+            "use_llm",
         ],
         "enums": {},
         "examples": [
@@ -3729,7 +4058,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["workspace_scan", "bootstrap_workspace"],
         "notes": None,
     },
-
     "flag_stale": {
         "operation": "flag_stale",
         "tool": "rka_execute",
@@ -3758,17 +4086,13 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["freshness", "eviction_sweep"],
         "notes": None,
     },
-
     "eviction_sweep": {
         "operation": "eviction_sweep",
         "tool": "rka_execute",
         "category": "maintenance",
         "role_tag": "BRAIN",
         "summary": "Evict knowledge per policy (defaults to dry_run).",
-        "signature": (
-            "rka_execute(operation='eviction_sweep', *, project_id, "
-            "dry_run=True)"
-        ),
+        "signature": ("rka_execute(operation='eviction_sweep', *, project_id, dry_run=True)"),
         "required_fields": ["project_id"],
         "optional_fields": ["dry_run"],
         "enums": {},
@@ -3785,19 +4109,14 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["flag_stale", "freshness"],
         "notes": None,
     },
-
     # --- session (unscoped + project lifecycle) ------------------------
-
     "create_project": {
         "operation": "create_project",
         "tool": "rka_execute",
         "category": "session",
         "role_tag": "PI",
         "summary": "Bootstrap a new RKA project (UNSCOPED — no project_id required).",
-        "signature": (
-            "rka_execute(operation='create_project', *, name, "
-            "description=None)"
-        ),
+        "signature": ("rka_execute(operation='create_project', *, name, description=None)"),
         "required_fields": ["name"],
         "optional_fields": ["description"],
         "enums": {},
@@ -3814,7 +4133,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["list_projects", "status"],
         "notes": "UNSCOPED — does not require project_id.",
     },
-
     "reset_session": {
         "operation": "reset_session",
         "tool": "rka_execute",
@@ -3834,16 +4152,13 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["status"],
         "notes": "UNSCOPED.",
     },
-
     "session_digest": {
         "operation": "session_digest",
         "tool": "rka_execute",
         "category": "session",
         "role_tag": "ANY",
         "summary": "Compact session summary (mutates session state).",
-        "signature": (
-            "rka_execute(operation='session_digest', *, project_id)"
-        ),
+        "signature": ("rka_execute(operation='session_digest', *, project_id)"),
         "required_fields": ["project_id"],
         "optional_fields": [],
         "enums": {},

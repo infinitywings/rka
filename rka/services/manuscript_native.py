@@ -28,6 +28,7 @@ from rka.models.manuscript_native import (
     ManuscriptUpdate,
 )
 from rka.services.base import BaseService, _now
+from rka.services.claims import ClaimService
 
 
 def _normalized_reference_doi(value: Any) -> str | None:
@@ -68,9 +69,7 @@ def _timestamp_is_strictly_after(later: Any, earlier: Any) -> bool:
     parsed_later = parse(later)
     parsed_earlier = parse(earlier)
     return bool(
-        parsed_later is not None
-        and parsed_earlier is not None
-        and parsed_later > parsed_earlier
+        parsed_later is not None and parsed_earlier is not None and parsed_later > parsed_earlier
     )
 
 
@@ -229,9 +228,7 @@ class NativeManuscriptService(BaseService):
         self._validate_actor(actor)
         lifecycle_fields = {"phase", "state"} & data.model_fields_set
         if lifecycle_fields and not allow_lifecycle:
-            raise ValueError(
-                "phase and state are lifecycle fields; use transition_phase"
-            )
+            raise ValueError("phase and state are lifecycle fields; use transition_phase")
         canonical_id = await self._require_id(manuscript_id)
         updates = data.model_dump(
             exclude={"expected_revision"},
@@ -252,9 +249,7 @@ class NativeManuscriptService(BaseService):
                 ],
             )
             if cursor.rowcount != 1:
-                await self._raise_revision_conflict(
-                    canonical_id, data.expected_revision
-                )
+                await self._raise_revision_conflict(canonical_id, data.expected_revision)
             if "venue" in updates:
                 await self._invalidate_resolved_checkpoints(
                     canonical_id,
@@ -290,18 +285,12 @@ class NativeManuscriptService(BaseService):
         async with self.db.transaction():
             current = await self.get(manuscript_id)
             if current is None:
-                raise ManuscriptNotFoundError(
-                    f"manuscript {manuscript_id!r} not found"
-                )
+                raise ManuscriptNotFoundError(f"manuscript {manuscript_id!r} not found")
             if current.phase not in self._PHASE_ORDER:
-                raise ValueError(
-                    f"current manuscript phase {current.phase!r} is not managed"
-                )
+                raise ValueError(f"current manuscript phase {current.phase!r} is not managed")
             current_index = self._PHASE_ORDER.index(current.phase)
             target_index = (
-                self._PHASE_ORDER.index(target_phase)
-                if target_phase in self._PHASE_ORDER
-                else -1
+                self._PHASE_ORDER.index(target_phase) if target_phase in self._PHASE_ORDER else -1
             )
             if target_index <= current_index:
                 raise ValueError(
@@ -310,15 +299,10 @@ class NativeManuscriptService(BaseService):
                 )
             if target_phase == "submitted":
                 if target_state not in {None, "submitted"}:
-                    raise ValueError(
-                        "transitioning to submitted may only set state='submitted'"
-                    )
+                    raise ValueError("transitioning to submitted may only set state='submitted'")
                 target_state = "submitted"
             elif target_state not in {None, "active"}:
-                raise ValueError(
-                    "pre-submission phase transitions may only retain "
-                    "state='active'"
-                )
+                raise ValueError("pre-submission phase transitions may only retain state='active'")
             readiness = await self.get_readiness(
                 manuscript_id,
                 target_phase=target_phase,
@@ -326,8 +310,7 @@ class NativeManuscriptService(BaseService):
             if not readiness["ready"]:
                 codes = sorted({item["code"] for item in readiness["findings"]})
                 raise ValueError(
-                    f"manuscript cannot transition to {target_phase!r}: "
-                    + ", ".join(codes)
+                    f"manuscript cannot transition to {target_phase!r}: " + ", ".join(codes)
                 )
             payload: dict[str, Any] = {
                 "expected_revision": expected_revision,
@@ -418,9 +401,7 @@ class NativeManuscriptService(BaseService):
             raise ValueError("provide exactly one of claim_id or local_key")
         async with self.db.transaction():
             await self._assert_revision(canonical_id, expected_revision)
-            claim = await self._find_claim(
-                canonical_id, claim_id=claim_id, local_key=local_key
-            )
+            claim = await self._find_claim(canonical_id, claim_id=claim_id, local_key=local_key)
             if claim is None:
                 raise ValueError("manuscript claim not found")
             version = claim_version or await self._latest_claim_version(claim["id"])
@@ -490,9 +471,7 @@ class NativeManuscriptService(BaseService):
         """Replace the active citation-key set without rewriting its history."""
         self._validate_actor(actor)
         canonical_id = await self._require_id(manuscript_id)
-        desired = {
-            member.citation_key: member.literature_id for member in data.members
-        }
+        desired = {member.citation_key: member.literature_id for member in data.members}
 
         async with self.db.transaction():
             await self._assert_revision(canonical_id, data.expected_revision)
@@ -512,8 +491,7 @@ class NativeManuscriptService(BaseService):
                 # Keep the project boundary opaque: a foreign row and a missing
                 # row produce the same caller-visible failure.
                 raise ValueError(
-                    "reference manifest contains literature that is not "
-                    "available in this project"
+                    "reference manifest contains literature that is not available in this project"
                 )
 
             active_rows = await self.db.fetchall(
@@ -525,8 +503,7 @@ class NativeManuscriptService(BaseService):
                 [canonical_id, self.project_id],
             )
             active_exact = {
-                (str(row["citation_key"]), str(row["literature_id"]))
-                for row in active_rows
+                (str(row["citation_key"]), str(row["literature_id"])) for row in active_rows
             }
             desired_exact = set(desired.items())
             changed = active_exact != desired_exact
@@ -591,26 +568,20 @@ class NativeManuscriptService(BaseService):
 
             return await self._get_reference_manifest_snapshot(canonical_id)
 
-    async def get_reference_manifest(
-        self, manuscript_id: str
-    ) -> dict[str, Any]:
+    async def get_reference_manifest(self, manuscript_id: str) -> dict[str, Any]:
         """Read the authoritative active citation set and validation currency."""
         async with self.db.transaction(write=False):
             canonical_id = await self._require_id(manuscript_id)
             return await self._get_reference_manifest_snapshot(canonical_id)
 
-    async def _get_reference_manifest_snapshot(
-        self, canonical_id: str
-    ) -> dict[str, Any]:
+    async def _get_reference_manifest_snapshot(self, canonical_id: str) -> dict[str, Any]:
         manuscript = await self.db.fetchone(
             """SELECT revision FROM manuscripts
                WHERE id = ? AND project_id = ?""",
             [canonical_id, self.project_id],
         )
         if manuscript is None:
-            raise ManuscriptNotFoundError(
-                f"manuscript {canonical_id!r} not found"
-            )
+            raise ManuscriptNotFoundError(f"manuscript {canonical_id!r} not found")
         rows = await self.db.fetchall(
             """WITH ranked_validations AS (
                    SELECT rv.*,
@@ -672,9 +643,7 @@ class NativeManuscriptService(BaseService):
             validation_status = row.pop("validation_status", None)
             retraction_enabled = row.pop("retraction_check_enabled", None)
             retraction_checked = row.pop("retraction_checked", None)
-            sources_confirmed = self._json_loads(
-                row.pop("validation_sources_confirmed", None), []
-            )
+            sources_confirmed = self._json_loads(row.pop("validation_sources_confirmed", None), [])
             pipeline_version = row.pop("validation_pipeline_version", None)
             completed_at = row.pop("validation_completed_at", None)
             literature_updated_at = row.get("literature_updated_at")
@@ -691,10 +660,7 @@ class NativeManuscriptService(BaseService):
                 validation_id
                 and identity_matches
                 and validation_status == "VERIFIED"
-                and (
-                    retraction_enabled != 1
-                    or retraction_checked == 1
-                )
+                and (retraction_enabled != 1 or retraction_checked == 1)
                 and row.get("literature_status") != "excluded"
                 and (
                     not literature_updated_at
@@ -726,12 +692,9 @@ class NativeManuscriptService(BaseService):
             "manuscript_id": canonical_id,
             "manuscript_revision": int(manuscript["revision"]),
             "members": members,
-            "active_citation_keys": [
-                str(member["citation_key"]) for member in members
-            ],
+            "active_citation_keys": [str(member["citation_key"]) for member in members],
             "approved_citation_keys": approved_keys,
-            "all_members_verified": bool(members)
-            and len(approved_keys) == len(members),
+            "all_members_verified": bool(members) and len(approved_keys) == len(members),
             "authoritative_source": "rka",
         }
 
@@ -767,8 +730,7 @@ class NativeManuscriptService(BaseService):
             )
             if data.supersedes_id is None and existing_head is not None:
                 raise ValueError(
-                    "an active checkpoint head already exists; set "
-                    "supersedes_id explicitly"
+                    "an active checkpoint head already exists; set supersedes_id explicitly"
                 )
             if data.supersedes_id is not None:
                 prior = await self.db.fetchone(
@@ -779,24 +741,12 @@ class NativeManuscriptService(BaseService):
                 )
                 if prior is None:
                     raise ValueError("superseded checkpoint is not in this manuscript")
-                if (
-                    prior["kind"] != data.kind
-                    or prior.get("unit_id") != data.unit_id
-                ):
-                    raise ValueError(
-                        "a checkpoint may supersede only the same kind and unit"
-                    )
+                if prior["kind"] != data.kind or prior.get("unit_id") != data.unit_id:
+                    raise ValueError("a checkpoint may supersede only the same kind and unit")
                 if prior["status"] == "pending":
-                    raise ValueError(
-                        "a pending checkpoint must be resolved before replacement"
-                    )
-                if (
-                    existing_head is None
-                    or existing_head["id"] != data.supersedes_id
-                ):
-                    raise ValueError(
-                        "supersedes_id must name the current checkpoint head"
-                    )
+                    raise ValueError("a pending checkpoint must be resolved before replacement")
+                if existing_head is None or existing_head["id"] != data.supersedes_id:
+                    raise ValueError("supersedes_id must name the current checkpoint head")
                 await self.db.execute(
                     """UPDATE manuscript_checkpoints
                        SET status = 'superseded'
@@ -987,9 +937,7 @@ class NativeManuscriptService(BaseService):
         """Read the full current native manuscript aggregate."""
         manuscript = await self.get(manuscript_id)
         if manuscript is None:
-            raise ManuscriptNotFoundError(
-                f"manuscript {manuscript_id!r} not found"
-            )
+            raise ManuscriptNotFoundError(f"manuscript {manuscript_id!r} not found")
         canonical_id = manuscript.id
 
         claim_rows = await self.db.fetchall(
@@ -1010,9 +958,7 @@ class NativeManuscriptService(BaseService):
         claims: list[dict[str, Any]] = []
         for row in claim_rows:
             claim = dict(row)
-            claim["prohibited_wording"] = self._json_loads(
-                claim.get("prohibited_wording"), []
-            )
+            claim["prohibited_wording"] = self._json_loads(claim.get("prohibited_wording"), [])
             claim["ratifications"] = await self.db.fetchall(
                 """SELECT r.*, d.status AS decision_status,
                           d.decided_by, d.chosen, d.superseded_by
@@ -1026,8 +972,9 @@ class NativeManuscriptService(BaseService):
             claim["evidence"] = await self._claim_evidence(
                 canonical_id, row["id"], row.get("version")
             )
-            claim["unit_links"] = await self.db.fetchall(
-                """SELECT cu.*, u.local_key AS unit_local_key,
+            claim["unit_links"] = (
+                await self.db.fetchall(
+                    """SELECT cu.*, u.local_key AS unit_local_key,
                           u.kind AS unit_kind, u.location AS unit_location
                    FROM manuscript_claim_units AS cu
                    JOIN manuscript_units AS u
@@ -1038,8 +985,11 @@ class NativeManuscriptService(BaseService):
                      AND cu.claim_version = ?
                      AND cu.project_id = ?
                    ORDER BY u.sequence, u.local_key, cu.relationship""",
-                [row["id"], row.get("version"), self.project_id],
-            ) if row.get("version") is not None else []
+                    [row["id"], row.get("version"), self.project_id],
+                )
+                if row.get("version") is not None
+                else []
+            )
             claims.append(claim)
 
         unit_rows = await self.db.fetchall(
@@ -1053,9 +1003,7 @@ class NativeManuscriptService(BaseService):
             unit = dict(row)
             unit["evidence"] = await self._unit_evidence(canonical_id, row["id"])
             if unit.get("kind") == "result":
-                unit["artifact_binding"] = await self._artifact_binding(
-                    unit.get("artifact_ref")
-                )
+                unit["artifact_binding"] = await self._artifact_binding(unit.get("artifact_ref"))
             units.append(unit)
 
         checkpoints = await self.db.fetchall(
@@ -1072,14 +1020,13 @@ class NativeManuscriptService(BaseService):
             checkpoint["dependency_snapshot"] = self._json_loads(
                 checkpoint.get("dependency_snapshot"), {}
             )
-            checkpoint["dependency_current"] = (
-                checkpoint.get("status") in {"resolved", "rejected"}
-                and checkpoint["dependency_snapshot"]
-                == await self._checkpoint_dependency_snapshot(
-                    canonical_id,
-                    kind=checkpoint["kind"],
-                    unit_id=checkpoint.get("unit_id"),
-                )
+            checkpoint["dependency_current"] = checkpoint.get("status") in {
+                "resolved",
+                "rejected",
+            } and checkpoint["dependency_snapshot"] == await self._checkpoint_dependency_snapshot(
+                canonical_id,
+                kind=checkpoint["kind"],
+                unit_id=checkpoint.get("unit_id"),
             )
         verifications = await self.db.fetchall(
             """SELECT * FROM manuscript_claim_verification_attestations
@@ -1088,12 +1035,8 @@ class NativeManuscriptService(BaseService):
             [canonical_id, self.project_id],
         )
         for row in verifications:
-            row["dependency_snapshot"] = self._json_loads(
-                row.get("dependency_snapshot"), {}
-            )
-            row["full_json_payload"] = self._json_loads(
-                row.get("full_json_payload"), {}
-            )
+            row["dependency_snapshot"] = self._json_loads(row.get("dependency_snapshot"), {})
+            row["full_json_payload"] = self._json_loads(row.get("full_json_payload"), {})
         reference_validations = await self.db.fetchall(
             """SELECT rv.*, l.title AS literature_title,
                       l.authors AS literature_authors,
@@ -1122,9 +1065,7 @@ class NativeManuscriptService(BaseService):
                 ("full_json_payload", {}),
             ):
                 row[field] = self._json_loads(row.get(field), default)
-        reference_manifest = await self._get_reference_manifest_snapshot(
-            canonical_id
-        )
+        reference_manifest = await self._get_reference_manifest_snapshot(canonical_id)
 
         return {
             "schema_version": "rka.manuscript-context/v1",
@@ -1147,9 +1088,7 @@ class NativeManuscriptService(BaseService):
     ) -> dict[str, Any]:
         """Return categorical, evidence-linked readiness findings."""
         if target_phase not in self._CHECKPOINTS_BY_TARGET:
-            raise ValueError(
-                f"target_phase must be one of {sorted(self._CHECKPOINTS_BY_TARGET)}"
-            )
+            raise ValueError(f"target_phase must be one of {sorted(self._CHECKPOINTS_BY_TARGET)}")
         context = await self.get_context(manuscript_id)
         findings: list[dict[str, Any]] = []
         manuscript = context["manuscript"]
@@ -1184,16 +1123,12 @@ class NativeManuscriptService(BaseService):
         if target_phase != "planning" and not manuscript.get("venue"):
             add("BLOCK", "VENUE_REQUIRED", "target venue is not set")
 
-        active_claims = [
-            claim for claim in context["claims"] if claim.get("state") == "active"
-        ]
+        active_claims = [claim for claim in context["claims"] if claim.get("state") == "active"]
         if not active_claims:
             add("BLOCK", "NO_ACTIVE_CLAIMS", "argument spine has no active claims")
 
         active_unit_ids = {
-            unit["id"]
-            for unit in context["units"]
-            if unit.get("status") != "removed"
+            unit["id"] for unit in context["units"] if unit.get("status") != "removed"
         }
         result_units = {
             unit["id"]: unit
@@ -1233,11 +1168,7 @@ class NativeManuscriptService(BaseService):
 
             evidence = claim.get("evidence", [])
             support = [item for item in evidence if item.get("role") == "support"]
-            counterevidence = [
-                item
-                for item in evidence
-                if item.get("role") == "counterevidence"
-            ]
+            counterevidence = [item for item in evidence if item.get("role") == "counterevidence"]
             if counterevidence:
                 add(
                     "BLOCK",
@@ -1260,10 +1191,10 @@ class NativeManuscriptService(BaseService):
             for item in support:
                 if (
                     item.get("verified") != 1
-                    or item.get("evidence_status")
-                    not in self._READY_EVIDENCE_STATUSES
+                    or item.get("evidence_status") not in self._READY_EVIDENCE_STATUSES
                     or item.get("stale") != 0
                     or item.get("contradicted") != 0
+                    or item.get("scope_readiness") != "ready"
                     or item.get("source_current") != 1
                     or item.get("source_is_manuscript") != 0
                 ):
@@ -1271,7 +1202,7 @@ class NativeManuscriptService(BaseService):
                         "BLOCK",
                         "EVIDENCE_NOT_MANUSCRIPT_READY",
                         f"support claim {item.get('evidence_claim_id')} is not "
-                        "grounded, supported, current, and uncontested",
+                        "grounded, supported, scope-reviewed, current, and uncontested",
                         claim_id=claim_id,
                     )
 
@@ -1299,14 +1230,9 @@ class NativeManuscriptService(BaseService):
                     "result unit is not linked to an active claim",
                     unit_id=unit_id,
                 )
-            support = [
-                item for item in unit.get("evidence", [])
-                if item.get("role") == "support"
-            ]
+            support = [item for item in unit.get("evidence", []) if item.get("role") == "support"]
             counterevidence = [
-                item
-                for item in unit.get("evidence", [])
-                if item.get("role") == "counterevidence"
+                item for item in unit.get("evidence", []) if item.get("role") == "counterevidence"
             ]
             if counterevidence:
                 add(
@@ -1326,10 +1252,10 @@ class NativeManuscriptService(BaseService):
             for item in support:
                 if (
                     item.get("verified") != 1
-                    or item.get("evidence_status")
-                    not in self._READY_EVIDENCE_STATUSES
+                    or item.get("evidence_status") not in self._READY_EVIDENCE_STATUSES
                     or item.get("stale") != 0
                     or item.get("contradicted") != 0
+                    or item.get("scope_readiness") != "ready"
                     or item.get("source_current") != 1
                     or item.get("source_is_manuscript") != 0
                 ):
@@ -1337,7 +1263,7 @@ class NativeManuscriptService(BaseService):
                         "BLOCK",
                         "RESULT_EVIDENCE_NOT_READY",
                         f"result support claim {item.get('evidence_claim_id')} "
-                        "is not grounded, supported, current, and uncontested",
+                        "is not grounded, supported, scope-reviewed, current, and uncontested",
                         unit_id=unit_id,
                     )
             if target_phase in {"review", "final", "submitted"}:
@@ -1358,8 +1284,7 @@ class NativeManuscriptService(BaseService):
                 add(
                     "BLOCK",
                     "REFERENCE_MANIFEST_REQUIRED",
-                    "review readiness requires an explicit authoritative "
-                    "citation-key manifest",
+                    "review readiness requires an explicit authoritative citation-key manifest",
                 )
             for member in reference_members:
                 citation_key = member.get("citation_key")
@@ -1379,8 +1304,7 @@ class NativeManuscriptService(BaseService):
                     add(
                         "BLOCK",
                         "REFERENCE_NOT_VERIFIED",
-                        "the latest validation attempt for this active citation "
-                        "is not VERIFIED",
+                        "the latest validation attempt for this active citation is not VERIFIED",
                         citation_key=citation_key,
                         literature_id=literature_id,
                     )
@@ -1414,12 +1338,9 @@ class NativeManuscriptService(BaseService):
                     )
                 literature_updated = member.get("literature_updated_at")
                 completed_at = validation.get("completed_at")
-                if (
-                    literature_updated
-                    and not _timestamp_is_strictly_after(
-                        completed_at,
-                        literature_updated,
-                    )
+                if literature_updated and not _timestamp_is_strictly_after(
+                    completed_at,
+                    literature_updated,
                 ):
                     add(
                         "BLOCK",
@@ -1439,8 +1360,7 @@ class NativeManuscriptService(BaseService):
                 and checkpoint.get("decision_status") == "active"
                 and checkpoint.get("decided_by") == "pi"
                 and not checkpoint.get("superseded_by")
-                and checkpoint.get("chosen")
-                == checkpoint.get("approved_choice")
+                and checkpoint.get("chosen") == checkpoint.get("approved_choice")
             ]
             resolved = [
                 checkpoint
@@ -1448,9 +1368,7 @@ class NativeManuscriptService(BaseService):
                 if checkpoint.get("dependency_current") is True
             ]
             if checkpoint_kind == "draft_section":
-                resolved_units = {
-                    checkpoint.get("unit_id") for checkpoint in resolved
-                }
+                resolved_units = {checkpoint.get("unit_id") for checkpoint in resolved}
                 missing = sorted(active_unit_ids - resolved_units)
                 for unit_id in missing:
                     add(
@@ -1459,12 +1377,14 @@ class NativeManuscriptService(BaseService):
                         "active manuscript unit lacks a resolved draft checkpoint",
                         unit_id=unit_id,
                     )
-                stale_units = sorted({
-                    checkpoint.get("unit_id")
-                    for checkpoint in approved
-                    if checkpoint.get("dependency_current") is not True
-                    and checkpoint.get("unit_id") in active_unit_ids
-                })
+                stale_units = sorted(
+                    {
+                        checkpoint.get("unit_id")
+                        for checkpoint in approved
+                        if checkpoint.get("dependency_current") is not True
+                        and checkpoint.get("unit_id") in active_unit_ids
+                    }
+                )
                 for unit_id in stale_units:
                     add(
                         "BLOCK",
@@ -1476,8 +1396,7 @@ class NativeManuscriptService(BaseService):
                 add(
                     "BLOCK",
                     "CHECKPOINT_STALE",
-                    f"checkpoint {checkpoint_kind!r} dependencies changed "
-                    "after PI approval",
+                    f"checkpoint {checkpoint_kind!r} dependencies changed after PI approval",
                 )
             elif not resolved:
                 add(
@@ -1519,9 +1438,7 @@ class NativeManuscriptService(BaseService):
             canonical_id = await self._require_id(manuscript_id)
             manuscript = await self.get(canonical_id)
             if manuscript is None:  # pragma: no cover - guarded by _require_id
-                raise ManuscriptNotFoundError(
-                    f"manuscript {manuscript_id!r} not found"
-                )
+                raise ManuscriptNotFoundError(f"manuscript {manuscript_id!r} not found")
             cluster_rows = await self.db.fetchall(
                 """SELECT ec.*, rq.question AS research_question,
                           rq.status AS rq_status,
@@ -1554,10 +1471,11 @@ class NativeManuscriptService(BaseService):
                 [self.project_id],
             )
             membership_rows = await self.db.fetchall(
-                """SELECT ce.cluster_id, c.id, c.claim_type, c.content,
+                f"""SELECT ce.cluster_id, c.id, c.claim_type, c.content,
                           c.confidence, c.verified, c.evidence_status,
                           c.stale, coalesce(c.staleness, 'green') AS staleness,
-                          c.source_entry_id,
+                          c.source_entry_id, c.scope_revision, c.project_id,
+                          {ClaimService._SCOPE_PROJECTION},
                           CASE
                               WHEN j.id IS NOT NULL
                                AND j.status = 'active'
@@ -1590,6 +1508,7 @@ class NativeManuscriptService(BaseService):
                    JOIN claims AS c
                      ON c.id = ce.source_claim_id
                     AND c.project_id = ce.project_id
+                   {ClaimService._SCOPE_JOIN}
                    LEFT JOIN journal AS j
                      ON j.id = c.source_entry_id
                     AND j.project_id = c.project_id
@@ -1624,9 +1543,7 @@ class NativeManuscriptService(BaseService):
                     cluster_ids.update(claim_clusters.get(claim_id, set()))
             for cluster_id in cluster_ids:
                 if row["relation"] == "qualifies":
-                    qualifiers.setdefault(cluster_id, set()).add(
-                        row["source_claim_id"]
-                    )
+                    qualifiers.setdefault(cluster_id, set()).add(row["source_claim_id"])
                 else:
                     touched = contradictions.setdefault(cluster_id, set())
                     touched.add(row["source_claim_id"])
@@ -1643,7 +1560,19 @@ class NativeManuscriptService(BaseService):
             cluster_qualifiers = qualifiers.get(cluster_id, set())
             cluster_counterevidence = contradictions.get(cluster_id, set())
             ready_support: list[dict[str, Any]] = []
-            for claim in cluster_members:
+            for raw_claim in cluster_members:
+                claim = dict(raw_claim)
+                claim["contradicted"] = claim["id"] in cluster_counterevidence
+                scope = ClaimService._scope_projection_to_model(claim)
+                scope_readiness, scope_findings = ClaimService._assess_scope(
+                    claim,
+                    scope,
+                )
+                claim["scope_readiness"] = scope_readiness
+                claim["scope_contract"] = scope.model_dump(mode="json") if scope else None
+                claim["scope_findings"] = [
+                    finding.model_dump(mode="json") for finding in scope_findings
+                ]
                 reasons: list[str] = []
                 if claim.get("verified") != 1:
                     reasons.append("SOURCE_GROUNDING_NOT_VERIFIED")
@@ -1660,20 +1589,22 @@ class NativeManuscriptService(BaseService):
                     reasons.append("MANUSCRIPT_DERIVED")
                 if claim["id"] in cluster_counterevidence:
                     reasons.append("UNRESOLVED_CONTRADICTION")
+                if scope_readiness != "ready":
+                    reasons.append("CLAIM_SCOPE_NOT_READY")
                 if reasons:
-                    excluded_claims.append({
-                        "claim_id": claim["id"],
-                        "cluster_id": cluster_id,
-                        "reasons": sorted(set(reasons)),
-                    })
+                    excluded_claims.append(
+                        {
+                            "claim_id": claim["id"],
+                            "cluster_id": cluster_id,
+                            "reasons": sorted(set(reasons)),
+                        }
+                    )
                 else:
                     ready_support.append(claim)
 
             normalized_groups: dict[str, list[dict[str, Any]]] = {}
             for claim in ready_support:
-                normalized = " ".join(
-                    str(claim.get("content") or "").casefold().split()
-                )
+                normalized = " ".join(str(claim.get("content") or "").casefold().split())
                 normalized_groups.setdefault(normalized, []).append(claim)
             representative_ids = [
                 sorted(
@@ -1687,22 +1618,19 @@ class NativeManuscriptService(BaseService):
             ]
 
             blockers: list[str] = []
-            if not cluster.get("research_question_id") or not cluster.get(
-                "research_question"
-            ):
+            if not cluster.get("research_question_id") or not cluster.get("research_question"):
                 blockers.append("RESEARCH_QUESTION_REQUIRED")
-            elif (
-                cluster.get("rq_status") != "active"
-                or cluster.get("rq_superseded_by")
-            ):
+            elif cluster.get("rq_status") != "active" or cluster.get("rq_superseded_by"):
                 blockers.append("RESEARCH_QUESTION_NOT_CURRENT")
-            if cluster.get("synthesized_by") != "brain" or not str(
-                cluster.get("synthesis") or ""
-            ).strip():
+            if (
+                cluster.get("synthesized_by") != "brain"
+                or not str(cluster.get("synthesis") or "").strip()
+            ):
                 blockers.append("BRAIN_CLUSTER_REVIEW_REQUIRED")
-            if cluster.get("needs_reprocessing") == 1 or cluster.get(
-                "staleness"
-            ) not in {"green", "dismissed"}:
+            if cluster.get("needs_reprocessing") == 1 or cluster.get("staleness") not in {
+                "green",
+                "dismissed",
+            }:
                 blockers.append("CLUSTER_NOT_CURRENT")
             if cluster.get("confidence") not in {"strong", "moderate"}:
                 blockers.append("CLUSTER_EVIDENCE_NOT_READY")
@@ -1727,9 +1655,7 @@ class NativeManuscriptService(BaseService):
                 "synthesis": cluster.get("synthesis"),
                 "confidence": cluster.get("confidence"),
                 "synthesized_by": cluster.get("synthesized_by"),
-                "support_claim_ids": [
-                    claim["id"] for claim in ready_support
-                ],
+                "support_claim_ids": [claim["id"] for claim in ready_support],
                 "representative_claim_ids": representative_ids,
                 "qualifier_claim_ids": sorted(cluster_qualifiers),
                 "counterevidence_claim_ids": sorted(cluster_counterevidence),
@@ -1744,35 +1670,49 @@ class NativeManuscriptService(BaseService):
             clusters.append(cluster_record)
             if disposition == "eligible":
                 local_key = f"C{len(candidate_claims) + 1}"
-                claim_kinds = {
-                    claim.get("claim_type") for claim in ready_support
-                }
+                claim_kinds = {claim.get("claim_type") for claim in ready_support}
                 claim_type = (
-                    "methodological"
-                    if claim_kinds and claim_kinds <= {"method"}
-                    else "empirical"
+                    "methodological" if claim_kinds and claim_kinds <= {"method"} else "empirical"
                 )
-                candidate_claims.append({
-                    "claim_id": local_key,
-                    "claim_type": claim_type,
-                    "status": "candidate",
-                    "text": str(cluster["synthesis"]).strip(),
-                    "allowed_wording": str(cluster["synthesis"]).strip(),
-                    "prohibited_wording": [],
-                    "ratified_by": None,
-                    "evidence_ids": [
-                        claim["id"] for claim in ready_support
-                    ],
-                    "qualifier_ids": sorted(cluster_qualifiers),
-                    "counterevidence_ids": [],
-                    "manuscript_units": [],
-                })
+                candidate_claims.append(
+                    {
+                        "claim_id": local_key,
+                        "claim_type": claim_type,
+                        "status": "candidate",
+                        "text": str(cluster["synthesis"]).strip(),
+                        "allowed_wording": str(cluster["synthesis"]).strip(),
+                        "prohibited_wording": sorted(
+                            {
+                                boundary
+                                for claim in ready_support
+                                for boundary in (
+                                    claim.get("scope_contract", {}).get("prohibited_extensions", [])
+                                    if claim.get("scope_contract")
+                                    else []
+                                )
+                            }
+                        ),
+                        "ratified_by": None,
+                        "evidence_ids": [claim["id"] for claim in ready_support],
+                        "qualifier_ids": sorted(cluster_qualifiers),
+                        "counterevidence_ids": [],
+                        "manuscript_units": [],
+                        "scope_contract_ids": sorted(
+                            claim["scope_contract"]["id"]
+                            for claim in ready_support
+                            if claim.get("scope_contract")
+                        ),
+                    }
+                )
                 candidate_lineage[local_key] = {
                     "cluster_id": cluster_id,
-                    "research_question_id": cluster.get(
-                        "research_question_id"
-                    ),
+                    "research_question_id": cluster.get("research_question_id"),
                     "representative_claim_ids": representative_ids,
+                    "scope_contract_ids": sorted(
+                        claim["scope_contract"]["id"]
+                        for claim in ready_support
+                        if claim.get("scope_contract")
+                    ),
                 }
 
         return {
@@ -1807,9 +1747,7 @@ class NativeManuscriptService(BaseService):
             "candidate_lineage": candidate_lineage,
             "summary": {
                 "clusters_total": len(clusters),
-                "clusters_eligible": sum(
-                    item["disposition"] == "eligible" for item in clusters
-                ),
+                "clusters_eligible": sum(item["disposition"] == "eligible" for item in clusters),
                 "clusters_needing_review": sum(
                     item["disposition"] != "eligible" for item in clusters
                 ),
@@ -1862,8 +1800,7 @@ class NativeManuscriptService(BaseService):
         else:
             return {"verified": False, "reason": "untyped_reference"}
         binding["verified"] = bool(
-            binding.get("content_hash")
-            and binding.get("extraction_status") == "complete"
+            binding.get("content_hash") and binding.get("extraction_status") == "complete"
         )
         return binding
 
@@ -1936,15 +1873,11 @@ class NativeManuscriptService(BaseService):
                 [manuscript_id, self.project_id],
             )
             for row in rows:
-                row["artifact_binding"] = await self._artifact_binding(
-                    row.get("artifact_ref")
-                )
+                row["artifact_binding"] = await self._artifact_binding(row.get("artifact_ref"))
                 row.pop("artifact_ref", None)
             components["result_units"] = rows
         elif kind == "reference_set":
-            manifest = await self._get_reference_manifest_snapshot(
-                manuscript_id
-            )
+            manifest = await self._get_reference_manifest_snapshot(manuscript_id)
             components["reference_manifest"] = [
                 {
                     "citation_key": member["citation_key"],
@@ -1955,9 +1888,7 @@ class NativeManuscriptService(BaseService):
                     "literature_doi": member.get("literature_doi"),
                     "literature_url": member.get("literature_url"),
                     "literature_status": member.get("literature_status"),
-                    "literature_updated_at": member.get(
-                        "literature_updated_at"
-                    ),
+                    "literature_updated_at": member.get("literature_updated_at"),
                     # Checkpoints approve the semantic reference set, not
                     # installation-local row identities. Knowledge-pack import
                     # intentionally re-keys memberships, literature, and
@@ -1982,9 +1913,7 @@ class NativeManuscriptService(BaseService):
                 [unit_id, manuscript_id, self.project_id],
             )
             if unit is not None:
-                unit["artifact_binding"] = await self._artifact_binding(
-                    unit.get("artifact_ref")
-                )
+                unit["artifact_binding"] = await self._artifact_binding(unit.get("artifact_ref"))
                 unit.pop("artifact_ref", None)
             components["unit"] = unit
             components["claims"] = await self.db.fetchall(
@@ -2031,9 +1960,7 @@ class NativeManuscriptService(BaseService):
             )
             for row in rows:
                 if row.get("artifact_ref"):
-                    row["artifact_binding"] = await self._artifact_binding(
-                        row["artifact_ref"]
-                    )
+                    row["artifact_binding"] = await self._artifact_binding(row["artifact_ref"])
                 row.pop("artifact_ref", None)
             components["units"] = rows
         else:
@@ -2063,9 +1990,7 @@ class NativeManuscriptService(BaseService):
         for claim in context["claims"]:
             evidence_by_role = {
                 role: [
-                    item["evidence_claim_id"]
-                    for item in claim["evidence"]
-                    if item["role"] == role
+                    item["evidence_claim_id"] for item in claim["evidence"] if item["role"] == role
                 ]
                 for role in ("support", "qualifier", "counterevidence")
             }
@@ -2083,47 +2008,46 @@ class NativeManuscriptService(BaseService):
             )
             local_claim_id = claim["local_key"]
             for link in claim["unit_links"]:
-                unit_claims.setdefault(link["unit_local_key"], []).append(
-                    local_claim_id
-                )
-            claims.append({
-                "claim_id": local_claim_id,
-                "rka_manuscript_claim_id": claim["id"],
-                "version": claim.get("version"),
-                "claim_type": claim["kind"],
-                "status": claim["state"],
-                "text": claim.get("exact_wording"),
-                "allowed_wording": claim.get("allowed_wording"),
-                "prohibited_wording": claim.get("prohibited_wording") or [],
-                "ratified_by": (
-                    current_ratification.get("decision_id")
-                    if current_ratification else None
-                ),
-                "evidence_ids": evidence_by_role["support"],
-                "qualifier_ids": evidence_by_role["qualifier"],
-                "counterevidence_ids": evidence_by_role["counterevidence"],
-                "manuscript_units": [
-                    link["unit_local_key"] for link in claim["unit_links"]
-                ],
-            })
+                unit_claims.setdefault(link["unit_local_key"], []).append(local_claim_id)
+            claims.append(
+                {
+                    "claim_id": local_claim_id,
+                    "rka_manuscript_claim_id": claim["id"],
+                    "version": claim.get("version"),
+                    "claim_type": claim["kind"],
+                    "status": claim["state"],
+                    "text": claim.get("exact_wording"),
+                    "allowed_wording": claim.get("allowed_wording"),
+                    "prohibited_wording": claim.get("prohibited_wording") or [],
+                    "ratified_by": (
+                        current_ratification.get("decision_id") if current_ratification else None
+                    ),
+                    "evidence_ids": evidence_by_role["support"],
+                    "qualifier_ids": evidence_by_role["qualifier"],
+                    "counterevidence_ids": evidence_by_role["counterevidence"],
+                    "manuscript_units": [link["unit_local_key"] for link in claim["unit_links"]],
+                }
+            )
         units = []
         for unit in context["units"]:
-            units.append({
-                "unit_id": unit["local_key"],
-                "rka_manuscript_unit_id": unit["id"],
-                "kind": unit["kind"],
-                "location": unit["location"],
-                "artifact_ref": unit.get("artifact_ref"),
-                "allowed_interpretation": unit.get("allowed_interpretation"),
-                "prohibited_interpretation": unit.get("prohibited_interpretation"),
-                "status": unit["status"],
-                "evidence_ids": [
-                    item["evidence_claim_id"]
-                    for item in unit["evidence"]
-                    if item["role"] == "support"
-                ],
-                "claim_ids": sorted(set(unit_claims.get(unit["local_key"], []))),
-            })
+            units.append(
+                {
+                    "unit_id": unit["local_key"],
+                    "rka_manuscript_unit_id": unit["id"],
+                    "kind": unit["kind"],
+                    "location": unit["location"],
+                    "artifact_ref": unit.get("artifact_ref"),
+                    "allowed_interpretation": unit.get("allowed_interpretation"),
+                    "prohibited_interpretation": unit.get("prohibited_interpretation"),
+                    "status": unit["status"],
+                    "evidence_ids": [
+                        item["evidence_claim_id"]
+                        for item in unit["evidence"]
+                        if item["role"] == "support"
+                    ],
+                    "claim_ids": sorted(set(unit_claims.get(unit["local_key"], []))),
+                }
+            )
         return {
             "schema_version": "rka-claim-spine/v2",
             "authoritative_source": "rka",
@@ -2139,8 +2063,7 @@ class NativeManuscriptService(BaseService):
         canonical_id = await self.resolve_id(manuscript_id)
         if canonical_id is None:
             raise ManuscriptNotFoundError(
-                f"manuscript {manuscript_id!r} does not belong to project "
-                f"{self.project_id}"
+                f"manuscript {manuscript_id!r} does not belong to project {self.project_id}"
             )
         return canonical_id
 
@@ -2150,34 +2073,26 @@ class NativeManuscriptService(BaseService):
             [manuscript_id, self.project_id],
         )
         if row is None:
-            raise ManuscriptNotFoundError(
-                f"manuscript {manuscript_id!r} not found"
-            )
+            raise ManuscriptNotFoundError(f"manuscript {manuscript_id!r} not found")
         if int(row["revision"]) != expected_revision:
             raise ManuscriptRevisionConflict(
                 f"manuscript {manuscript_id} revision is {row['revision']}, "
                 f"expected {expected_revision}"
             )
 
-    async def _raise_revision_conflict(
-        self, manuscript_id: str, expected_revision: int
-    ) -> None:
+    async def _raise_revision_conflict(self, manuscript_id: str, expected_revision: int) -> None:
         row = await self.db.fetchone(
             "SELECT revision FROM manuscripts WHERE id = ? AND project_id = ?",
             [manuscript_id, self.project_id],
         )
         if row is None:
-            raise ManuscriptNotFoundError(
-                f"manuscript {manuscript_id!r} not found"
-            )
+            raise ManuscriptNotFoundError(f"manuscript {manuscript_id!r} not found")
         raise ManuscriptRevisionConflict(
             f"manuscript {manuscript_id} revision is {row['revision']}, "
             f"expected {expected_revision}"
         )
 
-    async def _bump_revision(
-        self, manuscript_id: str, expected_revision: int
-    ) -> None:
+    async def _bump_revision(self, manuscript_id: str, expected_revision: int) -> None:
         cursor = await self.db.execute(
             """UPDATE manuscripts
                SET revision = revision + 1, updated_at = ?
@@ -2208,9 +2123,7 @@ class NativeManuscriptService(BaseService):
         )
         stale_ids: list[str] = []
         for checkpoint in checkpoints:
-            stored_snapshot = self._json_loads(
-                checkpoint.get("dependency_snapshot"), {}
-            )
+            stored_snapshot = self._json_loads(checkpoint.get("dependency_snapshot"), {})
             current_snapshot = await self._checkpoint_dependency_snapshot(
                 manuscript_id,
                 kind=checkpoint["kind"],
@@ -2258,76 +2171,77 @@ class NativeManuscriptService(BaseService):
                 not local_key
                 or not exact
                 or not allowed
-                or kind not in {
-                    "empirical", "methodological", "theoretical", "survey", "position"
-                }
+                or kind not in {"empirical", "methodological", "theoretical", "survey", "position"}
                 or state not in {"candidate", "active", "retired"}
                 or not isinstance(prohibited, list)
                 or not prohibited
                 or any(not isinstance(item, str) or not item.strip() for item in prohibited)
             ):
-                raise ValueError(
-                    f"invalid native manuscript claim specification {local_key!r}"
-                )
+                raise ValueError(f"invalid native manuscript claim specification {local_key!r}")
             evidence = raw.get("evidence") or {}
             if not isinstance(evidence, Mapping):
                 raise ValueError(f"claim {local_key} evidence must be an object")
             support = evidence.get("support", raw.get("evidence_ids", []))
             qualifier = evidence.get("qualifier", raw.get("qualifier_ids", []))
-            counter = evidence.get(
-                "counterevidence", raw.get("counterevidence_ids", [])
-            )
+            counter = evidence.get("counterevidence", raw.get("counterevidence_ids", []))
             raw_links = raw.get("unit_links", raw.get("manuscript_units", []))
             links = []
             for item in raw_links or []:
                 if isinstance(item, str):
                     links.append({"unit_key": item, "relationship": "advances"})
                 elif isinstance(item, Mapping):
-                    links.append({
-                        "unit_key": item.get("unit_key") or item.get("unit_id"),
-                        "relationship": item.get("relationship", "advances"),
-                    })
+                    links.append(
+                        {
+                            "unit_key": item.get("unit_key") or item.get("unit_id"),
+                            "relationship": item.get("relationship", "advances"),
+                        }
+                    )
                 else:
                     raise ValueError(f"claim {local_key} has an invalid unit link")
-            normalized.append({
-                "local_key": local_key,
-                "kind": kind,
-                "state": state,
-                "exact_wording": exact,
-                "allowed_wording": allowed,
-                "prohibited_wording": [item.strip() for item in prohibited],
-                "evidence": {
-                    "support": self._id_list(support, f"claim {local_key} support"),
-                    "qualifier": self._id_list(
-                        qualifier, f"claim {local_key} qualifiers"
-                    ),
-                    "counterevidence": self._id_list(
-                        counter, f"claim {local_key} counterevidence"
-                    ),
-                },
-                "unit_links": links,
-            })
+            normalized.append(
+                {
+                    "local_key": local_key,
+                    "kind": kind,
+                    "state": state,
+                    "exact_wording": exact,
+                    "allowed_wording": allowed,
+                    "prohibited_wording": [item.strip() for item in prohibited],
+                    "evidence": {
+                        "support": self._id_list(support, f"claim {local_key} support"),
+                        "qualifier": self._id_list(qualifier, f"claim {local_key} qualifiers"),
+                        "counterevidence": self._id_list(
+                            counter, f"claim {local_key} counterevidence"
+                        ),
+                    },
+                    "unit_links": links,
+                }
+            )
         return normalized
 
     def _normalize_unit_specs(self, value: Any) -> list[dict[str, Any]]:
         normalized = []
         valid_kinds = {
-            "abstract", "introduction", "related_work", "background", "method",
-            "result", "discussion", "limitation", "conclusion", "caption",
-            "appendix", "other",
+            "abstract",
+            "introduction",
+            "related_work",
+            "background",
+            "method",
+            "result",
+            "discussion",
+            "limitation",
+            "conclusion",
+            "caption",
+            "appendix",
+            "other",
         }
         valid_statuses = {"planned", "drafted", "reviewed", "final", "removed"}
         for raw in self._spec_list(value, "units"):
             local_key = str(raw.get("local_key") or raw.get("unit_id") or "").strip()
             kind = str(raw.get("kind") or "").strip()
-            location = str(
-                raw.get("location") or raw.get("source_location") or ""
-            ).strip()
+            location = str(raw.get("location") or raw.get("source_location") or "").strip()
             status = str(raw.get("status") or "planned").strip()
             if not local_key or kind not in valid_kinds or not location:
-                raise ValueError(
-                    f"invalid native manuscript unit specification {local_key!r}"
-                )
+                raise ValueError(f"invalid native manuscript unit specification {local_key!r}")
             if status not in valid_statuses:
                 raise ValueError(f"unit {local_key} has invalid status {status!r}")
             if kind == "result":
@@ -2341,33 +2255,33 @@ class NativeManuscriptService(BaseService):
             evidence = raw.get("evidence") or {}
             if not isinstance(evidence, Mapping):
                 raise ValueError(f"unit {local_key} evidence must be an object")
-            normalized.append({
-                "local_key": local_key,
-                "kind": kind,
-                "location": location,
-                "title": raw.get("title"),
-                "artifact_ref": raw.get("artifact_ref"),
-                "allowed_interpretation": raw.get("allowed_interpretation"),
-                "prohibited_interpretation": raw.get("prohibited_interpretation"),
-                "sequence": int(raw.get("sequence", 0)),
-                "status": status,
-                "evidence": {
-                    "support": self._id_list(
-                        evidence.get("support", raw.get("evidence_ids", [])),
-                        f"unit {local_key} support",
-                    ),
-                    "qualifier": self._id_list(
-                        evidence.get("qualifier", raw.get("qualifier_ids", [])),
-                        f"unit {local_key} qualifiers",
-                    ),
-                    "counterevidence": self._id_list(
-                        evidence.get(
-                            "counterevidence", raw.get("counterevidence_ids", [])
+            normalized.append(
+                {
+                    "local_key": local_key,
+                    "kind": kind,
+                    "location": location,
+                    "title": raw.get("title"),
+                    "artifact_ref": raw.get("artifact_ref"),
+                    "allowed_interpretation": raw.get("allowed_interpretation"),
+                    "prohibited_interpretation": raw.get("prohibited_interpretation"),
+                    "sequence": int(raw.get("sequence", 0)),
+                    "status": status,
+                    "evidence": {
+                        "support": self._id_list(
+                            evidence.get("support", raw.get("evidence_ids", [])),
+                            f"unit {local_key} support",
                         ),
-                        f"unit {local_key} counterevidence",
-                    ),
-                },
-            })
+                        "qualifier": self._id_list(
+                            evidence.get("qualifier", raw.get("qualifier_ids", [])),
+                            f"unit {local_key} qualifiers",
+                        ),
+                        "counterevidence": self._id_list(
+                            evidence.get("counterevidence", raw.get("counterevidence_ids", [])),
+                            f"unit {local_key} counterevidence",
+                        ),
+                    },
+                }
+            )
         return normalized
 
     @staticmethod
@@ -2426,8 +2340,7 @@ class NativeManuscriptService(BaseService):
                 claim_id = row["id"]
                 if row["kind"] != spec["kind"]:
                     raise ValueError(
-                        f"claim {local_key} kind is immutable; retire it and "
-                        "create a new local_key"
+                        f"claim {local_key} kind is immutable; retire it and create a new local_key"
                     )
                 await self.db.execute(
                     """UPDATE manuscript_claims
@@ -2455,8 +2368,7 @@ class NativeManuscriptService(BaseService):
                 latest
                 and latest["exact_wording"] == spec["exact_wording"]
                 and latest["allowed_wording"] == spec["allowed_wording"]
-                and self._json_loads(latest["prohibited_wording"], [])
-                == spec["prohibited_wording"]
+                and self._json_loads(latest["prohibited_wording"], []) == spec["prohibited_wording"]
             )
             version = previous_version if same_wording else previous_version + 1
             if not same_wording:
@@ -2475,9 +2387,7 @@ class NativeManuscriptService(BaseService):
                         json.dumps(spec["prohibited_wording"], sort_keys=True),
                     ],
                 )
-            await self._replace_claim_evidence(
-                manuscript_id, claim_id, version, spec["evidence"]
-            )
+            await self._replace_claim_evidence(manuscript_id, claim_id, version, spec["evidence"])
             result[local_key] = (claim_id, version)
 
         for local_key, row in existing.items():
@@ -2550,9 +2460,7 @@ class NativeManuscriptService(BaseService):
                         self.project_id,
                     ],
                 )
-            await self._replace_unit_evidence(
-                manuscript_id, unit_id, spec["evidence"]
-            )
+            await self._replace_unit_evidence(manuscript_id, unit_id, spec["evidence"])
             result[local_key] = unit_id
 
         for local_key, row in existing.items():
@@ -2648,9 +2556,7 @@ class NativeManuscriptService(BaseService):
                         f"claim {spec['local_key']} references unknown unit {unit_key!r}"
                     )
                 if relationship not in {"advances", "tests", "bounds", "mentions"}:
-                    raise ValueError(
-                        f"claim {spec['local_key']} has invalid unit relationship"
-                    )
+                    raise ValueError(f"claim {spec['local_key']} has invalid unit relationship")
                 await self.db.execute(
                     """INSERT INTO manuscript_claim_units
                        (manuscript_id, project_id, manuscript_claim_id,
@@ -2697,9 +2603,10 @@ class NativeManuscriptService(BaseService):
     ) -> list[dict[str, Any]]:
         if version is None:
             return []
-        return await self.db.fetchall(
-            """SELECT e.*, c.content, c.claim_type, c.confidence, c.verified,
+        rows = await self.db.fetchall(
+            f"""SELECT e.*, c.content, c.claim_type, c.confidence, c.verified,
                       c.evidence_status, c.stale, c.source_entry_id,
+                      c.scope_revision, {ClaimService._SCOPE_PROJECTION},
                       EXISTS (
                           SELECT 1 FROM claim_edges AS ce
                           WHERE ce.project_id = c.project_id
@@ -2735,6 +2642,7 @@ class NativeManuscriptService(BaseService):
                JOIN claims AS c
                  ON c.id = e.evidence_claim_id
                 AND c.project_id = e.project_id
+               {ClaimService._SCOPE_JOIN}
                LEFT JOIN journal AS j
                  ON j.id = c.source_entry_id
                 AND j.project_id = c.project_id
@@ -2745,13 +2653,13 @@ class NativeManuscriptService(BaseService):
                ORDER BY e.role, e.ordinal, e.evidence_claim_id""",
             [manuscript_id, claim_id, version, self.project_id],
         )
+        return self._decorate_evidence_scope(rows)
 
-    async def _unit_evidence(
-        self, manuscript_id: str, unit_id: str
-    ) -> list[dict[str, Any]]:
-        return await self.db.fetchall(
-            """SELECT e.*, c.content, c.claim_type, c.confidence, c.verified,
+    async def _unit_evidence(self, manuscript_id: str, unit_id: str) -> list[dict[str, Any]]:
+        rows = await self.db.fetchall(
+            f"""SELECT e.*, c.content, c.claim_type, c.confidence, c.verified,
                       c.evidence_status, c.stale, c.source_entry_id,
+                      c.scope_revision, {ClaimService._SCOPE_PROJECTION},
                       EXISTS (
                           SELECT 1 FROM claim_edges AS ce
                           WHERE ce.project_id = c.project_id
@@ -2787,6 +2695,7 @@ class NativeManuscriptService(BaseService):
                JOIN claims AS c
                  ON c.id = e.evidence_claim_id
                 AND c.project_id = e.project_id
+               {ClaimService._SCOPE_JOIN}
                LEFT JOIN journal AS j
                  ON j.id = c.source_entry_id
                 AND j.project_id = c.project_id
@@ -2795,3 +2704,19 @@ class NativeManuscriptService(BaseService):
                ORDER BY e.role, e.ordinal, e.evidence_claim_id""",
             [manuscript_id, unit_id, self.project_id],
         )
+        return self._decorate_evidence_scope(rows)
+
+    @staticmethod
+    def _decorate_evidence_scope(
+        rows: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        decorated: list[dict[str, Any]] = []
+        for raw in rows:
+            row = dict(raw)
+            scope = ClaimService._scope_projection_to_model(row)
+            readiness, findings = ClaimService._assess_scope(row, scope)
+            row["scope_readiness"] = readiness
+            row["scope_contract"] = scope.model_dump(mode="json") if scope else None
+            row["scope_findings"] = [finding.model_dump(mode="json") for finding in findings]
+            decorated.append(row)
+        return decorated

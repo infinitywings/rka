@@ -127,6 +127,18 @@ _ENTITY_SPECS: dict[str, _EntitySpec] = {
         "claim",
         "claims",
         bool_fields=("verified", "stale", "embedding_pending"),
+        version_fields=("scope_revision",),
+    ),
+    "csc": _EntitySpec(
+        "claim_scope",
+        "claim_scope_versions",
+        json_fields=(
+            "conditions",
+            "allowed_extensions",
+            "prohibited_extensions",
+            "disconfirming_claim_ids",
+        ),
+        version_fields=("revision",),
     ),
     "icd": _EntitySpec(
         "interpretation_candidate",
@@ -358,11 +370,7 @@ def _revision(
         sort_keys=True,
     ).encode("utf-8")
     version = next(
-        (
-            record.get(field)
-            for field in spec.version_fields
-            if record.get(field) is not None
-        ),
+        (record.get(field) for field in spec.version_fields if record.get(field) is not None),
         None,
     )
     timestamp = next(
@@ -443,8 +451,7 @@ class EntityResolverService:
         duplicates_removed = len(normalized_ids) - len(requested_ids)
 
         specs_by_id: dict[str, _EntitySpec | None] = {
-            entity_id: _ENTITY_SPECS.get(_prefix(entity_id))
-            for entity_id in requested_ids
+            entity_id: _ENTITY_SPECS.get(_prefix(entity_id)) for entity_id in requested_ids
         }
         rows_by_id = await self._fetch_entity_rows(specs_by_id)
 
@@ -493,8 +500,7 @@ class EntityResolverService:
                 tags=tags_by_id.get(entity_id, []),
                 contradicted=(
                     entity_id in contradicted_claims
-                    if specs_by_id.get(entity_id)
-                    and specs_by_id[entity_id].entity_type == "claim"
+                    if specs_by_id.get(entity_id) and specs_by_id[entity_id].entity_type == "claim"
                     else None
                 ),
                 as_of=as_of,
@@ -530,14 +536,11 @@ class EntityResolverService:
         }
         if include_sources:
             packet["terminal_sources"] = {
-                claim_id: terminal_sources[claim_id]
-                for claim_id in sorted(terminal_sources)
+                claim_id: terminal_sources[claim_id] for claim_id in sorted(terminal_sources)
             }
         if include_edges:
             resolved_ids = sorted(
-                entity_id
-                for entity_id, resolution in entities.items()
-                if resolution["found"]
+                entity_id for entity_id, resolution in entities.items() if resolution["found"]
             )
             packet["entity_links"] = await self._fetch_entity_links(
                 resolved_ids,
@@ -593,9 +596,7 @@ class EntityResolverService:
             if spec is None or spec.entity_type != "claim":
                 continue
             row = rows_by_id.get(entity_id)
-            stored_project = (
-                EntityResolverService._stored_project_id(spec, row) if row else None
-            )
+            stored_project = EntityResolverService._stored_project_id(spec, row) if row else None
             source_id = row.get("source_entry_id") if row and stored_project == project_id else None
             source_id = source_id if isinstance(source_id, str) and source_id else None
             closures[entity_id] = {
@@ -617,8 +618,7 @@ class EntityResolverService:
         if not resolved:
             return {}
         allowed_pairs = {
-            (spec.entity_type, entity_id)
-            for entity_id, (spec, _row) in resolved.items()
+            (spec.entity_type, entity_id) for entity_id, (spec, _row) in resolved.items()
         }
         tags: dict[str, set[str]] = {}
         for chunk in _chunks(sorted(resolved)):
@@ -698,9 +698,7 @@ class EntityResolverService:
             record["contradicted"] = bool(contradicted)
         sorted_tags = sorted(set(tags), key=lambda value: (value.casefold(), value))
         flattened = {
-            key: value
-            for key, value in record.items()
-            if key not in _RESERVED_PACKET_FIELDS
+            key: value for key, value in record.items() if key not in _RESERVED_PACKET_FIELDS
         }
         flattened.update(
             {

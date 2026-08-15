@@ -9,7 +9,9 @@ from pathlib import Path
 import pytest
 
 from rka.models.project import ProjectCreate
+from rka.models.claim import ClaimCreate, ClaimScopeCondition, ClaimScopeWrite
 from rka.models.interpretation import InterpretationCandidateCreate
+from rka.services.claims import ClaimService
 from rka.services.interpretation import InterpretationService
 from rka.services.project import ProjectService
 
@@ -244,6 +246,70 @@ async def test_confirmed_project_delete_removes_interpretation_history(db) -> No
     ) == []
     assert await db.fetchall(
         "SELECT * FROM interpretation_review_events WHERE project_id = ?",
+        [project_id],
+    ) == []
+    assert await db.fetchall("PRAGMA foreign_key_check") == []
+
+
+@pytest.mark.asyncio
+async def test_confirmed_project_delete_removes_claim_scope_history(db) -> None:
+    svc = ProjectService(db)
+    project_id = "proj_delete_claim_scope"
+    await svc.create_project(
+        ProjectCreate(id=project_id, name="Delete Claim Scope History"),
+        actor="system",
+    )
+    await db.execute(
+        """INSERT INTO journal
+           (id, project_id, type, content, source, confidence)
+           VALUES ('jrn_delete_claim_scope', ?, 'note', ?, 'executor', 'tested')""",
+        [project_id, "The isolated run measured 42 ms."],
+    )
+    await db.commit()
+    claims = ClaimService(db, project_id=project_id)
+    claim = await claims.create(
+        ClaimCreate(
+            source_entry_id="jrn_delete_claim_scope",
+            claim_type="result",
+            content="The isolated run measured 42 ms.",
+            verified=True,
+        ),
+        actor="executor",
+    )
+    await claims.append_scope(
+        claim.id,
+        ClaimScopeWrite(
+            expected_revision=0,
+            actor="brain",
+            reason="Reviewed exact evaluation boundary.",
+            conditions=[
+                ClaimScopeCondition(
+                    kind="environment",
+                    key="run_mode",
+                    operator="equals",
+                    value="isolated",
+                )
+            ],
+            uncertainty="low",
+            extension_policy="exact_only",
+            prohibited_extensions=["concurrent workloads"],
+            falsifier_status="applicable",
+            falsifier="The same isolated run does not reproduce 42 ms.",
+            review_status="reviewed",
+        ),
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="project-authorized deletion"):
+        await db.execute(
+            "DELETE FROM claim_scope_versions WHERE claim_id = ?",
+            [claim.id],
+        )
+
+    result = await svc.delete_project(project_id, confirm=True)
+
+    assert result["confirmed"] is True
+    assert await db.fetchall(
+        "SELECT * FROM claim_scope_versions WHERE project_id = ?",
         [project_id],
     ) == []
     assert await db.fetchall("PRAGMA foreign_key_check") == []

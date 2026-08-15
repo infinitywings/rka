@@ -18,9 +18,7 @@ class ProjectService(BaseService):
     """Manages projects and per-project state."""
 
     DEFAULT_PROJECT_ID = DEFAULT_PROJECT_ID
-    _SAFE_STORAGE_PROJECT_ID = re.compile(
-        r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z"
-    )
+    _SAFE_STORAGE_PROJECT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
     async def list_projects(self) -> list[ProjectInfo]:
         rows = await self.db.fetchall(
@@ -44,7 +42,9 @@ class ProjectService(BaseService):
         if existing_id:
             raise ValueError(f"Project '{project_id}' already exists")
 
-        existing_name = await self.db.fetchone("SELECT id FROM projects WHERE name = ?", [data.name])
+        existing_name = await self.db.fetchone(
+            "SELECT id FROM projects WHERE name = ?", [data.name]
+        )
         if existing_name:
             raise ValueError(f"Project name '{data.name}' already exists")
 
@@ -56,7 +56,12 @@ class ProjectService(BaseService):
         )
 
         phases = data.phases_config or [
-            "literature", "planning", "data_collection", "implementation", "evaluation", "paper_writing",
+            "literature",
+            "planning",
+            "data_collection",
+            "implementation",
+            "evaluation",
+            "paper_writing",
         ]
         await self.db.execute(
             """INSERT OR IGNORE INTO project_states
@@ -65,7 +70,9 @@ class ProjectService(BaseService):
             [project_id, data.name, data.description, phases[0], json.dumps(phases), now, now],
         )
         await self.db.commit()
-        await self.audit("create", "project", project_id, actor, {"name": data.name}, project_id=project_id)
+        await self.audit(
+            "create", "project", project_id, actor, {"name": data.name}, project_id=project_id
+        )
         row = await self.db.fetchone("SELECT * FROM projects WHERE id = ?", [project_id])
         return ProjectInfo(**dict(row))
 
@@ -108,8 +115,12 @@ class ProjectService(BaseService):
     ) -> ProjectState:
         """Implementation for :meth:`initialize` inside its transaction."""
         default_phases = phases or [
-            "literature", "planning", "data_collection",
-            "implementation", "evaluation", "paper_writing",
+            "literature",
+            "planning",
+            "data_collection",
+            "implementation",
+            "evaluation",
+            "paper_writing",
         ]
         await self.db.execute(
             """INSERT OR IGNORE INTO projects (id, name, description, created_by)
@@ -120,10 +131,21 @@ class ProjectService(BaseService):
             """INSERT OR REPLACE INTO project_states
                (project_id, project_name, project_description, current_phase, phases_config, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM project_states WHERE project_id = ?), ?), ?)""",
-            [project_id, name, description, default_phases[0], json.dumps(default_phases), project_id, _now(), _now()],
+            [
+                project_id,
+                name,
+                description,
+                default_phases[0],
+                json.dumps(default_phases),
+                project_id,
+                _now(),
+                _now(),
+            ],
         )
         await self.db.commit()
-        await self.audit("create", "project", project_id, "system", {"name": name}, project_id=project_id)
+        await self.audit(
+            "create", "project", project_id, "system", {"name": name}, project_id=project_id
+        )
         return await self.get(project_id=project_id)
 
     async def update(
@@ -181,7 +203,14 @@ class ProjectService(BaseService):
                 project_id=project_id,
             )
 
-        await self.audit("update", "project", project_id, actor, {"fields": list(updates.keys())}, project_id=project_id)
+        await self.audit(
+            "update",
+            "project",
+            project_id,
+            actor,
+            {"fields": list(updates.keys())},
+            project_id=project_id,
+        )
         return await self.get(project_id=project_id)
 
     # All project-scoped tables that must be cascade-deleted.
@@ -204,6 +233,7 @@ class ProjectService(BaseService):
         "reference_validation_migration_issues",
         # Research graph and operational records.
         "review_queue",
+        "claim_scope_versions",
         "interpretation_review_events",
         "interpretation_candidate_hints",
         "interpretation_promotions",
@@ -327,40 +357,27 @@ class ProjectService(BaseService):
 
     def _knowledge_pack_project_dir(self, project_id: str) -> Path:
         """Return the service-owned project directory after strict validation."""
-        if (
-            project_id in {".", ".."}
-            or not self._SAFE_STORAGE_PROJECT_ID.fullmatch(project_id)
-        ):
-            raise ValueError(
-                "Project ID is not safe for knowledge-pack storage cleanup"
-            )
+        if project_id in {".", ".."} or not self._SAFE_STORAGE_PROJECT_ID.fullmatch(project_id):
+            raise ValueError("Project ID is not safe for knowledge-pack storage cleanup")
 
         db_dir = Path(self.db.db_path).resolve().parent
         storage_root = db_dir / "knowledge-packs"
         if storage_root.is_symlink():
-            raise ValueError(
-                "Knowledge-pack storage root must not be a symbolic link"
-            )
+            raise ValueError("Knowledge-pack storage root must not be a symbolic link")
 
         resolved_root = storage_root.resolve()
         project_dir = storage_root / project_id
         if project_dir.is_symlink():
-            raise ValueError(
-                "Knowledge-pack project directory must not be a symbolic link"
-            )
+            raise ValueError("Knowledge-pack project directory must not be a symbolic link")
 
         resolved_project_dir = project_dir.resolve()
         if (
             not resolved_project_dir.is_relative_to(resolved_root)
             or resolved_project_dir.parent != resolved_root
         ):
-            raise ValueError(
-                "Project ID escapes knowledge-pack storage cleanup root"
-            )
+            raise ValueError("Project ID escapes knowledge-pack storage cleanup root")
         if project_dir.exists() and not project_dir.is_dir():
-            raise ValueError(
-                "Knowledge-pack project storage path is not a directory"
-            )
+            raise ValueError("Knowledge-pack project storage path is not a directory")
         return project_dir
 
     def _remove_knowledge_pack_project_dir(
@@ -372,9 +389,7 @@ class ProjectService(BaseService):
         """Remove only the validated service-owned directory after DB commit."""
         project_dir = self._knowledge_pack_project_dir(project_id)
         if project_dir != expected_path:
-            raise RuntimeError(
-                "Knowledge-pack project storage path changed during deletion"
-            )
+            raise RuntimeError("Knowledge-pack project storage path changed during deletion")
         if project_dir.exists():
             shutil.rmtree(project_dir)
             return True

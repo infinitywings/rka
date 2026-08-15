@@ -23,6 +23,7 @@ _PREFIXES = {
     "keynode": "knd",
     "graphview": "gvw",
     "claim": "clm",
+    "claim_scope": "csc",
     "cluster": "ecl",
     "claim_edge": "ced",
     "interpretation_candidate": "icd",

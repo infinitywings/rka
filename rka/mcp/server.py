@@ -4458,11 +4458,65 @@ async def rka_get_claims(
         lines.append(
             f"  [{cl['id']}] ({cl['claim_type']}) "
             f"grounded={v} evidence={evidence} contradicted={contradicted} "
+            f"scope={cl.get('scope_readiness', 'missing')} "
+            f"scope_rev={cl.get('scope_revision', 0)} "
             f"conf={cl.get('confidence', '?'):.2f}{s}"
         )
         lines.append(f"    {cl['content'][:500]}")
         lines.append(f"    source: {cl['source_entry_id']}")
     return "\n".join(lines)
+
+
+@tool(category="claims")
+async def rka_get_claim_scope(claim_id: str, *, project_id: str) -> str:
+    """Fetch current claim-scope readiness plus immutable scope history."""
+    async with _client(project_id) as c:
+        r = await c.get(f"/api/claims/{claim_id}/scope")
+        _raise_with_detail(r)
+    return json.dumps(r.json(), indent=2, ensure_ascii=False)
+
+
+@tool(category="claims")
+async def rka_set_claim_scope(
+    claim_id: str,
+    expected_revision: int,
+    actor: str,
+    reason: str,
+    conditions: list[dict] | None = None,
+    uncertainty: str = "unknown",
+    uncertainty_note: str | None = None,
+    extension_policy: str | None = None,
+    allowed_extensions: list[str] | None = None,
+    prohibited_extensions: list[str] | None = None,
+    falsifier_status: str = "unknown",
+    falsifier: str | None = None,
+    falsifier_rationale: str | None = None,
+    disconfirming_claim_ids: list[str] | None = None,
+    review_status: str = "draft",
+    *,
+    project_id: str,
+) -> str:
+    """Append a revision-guarded canonical claim-scope contract."""
+    payload = {
+        "expected_revision": expected_revision,
+        "actor": actor,
+        "reason": reason,
+        "conditions": conditions or [],
+        "uncertainty": uncertainty,
+        "uncertainty_note": uncertainty_note,
+        "extension_policy": extension_policy,
+        "allowed_extensions": allowed_extensions or [],
+        "prohibited_extensions": prohibited_extensions or [],
+        "falsifier_status": falsifier_status,
+        "falsifier": falsifier,
+        "falsifier_rationale": falsifier_rationale,
+        "disconfirming_claim_ids": disconfirming_claim_ids or [],
+        "review_status": review_status,
+    }
+    async with _client(project_id) as c:
+        r = await c.post(f"/api/claims/{claim_id}/scope", json=payload)
+        _raise_with_detail(r)
+    return json.dumps(r.json(), indent=2, ensure_ascii=False)
 
 
 @tool(category="claims")

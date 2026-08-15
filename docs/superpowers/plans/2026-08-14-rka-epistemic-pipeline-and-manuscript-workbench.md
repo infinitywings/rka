@@ -1,8 +1,8 @@
 # RKA Epistemic Pipeline and Manuscript Drafting Workbench
 
-Status: roadmap design source; M0 merged; M1 PR 1 Interpretation Staging
-implemented on its feature branch and pending review and merge; M1 PR 2 is
-next.
+Status: roadmap design source; M0 and M1 PR 1 Interpretation Staging merged;
+M1 PR 2 Claim Scope Contracts implemented and fully validated on its feature
+branch, pending review and merge; M2 PR 4 workbench hardening follows.
 
 Date: 2026-08-14
 
@@ -16,6 +16,8 @@ The real-project validation and resulting design revisions are recorded in the
 [`M0 walkthrough`](../specs/2026-08-14-delaysteer-workbench-walkthrough.md).
 The M1 interpretation and experiment boundary is frozen in
 [`ADR 0002`](../../adr/0002-interpretation-staging-and-experiment-boundary.md).
+The M1 canonical-claim applicability boundary is frozen in
+[`ADR 0003`](../../adr/0003-canonical-claim-scope-contracts.md).
 
 ## 1. Baseline and source snapshots
 
@@ -23,11 +25,11 @@ This plan targets the clean default RKA branch at:
 
 - repository: `infinitywings/rka`
 - branch: `main`
-- commit: `fee76542d69aa69c9490b4107a3e1ce68c1c0388`
+- commit: `a3f02813b10c940907e9f736c6bae890c525cf7c`
 - RKA package version: `2.9.0`
-- latest migration: `040`
+- latest migration: `041`
 
-The Writer behavior had a relevant delta that the M0 implementation now
+The Writer behavior had a relevant delta that the local M0 implementation now
 reconciles onto the current baseline:
 
 - remote branch: `origin/codex/writer-framing-elicitation`
@@ -1230,18 +1232,28 @@ projects.
 
 ## 21. Immediate next step
 
-PR 0A, PR 0B, and PR 1 are complete locally. The next implementation slice is
-**M1 / PR 2 Claim Scope Contracts**:
+PR 0A, PR 0B, and PR 1 are merged; PR 2 is implemented on its feature branch.
+PR 2 freezes the distinction
+between source-bounded candidate scope and canonical claim scope; adds
+backward-compatible typed conditions, uncertainty, extension, and falsifier
+contracts; migrates legacy claims without invented semantics; projects scope
+through REST, MCP, packs, graph, Writer gating, and the web; and passed its
+full-suite, production-build, isolated-container, concurrency, and browser
+acceptance gates on the rebased feature branch.
 
-1. freeze the distinction between source-bounded candidate scope and canonical
-   claim scope;
-2. define backward-compatible structured conditions, uncertainty,
-   allowed/prohibited extension, and falsifier contracts;
-3. migrate existing claims without inventing missing semantics;
-4. expose scope readiness and disconfirming observations through REST, MCP,
-   packs, graph, and the workbench;
-5. add revision-safe review operations and change-impact behavior;
-6. validate with scoped, over-broad, conflicting, and legacy DelaySteer claims.
+After PR 2 merges, the next implementation slice is **M2 / PR 4 Workbench
+Shell and Context Capsule hardening**:
+
+1. make the Context Capsule summarize interpretation and canonical-scope
+   readiness without collapsing independent evidence axes;
+2. deep-link workbench evidence and blockers into the relevant interpretation,
+   claim-scope, source, and manuscript views;
+3. make route and selection state resumable without creating a second semantic
+   store;
+4. surface localized stale-impact paths and explicitly label the still-missing
+   experiment/result layer;
+5. validate read-only navigation on DelaySteer and a mature positive-path
+   project before any deliberation or mutation UI is enabled.
 
 PR 3 remains deferred until the experiment/run/result schema is separately
 designed and reviewed. Interpretation candidates and ordinary journal entries
