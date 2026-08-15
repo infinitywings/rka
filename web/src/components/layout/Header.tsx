@@ -1,12 +1,21 @@
 import { useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { Search, Circle } from "lucide-react"
+import { Search, Circle, Menu } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import {
+  Sheet,
+  SheetContent,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet"
+import { Sidebar } from "./Sidebar"
 import { useHealth } from "@/hooks/useProject"
 
 export function Header() {
   const [query, setQuery] = useState("")
+  const [navigationOpen, setNavigationOpen] = useState(false)
   const navigate = useNavigate()
   const { data: health } = useHealth()
 
@@ -19,9 +28,32 @@ export function Header() {
   }
 
   return (
-    <header className="flex h-14 items-center justify-between border-b bg-background px-6">
+    <header className="flex h-14 shrink-0 items-center gap-2 border-b bg-background px-3 sm:px-6">
+      <Sheet open={navigationOpen} onOpenChange={setNavigationOpen}>
+        <SheetTrigger
+          render={
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="shrink-0 md:hidden"
+            />
+          }
+        >
+          <Menu className="h-4 w-4" />
+          <span className="sr-only">Open navigation</span>
+        </SheetTrigger>
+        <SheetContent side="left" className="w-72 gap-0 p-0">
+          <SheetTitle className="sr-only">RKA navigation</SheetTitle>
+          <Sidebar
+            className="h-full w-full border-r-0"
+            onNavigate={() => setNavigationOpen(false)}
+          />
+        </SheetContent>
+      </Sheet>
+
       {/* Search */}
-      <form onSubmit={handleSearch} className="flex items-center gap-2 w-full max-w-md">
+      <form onSubmit={handleSearch} className="flex min-w-0 flex-1 items-center gap-2 sm:max-w-md">
         <div className="relative flex-1">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
@@ -35,7 +67,7 @@ export function Header() {
       </form>
 
       {/* Status Indicators */}
-      <div className="flex items-center gap-3">
+      <div className="hidden shrink-0 items-center gap-3 sm:flex">
         {health && (
           <>
             <Badge variant="outline" className="gap-1.5 text-xs">

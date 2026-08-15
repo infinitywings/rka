@@ -203,7 +203,11 @@ export default function ManuscriptWorkbench() {
           </p>
         </div>
 
-        <form key={manuscriptId ?? "project-only"} onSubmit={handleLoad} className="flex w-full gap-2 lg:w-[34rem]">
+        <form
+          key={manuscriptId ?? "project-only"}
+          onSubmit={handleLoad}
+          className="flex w-full flex-col gap-2 sm:flex-row lg:w-[34rem]"
+        >
           <Input
             name="manuscript_id"
             defaultValue={manuscriptId ?? ""}
