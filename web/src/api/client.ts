@@ -153,6 +153,10 @@ import type {
   ManuscriptReadiness,
   ManuscriptSpine,
   ManuscriptWritingCandidates,
+  InterpretationCandidate,
+  InterpretationCandidateDetail,
+  InterpretationReviewStatus,
+  InterpretationTriageRequest,
 } from "./types"
 
 export const api = {
@@ -403,6 +407,38 @@ export const api = {
     const qs = search.toString()
     return get<ClaimData[]>(`/claims${qs ? `?${qs}` : ""}`)
   },
+
+  // M1: reviewable source interpretations. A candidate is not a claim until
+  // the explicit, revision-guarded promote action succeeds.
+  listInterpretationCandidates: (params?: {
+    review_status?: InterpretationReviewStatus
+    disposition?: string
+    epistemic_kind?: string
+    source_type?: string
+    source_id?: string
+    limit?: number
+  }) => {
+    const search = new URLSearchParams()
+    if (params?.review_status) search.set("review_status", params.review_status)
+    if (params?.disposition) search.set("disposition", params.disposition)
+    if (params?.epistemic_kind) search.set("epistemic_kind", params.epistemic_kind)
+    if (params?.source_type) search.set("source_type", params.source_type)
+    if (params?.source_id) search.set("source_id", params.source_id)
+    search.set("limit", String(params?.limit ?? 200))
+    return get<InterpretationCandidate[]>(`/interpretations?${search.toString()}`)
+  },
+  getInterpretationCandidate: (candidateId: string) =>
+    get<InterpretationCandidateDetail>(
+      `/interpretations/${encodeURIComponent(candidateId)}`,
+    ),
+  triageInterpretationCandidate: (
+    candidateId: string,
+    data: InterpretationTriageRequest,
+  ) =>
+    post<InterpretationCandidateDetail>(
+      `/interpretations/${encodeURIComponent(candidateId)}/triage`,
+      data,
+    ),
 
   // v2.0: Review Queue
   getReviewQueue: (params?: { status?: string; limit?: number }) => {

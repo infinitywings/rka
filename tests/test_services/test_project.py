@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 from rka.models.project import ProjectCreate
+from rka.models.interpretation import InterpretationCandidateCreate
+from rka.services.interpretation import InterpretationService
 from rka.services.project import ProjectService
 
 
@@ -194,6 +196,55 @@ async def test_confirmed_project_delete_is_only_immutable_history_exception(
     ) is None
     assert await db.fetchall(
         "SELECT * FROM project_deletion_authorizations"
+    ) == []
+    assert await db.fetchall("PRAGMA foreign_key_check") == []
+
+
+@pytest.mark.asyncio
+async def test_confirmed_project_delete_removes_interpretation_history(db) -> None:
+    svc = ProjectService(db)
+    project_id = "proj_delete_interpretations"
+    await svc.create_project(
+        ProjectCreate(id=project_id, name="Delete Interpretation History"),
+        actor="system",
+    )
+    await db.execute(
+        """INSERT INTO journal
+           (id, project_id, type, content, source, confidence)
+           VALUES ('jrn_delete_interpretations', ?, 'note', ?, 'executor', 'tested')""",
+        [project_id, "The isolated run measured 42 ms."],
+    )
+    await db.commit()
+    candidate = await InterpretationService(db, project_id=project_id).create(
+        InterpretationCandidateCreate(
+            source_type="journal",
+            source_id="jrn_delete_interpretations",
+            locator_kind="record",
+            locator_value="full_record",
+            statement="The isolated run measured 42 ms.",
+            epistemic_kind="observation",
+            created_by="executor",
+            extraction_tool="pytest",
+            proposed_claim_type="result",
+        )
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="project-authorized deletion"):
+        await db.execute(
+            "DELETE FROM interpretation_candidates WHERE id = ?",
+            [candidate.id],
+        )
+
+    result = await svc.delete_project(project_id, confirm=True)
+
+    assert result["confirmed"] is True
+    assert await db.fetchall(
+        "SELECT * FROM interpretation_candidates WHERE project_id = ?",
+        [project_id],
+    ) == []
+    assert await db.fetchall(
+        "SELECT * FROM interpretation_review_events WHERE project_id = ?",
+        [project_id],
     ) == []
     assert await db.fetchall("PRAGMA foreign_key_check") == []
 

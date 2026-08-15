@@ -46,6 +46,7 @@ from rka.api.routes import (
     verification as verification_routes,
     researcher_tools as researcher_tools_routes,
     hooks as hooks_routes,
+    interpretations as interpretations_routes,
     zotero_config as zotero_config_routes,
 )
 from rka.config import RKAConfig
@@ -313,6 +314,11 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
     app.include_router(artifact_routes.router, prefix="/api", tags=["artifacts"])
     app.include_router(llm_routes.router, prefix="/api", tags=["llm"])
     app.include_router(claims_routes.router, prefix="/api", tags=["claims"])
+    app.include_router(
+        interpretations_routes.router,
+        prefix="/api",
+        tags=["interpretation-staging"],
+    )
     app.include_router(clusters_routes.router, prefix="/api", tags=["clusters"])
     app.include_router(topics_routes.router, prefix="/api", tags=["topics"])
     app.include_router(research_map_routes.router, prefix="/api", tags=["research-map"])

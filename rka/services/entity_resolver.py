@@ -128,6 +128,24 @@ _ENTITY_SPECS: dict[str, _EntitySpec] = {
         "claims",
         bool_fields=("verified", "stale", "embedding_pending"),
     ),
+    "icd": _EntitySpec(
+        "interpretation_candidate",
+        "interpretation_candidates",
+        json_fields=("scope_conditions",),
+        version_fields=("revision",),
+    ),
+    "ich": _EntitySpec(
+        "interpretation_hint",
+        "interpretation_candidate_hints",
+    ),
+    "icv": _EntitySpec(
+        "interpretation_review",
+        "interpretation_review_events",
+    ),
+    "ipm": _EntitySpec(
+        "interpretation_promotion",
+        "interpretation_promotions",
+    ),
     "ecl": _EntitySpec(
         "cluster",
         "evidence_clusters",

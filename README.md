@@ -64,15 +64,20 @@ RKA does not require every raw note to become a formal conclusion immediately. K
 ```mermaid
 flowchart LR
     Journal["Journal<br/>observations · procedures · directives"]
+    Candidates["Interpretation candidates<br/>source locator · uncertainty · falsifier"]
     Claims["Claims<br/>typed assertions with source spans"]
     Clusters["Evidence clusters<br/>related claims + synthesis"]
     Questions["Research map<br/>questions · gaps · contradictions"]
     Writing["Claim spine<br/>argument · contribution · evaluation"]
 
-    Journal --> Claims --> Clusters --> Questions --> Writing
+    Journal --> Candidates --> Claims --> Clusters --> Questions --> Writing
 ```
 
-Raw records remain available even when later interpretations change. Derived claims and clusters can be reviewed, superseded, or rebuilt without rewriting history.
+Raw records remain available even when later interpretations change. Candidate
+interpretations must be reviewed explicitly before promotion; they can be
+deferred, rejected, merged, or classified without silently becoming scientific
+claims. Derived claims and clusters can be reviewed, superseded, or rebuilt
+without rewriting history.
 
 ### Provenance by construction
 
@@ -106,6 +111,7 @@ Zotero, repositories, notebooks, and experimental platforms remain important sou
 ## What is available today
 
 - **Persistent, multi-project research records** for journals, literature, decisions, missions, reports, checkpoints, and artifacts.
+- **Interpretation staging** with exact source locators, uncertainty, falsifiers, immutable review history, and explicit promotion or revocation.
 - **Claims and evidence clusters** with source-span provenance, confidence states, contradictions, and review workflows.
 - **Research maps** connecting research questions to clusters and individual claims.
 - **Decision and freshness lifecycles** with supersession, staleness propagation, assumption tracking, and historical belief queries.

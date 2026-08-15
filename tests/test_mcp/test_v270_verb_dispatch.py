@@ -97,6 +97,7 @@ def recorder(monkeypatch) -> _Recorder:
         ("literature", "rka_get_literature", {}),
         ("clusters", "rka_list_clusters", {}),
         ("claims", "rka_get_claims", {}),
+        ("interpretation_candidates", "rka_get_interpretation_candidates", {}),
         ("hooks", "rka_list_hooks", {}),
         ("hook_executions", "rka_get_hook_executions", {}),
         ("brain_notifications", "rka_get_brain_notifications", {}),
@@ -172,6 +173,55 @@ async def test_dispatch_query_threads_project_id(
     assert recorder.calls
     _, captured_kw = recorder.calls[-1]
     assert captured_kw.get("project_id") == "prj_specific_test"
+
+
+async def test_dispatch_interpretation_staging_threads_typed_review_fields(
+    recorder: _Recorder,
+) -> None:
+    await verb_dispatch.dispatch_execute(
+        "create_interpretation_candidate",
+        project_id="prj_stage",
+        source_type="journal",
+        source_id="jrn_source",
+        locator_kind="record",
+        locator_value="full_record",
+        statement="The local run measured 42 ms.",
+        epistemic_kind="observation",
+        created_by="brain",
+        extraction_tool="manual_review",
+        proposed_claim_type="result",
+    )
+    name, payload = recorder.calls[-1]
+    assert name == "rka_create_interpretation_candidate"
+    assert payload["project_id"] == "prj_stage"
+    assert payload["locator_value"] == "full_record"
+    assert payload["proposed_claim_type"] == "result"
+
+    await verb_dispatch.dispatch_execute(
+        "triage_interpretation_candidate",
+        project_id="prj_stage",
+        id="icd_candidate",
+        action="promote",
+        expected_revision=2,
+        actor="brain",
+        reason="Checked the exact journal record.",
+        grounding_verified=True,
+        claim_confidence=0.83,
+    )
+    name, payload = recorder.calls[-1]
+    assert name == "rka_triage_interpretation_candidate"
+    assert payload == {
+        "candidate_id": "icd_candidate",
+        "action": "promote",
+        "expected_revision": 2,
+        "actor": "brain",
+        "reason": "Checked the exact journal record.",
+        "target_candidate_id": None,
+        "target_entity_id": None,
+        "grounding_verified": True,
+        "claim_confidence": 0.83,
+        "project_id": "prj_stage",
+    }
 
 
 # ---------------------------------------------------------------------------

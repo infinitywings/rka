@@ -7,25 +7,30 @@ substrate with a researcher-facing manuscript drafting workbench.
 
 The M0 authority, stage, proposal, and provider decisions are recorded in
 [ADR 0001](docs/adr/0001-manuscript-workbench-authority-stage-and-ai-boundary.md).
+The M1 interpretation boundary is recorded in
+[ADR 0002](docs/adr/0002-interpretation-staging-and-experiment-boundary.md).
 
 The roadmap is ordered by dependency, not by invented delivery dates. Every
 milestone must satisfy its exit gate before dependent work is treated as ready.
 
 ## Now
 
-**M0 / PR 0A and PR 0B are implemented and technically validated on the
-workbench feature branch.** The choice-first Writer delta is reconciled, the
-authority and AI boundary is recorded in ADR 0001, and the read-only workbench
-has been walked through with DelaySteer and a full-manuscript control.
+**M0 is merged. M1 / PR 1 Interpretation Staging is implemented on its feature
+branch and pending review and merge.** The choice-first Writer delta is
+reconciled, the authority and AI boundary is recorded in ADR 0001, and the
+read-only workbench has been walked through with DelaySteer and a
+full-manuscript control.
 
 The walkthrough and its design revisions are recorded in
 [`2026-08-14-delaysteer-workbench-walkthrough.md`](docs/superpowers/specs/2026-08-14-delaysteer-workbench-walkthrough.md).
-The authority and stage contracts have researcher approval. The remaining M0
-gate is review and merge of this feature slice. After merge, the immediate
-implementation target is **M1 / PR 1 Interpretation Staging and
-experiment-contract schema design**. M2 / PR 4 may expand the read-only
-workbench in parallel, but no migration should land before the M1 schema ADR is
-approved.
+The authority and stage contracts have researcher approval. PR 1 now includes
+the candidate schema and immutable audit history, exact source locators,
+duplicate/conflict hints, explicit promotion and revocation, deterministic
+review UI, REST/MCP/knowledge-pack parity, a full-suite release gate, an
+isolated Docker smoke test, and a disposable DelaySteer browser pilot. The
+next implementation target after this slice merges is **M1 / PR 2 claim scope
+contracts**; the PR 3 experiment boundary remains explicitly deferred until
+its schema is designed and reviewed.
 
 ## Dependency map
 

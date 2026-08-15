@@ -108,12 +108,15 @@ schema-valid `entity_links` vocabulary. Writer never invents edge types.
 The writing path is hierarchical:
 
 ```text
-journal -> grounded claim -> reviewed evidence cluster
+journal -> staged interpretation candidate -> explicitly promoted grounded claim
+-> reviewed evidence cluster
 -> active research question -> unratified candidate -> native claim and unit
 ```
 
 Each boundary reduces noise without destroying history. Journals are never
-promoted directly. Source claims must pass grounding, scientific-support,
+promoted directly. Candidate extraction is not claim creation; the reviewer
+must inspect its exact locator, uncertainty, scope, and conflict/duplicate
+hints before explicit promotion. Source claims must then pass grounding, scientific-support,
 currency, project, source, and contradiction checks. Duplicate support stays
 linked but does not create extra candidate claims. A cluster must be current,
 Brain-reviewed, sufficiently confident, and bound to an active research

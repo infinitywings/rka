@@ -84,6 +84,14 @@ from rka.mcp._enums import (  # noqa: E402, F811
     GateTypeLit,
     ImportanceLit,
     IngestSourceLit,
+    EpistemicKindLit,
+    InterpretationActorLit,
+    InterpretationHintKindLit,
+    InterpretationLocatorLit,
+    InterpretationReviewActorLit,
+    InterpretationSourceLit,
+    InterpretationTriageActionLit,
+    InterpretationUncertaintyLit,
     LitStatusLit,
     NoteTypeLit,
     SourceLit,
@@ -442,6 +450,21 @@ class QueryClaimsArgs(ProjectScopedArgs, PaginatedFiltersMixin):
     """
 
     operation: Literal["claims"] = "claims"
+
+
+class QueryInterpretationCandidatesArgs(ProjectScopedArgs, PaginatedFiltersMixin):
+    """[ANY] List staged interpretations or fetch one candidate detail.
+
+    ``id`` selects the detailed candidate with immutable review history.
+    Filter keys: ``review_status``, ``disposition``, ``epistemic_kind``,
+    ``source_type``, and ``source_id``.
+    """
+
+    operation: Literal["interpretation_candidates"] = "interpretation_candidates"
+    id: Annotated[
+        Optional[str],
+        Field(default=None, description="Optional icd_ id for detailed history."),
+    ] = None
 
 
 class QueryManuscriptArgs(ProjectScopedArgs):
@@ -1117,6 +1140,7 @@ QueryArgsUnion = Annotated[
         QueryReviewQueueArgs,
         QueryClustersArgs,
         QueryClaimsArgs,
+        QueryInterpretationCandidatesArgs,
         QueryManuscriptArgs,
         QueryReferenceValidationStatusArgs,
         ResolveEntitiesArgs,
@@ -2208,6 +2232,20 @@ class _ExtractClaimItem(BaseModel):
             ),
         ),
     ]
+    epistemic_kind: Annotated[
+        Optional[EpistemicKindLit],
+        Field(default=None, description="Explicit interpretation kind; inferred from claim_type when omitted."),
+    ] = None
+    source_offset_start: Annotated[Optional[int], Field(default=None, ge=0)] = None
+    source_offset_end: Annotated[Optional[int], Field(default=None, ge=0)] = None
+    scope_conditions: Annotated[Optional[list[str]], Field(default=None)] = None
+    uncertainty: Annotated[
+        InterpretationUncertaintyLit,
+        Field(default="unknown", description="Known uncertainty at extraction time."),
+    ] = "unknown"
+    uncertainty_note: Annotated[Optional[str], Field(default=None)] = None
+    falsifier: Annotated[Optional[str], Field(default=None)] = None
+    extraction_model: Annotated[Optional[str], Field(default=None)] = None
 
 
 class ExtractClaimsArgs(ProjectScopedArgs):
@@ -2230,6 +2268,83 @@ class ExtractClaimsArgs(ProjectScopedArgs):
             ),
         ),
     ]
+
+
+class CreateInterpretationCandidateArgs(ProjectScopedArgs):
+    """[BRAIN/EXECUTOR/PI] Stage one atomic source interpretation."""
+
+    operation: Literal["create_interpretation_candidate"] = (
+        "create_interpretation_candidate"
+    )
+    source_type: Annotated[InterpretationSourceLit, Field(description="Source entity type.")]
+    source_id: Annotated[str, Field(min_length=1, max_length=128)]
+    locator_kind: Annotated[InterpretationLocatorLit, Field(description="Exact locator shape.")]
+    statement: Annotated[str, Field(min_length=1, max_length=20_000)]
+    epistemic_kind: Annotated[EpistemicKindLit, Field(description="Meaning of this staged statement.")]
+    created_by: Annotated[InterpretationActorLit, Field(description="Candidate author/extractor.")]
+    extraction_tool: Annotated[str, Field(min_length=1, max_length=256)]
+    locator_start: Annotated[Optional[int], Field(default=None, ge=0)] = None
+    locator_end: Annotated[Optional[int], Field(default=None, ge=0)] = None
+    locator_value: Annotated[Optional[str], Field(default=None, max_length=2048)] = None
+    scope_conditions: Annotated[Optional[list[str]], Field(default=None, max_length=100)] = None
+    uncertainty: Annotated[
+        InterpretationUncertaintyLit, Field(default="unknown")
+    ] = "unknown"
+    uncertainty_note: Annotated[Optional[str], Field(default=None, max_length=4000)] = None
+    falsifier: Annotated[Optional[str], Field(default=None, max_length=10_000)] = None
+    proposed_claim_type: Annotated[Optional[ClaimTypeLit], Field(default=None)] = None
+    extraction_model: Annotated[Optional[str], Field(default=None, max_length=256)] = None
+
+    @model_validator(mode="after")
+    def _validate_locator(self) -> "CreateInterpretationCandidateArgs":
+        if self.locator_kind in {"text_offset", "page", "line_range"}:
+            if self.locator_start is None:
+                raise ValueError(f"{self.locator_kind} requires locator_start")
+            if self.locator_end is not None and self.locator_end < self.locator_start:
+                raise ValueError("locator_end must be >= locator_start")
+        elif not self.locator_value or not self.locator_value.strip():
+            raise ValueError(f"{self.locator_kind} requires locator_value")
+        return self
+
+
+class AddInterpretationHintArgs(ProjectScopedArgs):
+    """[BRAIN/PI] Attach a duplicate/conflict review hint."""
+
+    operation: Literal["add_interpretation_hint"] = "add_interpretation_hint"
+    id: Annotated[str, Field(description="Candidate receiving the hint.")]
+    related_candidate_id: Annotated[str, Field(description="Related candidate id.")]
+    kind: Annotated[InterpretationHintKindLit, Field(description="Duplicate or conflict.")]
+    rationale: Annotated[str, Field(min_length=1, max_length=10_000)]
+    created_by: Annotated[InterpretationActorLit, Field(description="Hint author.")]
+    expected_revision: Annotated[int, Field(ge=1)]
+    confidence: Annotated[float, Field(default=0.5, ge=0.0, le=1.0)] = 0.5
+
+
+class TriageInterpretationCandidateArgs(ProjectScopedArgs):
+    """[BRAIN/PI] Review, promote, reopen, or revoke one candidate."""
+
+    operation: Literal["triage_interpretation_candidate"] = (
+        "triage_interpretation_candidate"
+    )
+    id: Annotated[str, Field(description="Interpretation candidate id.")]
+    action: Annotated[InterpretationTriageActionLit, Field(description="Review action.")]
+    expected_revision: Annotated[int, Field(ge=1)]
+    actor: Annotated[InterpretationReviewActorLit, Field(description="Reviewing actor.")]
+    reason: Annotated[Optional[str], Field(default=None, max_length=10_000)] = None
+    target_candidate_id: Annotated[Optional[str], Field(default=None, max_length=128)] = None
+    target_entity_id: Annotated[Optional[str], Field(default=None, max_length=128)] = None
+    grounding_verified: Annotated[bool, Field(default=False)] = False
+    claim_confidence: Annotated[float, Field(default=0.5, ge=0.0, le=1.0)] = 0.5
+
+    @model_validator(mode="after")
+    def _validate_triage(self) -> "TriageInterpretationCandidateArgs":
+        if self.action != "start_review" and not self.reason:
+            raise ValueError(f"{self.action} requires reason")
+        if self.action == "merge" and not self.target_candidate_id:
+            raise ValueError("merge requires target_candidate_id")
+        if self.action == "promote" and not self.grounding_verified:
+            raise ValueError("promote requires grounding_verified=true")
+        return self
 
 
 # --- checkpoint / gates ---------------------------------------------------
@@ -2381,6 +2496,9 @@ BatchBExecuteUnion = Annotated[
         CreateGateArgs,
         HookAddArgs,
         ExtractClaimsArgs,
+        CreateInterpretationCandidateArgs,
+        AddInterpretationHintArgs,
+        TriageInterpretationCandidateArgs,
     ],
     Field(discriminator="operation"),
 ]
@@ -4279,6 +4397,9 @@ ExecuteArgsUnion = Annotated[
         CreateGateArgs,
         HookAddArgs,
         ExtractClaimsArgs,
+        CreateInterpretationCandidateArgs,
+        AddInterpretationHintArgs,
+        TriageInterpretationCandidateArgs,
         # ===== Batch C — UPDATE/LIFECYCLE/SUBMIT (22) =====
         UpdateNoteArgs,
         UpdateDecisionArgs,
@@ -4346,6 +4467,7 @@ __all__ = [
     "QueryReviewQueueArgs",
     "QueryClustersArgs",
     "QueryClaimsArgs",
+    "QueryInterpretationCandidatesArgs",
     "QueryManuscriptArgs",
     "QueryReferenceValidationStatusArgs",
     "ResolveEntitiesArgs",
@@ -4404,6 +4526,9 @@ __all__ = [
     "CreateGateArgs",
     "HookAddArgs",
     "ExtractClaimsArgs",
+    "CreateInterpretationCandidateArgs",
+    "AddInterpretationHintArgs",
+    "TriageInterpretationCandidateArgs",
     # Batch B partial union
     "BatchBExecuteUnion",
     # Batch D — Review / Maintenance / Hooks / Workspace write models
