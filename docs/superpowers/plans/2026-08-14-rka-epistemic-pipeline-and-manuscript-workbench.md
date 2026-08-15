@@ -2,7 +2,7 @@
 
 Status: roadmap design source; M0, M1 PR 1 Interpretation Staging, and M1 PR 2
 Claim Scope Contracts merged; the first M2 PR 4 workbench-hardening slice is
-implemented on its feature branch and pending validation, review, and merge.
+implemented and fully validated on its feature branch, pending review and merge.
 
 Date: 2026-08-14
 
@@ -1243,7 +1243,8 @@ acceptance gates.
 The active milestone is **M2 / PR 4 Workbench Shell and Context Capsule
 hardening**. The first slice now provides scope-aware capsule summaries,
 URL-resumable stage and review selection, and evidence-to-review trace links.
-Its disposable production-browser acceptance path is recorded in
+Its production build, focused lint, full 2,844-test backend suite, and
+disposable production-browser acceptance path all pass. The evidence is recorded in
 [`2026-08-14-workbench-scope-navigation-walkthrough.md`](../specs/2026-08-14-workbench-scope-navigation-walkthrough.md).
 
 The real-project admission pass now covers DelaySteer, InvarLLM, CPSEval, and

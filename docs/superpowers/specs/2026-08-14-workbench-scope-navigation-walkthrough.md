@@ -2,12 +2,13 @@
 
 Date: 2026-08-14
 
-Branch: `feature/rka-workbench-scope-navigation`
+Branch: `feature/rka-workbench-navigation-m2`
 
-Base commits:
+Merged-main baseline:
 
-- `fb4ab7c` — canonical claim scope contracts;
-- `ceab2a1` — corrected MCP operation-count documentation.
+- `1ef67b6` — merged canonical claim scope contracts (PR 71).
+
+Validation refresh: 2026-08-15
 
 ## Purpose
 
@@ -19,7 +20,7 @@ boundary without creating a second semantic store.
 
 ## Disposable scenario
 
-The production image was started on localhost-only port `19715` with a fresh
+The rebased production image was started on localhost-only port `19712` with a fresh
 container-owned database and embeddings disabled. The scenario contained:
 
 - one source journal record;
@@ -59,9 +60,11 @@ The container was stopped and auto-removed after testing.
 
 ## Result
 
-All eleven checks passed in the in-app browser. The production web build also
-passed TypeScript compilation and focused ESLint checks. The existing Vite
-large-chunk warning remains; it is not introduced by this slice.
+All eleven checks passed in the in-app browser both before and after rebasing
+onto merged PR 71. The production web build, focused ESLint checks, Docker
+image build, and full backend suite (`2,844 passed`) also passed on the rebased
+branch. The existing Vite large-chunk warning remains; it is not introduced by
+this slice.
 
 ## Preserved boundaries
 

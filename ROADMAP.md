@@ -18,8 +18,8 @@ milestone must satisfy its exit gate before dependent work is treated as ready.
 ## Now
 
 **M0, M1 / PR 1, and M1 / PR 2 are merged. The first M2 / PR 4 workbench
-hardening slice is implemented on its feature branch and pending validation,
-review, and merge.** The choice-first Writer delta is reconciled, the authority
+hardening slice is implemented and fully validated on its feature branch;
+review and merge are the remaining publication gates.** The choice-first Writer delta is reconciled, the authority
 and AI boundary is recorded in ADR 0001, and the read-only workbench has been
 walked through with DelaySteer and a full-manuscript control.
 
@@ -50,7 +50,7 @@ detectability through an online database backup. Project isolation passed, and
 the workbench correctly refused to invent scopes or spines: the first two
 projects have no native manuscript, while CPSEval and detectability have native
 manuscripts but empty spines; all four still contain only legacy claims with
-missing canonical scopes. After this slice is validated and merged, the
+missing canonical scopes. After this slice is merged, the
 immediate target remains **M2 / PR 4**: run a bounded positive-path migration on
 a disposable CPSEval database copy because it already has a native manuscript
 and fewer legacy claims than detectability. No live semantic record will be
