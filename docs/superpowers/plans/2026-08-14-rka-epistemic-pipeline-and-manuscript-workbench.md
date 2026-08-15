@@ -1,7 +1,7 @@
 # RKA Epistemic Pipeline and Manuscript Drafting Workbench
 
-Status: roadmap design source; M0, M1, M2, and M3 PR 5 are complete on `main`.
-M3 PR 6 unified semantic patch proposals is the active implementation slice.
+Status: roadmap design source; M0 through M3 are complete on `main`.
+M4 PR 7 seed-through-contribution guidance is the active implementation slice.
 
 Date: 2026-08-14
 
@@ -25,6 +25,9 @@ The PR 5 release evidence is recorded in the
 [`M3 planning-branch exit record`](../specs/2026-08-15-workbench-m3-pr5-exit-evidence.md).
 The PR 6 proposal and provider boundary is frozen in
 [`ADR 0006`](../../adr/0006-unified-semantic-patch-proposals.md).
+The PR 7 guidance, stable candidate identity, promotion, and exact PI
+ratification boundary is frozen in
+[`ADR 0007`](../../adr/0007-seed-to-contribution-guidance-and-promotion.md).
 
 ## 1. Baseline and source snapshots
 
@@ -32,10 +35,10 @@ This plan targets the clean default RKA branch at:
 
 - repository: `infinitywings/rka`
 - branch: `main`
-- current implementation baseline: `5ec717fca5936853ae80e71d5594e2557f37a1be`
+- current implementation baseline: `6cdf0f7073ecb30300df030d4016b95377652b57`
 - original plan baseline: `edb1e6f170025a77ddcb5b89038d0e1a34af4857`
 - RKA package version: `2.9.0`
-- latest migration on baseline: `043`
+- latest migration on baseline: `044`
 
 The Writer behavior had a relevant delta that the local M0 implementation now
 reconciles onto the current baseline:
@@ -1282,8 +1285,8 @@ The live pack exporter also emits agentic-branch staleness fields that current
 semantic columns. Cross-branch pack migration belongs to the intake/hardening
 milestone and must not be solved by dropping them.
 
-M1 / PR 3 and M3 / PR 5 are now complete on `main`. The active
-dependency-ordered target is **M3 / PR 6**. Its proposal authority and provider
-boundary are frozen in ADR 0006. After its migration, REST/MCP, pack,
-change-impact, concurrency, UI, and disposable-project gates pass and merge,
-the next target is **M4 / PR 7: seed-through-contribution guided workflow**.
+M1 through M3 are now complete on `main`. PR 6 merged in #77, and its proposal
+authority and provider boundary remain frozen in ADR 0006. The active
+dependency-ordered target is **M4 / PR 7: seed-through-contribution guided
+workflow**. ADR 0007 freezes its stage, candidate-identity, promotion-ledger,
+semantic-proposal, and exact PI-ratification contract.
