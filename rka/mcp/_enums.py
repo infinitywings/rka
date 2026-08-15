@@ -343,6 +343,30 @@ EvidenceLocatorKindLit = Literal[
 ]
 ClaimEvidenceRoleLit = Literal["support", "qualifier", "counterevidence", "context"]
 
+# Provisional manuscript-planning branches (rka/models/planning.py).
+PlanningActorLit = Literal["pi", "brain", "executor", "web_ui", "llm", "import"]
+PlanningBranchStateLit = Literal["active", "selected", "archived", "superseded"]
+PlanningStageLit = Literal[
+    "seed",
+    "paragraph_spine",
+    "problem_scope",
+    "landscape_gap",
+    "response_mechanism",
+    "challenge_innovation",
+    "rq_contribution",
+    "evaluation",
+    "outline",
+    "review",
+]
+PlanningLifecycleLit = Literal[
+    "candidate", "reviewed", "selected", "parked", "superseded", "archived"
+]
+PlanningOriginLit = Literal["user", "ai_suggested", "imported", "user_revised"]
+PlanningReadinessLit = Literal["blocked", "in_progress", "ready"]
+PlanningPromotionTargetLit = Literal[
+    "manuscript", "manuscript_claim", "manuscript_unit", "experiment", "decision"
+]
+
 # Scientific evidence assessment on a claim. This is intentionally
 # independent from ``claims.verified``, which records extraction/grounding
 # fidelity against the source entry.

@@ -54,6 +54,11 @@ _PREFIXES = {
     "manuscript_checkpoint": "mck",
     "manuscript_verification": "mva",
     "manuscript_reference": "mrf",
+    "manuscript_planning_branch": "mpb",
+    "manuscript_planning_branch_event": "pbe",
+    "manuscript_planning_artifact": "pla",
+    "manuscript_planning_artifact_version": "plv",
+    "manuscript_planning_evidence_binding": "plb",
 }
 
 

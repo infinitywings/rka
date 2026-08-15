@@ -174,7 +174,7 @@ export function ContextCapsule({
           </div>
           <div className="flex flex-wrap gap-1.5">
             <Badge variant="outline"><Database className="mr-1 h-3 w-3" />RKA authoritative</Badge>
-            <Badge variant="outline"><FileText className="mr-1 h-3 w-3" />Read-only prototype</Badge>
+            <Badge variant="outline"><FileText className="mr-1 h-3 w-3" />Canonical views read-only</Badge>
           </div>
         </div>
 

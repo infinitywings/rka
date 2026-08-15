@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { ContextCapsule } from "@/components/workbench/ContextCapsule"
+import { PlanningBranchPanel } from "@/components/workbench/PlanningBranchPanel"
 import {
   EvidenceInspector,
   type WorkbenchTraceItem,
@@ -56,7 +57,7 @@ type ScopedTraceSelection = {
 }
 
 const stageDescriptions: Record<WorkbenchStageId, string> = {
-  seed: "Author intent and candidate inspiration. A seed is not evidence and is not stored by this prototype.",
+  seed: "Author intent and candidate inspiration. A captured seed remains provisional planning and never becomes evidence by itself.",
   spine: "Current ratified claims first, then server-attested candidate claims. No prose is generated here.",
   scope: "Allowed and prohibited wording make the claim boundary visible before drafting.",
   landscape: "Research questions and their cluster coverage organize the evidence landscape.",
@@ -154,8 +155,8 @@ export default function ManuscriptWorkbench() {
     title: stageMeta.label,
     summary: stageDescriptions[stage],
     kind: "stage contract",
-    origin: "M0 workbench architecture decision",
-    derivation: "Interface-only projection; it creates no RKA record and performs no LLM call.",
+    origin: "Workbench stage contract (ADR 0001 and ADR 0005)",
+    derivation: "Stage guidance is a deterministic projection. Captured work is stored separately as provisional planning; this view performs no LLM call.",
     ids: manuscriptId ? [projectId, manuscriptId] : [projectId],
     status: verdicts[stage],
     trace: manuscriptId ? [projectId, manuscriptId, stage] : [projectId, stage],
@@ -224,7 +225,7 @@ export default function ManuscriptWorkbench() {
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-semibold tracking-tight">Manuscript Workbench</h1>
-            <Badge variant="outline">M2 read-only</Badge>
+            <Badge variant="outline">M3 provisional planning</Badge>
           </div>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
             Navigate the argument from seed to outline while preserving the distinction between RKA evidence,
@@ -301,6 +302,8 @@ export default function ManuscriptWorkbench() {
         scopeSummary={scopeSummary}
       />
 
+      <PlanningBranchPanel manuscriptId={manuscriptId} />
+
       <div className="grid gap-4 xl:grid-cols-[17rem_minmax(0,1fr)]">
         <Card className="h-fit">
           <CardHeader className="pb-2">
@@ -373,7 +376,7 @@ function StageCanvas({
             <CardTitle className="text-lg">{stageMeta.label}</CardTitle>
             <p className="mt-1 text-sm text-muted-foreground">{stageMeta.question}</p>
           </div>
-          <Badge variant="secondary">Read-only</Badge>
+          <Badge variant="secondary">Canonical projection</Badge>
         </div>
         <p className="rounded-md bg-muted/50 px-3 py-2 text-xs leading-5 text-muted-foreground">
           {stageDescriptions[stage]}
@@ -485,7 +488,7 @@ function SeedView({
       <>
         <EmptyState
           title="No canonical seed exists by design"
-          detail="The seed is author intent. Current RKA supplies research-map context, but the M0 prototype does not persist or promote a seed."
+          detail="The seed is author intent. Capture it as a versioned planning artifact on the selected branch; it remains provisional and is never promoted automatically."
         />
         {map && (
           <TraceCard

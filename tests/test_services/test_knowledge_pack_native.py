@@ -546,7 +546,7 @@ async def test_native_manuscript_round_trip_preserves_history_without_synthesis(
     with zipfile.ZipFile(pack_path) as archive:
         manifest = json.loads(archive.read("manifest.json"))
 
-    assert manifest["pack_format_version"] == PACK_SCHEMA_VERSION == 5
+    assert manifest["pack_format_version"] == PACK_SCHEMA_VERSION == 6
     assert manifest["portability"] == {
         "completed_validation_attestations": "included",
         "excluded_tables": {

@@ -217,6 +217,11 @@ class ProjectService(BaseService):
     # Order: dependents first (reverse of insert order).
     _DELETE_TABLES = (
         # Native manuscript and immutable validation histories.
+        "manuscript_planning_evidence_bindings",
+        "manuscript_planning_artifact_versions",
+        "manuscript_planning_artifacts",
+        "manuscript_planning_branch_events",
+        "manuscript_planning_branches",
         "manuscript_claim_verification_attestations",
         "manuscript_claim_ratifications",
         "manuscript_claim_evidence",

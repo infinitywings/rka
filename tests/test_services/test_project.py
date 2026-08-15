@@ -12,9 +12,11 @@ from rka.models.project import ProjectCreate
 from rka.models.claim import ClaimCreate, ClaimScopeCondition, ClaimScopeWrite
 from rka.models.interpretation import InterpretationCandidateCreate
 from rka.models.experiment import ExperimentCreate, ExperimentRunCreate
+from rka.models.planning import PlanningArtifactVersionAppend, PlanningBranchCreate
 from rka.services.claims import ClaimService
 from rka.services.experiments import ExperimentService
 from rka.services.interpretation import InterpretationService
+from rka.services.planning import ManuscriptPlanningService
 from rka.services.project import ProjectService
 
 
@@ -127,6 +129,59 @@ async def test_delete_project_removes_experiment_substrate_in_dependency_order(d
         "experiment_runs",
         "experiment_plan_versions",
         "experiments",
+    ):
+        assert await db.fetchall(
+            f"SELECT * FROM {table} WHERE project_id = ?", [project_id]
+        ) == []
+    assert await db.fetchall("PRAGMA foreign_key_check") == []
+
+
+@pytest.mark.asyncio
+async def test_delete_project_removes_planning_histories_in_dependency_order(db) -> None:
+    projects = ProjectService(db)
+    project_id = "proj_delete_planning"
+    await projects.create_project(
+        ProjectCreate(id=project_id, name="Delete Planning Histories"),
+        actor="system",
+    )
+    planning = ManuscriptPlanningService(db, project_id=project_id)
+    branch = await planning.create_branch(
+        PlanningBranchCreate(
+            name="primary",
+            purpose="Exercise guarded planning tables.",
+            created_by="pi",
+            reason="Create a deletable planning aggregate.",
+        )
+    )
+    branch = await planning.append_artifact_version(
+        branch["branch"]["id"],
+        PlanningArtifactVersionAppend(
+            expected_branch_revision=1,
+            local_key="seed",
+            stage_type="seed",
+            summary="Planning deletion seed.",
+            payload={"insight": "Deletion must remove the complete aggregate."},
+            origin="user",
+            created_by="pi",
+            reason="Create dependent immutable rows.",
+        ),
+    )
+    version_id = branch["effective_artifacts"][0]["version"]["id"]
+    with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+        await db.execute(
+            "DELETE FROM manuscript_planning_artifact_versions WHERE id = ?",
+            [version_id],
+        )
+
+    result = await projects.delete_project(project_id, confirm=True)
+
+    assert result["confirmed"] is True
+    for table in (
+        "manuscript_planning_evidence_bindings",
+        "manuscript_planning_artifact_versions",
+        "manuscript_planning_artifacts",
+        "manuscript_planning_branch_events",
+        "manuscript_planning_branches",
     ):
         assert await db.fetchall(
             f"SELECT * FROM {table} WHERE project_id = ?", [project_id]

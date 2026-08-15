@@ -1325,3 +1325,150 @@ export interface LinkSupportAudit {
   unsupported: LinkSupportFinding[]
   method: string
 }
+
+// ---- Provisional manuscript planning ----
+
+export type PlanningBranchState = "active" | "selected" | "archived" | "superseded"
+export type PlanningStage =
+  | "seed" | "paragraph_spine" | "problem_scope" | "landscape_gap"
+  | "response_mechanism" | "challenge_innovation" | "rq_contribution"
+  | "evaluation" | "outline" | "review"
+export type PlanningLifecycle =
+  | "candidate" | "reviewed" | "selected" | "parked" | "superseded" | "archived"
+
+export interface PlanningBranch {
+  id: string
+  project_id: string
+  manuscript_id: string | null
+  context_key: string
+  name: string
+  purpose: string
+  parent_branch_id: string | null
+  parent_branch_revision: number | null
+  base_manuscript_revision: number | null
+  state: PlanningBranchState
+  revision: number
+  created_by: string
+  created_at: string
+  updated_at: string
+}
+
+export interface PlanningEvidenceBinding {
+  id: string
+  entity_type: string
+  entity_id: string
+  role: string
+  source_version: string | null
+  locator_kind: string | null
+  locator_value: string | null
+  locator_start: number | null
+  locator_end: number | null
+  content_hash: string | null
+  ordinal: number
+  note: string | null
+}
+
+export interface PlanningArtifactVersion {
+  id: string
+  artifact_id: string
+  branch_id: string
+  project_id: string
+  version: number
+  branch_revision: number
+  lifecycle: PlanningLifecycle
+  summary: string
+  payload: Record<string, unknown>
+  origin: string
+  provider: string | null
+  model: string | null
+  context_hash: string | null
+  unresolved_items: string[]
+  readiness_state: "blocked" | "in_progress" | "ready"
+  readiness_missing: string[]
+  readiness_notes: string | null
+  promotion_target_type: string | null
+  promotion_target_id: string | null
+  supersedes_version_id: string | null
+  derived_from_version_id: string | null
+  evidence_bindings: PlanningEvidenceBinding[]
+}
+
+export interface PlanningArtifact {
+  id: string
+  branch_id: string
+  project_id: string
+  local_key: string
+  stage_type: PlanningStage
+  current_version: number
+  current_version_id: string
+  resolved_from_branch_id: string
+  is_inherited: boolean
+  version: PlanningArtifactVersion
+}
+
+export interface PlanningBranchEvent {
+  id: string
+  branch_id: string
+  project_id: string
+  branch_revision: number
+  action: string
+  from_state: PlanningBranchState | null
+  to_state: PlanningBranchState
+  actor: string
+  reason: string
+  details: Record<string, unknown>
+  created_at: string
+}
+
+export interface PlanningContext {
+  schema_version: string
+  project_id: string
+  branch: PlanningBranch
+  effective_artifacts: PlanningArtifact[]
+  parking_lot: PlanningArtifact[]
+  events: PlanningBranchEvent[]
+}
+
+export interface PlanningComparisonRef {
+  artifact_id: string
+  version_id: string
+  version: number
+  lifecycle: PlanningLifecycle
+  summary: string
+  resolved_from_branch_id: string
+  is_inherited: boolean
+}
+
+export interface PlanningComparisonChange {
+  stage_type: PlanningStage
+  local_key: string
+  status: "added" | "removed" | "changed" | "unchanged"
+  base: PlanningComparisonRef | null
+  other: PlanningComparisonRef | null
+}
+
+export interface PlanningBranchComparison {
+  schema_version: string
+  project_id: string
+  context_key: string
+  base_branch: PlanningBranch
+  other_branch: PlanningBranch
+  summary: Record<"added" | "removed" | "changed" | "unchanged", number>
+  changes: PlanningComparisonChange[]
+}
+
+export interface PlanningBranchCreate {
+  manuscript_id?: string
+  name: string
+  purpose: string
+  parent_branch_id?: string
+  created_by: "pi" | "brain" | "executor" | "web_ui" | "llm" | "import"
+  reason: string
+}
+
+export interface PlanningBranchTransition {
+  expected_revision: number
+  target_state: PlanningBranchState
+  actor: "pi" | "brain" | "executor" | "web_ui" | "llm" | "import"
+  reason: string
+}

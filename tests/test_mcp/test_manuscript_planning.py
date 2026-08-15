@@ -1,0 +1,161 @@
+"""Typed MCP routing for manuscript-planning branches."""
+
+from __future__ import annotations
+
+import json
+
+import httpx
+import pytest
+from pydantic import TypeAdapter, ValidationError
+
+from rka.mcp import server
+from rka.mcp.operation_args import ExecuteArgsUnion, QueryArgsUnion
+from rka.mcp.operations_schema import OPERATIONS_SCHEMA
+from rka.mcp.verb_dispatch import (
+    EXECUTE_OPERATIONS,
+    _QUERY_DISPATCH,
+    dispatch_execute_typed,
+    dispatch_query_typed,
+)
+
+
+@pytest.fixture
+def planning_requests(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+    captured: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(
+            {
+                "method": request.method,
+                "path": request.url.path,
+                "query": dict(request.url.params),
+                "body": json.loads(request.content) if request.content else None,
+            }
+        )
+        return httpx.Response(200, json={"ok": True})
+
+    def client(_project_id: str | None = None) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            base_url="http://testserver",
+        )
+
+    monkeypatch.setattr(server, "_client", client)
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_planning_reads_route_exact_context_and_compare(planning_requests) -> None:
+    listed = TypeAdapter(QueryArgsUnion).validate_python(
+        {
+            "operation": "planning_branches",
+            "project_id": "prj_test",
+            "manuscript_id": "man_01XYZ",
+            "include_archived": False,
+        }
+    )
+    await dispatch_query_typed(listed)
+    compared = TypeAdapter(QueryArgsUnion).validate_python(
+        {
+            "operation": "planning_compare",
+            "project_id": "prj_test",
+            "base_branch_id": "mpb_01BASE",
+            "other_branch_id": "mpb_01OTHER",
+        }
+    )
+    await dispatch_query_typed(compared)
+    planning_only = [
+        request for request in planning_requests if request["path"].startswith("/api/planning/")
+    ]
+    assert planning_only == [
+        {
+            "method": "GET",
+            "path": "/api/planning/branches",
+            "query": {"manuscript_id": "man_01XYZ", "include_archived": "false"},
+            "body": None,
+        },
+        {
+            "method": "GET",
+            "path": "/api/planning/branches/compare",
+            "query": {
+                "base_branch_id": "mpb_01BASE",
+                "other_branch_id": "mpb_01OTHER",
+            },
+            "body": None,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_planning_write_routes_preserve_typed_payload(planning_requests) -> None:
+    created = TypeAdapter(ExecuteArgsUnion).validate_python(
+        {
+            "operation": "create_planning_branch",
+            "project_id": "prj_test",
+            "name": "primary",
+            "purpose": "Develop the argument.",
+            "created_by": "pi",
+            "reason": "Start planning.",
+        }
+    )
+    await dispatch_execute_typed(created)
+    appended = TypeAdapter(ExecuteArgsUnion).validate_python(
+        {
+            "operation": "append_planning_artifact_version",
+            "project_id": "prj_test",
+            "id": "mpb_01XYZ",
+            "expected_branch_revision": 1,
+            "local_key": "core-insight",
+            "stage_type": "seed",
+            "summary": "Composable timing primitive.",
+            "payload": {"insight": "Treat timing as composable."},
+            "origin": "user",
+            "created_by": "pi",
+            "reason": "Preserve insight.",
+        }
+    )
+    await dispatch_execute_typed(appended)
+    planning_only = [
+        request for request in planning_requests if request["path"].startswith("/api/planning/")
+    ]
+    assert planning_only[0]["path"] == "/api/planning/branches"
+    assert "project_id" not in planning_only[0]["body"]
+    assert planning_only[1]["path"] == "/api/planning/branches/mpb_01XYZ/artifacts"
+    assert planning_only[1]["body"]["payload"] == {
+        "insight": "Treat timing as composable.",
+        "audience": [],
+    }
+
+
+def test_planning_operations_are_complete_and_ai_provenance_is_closed() -> None:
+    query_ops = {
+        "planning_branches",
+        "planning_resume",
+        "planning_compare",
+        "planning_artifact_versions",
+    }
+    execute_ops = {
+        "create_planning_branch",
+        "transition_planning_branch",
+        "append_planning_artifact_version",
+    }
+    assert query_ops <= set(_QUERY_DISPATCH)
+    assert execute_ops <= set(EXECUTE_OPERATIONS)
+    assert query_ops | execute_ops <= set(OPERATIONS_SCHEMA)
+
+    with pytest.raises(ValidationError, match="provider, model, and context_hash"):
+        TypeAdapter(ExecuteArgsUnion).validate_python(
+            {
+                "operation": "append_planning_artifact_version",
+                "project_id": "prj_test",
+                "id": "mpb_01XYZ",
+                "expected_branch_revision": 1,
+                "local_key": "core-insight",
+                "stage_type": "seed",
+                "summary": "AI proposal.",
+                "payload": {"insight": "AI proposal."},
+                "origin": "ai_suggested",
+                "created_by": "llm",
+                "reason": "Require complete provenance.",
+            }
+        )

@@ -577,7 +577,7 @@ The Brain processes up to 10 maintenance items per session, prioritized by impor
 
 ## Chapter 16: MCP Tools Quick Reference
 
-> **v2.7.0+ dispatch surface.** RKA broadcasts exactly 5 always-on tools: 3 dispatch tools (`rka_query`, `rka_execute`, `rka_describe`) plus 2 escape hatches (`rka_load_tools`, `rka_help`). The tables below list the **operation names** — the values you pass as `operation`: 56 read operations go through `rka_query(args={"operation": ...})` and 69 write/lifecycle operations through `rka_execute(args={"operation": ...})`. There are 125 typed operations total. The pre-v2.7 per-tool names (`rka_add_note`, `rka_get_status`, `rka_trace_provenance`, …) are `tier=deferred` legacy synonyms: they resolve to these operations (typically drop the `rka_`/`get_`/`add_` prefix, e.g. `rka_get_status` → `status`, `rka_add_note` → `record_note`, `rka_trace_provenance` → `provenance`), but on the default surface you call the operation through the dispatch tools rather than the legacy name. The discipline (`source="pi"` + `verbatim_input`, `related_journal=[...]` on decisions, `motivated_by_decision=...` on missions, `project_id` on every call) is unchanged. See `rka_describe(operation="<name>")` for per-operation signatures, or `rka_describe(operation="")` for the full 125-operation index. `rka_set_project` was removed in v2.6 (deprecated no-op) — pin `project_id` at conversation start and thread it on every operation. The LLM-backed `rka_ask` / `rka_generate_summary` features were removed in v2.4.0 and are no longer part of the surface.
+> **v2.7.0+ dispatch surface.** RKA broadcasts exactly 5 always-on tools: 3 dispatch tools (`rka_query`, `rka_execute`, `rka_describe`) plus 2 escape hatches (`rka_load_tools`, `rka_help`). The tables below list the **operation names** — the values you pass as `operation`: 60 read operations go through `rka_query(args={"operation": ...})` and 72 write/lifecycle operations through `rka_execute(args={"operation": ...})`. There are 132 typed operations total. The pre-v2.7 per-tool names (`rka_add_note`, `rka_get_status`, `rka_trace_provenance`, …) are `tier=deferred` legacy synonyms: they resolve to these operations (typically drop the `rka_`/`get_`/`add_` prefix, e.g. `rka_get_status` → `status`, `rka_add_note` → `record_note`, `rka_trace_provenance` → `provenance`), but on the default surface you call the operation through the dispatch tools rather than the legacy name. The discipline (`source="pi"` + `verbatim_input`, `related_journal=[...]` on decisions, `motivated_by_decision=...` on missions, `project_id` on every call) is unchanged. See `rka_describe(operation="<name>")` for per-operation signatures, or `rka_describe(operation="")` for the full 132-operation index. `rka_set_project` was removed in v2.6 (deprecated no-op) — pin `project_id` at conversation start and thread it on every operation. The LLM-backed `rka_ask` / `rka_generate_summary` features were removed in v2.4.0 and are no longer part of the surface.
 
 ### Knowledge Management (`rka_execute`)
 
@@ -643,6 +643,23 @@ Use Interpretation Review to classify an observation candidate as `support`,
 `qualifier`, `counterevidence`, or `context` for a claim. This reviewed relation
 does not automatically change the claim's evidence status.
 
+### Provisional Manuscript Planning
+
+| Operation | Dispatch tool | Purpose |
+|-----------|---------------|---------|
+| `planning_branches` | `rka_query` | List named alternatives in a project or manuscript context |
+| `planning_resume` | `rka_query` | Restore the exact selected branch and effective artifacts |
+| `planning_compare` | `rka_query` | Compare two branches through their frozen ancestry |
+| `planning_artifact_versions` | `rka_query` | Inspect the immutable history of one planning artifact |
+| `create_planning_branch` | `rka_execute` | Create a root alternative or fork the selected framing |
+| `transition_planning_branch` | `rka_execute` | Select, activate, archive, or supersede with an expected revision |
+| `append_planning_artifact_version` | `rka_execute` | Append a typed stage version with provenance and evidence bindings |
+
+Planning is provisional: it can cite RKA records and preserve AI-origin
+metadata, but it does not ratify a claim, update a canonical manuscript, or
+write authoring files. The first branch in a context becomes the deterministic
+resume head. Select another branch before archiving the current selection.
+
 ### Project & Session
 
 | Operation | Dispatch tool | Purpose |
@@ -672,7 +689,7 @@ The web dashboard at `http://localhost:9712` provides a visual interface for bro
 | **Research Map** | `/research-map` | Three-level drill-down: RQs → clusters → claims |
 | **Interpretation Review** | `/interpretations` | Review source-located `icd_` candidates before canonical promotion |
 | **Claim Scope Review** | `/claim-scopes` | Append and audit canonical `csc_` applicability contracts; resolve Writer scope blockers |
-| **Manuscript Workbench** | `/workbench` | Navigate manuscript stages, scope contracts, evidence lineage, and current readiness |
+| **Manuscript Workbench** | `/workbench` | Navigate canonical manuscript evidence and create, fork, select, compare, archive, or resume provisional planning branches |
 | **Notebook** | `/notebook` | (historical) Q&A chat and summary generation — the LLM-backed Q&A/summary features were removed in v2.4.0 |
 | **Audit Log** | `/audit` | System audit trail with action/entity/actor filters |
 | **Context Inspector** | `/context` | Generate and inspect context packages |

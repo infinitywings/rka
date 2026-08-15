@@ -13,17 +13,23 @@ The canonical-claim applicability boundary is recorded in
 [ADR 0003](docs/adr/0003-canonical-claim-scope-contracts.md).
 The experiment/run/observation and exact-locator boundary is recorded in
 [ADR 0004](docs/adr/0004-experiment-run-observation-and-evidence-locator-contracts.md).
+The provisional planning and frozen-branch boundary is recorded in
+[ADR 0005](docs/adr/0005-versioned-manuscript-planning-branches.md).
 
 The roadmap is ordered by dependency, not by invented delivery dates. Every
 milestone must satisfy its exit gate before dependent work is treated as ready.
 
 ## Now
 
-**M0, M1 / PR 1, M1 / PR 2, and the CPSEval-backed M2 / PR 4 workbench are
-complete in the current tree. The next dependency-ordered target is M1 / PR 3
-experiment, run, result, and evidence-locator design.** The choice-first Writer delta is reconciled, the authority
-and AI boundary is recorded in ADR 0001, and the read-only workbench has been
-walked through with DelaySteer and a full-manuscript control.
+**M0, M1, and M2 are complete on `main`. M3 / PR 5 (issue #56), versioned
+planning artifacts and branches, is implemented and release-validated on its
+feature branch. After review and merge, M3 / PR 6 is the next dependency-ordered
+target.**
+The choice-first Writer delta is reconciled, the authority and AI boundary is
+recorded in ADR 0001, the read-only workbench has passed its real-project exit
+gate, and first-class experiment/run/observation/evidence-locator semantics
+have passed their migration, REST/MCP, pack, deletion, change-impact, and
+release gates.
 
 The walkthrough and its design revisions are recorded in
 [`2026-08-14-delaysteer-workbench-walkthrough.md`](docs/superpowers/specs/2026-08-14-delaysteer-workbench-walkthrough.md).
@@ -63,12 +69,15 @@ loading, unavailable, empty, and capped-count states; keyboard stage
 navigation; a skip link; live-region semantics; and a responsive 390 by 844
 check. The evidence is recorded in
 [`2026-08-15-workbench-m2-exit-evidence.md`](docs/superpowers/specs/2026-08-15-workbench-m2-exit-evidence.md).
-The immediate target is now **M1 / PR 3 implementation**. Its
-experiment/run/observation and exact-locator contract is frozen in ADR 0004 and
-the [implementation specification](docs/superpowers/specs/2026-08-15-experiment-substrate-design.md).
-The workbench must continue to label that semantic layer as missing until the
-migration, REST/MCP, pack, change-impact, and disposable real-project release
-gates pass.
+The **M3 / PR 5 implementation** now satisfies its release gate. ADR 0005
+freezes the authority, branch, version, and provenance contract. This slice adds
+project-only and manuscript-bound planning, frozen copy-on-write ancestry,
+typed immutable stage versions, exact evidence/context bindings, deterministic
+resume and comparison, parking, pack/delete/change-cursor parity, and a
+provisional workbench branch surface. It does not promote planning into
+canonical manuscript semantics and does not yet add the PR 6 AI broker or
+unified proposal/apply path. Its validation record is
+[`2026-08-15-workbench-m3-pr5-exit-evidence.md`](docs/superpowers/specs/2026-08-15-workbench-m3-pr5-exit-evidence.md).
 
 ## Dependency map
 

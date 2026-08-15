@@ -15,9 +15,10 @@ from typing import Any, BinaryIO
 from rka import __version__
 from rka.infra.ids import generate_id
 from rka.models.knowledge_pack import KnowledgePackImportResult
+from rka.models.planning import validate_planning_payload
 from rka.services.base import BaseService, _now
 
-PACK_SCHEMA_VERSION = 5
+PACK_SCHEMA_VERSION = 6
 PACK_FILE_SUFFIX = ".rka-pack.zip"
 _IMPORT_PROJECT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
@@ -73,6 +74,12 @@ _CRITICAL_INTEGRITY_CATEGORIES: frozenset[str] = frozenset(
         "evidence_locator_source_invalid",
         "experiment_candidate_source_invalid",
         "claim_evidence_relation_invalid",
+        "planning_branch_lineage_invalid",
+        "planning_branch_event_head_mismatch",
+        "planning_artifact_head_mismatch",
+        "planning_artifact_chain_invalid",
+        "planning_evidence_binding_invalid",
+        "planning_payload_invalid",
     }
 )
 
@@ -122,6 +129,11 @@ _TABLE_CATEGORIES: dict[str, list[str]] = {
         # Native manuscript aggregate. Immutable histories and typed joins are
         # first-class knowledge and must round-trip without reconstruction.
         "manuscripts",
+        "manuscript_planning_branches",
+        "manuscript_planning_branch_events",
+        "manuscript_planning_artifacts",
+        "manuscript_planning_artifact_versions",
+        "manuscript_planning_evidence_bindings",
         "manuscript_reference_members",
         "manuscript_claims",
         "manuscript_claim_versions",
@@ -210,6 +222,11 @@ _INSERT_ORDER = (
     # Native manuscript aggregate (FK-safe order). The legacy journal row is
     # already present before ``manuscripts.legacy_journal_id`` is restored.
     "manuscripts",
+    "manuscript_planning_branches",
+    "manuscript_planning_artifacts",
+    "manuscript_planning_artifact_versions",
+    "manuscript_planning_evidence_bindings",
+    "manuscript_planning_branch_events",
     "manuscript_reference_members",
     "manuscript_claims",
     "manuscript_claim_versions",
@@ -258,6 +275,11 @@ _SELF_REFERENTIAL_TABLES: dict[str, str | list[str]] = {
     "experiment_plan_versions": "supersedes_plan_id",
     "events": "caused_by_event",
     "manuscript_checkpoints": "supersedes_id",
+    "manuscript_planning_branches": "parent_branch_id",
+    "manuscript_planning_artifact_versions": [
+        "supersedes_version_id",
+        "derived_from_version_id",
+    ],
     "topics": "parent_id",
 }
 _ID_ENTITY_TYPES = {
@@ -285,6 +307,11 @@ _ID_ENTITY_TYPES = {
     "calibration_outcomes": "calibration_outcome",
     "reference_validation_attestations": "reference_validation",
     "manuscripts": "manuscript",
+    "manuscript_planning_branches": "manuscript_planning_branch",
+    "manuscript_planning_branch_events": "manuscript_planning_branch_event",
+    "manuscript_planning_artifacts": "manuscript_planning_artifact",
+    "manuscript_planning_artifact_versions": "manuscript_planning_artifact_version",
+    "manuscript_planning_evidence_bindings": "manuscript_planning_evidence_binding",
     "manuscript_reference_members": "manuscript_reference",
     "manuscript_claims": "manuscript_claim",
     "manuscript_claim_ratifications": "manuscript_claim_ratification",
@@ -370,6 +397,28 @@ _DIRECT_ID_COLUMNS = {
         "validation_job_id",
     ),
     "manuscripts": ("id", "legacy_journal_id"),
+    "manuscript_planning_branches": (
+        "id",
+        "manuscript_id",
+        "context_key",
+        "parent_branch_id",
+    ),
+    "manuscript_planning_branch_events": ("id", "branch_id"),
+    "manuscript_planning_artifacts": ("id", "branch_id", "current_version_id"),
+    "manuscript_planning_artifact_versions": (
+        "id",
+        "artifact_id",
+        "branch_id",
+        "promotion_target_id",
+        "supersedes_version_id",
+        "derived_from_version_id",
+    ),
+    "manuscript_planning_evidence_bindings": (
+        "id",
+        "artifact_version_id",
+        "artifact_id",
+        "entity_id",
+    ),
     "manuscript_reference_members": (
         "id",
         "manuscript_id",
@@ -473,6 +522,19 @@ _FK_COLUMNS: dict[str, set[str]] = {
         "validation_job_id",
     },
     "manuscripts": {"legacy_journal_id"},
+    "manuscript_planning_branches": {"manuscript_id", "parent_branch_id"},
+    "manuscript_planning_branch_events": {"branch_id"},
+    "manuscript_planning_artifacts": {"branch_id"},
+    "manuscript_planning_artifact_versions": {
+        "artifact_id",
+        "branch_id",
+        "supersedes_version_id",
+        "derived_from_version_id",
+    },
+    "manuscript_planning_evidence_bindings": {
+        "artifact_version_id",
+        "artifact_id",
+    },
     "manuscript_reference_members": {"manuscript_id", "literature_id"},
     "manuscript_claims": {"manuscript_id"},
     "manuscript_claim_versions": {"claim_id", "manuscript_id"},
@@ -566,6 +628,14 @@ _PROSE_TEXT_COLUMNS: dict[str, tuple[str, ...]] = {
         "allowed_interpretation",
         "prohibited_interpretation",
     ),
+    "manuscript_planning_branches": ("name", "purpose"),
+    "manuscript_planning_branch_events": ("reason",),
+    "manuscript_planning_artifact_versions": (
+        "summary",
+        "readiness_notes",
+        "reason",
+    ),
+    "manuscript_planning_evidence_bindings": ("locator_value", "note"),
 }
 
 _JSON_ID_COLUMNS = {
@@ -594,6 +664,12 @@ _JSON_ID_COLUMNS = {
     "audit_log": ("details",),
     "reference_validation_attestations": ("full_json_payload",),
     "manuscript_claim_versions": ("prohibited_wording",),
+    "manuscript_planning_branch_events": ("details",),
+    "manuscript_planning_artifact_versions": (
+        "payload",
+        "unresolved_items",
+        "readiness_missing",
+    ),
     "manuscript_claim_verification_attestations": (
         "dependency_snapshot",
         "full_json_payload",
@@ -633,6 +709,11 @@ _ENTITY_LINK_ENDPOINT_TABLES: dict[str, str] = {
     "link": "entity_links",
     "literature": "literature",
     "manuscript": "manuscripts",
+    "manuscript_planning_branch": "manuscript_planning_branches",
+    "manuscript_planning_branch_event": "manuscript_planning_branch_events",
+    "manuscript_planning_artifact": "manuscript_planning_artifacts",
+    "manuscript_planning_artifact_version": "manuscript_planning_artifact_versions",
+    "manuscript_planning_evidence_binding": "manuscript_planning_evidence_bindings",
     "manuscript_checkpoint": "manuscript_checkpoints",
     "manuscript_claim": "manuscript_claims",
     "manuscript_claim_ratification": "manuscript_claim_ratifications",
@@ -644,6 +725,25 @@ _ENTITY_LINK_ENDPOINT_TABLES: dict[str, str] = {
     "research_question": "decisions",
     "review": "review_queue",
     "topic": "topics",
+}
+
+_PLANNING_EVIDENCE_ENTITY_TABLES: dict[str, str] = {
+    "journal": "journal",
+    "literature": "literature",
+    "decision": "decisions",
+    "claim": "claims",
+    "claim_scope": "claim_scope_versions",
+    "cluster": "evidence_clusters",
+    "interpretation_candidate": "interpretation_candidates",
+    "experiment": "experiments",
+    "experiment_plan_version": "experiment_plan_versions",
+    "experiment_run": "experiment_runs",
+    "experiment_observation": "experiment_observations",
+    "evidence_locator": "evidence_locators",
+    "artifact": "artifacts",
+    "manuscript": "manuscripts",
+    "manuscript_claim": "manuscript_claims",
+    "manuscript_unit": "manuscript_units",
 }
 
 
@@ -1193,7 +1293,7 @@ class KnowledgePackService(BaseService):
             raise ValueError("Knowledge pack manifest is not valid JSON") from exc
 
         pack_format = manifest.get("pack_format_version") or manifest.get("schema_version")
-        if pack_format not in (1, 2, 3, PACK_SCHEMA_VERSION):
+        if pack_format not in range(1, PACK_SCHEMA_VERSION + 1):
             raise ValueError(f"Unsupported knowledge pack format version: {pack_format}")
         if not manifest.get("project"):
             raise ValueError("Knowledge pack manifest is missing project metadata")
@@ -1542,8 +1642,7 @@ class KnowledgePackService(BaseService):
         dependency_keys = _SELF_REFERENTIAL_TABLES.get(table)
         if dependency_keys:
             keys = [dependency_keys] if isinstance(dependency_keys, str) else list(dependency_keys)
-            for key in keys:
-                prepared = self._sort_rows_by_dependency(prepared, key)
+            prepared = self._sort_rows_by_dependencies(prepared, keys)
 
         if table == "audit_log" or table == "bootstrap_log":
             for row in prepared:
@@ -1575,6 +1674,13 @@ class KnowledgePackService(BaseService):
         rows: list[dict[str, Any]],
         dependency_key: str,
     ) -> list[dict[str, Any]]:
+        return self._sort_rows_by_dependencies(rows, [dependency_key])
+
+    def _sort_rows_by_dependencies(
+        self,
+        rows: list[dict[str, Any]],
+        dependency_keys: list[str],
+    ) -> list[dict[str, Any]]:
         remaining = {str(row["id"]): dict(row) for row in rows if row.get("id")}
         ordered: list[dict[str, Any]] = []
         placed: set[str] = set()
@@ -1582,15 +1688,21 @@ class KnowledgePackService(BaseService):
         while remaining:
             progressed = False
             for row_id, row in list(remaining.items()):
-                dependency = row.get(dependency_key)
-                if not dependency or dependency in placed or dependency not in remaining:
+                dependencies = {
+                    str(row[key])
+                    for key in dependency_keys
+                    if row.get(key) is not None
+                    and str(row[key]) in remaining
+                }
+                if dependencies.issubset(placed):
                     ordered.append(row)
                     placed.add(row_id)
                     del remaining[row_id]
                     progressed = True
             if not progressed:
                 raise ValueError(
-                    f"Cannot import pack because {dependency_key} contains a cycle or unresolved reference"
+                    "Cannot import pack because self-references in "
+                    f"{', '.join(dependency_keys)} contain a cycle or unresolved reference"
                 )
 
         return ordered
@@ -1882,6 +1994,12 @@ class KnowledgePackService(BaseService):
         "evidence_locator_source_invalid": "critical",
         "experiment_candidate_source_invalid": "critical",
         "claim_evidence_relation_invalid": "critical",
+        "planning_branch_lineage_invalid": "critical",
+        "planning_branch_event_head_mismatch": "critical",
+        "planning_artifact_head_mismatch": "critical",
+        "planning_artifact_chain_invalid": "critical",
+        "planning_evidence_binding_invalid": "critical",
+        "planning_payload_invalid": "critical",
         "claim_count_mismatch": "warning",
     }
 
@@ -2425,6 +2543,238 @@ class KnowledgePackService(BaseService):
                     "ids": [row["id"] for row in bad_evidence_relations[:10]],
                     "description": "claim evidence relations whose reviewed lineage is inconsistent",
                     "fix_action": "Restore the claim-relative interpretation history",
+                }
+            )
+
+        # 18. Planning branches preserve one context and pin reachable parent
+        # and manuscript revisions. A child must never silently drift when its
+        # parent or bound manuscript advances after the fork.
+        bad_planning_lineage = await self.db.fetchall(
+            """SELECT branch.id
+               FROM manuscript_planning_branches AS branch
+               LEFT JOIN manuscripts AS manuscript
+                 ON manuscript.id = branch.manuscript_id
+                AND manuscript.project_id = branch.project_id
+               LEFT JOIN manuscript_planning_branches AS parent
+                 ON parent.id = branch.parent_branch_id
+                AND parent.project_id = branch.project_id
+               WHERE branch.project_id = ?
+                 AND (
+                     (branch.manuscript_id IS NULL
+                      AND (branch.context_key <> 'project'
+                           OR branch.base_manuscript_revision IS NOT NULL))
+                     OR (branch.manuscript_id IS NOT NULL
+                         AND (manuscript.id IS NULL
+                              OR branch.context_key <> branch.manuscript_id
+                              OR branch.base_manuscript_revision IS NULL
+                              OR branch.base_manuscript_revision > manuscript.revision))
+                     OR (branch.parent_branch_id IS NULL
+                         AND branch.parent_branch_revision IS NOT NULL)
+                     OR (branch.parent_branch_id IS NOT NULL
+                         AND (parent.id IS NULL
+                              OR parent.context_key <> branch.context_key
+                              OR branch.parent_branch_revision IS NULL
+                              OR branch.parent_branch_revision > parent.revision
+                              OR branch.parent_branch_id = branch.id))
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_planning_lineage:
+            cat = "planning_branch_lineage_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_planning_lineage),
+                    "ids": [row["id"] for row in bad_planning_lineage[:10]],
+                    "description": "planning branches with invalid frozen ancestry or manuscript context",
+                    "fix_action": "Restore the branch parent/context and its pinned revision",
+                }
+            )
+
+        # 19. Every mutable branch revision has exactly one immutable event.
+        bad_planning_event_heads = await self.db.fetchall(
+            """SELECT branch.id
+               FROM manuscript_planning_branches AS branch
+               WHERE branch.project_id = ?
+                 AND (
+                     branch.revision <> COALESCE((
+                         SELECT MAX(event.branch_revision)
+                         FROM manuscript_planning_branch_events AS event
+                         WHERE event.branch_id = branch.id
+                           AND event.project_id = branch.project_id
+                     ), 0)
+                     OR branch.revision <> (
+                         SELECT COUNT(*)
+                         FROM manuscript_planning_branch_events AS event
+                         WHERE event.branch_id = branch.id
+                           AND event.project_id = branch.project_id
+                     )
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_planning_event_heads:
+            cat = "planning_branch_event_head_mismatch"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_planning_event_heads),
+                    "ids": [row["id"] for row in bad_planning_event_heads[:10]],
+                    "description": "planning branch heads disagree with immutable event history",
+                    "fix_action": "Restore the complete one-event-per-revision history",
+                }
+            )
+
+        # 20. Stable artifact heads point to the latest immutable version.
+        bad_planning_artifact_heads = await self.db.fetchall(
+            """SELECT artifact.id
+               FROM manuscript_planning_artifacts AS artifact
+               WHERE artifact.project_id = ?
+                 AND (
+                     artifact.current_version <> COALESCE((
+                         SELECT MAX(version.version)
+                         FROM manuscript_planning_artifact_versions AS version
+                         WHERE version.artifact_id = artifact.id
+                           AND version.project_id = artifact.project_id
+                     ), 0)
+                     OR (artifact.current_version = 0
+                         AND artifact.current_version_id IS NOT NULL)
+                     OR (artifact.current_version > 0
+                         AND NOT EXISTS (
+                             SELECT 1
+                             FROM manuscript_planning_artifact_versions AS version
+                             WHERE version.id = artifact.current_version_id
+                               AND version.artifact_id = artifact.id
+                               AND version.project_id = artifact.project_id
+                               AND version.version = artifact.current_version
+                         ))
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_planning_artifact_heads:
+            cat = "planning_artifact_head_mismatch"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_planning_artifact_heads),
+                    "ids": [row["id"] for row in bad_planning_artifact_heads[:10]],
+                    "description": "planning artifact heads disagree with immutable version history",
+                    "fix_action": "Restore the missing artifact version or exact head pointer",
+                }
+            )
+
+        # 21. Version predecessor, branch, and branch-event provenance agree.
+        bad_planning_chains = await self.db.fetchall(
+            """SELECT version.id
+               FROM manuscript_planning_artifact_versions AS version
+               JOIN manuscript_planning_artifacts AS artifact
+                 ON artifact.id = version.artifact_id
+                AND artifact.project_id = version.project_id
+               WHERE version.project_id = ?
+                 AND (
+                     version.branch_id <> artifact.branch_id
+                     OR (version.version = 1
+                         AND version.supersedes_version_id IS NOT NULL)
+                     OR (version.version > 1
+                         AND NOT EXISTS (
+                             SELECT 1
+                             FROM manuscript_planning_artifact_versions AS previous
+                             WHERE previous.id = version.supersedes_version_id
+                               AND previous.artifact_id = version.artifact_id
+                               AND previous.project_id = version.project_id
+                               AND previous.version = version.version - 1
+                         ))
+                     OR NOT EXISTS (
+                         SELECT 1
+                         FROM manuscript_planning_branch_events AS event
+                         WHERE event.branch_id = version.branch_id
+                           AND event.project_id = version.project_id
+                           AND event.branch_revision = version.branch_revision
+                           AND event.action = 'artifact_version_appended'
+                           AND json_extract(event.details, '$.artifact_id') = version.artifact_id
+                           AND json_extract(event.details, '$.artifact_version_id') = version.id
+                     )
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_planning_chains:
+            cat = "planning_artifact_chain_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_planning_chains),
+                    "ids": [row["id"] for row in bad_planning_chains[:10]],
+                    "description": "planning versions have inconsistent predecessor or branch-event lineage",
+                    "fix_action": "Restore the exact immutable version and event chain",
+                }
+            )
+
+        # 22. Evidence bindings resolve by declared type inside the project.
+        binding_clauses = []
+        for entity_type, table in _PLANNING_EVIDENCE_ENTITY_TABLES.items():
+            binding_clauses.append(
+                f"(binding.entity_type = '{entity_type}' "
+                f"AND EXISTS (SELECT 1 FROM [{table}] AS endpoint "
+                "WHERE endpoint.id = binding.entity_id "
+                "AND endpoint.project_id = binding.project_id))"
+            )
+        bad_planning_bindings = await self.db.fetchall(
+            f"""SELECT binding.id
+                FROM manuscript_planning_evidence_bindings AS binding
+                WHERE binding.project_id = ?
+                  AND NOT ({' OR '.join(binding_clauses)})
+                LIMIT 50""",
+            [pid],
+        )
+        if bad_planning_bindings:
+            cat = "planning_evidence_binding_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_planning_bindings),
+                    "ids": [row["id"] for row in bad_planning_bindings[:10]],
+                    "description": "planning evidence bindings do not resolve in their project",
+                    "fix_action": "Restore the typed evidence entity or remove the invalid imported binding",
+                }
+            )
+
+        # 23. JSON validity is insufficient: each stage has a closed payload
+        # contract. This Python check makes pack import reject structurally
+        # plausible but semantically invalid deliberation state.
+        planning_payload_rows = await self.db.fetchall(
+            """SELECT version.id, artifact.stage_type, version.payload
+               FROM manuscript_planning_artifact_versions AS version
+               JOIN manuscript_planning_artifacts AS artifact
+                 ON artifact.id = version.artifact_id
+                AND artifact.project_id = version.project_id
+               WHERE version.project_id = ?
+               ORDER BY version.id""",
+            [pid],
+        )
+        bad_planning_payload_ids: list[str] = []
+        for row in planning_payload_rows:
+            try:
+                validate_planning_payload(row["stage_type"], json.loads(row["payload"]))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                bad_planning_payload_ids.append(row["id"])
+        if bad_planning_payload_ids:
+            cat = "planning_payload_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_planning_payload_ids),
+                    "ids": bad_planning_payload_ids[:10],
+                    "description": "planning artifact payloads violate their closed stage schema",
+                    "fix_action": "Restore a payload that validates against the declared planning stage",
                 }
             )
 

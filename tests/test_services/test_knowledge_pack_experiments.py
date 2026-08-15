@@ -20,7 +20,7 @@ from rka.services.knowledge_pack import KnowledgePackService, PACK_SCHEMA_VERSIO
 
 
 @pytest.mark.asyncio
-async def test_pack_v5_round_trip_preserves_experiment_evidence_lineage(
+async def test_current_pack_round_trip_preserves_experiment_evidence_lineage(
     db_with_project,
 ) -> None:
     db = db_with_project
@@ -35,7 +35,7 @@ async def test_pack_v5_round_trip_preserves_experiment_evidence_lineage(
             protocol="Execute one run and retain an exact repository locator.",
             metrics=["latency"],
             created_by="brain",
-            reason="Exercise pack format 5.",
+            reason="Exercise the current pack format.",
         )
     )
     run = await experiments.create_run(
@@ -145,7 +145,7 @@ async def test_pack_v5_round_trip_preserves_experiment_evidence_lineage(
             project_name="Imported Experiment Evidence",
         )
 
-    assert PACK_SCHEMA_VERSION == 5
+    assert PACK_SCHEMA_VERSION == 6
     for table in (
         "experiments",
         "experiment_plan_versions",
