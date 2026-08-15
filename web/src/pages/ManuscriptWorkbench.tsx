@@ -68,6 +68,8 @@ const stageDescriptions: Record<WorkbenchStageId, string> = {
   outline: "Claim-sized manuscript units form the read-only outline and preserve file and evidence anchors.",
 }
 
+const WORKBENCH_QUEUE_LIMIT = 200
+
 function statusForClaim(claim: ManuscriptClaimContext): string {
   const currentRatification = claim.ratifications.some(
     (item) =>
@@ -161,25 +163,52 @@ export default function ManuscriptWorkbench() {
 
   const impactCount = impact?.relevant_changes?.length ?? 0
   const interpretationSummary = useMemo(() => {
-    if (!interpretations.data) return undefined
+    if (interpretations.isLoading) return { state: "loading" as const }
+    if (interpretations.error) {
+      return { state: "error" as const, message: interpretations.error.message }
+    }
+    if (!interpretations.data) return { state: "loading" as const }
     const attention = interpretations.data.filter((item) => item.review_status !== "resolved").length
     return {
-      total: interpretations.data.length,
+      state: "ready" as const,
+      shown: interpretations.data.length,
       attention,
       ready: interpretations.data.length - attention,
-      partial: interpretations.data.length >= 200,
+      limitReached: interpretations.data.length >= WORKBENCH_QUEUE_LIMIT,
     }
-  }, [interpretations.data])
+  }, [interpretations.data, interpretations.error, interpretations.isLoading])
   const scopeSummary = useMemo(() => {
-    if (!claimScopes.data) return undefined
+    if (claimScopes.isLoading) return { state: "loading" as const }
+    if (claimScopes.error) {
+      return { state: "error" as const, message: claimScopes.error.message }
+    }
+    if (!claimScopes.data) return { state: "loading" as const }
     const ready = claimScopes.data.filter((claim) => claim.scope_readiness === "ready").length
     return {
-      total: claimScopes.data.length,
+      state: "ready" as const,
+      shown: claimScopes.data.length,
       attention: claimScopes.data.length - ready,
       ready,
-      partial: claimScopes.data.length >= 200,
+      limitReached: claimScopes.data.length >= WORKBENCH_QUEUE_LIMIT,
     }
-  }, [claimScopes.data])
+  }, [claimScopes.data, claimScopes.error, claimScopes.isLoading])
+
+  const stageQueries = (() => {
+    if (!manuscriptId) return []
+    if (["seed", "spine", "scope", "gap", "response"].includes(stage)) {
+      return [workbench.context, workbench.candidates]
+    }
+    if (stage === "contributions") {
+      return [workbench.context, workbench.candidates, workbench.readiness]
+    }
+    if (stage === "evaluation") return [workbench.context]
+    if (stage === "outline") return [workbench.context, workbench.spine]
+    return []
+  })()
+  const stageIsLoading = stageQueries.some((query) => query.isLoading)
+    || (["seed", "landscape", "gap", "rqs"].includes(stage) && researchMap.isLoading)
+  const stageError = stageQueries.map((query) => query.error).find(Boolean)
+    ?? (["seed", "landscape", "gap", "rqs"].includes(stage) ? researchMap.error : null)
 
   const selectStage = (next: WorkbenchStageId) => {
     const params = new URLSearchParams(searchParams)
@@ -232,14 +261,18 @@ export default function ManuscriptWorkbench() {
         </form>
       </div>
 
-      {manuscriptId && workbench.context.isLoading && (
-        <div className="flex h-36 items-center justify-center rounded-lg border">
-          <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Loading canonical manuscript context
+      {!manuscriptId && (
+        <div role="status" className="flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-950 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-100">
+          <Info className="mt-0.5 h-4 w-4 shrink-0" />
+          <p>
+            Project-only exploration. Load a canonical <code>man_...</code> identifier to inspect manuscript claims,
+            evidence, readiness, and outline units.
+          </p>
         </div>
       )}
 
       {workbench.context.error && (
-        <div className="flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-900 dark:border-red-800 dark:bg-red-950 dark:text-red-100">
+        <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-900 dark:border-red-800 dark:bg-red-950 dark:text-red-100">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           <div>
             <p className="font-medium">The manuscript could not be loaded in the selected project.</p>
@@ -250,12 +283,20 @@ export default function ManuscriptWorkbench() {
 
       <ContextCapsule
         projectId={projectId}
-        projectName={project.data?.project_name ?? "Loading project"}
+        projectName={project.data?.project_name ?? (project.error ? "Project unavailable" : "Loading project")}
+        projectError={project.error instanceof Error ? project.error : null}
+        manuscriptRequested={Boolean(manuscriptId)}
+        contextLoading={workbench.context.isLoading}
         context={context}
         readiness={readiness}
+        readinessLoading={workbench.readiness.isLoading}
+        readinessError={workbench.readiness.error instanceof Error ? workbench.readiness.error : null}
         map={researchMap.data}
+        mapLoading={researchMap.isLoading}
+        mapError={researchMap.error instanceof Error ? researchMap.error : null}
         impactCount={impactCount}
         impactPartial={Boolean(impact?.has_more)}
+        impactError={workbench.impact.error instanceof Error ? workbench.impact.error : null}
         interpretationSummary={interpretationSummary}
         scopeSummary={scopeSummary}
       />
@@ -283,6 +324,8 @@ export default function ManuscriptWorkbench() {
             spine={spine}
             candidates={candidates}
             readiness={readiness}
+            isLoading={stageIsLoading}
+            error={stageError instanceof Error ? stageError : null}
             onInspect={(item) => setSelectedTrace({ scopeKey: traceScopeKey, item })}
           />
           <EvidenceInspector
@@ -301,6 +344,8 @@ function StageCanvas({
   spine,
   candidates,
   readiness,
+  isLoading,
+  error,
   onInspect,
 }: {
   stage: WorkbenchStageId
@@ -309,6 +354,8 @@ function StageCanvas({
   spine?: ManuscriptSpine
   candidates?: ManuscriptWritingCandidates
   readiness?: ManuscriptReadiness
+  isLoading: boolean
+  error: Error | null
   onInspect: (item: WorkbenchTraceItem) => void
 }) {
   const stageMeta = WORKBENCH_STAGES.find((item) => item.id === stage)!
@@ -333,6 +380,21 @@ function StageCanvas({
         </p>
       </CardHeader>
       <CardContent className="space-y-3 p-4">
+        {isLoading && (
+          <div role="status" aria-live="polite" className="flex min-h-32 items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading {stageMeta.label.toLowerCase()} data
+          </div>
+        )}
+        {!isLoading && error && (
+          <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-900 dark:border-red-800 dark:bg-red-950 dark:text-red-100">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <div>
+              <p className="font-medium">This stage could not load its authoritative data.</p>
+              <p className="mt-1 text-xs opacity-80">{error.message}</p>
+            </div>
+          </div>
+        )}
+        {!isLoading && !error && <>
         {stage === "seed" && (
           <SeedView map={map} candidates={candidates} onInspect={onInspect} />
         )}
@@ -360,6 +422,7 @@ function StageCanvas({
         )}
         {stage === "evaluation" && <EvaluationView units={units} onInspect={onInspect} />}
         {stage === "outline" && <OutlineView units={units} spine={spine} onInspect={onInspect} />}
+        </>}
       </CardContent>
     </Card>
   )
@@ -380,7 +443,8 @@ function TraceCard({
     <button
       type="button"
       onClick={() => onInspect(trace)}
-      className="group w-full rounded-lg border bg-card p-3 text-left transition-colors hover:border-primary/40 hover:bg-muted/25"
+      aria-label={`Inspect evidence for ${title}`}
+      className="group w-full rounded-lg border bg-card p-3 text-left transition-colors hover:border-primary/40 hover:bg-muted/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
     >
       <div className="flex items-start justify-between gap-3">
         <h3 className="text-sm font-semibold">{title}</h3>

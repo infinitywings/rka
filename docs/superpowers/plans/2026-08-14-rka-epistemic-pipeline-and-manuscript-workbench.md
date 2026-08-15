@@ -1,9 +1,9 @@
 # RKA Epistemic Pipeline and Manuscript Drafting Workbench
 
 Status: roadmap design source; M0, M1 PR 1 Interpretation Staging, M1 PR 2
-Claim Scope Contracts, and the first M2 PR 4 navigation slice merged; the
-bounded CPSEval pilot and responsive repair are validated, pending review and
-merge.
+Claim Scope Contracts, and M2 PR 4 are complete in the current tree. The next
+dependency-ordered target is M1 PR 3 experiment, run, result, and exact
+evidence-locator design.
 
 Date: 2026-08-14
 
@@ -1241,8 +1241,8 @@ through REST, MCP, packs, graph, Writer gating, and the web; and passed its
 full-suite, production-build, isolated-container, concurrency, and browser
 acceptance gates.
 
-The active milestone is **M2 / PR 4 Workbench Shell and Context Capsule
-hardening**. Its merged navigation slice provides scope-aware capsule summaries,
+**M2 / PR 4 Workbench Shell and Context Capsule is complete in the current
+tree.** Its merged navigation slice provides scope-aware capsule summaries,
 URL-resumable stage and review selection, and evidence-to-review trace links.
 Its production build, focused lint, full 2,844-test backend suite, and
 disposable production-browser acceptance path all pass. The evidence is recorded in
@@ -1261,19 +1261,21 @@ unratified, and checkpoint-blocked state. The same pass exposed and closed a
 narrow-viewport navigation defect. Detailed evidence is recorded in
 [`2026-08-15-cpseval-m2-positive-path.md`](../specs/2026-08-15-cpseval-m2-positive-path.md).
 
-The remaining PR 4 work is:
-
-1. merge the CPSEval pilot evidence and responsive repair;
-2. run the final keyboard/accessibility pass and explicit loading, empty, and
-   capped-count cases;
-3. freeze the M2 exit evidence before any deliberation or mutation UI is
-   enabled.
+The CPSEval pilot and responsive repair merged in PR 73. The final M2 branch
+adds and validates project-only, loading, unavailable, empty, and capped-count
+states; Arrow/Home/End plus Enter/Space stage navigation; a skip link; explicit
+live-region semantics; and a 390 by 844 responsive boundary. Detailed evidence
+is recorded in
+[`2026-08-15-workbench-m2-exit-evidence.md`](../specs/2026-08-15-workbench-m2-exit-evidence.md).
+This final branch closes the M2 exit gate.
 
 The live pack exporter also emits agentic-branch staleness fields that current
 `main` cannot import losslessly. The importer correctly rejects those unknown
 semantic columns. Cross-branch pack migration belongs to the intake/hardening
 milestone and must not be solved by dropping them.
 
-PR 3 remains deferred until the experiment/run/result schema is separately
-designed and reviewed. Interpretation candidates and ordinary journal entries
-must not be treated as experiment results in the meantime.
+The next dependency-ordered target is **M1 / PR 3**. Its experiment/run/result
+schema must be separately designed and reviewed before implementation.
+Interpretation candidates and ordinary journal entries must not be treated as
+experiment results in the meantime, and M3 mutation UI remains blocked until
+the substrate is accepted.

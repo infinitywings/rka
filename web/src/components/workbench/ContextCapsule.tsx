@@ -4,11 +4,37 @@ import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
 import type { ManuscriptContext, ManuscriptReadiness, ResearchMapData } from "@/api/types"
 
-export interface WorkbenchQueueSummary {
-  total: number
-  attention: number
-  ready: number
-  partial: boolean
+export type WorkbenchQueueSummary =
+  | { state: "loading" }
+  | { state: "error"; message: string }
+  | {
+      state: "ready"
+      shown: number
+      attention: number
+      ready: number
+      limitReached: boolean
+    }
+
+function queueValue(
+  summary: WorkbenchQueueSummary,
+  attentionLabel: string,
+  readyLabel: string,
+) {
+  if (summary.state === "loading") return "Loading review queue"
+  if (summary.state === "error") return "Review queue unavailable"
+  if (summary.shown === 0) return "No records in this view"
+  const counts = `${summary.attention} ${attentionLabel} · ${summary.ready} ${readyLabel}`
+  return summary.limitReached
+    ? `${counts} · ${summary.shown} records shown; total unknown`
+    : counts
+}
+
+function queueDetail(summary: WorkbenchQueueSummary, base: string) {
+  if (summary.state === "error") return `${base} Error: ${summary.message}`
+  if (summary.state === "ready" && summary.limitReached) {
+    return `${base} The API limit was reached, so these counts must not be read as project totals.`
+  }
+  return base
 }
 
 function CapsuleFact({
@@ -45,7 +71,7 @@ function ReviewQueueFact({
   return (
     <Link
       to={to}
-      className="group rounded-md border bg-background/70 px-3 py-2 transition-colors hover:border-primary/40 hover:bg-muted/30"
+      className="group rounded-md border bg-background/70 px-3 py-2 transition-colors hover:border-primary/40 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
@@ -63,32 +89,75 @@ function ReviewQueueFact({
 export function ContextCapsule({
   projectId,
   projectName,
+  projectError,
+  manuscriptRequested,
+  contextLoading,
   context,
   readiness,
+  readinessLoading,
+  readinessError,
   map,
+  mapLoading,
+  mapError,
   impactCount,
   impactPartial,
+  impactError,
   interpretationSummary,
   scopeSummary,
 }: {
   projectId: string
   projectName: string
+  projectError: Error | null
+  manuscriptRequested: boolean
+  contextLoading: boolean
   context?: ManuscriptContext
   readiness?: ManuscriptReadiness
+  readinessLoading: boolean
+  readinessError: Error | null
   map?: ResearchMapData
+  mapLoading: boolean
+  mapError: Error | null
   impactCount: number
   impactPartial: boolean
-  interpretationSummary?: WorkbenchQueueSummary
-  scopeSummary?: WorkbenchQueueSummary
+  impactError: Error | null
+  interpretationSummary: WorkbenchQueueSummary
+  scopeSummary: WorkbenchQueueSummary
 }) {
   const manuscript = context?.manuscript
   const readinessLabel = readiness
     ? readiness.ready
       ? "Ready for drafting"
       : `${readiness.verdict}: ${readiness.findings.length} finding${readiness.findings.length === 1 ? "" : "s"}`
+    : contextLoading
+      ? "Waiting for manuscript context"
+      : readinessError
+        ? "Readiness unavailable"
     : manuscript
-      ? "Readiness loading"
-      : "Pre-manuscript exploration"
+      ? readinessLoading
+        ? "Readiness loading"
+        : "Readiness unavailable"
+      : manuscriptRequested
+        ? "Manuscript unavailable"
+        : "Pre-manuscript exploration"
+  const manuscriptLabel = manuscript
+    ? manuscript.title
+    : contextLoading
+      ? "Loading manuscript"
+      : manuscriptRequested
+        ? "Unavailable"
+        : "Not selected"
+  const manuscriptSource = manuscript
+    ? `/api/manuscripts/${manuscript.id}/context`
+    : manuscriptRequested
+      ? "Canonical context request"
+      : "No canonical man_ aggregate"
+  const mapLabel = map
+    ? `${map.summary.total_rqs} RQs · ${map.summary.total_clusters} clusters · ${map.summary.total_claims} claims`
+    : mapError
+      ? "Research map unavailable"
+      : mapLoading
+        ? "Loading"
+        : "No research map returned"
 
   return (
     <Card className="border-primary/20 bg-gradient-to-r from-primary/[0.04] via-background to-background">
@@ -110,11 +179,15 @@ export function ContextCapsule({
         </div>
 
         <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
-          <CapsuleFact label="Project" value={projectName} source={`/api/status · ${projectId}`} />
+          <CapsuleFact
+            label="Project"
+            value={projectName}
+            source={projectError ? `Error: ${projectError.message}` : `/api/status · ${projectId}`}
+          />
           <CapsuleFact
             label="Manuscript"
-            value={manuscript ? manuscript.title : "Not selected"}
-            source={manuscript ? `/api/manuscripts/${manuscript.id}/context` : "No canonical man_ aggregate"}
+            value={manuscriptLabel}
+            source={manuscriptSource}
           />
           <CapsuleFact
             label="Venue and phase"
@@ -123,28 +196,34 @@ export function ContextCapsule({
           />
           <CapsuleFact
             label="Research map"
-            value={map ? `${map.summary.total_rqs} RQs · ${map.summary.total_clusters} clusters · ${map.summary.total_claims} claims` : "Loading"}
-            source="/api/research-map"
+            value={mapLabel}
+            source={mapError ? `Error: ${mapError.message}` : "/api/research-map"}
           />
-          <CapsuleFact label="Readiness" value={readinessLabel} source="/api/manuscripts/:id/readiness?target_phase=drafting" />
+          <CapsuleFact
+            label="Readiness"
+            value={readinessLabel}
+            source={readinessError ? `Error: ${readinessError.message}` : "/api/manuscripts/:id/readiness?target_phase=drafting"}
+          />
         </div>
 
         <div className="grid gap-2 lg:grid-cols-2">
           <ReviewQueueFact
             label="Interpretation staging"
-            value={interpretationSummary
-              ? `${interpretationSummary.attention} awaiting review · ${interpretationSummary.ready} resolved${interpretationSummary.partial ? ` · first ${interpretationSummary.total}+ records` : ""}`
-              : "Loading review queue"}
-            detail="Source-bounded candidates only; review does not establish scientific support."
+            value={queueValue(interpretationSummary, "awaiting review", "resolved")}
+            detail={queueDetail(
+              interpretationSummary,
+              "Source-bounded candidates only; review does not establish scientific support.",
+            )}
             source="/api/interpretation-candidates?limit=200"
             to="/interpretations?review_status=pending"
           />
           <ReviewQueueFact
             label="Canonical claim scope"
-            value={scopeSummary
-              ? `${scopeSummary.attention} blocking scope · ${scopeSummary.ready} ready${scopeSummary.partial ? ` · first ${scopeSummary.total}+ records` : ""}`
-              : "Loading scope queue"}
-            detail="Applicability only; evidence support, contradictions, and source grounding remain independent."
+            value={queueValue(scopeSummary, "blocking scope", "ready")}
+            detail={queueDetail(
+              scopeSummary,
+              "Applicability only; evidence support, contradictions, and source grounding remain independent.",
+            )}
             source="/api/claims?limit=200"
             to="/claim-scopes?scope=missing"
           />
@@ -160,6 +239,18 @@ export function ContextCapsule({
               <p className="mt-0.5 opacity-80">
                 Derived from <code>/api/manuscripts/:id/impact</code>.
                 {impactPartial ? " The first page is partial; this is not a clean impact result." : ""}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {impactError && (
+          <div role="alert" className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-red-900 dark:border-red-800 dark:bg-red-950 dark:text-red-100">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <div className="text-xs">
+              <p className="font-medium">Semantic impact check unavailable.</p>
+              <p className="mt-0.5 opacity-80">
+                No clean-impact conclusion can be drawn. Error: {impactError.message}
               </p>
             </div>
           </div>
