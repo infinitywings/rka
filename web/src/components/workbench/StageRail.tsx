@@ -1,3 +1,4 @@
+import { useRef } from "react"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import {
@@ -22,18 +23,54 @@ export function StageRail({
   verdicts: Record<WorkbenchStageId, StageVerdict>
   onSelect: (stage: WorkbenchStageId) => void
 }) {
+  const stageButtons = useRef<Array<HTMLButtonElement | null>>([])
+
+  const moveFocus = (index: number, key: string) => {
+    let nextIndex: number | null = null
+    if (key === "ArrowDown" || key === "ArrowRight") {
+      nextIndex = (index + 1) % WORKBENCH_STAGES.length
+    } else if (key === "ArrowUp" || key === "ArrowLeft") {
+      nextIndex = (index - 1 + WORKBENCH_STAGES.length) % WORKBENCH_STAGES.length
+    } else if (key === "Home") {
+      nextIndex = 0
+    } else if (key === "End") {
+      nextIndex = WORKBENCH_STAGES.length - 1
+    }
+    if (nextIndex === null) return
+    stageButtons.current[nextIndex]?.focus()
+  }
+
   return (
-    <nav aria-label="Manuscript stages" className="space-y-1.5">
+    <nav
+      aria-label="Manuscript stages"
+      aria-describedby="manuscript-stage-keyboard-help"
+      className="space-y-1.5"
+    >
+      <p id="manuscript-stage-keyboard-help" className="sr-only">
+        Use the arrow keys, Home, or End to move between stages. Press Enter or Space to select a stage.
+      </p>
       {WORKBENCH_STAGES.map((stage, index) => {
         const Icon = stage.icon
         const verdict = verdicts[stage.id]
         return (
           <button
             key={stage.id}
+            ref={(node) => { stageButtons.current[index] = node }}
             type="button"
             onClick={() => onSelect(stage.id)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault()
+                onSelect(stage.id)
+                return
+              }
+              if (["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft", "Home", "End"].includes(event.key)) {
+                event.preventDefault()
+                moveFocus(index, event.key)
+              }
+            }}
             className={cn(
-              "w-full rounded-lg border px-3 py-2.5 text-left transition-colors",
+              "w-full rounded-lg border px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2",
               selected === stage.id
                 ? "border-primary bg-primary/5 shadow-sm"
                 : "border-transparent hover:border-border hover:bg-muted/60",

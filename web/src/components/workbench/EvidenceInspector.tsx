@@ -20,7 +20,7 @@ export interface WorkbenchTraceItem {
 
 export function EvidenceInspector({ item }: { item: WorkbenchTraceItem }) {
   return (
-    <Card className="min-h-40">
+    <Card className="min-h-40" aria-live="polite" aria-atomic="true">
       <CardHeader className="pb-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <CardTitle className="flex items-center gap-2 text-sm">
