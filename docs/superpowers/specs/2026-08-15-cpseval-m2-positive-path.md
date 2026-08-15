@@ -124,9 +124,10 @@ error. The viewport override was reset after testing.
 - 390 by 844 responsive and mobile-navigation walkthrough: pass;
 - live backup and post-pilot backup integrity checks: pass.
 
-## Remaining M2 exit work
+## M2 exit follow-up
 
-The real-project positive path and narrow-viewport blocker are closed. Before
-enabling M3 mutation UI, freeze the M2 exit evidence with a final keyboard and
-accessibility pass plus explicit loading, empty, and capped-count cases. Those
-checks must not weaken the epistemic labels demonstrated here.
+The final keyboard/accessibility, loading, empty, capped-count, and responsive
+cases are closed in
+[`2026-08-15-workbench-m2-exit-evidence.md`](2026-08-15-workbench-m2-exit-evidence.md).
+Those checks preserve the epistemic labels demonstrated here. M2 is complete
+when that follow-up branch merges.

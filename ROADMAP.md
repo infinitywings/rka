@@ -17,10 +17,9 @@ milestone must satisfy its exit gate before dependent work is treated as ready.
 
 ## Now
 
-**M0, M1 / PR 1, M1 / PR 2, and the first M2 / PR 4 navigation slice are
-merged. The bounded CPSEval positive-path pilot and responsive-layout repair
-are fully validated on their feature branch; review and merge are the remaining
-publication gates.** The choice-first Writer delta is reconciled, the authority
+**M0, M1 / PR 1, M1 / PR 2, and the CPSEval-backed M2 / PR 4 workbench are
+complete in the current tree. The next dependency-ordered target is M1 / PR 3
+experiment, run, result, and evidence-locator design.** The choice-first Writer delta is reconciled, the authority
 and AI boundary is recorded in ADR 0001, and the read-only workbench has been
 walked through with DelaySteer and a full-manuscript control.
 
@@ -57,12 +56,15 @@ reviewed scope and a one-claim native spine while remaining visibly unverified,
 unassessed, unratified, and checkpoint-blocked. The pilot also exposed and
 closed a narrow-viewport navigation defect. The evidence is recorded in
 [`2026-08-15-cpseval-m2-positive-path.md`](docs/superpowers/specs/2026-08-15-cpseval-m2-positive-path.md).
-No live semantic record changed. The immediate target remains **M2 / PR 4**:
-freeze the exit evidence with final keyboard/accessibility and explicit
-loading, empty, and capped-count cases. PR 3 remains explicitly deferred until the
-experiment/run/result schema is separately designed and reviewed; the
-workbench must label that missing semantic layer rather than infer experiments
-from journal entries.
+No live semantic record changed. The final M2 pass adds explicit project-only,
+loading, unavailable, empty, and capped-count states; keyboard stage
+navigation; a skip link; live-region semantics; and a responsive 390 by 844
+check. The evidence is recorded in
+[`2026-08-15-workbench-m2-exit-evidence.md`](docs/superpowers/specs/2026-08-15-workbench-m2-exit-evidence.md).
+The immediate target is now **M1 / PR 3**. Its
+experiment/run/result schema must be separately designed and reviewed; the
+workbench must continue to label that missing semantic layer rather than infer
+experiments from journal entries.
 
 ## Dependency map
 
