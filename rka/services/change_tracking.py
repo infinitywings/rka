@@ -562,6 +562,44 @@ class ChangeTrackingService(BaseService):
                 for index in endpoint_to_pages.get(target, set()):
                     endpoint_sets[index].add(source)
 
+        # Experiment evidence uses a reviewed relation table rather than a
+        # generic graph edge so revocation can remain auditable without a
+        # stale active edge. Expand run -> observation -> active canonical
+        # claim explicitly for manuscript impact.
+        run_to_pages: dict[str, set[int]] = defaultdict(set)
+        observation_to_pages: dict[str, set[int]] = defaultdict(set)
+        for index, endpoints in enumerate(endpoint_sets):
+            for entity_type, entity_id in endpoints:
+                if entity_type == "experiment_run":
+                    run_to_pages[entity_id].add(index)
+                elif entity_type == "experiment_observation":
+                    observation_to_pages[entity_id].add(index)
+
+        for batch in _chunks(run_to_pages):
+            placeholders = ", ".join("?" for _ in batch)
+            rows = await self.db.fetchall(
+                f"""SELECT id, run_id FROM experiment_observations
+                    WHERE project_id = ? AND run_id IN ({placeholders})""",
+                [self.project_id, *batch],
+            )
+            for row in rows:
+                for index in run_to_pages.get(row["run_id"], set()):
+                    endpoint_sets[index].add(("experiment_observation", row["id"]))
+                    observation_to_pages[row["id"]].add(index)
+
+        for batch in _chunks(observation_to_pages):
+            placeholders = ", ".join("?" for _ in batch)
+            rows = await self.db.fetchall(
+                f"""SELECT observation_id, claim_id
+                    FROM claim_evidence_relations
+                    WHERE project_id = ? AND status = 'active'
+                      AND observation_id IN ({placeholders})""",
+                [self.project_id, *batch],
+            )
+            for row in rows:
+                for index in observation_to_pages.get(row["observation_id"], set()):
+                    endpoint_sets[index].add(("claim", row["claim_id"]))
+
     async def _claims_for_journal_endpoints(
         self, endpoint_sets: list[set[tuple[str, str]]]
     ) -> dict[str, set[str]]:

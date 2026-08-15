@@ -30,7 +30,7 @@ Design choices (decision #3 in the project locked-decisions list):
   hints, and the Phase-X²' canonical-field-name lessons (e.g. the
   `description=` vs `content=` checkpoint pitfall from the 2026-06-01
   hyperscaler-auditing PA-2 bug).
-- Single dict, one entry per operation. Total 115 entries.
+- Single dict, one entry per operation. Total 125 entries.
 - Enum value-sets reference rka.mcp._enums for drift-detection — the
   enums dict here cites the values directly (mirror of _enums.py) so
   consumers don't need to import _enums. The lock-test in
@@ -158,7 +158,9 @@ _ENUMS = {
         "absent",
         "described_by",
     ],
-    "interpretation_source": ["journal", "literature", "artifact"],
+    "interpretation_source": [
+        "journal", "literature", "artifact", "experiment_observation"
+    ],
     "interpretation_locator": [
         "text_offset",
         "page",
@@ -188,6 +190,7 @@ _ENUMS = {
         "classified_plan",
         "classified_author_intent",
         "evidence_mission_requested",
+        "classified_evidence",
     ],
     "interpretation_hint_kind": ["duplicate", "conflict"],
     "interpretation_triage_action": [
@@ -202,7 +205,35 @@ _ENUMS = {
         "request_evidence_mission",
         "reopen",
         "revoke_promotion",
+        "classify_evidence",
+        "revoke_evidence",
     ],
+    "experiment_actor": ["pi", "brain", "executor", "web_ui", "llm", "import"],
+    "experiment_status": ["planned", "active", "completed", "abandoned"],
+    "working_tree_state": ["clean", "dirty", "unknown"],
+    "experiment_run_status": [
+        "queued", "running", "succeeded", "failed", "cancelled"
+    ],
+    "experiment_run_action": ["start", "succeed", "fail", "cancel"],
+    "experiment_run_kind": ["local", "docker", "cluster", "manual", "import"],
+    "experiment_observation_kind": [
+        "metric", "comparison", "test", "qualitative", "failure", "artifact"
+    ],
+    "experiment_observation_direction": [
+        "positive", "negative", "inconclusive", "neutral", "error"
+    ],
+    "evidence_source_kind": ["artifact", "repository"],
+    "evidence_locator_kind": [
+        "whole_artifact",
+        "page",
+        "line_range",
+        "table",
+        "table_cell",
+        "json_pointer",
+        "notebook_cell",
+        "record",
+    ],
+    "claim_evidence_role": ["support", "qualifier", "counterevidence", "context"],
     "evidence_status": [
         "unassessed",
         "supported",
@@ -879,6 +910,87 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "claims",
         ],
         "notes": "Candidates are not canonical claims or scientific support.",
+    },
+    "experiments": {
+        "operation": "experiments",
+        "tool": "rka_query",
+        "category": "experiments",
+        "role_tag": "ANY",
+        "summary": "List experiments or fetch one with immutable plan and run history.",
+        "signature": (
+            "rka_query(operation='experiments', *, project_id, id=None, "
+            "limit=50, filters={'status'})"
+        ),
+        "required_fields": ["project_id"],
+        "optional_fields": ["limit", "filters", "id"],
+        "enums": _e("experiment_status"),
+        "examples": [{
+            "description": "Inspect an experiment and its exact plan history.",
+            "call": {
+                "operation": "experiments",
+                "project_id": "prj_01ABC...",
+                "id": "exp_01XYZ...",
+            },
+        }],
+        "related_operations": [
+            "create_experiment", "append_experiment_plan", "experiment_runs"
+        ],
+        "notes": "A plan version is immutable; lifecycle status is revision guarded.",
+    },
+    "experiment_runs": {
+        "operation": "experiment_runs",
+        "tool": "rka_query",
+        "category": "experiments",
+        "role_tag": "ANY",
+        "summary": "List plan-bound runs or fetch one with events and observations.",
+        "signature": (
+            "rka_query(operation='experiment_runs', *, project_id, id=None, "
+            "limit=50, filters={'experiment_id', 'status'})"
+        ),
+        "required_fields": ["project_id"],
+        "optional_fields": ["limit", "filters", "id"],
+        "enums": _e("experiment_run_status"),
+        "examples": [{
+            "description": "Inspect one run and its append-only lifecycle events.",
+            "call": {
+                "operation": "experiment_runs",
+                "project_id": "prj_01ABC...",
+                "id": "run_01XYZ...",
+            },
+        }],
+        "related_operations": [
+            "experiments", "create_experiment_run", "experiment_observations"
+        ],
+        "notes": "A succeeded run establishes execution status, not scientific support.",
+    },
+    "experiment_observations": {
+        "operation": "experiment_observations",
+        "tool": "rka_query",
+        "category": "experiments",
+        "role_tag": "ANY",
+        "summary": "List immutable observations or fetch exact locator and review lineage.",
+        "signature": (
+            "rka_query(operation='experiment_observations', *, project_id, "
+            "id=None, limit=50, filters={'run_id', 'direction', 'kind', 'claim_id'})"
+        ),
+        "required_fields": ["project_id"],
+        "optional_fields": ["limit", "filters", "id"],
+        "enums": _e("experiment_observation_direction", "experiment_observation_kind"),
+        "examples": [{
+            "description": "Inspect an observation and its auditable evidence locators.",
+            "call": {
+                "operation": "experiment_observations",
+                "project_id": "prj_01ABC...",
+                "id": "obs_01XYZ...",
+            },
+        }],
+        "related_operations": [
+            "record_experiment_observation",
+            "add_evidence_locator",
+            "create_interpretation_candidate",
+            "triage_interpretation_candidate",
+        ],
+        "notes": "Observation direction is preserved even when negative or inconclusive.",
     },
     "manuscript": {
         "operation": "manuscript",
@@ -3524,8 +3636,13 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "target_entity_id",
             "grounding_verified",
             "claim_confidence",
+            "evidence_role",
         ],
-        "enums": _e("interpretation_triage_action", "interpretation_review_actor"),
+        "enums": _e(
+            "interpretation_triage_action",
+            "interpretation_review_actor",
+            "claim_evidence_role",
+        ),
         "examples": [
             {
                 "description": "Promote after checking the exact source span.",
@@ -3546,6 +3663,250 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "Promotion sets grounding fidelity but leaves scientific evidence "
             "status unassessed. Revoke preserves the claim and marks it stale."
         ),
+    },
+    "create_experiment": {
+        "operation": "create_experiment",
+        "tool": "rka_execute",
+        "category": "experiments",
+        "role_tag": "BRAIN",
+        "summary": "Create an experiment with immutable plan version 1.",
+        "signature": (
+            "rka_execute(operation='create_experiment', *, project_id, title, "
+            "objective, protocol, created_by, reason, ...)"
+        ),
+        "required_fields": [
+            "project_id", "objective", "protocol", "title", "created_by", "reason"
+        ],
+        "optional_fields": [
+            "hypothesis", "conditions", "variables", "metrics", "baselines",
+            "success_criteria", "failure_criteria", "repository_url", "commit_sha",
+            "working_tree_state",
+        ],
+        "enums": _e("experiment_actor", "working_tree_state"),
+        "examples": [{
+            "description": "Create a reproducible experiment plan.",
+            "call": {
+                "operation": "create_experiment",
+                "project_id": "prj_01ABC...",
+                "title": "Evaluate detector latency",
+                "objective": "Measure latency under the frozen workload.",
+                "protocol": "Run 30 repetitions and retain raw outputs.",
+                "created_by": "brain",
+                "reason": "Test the latency claim.",
+            },
+        }],
+        "related_operations": ["experiments", "create_experiment_run"],
+        "notes": "Creation records a plan, not a result.",
+    },
+    "append_experiment_plan": {
+        "operation": "append_experiment_plan",
+        "tool": "rka_execute",
+        "category": "experiments",
+        "role_tag": "BRAIN",
+        "summary": "Append a revision-guarded immutable experiment plan version.",
+        "signature": (
+            "rka_execute(operation='append_experiment_plan', *, project_id, id, "
+            "expected_revision, objective, protocol, created_by, reason, ...)"
+        ),
+        "required_fields": [
+            "project_id", "objective", "protocol", "id", "expected_revision",
+            "created_by", "reason",
+        ],
+        "optional_fields": [
+            "hypothesis", "conditions", "variables", "metrics", "baselines",
+            "success_criteria", "failure_criteria", "repository_url", "commit_sha",
+            "working_tree_state",
+        ],
+        "enums": _e("experiment_actor", "working_tree_state"),
+        "examples": [{
+            "description": "Refine a protocol without overwriting plan version 1.",
+            "call": {
+                "operation": "append_experiment_plan",
+                "project_id": "prj_01ABC...",
+                "id": "exp_01XYZ...",
+                "expected_revision": 1,
+                "objective": "Measure latency under the frozen workload.",
+                "protocol": "Run 50 repetitions and retain raw outputs.",
+                "created_by": "brain",
+                "reason": "Increase statistical power.",
+            },
+        }],
+        "related_operations": ["experiments"],
+        "notes": "Older plan versions remain addressable by existing runs.",
+    },
+    "transition_experiment": {
+        "operation": "transition_experiment",
+        "tool": "rka_execute",
+        "category": "experiments",
+        "role_tag": "BRAIN",
+        "summary": "Transition a revision-guarded experiment lifecycle.",
+        "signature": (
+            "rka_execute(operation='transition_experiment', *, project_id, id, "
+            "expected_revision, target_status, actor, reason)"
+        ),
+        "required_fields": [
+            "project_id", "id", "expected_revision", "target_status", "actor", "reason"
+        ],
+        "optional_fields": [],
+        "enums": _e("experiment_status", "experiment_actor"),
+        "examples": [{
+            "description": "Activate a reviewed experiment plan.",
+            "call": {
+                "operation": "transition_experiment",
+                "project_id": "prj_01ABC...",
+                "id": "exp_01XYZ...",
+                "expected_revision": 1,
+                "target_status": "active",
+                "actor": "pi",
+                "reason": "Plan approved.",
+            },
+        }],
+        "related_operations": ["experiments"],
+        "notes": "Completion requires terminal run evidence but does not assess claims.",
+    },
+    "create_experiment_run": {
+        "operation": "create_experiment_run",
+        "tool": "rka_execute",
+        "category": "experiments",
+        "role_tag": "EXECUTOR",
+        "summary": "Queue a run bound to one immutable plan version.",
+        "signature": (
+            "rka_execute(operation='create_experiment_run', *, project_id, "
+            "experiment_id, plan_version, label, runner, created_by, reason, ...)"
+        ),
+        "required_fields": [
+            "project_id", "experiment_id", "plan_version", "label", "runner",
+            "created_by", "reason",
+        ],
+        "optional_fields": [
+            "command", "config", "environment", "repository_url", "commit_sha",
+            "working_tree_state",
+        ],
+        "enums": _e("experiment_run_kind", "experiment_actor", "working_tree_state"),
+        "examples": [{
+            "description": "Queue a local run against plan version 1.",
+            "call": {
+                "operation": "create_experiment_run",
+                "project_id": "prj_01ABC...",
+                "experiment_id": "exp_01XYZ...",
+                "plan_version": 1,
+                "label": "seed-1",
+                "runner": "local",
+                "created_by": "executor",
+                "reason": "Execute the approved protocol.",
+            },
+        }],
+        "related_operations": ["experiment_runs", "transition_experiment_run"],
+        "notes": "A run cannot silently float to a newer plan.",
+    },
+    "transition_experiment_run": {
+        "operation": "transition_experiment_run",
+        "tool": "rka_execute",
+        "category": "experiments",
+        "role_tag": "EXECUTOR",
+        "summary": "Append a revision-guarded run lifecycle event.",
+        "signature": (
+            "rka_execute(operation='transition_experiment_run', *, project_id, id, "
+            "expected_revision, action, actor, reason, ...)"
+        ),
+        "required_fields": [
+            "project_id", "id", "expected_revision", "action", "actor", "reason"
+        ],
+        "optional_fields": [
+            "started_at", "completed_at", "exit_code", "failure_summary"
+        ],
+        "enums": _e("experiment_run_action", "experiment_actor"),
+        "examples": [{
+            "description": "Start a queued run.",
+            "call": {
+                "operation": "transition_experiment_run",
+                "project_id": "prj_01ABC...",
+                "id": "run_01XYZ...",
+                "expected_revision": 1,
+                "action": "start",
+                "actor": "executor",
+                "reason": "Execution started.",
+            },
+        }],
+        "related_operations": ["experiment_runs", "record_experiment_observation"],
+        "notes": "Run success means execution completed, not that a claim is supported.",
+    },
+    "record_experiment_observation": {
+        "operation": "record_experiment_observation",
+        "tool": "rka_execute",
+        "category": "experiments",
+        "role_tag": "EXECUTOR",
+        "summary": "Record one immutable positive, negative, or inconclusive observation.",
+        "signature": (
+            "rka_execute(operation='record_experiment_observation', *, project_id, "
+            "run_id, name, kind, direction, summary, observed_at, recorded_by, ...)"
+        ),
+        "required_fields": [
+            "project_id", "run_id", "name", "kind", "direction", "summary",
+            "observed_at", "recorded_by",
+        ],
+        "optional_fields": [
+            "value_real", "value_text", "unit", "sample_size", "uncertainty_note"
+        ],
+        "enums": _e(
+            "experiment_observation_kind",
+            "experiment_observation_direction",
+            "experiment_actor",
+        ),
+        "examples": [{
+            "description": "Record an inconclusive comparison without recasting it as support.",
+            "call": {
+                "operation": "record_experiment_observation",
+                "project_id": "prj_01ABC...",
+                "run_id": "run_01XYZ...",
+                "name": "latency difference",
+                "kind": "comparison",
+                "direction": "inconclusive",
+                "summary": "Confidence interval crosses zero.",
+                "value_text": "95% CI [-1.2, 0.8] ms",
+                "observed_at": "2026-08-15T12:00:00Z",
+                "recorded_by": "executor",
+            },
+        }],
+        "related_operations": ["experiment_observations", "add_evidence_locator"],
+        "notes": "Observations are append-only and do not update claim evidence status.",
+    },
+    "add_evidence_locator": {
+        "operation": "add_evidence_locator",
+        "tool": "rka_execute",
+        "category": "experiments",
+        "role_tag": "EXECUTOR",
+        "summary": "Bind an observation to exact immutable evidence bytes.",
+        "signature": (
+            "rka_execute(operation='add_evidence_locator', *, project_id, "
+            "observation_id, source_kind, locator_kind, created_by, ...)"
+        ),
+        "required_fields": [
+            "project_id", "observation_id", "source_kind", "locator_kind", "created_by"
+        ],
+        "optional_fields": [
+            "artifact_id", "repository_url", "commit_sha", "relative_path",
+            "locator_start", "locator_end", "locator_value", "content_hash", "label"
+        ],
+        "enums": _e("evidence_source_kind", "evidence_locator_kind", "experiment_actor"),
+        "examples": [{
+            "description": "Bind an observation to a content-hashed repository file.",
+            "call": {
+                "operation": "add_evidence_locator",
+                "project_id": "prj_01ABC...",
+                "observation_id": "obs_01XYZ...",
+                "source_kind": "repository",
+                "repository_url": "https://github.com/example/project",
+                "commit_sha": "0123456789abcdef0123456789abcdef01234567",
+                "relative_path": "results/metrics.json",
+                "locator_kind": "json_pointer",
+                "locator_value": "/latency/median",
+                "content_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "created_by": "executor",
+            },
+        }],
+        "related_operations": ["experiment_observations"],
+        "notes": "Artifact locators copy the registered artifact hash; repository locators require one.",
     },
     "set_claim_scope": {
         "operation": "set_claim_scope",

@@ -38,6 +38,7 @@ from rka.services.decision_options import DecisionOptionsService
 from rka.services.calibration import CalibrationService
 from rka.services.hooks_service import HooksService
 from rka.services.interpretation import InterpretationService
+from rka.services.experiments import ExperimentService
 
 logger = logging.getLogger(__name__)
 
@@ -424,6 +425,14 @@ def get_scoped_interpretation_service(
     embeddings: EmbeddingService | None = Depends(get_embeddings),
 ) -> InterpretationService:
     return InterpretationService(db, embeddings=embeddings, project_id=project_id)
+
+
+def get_scoped_experiment_service(
+    project_id: str = Depends(require_project),
+    db: Database = Depends(get_db),
+    embeddings: EmbeddingService | None = Depends(get_embeddings),
+) -> ExperimentService:
+    return ExperimentService(db, embeddings=embeddings, project_id=project_id)
 
 
 def get_scoped_cluster_service(

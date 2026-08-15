@@ -577,7 +577,7 @@ The Brain processes up to 10 maintenance items per session, prioritized by impor
 
 ## Chapter 16: MCP Tools Quick Reference
 
-> **v2.7.0+ dispatch surface.** RKA broadcasts exactly 5 always-on tools: 3 dispatch tools (`rka_query`, `rka_execute`, `rka_describe`) plus 2 escape hatches (`rka_load_tools`, `rka_help`). The tables below list the **operation names** — the values you pass as `operation`: 53 read operations go through `rka_query(args={"operation": ...})` and 62 write/lifecycle operations through `rka_execute(args={"operation": ...})`. There are 115 typed operations total. The pre-v2.7 per-tool names (`rka_add_note`, `rka_get_status`, `rka_trace_provenance`, …) are `tier=deferred` legacy synonyms: they resolve to these operations (typically drop the `rka_`/`get_`/`add_` prefix, e.g. `rka_get_status` → `status`, `rka_add_note` → `record_note`, `rka_trace_provenance` → `provenance`), but on the default surface you call the operation through the dispatch tools rather than the legacy name. The discipline (`source="pi"` + `verbatim_input`, `related_journal=[...]` on decisions, `motivated_by_decision=...` on missions, `project_id` on every call) is unchanged. See `rka_describe(operation="<name>")` for per-operation signatures, or `rka_describe(operation="")` for the full 115-operation index. `rka_set_project` was removed in v2.6 (deprecated no-op) — pin `project_id` at conversation start and thread it on every operation. The LLM-backed `rka_ask` / `rka_generate_summary` features were removed in v2.4.0 and are no longer part of the surface.
+> **v2.7.0+ dispatch surface.** RKA broadcasts exactly 5 always-on tools: 3 dispatch tools (`rka_query`, `rka_execute`, `rka_describe`) plus 2 escape hatches (`rka_load_tools`, `rka_help`). The tables below list the **operation names** — the values you pass as `operation`: 56 read operations go through `rka_query(args={"operation": ...})` and 69 write/lifecycle operations through `rka_execute(args={"operation": ...})`. There are 125 typed operations total. The pre-v2.7 per-tool names (`rka_add_note`, `rka_get_status`, `rka_trace_provenance`, …) are `tier=deferred` legacy synonyms: they resolve to these operations (typically drop the `rka_`/`get_`/`add_` prefix, e.g. `rka_get_status` → `status`, `rka_add_note` → `record_note`, `rka_trace_provenance` → `provenance`), but on the default surface you call the operation through the dispatch tools rather than the legacy name. The discipline (`source="pi"` + `verbatim_input`, `related_journal=[...]` on decisions, `motivated_by_decision=...` on missions, `project_id` on every call) is unchanged. See `rka_describe(operation="<name>")` for per-operation signatures, or `rka_describe(operation="")` for the full 125-operation index. `rka_set_project` was removed in v2.6 (deprecated no-op) — pin `project_id` at conversation start and thread it on every operation. The LLM-backed `rka_ask` / `rka_generate_summary` features were removed in v2.4.0 and are no longer part of the surface.
 
 ### Knowledge Management (`rka_execute`)
 
@@ -623,6 +623,25 @@ The Brain processes up to 10 maintenance items per session, prioritized by impor
 | `provenance` | `rka_query` | Trace the reasoning chain behind any entity |
 | `decision_tree` | `rka_query` | Get the full decision tree |
 | `graph_stats` | `rka_query` | Knowledge graph statistics |
+
+### Experiments & Evidence
+
+| Operation | Dispatch tool | Purpose |
+|-----------|---------------|---------|
+| `experiments` | `rka_query` | Inspect versioned experiment plans and lifecycle state |
+| `experiment_runs` | `rka_query` | Inspect revision-guarded execution runs and event history |
+| `experiment_observations` | `rka_query` | Find positive, negative, neutral, inconclusive, or error observations |
+| `create_experiment` | `rka_execute` | Create an experiment with immutable plan version 1 |
+| `append_experiment_plan` | `rka_execute` | Append a new immutable plan version |
+| `transition_experiment` | `rka_execute` | Advance or abandon an experiment with an expected revision |
+| `create_experiment_run` | `rka_execute` | Bind a run to an exact plan version and repository snapshot |
+| `transition_experiment_run` | `rka_execute` | Record a guarded run lifecycle transition |
+| `record_experiment_observation` | `rka_execute` | Record an immutable result without inferring claim support |
+| `add_evidence_locator` | `rka_execute` | Attach an exact artifact or repository-content locator |
+
+Use Interpretation Review to classify an observation candidate as `support`,
+`qualifier`, `counterevidence`, or `context` for a claim. This reviewed relation
+does not automatically change the claim's evidence status.
 
 ### Project & Session
 

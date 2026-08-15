@@ -11,7 +11,9 @@ import pytest
 from rka.models.project import ProjectCreate
 from rka.models.claim import ClaimCreate, ClaimScopeCondition, ClaimScopeWrite
 from rka.models.interpretation import InterpretationCandidateCreate
+from rka.models.experiment import ExperimentCreate, ExperimentRunCreate
 from rka.services.claims import ClaimService
+from rka.services.experiments import ExperimentService
 from rka.services.interpretation import InterpretationService
 from rka.services.project import ProjectService
 
@@ -83,6 +85,53 @@ async def test_delete_project_failure_rolls_back_prior_table_deletes(
         "SELECT id FROM review_queue WHERE id = 'rvw_atomic_delete'"
     ) is not None
     assert (pack_dir / "must-survive.txt").read_text(encoding="utf-8") == "rollback"
+
+
+@pytest.mark.asyncio
+async def test_delete_project_removes_experiment_substrate_in_dependency_order(db) -> None:
+    projects = ProjectService(db)
+    project_id = "proj_delete_experiment"
+    await projects.create_project(
+        ProjectCreate(id=project_id, name="Delete Experiment Substrate"),
+        actor="system",
+    )
+    experiments = ExperimentService(db, project_id=project_id)
+    experiment = await experiments.create_experiment(
+        ExperimentCreate(
+            title="Deletion experiment",
+            objective="Verify dependency-ordered project deletion.",
+            protocol="Create one queued run.",
+            created_by="brain",
+            reason="Exercise guarded experiment tables.",
+        )
+    )
+    run = await experiments.create_run(
+        ExperimentRunCreate(
+            experiment_id=experiment.id,
+            plan_version=1,
+            label="queued deletion run",
+            runner="local",
+            created_by="executor",
+            reason="Create dependent run rows.",
+        )
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="project-authorized deletion"):
+        await db.execute("DELETE FROM experiment_runs WHERE id = ?", [run.id])
+
+    result = await projects.delete_project(project_id, confirm=True)
+
+    assert result["confirmed"] is True
+    for table in (
+        "experiment_run_events",
+        "experiment_runs",
+        "experiment_plan_versions",
+        "experiments",
+    ):
+        assert await db.fetchall(
+            f"SELECT * FROM {table} WHERE project_id = ?", [project_id]
+        ) == []
+    assert await db.fetchall("PRAGMA foreign_key_check") == []
 
 
 @pytest.mark.asyncio

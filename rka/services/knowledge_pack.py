@@ -17,7 +17,7 @@ from rka.infra.ids import generate_id
 from rka.models.knowledge_pack import KnowledgePackImportResult
 from rka.services.base import BaseService, _now
 
-PACK_SCHEMA_VERSION = 4
+PACK_SCHEMA_VERSION = 5
 PACK_FILE_SUFFIX = ".rka-pack.zip"
 _IMPORT_PROJECT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
@@ -65,6 +65,14 @@ _CRITICAL_INTEGRITY_CATEGORIES: frozenset[str] = frozenset(
         "claim_scope_pointer_mismatch",
         "claim_scope_revision_chain_invalid",
         "claim_scope_disconfirming_refs_invalid",
+        "experiment_plan_head_mismatch",
+        "experiment_plan_chain_invalid",
+        "experiment_run_plan_invalid",
+        "experiment_run_event_head_mismatch",
+        "experiment_observation_parent_invalid",
+        "evidence_locator_source_invalid",
+        "experiment_candidate_source_invalid",
+        "claim_evidence_relation_invalid",
     }
 )
 
@@ -97,9 +105,16 @@ _TABLE_CATEGORIES: dict[str, list[str]] = {
         "interpretation_candidates",
         "interpretation_candidate_hints",
         "interpretation_review_events",
+        "experiments",
+        "experiment_plan_versions",
+        "experiment_runs",
+        "experiment_run_events",
+        "experiment_observations",
+        "evidence_locators",
         "claims",
         "claim_scope_versions",
         "interpretation_promotions",
+        "claim_evidence_relations",
         "evidence_clusters",
         "claim_edges",
         "entity_links",
@@ -174,12 +189,18 @@ _INSERT_ORDER = (
     "reference_validation_attestations",
     "checkpoints",
     "evidence_clusters",
+    "experiments",
+    "experiment_plan_versions",
+    "experiment_runs",
+    "experiment_run_events",
+    "experiment_observations",
     "interpretation_candidates",
     "interpretation_candidate_hints",
     "interpretation_review_events",
     "claims",
     "claim_scope_versions",
     "interpretation_promotions",
+    "claim_evidence_relations",
     "claim_edges",
     "entity_links",
     "tags",
@@ -208,6 +229,7 @@ _INSERT_ORDER = (
     "keynodes",
     "graph_views",
     "artifacts",
+    "evidence_locators",
     "figures",
     "bootstrap_log",
     # bulk_logs (when included)
@@ -233,6 +255,7 @@ _SELF_REFERENTIAL_TABLES: dict[str, str | list[str]] = {
     "decisions": ["parent_id", "superseded_by"],
     "journal": "supersedes",
     "claim_scope_versions": "supersedes_scope_id",
+    "experiment_plan_versions": "supersedes_plan_id",
     "events": "caused_by_event",
     "manuscript_checkpoints": "supersedes_id",
     "topics": "parent_id",
@@ -249,6 +272,13 @@ _ID_ENTITY_TYPES = {
     "interpretation_candidate_hints": "interpretation_hint",
     "interpretation_review_events": "interpretation_review",
     "interpretation_promotions": "interpretation_promotion",
+    "experiments": "experiment",
+    "experiment_plan_versions": "experiment_plan_version",
+    "experiment_runs": "experiment_run",
+    "experiment_run_events": "experiment_run_event",
+    "experiment_observations": "experiment_observation",
+    "evidence_locators": "evidence_locator",
+    "claim_evidence_relations": "claim_evidence_relation",
     "evidence_clusters": "cluster",
     "claim_edges": "claim_edge",
     "decision_options": "decision_option",
@@ -308,6 +338,22 @@ _DIRECT_ID_COLUMNS = {
         "target_id",
     ),
     "interpretation_promotions": ("id", "candidate_id", "claim_id"),
+    "experiments": ("id",),
+    "experiment_plan_versions": (
+        "id",
+        "experiment_id",
+        "supersedes_plan_id",
+    ),
+    "experiment_runs": ("id", "experiment_id"),
+    "experiment_run_events": ("id", "run_id"),
+    "experiment_observations": ("id", "run_id"),
+    "evidence_locators": ("id", "observation_id", "artifact_id"),
+    "claim_evidence_relations": (
+        "id",
+        "claim_id",
+        "observation_id",
+        "candidate_id",
+    ),
     "evidence_clusters": ("id", "research_question_id"),
     "claim_edges": ("id", "source_claim_id", "target_claim_id", "cluster_id"),
     "decision_options": ("id", "decision_id", "dominated_by"),
@@ -405,6 +451,16 @@ _FK_COLUMNS: dict[str, set[str]] = {
     },
     "interpretation_review_events": {"candidate_id"},
     "interpretation_promotions": {"candidate_id", "claim_id"},
+    "experiment_plan_versions": {"experiment_id", "supersedes_plan_id"},
+    "experiment_runs": {"experiment_id"},
+    "experiment_run_events": {"run_id"},
+    "experiment_observations": {"run_id"},
+    "evidence_locators": {"observation_id", "artifact_id"},
+    "claim_evidence_relations": {
+        "claim_id",
+        "observation_id",
+        "candidate_id",
+    },
     "evidence_clusters": {"research_question_id"},
     "claim_edges": {"source_claim_id", "target_claim_id", "cluster_id"},
     "events": {"caused_by_event"},
@@ -486,6 +542,22 @@ _PROSE_TEXT_COLUMNS: dict[str, tuple[str, ...]] = {
     "interpretation_candidate_hints": ("rationale",),
     "interpretation_review_events": ("reason",),
     "interpretation_promotions": ("promotion_reason", "revocation_reason"),
+    "experiment_plan_versions": (
+        "objective",
+        "hypothesis",
+        "protocol",
+        "reason",
+    ),
+    "experiment_runs": ("label", "command", "failure_summary"),
+    "experiment_run_events": ("reason",),
+    "experiment_observations": (
+        "name",
+        "summary",
+        "value_text",
+        "uncertainty_note",
+    ),
+    "evidence_locators": ("label", "locator_value"),
+    "claim_evidence_relations": ("review_reason", "revocation_reason"),
     "evidence_clusters": ("label", "synthesis"),
     "checkpoints": ("description",),
     "events": ("summary",),
@@ -507,6 +579,15 @@ _JSON_ID_COLUMNS = {
         "prohibited_extensions",
         "disconfirming_claim_ids",
     ),
+    "experiment_plan_versions": (
+        "conditions",
+        "variables",
+        "metrics",
+        "baselines",
+        "success_criteria",
+        "failure_criteria",
+    ),
+    "experiment_runs": ("config", "environment"),
     "exploration_summaries": ("source_refs",),
     "qa_logs": ("answer_structured", "sources"),
     "events": ("details",),
@@ -535,6 +616,13 @@ _ENTITY_LINK_ENDPOINT_TABLES: dict[str, str] = {
     "interpretation_hint": "interpretation_candidate_hints",
     "interpretation_promotion": "interpretation_promotions",
     "interpretation_review": "interpretation_review_events",
+    "experiment": "experiments",
+    "experiment_plan_version": "experiment_plan_versions",
+    "experiment_run": "experiment_runs",
+    "experiment_run_event": "experiment_run_events",
+    "experiment_observation": "experiment_observations",
+    "evidence_locator": "evidence_locators",
+    "claim_evidence_relation": "claim_evidence_relations",
     "claim_edge": "claim_edges",
     "cluster": "evidence_clusters",
     "decision": "decisions",
@@ -1786,6 +1874,14 @@ class KnowledgePackService(BaseService):
         "claim_scope_pointer_mismatch": "critical",
         "claim_scope_revision_chain_invalid": "critical",
         "claim_scope_disconfirming_refs_invalid": "critical",
+        "experiment_plan_head_mismatch": "critical",
+        "experiment_plan_chain_invalid": "critical",
+        "experiment_run_plan_invalid": "critical",
+        "experiment_run_event_head_mismatch": "critical",
+        "experiment_observation_parent_invalid": "critical",
+        "evidence_locator_source_invalid": "critical",
+        "experiment_candidate_source_invalid": "critical",
+        "claim_evidence_relation_invalid": "critical",
         "claim_count_mismatch": "warning",
     }
 
@@ -2075,6 +2171,260 @@ class KnowledgePackService(BaseService):
                     "ids": [row["id"] for row in bad_disconfirming_refs[:10]],
                     "description": "claim scope versions with invalid disconfirming claim references",
                     "fix_action": "Restore same-project canonical references or append a corrected scope version",
+                }
+            )
+
+        # 10. Stable experiment heads must point to the latest immutable plan.
+        bad_plan_heads = await self.db.fetchall(
+            """SELECT experiment.id
+               FROM experiments AS experiment
+               WHERE experiment.project_id = ?
+                 AND experiment.current_plan_version <> COALESCE((
+                     SELECT MAX(plan.version)
+                     FROM experiment_plan_versions AS plan
+                     WHERE plan.experiment_id = experiment.id
+                       AND plan.project_id = experiment.project_id
+                 ), 0)
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_plan_heads:
+            cat = "experiment_plan_head_mismatch"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_plan_heads),
+                    "ids": [row["id"] for row in bad_plan_heads[:10]],
+                    "description": "experiments whose current plan head does not match immutable history",
+                    "fix_action": "Restore the missing plan history or repair the experiment head",
+                }
+            )
+
+        # 11. Plan versions form one explicit predecessor chain.
+        bad_plan_chains = await self.db.fetchall(
+            """SELECT plan.id
+               FROM experiment_plan_versions AS plan
+               WHERE plan.project_id = ?
+                 AND (
+                     (plan.version = 1 AND plan.supersedes_plan_id IS NOT NULL)
+                     OR (
+                         plan.version > 1
+                         AND NOT EXISTS (
+                             SELECT 1 FROM experiment_plan_versions AS previous
+                             WHERE previous.experiment_id = plan.experiment_id
+                               AND previous.project_id = plan.project_id
+                               AND previous.version = plan.version - 1
+                               AND previous.id = plan.supersedes_plan_id
+                         )
+                     )
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_plan_chains:
+            cat = "experiment_plan_chain_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_plan_chains),
+                    "ids": [row["id"] for row in bad_plan_chains[:10]],
+                    "description": "experiment plan versions with a missing exact predecessor",
+                    "fix_action": "Restore the immutable predecessor chain",
+                }
+            )
+
+        # 12. Every run binds an exact same-project plan version.
+        bad_run_plans = await self.db.fetchall(
+            """SELECT run.id
+               FROM experiment_runs AS run
+               WHERE run.project_id = ?
+                 AND NOT EXISTS (
+                     SELECT 1 FROM experiment_plan_versions AS plan
+                     WHERE plan.experiment_id = run.experiment_id
+                       AND plan.project_id = run.project_id
+                       AND plan.version = run.plan_version
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_run_plans:
+            cat = "experiment_run_plan_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_run_plans),
+                    "ids": [row["id"] for row in bad_run_plans[:10]],
+                    "description": "experiment runs without their exact plan version",
+                    "fix_action": "Restore the plan version used by each run",
+                }
+            )
+
+        # 13. Run revision heads and append-only event histories agree.
+        bad_run_event_heads = await self.db.fetchall(
+            """SELECT run.id
+               FROM experiment_runs AS run
+               WHERE run.project_id = ?
+                 AND run.revision <> COALESCE((
+                     SELECT MAX(event.run_revision)
+                     FROM experiment_run_events AS event
+                     WHERE event.run_id = run.id
+                       AND event.project_id = run.project_id
+                 ), 0)
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_run_event_heads:
+            cat = "experiment_run_event_head_mismatch"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_run_event_heads),
+                    "ids": [row["id"] for row in bad_run_event_heads[:10]],
+                    "description": "experiment runs whose revision differs from event history",
+                    "fix_action": "Restore the immutable run transition history",
+                }
+            )
+
+        # 14. Observations retain a same-project run parent.
+        bad_observation_parents = await self.db.fetchall(
+            """SELECT observation.id
+               FROM experiment_observations AS observation
+               WHERE observation.project_id = ?
+                 AND NOT EXISTS (
+                     SELECT 1 FROM experiment_runs AS run
+                     WHERE run.id = observation.run_id
+                       AND run.project_id = observation.project_id
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_observation_parents:
+            cat = "experiment_observation_parent_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_observation_parents),
+                    "ids": [row["id"] for row in bad_observation_parents[:10]],
+                    "description": "experiment observations without a same-project run",
+                    "fix_action": "Restore the parent run",
+                }
+            )
+
+        # 15. Exact locators resolve their observation and pinned artifact/hash.
+        bad_locator_sources = await self.db.fetchall(
+            """SELECT locator.id
+               FROM evidence_locators AS locator
+               WHERE locator.project_id = ?
+                 AND (
+                     NOT EXISTS (
+                         SELECT 1 FROM experiment_observations AS observation
+                         WHERE observation.id = locator.observation_id
+                           AND observation.project_id = locator.project_id
+                     )
+                     OR (
+                         locator.source_kind = 'artifact'
+                         AND NOT EXISTS (
+                             SELECT 1 FROM artifacts AS artifact
+                             WHERE artifact.id = locator.artifact_id
+                               AND artifact.project_id = locator.project_id
+                               AND lower(artifact.content_hash) = lower(locator.content_hash)
+                         )
+                     )
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_locator_sources:
+            cat = "evidence_locator_source_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_locator_sources),
+                    "ids": [row["id"] for row in bad_locator_sources[:10]],
+                    "description": "evidence locators with missing or hash-mismatched sources",
+                    "fix_action": "Restore the exact observation/artifact source",
+                }
+            )
+
+        # 16. Observation-backed interpretation candidates resolve locally.
+        bad_experiment_candidates = await self.db.fetchall(
+            """SELECT candidate.id
+               FROM interpretation_candidates AS candidate
+               WHERE candidate.project_id = ?
+                 AND candidate.source_type = 'experiment_observation'
+                 AND NOT EXISTS (
+                     SELECT 1 FROM experiment_observations AS observation
+                     WHERE observation.id = candidate.source_id
+                       AND observation.project_id = candidate.project_id
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_experiment_candidates:
+            cat = "experiment_candidate_source_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_experiment_candidates),
+                    "ids": [row["id"] for row in bad_experiment_candidates[:10]],
+                    "description": "experiment interpretation candidates without observations",
+                    "fix_action": "Restore the observation source",
+                }
+            )
+
+        # 17. Reviewed claim relations keep claim, observation, and candidate aligned.
+        bad_evidence_relations = await self.db.fetchall(
+            """SELECT relation.id
+               FROM claim_evidence_relations AS relation
+               WHERE relation.project_id = ?
+                 AND (
+                     NOT EXISTS (
+                         SELECT 1 FROM claims AS claim
+                         WHERE claim.id = relation.claim_id
+                           AND claim.project_id = relation.project_id
+                     )
+                     OR NOT EXISTS (
+                         SELECT 1 FROM experiment_observations AS observation
+                         WHERE observation.id = relation.observation_id
+                           AND observation.project_id = relation.project_id
+                     )
+                     OR NOT EXISTS (
+                         SELECT 1 FROM interpretation_candidates AS candidate
+                         WHERE candidate.id = relation.candidate_id
+                           AND candidate.project_id = relation.project_id
+                           AND candidate.source_type = 'experiment_observation'
+                           AND candidate.source_id = relation.observation_id
+                           AND (
+                               (relation.status = 'active'
+                                AND candidate.review_status = 'resolved'
+                                AND candidate.disposition = 'classified_evidence'
+                                AND candidate.disposition_target_type = 'claim'
+                                AND candidate.disposition_target_id = relation.claim_id)
+                               OR (relation.status = 'revoked'
+                                   AND candidate.review_status = 'pending')
+                           )
+                     )
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_evidence_relations:
+            cat = "claim_evidence_relation_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_evidence_relations),
+                    "ids": [row["id"] for row in bad_evidence_relations[:10]],
+                    "description": "claim evidence relations whose reviewed lineage is inconsistent",
+                    "fix_action": "Restore the claim-relative interpretation history",
                 }
             )
 

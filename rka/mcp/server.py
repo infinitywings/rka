@@ -264,14 +264,14 @@ Detailed operating guidance is available via MCP prompts:
 Use these prompts to load role-specific guidance at session start.
 
 ## Tool Surface (v2.7.0+) — Typed Dispatch Architecture
-RKA ships 5 always-on tools: 3 dispatch tools that route to 113 typed
+RKA ships 5 always-on tools: 3 dispatch tools that route to 125 typed
 operations, plus 2 escape hatches into the legacy surface.
 
 - **Dispatch (always-on):**
-- `rka_query(args={"operation": ..., "project_id": ..., ...})` — 52 read
+- `rka_query(args={"operation": ..., "project_id": ..., ...})` — 56 read
     operations (status, context, journal, decisions, missions, literature,
     research map, etc.). Returns structured data.
-- `rka_execute(args={"operation": ..., "project_id": ..., ...})` — 61
+- `rka_execute(args={"operation": ..., "project_id": ..., ...})` — 69
     write/lifecycle operations (record_note, record_decision, create_mission,
     submit_report, submit_checkpoint, etc.). Returns the created/updated entity.
   - `rka_describe(operation="" | "<op_name>")` — schema lookup. With no
@@ -283,7 +283,7 @@ operations, plus 2 escape hatches into the legacy surface.
     the live tool surface. Useful only for back-compat with old transcripts.
   - `rka_help(name=...)` — deprecated alias for `rka_describe`.
 
-The 113 operations are typed Pydantic models with per-branch enum constraints
+The 125 operations are typed Pydantic models with per-branch enum constraints
 and required-field enforcement at the FastMCP schema layer — illegal values
 (e.g. `confidence="confirmed"`) are rejected at the inputSchema boundary
 before the call goes out.
@@ -4618,6 +4618,7 @@ async def rka_triage_interpretation_candidate(
     target_entity_id: str | None = None,
     grounding_verified: bool = False,
     claim_confidence: float = 0.5,
+    evidence_role: str | None = None,
     *,
     project_id: str,
 ) -> str:
@@ -4632,6 +4633,7 @@ async def rka_triage_interpretation_candidate(
             "target_entity_id": target_entity_id,
             "grounding_verified": grounding_verified,
             "claim_confidence": claim_confidence,
+            "evidence_role": evidence_role,
         }
     )
     async with _client(project_id) as c:
@@ -4639,6 +4641,180 @@ async def rka_triage_interpretation_candidate(
             f"/api/interpretations/{candidate_id}/triage",
             json=payload,
         )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="experiments")
+async def rka_get_experiments(
+    experiment_id: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+    *,
+    project_id: str,
+) -> str:
+    """List experiments or fetch one detailed experiment."""
+    async with _client(project_id) as c:
+        if experiment_id:
+            response = await c.get(f"/api/experiments/{experiment_id}")
+        else:
+            response = await c.get(
+                "/api/experiments",
+                params=_strip_none({"status": status, "limit": limit}),
+            )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="experiments")
+async def rka_get_experiment_runs(
+    run_id: str | None = None,
+    experiment_id: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+    *,
+    project_id: str,
+) -> str:
+    """List experiment runs or fetch one run with events and observations."""
+    async with _client(project_id) as c:
+        if run_id:
+            response = await c.get(f"/api/experiment-runs/{run_id}")
+        else:
+            response = await c.get(
+                "/api/experiment-runs",
+                params=_strip_none(
+                    {
+                        "experiment_id": experiment_id,
+                        "status": status,
+                        "limit": limit,
+                    }
+                ),
+            )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="experiments")
+async def rka_get_experiment_observations(
+    observation_id: str | None = None,
+    run_id: str | None = None,
+    direction: str | None = None,
+    kind: str | None = None,
+    claim_id: str | None = None,
+    limit: int = 50,
+    *,
+    project_id: str,
+) -> str:
+    """List immutable observations or fetch evidence/review lineage for one."""
+    async with _client(project_id) as c:
+        if observation_id:
+            response = await c.get(
+                f"/api/experiment-observations/{observation_id}"
+            )
+        else:
+            response = await c.get(
+                "/api/experiment-observations",
+                params=_strip_none(
+                    {
+                        "run_id": run_id,
+                        "direction": direction,
+                        "kind": kind,
+                        "claim_id": claim_id,
+                        "limit": limit,
+                    }
+                ),
+            )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="experiments")
+async def rka_create_experiment(payload: dict, *, project_id: str) -> str:
+    """Create an experiment and immutable plan version 1."""
+    async with _client(project_id) as c:
+        response = await c.post("/api/experiments", json=payload)
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="experiments")
+async def rka_append_experiment_plan(
+    experiment_id: str,
+    payload: dict,
+    *,
+    project_id: str,
+) -> str:
+    """Append a revision-guarded immutable plan version."""
+    async with _client(project_id) as c:
+        response = await c.post(
+            f"/api/experiments/{experiment_id}/plans",
+            json=payload,
+        )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="experiments")
+async def rka_transition_experiment(
+    experiment_id: str,
+    payload: dict,
+    *,
+    project_id: str,
+) -> str:
+    """Transition a revision-guarded experiment lifecycle."""
+    async with _client(project_id) as c:
+        response = await c.post(
+            f"/api/experiments/{experiment_id}/transition",
+            json=payload,
+        )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="experiments")
+async def rka_create_experiment_run(payload: dict, *, project_id: str) -> str:
+    """Queue a run bound to one immutable experiment plan version."""
+    async with _client(project_id) as c:
+        response = await c.post("/api/experiment-runs", json=payload)
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="experiments")
+async def rka_transition_experiment_run(
+    run_id: str,
+    payload: dict,
+    *,
+    project_id: str,
+) -> str:
+    """Append one revision-guarded run lifecycle event."""
+    async with _client(project_id) as c:
+        response = await c.post(
+            f"/api/experiment-runs/{run_id}/transition",
+            json=payload,
+        )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="experiments")
+async def rka_record_experiment_observation(
+    payload: dict,
+    *,
+    project_id: str,
+) -> str:
+    """Record one immutable observation; never infer claim support."""
+    async with _client(project_id) as c:
+        response = await c.post("/api/experiment-observations", json=payload)
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="experiments")
+async def rka_add_evidence_locator(payload: dict, *, project_id: str) -> str:
+    """Bind an observation to exact content-hashed evidence bytes."""
+    async with _client(project_id) as c:
+        response = await c.post("/api/evidence-locators", json=payload)
         _raise_with_detail(response)
     return json.dumps(response.json(), indent=2)
 
@@ -6707,7 +6883,8 @@ QueryScopeLit = _Literal[
     "status", "context", "search", "entity", "journal", "literature",
     "mission", "report", "checkpoints", "decision_tree", "calibration_metrics",
     "hooks", "hook_executions", "brain_notifications", "research_map",
-    "review_queue", "clusters", "claims", "interpretation_candidates", "manuscript",
+    "review_queue", "clusters", "claims", "interpretation_candidates",
+    "experiments", "experiment_runs", "experiment_observations", "manuscript",
     "resolve_entities", "changes_since", "manuscript_context",
     "manuscript_reference_manifest",
     "manuscript_readiness", "manuscript_spine",
@@ -8224,7 +8401,7 @@ before using `rka_query` or `rka_execute`.
 # ============================================================
 # Companion to rka_query (reads) and rka_describe (schema lookup).
 #
-# This verb collapses the entire write/lifecycle surface (61
+# This verb collapses the entire write/lifecycle surface (69
 # operations) behind one Annotated[Literal] discriminator so the LLM
 # sees the full enum in its inputSchema. Dispatch lives in
 # rka/mcp/verb_dispatch.py::dispatch_execute, which routes to the
@@ -8261,7 +8438,7 @@ async def rka_execute(args: _ExecuteArgsUnion) -> str:
 
     v2.7.0 NO-COMPROMISE typed-arg surface. The ``args`` parameter is a
     Pydantic discriminated union (keyed by ``operation``) covering all
-    61 write/lifecycle operations. FastMCP renders the union as JSON
+    69 write/lifecycle operations. FastMCP renders the union as JSON
     Schema ``oneOf`` with per-branch ``required`` arrays + per-branch
     ``enum`` constraints on every Literal-typed field. The LLM CANNOT
     emit ``confidence='confirmed'``, ``decided_by='SUPERVISOR'``,
@@ -8406,11 +8583,11 @@ support; the Skill is authoritative.
 Always begin a session by loading context:
 
 0. **Tool surface (v2.7.0+ typed dispatch).** RKA ships 3 always-on dispatch
-   tools — `rka_query` (52 read ops), `rka_execute` (61 write/lifecycle ops),
+   tools — `rka_query` (56 read ops), `rka_execute` (69 write/lifecycle ops),
    and `rka_describe` (schema lookup) — plus 2 escape hatches (`rka_load_tools`
    for legacy compat and `rka_help` as a deprecated alias of `rka_describe`).
    No activation step is required: every operation is reachable from
-   `rka_query` / `rka_execute` on the first call. To browse the 113 operations
+   `rka_query` / `rka_execute` on the first call. To browse the 125 operations
    call `rka_describe("")`; for one operation's full schema call
    `rka_describe("record_decision")`. Per-branch enum + required-field
    enforcement at the FastMCP schema layer guarantees values like
@@ -8554,7 +8731,7 @@ Skill is authoritative.
 ## Session Start Protocol
 
 0. **Tool surface (v2.7.0+ typed dispatch).** RKA ships 3 always-on dispatch
-   tools — `rka_query` (52 read ops), `rka_execute` (61 write/lifecycle ops),
+   tools — `rka_query` (56 read ops), `rka_execute` (69 write/lifecycle ops),
    and `rka_describe` (schema lookup) — plus 2 escape hatches (`rka_load_tools`
    for legacy compat and `rka_help` as a deprecated alias of `rka_describe`).
    No activation step is required: every operation is reachable from

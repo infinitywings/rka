@@ -264,7 +264,9 @@ ClaimConditionOperatorLit = Literal[
 ]
 
 # Interpretation Staging (rka/models/interpretation.py).
-InterpretationSourceLit = Literal["journal", "literature", "artifact"]
+InterpretationSourceLit = Literal[
+    "journal", "literature", "artifact", "experiment_observation"
+]
 InterpretationLocatorLit = Literal[
     "text_offset",
     "page",
@@ -294,6 +296,7 @@ InterpretationDispositionLit = Literal[
     "classified_plan",
     "classified_author_intent",
     "evidence_mission_requested",
+    "classified_evidence",
 ]
 InterpretationHintKindLit = Literal["duplicate", "conflict"]
 InterpretationTriageActionLit = Literal[
@@ -308,7 +311,37 @@ InterpretationTriageActionLit = Literal[
     "request_evidence_mission",
     "reopen",
     "revoke_promotion",
+    "classify_evidence",
+    "revoke_evidence",
 ]
+
+# Experiment evidence substrate (rka/models/experiment.py).
+ExperimentActorLit = Literal["pi", "brain", "executor", "web_ui", "llm", "import"]
+ExperimentStatusLit = Literal["planned", "active", "completed", "abandoned"]
+WorkingTreeStateLit = Literal["clean", "dirty", "unknown"]
+ExperimentRunStatusLit = Literal[
+    "queued", "running", "succeeded", "failed", "cancelled"
+]
+ExperimentRunActionLit = Literal["start", "succeed", "fail", "cancel"]
+ExperimentRunKindLit = Literal["local", "docker", "cluster", "manual", "import"]
+ExperimentObservationKindLit = Literal[
+    "metric", "comparison", "test", "qualitative", "failure", "artifact"
+]
+ExperimentObservationDirectionLit = Literal[
+    "positive", "negative", "inconclusive", "neutral", "error"
+]
+EvidenceSourceKindLit = Literal["artifact", "repository"]
+EvidenceLocatorKindLit = Literal[
+    "whole_artifact",
+    "page",
+    "line_range",
+    "table",
+    "table_cell",
+    "json_pointer",
+    "notebook_cell",
+    "record",
+]
+ClaimEvidenceRoleLit = Literal["support", "qualifier", "counterevidence", "context"]
 
 # Scientific evidence assessment on a claim. This is intentionally
 # independent from ``claims.verified``, which records extraction/grounding
