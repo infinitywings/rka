@@ -1,9 +1,9 @@
 # RKA Epistemic Pipeline and Manuscript Drafting Workbench
 
 Status: roadmap design source; M0, M1 PR 1 Interpretation Staging, M1 PR 2
-Claim Scope Contracts, and M2 PR 4 are complete in the current tree. The next
-dependency-ordered target is M1 PR 3 experiment, run, result, and exact
-evidence-locator design.
+Claim Scope Contracts, and M2 PR 4 are complete in the current tree. M1 PR 3
+experiment, run, observation, and exact evidence-locator design is frozen and
+implementation is the next dependency-ordered target.
 
 Date: 2026-08-14
 
@@ -19,6 +19,8 @@ The M1 interpretation and experiment boundary is frozen in
 [`ADR 0002`](../../adr/0002-interpretation-staging-and-experiment-boundary.md).
 The M1 canonical-claim applicability boundary is frozen in
 [`ADR 0003`](../../adr/0003-canonical-claim-scope-contracts.md).
+The M1 experiment/run/observation and exact-locator boundary is frozen in
+[`ADR 0004`](../../adr/0004-experiment-run-observation-and-evidence-locator-contracts.md).
 
 ## 1. Baseline and source snapshots
 
@@ -26,7 +28,8 @@ This plan targets the clean default RKA branch at:
 
 - repository: `infinitywings/rka`
 - branch: `main`
-- commit: `edb1e6f170025a77ddcb5b89038d0e1a34af4857`
+- current implementation baseline: `9a9ef74f40909b58b217b6692f6bf0c03b590bc3`
+- original plan baseline: `edb1e6f170025a77ddcb5b89038d0e1a34af4857`
 - RKA package version: `2.9.0`
 - latest migration: `041`
 
@@ -1274,8 +1277,11 @@ The live pack exporter also emits agentic-branch staleness fields that current
 semantic columns. Cross-branch pack migration belongs to the intake/hardening
 milestone and must not be solved by dropping them.
 
-The next dependency-ordered target is **M1 / PR 3**. Its experiment/run/result
-schema must be separately designed and reviewed before implementation.
+The next dependency-ordered target is **M1 / PR 3 implementation**. Its
+experiment/run/observation, exact-locator, and reviewed claim-relation contract
+is frozen in ADR 0004 and the
+[`2026-08-15 experiment-substrate design`](../specs/2026-08-15-experiment-substrate-design.md).
 Interpretation candidates and ordinary journal entries must not be treated as
-experiment results in the meantime, and M3 mutation UI remains blocked until
+experiment results while the migration, REST/MCP, pack, change-impact, and
+disposable real-project gates remain open. M3 mutation UI remains blocked until
 the substrate is accepted.
