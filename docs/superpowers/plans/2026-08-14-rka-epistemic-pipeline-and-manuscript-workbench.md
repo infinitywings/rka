@@ -1,8 +1,9 @@
 # RKA Epistemic Pipeline and Manuscript Drafting Workbench
 
-Status: roadmap design source; M0, M1 PR 1 Interpretation Staging, and M1 PR 2
-Claim Scope Contracts merged; the first M2 PR 4 workbench-hardening slice is
-implemented and fully validated on its feature branch, pending review and merge.
+Status: roadmap design source; M0, M1 PR 1 Interpretation Staging, M1 PR 2
+Claim Scope Contracts, and the first M2 PR 4 navigation slice merged; the
+bounded CPSEval pilot and responsive repair are validated, pending review and
+merge.
 
 Date: 2026-08-14
 
@@ -25,7 +26,7 @@ This plan targets the clean default RKA branch at:
 
 - repository: `infinitywings/rka`
 - branch: `main`
-- commit: `1ef67b6e51cbb50fde60da948df866cdc911478c`
+- commit: `edb1e6f170025a77ddcb5b89038d0e1a34af4857`
 - RKA package version: `2.9.0`
 - latest migration: `041`
 
@@ -1241,7 +1242,7 @@ full-suite, production-build, isolated-container, concurrency, and browser
 acceptance gates.
 
 The active milestone is **M2 / PR 4 Workbench Shell and Context Capsule
-hardening**. The first slice now provides scope-aware capsule summaries,
+hardening**. Its merged navigation slice provides scope-aware capsule summaries,
 URL-resumable stage and review selection, and evidence-to-review trace links.
 Its production build, focused lint, full 2,844-test backend suite, and
 disposable production-browser acceptance path all pass. The evidence is recorded in
@@ -1253,18 +1254,19 @@ path under the new semantics: all canonical scopes are missing, and the two
 existing native manuscripts have empty spines. This is an honest migration
 gate, not a reason to auto-backfill meaning.
 
+The bounded CPSEval pilot is now complete. One exact legacy method claim was
+scoped and connected to a minimal claim-sized native spine only on a disposable
+online database backup. The UI preserved its unverified, unassessed,
+unratified, and checkpoint-blocked state. The same pass exposed and closed a
+narrow-viewport navigation defect. Detailed evidence is recorded in
+[`2026-08-15-cpseval-m2-positive-path.md`](../specs/2026-08-15-cpseval-m2-positive-path.md).
+
 The remaining PR 4 work is:
 
-1. create a disposable database copy for a bounded CPSEval semantic-migration
-   pilot; CPSEval is the recommended smallest case because its native
-   manuscript already exists;
-2. review and scope only the pilot claims needed for a minimal claim-sized
-   spine, preserving every legacy record and uncertainty boundary;
-3. rerun the positive scope-to-spine, trace, impact, and resume path without
-   changing any live semantic record;
-4. close accessibility, narrow-viewport, loading, empty, and partial-count gaps
-   found in that walkthrough;
-5. freeze the M2 exit evidence before any deliberation or mutation UI is
+1. merge the CPSEval pilot evidence and responsive repair;
+2. run the final keyboard/accessibility pass and explicit loading, empty, and
+   capped-count cases;
+3. freeze the M2 exit evidence before any deliberation or mutation UI is
    enabled.
 
 The live pack exporter also emits agentic-branch staleness fields that current
