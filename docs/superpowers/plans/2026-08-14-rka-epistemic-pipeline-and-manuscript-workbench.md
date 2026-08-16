@@ -1,7 +1,8 @@
 # RKA Epistemic Pipeline and Manuscript Drafting Workbench
 
 Status: roadmap design source; M0 through M3 are complete on `main`.
-M4 PR 7 seed-through-contribution guidance is the active implementation slice.
+M4 PR 7 seed-through-contribution guidance has passed its feature-branch gate;
+PR 8 remains blocked on PR 7 review and merge.
 
 Date: 2026-08-14
 
@@ -1286,7 +1287,10 @@ semantic columns. Cross-branch pack migration belongs to the intake/hardening
 milestone and must not be solved by dropping them.
 
 M1 through M3 are now complete on `main`. PR 6 merged in #77, and its proposal
-authority and provider boundary remain frozen in ADR 0006. The active
-dependency-ordered target is **M4 / PR 7: seed-through-contribution guided
-workflow**. ADR 0007 freezes its stage, candidate-identity, promotion-ledger,
-semantic-proposal, and exact PI-ratification contract.
+authority and provider boundary remain frozen in ADR 0006. **M4 / PR 7:
+seed-through-contribution guided workflow** now satisfies its feature-branch
+release gate in draft PR #78. ADR 0007 freezes its stage, candidate-identity,
+promotion-ledger, semantic-proposal, and exact PI-ratification contract. The
+fresh-database and disposable Invarllm validation record is
+[`2026-08-15-workbench-m4-pr7-exit-evidence.md`](../specs/2026-08-15-workbench-m4-pr7-exit-evidence.md).
+PR 8 is the next dependency-ordered slice after PR 7 review and merge.
