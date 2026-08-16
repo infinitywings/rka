@@ -1586,6 +1586,150 @@ export interface PlanningContributionRatification {
   confirmed_by?: "pi"
 }
 
+export interface PlanningEvaluationEvent {
+  id: string
+  project_id: string
+  branch_id: string
+  artifact_id: string
+  artifact_version_id: string
+  artifact_version: number
+  branch_revision: number
+  commitment_key: string
+  requirement_key: string | null
+  action:
+    | "missing_evidence_mission_created"
+    | "result_unit_proposal_prepared"
+    | "result_unit_proposal_applied"
+  target_type: "mission" | "semantic_patch_proposal" | "manuscript_unit"
+  target_id: string
+  target_version: number | null
+  proposal_id: string | null
+  mission_id: string | null
+  proposal_status: SemanticPatchStatus | null
+  mission_status: string | null
+  actor: string
+  reason: string
+  details: Record<string, unknown>
+  created_at: string
+}
+
+export interface PlanningEvaluationObservationView {
+  binding: {
+    observation_id: string
+    locator_ids: string[]
+    role: string
+    outcome: "supports" | "partially_supports" | "fails_to_support" | "inconclusive" | "exploratory"
+    claim_effect: "supports_as_worded" | "requires_narrowing" | "negative_result" | "exploratory_only" | "unresolved"
+    interpretation: string
+  }
+  observation: null | {
+    id: string
+    run_id: string
+    experiment_id: string
+    plan_version: number
+    run_status: string
+    name: string
+    direction: string
+    summary: string
+  }
+  locators: Array<{
+    id: string
+    locator_kind: string
+    locator_value: string | null
+    content_hash: string
+  }>
+}
+
+export interface PlanningEvaluationRequirementView {
+  requirement: {
+    local_key: string
+    kind: string
+    description: string
+    required: boolean
+    experiment_id: string | null
+    plan_version_id: string | null
+    plan_version: number | null
+    acceptance_criteria: string[]
+    failure_criteria: string[]
+    missing_evidence: string | null
+  }
+  plan: null | Record<string, unknown>
+  observations: PlanningEvaluationObservationView[]
+  conclusive_observation_count: number
+  verdict: PlanningWorkflowVerdict
+  blockers: string[]
+  warnings: string[]
+}
+
+export interface PlanningEvaluationCommitmentView {
+  legacy: boolean
+  commitment: Record<string, unknown> & {
+    local_key?: string
+    claim_id?: string
+    claim_version?: number
+    method?: string
+    allowed_interpretation?: string
+    prohibited_interpretation?: string[]
+    disposition?: string
+  }
+  claim?: null | Record<string, unknown>
+  research_questions?: Array<Record<string, unknown>>
+  requirements: PlanningEvaluationRequirementView[]
+  events?: PlanningEvaluationEvent[]
+  verdict: PlanningWorkflowVerdict
+  blockers: string[]
+  warnings: string[]
+  next_action: string
+}
+
+export interface PlanningEvaluationWorkflow {
+  schema_version: string
+  project_id: string
+  branch: PlanningBranch
+  artifact: PlanningArtifact | null
+  candidate_artifacts: PlanningArtifact[]
+  verdict: PlanningWorkflowVerdict
+  blockers: string[]
+  warnings: string[]
+  commitments: PlanningEvaluationCommitmentView[]
+  events: PlanningEvaluationEvent[]
+  next_action: string
+  authority: {
+    planning: "provisional"
+    evidence: "canonical_exact_records"
+    outcomes: "explicit_not_inferred_from_direction"
+    canonical_mutation: string
+    llm_at_view_time: false
+  }
+}
+
+export interface PlanningEvaluationMissionCreate {
+  expected_branch_revision: number
+  artifact_id: string
+  expected_artifact_version: number
+  commitment_key: string
+  requirement_key: string
+  phase?: string
+  motivated_by_decision?: string
+  reason: string
+  actor?: "pi" | "brain" | "executor" | "web_ui"
+}
+
+export interface PlanningEvaluationResultProposalPrepare {
+  expected_branch_revision: number
+  artifact_id: string
+  expected_artifact_version: number
+  commitment_key: string
+  manuscript_id: string
+  expected_manuscript_revision: number
+  result_unit_local_key: string
+  location: string
+  title: string
+  artifact_ref: string
+  reason: string
+  actor?: "pi" | "brain" | "executor" | "web_ui"
+}
+
 // ---- Unified semantic edit proposals ----
 
 export type SemanticPatchStatus =

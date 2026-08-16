@@ -5,6 +5,8 @@ import type {
   PlanningBranchTransition,
   PlanningContributionProposalPrepare,
   PlanningContributionRatification,
+  PlanningEvaluationMissionCreate,
+  PlanningEvaluationResultProposalPrepare,
   PlanningResearchQuestionPromotion,
 } from "@/api/types"
 import { useActiveProjectId } from "@/hooks/useProjectSelection"
@@ -31,6 +33,11 @@ export function usePlanningBranches(manuscriptId: string | null) {
   const promotions = useQuery({
     queryKey: [...key, "promotions", selectedBranchId],
     queryFn: () => api.listPlanningPromotions(selectedBranchId!),
+    enabled: Boolean(selectedBranchId),
+  })
+  const evaluation = useQuery({
+    queryKey: [...key, "evaluation", selectedBranchId],
+    queryFn: () => api.getPlanningEvaluationWorkflow(selectedBranchId!),
     enabled: Boolean(selectedBranchId),
   })
   const refresh = () => queryClient.invalidateQueries({ queryKey: key })
@@ -85,17 +92,40 @@ export function usePlanningBranches(manuscriptId: string | null) {
     }) => api.ratifyPlanningContribution(branchId, data),
     onSuccess: refreshPromotionSurfaces,
   })
+  const createEvaluationMission = useMutation({
+    mutationFn: ({
+      branchId,
+      data,
+    }: {
+      branchId: string
+      data: PlanningEvaluationMissionCreate
+    }) => api.createPlanningEvaluationMission(branchId, data),
+    onSuccess: refreshPromotionSurfaces,
+  })
+  const prepareEvaluationResult = useMutation({
+    mutationFn: ({
+      branchId,
+      data,
+    }: {
+      branchId: string
+      data: PlanningEvaluationResultProposalPrepare
+    }) => api.preparePlanningEvaluationResult(branchId, data),
+    onSuccess: refreshPromotionSurfaces,
+  })
 
   return {
     branches,
     resume,
     workflow,
     promotions,
+    evaluation,
     create,
     transition,
     promoteResearchQuestion,
     prepareContribution,
     ratifyContribution,
+    createEvaluationMission,
+    prepareEvaluationResult,
     key,
   }
 }
