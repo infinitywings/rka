@@ -4923,6 +4923,36 @@ async def rka_get_planning_promotions(
 
 
 @tool(category="manuscript_planning")
+async def rka_get_planning_evaluation_workflow(
+    branch_id: str,
+    *,
+    project_id: str,
+) -> str:
+    """Resolve exact claim, experiment, observation, and locator readiness."""
+    async with _client(project_id) as c:
+        response = await c.get(
+            f"/api/planning/branches/{branch_id}/evaluation-workflow"
+        )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="manuscript_planning")
+async def rka_get_planning_evaluation_events(
+    branch_id: str,
+    *,
+    project_id: str,
+) -> str:
+    """Read immutable mission and result-unit lineage for an evaluation branch."""
+    async with _client(project_id) as c:
+        response = await c.get(
+            f"/api/planning/branches/{branch_id}/evaluation-events"
+        )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="manuscript_planning")
 async def rka_create_planning_branch(payload: dict, *, project_id: str) -> str:
     """Create a project- or manuscript-scoped planning branch."""
     async with _client(project_id) as c:
@@ -5010,6 +5040,40 @@ async def rka_ratify_planning_contribution(
     async with _client(project_id) as c:
         response = await c.post(
             f"/api/planning/branches/{branch_id}/ratify-contribution",
+            json=payload,
+        )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="manuscript_planning")
+async def rka_create_planning_evaluation_mission(
+    branch_id: str,
+    payload: dict,
+    *,
+    project_id: str,
+) -> str:
+    """Create one canonical mission for a selected missing-evidence slot."""
+    async with _client(project_id) as c:
+        response = await c.post(
+            f"/api/planning/branches/{branch_id}/evaluation-missions",
+            json=payload,
+        )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="manuscript_planning")
+async def rka_prepare_planning_evaluation_result(
+    branch_id: str,
+    payload: dict,
+    *,
+    project_id: str,
+) -> str:
+    """Prepare a bounded result-unit proposal from exactly located evidence."""
+    async with _client(project_id) as c:
+        response = await c.post(
+            f"/api/planning/branches/{branch_id}/evaluation-result-proposals",
             json=payload,
         )
         _raise_with_detail(response)

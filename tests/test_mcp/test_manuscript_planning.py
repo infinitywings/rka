@@ -115,6 +115,75 @@ async def test_planning_reads_route_exact_context_and_compare(planning_requests)
 
 
 @pytest.mark.asyncio
+async def test_evaluation_reads_route_exact_branch(planning_requests) -> None:
+    workflow = TypeAdapter(QueryArgsUnion).validate_python({
+        "operation": "planning_evaluation_workflow",
+        "project_id": "prj_test",
+        "id": "mpb_01EVAL",
+    })
+    events = TypeAdapter(QueryArgsUnion).validate_python({
+        "operation": "planning_evaluation_events",
+        "project_id": "prj_test",
+        "id": "mpb_01EVAL",
+    })
+    await dispatch_query_typed(workflow)
+    await dispatch_query_typed(events)
+    assert planning_requests == [
+        {
+            "method": "GET",
+            "path": "/api/planning/branches/mpb_01EVAL/evaluation-workflow",
+            "query": {},
+            "body": None,
+        },
+        {
+            "method": "GET",
+            "path": "/api/planning/branches/mpb_01EVAL/evaluation-events",
+            "query": {},
+            "body": None,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_evaluation_writes_preserve_guarded_payload(planning_requests) -> None:
+    mission = TypeAdapter(ExecuteArgsUnion).validate_python({
+        "operation": "create_planning_evaluation_mission",
+        "project_id": "prj_test",
+        "id": "mpb_01EVAL",
+        "expected_branch_revision": 4,
+        "artifact_id": "pla_01EVAL",
+        "expected_artifact_version": 2,
+        "commitment_key": "claim-primary",
+        "requirement_key": "primary-effect",
+        "reason": "Collect missing evidence.",
+        "actor": "brain",
+    })
+    result = TypeAdapter(ExecuteArgsUnion).validate_python({
+        "operation": "prepare_planning_evaluation_result",
+        "project_id": "prj_test",
+        "id": "mpb_01EVAL",
+        "expected_branch_revision": 5,
+        "artifact_id": "pla_01EVAL",
+        "expected_artifact_version": 3,
+        "commitment_key": "claim-primary",
+        "manuscript_id": "man_01PAPER",
+        "expected_manuscript_revision": 7,
+        "result_unit_local_key": "result-primary",
+        "location": "sections/results.tex#primary",
+        "title": "Primary effect",
+        "artifact_ref": "art_01RESULT",
+        "reason": "Prepare exact result unit.",
+        "actor": "brain",
+    })
+    await dispatch_execute_typed(mission)
+    await dispatch_execute_typed(result)
+    assert planning_requests[0]["path"].endswith("/evaluation-missions")
+    assert planning_requests[0]["body"]["requirement_key"] == "primary-effect"
+    assert planning_requests[1]["path"].endswith("/evaluation-result-proposals")
+    assert planning_requests[1]["body"]["artifact_ref"] == "art_01RESULT"
+
+
+@pytest.mark.asyncio
 async def test_planning_write_routes_preserve_typed_payload(planning_requests) -> None:
     created = TypeAdapter(ExecuteArgsUnion).validate_python(
         {

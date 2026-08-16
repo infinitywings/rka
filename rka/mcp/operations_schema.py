@@ -4631,6 +4631,56 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ],
         "notes": "The ledger is append-only and includes exact source artifact versions.",
     },
+    "planning_evaluation_workflow": {
+        "operation": "planning_evaluation_workflow",
+        "tool": "rka_query",
+        "category": "manuscript_planning",
+        "role_tag": "ANY",
+        "summary": "Resolve exact claim, experiment, observation, and locator readiness.",
+        "signature": (
+            "rka_query(operation='planning_evaluation_workflow', *, project_id, id)"
+        ),
+        "required_fields": ["project_id", "id"],
+        "optional_fields": [],
+        "enums": {},
+        "examples": [{
+            "description": "Inspect categorical evidence readiness and adverse outcomes.",
+            "call": {
+                "operation": "planning_evaluation_workflow",
+                "project_id": "prj_01ABC...",
+                "id": "mpb_01XYZ...",
+            },
+        }],
+        "related_operations": [
+            "planning_evaluation_events",
+            "create_planning_evaluation_mission",
+            "prepare_planning_evaluation_result",
+        ],
+        "notes": "The projection performs no LLM call and never infers support from direction.",
+    },
+    "planning_evaluation_events": {
+        "operation": "planning_evaluation_events",
+        "tool": "rka_query",
+        "category": "manuscript_planning",
+        "role_tag": "ANY",
+        "summary": "Read immutable evaluation mission and result-unit action lineage.",
+        "signature": (
+            "rka_query(operation='planning_evaluation_events', *, project_id, id)"
+        ),
+        "required_fields": ["project_id", "id"],
+        "optional_fields": [],
+        "enums": {},
+        "examples": [{
+            "description": "Audit all canonical evaluation actions for one branch.",
+            "call": {
+                "operation": "planning_evaluation_events",
+                "project_id": "prj_01ABC...",
+                "id": "mpb_01XYZ...",
+            },
+        }],
+        "related_operations": ["planning_evaluation_workflow"],
+        "notes": "The ledger is append-only and pins exact planning versions.",
+    },
     "create_planning_branch": {
         "operation": "create_planning_branch",
         "tool": "rka_execute",
@@ -4852,6 +4902,86 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "ratify_manuscript_claim",
         ],
         "notes": "The selected candidate, applied claim version, and PI decision must agree exactly.",
+    },
+    "create_planning_evaluation_mission": {
+        "operation": "create_planning_evaluation_mission",
+        "tool": "rka_execute",
+        "category": "manuscript_planning",
+        "role_tag": "BRAIN",
+        "summary": "Create one canonical mission from a selected missing-evidence slot.",
+        "signature": (
+            "rka_execute(operation='create_planning_evaluation_mission', *, project_id, "
+            "id, expected_branch_revision, artifact_id, expected_artifact_version, "
+            "commitment_key, requirement_key, reason, ...)"
+        ),
+        "required_fields": [
+            "project_id", "id", "expected_branch_revision", "artifact_id",
+            "expected_artifact_version", "commitment_key", "requirement_key", "reason",
+        ],
+        "optional_fields": ["phase", "motivated_by_decision", "actor"],
+        "enums": {},
+        "examples": [{
+            "description": "Turn an unresolved primary-effect slot into executable work.",
+            "call": {
+                "operation": "create_planning_evaluation_mission",
+                "project_id": "prj_01ABC...",
+                "id": "mpb_01XYZ...",
+                "expected_branch_revision": 8,
+                "artifact_id": "pla_01EVAL...",
+                "expected_artifact_version": 2,
+                "commitment_key": "claim-primary-evaluation",
+                "requirement_key": "primary-effect",
+                "reason": "Collect the exact missing evidence.",
+            },
+        }],
+        "related_operations": ["planning_evaluation_workflow", "mission"],
+        "notes": "Creation is idempotent for one artifact version and requirement.",
+    },
+    "prepare_planning_evaluation_result": {
+        "operation": "prepare_planning_evaluation_result",
+        "tool": "rka_execute",
+        "category": "manuscript_planning",
+        "role_tag": "BRAIN",
+        "summary": "Prepare one bounded native result-unit semantic proposal.",
+        "signature": (
+            "rka_execute(operation='prepare_planning_evaluation_result', *, project_id, "
+            "id, expected_branch_revision, artifact_id, expected_artifact_version, "
+            "commitment_key, manuscript_id, expected_manuscript_revision, "
+            "result_unit_local_key, location, title, artifact_ref, reason, ...)"
+        ),
+        "required_fields": [
+            "project_id", "id", "expected_branch_revision", "artifact_id",
+            "expected_artifact_version", "commitment_key", "manuscript_id",
+            "expected_manuscript_revision", "result_unit_local_key", "location",
+            "title", "artifact_ref", "reason",
+        ],
+        "optional_fields": ["actor"],
+        "enums": {},
+        "examples": [{
+            "description": "Prepare a result unit from exact located observations.",
+            "call": {
+                "operation": "prepare_planning_evaluation_result",
+                "project_id": "prj_01ABC...",
+                "id": "mpb_01XYZ...",
+                "expected_branch_revision": 9,
+                "artifact_id": "pla_01EVAL...",
+                "expected_artifact_version": 3,
+                "commitment_key": "claim-primary-evaluation",
+                "manuscript_id": "man_01ABC...",
+                "expected_manuscript_revision": 5,
+                "result_unit_local_key": "result-primary-effect",
+                "location": "sections/results.tex#primary-effect",
+                "title": "Primary effect",
+                "artifact_ref": "art_01RESULT...",
+                "reason": "Prepare the exact bounded result for review.",
+            },
+        }],
+        "related_operations": [
+            "planning_evaluation_workflow",
+            "semantic_patch_proposals",
+            "apply_semantic_patch_proposal",
+        ],
+        "notes": "Preparation never mutates the manuscript; apply remains separate.",
     },
     # --- unified semantic patch proposals ------------------------------
     "semantic_patch_proposals": {

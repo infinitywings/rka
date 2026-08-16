@@ -14,6 +14,8 @@ from rka.models.planning import (
     PlanningBranchTransition,
     PlanningContributionProposalPrepare,
     PlanningContributionRatification,
+    PlanningEvaluationMissionCreate,
+    PlanningEvaluationResultProposalPrepare,
     PlanningResearchQuestionPromotion,
 )
 from rka.services.planning import (
@@ -109,6 +111,59 @@ async def list_planning_promotion_events(
 ) -> list[dict[str, Any]]:
     try:
         return await service.list_promotion_events(branch_id)
+    except Exception as exc:
+        _raise_planning_error(exc)
+
+
+@router.get("/planning/branches/{branch_id}/evaluation-workflow")
+async def get_planning_evaluation_workflow(
+    branch_id: str,
+    service: ManuscriptPlanningService = Depends(get_scoped_manuscript_planning_service),
+) -> dict[str, Any]:
+    """Resolve a claim-centered evaluation contract against exact evidence."""
+    try:
+        return await service.evaluation_workflow(branch_id)
+    except Exception as exc:
+        _raise_planning_error(exc)
+
+
+@router.get("/planning/branches/{branch_id}/evaluation-events")
+async def list_planning_evaluation_events(
+    branch_id: str,
+    service: ManuscriptPlanningService = Depends(get_scoped_manuscript_planning_service),
+) -> list[dict[str, Any]]:
+    try:
+        return await service.list_evaluation_events(branch_id)
+    except Exception as exc:
+        _raise_planning_error(exc)
+
+
+@router.post(
+    "/planning/branches/{branch_id}/evaluation-missions",
+    status_code=201,
+)
+async def create_planning_evaluation_mission(
+    branch_id: str,
+    data: PlanningEvaluationMissionCreate,
+    service: ManuscriptPlanningService = Depends(get_scoped_manuscript_planning_service),
+) -> dict[str, Any]:
+    try:
+        return await service.create_evaluation_mission(branch_id, data)
+    except Exception as exc:
+        _raise_planning_error(exc)
+
+
+@router.post(
+    "/planning/branches/{branch_id}/evaluation-result-proposals",
+    status_code=201,
+)
+async def prepare_planning_evaluation_result(
+    branch_id: str,
+    data: PlanningEvaluationResultProposalPrepare,
+    service: ManuscriptPlanningService = Depends(get_scoped_manuscript_planning_service),
+) -> dict[str, Any]:
+    try:
+        return await service.prepare_evaluation_result_proposal(branch_id, data)
     except Exception as exc:
         _raise_planning_error(exc)
 
