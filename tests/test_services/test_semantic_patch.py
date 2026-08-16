@@ -183,7 +183,7 @@ async def test_planning_edit_uses_same_proposal_and_apply_contract(db_with_proje
                     "summary": "Timing can be a composable security primitive.",
                     "payload": {"insight": "Timing can be a composable security primitive."},
                     "origin": "user",
-                    "created_by": "pi",
+                    "created_by": "brain",
                     "reason": "Draft proposal only.",
                 },
             }],
@@ -196,7 +196,13 @@ async def test_planning_edit_uses_same_proposal_and_apply_contract(db_with_proje
     )
     context = await planning.get_branch(branch_id)
     assert context["branch"]["revision"] == 2
-    assert context["effective_artifacts"][0]["version"]["summary"].startswith("Timing")
+    version = context["effective_artifacts"][0]["version"]
+    assert version["summary"].startswith("Timing")
+    assert version["created_by"] == "brain"
+    assert version["reason"] == "Draft proposal only."
+    applied = await patches.get_proposal(proposal["id"])
+    assert applied["events"][-1]["actor"] == "pi"
+    assert applied["events"][-1]["reason"] == "Apply seed."
 
 
 @pytest.mark.asyncio

@@ -900,12 +900,9 @@ class SemanticPatchService(BaseService):
         transition: SemanticPatchProposalTransition,
     ) -> dict[str, Any]:
         if isinstance(operation, PlanningArtifactUpsertOperation):
-            append = operation.append.model_copy(
-                update={"created_by": transition.actor, "reason": transition.reason}
-            )
             result = await ManuscriptPlanningService(
                 self.db, project_id=self.project_id
-            ).append_artifact_version(operation.branch_id, append)
+            ).append_artifact_version(operation.branch_id, operation.append)
             return {"operation": operation.operation, "branch_revision": result["branch"]["revision"]}
         manuscript = NativeManuscriptService(self.db, project_id=self.project_id)
         if isinstance(operation, ManuscriptMetadataUpdateOperation):
