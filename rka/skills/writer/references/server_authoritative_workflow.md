@@ -14,6 +14,8 @@ RKA owns:
 - evidence, qualifier, and counterevidence bindings;
 - `mra_` bindings between one exact claim version and one active PI decision;
 - `mun_` claim-sized manuscript units and result interpretation boundaries;
+- the L2-L5 outline hierarchy, writing rationale, and evidence intentions
+  attached one-to-one to `mun_` identities;
 - `mck_` manuscript checkpoints;
 - `mva_` multidimensional verification attestations;
 - `mrf_` citation-key membership bound to exact same-project `lit_` records;
@@ -128,6 +130,32 @@ blindly against a newer revision.
 
 The complete journal-to-prose admission policy is in
 [`evidence_to_spine_pipeline.md`](evidence_to_spine_pipeline.md).
+
+## Developing the progressive outline
+
+After the claim spine is present, use `manuscript_outline` to resume the
+canonical L2-L5 unit hierarchy. Each major unit must expose its communicative
+job, intended reader takeaway, intended claim, and evidence plan, together
+with reverse claim/evidence navigation and any completeness blocker.
+
+Direct editing and AI suggestions share one proposal-first route:
+
+1. Read the current outline and manuscript revision.
+2. Prepare `edit`, `expand`, `condense`, or `reorder` through
+   `prepare_manuscript_outline_proposal`.
+3. Inspect the immutable semantic diff, validation findings, binding changes,
+   and downstream order impact.
+4. Apply or reject the `spp_` separately. A stale manuscript revision becomes
+   a conflict and must be rebased explicitly.
+5. Re-query `manuscript_outline`; never infer success from the proposal alone.
+
+Expansion retains its parent and cannot invent undisclosed claim/evidence
+bindings. Condensation unions named descendant bindings into the retained
+parent before removal. Reorder requires the exact active unit-key set and
+changes no semantic content. Creating and resolving the Outline checkpoint are
+separate PI-authority operations; neither proposal preparation nor apply
+ratifies the outline. Writer-owned Markdown or LaTeX files remain projections
+until source synchronization is introduced.
 
 ## Readiness and change impact
 

@@ -253,7 +253,38 @@ The outline brief uses the strip-then-re-inject pattern that Brain uses for any 
 2. Prune any dominated framing via Pareto non-dominance over scope coverage, novelty positioning, and venue-fit.
 3. Rank by re-injecting PI preference as opposing-critique, not as steering. One option carries `is_recommended`; all surviving options are shown to the PI.
 
-The PI's selection is recorded via `rka_record_pi_selection`. The ratified outline is stored both as a `dec_` and as `.planning/OUTLINE.md`. Per-section sketches go into `.planning/sketches/<section-id>.md` and become the starting prompt for the Section Drafter sub-procedure.
+The PI's selection is recorded via `rka_record_pi_selection`. The canonical
+outline is the native L2-L5 `mun_` hierarchy; the PI decision and resolved
+Outline checkpoint ratify that exact aggregate revision. `.planning/OUTLINE.md`
+and per-section sketches remain Writer-owned projections and drafting aids,
+not a second semantic authority.
+
+### Progressive outline workbench
+
+After the candidate claim spine exists, query `manuscript_outline` and develop
+the paper from communicative sections (L2) through claim-sized paragraph or
+result units (L5). Every major active unit must state its communicative job,
+intended reader takeaway, intended claim, and evidence plan. Figure, table,
+citation, transition, location, and quick-reader fields are intentions until
+their corresponding artifacts or references exist; never present them as
+evidence by themselves.
+
+All direct or AI-assisted outline changes use
+`prepare_manuscript_outline_proposal` with one of `edit`, `expand`, `condense`,
+or `reorder`. Review the returned semantic diff, validation findings, binding
+changes, and downstream reorder impact. Apply the resulting proposal only in a
+separate `apply_semantic_patch_proposal` call. Expansion retains the parent and
+may inherit only disclosed claim/evidence bindings; condensation unions those
+bindings into the retained parent before removing named descendants; reorder
+must contain the complete active unit-key set. Never reconstruct the outline
+by free-form delete-and-recreate operations.
+
+Outline work is resumable while blockers remain. Re-query
+`manuscript_outline` after every applied proposal. Create an Outline checkpoint
+only when the projection reports no rationale blocker, then present the exact
+outline and bindings to the PI. A checkpoint is resolved only through
+`resolve_manuscript_checkpoint` with a same-project PI decision; a proposal,
+an AI recommendation, or a locally edited `OUTLINE.md` cannot resolve it.
 
 ### Mandatory claim-spine substep
 

@@ -4,7 +4,6 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom"
 import {
   AlertCircle,
   ArrowRight,
-  Braces,
   Database,
   FlaskConical,
   Info,
@@ -19,6 +18,7 @@ import { ContextCapsule } from "@/components/workbench/ContextCapsule"
 import { ArgumentWorkflowPanel } from "@/components/workbench/ArgumentWorkflowPanel"
 import { PlanningBranchPanel } from "@/components/workbench/PlanningBranchPanel"
 import { SemanticPatchPanel } from "@/components/workbench/SemanticPatchPanel"
+import { OutlineEditor } from "@/components/workbench/OutlineEditor"
 import {
   EvidenceInspector,
   type WorkbenchTraceItem,
@@ -41,8 +41,8 @@ import type {
   ManuscriptClaimContext,
   ManuscriptContext,
   ManuscriptEvidenceBinding,
+  ManuscriptOutline,
   ManuscriptReadiness,
-  ManuscriptSpine,
   ManuscriptUnitContext,
   ManuscriptWritingCandidates,
   ResearchMapData,
@@ -68,7 +68,7 @@ const stageDescriptions: Record<WorkbenchStageId, string> = {
   rqs: "Active research questions are navigational structure, not empirical support.",
   contributions: "Contribution candidates remain provisional until native versioning and exact PI ratification.",
   evaluation: "Exact contracts classify experiment plans, observations, and locators against bounded manuscript claims.",
-  outline: "Claim-sized manuscript units form the read-only outline and preserve file and evidence anchors.",
+  outline: "L2-L5 native manuscript units carry writing rationale and evidence bindings; every structural change remains a separate review proposal.",
 }
 
 const WORKBENCH_QUEUE_LIMIT = 200
@@ -90,6 +90,7 @@ function makeStageVerdicts(
   context: ManuscriptContext | undefined,
   candidates: ManuscriptWritingCandidates | undefined,
   readiness: ManuscriptReadiness | undefined,
+  outline: ManuscriptOutline | undefined,
 ): Record<WorkbenchStageId, StageVerdict> {
   const activeClaims = context?.claims.filter((claim) => claim.state === "active") ?? []
   const candidateClaims = candidates?.candidate_spine.claims ?? []
@@ -112,8 +113,14 @@ function makeStageVerdicts(
     rqs: rqs.length > 0 ? "Ready" : "Blocked",
     contributions: activeClaims.length > 0 ? (readiness?.ready ? "Ready" : "Needs review") : candidateClaims.length > 0 ? "Needs review" : "Blocked",
     evaluation: resultUnits.length > 0 ? "Needs review" : "Blocked",
-    outline: units.length > 0 ? "Needs review" : "Blocked",
+    outline: outline?.summary.checkpoint_ready
+      ? checkpointStatusForStage(outline) === "resolved" ? "Ready" : "Needs review"
+      : units.length > 0 ? "Needs review" : "Blocked",
   }
+}
+
+function checkpointStatusForStage(outline: ManuscriptOutline): string {
+  return String(outline.outline_checkpoint?.status ?? "not_created")
 }
 
 export default function ManuscriptWorkbench() {
@@ -136,13 +143,13 @@ export default function ManuscriptWorkbench() {
   const traceScopeKey = `${projectId}:${manuscriptId ?? "project-only"}:${stage}`
 
   const context = workbench.context.data
-  const spine = workbench.spine.data
+  const outline = workbench.outline.data
   const candidates = workbench.candidates.data
   const readiness = workbench.readiness.data
   const impact = workbench.impact.data
   const verdicts = useMemo(
-    () => makeStageVerdicts(researchMap.data, context, candidates, readiness),
-    [researchMap.data, context, candidates, readiness],
+    () => makeStageVerdicts(researchMap.data, context, candidates, readiness, outline),
+    [researchMap.data, context, candidates, readiness, outline],
   )
 
   const handleLoad = (event: FormEvent<HTMLFormElement>) => {
@@ -205,7 +212,7 @@ export default function ManuscriptWorkbench() {
       return [workbench.context, workbench.candidates, workbench.readiness]
     }
     if (stage === "evaluation") return [workbench.context]
-    if (stage === "outline") return [workbench.context, workbench.spine]
+    if (stage === "outline") return [workbench.context, workbench.outline]
     return []
   })()
   const stageIsLoading = stageQueries.some((query) => query.isLoading)
@@ -227,7 +234,7 @@ export default function ManuscriptWorkbench() {
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-semibold tracking-tight">Manuscript Workbench</h1>
-            <Badge variant="outline">M4 guided argument</Badge>
+            <Badge variant="outline">M5 outline workbench</Badge>
           </div>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
             Navigate the argument from seed to outline while preserving the distinction between RKA evidence,
@@ -330,7 +337,7 @@ export default function ManuscriptWorkbench() {
             stage={stage}
             map={researchMap.data}
             context={context}
-            spine={spine}
+            outline={outline}
             candidates={candidates}
             readiness={readiness}
             isLoading={stageIsLoading}
@@ -350,7 +357,7 @@ function StageCanvas({
   stage,
   map,
   context,
-  spine,
+  outline,
   candidates,
   readiness,
   isLoading,
@@ -360,7 +367,7 @@ function StageCanvas({
   stage: WorkbenchStageId
   map?: ResearchMapData
   context?: ManuscriptContext
-  spine?: ManuscriptSpine
+  outline?: ManuscriptOutline
   candidates?: ManuscriptWritingCandidates
   readiness?: ManuscriptReadiness
   isLoading: boolean
@@ -430,7 +437,12 @@ function StageCanvas({
           />
         )}
         {stage === "evaluation" && <EvaluationView units={units} onInspect={onInspect} />}
-        {stage === "outline" && <OutlineView units={units} spine={spine} onInspect={onInspect} />}
+        {stage === "outline" && outline && outline.units.length > 0 && (
+          <OutlineEditor key={outline.manuscript_revision} outline={outline} onInspect={onInspect} />
+        )}
+        {stage === "outline" && outline && outline.units.length === 0 && (
+          <EmptyState title="No native manuscript units" detail="Create claim-sized units through a reviewed argument-spine proposal before elaborating the outline." />
+        )}
         </>}
       </CardContent>
     </Card>
@@ -789,29 +801,6 @@ function EvaluationView({
       {results.map((unit) => <UnitCard key={unit.id} unit={unit} label="Result unit" onInspect={onInspect} />)}
       {results.length === 0 && (
         <EmptyState title="No canonical result units" detail="Use the evaluation contract to collect exact evidence and prepare a review proposal. Journal prose and repository execution are never promoted automatically." />
-      )}
-    </>
-  )
-}
-
-function OutlineView({
-  units,
-  spine,
-  onInspect,
-}: {
-  units: ManuscriptUnitContext[]
-  spine?: ManuscriptSpine
-  onInspect: (item: WorkbenchTraceItem) => void
-}) {
-  const ordered = [...units].sort((left, right) => left.sequence - right.sequence || left.local_key.localeCompare(right.local_key))
-  if (ordered.length === 0) return <EmptyState title="No native manuscript units" detail="A section-name list alone is not accepted as the argument outline. Create claim-sized units and their claim/evidence links through the future proposal path." />
-  return (
-    <>
-      {ordered.map((unit) => <UnitCard key={unit.id} unit={unit} label={`Unit ${unit.sequence}`} onInspect={onInspect} />)}
-      {spine && (
-        <p className="flex items-center gap-1.5 rounded-md bg-muted/50 px-3 py-2 text-[10px] text-muted-foreground">
-          <Braces className="h-3 w-3" /> Derived from deterministic {spine.schema_version} at manuscript revision {spine.manuscript_revision}.
-        </p>
       )}
     </>
   )

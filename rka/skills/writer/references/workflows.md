@@ -219,15 +219,31 @@ Procedure:
 13. Dry-run `rka writer import-spine`. Review the evidence roles, result
    coverage, and proposed revision; apply only with an explicit expected
    revision. Import never creates ratifications.
-14. Record the PI's selected framing and one child claim-scope `dec_` per
+14. Query `manuscript_outline` and progressively elaborate the active `mun_`
+   hierarchy from L2 communicative sections toward L5 claim-sized units. Every
+   major unit states its communicative job, intended takeaway, intended claim,
+   and evidence plan. Treat citation, figure, table, transition, and location
+   fields as plans until their sources or artifacts exist.
+15. For each direct or AI-assisted change, call
+   `prepare_manuscript_outline_proposal` with `edit`, `expand`, `condense`, or
+   `reorder`. Inspect the semantic diff, findings, claim/evidence binding
+   changes, and downstream ordering impact. Apply the `spp_` separately with
+   `apply_semantic_patch_proposal`; re-query the outline after apply. Expansion
+   retains its parent, condensation preserves the union of descendant
+   bindings on the retained parent, and reorder names the complete active
+   unit-key set.
+16. Record the PI's selected framing and one child claim-scope `dec_` per
    selected contribution. Set `chosen` to the exact claim text,
    `decided_by: pi`, and connect the decision to its evidence and Outline
    lineage. Bind each exact native claim version through
    `ratify_manuscript_claim`. A later material edit requires a new version and
    a superseding PI decision.
-15. Resolve the native Outline checkpoint, run `rka writer sync`, and require
-    server readiness. The generated `CONTRIBUTION_CONTRACT.md`,
-    `ARGUMENT_SPINE.md`, and `RESULTS_TRACE.md` are read-only views.
+17. When the outline projection has no rationale blockers, create the native
+    Outline checkpoint and show the exact hierarchy and bindings to the PI.
+    Resolve it only through `resolve_manuscript_checkpoint` with a same-project
+    PI decision. Then run `rka writer sync` and require server readiness. The
+    generated `CONTRIBUTION_CONTRACT.md`,
+   `ARGUMENT_SPINE.md`, and `RESULTS_TRACE.md` are read-only views.
 
 Output: Outline Decision (`dec_`), one exact-wording claim-scope `dec_` per
 contribution with evidence provenance,

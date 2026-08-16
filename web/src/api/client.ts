@@ -152,6 +152,9 @@ import type {
   ManuscriptImpact,
   ManuscriptReadiness,
   ManuscriptSpine,
+  ManuscriptOutline,
+  OutlineProposalRequest,
+  OutlineProposalResult,
   ManuscriptWritingCandidates,
   InterpretationCandidate,
   InterpretationCandidateDetail,
@@ -505,12 +508,31 @@ export const api = {
   auditLinkSupport: (limit = 200) =>
     get<LinkSupportAudit>(`/verification/link-support?limit=${limit}`),
 
-  // Native manuscript workbench reads. These endpoints are projections over
-  // RKA's canonical aggregate; the prototype intentionally exposes no writes.
+  // Native manuscript workbench. Reads are canonical projections; outline
+  // edits prepare semantic proposals and never bypass explicit apply.
   getManuscriptContext: (manuscriptId: string) =>
     get<ManuscriptContext>(`/manuscripts/${encodeURIComponent(manuscriptId)}/context`),
   getManuscriptSpine: (manuscriptId: string) =>
     get<ManuscriptSpine>(`/manuscripts/${encodeURIComponent(manuscriptId)}/spine`),
+  getManuscriptOutline: (manuscriptId: string) =>
+    get<ManuscriptOutline>(`/manuscripts/${encodeURIComponent(manuscriptId)}/outline`),
+  prepareManuscriptOutlineProposal: (
+    manuscriptId: string,
+    data: OutlineProposalRequest,
+  ) => post<OutlineProposalResult>(
+    `/manuscripts/${encodeURIComponent(manuscriptId)}/outline/proposals`, data,
+  ),
+  createManuscriptCheckpoint: (
+    manuscriptId: string,
+    data: {
+      expected_revision: number
+      kind: string
+      unit_id?: string
+      supersedes_id?: string
+    },
+  ) => post<Record<string, unknown>>(
+    `/manuscripts/${encodeURIComponent(manuscriptId)}/checkpoints`, data,
+  ),
   getManuscriptWritingCandidates: (manuscriptId: string) =>
     get<ManuscriptWritingCandidates>(
       `/manuscripts/${encodeURIComponent(manuscriptId)}/writing-candidates`,

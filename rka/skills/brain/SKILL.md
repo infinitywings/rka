@@ -18,13 +18,13 @@ The rka MCP server ships a **discriminated-union dispatch surface**. Five tools 
 
 | Always-on tool | Purpose |
 |---|---|
-| `rka_query(args)` | All 62 read operations (status, context, journal, research map, planning branches, semantic proposals, claim scope, experiments, native manuscripts, change impact, etc.) |
-| `rka_execute(args)` | All 77 write/lifecycle operations (notes, decisions, missions, planning artifacts, semantic proposals, interpretation promotion, experiment evidence, claim-scope review, manuscripts, checkpoints, maintenance) |
+| `rka_query(args)` | All 67 read operations (status, context, journal, research map, planning branches, semantic proposals, claim scope, experiments, native manuscripts, outlines, change impact, etc.) |
+| `rka_execute(args)` | All 83 write/lifecycle operations (notes, decisions, missions, planning artifacts, semantic proposals, interpretation promotion, experiment evidence, claim-scope review, manuscript outlines, checkpoints, maintenance) |
 | `rka_describe(operation)` | Schema lookup + worked example for any operation; `rka_describe('')` returns the <250-token index |
 | `rka_load_tools(names)` | Escape hatch — brings deferred legacy tools online when you specifically need backwards-compat access |
 | `rka_help(name)` | Deprecated alias for `rka_describe`; retained always-on for cockpits that learned the v2.6.3 navigator vocabulary |
 
-`args` is a **typed Pydantic model** discriminated by `operation`. There are 139 models in `rka/mcp/operation_args.py`. FastMCP renders them as `inputSchema.oneOf` with per-branch enum constraints + required-field arrays. **The schema layer rejects wrong enum values, missing required fields, and missing provenance BEFORE the call is dispatched** — the historical `confidence='confirmed'` hallucination class is structurally impossible at the inputSchema level.
+`args` is a **typed Pydantic model** discriminated by `operation`. There are 150 models in `rka/mcp/operation_args.py`. FastMCP renders them as `inputSchema.oneOf` with per-branch enum constraints + required-field arrays. **The schema layer rejects wrong enum values, missing required fields, and missing provenance BEFORE the call is dispatched** — the historical `confidence='confirmed'` hallucination class is structurally impossible at the inputSchema level.
 
 ### Worked examples
 
@@ -54,7 +54,7 @@ rka_execute(args={"operation": "record_decision", "project_id": "prj_01...",
 
 # Schema lookup
 rka_describe(operation="record_decision")  # signature + example + enums
-rka_describe(operation="")                 # compact index of all 139 ops
+rka_describe(operation="")                 # compact index of all 150 ops
 ```
 
 When a workflow below references a legacy tool name like `rka_add_decision`, treat it as a synonym for `rka_execute(args={"operation": "record_decision", ...})`. The mapping is in `rka_describe('')`. The typed-arg surface obviates `rka_load_tools` for normal work; only use it for explicit legacy access (e.g., orchestrator subprocess running with `RKA_LEGACY_TOOLS=1`).

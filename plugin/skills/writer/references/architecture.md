@@ -153,8 +153,20 @@ The argument-spine upsert deliberately never creates a ratification.
 
 A `mun_` is the smallest meaningful writing unit, not necessarily a section.
 It carries a stable local key, kind, source location, optional artifact, order,
-and drafting status. Claim-unit relationships are `advances`, `tests`,
-`bounds`, or `mentions`.
+and drafting status. Its one-to-one outline profile supplies an L2-L5 level,
+parent, communicative job, intended reader takeaway, transition,
+quick-reader role, evidence plan, and figure/table/citation intentions.
+Claim-unit relationships are `advances`, `tests`, `bounds`, or `mentions`.
+
+`manuscript_outline` is the resumable projection for navigating this hierarchy
+and its reverse claim/evidence bindings. Structural changes are never applied
+in place: `prepare_manuscript_outline_proposal` deterministically prepares an
+`argument_spine_replace` semantic proposal for edit, expand, condense, or
+reorder. The user inspects and separately applies or rejects that proposal.
+Expansion retains the parent and can only narrow inherited bindings;
+condensation preserves their union on the retained parent; reorder changes
+only sequence and reports affected predecessors. This keeps direct editing and
+AI assistance on one auditable mutation path.
 
 Every active empirical claim requires an active result unit. Every result unit
 requires:
