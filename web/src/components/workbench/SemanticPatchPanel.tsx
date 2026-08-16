@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { useSemanticPatches } from "@/hooks/useSemanticPatches"
+import { usePlanningBranches } from "@/hooks/usePlanningBranches"
 import type { ManuscriptContext, SemanticPatchProposal } from "@/api/types"
 
 export function SemanticPatchPanel({
@@ -18,15 +19,18 @@ export function SemanticPatchPanel({
   context?: ManuscriptContext
 }) {
   const patches = useSemanticPatches()
+  const planning = usePlanningBranches(manuscriptId)
+  const selectedBranchId = planning.resume.data?.branch.id ?? null
   const [showDirect, setShowDirect] = useState(false)
   const [showLocal, setShowLocal] = useState(false)
   const proposals = useMemo(() => {
     const all = patches.proposals.data ?? []
     if (!manuscriptId) return all
     return all.filter((proposal) => proposal.operations.some(
-      (operation) => operation.manuscript_id === manuscriptId,
+      (operation) => operation.manuscript_id === manuscriptId
+        || operation.branch_id === selectedBranchId,
     ))
-  }, [manuscriptId, patches.proposals.data])
+  }, [manuscriptId, patches.proposals.data, selectedBranchId])
   const pending = proposals.filter((proposal) => proposal.status === "proposed")
 
   const proposeTitle = async (event: FormEvent<HTMLFormElement>) => {

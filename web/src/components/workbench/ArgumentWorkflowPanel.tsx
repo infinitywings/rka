@@ -1,4 +1,4 @@
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
 import type { FormEvent } from "react"
 import { ArrowUpRight, CheckCircle2, FilePenLine, Loader2, Route } from "lucide-react"
 import { toast } from "sonner"
@@ -6,11 +6,15 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { usePlanningBranches } from "@/hooks/usePlanningBranches"
+import { useSemanticPatches } from "@/hooks/useSemanticPatches"
 import type {
   ManuscriptContext,
+  PlanningArgumentWorkflow,
   PlanningArtifact,
   PlanningPromotionEvent,
+  PlanningStage,
   PlanningWorkflowVerdict,
 } from "@/api/types"
 
@@ -49,6 +53,102 @@ function latestEvent(
   )
 }
 
+function lines(value: string) {
+  return [...new Set(value.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean))]
+}
+
+function planningEntityType(entityId: string) {
+  const prefix = entityId.split("_", 1)[0]
+  const types: Record<string, string> = {
+    jrn: "journal",
+    lit: "literature",
+    dec: "decision",
+    clm: "claim",
+    csc: "claim_scope",
+    ecl: "cluster",
+    icd: "interpretation_candidate",
+    exp: "experiment",
+    epv: "experiment_plan_version",
+    run: "experiment_run",
+    obs: "experiment_observation",
+    elc: "evidence_locator",
+    art: "artifact",
+    man: "manuscript",
+    mcl: "manuscript_claim",
+    mun: "manuscript_unit",
+  }
+  const entityType = types[prefix]
+  if (!entityType) throw new Error(`Unsupported RKA evidence identifier: ${entityId}`)
+  return entityType
+}
+
+const STAGE_TEMPLATES: Record<PlanningStage, Record<string, unknown>> = {
+  seed: {
+    insight: "State the one-sentence insight.",
+    significance: "Explain why this changes the research conversation.",
+    audience: [],
+  },
+  paragraph_spine: {
+    problem: "What concrete problem matters?",
+    gap: "What defensible gap remains?",
+    insight: "What is the core insight?",
+    response: "How does the work act on the insight?",
+    payoff: "What can a quick reader now understand or do?",
+  },
+  problem_scope: {
+    problem: "Define the problem precisely.",
+    in_scope: ["Name one included setting."],
+    out_of_scope: ["Name one material exclusion."],
+    assumptions: [],
+    key_terms: [],
+  },
+  landscape_gap: {
+    state_of_the_art: ["Summarize one evidence-backed SOTA capability."],
+    limitations: ["State a bounded limitation without caricaturing prior work."],
+    gap: "State the exact gap this paper addresses.",
+    motivation: "Explain why closing this gap matters.",
+  },
+  response_mechanism: {
+    insight: "State the mechanism-level insight.",
+    mechanism_steps: ["Describe the first causal or design step."],
+    expected_effect: "State the expected bounded effect.",
+    boundary_conditions: ["State where the mechanism is expected to hold."],
+  },
+  challenge_innovation: {
+    pairs: [{
+      local_key: "challenge-1",
+      challenge: "State the challenge created by the gap and proposed response.",
+      innovation: "State the corresponding innovation.",
+      required_evidence: ["Name the evidence needed to support this innovation."],
+    }],
+  },
+  rq_contribution: {
+    research_questions: [{
+      local_key: "rq-1",
+      question: "State a bounded research question.",
+      scope: "State the exact operating scope.",
+      rationale: "Explain why answering it resolves the central uncertainty.",
+      evidence_entity_ids: [],
+      missing_evidence: [],
+      disposition: "candidate",
+    }],
+    contributions: [{
+      local_key: "contribution-1",
+      exact_wording: "State the exact provisional contribution wording.",
+      contribution_type: "empirical",
+      research_question_refs: ["rq-1"],
+      allowed_wording: "State the strongest wording currently allowed.",
+      prohibited_wording: ["State one tempting but unsupported extension."],
+      support_ids: [],
+      missing_evidence: ["Name evidence still needed before selection."],
+      disposition: "candidate",
+    }],
+  },
+  evaluation: { commitments: [{ claim: "", method: "" }], validity_checks: [] },
+  outline: { units: [{ local_key: "intro", title: "Introduction", purpose: "" }] },
+  review: { focus: "", findings: [] },
+}
+
 export function ArgumentWorkflowPanel({
   manuscriptId,
   context,
@@ -57,6 +157,7 @@ export function ArgumentWorkflowPanel({
   context?: ManuscriptContext
 }) {
   const planning = usePlanningBranches(manuscriptId)
+  const patches = useSemanticPatches()
   const workflow = planning.workflow.data
   const promotionEvents = useMemo(
     () => planning.promotions.data ?? [],
@@ -67,6 +168,76 @@ export function ArgumentWorkflowPanel({
   const payload = portfolio?.version.payload ?? {}
   const researchQuestions = candidates(payload.research_questions)
   const contributions = candidates(payload.contributions)
+
+  const proposeStageDraft = async (
+    stage: PlanningStage,
+    form: FormData,
+  ) => {
+    if (!workflow) return
+    const localKey = String(form.get("local_key") ?? "").trim()
+    const summary = String(form.get("summary") ?? "").trim()
+    const reason = String(form.get("reason") ?? "").trim()
+    const lifecycle = String(form.get("lifecycle") ?? "candidate")
+    const readinessState = String(form.get("readiness_state") ?? "in_progress")
+    const stageView = workflow.stages.find((item) => item.stage_type === stage)
+    const existing = stageView?.candidate_artifacts.find(
+      (artifact) => artifact.local_key === localKey,
+    )
+    try {
+      const parsedPayload = JSON.parse(
+        String(form.get("payload") ?? "{}"),
+      ) as Record<string, unknown>
+      const upstreamVersions = (stageView?.prerequisites ?? []).flatMap((prerequisite) => {
+        const head = workflow.stages.find(
+          (item) => item.stage_type === prerequisite,
+        )?.current_artifact
+        return head ? [{
+          stage_type: prerequisite,
+          local_key: head.local_key,
+          artifact_id: head.id,
+          version_id: head.version.id,
+          version: head.version.version,
+        }] : []
+      })
+      if (upstreamVersions.length) parsedPayload.upstream_versions = upstreamVersions
+      else delete parsedPayload.upstream_versions
+      const evidenceIds = lines(String(form.get("evidence_ids") ?? ""))
+      await patches.create.mutateAsync({
+        origin: "human",
+        intent: `${existing ? "Revise" : "Capture"} ${stage.replaceAll("_", " ")} option ${localKey}.`,
+        reason,
+        created_by: "web_ui",
+        operations: [{
+          operation: "planning_artifact_upsert",
+          branch_id: workflow.branch.id,
+          append: {
+            expected_branch_revision: workflow.branch.revision,
+            expected_previous_version: existing?.version.version ?? 0,
+            local_key: localKey,
+            stage_type: stage,
+            lifecycle,
+            summary,
+            payload: parsedPayload,
+            origin: existing ? "user_revised" : "user",
+            unresolved_items: lines(String(form.get("unresolved_items") ?? "")),
+            readiness_state: readinessState,
+            readiness_missing: lines(String(form.get("readiness_missing") ?? "")),
+            created_by: "web_ui",
+            reason,
+            evidence_bindings: evidenceIds.map((entityId, ordinal) => ({
+              entity_type: planningEntityType(entityId),
+              entity_id: entityId,
+              role: "support",
+              ordinal,
+            })),
+          },
+        }],
+      })
+      toast.success("Stage draft saved as a semantic proposal; the branch is unchanged")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Stage proposal failed")
+    }
+  }
 
   const promoteResearchQuestion = async (candidate: Candidate) => {
     if (!workflow || !portfolio) return
@@ -199,6 +370,12 @@ export function ArgumentWorkflowPanel({
               ))}
             </div>
 
+            <StageDraftEditor
+              workflow={workflow}
+              pending={patches.create.isPending}
+              onPropose={proposeStageDraft}
+            />
+
             <div className="grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
               <div className="rounded-lg border p-3">
                 <div className="flex items-center justify-between gap-2">
@@ -248,6 +425,178 @@ export function ArgumentWorkflowPanel({
         )}
       </CardContent>
     </Card>
+  )
+}
+
+const EDITABLE_ARGUMENT_STAGES: PlanningStage[] = [
+  "seed",
+  "paragraph_spine",
+  "problem_scope",
+  "landscape_gap",
+  "response_mechanism",
+  "challenge_innovation",
+  "rq_contribution",
+]
+
+function StageDraftEditor({
+  workflow,
+  pending,
+  onPropose,
+}: {
+  workflow: PlanningArgumentWorkflow
+  pending: boolean
+  onPropose: (stage: PlanningStage, form: FormData) => Promise<void>
+}) {
+  const [stage, setStage] = useState<PlanningStage>(
+    workflow.next_recommended_stage && EDITABLE_ARGUMENT_STAGES.includes(
+      workflow.next_recommended_stage,
+    ) ? workflow.next_recommended_stage : "seed",
+  )
+  const stageView = workflow.stages.find((item) => item.stage_type === stage)
+  const current = stageView?.current_artifact ?? null
+  const existingEvidence = current?.version.evidence_bindings.map(
+    (binding) => binding.entity_id,
+  ).join("\n") ?? ""
+  const formKey = `${stage}:${current?.version.id ?? "new"}`
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    await onPropose(stage, new FormData(event.currentTarget))
+  }
+
+  return (
+    <div className="rounded-lg border p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="text-sm font-medium">Draft or revise a stage option</p>
+          <p className="mt-1 max-w-3xl text-xs text-muted-foreground">
+            Each save creates a reviewable ADR 0006 proposal. Apply it separately in Edit proposals;
+            changing an existing local key appends a version, while a new key preserves an alternative.
+          </p>
+        </div>
+        <label className="space-y-1 text-xs font-medium">
+          Stage
+          <select
+            className="block h-8 rounded-lg border border-input bg-background px-2 text-sm"
+            value={stage}
+            onChange={(event) => setStage(event.target.value as PlanningStage)}
+          >
+            {EDITABLE_ARGUMENT_STAGES.map((item) => (
+              <option key={item} value={item}>{item.replaceAll("_", " ")}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <form key={formKey} onSubmit={submit} className="mt-3 grid gap-3 lg:grid-cols-2">
+        <label className="space-y-1 text-xs font-medium">
+          Stable option key
+          <Input
+            name="local_key"
+            required
+            defaultValue={current?.local_key ?? `${stage}-primary`}
+            placeholder={`${stage}-primary`}
+          />
+        </label>
+        <label className="space-y-1 text-xs font-medium">
+          Scan-friendly summary
+          <Input
+            name="summary"
+            required
+            defaultValue={current?.version.summary ?? ""}
+            placeholder="What changed or what choice does this option preserve?"
+          />
+        </label>
+        <label className="space-y-1 text-xs font-medium">
+          Lifecycle
+          <select
+            name="lifecycle"
+            defaultValue={current?.version.lifecycle ?? "candidate"}
+            className="block h-9 w-full rounded-lg border border-input bg-background px-2 text-sm"
+          >
+            <option value="candidate">candidate</option>
+            <option value="reviewed">reviewed</option>
+            <option value="selected">selected</option>
+            <option value="parked">parked</option>
+          </select>
+        </label>
+        <label className="space-y-1 text-xs font-medium">
+          Mechanical readiness
+          <select
+            name="readiness_state"
+            defaultValue={current?.version.readiness_state ?? "in_progress"}
+            className="block h-9 w-full rounded-lg border border-input bg-background px-2 text-sm"
+          >
+            <option value="in_progress">in progress</option>
+            <option value="ready">ready</option>
+            <option value="blocked">blocked</option>
+          </select>
+        </label>
+        <label className="space-y-1 text-xs font-medium lg:col-span-2">
+          Typed stage payload
+          <Textarea
+            name="payload"
+            required
+            rows={14}
+            spellCheck={false}
+            className="font-mono text-xs"
+            defaultValue={JSON.stringify(
+              current?.version.payload ?? STAGE_TEMPLATES[stage],
+              null,
+              2,
+            )}
+          />
+          <span className="block font-normal text-muted-foreground">
+            Exact prerequisite heads are pinned automatically when the proposal is created.
+          </span>
+        </label>
+        <label className="space-y-1 text-xs font-medium">
+          RKA evidence/context IDs
+          <Textarea
+            name="evidence_ids"
+            rows={4}
+            defaultValue={existingEvidence}
+            placeholder={"One ID per line, for example:\nclm_...\nlit_..."}
+          />
+        </label>
+        <div className="grid gap-3">
+          <label className="space-y-1 text-xs font-medium">
+            Unresolved items
+            <Textarea
+              name="unresolved_items"
+              rows={2}
+              defaultValue={current?.version.unresolved_items.join("\n") ?? ""}
+              placeholder="One unresolved question per line"
+            />
+          </label>
+          <label className="space-y-1 text-xs font-medium">
+            Missing before ready
+            <Textarea
+              name="readiness_missing"
+              rows={2}
+              defaultValue={current?.version.readiness_missing.join("\n") ?? ""}
+              placeholder="One missing dependency per line"
+            />
+          </label>
+        </div>
+        <label className="space-y-1 text-xs font-medium lg:col-span-2">
+          Reason for this version
+          <Input
+            name="reason"
+            required
+            placeholder="Why should this option or revision be preserved?"
+          />
+        </label>
+        <div className="flex flex-wrap items-center justify-between gap-2 lg:col-span-2">
+          <p className="text-xs text-muted-foreground">
+            Select, revise, combine under a new key, or park an option without erasing history.
+          </p>
+          <Button type="submit" size="sm" disabled={pending}>
+            {pending && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
+            Save review proposal
+          </Button>
+        </div>
+      </form>
+    </div>
   )
 }
 
