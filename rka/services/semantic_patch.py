@@ -436,6 +436,13 @@ class SemanticPatchService(BaseService):
                     actor=data.actor,
                     reason=data.reason,
                 )
+                await ManuscriptPlanningService(
+                    self.db, project_id=self.project_id
+                ).record_evaluation_result_application(
+                    proposal_id,
+                    actor=data.actor,
+                    reason=data.reason,
+                )
         # Raise only after committing the conflict transition. Raising inside
         # the transaction would roll back the evidence that explains staleness.
         if stale:

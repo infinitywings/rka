@@ -170,6 +170,10 @@ import type {
   PlanningResearchQuestionPromotion,
   PlanningContributionProposalPrepare,
   PlanningContributionRatification,
+  PlanningEvaluationWorkflow,
+  PlanningEvaluationEvent,
+  PlanningEvaluationMissionCreate,
+  PlanningEvaluationResultProposalPrepare,
   SemanticPatchProposal,
   SemanticPatchProposalCreate,
   SemanticPatchTransition,
@@ -550,6 +554,14 @@ export const api = {
     get<PlanningArgumentWorkflow>(
       `/planning/branches/${encodeURIComponent(branchId)}/argument-workflow`,
     ),
+  getPlanningEvaluationWorkflow: (branchId: string) =>
+    get<PlanningEvaluationWorkflow>(
+      `/planning/branches/${encodeURIComponent(branchId)}/evaluation-workflow`,
+    ),
+  listPlanningEvaluationEvents: (branchId: string) =>
+    get<PlanningEvaluationEvent[]>(
+      `/planning/branches/${encodeURIComponent(branchId)}/evaluation-events`,
+    ),
   listPlanningPromotions: (branchId: string) =>
     get<PlanningPromotionEvent[]>(
       `/planning/branches/${encodeURIComponent(branchId)}/promotions`,
@@ -571,6 +583,18 @@ export const api = {
     data: PlanningContributionRatification,
   ) => post<Record<string, unknown>>(
     `/planning/branches/${encodeURIComponent(branchId)}/ratify-contribution`, data,
+  ),
+  createPlanningEvaluationMission: (
+    branchId: string,
+    data: PlanningEvaluationMissionCreate,
+  ) => post<Record<string, unknown>>(
+    `/planning/branches/${encodeURIComponent(branchId)}/evaluation-missions`, data,
+  ),
+  preparePlanningEvaluationResult: (
+    branchId: string,
+    data: PlanningEvaluationResultProposalPrepare,
+  ) => post<Record<string, unknown>>(
+    `/planning/branches/${encodeURIComponent(branchId)}/evaluation-result-proposals`, data,
   ),
 
   // Human, host-agent, and local-model edits converge on this proposal ledger.

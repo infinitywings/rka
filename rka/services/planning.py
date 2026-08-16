@@ -16,6 +16,8 @@ from rka.models.planning import (
     PlanningContributionProposalPrepare,
     PlanningContributionRatification,
     PlanningEvidenceBindingInput,
+    PlanningEvaluationMissionCreate,
+    PlanningEvaluationResultProposalPrepare,
     PlanningResearchQuestionPromotion,
     parse_json_field,
     validate_planning_payload,
@@ -26,6 +28,7 @@ from rka.services.base import BaseService, _now
 PLANNING_CONTEXT_SCHEMA_VERSION = "rka.manuscript-planning/v1"
 PLANNING_COMPARISON_SCHEMA_VERSION = "rka.manuscript-planning-comparison/v1"
 ARGUMENT_WORKFLOW_SCHEMA_VERSION = "rka.seed-to-contribution-workflow/v1"
+EVALUATION_WORKFLOW_SCHEMA_VERSION = "rka.claim-centered-evaluation/v1"
 
 ARGUMENT_STAGE_ORDER = (
     "seed",
@@ -682,6 +685,408 @@ class ManuscriptPlanningService(BaseService):
             result.append(item)
         return result
 
+    async def evaluation_workflow(self, branch_id: str) -> dict[str, Any]:
+        """Resolve one planning evaluation matrix against canonical evidence."""
+        branch = await self._require_branch(branch_id)
+        artifacts = await self._effective_artifacts(branch_id)
+        candidates = [
+            item
+            for item in artifacts
+            if item["stage_type"] == "evaluation"
+            and item["version"]["lifecycle"] not in {"parked", "superseded", "archived"}
+        ]
+        selected = [
+            item for item in candidates if item["version"]["lifecycle"] == "selected"
+        ]
+        artifact = selected[0] if len(selected) == 1 else (
+            candidates[0] if len(candidates) == 1 else None
+        )
+        blockers: list[str] = []
+        warnings: list[str] = []
+        if len(selected) > 1:
+            blockers.append("Multiple evaluation artifacts are marked selected")
+        elif artifact is None:
+            if candidates:
+                warnings.append("Choose or combine one evaluation contract")
+            else:
+                warnings.append("No evaluation contract has been captured")
+
+        rq_artifacts = [
+            item
+            for item in artifacts
+            if item["stage_type"] == "rq_contribution"
+            and item["version"]["lifecycle"] == "selected"
+        ]
+        if len(rq_artifacts) != 1:
+            blockers.append("Exactly one selected RQ/contribution artifact is required")
+        if artifact is not None:
+            version = artifact["version"]
+            if version["lifecycle"] != "selected":
+                warnings.append("The evaluation contract has not been selected")
+            if version["readiness_state"] == "blocked":
+                blockers.append("The evaluation artifact is explicitly blocked")
+            warnings.extend(version["unresolved_items"])
+            warnings.extend(version["readiness_missing"])
+            upstream = version["payload"].get("upstream_versions") or []
+            rq_refs = [item for item in upstream if item["stage_type"] == "rq_contribution"]
+            if len(rq_artifacts) == 1:
+                current_rq = rq_artifacts[0]
+                if len(rq_refs) != 1:
+                    blockers.append("The exact RQ/contribution planning head is not pinned")
+                else:
+                    reference = rq_refs[0]
+                    if (
+                        reference["artifact_id"] != current_rq["id"]
+                        or reference["version_id"] != current_rq["version"]["id"]
+                        or int(reference["version"]) != int(current_rq["version"]["version"])
+                    ):
+                        blockers.append("The reviewed RQ/contribution head has changed")
+
+        events = await self.list_evaluation_events(branch_id)
+        commitments: list[dict[str, Any]] = []
+        if artifact is not None:
+            for raw in artifact["version"]["payload"].get("commitments", []):
+                if "local_key" not in raw:
+                    commitments.append(
+                        {
+                            "legacy": True,
+                            "commitment": raw,
+                            "verdict": "Blocked",
+                            "blockers": [
+                                "Legacy free-text commitment must be revised into the ADR 0008 contract"
+                            ],
+                            "warnings": [],
+                            "requirements": [],
+                            "next_action": "Add stable claim, RQ, requirement, and evidence bindings",
+                        }
+                    )
+                    continue
+                commitments.append(
+                    await self._project_evaluation_commitment(
+                        branch=branch,
+                        artifact=artifact,
+                        commitment=raw,
+                        events=events,
+                    )
+                )
+        if artifact is not None and not commitments:
+            blockers.append("The evaluation artifact has no commitments")
+
+        if blockers or any(item["verdict"] == "Blocked" for item in commitments):
+            verdict = "Blocked"
+        elif artifact is None:
+            verdict = "Exploratory" if not candidates else "Needs review"
+        elif (
+            artifact["version"]["lifecycle"] != "selected"
+            or artifact["version"]["readiness_state"] != "ready"
+            or warnings
+            or any(item["verdict"] != "Ready" for item in commitments)
+        ):
+            verdict = "Needs review"
+        else:
+            verdict = "Ready"
+        if verdict == "Blocked":
+            next_action = "Resolve missing or conflicting claim/evidence links"
+        elif verdict == "Exploratory":
+            next_action = "Capture a claim-centered evaluation contract"
+        elif verdict == "Needs review":
+            next_action = "Review outcomes, interpretation boundaries, and remaining evidence"
+        else:
+            next_action = "Prepare bounded result units or continue drafting"
+        return {
+            "schema_version": EVALUATION_WORKFLOW_SCHEMA_VERSION,
+            "project_id": self.project_id,
+            "branch": branch,
+            "artifact": artifact,
+            "candidate_artifacts": candidates,
+            "verdict": verdict,
+            "blockers": sorted(set(blockers)),
+            "warnings": sorted(set(warnings)),
+            "commitments": commitments,
+            "events": events,
+            "next_action": next_action,
+            "authority": {
+                "planning": "provisional",
+                "evidence": "canonical_exact_records",
+                "outcomes": "explicit_not_inferred_from_direction",
+                "canonical_mutation": "explicit_mission_or_semantic_patch",
+                "llm_at_view_time": False,
+            },
+        }
+
+    async def _project_evaluation_commitment(
+        self,
+        *,
+        branch: Mapping[str, Any],
+        artifact: Mapping[str, Any],
+        commitment: Mapping[str, Any],
+        events: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        blockers: list[str] = []
+        warnings: list[str] = []
+        claim = await self.db.fetchone(
+            """SELECT claim.*, version.version, version.exact_wording,
+                      version.allowed_wording, version.prohibited_wording,
+                      (SELECT MAX(current.version)
+                         FROM manuscript_claim_versions AS current
+                        WHERE current.claim_id = claim.id
+                          AND current.project_id = claim.project_id) AS current_version
+                 FROM manuscript_claims AS claim
+                 JOIN manuscript_claim_versions AS version
+                   ON version.claim_id = claim.id
+                  AND version.project_id = claim.project_id
+                  AND version.version = ?
+                WHERE claim.id = ? AND claim.project_id = ?""",
+            [commitment["claim_version"], commitment["claim_id"], self.project_id],
+        )
+        claim_view = dict(claim) if claim is not None else None
+        if claim_view is None:
+            blockers.append("The exact manuscript claim version does not exist")
+        else:
+            claim_view["prohibited_wording"] = parse_json_field(
+                claim_view.get("prohibited_wording"), []
+            )
+            if branch.get("manuscript_id") and claim_view["manuscript_id"] != branch["manuscript_id"]:
+                blockers.append("The claim belongs to a different manuscript")
+            if claim_view["state"] != "active":
+                blockers.append("The evaluated manuscript claim is not active")
+            if int(claim_view["current_version"]) != int(commitment["claim_version"]):
+                blockers.append("The manuscript claim wording changed after this contract")
+            ratification = await self.db.fetchone(
+                """SELECT ratification.id, ratification.decision_id
+                     FROM manuscript_claim_ratifications AS ratification
+                     JOIN decisions AS decision
+                       ON decision.id = ratification.decision_id
+                      AND decision.project_id = ratification.project_id
+                    WHERE ratification.project_id = ? AND ratification.claim_id = ?
+                      AND ratification.claim_version = ? AND decision.status = 'active'
+                      AND decision.decided_by = 'pi' AND decision.superseded_by IS NULL
+                      AND decision.chosen = ?
+                    ORDER BY ratification.created_at DESC LIMIT 1""",
+                [
+                    self.project_id,
+                    commitment["claim_id"],
+                    commitment["claim_version"],
+                    claim_view["exact_wording"],
+                ],
+            )
+            claim_view["ratification"] = dict(ratification) if ratification else None
+            if ratification is None:
+                warnings.append("The exact evaluated claim version is not PI-ratified")
+
+        rq_decisions: list[dict[str, Any]] = []
+        for decision_id in commitment.get("research_question_refs", []):
+            decision = await self.db.fetchone(
+                """SELECT id, question, chosen, status, kind, decided_by, superseded_by
+                     FROM decisions WHERE id = ? AND project_id = ?""",
+                [decision_id, self.project_id],
+            )
+            if decision is None:
+                blockers.append(f"Research-question decision {decision_id} is missing")
+                continue
+            item = dict(decision)
+            rq_decisions.append(item)
+            if (
+                item["status"] != "active"
+                or item.get("kind") != "research_question"
+                or item.get("superseded_by")
+            ):
+                blockers.append(f"Research-question decision {decision_id} is not active")
+
+        requirements = [
+            await self._project_evaluation_requirement(requirement)
+            for requirement in commitment.get("requirements", [])
+        ]
+        for requirement in requirements:
+            blockers.extend(requirement["blockers"])
+            warnings.extend(requirement["warnings"])
+
+        if commitment.get("disposition") == "selected":
+            for field_name, label in (
+                ("baselines", "baseline or control"),
+                ("metrics", "metric or observation"),
+                ("conditions", "tested condition"),
+                ("success_criteria", "success criterion"),
+                ("failure_criteria", "failure or falsification criterion"),
+            ):
+                if not commitment.get(field_name):
+                    blockers.append(f"Selected commitment needs at least one {label}")
+        elif commitment.get("disposition") == "candidate":
+            warnings.append("The evaluation commitment has not been selected")
+
+        if blockers:
+            verdict = "Blocked"
+        elif commitment.get("disposition") == "parked":
+            verdict = "Exploratory"
+        elif warnings or commitment.get("disposition") != "selected":
+            verdict = "Needs review"
+        else:
+            verdict = "Ready"
+        related_events = [
+            item for item in events if item["commitment_key"] == commitment["local_key"]
+        ]
+        if verdict == "Blocked":
+            next_action = "Resolve missing evidence or stale canonical references"
+        elif verdict == "Needs review":
+            next_action = "Review claim effects and interpretation boundaries"
+        elif verdict == "Exploratory":
+            next_action = "Select or revise this commitment when it becomes central"
+        else:
+            next_action = "Prepare a result unit from the located evidence"
+        return {
+            "legacy": False,
+            "commitment": dict(commitment),
+            "claim": claim_view,
+            "research_questions": rq_decisions,
+            "requirements": requirements,
+            "events": related_events,
+            "verdict": verdict,
+            "blockers": sorted(set(blockers)),
+            "warnings": sorted(set(warnings)),
+            "next_action": next_action,
+        }
+
+    async def _project_evaluation_requirement(
+        self,
+        requirement: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        blockers: list[str] = []
+        warnings: list[str] = []
+        plan_view = None
+        if requirement.get("experiment_id"):
+            plan = await self.db.fetchone(
+                """SELECT plan.*, experiment.title AS experiment_title,
+                          experiment.status AS experiment_status
+                     FROM experiment_plan_versions AS plan
+                     JOIN experiments AS experiment
+                       ON experiment.id = plan.experiment_id
+                      AND experiment.project_id = plan.project_id
+                    WHERE plan.id = ? AND plan.experiment_id = ?
+                      AND plan.version = ? AND plan.project_id = ?""",
+                [
+                    requirement["plan_version_id"],
+                    requirement["experiment_id"],
+                    requirement["plan_version"],
+                    self.project_id,
+                ],
+            )
+            plan_view = dict(plan) if plan else None
+            if plan_view is None:
+                blockers.append(
+                    f"Requirement {requirement['local_key']} has an invalid exact experiment plan"
+                )
+        elif requirement.get("required"):
+            blockers.append(
+                f"Requirement {requirement['local_key']} has no exact experiment plan"
+            )
+
+        observations: list[dict[str, Any]] = []
+        conclusive = 0
+        for binding in requirement.get("observations", []):
+            row = await self.db.fetchone(
+                """SELECT observation.*, run.experiment_id, run.plan_version,
+                          run.status AS run_status, run.label AS run_label
+                     FROM experiment_observations AS observation
+                     JOIN experiment_runs AS run
+                       ON run.id = observation.run_id
+                      AND run.project_id = observation.project_id
+                    WHERE observation.id = ? AND observation.project_id = ?""",
+                [binding["observation_id"], self.project_id],
+            )
+            observation = dict(row) if row else None
+            locator_views: list[dict[str, Any]] = []
+            if observation is None:
+                blockers.append(f"Observation {binding['observation_id']} is missing")
+            else:
+                if observation["experiment_id"] != requirement.get("experiment_id"):
+                    blockers.append(
+                        f"Observation {binding['observation_id']} belongs to another experiment"
+                    )
+                if int(observation["plan_version"]) != int(requirement.get("plan_version") or 0):
+                    blockers.append(
+                        f"Observation {binding['observation_id']} used another plan version"
+                    )
+                for locator_id in binding.get("locator_ids", []):
+                    locator = await self.db.fetchone(
+                        """SELECT * FROM evidence_locators
+                            WHERE id = ? AND observation_id = ? AND project_id = ?""",
+                        [locator_id, binding["observation_id"], self.project_id],
+                    )
+                    if locator is None:
+                        blockers.append(
+                            f"Locator {locator_id} does not locate observation {binding['observation_id']}"
+                        )
+                    else:
+                        locator_views.append(dict(locator))
+            outcome = binding["outcome"]
+            effect = binding["claim_effect"]
+            if outcome in {"supports", "partially_supports", "fails_to_support"}:
+                conclusive += 1
+            if effect == "unresolved":
+                blockers.append(
+                    f"Observation {binding['observation_id']} has an unresolved claim effect"
+                )
+            elif outcome in {"partially_supports", "fails_to_support", "inconclusive"}:
+                warnings.append(
+                    f"Observation {binding['observation_id']} {outcome.replace('_', ' ')}; "
+                    f"claim effect is {effect.replace('_', ' ')}"
+                )
+            elif outcome == "exploratory":
+                warnings.append(
+                    f"Observation {binding['observation_id']} is exploratory and not claim support"
+                )
+            observations.append(
+                {
+                    "binding": dict(binding),
+                    "observation": observation,
+                    "locators": locator_views,
+                }
+            )
+        if requirement.get("required") and conclusive == 0:
+            blockers.append(
+                f"Requirement {requirement['local_key']} lacks conclusive located evidence"
+            )
+        if requirement.get("required") and not requirement.get("acceptance_criteria"):
+            blockers.append(
+                f"Requirement {requirement['local_key']} lacks acceptance criteria"
+            )
+        if requirement.get("required") and not requirement.get("failure_criteria"):
+            blockers.append(
+                f"Requirement {requirement['local_key']} lacks falsification criteria"
+            )
+        return {
+            "requirement": dict(requirement),
+            "plan": plan_view,
+            "observations": observations,
+            "conclusive_observation_count": conclusive,
+            "verdict": "Blocked" if blockers else ("Needs review" if warnings else "Ready"),
+            "blockers": sorted(set(blockers)),
+            "warnings": sorted(set(warnings)),
+        }
+
+    async def list_evaluation_events(self, branch_id: str) -> list[dict[str, Any]]:
+        await self._require_branch(branch_id)
+        rows = await self.db.fetchall(
+            """SELECT event.*, proposal.status AS proposal_status,
+                      mission.status AS mission_status
+                 FROM manuscript_evaluation_events AS event
+                 LEFT JOIN semantic_patch_proposals AS proposal
+                   ON proposal.id = event.proposal_id
+                  AND proposal.project_id = event.project_id
+                 LEFT JOIN missions AS mission
+                   ON mission.id = event.mission_id
+                  AND mission.project_id = event.project_id
+                WHERE event.project_id = ? AND event.branch_id = ?
+                ORDER BY event.created_at, event.id""",
+            [self.project_id, branch_id],
+        )
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["details"] = parse_json_field(item.get("details"), {})
+            result.append(item)
+        return result
+
     async def promote_research_question(
         self,
         branch_id: str,
@@ -1018,6 +1423,564 @@ class ManuscriptPlanningService(BaseService):
             "promotion_event": event,
         }
 
+    async def create_evaluation_mission(
+        self,
+        branch_id: str,
+        data: PlanningEvaluationMissionCreate,
+    ) -> dict[str, Any]:
+        """Turn one missing evidence slot into an explicit canonical mission."""
+        from rka.models.mission import MissionCreate, MissionTask
+        from rka.services.missions import MissionService
+
+        async with self.db.transaction():
+            branch, artifact, commitment = await self._require_selected_evaluation_commitment(
+                branch_id=branch_id,
+                expected_branch_revision=data.expected_branch_revision,
+                artifact_id=data.artifact_id,
+                expected_artifact_version=data.expected_artifact_version,
+                commitment_key=data.commitment_key,
+            )
+            requirement = next(
+                (
+                    item
+                    for item in commitment["requirements"]
+                    if item["local_key"] == data.requirement_key
+                ),
+                None,
+            )
+            if requirement is None:
+                raise PlanningNotFoundError(
+                    f"evaluation requirement {data.requirement_key!r} not found"
+                )
+            if any(
+                item["outcome"] in {"supports", "partially_supports", "fails_to_support"}
+                for item in requirement.get("observations", [])
+            ):
+                raise ValueError("missing-evidence mission requires an unresolved evidence slot")
+            await self._assert_no_evaluation_action(
+                artifact_version_id=str(artifact["version"]["id"]),
+                commitment_key=data.commitment_key,
+                requirement_key=data.requirement_key,
+                action="missing_evidence_mission_created",
+            )
+            criteria = requirement.get("acceptance_criteria") or commitment["success_criteria"]
+            failures = requirement.get("failure_criteria") or commitment["failure_criteria"]
+            experiment = (
+                f"Use experiment {requirement['experiment_id']} at exact plan "
+                f"{requirement['plan_version_id']} (v{requirement['plan_version']})."
+                if requirement.get("experiment_id")
+                else "Create and review an exact experiment plan before execution."
+            )
+            mission = await MissionService(
+                self.db, project_id=self.project_id
+            ).create(
+                MissionCreate(
+                    phase=data.phase,
+                    objective=requirement.get("missing_evidence") or requirement["description"],
+                    tasks=[
+                        MissionTask(description=experiment),
+                        MissionTask(
+                            description="Record immutable observations and exact evidence locators."
+                        ),
+                        MissionTask(
+                            description=(
+                                "Classify each outcome against the claim without inferring "
+                                "support from metric direction."
+                            )
+                        ),
+                    ],
+                    context=(
+                        f"Evaluation commitment {data.commitment_key} for exact claim "
+                        f"{commitment['claim_id']} v{commitment['claim_version']}. "
+                        f"Requirement: {requirement['description']}"
+                    ),
+                    acceptance_criteria="\n".join(criteria) or "Located evidence is recorded.",
+                    scope_boundaries="\n".join(commitment.get("conditions", [])) or None,
+                    checkpoint_triggers=(
+                        "Failure/falsification criteria:\n" + "\n".join(failures)
+                        if failures else None
+                    ),
+                    motivated_by_decision=(
+                        data.motivated_by_decision
+                        or commitment["research_question_refs"][0]
+                    ),
+                    tags=[
+                        "workbench:evaluation",
+                        f"planning-version:{artifact['version']['id']}",
+                        f"commitment:{data.commitment_key}",
+                        f"requirement:{data.requirement_key}",
+                    ],
+                ),
+                actor=data.actor,
+            )
+            event = await self._insert_evaluation_event(
+                branch=branch,
+                artifact=artifact,
+                commitment_key=data.commitment_key,
+                requirement_key=data.requirement_key,
+                action="missing_evidence_mission_created",
+                target_type="mission",
+                target_id=mission.id,
+                target_version=None,
+                proposal_id=None,
+                mission_id=mission.id,
+                actor=data.actor,
+                reason=data.reason,
+                details={
+                    "claim_id": commitment["claim_id"],
+                    "claim_version": commitment["claim_version"],
+                    "description": requirement["description"],
+                    "experiment_id": requirement.get("experiment_id"),
+                    "plan_version_id": requirement.get("plan_version_id"),
+                },
+            )
+        return {"mission": mission.model_dump(), "evaluation_event": event}
+
+    async def prepare_evaluation_result_proposal(
+        self,
+        branch_id: str,
+        data: PlanningEvaluationResultProposalPrepare,
+    ) -> dict[str, Any]:
+        """Prepare a conflict-safe native result unit from exact located evidence."""
+        from rka.models.semantic_patch import (
+            ArgumentSpineReplaceOperation,
+            SemanticPatchProposalCreate,
+        )
+        from rka.services.manuscript_native import NativeManuscriptService
+        from rka.services.semantic_patch import SemanticPatchService
+
+        async with self.db.transaction():
+            branch, artifact, commitment = await self._require_selected_evaluation_commitment(
+                branch_id=branch_id,
+                expected_branch_revision=data.expected_branch_revision,
+                artifact_id=data.artifact_id,
+                expected_artifact_version=data.expected_artifact_version,
+                commitment_key=data.commitment_key,
+            )
+            if branch.get("manuscript_id") and branch["manuscript_id"] != data.manuscript_id:
+                raise ValueError("result target must match the branch manuscript context")
+            await self._assert_no_evaluation_action(
+                artifact_version_id=str(artifact["version"]["id"]),
+                commitment_key=data.commitment_key,
+                requirement_key=None,
+                action="result_unit_proposal_prepared",
+            )
+            events = await self.list_evaluation_events(branch_id)
+            projected = await self._project_evaluation_commitment(
+                branch=branch,
+                artifact=artifact,
+                commitment=commitment,
+                events=events,
+            )
+            if projected["verdict"] == "Blocked":
+                raise ValueError(
+                    "result proposal is blocked: " + "; ".join(projected["blockers"])
+                )
+            located = [
+                observation
+                for requirement in projected["requirements"]
+                for observation in requirement["observations"]
+                if observation["observation"] is not None
+                and observation["locators"]
+                and observation["binding"]["outcome"]
+                in {"supports", "partially_supports", "fails_to_support"}
+            ]
+            if not located:
+                raise ValueError("result proposal requires conclusive, exactly located evidence")
+            self._require_claim_aligned_result(located)
+            artifact_row = None
+            if data.artifact_ref.startswith("art_"):
+                artifact_row = await self.db.fetchone(
+                    """SELECT id, extraction_status, content_hash FROM artifacts
+                        WHERE id = ? AND project_id = ?""",
+                    [data.artifact_ref, self.project_id],
+                )
+            else:
+                artifact_row = await self.db.fetchone(
+                    """SELECT figure.id, artifact.extraction_status, artifact.content_hash
+                         FROM figures AS figure
+                         JOIN artifacts AS artifact ON artifact.id = figure.artifact_id
+                        WHERE figure.id = ? AND artifact.project_id = ?""",
+                    [data.artifact_ref, self.project_id],
+                )
+            if (
+                artifact_row is None
+                or artifact_row["extraction_status"] != "complete"
+                or not artifact_row["content_hash"]
+            ):
+                raise ValueError(
+                    "result artifact must be a same-project complete art_ or fig_ with a content hash"
+                )
+
+            manuscript = NativeManuscriptService(self.db, project_id=self.project_id)
+            current = await manuscript.get(data.manuscript_id)
+            if current is None:
+                raise ValueError(f"manuscript {data.manuscript_id!r} not found")
+            if int(current.revision) != data.expected_manuscript_revision:
+                raise PlanningConflictError(
+                    "manuscript revision changed before result proposal preparation"
+                )
+            spine = await manuscript.export_spine_projection(data.manuscript_id)
+            claims = list(spine.get("claims") or [])
+            units = list(spine.get("units") or [])
+            claim_spec = next(
+                (
+                    item
+                    for item in claims
+                    if item.get("rka_manuscript_claim_id") == commitment["claim_id"]
+                    and int(item.get("version") or 0) == int(commitment["claim_version"])
+                ),
+                None,
+            )
+            if claim_spec is None:
+                raise PlanningConflictError("the exact evaluated claim is no longer current")
+            unit_links = list(claim_spec.get("unit_links") or [])
+            unit_links = [
+                link
+                for link in unit_links
+                if link.get("unit_key") != data.result_unit_local_key
+            ]
+            unit_links.append(
+                {"unit_key": data.result_unit_local_key, "relationship": "tests"}
+            )
+            claim_spec["unit_links"] = unit_links
+
+            existing_unit = next(
+                (
+                    item
+                    for item in units
+                    if (item.get("unit_id") or item.get("local_key"))
+                    == data.result_unit_local_key
+                ),
+                None,
+            )
+            sequence = (
+                int(existing_unit.get("sequence") or 0)
+                if existing_unit
+                else max((int(item.get("sequence") or 0) for item in units), default=0) + 10
+            )
+            result_spec = {
+                "unit_id": data.result_unit_local_key,
+                "kind": "result",
+                "location": data.location,
+                "title": data.title,
+                "artifact_ref": data.artifact_ref,
+                "allowed_interpretation": commitment["allowed_interpretation"],
+                "prohibited_interpretation": "; ".join(
+                    commitment["prohibited_interpretation"]
+                ),
+                "sequence": sequence,
+                "status": "planned",
+                "evidence_ids": claim_spec.get("evidence_ids", []),
+                "qualifier_ids": claim_spec.get("qualifier_ids", []),
+                "counterevidence_ids": claim_spec.get("counterevidence_ids", []),
+            }
+            units = [
+                result_spec
+                if (item.get("unit_id") or item.get("local_key"))
+                == data.result_unit_local_key
+                else item
+                for item in units
+            ]
+            if existing_unit is None:
+                units.append(result_spec)
+            proposal = await SemanticPatchService(
+                self.db, project_id=self.project_id
+            ).create_proposal(
+                SemanticPatchProposalCreate(
+                    origin="human",
+                    intent=f"Create result unit for evaluation commitment {data.commitment_key}.",
+                    reason=data.reason,
+                    created_by=data.actor,
+                    operations=[
+                        ArgumentSpineReplaceOperation(
+                            manuscript_id=data.manuscript_id,
+                            expected_revision=data.expected_manuscript_revision,
+                            spine={"claims": claims, "units": units},
+                        )
+                    ],
+                )
+            )
+            observation_ids = [
+                item["binding"]["observation_id"] for item in located
+            ]
+            locator_ids = [
+                locator["id"] for item in located for locator in item["locators"]
+            ]
+            event = await self._insert_evaluation_event(
+                branch=branch,
+                artifact=artifact,
+                commitment_key=data.commitment_key,
+                requirement_key=None,
+                action="result_unit_proposal_prepared",
+                target_type="semantic_patch_proposal",
+                target_id=str(proposal["id"]),
+                target_version=None,
+                proposal_id=str(proposal["id"]),
+                mission_id=None,
+                actor=data.actor,
+                reason=data.reason,
+                details={
+                    "manuscript_id": data.manuscript_id,
+                    "result_unit_local_key": data.result_unit_local_key,
+                    "claim_id": commitment["claim_id"],
+                    "claim_version": commitment["claim_version"],
+                    "artifact_ref": data.artifact_ref,
+                    "allowed_interpretation": commitment["allowed_interpretation"],
+                    "prohibited_interpretation": commitment["prohibited_interpretation"],
+                    "observation_ids": observation_ids,
+                    "locator_ids": locator_ids,
+                },
+            )
+        return {"proposal": proposal, "evaluation_event": event}
+
+    @staticmethod
+    def _require_claim_aligned_result(
+        located: list[Mapping[str, Any]],
+    ) -> None:
+        """Prevent adverse evidence from being framed as support for the old claim.
+
+        A narrowing or negative result is scientifically useful, but it must
+        first revise or replace the manuscript claim and evaluation contract.
+        Otherwise copying the old contract's allowed wording into a result
+        unit would contradict the binding's explicit claim effect.
+        """
+        misaligned = [
+            item
+            for item in located
+            if item["binding"]["claim_effect"] != "supports_as_worded"
+        ]
+        if misaligned:
+            effects = sorted(
+                {item["binding"]["claim_effect"] for item in misaligned}
+            )
+            raise ValueError(
+                "result proposal requires evidence aligned with the current claim; "
+                "revise or replace the claim and evaluation contract for: "
+                + ", ".join(effect.replace("_", " ") for effect in effects)
+            )
+
+    async def record_evaluation_result_application(
+        self,
+        proposal_id: str,
+        *,
+        actor: str,
+        reason: str,
+    ) -> list[dict[str, Any]]:
+        """Append exact result-unit lineage after an evaluation proposal applies."""
+        prepared = await self.db.fetchall(
+            """SELECT * FROM manuscript_evaluation_events
+                WHERE project_id = ? AND proposal_id = ?
+                  AND action = 'result_unit_proposal_prepared'""",
+            [self.project_id, proposal_id],
+        )
+        events = []
+        for row in prepared:
+            item = dict(row)
+            details = parse_json_field(item.get("details"), {})
+            unit = await self.db.fetchone(
+                """SELECT unit.*, manuscript.revision AS manuscript_revision
+                     FROM manuscript_units AS unit
+                     JOIN manuscripts AS manuscript
+                       ON manuscript.id = unit.manuscript_id
+                      AND manuscript.project_id = unit.project_id
+                    WHERE unit.project_id = ? AND unit.manuscript_id = ?
+                      AND unit.local_key = ?""",
+                [
+                    self.project_id,
+                    details["manuscript_id"],
+                    details["result_unit_local_key"],
+                ],
+            )
+            if (
+                unit is None
+                or unit["kind"] != "result"
+                or unit["artifact_ref"] != details["artifact_ref"]
+                or unit["allowed_interpretation"] != details["allowed_interpretation"]
+                or unit["prohibited_interpretation"]
+                != "; ".join(details["prohibited_interpretation"])
+            ):
+                raise RuntimeError(
+                    "applied evaluation proposal did not produce its exact bounded result unit"
+                )
+            artifact = await self._evaluation_artifact(item)
+            branch = await self._require_branch(str(item["branch_id"]))
+            events.append(
+                await self._insert_evaluation_event(
+                    branch=branch,
+                    artifact=artifact,
+                    commitment_key=str(item["commitment_key"]),
+                    requirement_key=None,
+                    action="result_unit_proposal_applied",
+                    target_type="manuscript_unit",
+                    target_id=str(unit["id"]),
+                    target_version=int(unit["manuscript_revision"]),
+                    proposal_id=proposal_id,
+                    mission_id=None,
+                    actor=actor,
+                    reason=reason,
+                    details={
+                        **details,
+                        "manuscript_revision": int(unit["manuscript_revision"]),
+                    },
+                )
+            )
+        return events
+
+    async def _require_selected_evaluation_commitment(
+        self,
+        *,
+        branch_id: str,
+        expected_branch_revision: int,
+        artifact_id: str,
+        expected_artifact_version: int,
+        commitment_key: str,
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        branch = await self._require_branch(branch_id)
+        if branch["state"] != "selected":
+            raise ValueError("only the selected planning branch may create evaluation actions")
+        if int(branch["revision"]) != expected_branch_revision:
+            raise PlanningConflictError(
+                f"planning branch revision conflict: expected {expected_branch_revision}, "
+                f"found {branch['revision']}"
+            )
+        artifact = next(
+            (
+                item
+                for item in await self._effective_artifacts(branch_id)
+                if item["id"] == artifact_id and item["stage_type"] == "evaluation"
+            ),
+            None,
+        )
+        if artifact is None:
+            raise PlanningNotFoundError(f"evaluation artifact {artifact_id!r} not found")
+        version = artifact["version"]
+        if int(version["version"]) != expected_artifact_version:
+            raise PlanningConflictError(
+                "planning artifact version changed before evaluation action"
+            )
+        if version["lifecycle"] != "selected" or version["readiness_state"] != "ready":
+            raise ValueError("evaluation actions require a selected, ready artifact version")
+        if version["unresolved_items"] or version["readiness_missing"]:
+            raise ValueError("evaluation action is blocked by unresolved or missing items")
+        findings = self._stage_contract_findings("evaluation", version)
+        if findings:
+            raise ValueError(
+                "evaluation contract is not action-ready: " + "; ".join(findings)
+            )
+        commitment = next(
+            (
+                item
+                for item in version["payload"].get("commitments", [])
+                if item.get("local_key") == commitment_key
+            ),
+            None,
+        )
+        if commitment is None:
+            raise PlanningNotFoundError(
+                f"evaluation commitment {commitment_key!r} not found"
+            )
+        if commitment.get("disposition") != "selected":
+            raise ValueError("evaluation commitment must be selected before canonical action")
+        return branch, artifact, commitment
+
+    async def _assert_no_evaluation_action(
+        self,
+        *,
+        artifact_version_id: str,
+        commitment_key: str,
+        requirement_key: str | None,
+        action: str,
+    ) -> None:
+        row = await self.db.fetchone(
+            """SELECT id FROM manuscript_evaluation_events
+                WHERE project_id = ? AND artifact_version_id = ?
+                  AND commitment_key = ? AND requirement_key IS ? AND action = ?
+                LIMIT 1""",
+            [
+                self.project_id,
+                artifact_version_id,
+                commitment_key,
+                requirement_key,
+                action,
+            ],
+        )
+        if row is not None:
+            raise PlanningConflictError(
+                f"evaluation commitment already has a {action.replace('_', ' ')} event"
+            )
+
+    async def _evaluation_artifact(self, event: Mapping[str, Any]) -> dict[str, Any]:
+        artifact = await self.db.fetchone(
+            """SELECT * FROM manuscript_planning_artifacts
+                WHERE id = ? AND project_id = ?""",
+            [event["artifact_id"], self.project_id],
+        )
+        version = await self.db.fetchone(
+            """SELECT * FROM manuscript_planning_artifact_versions
+                WHERE id = ? AND artifact_id = ? AND project_id = ?""",
+            [event["artifact_version_id"], event["artifact_id"], self.project_id],
+        )
+        if artifact is None or version is None:
+            raise RuntimeError("evaluation source artifact is missing")
+        result = dict(artifact)
+        result["version"] = await self._version_row(version)
+        return result
+
+    async def _insert_evaluation_event(
+        self,
+        *,
+        branch: Mapping[str, Any],
+        artifact: Mapping[str, Any],
+        commitment_key: str,
+        requirement_key: str | None,
+        action: str,
+        target_type: str,
+        target_id: str,
+        target_version: int | None,
+        proposal_id: str | None,
+        mission_id: str | None,
+        actor: str,
+        reason: str,
+        details: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        event_id = generate_id("manuscript_evaluation_event")
+        version = artifact["version"]
+        await self.db.execute(
+            """INSERT INTO manuscript_evaluation_events
+               (id, project_id, branch_id, artifact_id, artifact_version_id,
+                artifact_version, branch_revision, commitment_key,
+                requirement_key, action, target_type, target_id, target_version,
+                proposal_id, mission_id, actor, reason, details)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                event_id,
+                self.project_id,
+                branch["id"],
+                artifact["id"],
+                version["id"],
+                version["version"],
+                branch["revision"],
+                commitment_key,
+                requirement_key,
+                action,
+                target_type,
+                target_id,
+                target_version,
+                proposal_id,
+                mission_id,
+                actor,
+                reason,
+                _canonical_json(dict(details)),
+            ],
+        )
+        row = await self.db.fetchone(
+            "SELECT * FROM manuscript_evaluation_events WHERE id = ?", [event_id]
+        )
+        result = dict(row)
+        result["details"] = parse_json_field(result.get("details"), {})
+        return result
+
     async def _require_selected_candidate(
         self,
         *,
@@ -1219,6 +2182,38 @@ class ManuscriptPlanningService(BaseService):
                 findings.append("Each selected contribution needs positive evidence")
             if any(item.get("missing_evidence") for item in selected_contributions):
                 findings.append("Selected contributions still declare missing evidence")
+        elif stage == "evaluation":
+            commitments = payload.get("commitments", [])
+            if any("local_key" not in item for item in commitments):
+                findings.append("Legacy evaluation commitments require structured revision")
+            selected_commitments = [
+                item
+                for item in commitments
+                if item.get("local_key") and item.get("disposition") == "selected"
+            ]
+            if not selected_commitments:
+                findings.append("Select at least one claim-centered evaluation commitment")
+            for commitment in selected_commitments:
+                for field_name in (
+                    "baselines",
+                    "metrics",
+                    "conditions",
+                    "success_criteria",
+                    "failure_criteria",
+                ):
+                    if not commitment.get(field_name):
+                        findings.append(
+                            f"Evaluation commitment {commitment['local_key']} needs {field_name}"
+                        )
+                for requirement in commitment.get("requirements", []):
+                    if requirement.get("required") and not requirement.get("acceptance_criteria"):
+                        findings.append(
+                            f"Requirement {requirement['local_key']} needs acceptance criteria"
+                        )
+                    if requirement.get("required") and not requirement.get("failure_criteria"):
+                        findings.append(
+                            f"Requirement {requirement['local_key']} needs failure criteria"
+                        )
         return findings
 
     @staticmethod

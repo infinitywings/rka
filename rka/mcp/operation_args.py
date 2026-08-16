@@ -62,6 +62,8 @@ from rka.models.planning import (
     PlanningBranchTransition,
     PlanningContributionProposalPrepare,
     PlanningContributionRatification,
+    PlanningEvaluationMissionCreate,
+    PlanningEvaluationResultProposalPrepare,
     PlanningResearchQuestionPromotion,
 )
 from rka.models.semantic_patch import (
@@ -592,6 +594,20 @@ class QueryPlanningPromotionsArgs(ProjectScopedArgs):
     """[ANY] Read append-only promotion lineage for one planning branch."""
 
     operation: Literal["planning_promotions"] = "planning_promotions"
+    id: Annotated[str, Field(min_length=1, description="Canonical mpb_ id.")]
+
+
+class QueryPlanningEvaluationWorkflowArgs(ProjectScopedArgs):
+    """[ANY] Resolve exact claim-to-result readiness for one planning branch."""
+
+    operation: Literal["planning_evaluation_workflow"] = "planning_evaluation_workflow"
+    id: Annotated[str, Field(min_length=1, description="Canonical mpb_ id.")]
+
+
+class QueryPlanningEvaluationEventsArgs(ProjectScopedArgs):
+    """[ANY] Read immutable evaluation mission/result lineage for one branch."""
+
+    operation: Literal["planning_evaluation_events"] = "planning_evaluation_events"
     id: Annotated[str, Field(min_length=1, description="Canonical mpb_ id.")]
 
 
@@ -1276,6 +1292,8 @@ QueryArgsUnion = Annotated[
         QueryPlanningArtifactVersionsArgs,
         QueryPlanningArgumentWorkflowArgs,
         QueryPlanningPromotionsArgs,
+        QueryPlanningEvaluationWorkflowArgs,
+        QueryPlanningEvaluationEventsArgs,
         QuerySemanticPatchProposalsArgs,
         QuerySemanticPatchSchemaArgs,
         QueryManuscriptArgs,
@@ -2654,6 +2672,28 @@ class RatifyPlanningContributionArgs(
     id: Annotated[str, Field(min_length=1, description="Canonical mpb_ branch id.")]
 
 
+class CreatePlanningEvaluationMissionArgs(
+    ProjectScopedArgs, PlanningEvaluationMissionCreate
+):
+    """[BRAIN/EXECUTOR/PI] Create one mission from a missing evidence slot."""
+
+    operation: Literal["create_planning_evaluation_mission"] = (
+        "create_planning_evaluation_mission"
+    )
+    id: Annotated[str, Field(min_length=1, description="Canonical mpb_ branch id.")]
+
+
+class PreparePlanningEvaluationResultArgs(
+    ProjectScopedArgs, PlanningEvaluationResultProposalPrepare
+):
+    """[BRAIN/EXECUTOR/PI] Prepare one exact bounded result-unit proposal."""
+
+    operation: Literal["prepare_planning_evaluation_result"] = (
+        "prepare_planning_evaluation_result"
+    )
+    id: Annotated[str, Field(min_length=1, description="Canonical mpb_ branch id.")]
+
+
 class PrepareSemanticPatchContextArgs(ProjectScopedArgs, ContextManifestCreate):
     """[ANY] Persist the exact context disclosure before an AI call."""
 
@@ -2930,6 +2970,8 @@ BatchBExecuteUnion = Annotated[
         PromotePlanningResearchQuestionArgs,
         PreparePlanningContributionArgs,
         RatifyPlanningContributionArgs,
+        CreatePlanningEvaluationMissionArgs,
+        PreparePlanningEvaluationResultArgs,
         PrepareSemanticPatchContextArgs,
         CreateSemanticPatchProposalArgs,
         ApplySemanticPatchProposalArgs,
@@ -4821,6 +4863,8 @@ ExecuteArgsUnion = Annotated[
         PromotePlanningResearchQuestionArgs,
         PreparePlanningContributionArgs,
         RatifyPlanningContributionArgs,
+        CreatePlanningEvaluationMissionArgs,
+        PreparePlanningEvaluationResultArgs,
         PrepareSemanticPatchContextArgs,
         CreateSemanticPatchProposalArgs,
         ApplySemanticPatchProposalArgs,
@@ -4903,6 +4947,8 @@ __all__ = [
     "QueryPlanningCompareArgs",
     "QueryPlanningArtifactVersionsArgs",
     "QueryPlanningArgumentWorkflowArgs",
+    "QueryPlanningEvaluationWorkflowArgs",
+    "QueryPlanningEvaluationEventsArgs",
     "QueryPlanningPromotionsArgs",
     "QuerySemanticPatchProposalsArgs",
     "QuerySemanticPatchSchemaArgs",
@@ -4978,6 +5024,8 @@ __all__ = [
     "CreatePlanningBranchArgs",
     "TransitionPlanningBranchArgs",
     "AppendPlanningArtifactVersionArgs",
+    "CreatePlanningEvaluationMissionArgs",
+    "PreparePlanningEvaluationResultArgs",
     "PromotePlanningResearchQuestionArgs",
     "PreparePlanningContributionArgs",
     "RatifyPlanningContributionArgs",

@@ -213,6 +213,41 @@ async def test_planning_argument_workflow_route_is_project_scoped(
 
 
 @pytest.mark.asyncio
+async def test_planning_evaluation_workflow_and_events_are_project_scoped(
+    planning_client: httpx.AsyncClient,
+) -> None:
+    created = await planning_client.post(
+        "/api/planning/branches",
+        headers=DEFAULT_HEADERS,
+        json={
+            "name": "evaluation",
+            "purpose": "Exercise exact evaluation reads.",
+            "created_by": "pi",
+            "reason": "Start evaluation projection.",
+        },
+    )
+    branch_id = created.json()["branch"]["id"]
+    workflow = await planning_client.get(
+        f"/api/planning/branches/{branch_id}/evaluation-workflow",
+        headers=DEFAULT_HEADERS,
+    )
+    assert workflow.status_code == 200
+    assert workflow.json()["schema_version"] == "rka.claim-centered-evaluation/v1"
+    assert workflow.json()["authority"]["outcomes"] == "explicit_not_inferred_from_direction"
+    events = await planning_client.get(
+        f"/api/planning/branches/{branch_id}/evaluation-events",
+        headers=DEFAULT_HEADERS,
+    )
+    assert events.status_code == 200
+    assert events.json() == []
+    foreign = await planning_client.get(
+        f"/api/planning/branches/{branch_id}/evaluation-workflow",
+        headers=OTHER_HEADERS,
+    )
+    assert foreign.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_planning_rq_promotion_route_is_guarded_and_auditable(
     planning_client: httpx.AsyncClient,
 ) -> None:

@@ -2026,6 +2026,13 @@ class NativeManuscriptService(BaseService):
                     "qualifier_ids": evidence_by_role["qualifier"],
                     "counterevidence_ids": evidence_by_role["counterevidence"],
                     "manuscript_units": [link["unit_local_key"] for link in claim["unit_links"]],
+                    "unit_links": [
+                        {
+                            "unit_key": link["unit_local_key"],
+                            "relationship": link["relationship"],
+                        }
+                        for link in claim["unit_links"]
+                    ],
                 }
             )
         units = []
@@ -2036,14 +2043,26 @@ class NativeManuscriptService(BaseService):
                     "rka_manuscript_unit_id": unit["id"],
                     "kind": unit["kind"],
                     "location": unit["location"],
+                    "title": unit.get("title"),
                     "artifact_ref": unit.get("artifact_ref"),
                     "allowed_interpretation": unit.get("allowed_interpretation"),
                     "prohibited_interpretation": unit.get("prohibited_interpretation"),
+                    "sequence": unit["sequence"],
                     "status": unit["status"],
                     "evidence_ids": [
                         item["evidence_claim_id"]
                         for item in unit["evidence"]
                         if item["role"] == "support"
+                    ],
+                    "qualifier_ids": [
+                        item["evidence_claim_id"]
+                        for item in unit["evidence"]
+                        if item["role"] == "qualifier"
+                    ],
+                    "counterevidence_ids": [
+                        item["evidence_claim_id"]
+                        for item in unit["evidence"]
+                        if item["role"] == "counterevidence"
                     ],
                     "claim_ids": sorted(set(unit_claims.get(unit["local_key"], []))),
                 }

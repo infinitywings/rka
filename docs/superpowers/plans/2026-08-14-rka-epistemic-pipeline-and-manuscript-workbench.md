@@ -1,8 +1,9 @@
 # RKA Epistemic Pipeline and Manuscript Drafting Workbench
 
-Status: roadmap design source; M0 through M3 are complete on `main`.
-M4 PR 7 seed-through-contribution guidance has passed its feature-branch gate;
-PR 8 remains blocked on PR 7 review and merge.
+Status: roadmap design source; M0 through M3 and M4 PR 7 are complete on
+`main`. M4 PR 8, the evaluation contract and results trace, has passed its
+feature-branch release gate under ADR 0008 and awaits review and merge in
+draft PR [#79](https://github.com/infinitywings/rka/pull/79).
 
 Date: 2026-08-14
 
@@ -1293,4 +1294,9 @@ release gate in draft PR #78. ADR 0007 freezes its stage, candidate-identity,
 promotion-ledger, semantic-proposal, and exact PI-ratification contract. The
 fresh-database and disposable Invarllm validation record is
 [`2026-08-15-workbench-m4-pr7-exit-evidence.md`](../specs/2026-08-15-workbench-m4-pr7-exit-evidence.md).
-PR 8 is the next dependency-ordered slice after PR 7 review and merge.
+PR 8 passed its feature-branch gate after PR 7 merged in #78. Its exact
+implementation contract is
+[`ADR 0008`](../../adr/0008-claim-centered-evaluation-contract-and-results-trace.md),
+and its validation record is
+[`2026-08-15-workbench-m4-pr8-exit-evidence.md`](../specs/2026-08-15-workbench-m4-pr8-exit-evidence.md).
+PR 9 remains dependency-blocked until PR 8 review and merge.

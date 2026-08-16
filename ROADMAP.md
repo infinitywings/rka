@@ -20,17 +20,23 @@ The unified human/AI proposal, conflict, and provider boundary is recorded in
 The seed-to-contribution guidance, candidate identity, promotion, and exact PI
 ratification boundary is recorded in
 [ADR 0007](docs/adr/0007-seed-to-contribution-guidance-and-promotion.md).
+The claim-centered evaluation, adverse-outcome, mission, and result-unit
+boundary is recorded in
+[ADR 0008](docs/adr/0008-claim-centered-evaluation-contract-and-results-trace.md).
 
 The roadmap is ordered by dependency, not by invented delivery dates. Every
 milestone must satisfy its exit gate before dependent work is treated as ready.
 
 ## Now
 
-**M0 through M3 are complete on `main`. M4 / PR 7 (issue #58), the
-seed-through-contribution guided workflow, has satisfied its feature-branch
-release gate in draft PR [#78](https://github.com/infinitywings/rka/pull/78).**
-Review and merge PR 7 before moving the `priority: next` label to M4 / PR 8,
-the evaluation contract and results trace.
+**M0 through M3 and M4 / PR 7 are complete on `main`. M4 / PR 8 (issue #59),
+the evaluation contract and results trace, has satisfied its feature-branch
+release gate in draft PR [#79](https://github.com/infinitywings/rka/pull/79).**
+PR [#78](https://github.com/infinitywings/rka/pull/78) merged
+the seed-through-contribution dependency; ADR 0008 freezes the evaluation
+contract, and the exact release evidence is recorded in
+[`2026-08-15-workbench-m4-pr8-exit-evidence.md`](docs/superpowers/specs/2026-08-15-workbench-m4-pr8-exit-evidence.md).
+Review and merge PR 8 before starting M4 / PR 9 progressive outline authoring.
 The choice-first Writer delta is reconciled, the authority and AI boundary is
 recorded in ADR 0001, the read-only workbench has passed its real-project exit
 gate, and first-class experiment/run/observation/evidence-locator semantics

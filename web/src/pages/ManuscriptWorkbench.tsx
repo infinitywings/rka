@@ -67,7 +67,7 @@ const stageDescriptions: Record<WorkbenchStageId, string> = {
   response: "Method and mechanism candidates are shown only with their review state and lineage.",
   rqs: "Active research questions are navigational structure, not empirical support.",
   contributions: "Contribution candidates remain provisional until native versioning and exact PI ratification.",
-  evaluation: "Current RKA result units are visible, while missing first-class experiment semantics are labeled.",
+  evaluation: "Exact contracts classify experiment plans, observations, and locators against bounded manuscript claims.",
   outline: "Claim-sized manuscript units form the read-only outline and preserve file and evidence anchors.",
 }
 
@@ -779,16 +779,16 @@ function EvaluationView({
       <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
         <FlaskConical className="mt-0.5 h-4 w-4 shrink-0" />
         <div>
-          <p className="font-medium">Missing experiment semantics are explicit.</p>
+          <p className="font-medium">Evaluation authority stays explicit.</p>
           <p className="mt-1 opacity-80">
-            Current native reads expose result units, artifacts, evidence claims, and interpretation boundaries, but not the planned first-class experiment, run, measurement, baseline, metric, and condition objects from M1.
+            The claim-centered matrix above resolves exact experiment plans, runs, observations, and locators. This drafting view shows only canonical result units that crossed the separate semantic-review boundary.
           </p>
-          <p className="mt-1 opacity-70">Derivation: current API/schema audit plus the M0 stage contract.</p>
+          <p className="mt-1 opacity-70">A completed run is not evidence until an exact observation and locator are classified against the claim.</p>
         </div>
       </div>
       {results.map((unit) => <UnitCard key={unit.id} unit={unit} label="Result unit" onInspect={onInspect} />)}
       {results.length === 0 && (
-        <EmptyState title="No result units" detail="The evaluation view remains blocked. The prototype will not infer experiments from journal prose or treat repository execution as support for a manuscript claim." />
+        <EmptyState title="No canonical result units" detail="Use the evaluation contract to collect exact evidence and prepare a review proposal. Journal prose and repository execution are never promoted automatically." />
       )}
     </>
   )

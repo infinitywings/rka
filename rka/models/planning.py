@@ -283,7 +283,27 @@ class RQContributionPayload(_Payload):
         return self
 
 
-class EvaluationCommitment(BaseModel):
+EvaluationRequirementKind = Literal[
+    "support", "falsification", "qualifier", "validity", "exploratory"
+]
+EvaluationObservationRole = Literal[
+    "primary", "replication", "robustness", "falsifier", "qualifier", "context"
+]
+EvaluationOutcome = Literal[
+    "supports", "partially_supports", "fails_to_support", "inconclusive", "exploratory"
+]
+EvaluationClaimEffect = Literal[
+    "supports_as_worded",
+    "requires_narrowing",
+    "negative_result",
+    "exploratory_only",
+    "unresolved",
+]
+
+
+class LegacyEvaluationCommitment(BaseModel):
+    """Read-compatible pre-ADR-0008 commitment; never promotion-ready."""
+
     model_config = ConfigDict(extra="forbid")
     claim: str = Field(min_length=1, max_length=20_000)
     method: str = Field(min_length=1, max_length=40_000)
@@ -293,9 +313,148 @@ class EvaluationCommitment(BaseModel):
     success_criteria: list[str] = Field(default_factory=list, max_length=500)
 
 
+class EvaluationObservationBinding(BaseModel):
+    """Explicit interpretation of one exact canonical observation."""
+
+    model_config = ConfigDict(extra="forbid")
+    observation_id: str = Field(pattern=r"^obs_.+", max_length=128)
+    locator_ids: list[str] = Field(min_length=1, max_length=500)
+    role: EvaluationObservationRole
+    outcome: EvaluationOutcome
+    claim_effect: EvaluationClaimEffect
+    interpretation: str = Field(min_length=1, max_length=40_000)
+
+    @model_validator(mode="after")
+    def normalize_and_validate(self):
+        self.observation_id = _strip(self.observation_id)
+        self.locator_ids = _strings(self.locator_ids)
+        self.interpretation = _strip(self.interpretation)
+        if not self.locator_ids or any(not item.startswith("elc_") for item in self.locator_ids):
+            raise ValueError("observation bindings require one or more elc_ locator IDs")
+        compatible = {
+            "supports": {"supports_as_worded", "requires_narrowing"},
+            "partially_supports": {"requires_narrowing", "supports_as_worded"},
+            "fails_to_support": {"requires_narrowing", "negative_result", "unresolved"},
+            "inconclusive": {"exploratory_only", "unresolved", "requires_narrowing"},
+            "exploratory": {"exploratory_only", "unresolved"},
+        }
+        if self.claim_effect not in compatible[self.outcome]:
+            raise ValueError(
+                f"{self.outcome} is incompatible with claim effect {self.claim_effect}"
+            )
+        return self
+
+
+class EvaluationEvidenceRequirement(BaseModel):
+    """One stable evidence slot used to support, qualify, or falsify a claim."""
+
+    model_config = ConfigDict(extra="forbid")
+    local_key: str = Field(min_length=1, max_length=500)
+    kind: EvaluationRequirementKind
+    description: str = Field(min_length=1, max_length=40_000)
+    required: bool = True
+    experiment_id: str | None = Field(default=None, pattern=r"^exp_.+", max_length=128)
+    plan_version_id: str | None = Field(default=None, pattern=r"^epv_.+", max_length=128)
+    plan_version: int | None = Field(default=None, ge=1)
+    acceptance_criteria: list[str] = Field(default_factory=list, max_length=500)
+    failure_criteria: list[str] = Field(default_factory=list, max_length=500)
+    observations: list[EvaluationObservationBinding] = Field(
+        default_factory=list, max_length=1000
+    )
+    missing_evidence: str | None = Field(default=None, max_length=40_000)
+
+    @model_validator(mode="after")
+    def normalize_and_validate(self):
+        self.local_key = _strip(self.local_key)
+        self.description = _strip(self.description)
+        self.experiment_id = _strip(self.experiment_id) if self.experiment_id else None
+        self.plan_version_id = _strip(self.plan_version_id) if self.plan_version_id else None
+        self.acceptance_criteria = _strings(self.acceptance_criteria)
+        self.failure_criteria = _strings(self.failure_criteria)
+        self.missing_evidence = (
+            self.missing_evidence.strip() if self.missing_evidence else None
+        )
+        plan_fields = (self.experiment_id, self.plan_version_id, self.plan_version)
+        if any(value is not None for value in plan_fields) and not all(
+            value is not None for value in plan_fields
+        ):
+            raise ValueError(
+                "experiment_id, plan_version_id, and plan_version are all-or-none"
+            )
+        if self.observations and self.experiment_id is None:
+            raise ValueError("located observations require an exact experiment plan")
+        observation_ids = [item.observation_id for item in self.observations]
+        if len(observation_ids) != len(set(observation_ids)):
+            raise ValueError("observation IDs must be unique within an evidence requirement")
+        return self
+
+
+class EvaluationCommitment(BaseModel):
+    """Claim-centered evaluation contract introduced by ADR 0008."""
+
+    model_config = ConfigDict(extra="forbid")
+    local_key: str = Field(min_length=1, max_length=500)
+    claim_id: str = Field(pattern=r"^mcl_.+", max_length=128)
+    claim_version: int = Field(ge=1)
+    research_question_refs: list[str] = Field(min_length=1, max_length=200)
+    method: str = Field(min_length=1, max_length=40_000)
+    requirements: list[EvaluationEvidenceRequirement] = Field(min_length=1, max_length=500)
+    baselines: list[str] = Field(default_factory=list, max_length=500)
+    metrics: list[str] = Field(default_factory=list, max_length=500)
+    conditions: list[str] = Field(default_factory=list, max_length=500)
+    success_criteria: list[str] = Field(default_factory=list, max_length=500)
+    failure_criteria: list[str] = Field(default_factory=list, max_length=500)
+    allowed_interpretation: str = Field(min_length=1, max_length=40_000)
+    prohibited_interpretation: list[str] = Field(min_length=1, max_length=500)
+    disposition: PlanningCandidateDisposition = "candidate"
+
+    @model_validator(mode="after")
+    def normalize_and_validate(self):
+        self.local_key = _strip(self.local_key)
+        self.claim_id = _strip(self.claim_id)
+        self.research_question_refs = _strings(self.research_question_refs)
+        self.method = _strip(self.method)
+        self.baselines = _strings(self.baselines)
+        self.metrics = _strings(self.metrics)
+        self.conditions = _strings(self.conditions)
+        self.success_criteria = _strings(self.success_criteria)
+        self.failure_criteria = _strings(self.failure_criteria)
+        self.allowed_interpretation = _strip(self.allowed_interpretation)
+        self.prohibited_interpretation = _strings(self.prohibited_interpretation)
+        if not self.research_question_refs or any(
+            not item.startswith("dec_") for item in self.research_question_refs
+        ):
+            raise ValueError("research_question_refs must contain one or more dec_ IDs")
+        if not self.prohibited_interpretation:
+            raise ValueError("prohibited_interpretation must not be empty")
+        requirement_keys = [item.local_key for item in self.requirements]
+        if len(requirement_keys) != len(set(requirement_keys)):
+            raise ValueError("evaluation requirement local_key values must be unique")
+        return self
+
+
 class EvaluationPayload(_Payload):
-    commitments: list[EvaluationCommitment] = Field(min_length=1, max_length=200)
+    commitments: list[LegacyEvaluationCommitment | EvaluationCommitment] = Field(
+        min_length=1, max_length=200
+    )
     validity_checks: list[str] = Field(default_factory=list, max_length=500)
+
+    @model_validator(mode="after")
+    def validate_commitments(self):
+        keys = [
+            item.local_key for item in self.commitments if isinstance(item, EvaluationCommitment)
+        ]
+        if len(keys) != len(set(keys)):
+            raise ValueError("evaluation commitment local_key values must be unique")
+        exact_claims = [
+            (item.claim_id, item.claim_version)
+            for item in self.commitments
+            if isinstance(item, EvaluationCommitment)
+        ]
+        if len(exact_claims) != len(set(exact_claims)):
+            raise ValueError("an exact claim version may have only one evaluation commitment")
+        self.validity_checks = _strings(self.validity_checks)
+        return self
 
 
 class OutlineNode(BaseModel):
@@ -494,6 +653,20 @@ class PlanningArtifactVersionAppend(BaseModel):
                     for ref in contribution.get("research_question_refs", [])
                     if ref.startswith("dec_")
                 )
+        if self.stage_type == "evaluation":
+            for commitment in self.payload.get("commitments", []):
+                if not isinstance(commitment, dict) or "local_key" not in commitment:
+                    continue
+                referenced_ids.add(commitment["claim_id"])
+                referenced_ids.update(commitment.get("research_question_refs", []))
+                for requirement in commitment.get("requirements", []):
+                    if requirement.get("experiment_id"):
+                        referenced_ids.add(requirement["experiment_id"])
+                    if requirement.get("plan_version_id"):
+                        referenced_ids.add(requirement["plan_version_id"])
+                    for observation in requirement.get("observations", []):
+                        referenced_ids.add(observation["observation_id"])
+                        referenced_ids.update(observation.get("locator_ids", []))
         undisclosed = sorted(referenced_ids - bound_ids)
         if undisclosed:
             raise ValueError(
@@ -573,6 +746,65 @@ class PlanningContributionRatification(BaseModel):
         self.proposal_id = _strip(self.proposal_id)
         self.decision_id = _strip(self.decision_id)
         self.reason = _strip(self.reason)
+        return self
+
+
+class PlanningEvaluationMissionCreate(BaseModel):
+    """Create one canonical missing-evidence mission from an exact contract version."""
+
+    model_config = ConfigDict(extra="forbid")
+    expected_branch_revision: int = Field(ge=1)
+    artifact_id: str = Field(min_length=1, max_length=128)
+    expected_artifact_version: int = Field(ge=1)
+    commitment_key: str = Field(min_length=1, max_length=500)
+    requirement_key: str = Field(min_length=1, max_length=500)
+    phase: str = Field(default="evaluation", min_length=1, max_length=500)
+    motivated_by_decision: str | None = Field(default=None, max_length=128)
+    reason: str = Field(min_length=1, max_length=10_000)
+    actor: Literal["pi", "brain", "executor", "web_ui"] = "web_ui"
+
+    @model_validator(mode="after")
+    def normalize(self):
+        for field_name in (
+            "artifact_id", "commitment_key", "requirement_key", "phase", "reason"
+        ):
+            setattr(self, field_name, _strip(getattr(self, field_name)))
+        self.motivated_by_decision = (
+            _strip(self.motivated_by_decision) if self.motivated_by_decision else None
+        )
+        return self
+
+
+class PlanningEvaluationResultProposalPrepare(BaseModel):
+    """Prepare, but never apply, one native result-unit proposal."""
+
+    model_config = ConfigDict(extra="forbid")
+    expected_branch_revision: int = Field(ge=1)
+    artifact_id: str = Field(min_length=1, max_length=128)
+    expected_artifact_version: int = Field(ge=1)
+    commitment_key: str = Field(min_length=1, max_length=500)
+    manuscript_id: str = Field(min_length=1, max_length=128)
+    expected_manuscript_revision: int = Field(ge=1)
+    result_unit_local_key: str = Field(min_length=1, max_length=500)
+    location: str = Field(min_length=1, max_length=4000)
+    title: str = Field(min_length=1, max_length=1000)
+    artifact_ref: str = Field(pattern=r"^(art|fig)_.+", max_length=128)
+    reason: str = Field(min_length=1, max_length=10_000)
+    actor: Literal["pi", "brain", "executor", "web_ui"] = "web_ui"
+
+    @model_validator(mode="after")
+    def normalize(self):
+        for field_name in (
+            "artifact_id",
+            "commitment_key",
+            "manuscript_id",
+            "result_unit_local_key",
+            "location",
+            "title",
+            "artifact_ref",
+            "reason",
+        ):
+            setattr(self, field_name, _strip(getattr(self, field_name)))
         return self
 
 

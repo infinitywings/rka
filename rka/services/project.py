@@ -218,6 +218,7 @@ class ProjectService(BaseService):
     _DELETE_TABLES = (
         # Native manuscript and immutable validation histories.
         "semantic_patch_provider_events",
+        "manuscript_evaluation_events",
         "manuscript_planning_promotion_events",
         "semantic_patch_proposal_events",
         "semantic_patch_proposals",
@@ -412,6 +413,70 @@ class ProjectService(BaseService):
             return True
         return False
 
+    async def _delete_planning_versions_dependency_ordered(self, project_id: str) -> None:
+        """Delete immutable planning versions from leaves back to their roots.
+
+        SQLite enforces ``ON DELETE RESTRICT`` self-references row by row, so a
+        single project-scoped DELETE cannot remove a supersession/derivation
+        chain even when every row in that chain is in scope.  Project deletion
+        is already explicitly authorized; deleting only unreferenced leaves
+        retains the immutable-row contract without weakening its triggers.
+        """
+        while True:
+            remaining = await self.db.fetchone(
+                """SELECT COUNT(*) AS cnt
+                   FROM manuscript_planning_artifact_versions
+                   WHERE project_id = ?""",
+                [project_id],
+            )
+            if not remaining or remaining["cnt"] == 0:
+                return
+            cursor = await self.db.execute(
+                """DELETE FROM manuscript_planning_artifact_versions AS version
+                   WHERE version.project_id = ?
+                     AND NOT EXISTS (
+                         SELECT 1
+                         FROM manuscript_planning_artifact_versions AS dependent
+                         WHERE dependent.project_id = version.project_id
+                           AND (
+                               dependent.supersedes_version_id = version.id
+                               OR dependent.derived_from_version_id = version.id
+                           )
+                     )""",
+                [project_id],
+            )
+            if cursor.rowcount == 0:
+                raise sqlite3.IntegrityError(
+                    "Planning artifact version dependency cycle blocks project deletion"
+                )
+
+    async def _delete_planning_branches_dependency_ordered(self, project_id: str) -> None:
+        """Delete planning branches from child leaves back to their roots."""
+        while True:
+            remaining = await self.db.fetchone(
+                """SELECT COUNT(*) AS cnt
+                   FROM manuscript_planning_branches
+                   WHERE project_id = ?""",
+                [project_id],
+            )
+            if not remaining or remaining["cnt"] == 0:
+                return
+            cursor = await self.db.execute(
+                """DELETE FROM manuscript_planning_branches AS branch
+                   WHERE branch.project_id = ?
+                     AND NOT EXISTS (
+                         SELECT 1
+                         FROM manuscript_planning_branches AS child
+                         WHERE child.project_id = branch.project_id
+                           AND child.parent_branch_id = branch.id
+                     )""",
+                [project_id],
+            )
+            if cursor.rowcount == 0:
+                raise sqlite3.IntegrityError(
+                    "Planning branch dependency cycle blocks project deletion"
+                )
+
     async def _delete_project(self, project_id: str, confirm: bool) -> dict:
         """Implementation for :meth:`delete_project` inside its transaction."""
         if project_id == SENTINEL_PROJECT_ID:
@@ -474,14 +539,23 @@ class ProjectService(BaseService):
         # Cascade delete in reverse dependency order
         for table in self._DELETE_TABLES:
             try:
-                await self.db.execute(
-                    f"DELETE FROM {table} WHERE project_id = ?",
-                    [project_id],
-                )
+                if table == "manuscript_planning_artifact_versions":
+                    await self._delete_planning_versions_dependency_ordered(project_id)
+                elif table == "manuscript_planning_branches":
+                    await self._delete_planning_branches_dependency_ordered(project_id)
+                else:
+                    await self.db.execute(
+                        f"DELETE FROM {table} WHERE project_id = ?",
+                        [project_id],
+                    )
             except sqlite3.OperationalError as exc:
                 if "no such table" not in str(exc).lower():
                     raise
                 # Some pre-migration databases do not have every scoped table.
+            except sqlite3.IntegrityError as exc:
+                raise sqlite3.IntegrityError(
+                    f"Failed to delete project rows from {table}: {exc}"
+                ) from exc
 
         # Delete the project row itself
         await self.db.execute("DELETE FROM projects WHERE id = ?", [project_id])

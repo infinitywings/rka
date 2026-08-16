@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react"
 import type { FormEvent } from "react"
-import { ArrowUpRight, CheckCircle2, FilePenLine, Loader2, Route } from "lucide-react"
+import { ArrowUpRight, CheckCircle2, FilePenLine, FlaskConical, Loader2, Route } from "lucide-react"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -13,6 +13,9 @@ import type {
   ManuscriptContext,
   PlanningArgumentWorkflow,
   PlanningArtifact,
+  PlanningEvaluationCommitmentView,
+  PlanningEvaluationRequirementView,
+  PlanningEvaluationWorkflow,
   PlanningPromotionEvent,
   PlanningStage,
   PlanningWorkflowVerdict,
@@ -144,7 +147,34 @@ const STAGE_TEMPLATES: Record<PlanningStage, Record<string, unknown>> = {
       disposition: "candidate",
     }],
   },
-  evaluation: { commitments: [{ claim: "", method: "" }], validity_checks: [] },
+  evaluation: {
+    commitments: [{
+      local_key: "claim-primary-evaluation",
+      claim_id: "mcl_REPLACE_WITH_EXACT_ID",
+      claim_version: 1,
+      research_question_refs: ["dec_REPLACE_WITH_RQ_ID"],
+      method: "Describe the exact evaluation method.",
+      requirements: [{
+        local_key: "primary-effect",
+        kind: "support",
+        description: "State the evidence needed to support or falsify the claim.",
+        required: true,
+        acceptance_criteria: ["State the exact success criterion."],
+        failure_criteria: ["State the exact falsification criterion."],
+        observations: [],
+        missing_evidence: "Describe the work needed to collect exact evidence.",
+      }],
+      baselines: ["Name the baseline or control."],
+      metrics: ["Name the metric or observation."],
+      conditions: ["State the tested condition."],
+      success_criteria: ["State what would support the bounded claim."],
+      failure_criteria: ["State what would fail to support it."],
+      allowed_interpretation: "State the strongest interpretation currently allowed.",
+      prohibited_interpretation: ["State one tempting unsupported extension."],
+      disposition: "candidate",
+    }],
+    validity_checks: ["State one validity check."],
+  },
   outline: { units: [{ local_key: "intro", title: "Introduction", purpose: "" }] },
   review: { focus: "", findings: [] },
 }
@@ -168,6 +198,7 @@ export function ArgumentWorkflowPanel({
   const payload = portfolio?.version.payload ?? {}
   const researchQuestions = candidates(payload.research_questions)
   const contributions = candidates(payload.contributions)
+  const evaluation = planning.evaluation.data
 
   const proposeStageDraft = async (
     stage: PlanningStage,
@@ -313,8 +344,63 @@ export function ArgumentWorkflowPanel({
     }
   }
 
+  const createEvaluationMission = async (
+    commitment: PlanningEvaluationCommitmentView,
+    requirement: PlanningEvaluationRequirementView,
+  ) => {
+    if (!evaluation?.artifact || !commitment.commitment.local_key) return
+    try {
+      await planning.createEvaluationMission.mutateAsync({
+        branchId: evaluation.branch.id,
+        data: {
+          expected_branch_revision: evaluation.branch.revision,
+          artifact_id: evaluation.artifact.id,
+          expected_artifact_version: evaluation.artifact.version.version,
+          commitment_key: commitment.commitment.local_key,
+          requirement_key: requirement.requirement.local_key,
+          reason: "Create executable work for this exact missing-evidence requirement.",
+          actor: "web_ui",
+        },
+      })
+      toast.success("Missing-evidence mission created with exact contract provenance")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Evaluation mission failed")
+    }
+  }
+
+  const prepareEvaluationResult = async (
+    event: FormEvent<HTMLFormElement>,
+    commitment: PlanningEvaluationCommitmentView,
+  ) => {
+    event.preventDefault()
+    if (!evaluation?.artifact || !commitment.commitment.local_key || !manuscriptId || !context) return
+    const form = new FormData(event.currentTarget)
+    try {
+      await planning.prepareEvaluationResult.mutateAsync({
+        branchId: evaluation.branch.id,
+        data: {
+          expected_branch_revision: evaluation.branch.revision,
+          artifact_id: evaluation.artifact.id,
+          expected_artifact_version: evaluation.artifact.version.version,
+          commitment_key: commitment.commitment.local_key,
+          manuscript_id: manuscriptId,
+          expected_manuscript_revision: context.manuscript.revision,
+          result_unit_local_key: String(form.get("result_unit_local_key") ?? "").trim(),
+          location: String(form.get("location") ?? "").trim(),
+          title: String(form.get("title") ?? "").trim(),
+          artifact_ref: String(form.get("artifact_ref") ?? "").trim(),
+          reason: "Prepare a bounded result unit from the exact located evidence.",
+          actor: "web_ui",
+        },
+      })
+      toast.success("Result-unit proposal prepared; the manuscript is unchanged")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Result proposal failed")
+    }
+  }
+
   const loading = planning.resume.isLoading || planning.workflow.isLoading
-  const error = planning.workflow.error ?? planning.promotions.error
+  const error = planning.workflow.error ?? planning.promotions.error ?? planning.evaluation.error
 
   return (
     <Card>
@@ -421,6 +507,15 @@ export function ArgumentWorkflowPanel({
                 onRatifyContribution={ratifyContribution}
               />
             </div>
+
+            <EvaluationContractMatrix
+              workflow={evaluation}
+              manuscriptReady={Boolean(manuscriptId && context)}
+              pending={planning.createEvaluationMission.isPending
+                || planning.prepareEvaluationResult.isPending}
+              onCreateMission={createEvaluationMission}
+              onPrepareResult={prepareEvaluationResult}
+            />
           </>
         )}
       </CardContent>
@@ -436,6 +531,7 @@ const EDITABLE_ARGUMENT_STAGES: PlanningStage[] = [
   "response_mechanism",
   "challenge_innovation",
   "rq_contribution",
+  "evaluation",
 ]
 
 function StageDraftEditor({
@@ -715,6 +811,217 @@ function CandidatePromotionPanel({
               <li key={event.id}>
                 {event.action.replaceAll("_", " ")} · {event.candidate_key} · {event.target_id}
               </li>
+            ))}
+          </ol>
+        </details>
+      )}
+    </div>
+  )
+}
+
+function EvaluationContractMatrix({
+  workflow,
+  manuscriptReady,
+  pending,
+  onCreateMission,
+  onPrepareResult,
+}: {
+  workflow?: PlanningEvaluationWorkflow
+  manuscriptReady: boolean
+  pending: boolean
+  onCreateMission: (
+    commitment: PlanningEvaluationCommitmentView,
+    requirement: PlanningEvaluationRequirementView,
+  ) => Promise<void>
+  onPrepareResult: (
+    event: FormEvent<HTMLFormElement>,
+    commitment: PlanningEvaluationCommitmentView,
+  ) => Promise<void>
+}) {
+  if (!workflow) {
+    return (
+      <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+        Add an evaluation-stage artifact to connect exact claims to experiments and results.
+      </div>
+    )
+  }
+  return (
+    <div className="space-y-4 rounded-lg border p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="flex items-center gap-2 text-sm font-medium">
+            <FlaskConical className="h-4 w-4" /> Claim-centered evaluation matrix
+          </p>
+          <p className="mt-1 max-w-4xl text-xs text-muted-foreground">
+            Exact canonical evidence is resolved server-side. Positive or negative metric direction is
+            never treated as claim support unless the contract classifies the outcome explicitly.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          <Badge variant={verdictVariant(workflow.verdict)}>{workflow.verdict}</Badge>
+          <Badge variant="outline">private evidence contract</Badge>
+          <Badge variant="outline">no model call</Badge>
+        </div>
+      </div>
+      {[...workflow.blockers, ...workflow.warnings].map((finding) => (
+        <p key={finding} className="rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-100">
+          {finding}
+        </p>
+      ))}
+      {workflow.commitments.map((commitment, commitmentIndex) => {
+        const key = commitment.commitment.local_key ?? `legacy-${commitmentIndex}`
+        const prepared = commitment.events?.find(
+          (event) => event.action === "result_unit_proposal_prepared",
+        )
+        const applied = commitment.events?.find(
+          (event) => event.action === "result_unit_proposal_applied",
+        )
+        return (
+          <section key={key} className="space-y-3 rounded-lg bg-muted/25 p-3" aria-labelledby={`evaluation-${key}`}>
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <p id={`evaluation-${key}`} className="text-sm font-medium">
+                  {key} · claim {String(commitment.commitment.claim_id ?? "legacy text")}
+                  {commitment.commitment.claim_version ? ` v${commitment.commitment.claim_version}` : ""}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {String((commitment.claim as Record<string, unknown> | undefined)?.exact_wording
+                    ?? commitment.commitment.method ?? "Structured revision required")}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                <Badge variant={verdictVariant(commitment.verdict)}>{commitment.verdict}</Badge>
+                {prepared && <Badge variant="secondary">proposal {prepared.proposal_status ?? "prepared"}</Badge>}
+                {applied && <Badge><CheckCircle2 className="mr-1 h-3 w-3" /> result applied</Badge>}
+              </div>
+            </div>
+            {[...commitment.blockers, ...commitment.warnings].map((finding) => (
+              <p key={finding} className="text-xs text-amber-800 dark:text-amber-200">{finding}</p>
+            ))}
+            {!commitment.legacy && (
+              <div className="grid gap-2 text-xs lg:grid-cols-2">
+                <div className="rounded-md border bg-background p-2">
+                  <p className="font-medium">Allowed interpretation</p>
+                  <p className="mt-1 text-muted-foreground">{commitment.commitment.allowed_interpretation}</p>
+                </div>
+                <div className="rounded-md border bg-background p-2">
+                  <p className="font-medium">Prohibited interpretation</p>
+                  <ul className="mt-1 list-disc pl-4 text-muted-foreground">
+                    {(commitment.commitment.prohibited_interpretation ?? []).map((item) => <li key={item}>{item}</li>)}
+                  </ul>
+                </div>
+              </div>
+            )}
+            <div className="overflow-x-auto rounded-md border bg-background">
+              <table className="min-w-[900px] w-full text-left text-xs">
+                <thead className="border-b bg-muted/50">
+                  <tr>
+                    <th className="p-2 font-medium">Evidence requirement</th>
+                    <th className="p-2 font-medium">Exact plan</th>
+                    <th className="p-2 font-medium">Observed outcome</th>
+                    <th className="p-2 font-medium">Run / locators</th>
+                    <th className="p-2 font-medium">Readiness / action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {commitment.requirements.map((requirement) => {
+                    const mission = commitment.events?.find(
+                      (event) => event.action === "missing_evidence_mission_created"
+                        && event.requirement_key === requirement.requirement.local_key,
+                    )
+                    return (
+                      <tr key={requirement.requirement.local_key} className="border-b last:border-0 align-top">
+                        <td className="p-2">
+                          <p className="font-medium">{requirement.requirement.local_key}</p>
+                          <p className="mt-1 text-muted-foreground">{requirement.requirement.description}</p>
+                          <Badge variant="outline" className="mt-1">{requirement.requirement.kind}</Badge>
+                        </td>
+                        <td className="p-2 font-mono text-[10px] text-muted-foreground">
+                          <p>{requirement.requirement.experiment_id ?? "missing exp_"}</p>
+                          <p>{requirement.requirement.plan_version_id ?? "missing epv_"}</p>
+                          {requirement.requirement.plan_version && <p>plan v{requirement.requirement.plan_version}</p>}
+                        </td>
+                        <td className="space-y-2 p-2">
+                          {requirement.observations.map((item) => (
+                            <div key={item.binding.observation_id} className="rounded bg-muted/40 p-1.5">
+                              <div className="flex flex-wrap gap-1">
+                                <Badge variant={item.binding.outcome === "fails_to_support" ? "destructive" : "outline"}>
+                                  {item.binding.outcome.replaceAll("_", " ")}
+                                </Badge>
+                                <Badge variant="outline">{item.binding.claim_effect.replaceAll("_", " ")}</Badge>
+                              </div>
+                              <p className="mt-1">{item.binding.interpretation}</p>
+                              {item.observation && <p className="mt-1 text-muted-foreground">direction: {item.observation.direction}</p>}
+                            </div>
+                          ))}
+                          {requirement.observations.length === 0 && <span className="text-muted-foreground">No observation bound</span>}
+                        </td>
+                        <td className="p-2 font-mono text-[10px] text-muted-foreground">
+                          {requirement.observations.map((item) => (
+                            <div key={item.binding.observation_id} className="mb-2">
+                              <p>{item.binding.observation_id}</p>
+                              {item.observation && <p>{item.observation.run_id} · {item.observation.run_status}</p>}
+                              {item.locators.map((locator) => <p key={locator.id}>{locator.id}</p>)}
+                            </div>
+                          ))}
+                        </td>
+                        <td className="p-2">
+                          <Badge variant={verdictVariant(requirement.verdict)}>{requirement.verdict}</Badge>
+                          {[...requirement.blockers, ...requirement.warnings].slice(0, 3).map((finding) => (
+                            <p key={finding} className="mt-1 text-[10px] text-amber-800 dark:text-amber-200">{finding}</p>
+                          ))}
+                          {mission ? (
+                            <p className="mt-2 font-mono text-[10px] text-muted-foreground">
+                              mission {mission.target_id} · {mission.mission_status ?? "created"}
+                            </p>
+                          ) : requirement.conclusive_observation_count === 0 && !commitment.legacy ? (
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              className="mt-2"
+                              disabled={pending || !workflow.artifact}
+                              onClick={() => void onCreateMission(commitment, requirement)}
+                            >
+                              Create evidence mission
+                            </Button>
+                          ) : null}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {!commitment.legacy && commitment.requirements.some(
+              (requirement) => requirement.conclusive_observation_count > 0,
+            ) && !prepared && (
+              <form
+                className="grid gap-2 rounded-md border bg-background p-2 md:grid-cols-2 xl:grid-cols-4"
+                onSubmit={(event) => void onPrepareResult(event, commitment)}
+              >
+                <Input name="result_unit_local_key" required placeholder="result-primary-effect" aria-label={`Result unit key for ${key}`} />
+                <Input name="location" required placeholder="sections/results.tex#primary" aria-label={`Result location for ${key}`} />
+                <Input name="title" required placeholder="Primary effect" aria-label={`Result title for ${key}`} />
+                <Input name="artifact_ref" required pattern="(art|fig)_.+" placeholder="art_... or fig_..." aria-label={`Result artifact for ${key}`} />
+                <div className="flex items-center justify-between gap-2 md:col-span-2 xl:col-span-4">
+                  <p className="text-[10px] text-muted-foreground">
+                    Creates a review proposal only; explicit semantic-patch apply remains separate.
+                  </p>
+                  <Button size="xs" type="submit" disabled={pending || !manuscriptReady}>
+                    <FilePenLine className="mr-1 h-3.5 w-3.5" /> Prepare result proposal
+                  </Button>
+                </div>
+              </form>
+            )}
+          </section>
+        )
+      })}
+      {workflow.events.length > 0 && (
+        <details className="rounded-md border p-2 text-xs">
+          <summary className="cursor-pointer font-medium">Audit {workflow.events.length} evaluation actions</summary>
+          <ol className="mt-2 space-y-1 text-muted-foreground">
+            {workflow.events.map((event) => (
+              <li key={event.id}>{event.action.replaceAll("_", " ")} · {event.commitment_key} · {event.target_id}</li>
             ))}
           </ol>
         </details>

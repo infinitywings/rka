@@ -167,6 +167,15 @@ async def test_delete_project_removes_planning_histories_in_dependency_order(db)
         ),
     )
     version_id = branch["effective_artifacts"][0]["version"]["id"]
+    await planning.create_branch(
+        PlanningBranchCreate(
+            name="child",
+            purpose="Exercise dependency-ordered branch deletion.",
+            parent_branch_id=branch["branch"]["id"],
+            created_by="pi",
+            reason="Create a child planning branch.",
+        )
+    )
     with pytest.raises(sqlite3.IntegrityError, match="immutable"):
         await db.execute(
             "DELETE FROM manuscript_planning_artifact_versions WHERE id = ?",
