@@ -4578,6 +4578,59 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["append_planning_artifact_version"],
         "notes": None,
     },
+    "planning_argument_workflow": {
+        "operation": "planning_argument_workflow",
+        "tool": "rka_query",
+        "category": "manuscript_planning",
+        "role_tag": "ANY",
+        "summary": "Read deterministic seed-to-contribution guidance and quick-reader slots.",
+        "signature": (
+            "rka_query(operation='planning_argument_workflow', *, project_id, id)"
+        ),
+        "required_fields": ["project_id", "id"],
+        "optional_fields": [],
+        "enums": {},
+        "examples": [{
+            "description": "Inspect stage blockers and the next useful decision.",
+            "call": {
+                "operation": "planning_argument_workflow",
+                "project_id": "prj_01ABC...",
+                "id": "mpb_01XYZ...",
+            },
+        }],
+        "related_operations": [
+            "planning_branches",
+            "append_planning_artifact_version",
+        ],
+        "notes": "This is a read-only projection and performs no LLM call or promotion.",
+    },
+    "planning_promotions": {
+        "operation": "planning_promotions",
+        "tool": "rka_query",
+        "category": "manuscript_planning",
+        "role_tag": "ANY",
+        "summary": "Read append-only RQ and contribution promotion lineage.",
+        "signature": (
+            "rka_query(operation='planning_promotions', *, project_id, id)"
+        ),
+        "required_fields": ["project_id", "id"],
+        "optional_fields": [],
+        "enums": {},
+        "examples": [{
+            "description": "Audit all promotion actions for one branch.",
+            "call": {
+                "operation": "planning_promotions",
+                "project_id": "prj_01ABC...",
+                "id": "mpb_01XYZ...",
+            },
+        }],
+        "related_operations": [
+            "promote_planning_rq",
+            "prepare_planning_contribution",
+            "ratify_planning_contribution",
+        ],
+        "notes": "The ledger is append-only and includes exact source artifact versions.",
+    },
     "create_planning_branch": {
         "operation": "create_planning_branch",
         "tool": "rka_execute",
@@ -4681,6 +4734,124 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "origin='ai_suggested' additionally requires provider, model, and context_hash. "
             "Use lifecycle='parked' for the recoverable parking lot."
         ),
+    },
+    "promote_planning_rq": {
+        "operation": "promote_planning_rq",
+        "tool": "rka_execute",
+        "category": "manuscript_planning",
+        "role_tag": "PI",
+        "summary": "Promote one selected, ready RQ candidate into a PI decision.",
+        "signature": (
+            "rka_execute(operation='promote_planning_rq', *, project_id, id, "
+            "expected_branch_revision, artifact_id, expected_artifact_version, "
+            "candidate_key, phase, reason, confirmed_by='pi')"
+        ),
+        "required_fields": [
+            "project_id", "id", "expected_branch_revision", "artifact_id",
+            "expected_artifact_version", "candidate_key", "phase", "reason",
+        ],
+        "optional_fields": ["confirmed_by"],
+        "enums": {},
+        "examples": [{
+            "description": "Ratify the selected research question as a decision.",
+            "call": {
+                "operation": "promote_planning_rq",
+                "project_id": "prj_01ABC...",
+                "id": "mpb_01XYZ...",
+                "expected_branch_revision": 7,
+                "artifact_id": "pla_01RQ...",
+                "expected_artifact_version": 2,
+                "candidate_key": "rq-main",
+                "phase": "paper_framing",
+                "reason": "PI selected this bounded question.",
+            },
+        }],
+        "related_operations": ["planning_argument_workflow", "planning_promotions"],
+        "notes": "Promotion is explicit, revision guarded, and rejects duplicate actions.",
+    },
+    "prepare_planning_contribution": {
+        "operation": "prepare_planning_contribution",
+        "tool": "rka_execute",
+        "category": "manuscript_planning",
+        "role_tag": "BRAIN",
+        "summary": "Prepare a semantic proposal for one selected contribution candidate.",
+        "signature": (
+            "rka_execute(operation='prepare_planning_contribution', *, project_id, id, "
+            "expected_branch_revision, artifact_id, expected_artifact_version, "
+            "candidate_key, manuscript_id, expected_manuscript_revision, reason, ...)"
+        ),
+        "required_fields": [
+            "project_id", "id", "expected_branch_revision", "artifact_id",
+            "expected_artifact_version", "candidate_key", "manuscript_id",
+            "expected_manuscript_revision", "reason",
+        ],
+        "optional_fields": ["claim_local_key", "actor"],
+        "enums": {},
+        "examples": [{
+            "description": "Prepare the exact candidate wording for review without applying it.",
+            "call": {
+                "operation": "prepare_planning_contribution",
+                "project_id": "prj_01ABC...",
+                "id": "mpb_01XYZ...",
+                "expected_branch_revision": 7,
+                "artifact_id": "pla_01RQ...",
+                "expected_artifact_version": 2,
+                "candidate_key": "contribution-main",
+                "manuscript_id": "man_01ABC...",
+                "expected_manuscript_revision": 3,
+                "reason": "Prepare exact wording for human review.",
+            },
+        }],
+        "related_operations": [
+            "semantic_patch_proposals",
+            "apply_semantic_patch_proposal",
+            "planning_promotions",
+        ],
+        "notes": "This action never mutates the manuscript; apply remains a separate review step.",
+    },
+    "ratify_planning_contribution": {
+        "operation": "ratify_planning_contribution",
+        "tool": "rka_execute",
+        "category": "manuscript_planning",
+        "role_tag": "PI",
+        "summary": "Ratify exact applied contribution wording against a PI decision.",
+        "signature": (
+            "rka_execute(operation='ratify_planning_contribution', *, project_id, id, "
+            "expected_branch_revision, artifact_id, expected_artifact_version, "
+            "candidate_key, manuscript_id, claim_ref, expected_manuscript_revision, "
+            "proposal_id, decision_id, reason, confirmed_by='pi')"
+        ),
+        "required_fields": [
+            "project_id", "id", "expected_branch_revision", "artifact_id",
+            "expected_artifact_version", "candidate_key", "manuscript_id",
+            "claim_ref", "expected_manuscript_revision", "proposal_id",
+            "decision_id", "reason",
+        ],
+        "optional_fields": ["confirmed_by"],
+        "enums": {},
+        "examples": [{
+            "description": "Bind the applied wording to an existing PI decision.",
+            "call": {
+                "operation": "ratify_planning_contribution",
+                "project_id": "prj_01ABC...",
+                "id": "mpb_01XYZ...",
+                "expected_branch_revision": 7,
+                "artifact_id": "pla_01RQ...",
+                "expected_artifact_version": 2,
+                "candidate_key": "contribution-main",
+                "manuscript_id": "man_01ABC...",
+                "claim_ref": "main-contribution",
+                "expected_manuscript_revision": 4,
+                "proposal_id": "spp_01ABC...",
+                "decision_id": "dec_01ABC...",
+                "reason": "PI ratified the exact applied wording.",
+            },
+        }],
+        "related_operations": [
+            "planning_promotions",
+            "ratify_manuscript_claim",
+        ],
+        "notes": "The selected candidate, applied claim version, and PI decision must agree exactly.",
     },
     # --- unified semantic patch proposals ------------------------------
     "semantic_patch_proposals": {

@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { ContextCapsule } from "@/components/workbench/ContextCapsule"
+import { ArgumentWorkflowPanel } from "@/components/workbench/ArgumentWorkflowPanel"
 import { PlanningBranchPanel } from "@/components/workbench/PlanningBranchPanel"
 import { SemanticPatchPanel } from "@/components/workbench/SemanticPatchPanel"
 import {
@@ -226,7 +227,7 @@ export default function ManuscriptWorkbench() {
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-semibold tracking-tight">Manuscript Workbench</h1>
-            <Badge variant="outline">M3 provisional planning</Badge>
+            <Badge variant="outline">M4 guided argument</Badge>
           </div>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
             Navigate the argument from seed to outline while preserving the distinction between RKA evidence,
@@ -304,6 +305,8 @@ export default function ManuscriptWorkbench() {
       />
 
       <PlanningBranchPanel manuscriptId={manuscriptId} />
+
+      <ArgumentWorkflowPanel manuscriptId={manuscriptId} context={context} />
 
       <SemanticPatchPanel manuscriptId={manuscriptId} context={context} />
 

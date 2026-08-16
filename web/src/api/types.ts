@@ -1473,6 +1473,119 @@ export interface PlanningBranchTransition {
   reason: string
 }
 
+export type PlanningWorkflowVerdict = "Ready" | "Needs review" | "Blocked" | "Exploratory"
+
+export interface PlanningWorkflowStage {
+  stage_type: PlanningStage
+  label: string
+  verdict: PlanningWorkflowVerdict
+  prerequisites: PlanningStage[]
+  dependents: PlanningStage[]
+  current_artifact: PlanningArtifact | null
+  candidate_artifacts: PlanningArtifact[]
+  blockers: string[]
+  warnings: string[]
+  upstream_conflicts: Array<Record<string, unknown>>
+  next_action: string
+}
+
+export interface PlanningQuickReaderSlot {
+  slot: string
+  text: string
+  authority: "provisional"
+  source: PlanningComparisonRef
+}
+
+export interface PlanningArgumentWorkflow {
+  schema_version: string
+  project_id: string
+  branch: PlanningBranch
+  stages: PlanningWorkflowStage[]
+  next_recommended_stage: PlanningStage | null
+  quick_reader: {
+    slots: PlanningQuickReaderSlot[]
+    canonical_contributions: Array<{
+      claim_id: string
+      local_key: string
+      version: number
+      exact_wording: string
+      ratified: boolean
+    }>
+    discrepancies: Array<Record<string, unknown>>
+    llm_generated: false
+  }
+  authority: {
+    planning: "provisional"
+    canonical_mutation: string
+    ratification: string
+    llm_at_view_time: false
+  }
+}
+
+export interface PlanningPromotionEvent {
+  id: string
+  project_id: string
+  branch_id: string
+  artifact_id: string
+  artifact_version_id: string
+  artifact_version: number
+  branch_revision: number
+  candidate_kind: "research_question" | "contribution"
+  candidate_key: string
+  action:
+    | "rq_promoted"
+    | "contribution_proposal_prepared"
+    | "contribution_proposal_applied"
+    | "contribution_ratified"
+  target_type: string
+  target_id: string
+  target_version: number | null
+  proposal_id: string | null
+  decision_id: string | null
+  proposal_status: SemanticPatchStatus | null
+  decision_status: string | null
+  actor: string
+  reason: string
+  details: Record<string, unknown>
+  created_at: string
+}
+
+export interface PlanningResearchQuestionPromotion {
+  expected_branch_revision: number
+  artifact_id: string
+  expected_artifact_version: number
+  candidate_key: string
+  phase: string
+  reason: string
+  confirmed_by?: "pi"
+}
+
+export interface PlanningContributionProposalPrepare {
+  expected_branch_revision: number
+  artifact_id: string
+  expected_artifact_version: number
+  candidate_key: string
+  manuscript_id: string
+  expected_manuscript_revision: number
+  claim_local_key?: string
+  reason: string
+  actor?: "pi" | "brain" | "executor" | "web_ui"
+}
+
+export interface PlanningContributionRatification {
+  expected_branch_revision: number
+  artifact_id: string
+  expected_artifact_version: number
+  candidate_key: string
+  manuscript_id: string
+  claim_ref: string
+  expected_manuscript_revision: number
+  proposal_id: string
+  decision_id: string
+  reason: string
+  confirmed_by?: "pi"
+}
+
 // ---- Unified semantic edit proposals ----
 
 export type SemanticPatchStatus =

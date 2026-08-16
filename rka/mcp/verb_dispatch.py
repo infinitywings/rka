@@ -925,6 +925,8 @@ _QUERY_DISPATCH: dict[str, str] = {
     "planning_resume": "rka_resume_planning",
     "planning_compare": "rka_compare_planning_branches",
     "planning_artifact_versions": "rka_get_planning_artifact_versions",
+    "planning_argument_workflow": "rka_get_planning_argument_workflow",
+    "planning_promotions": "rka_get_planning_promotions",
     "semantic_patch_proposals": "rka_get_semantic_patch_proposals",
     "semantic_patch_schema": "rka_get_semantic_patch_schema",
     # provenance / multi-hop
@@ -1274,6 +1276,16 @@ async def dispatch_query(
         if not id:
             return _err("missing_field", "planning_artifact_versions requires id")
         return await legacy(artifact_id=id, project_id=project_id)
+
+    if scope == "planning_argument_workflow":
+        if not id:
+            return _err("missing_field", "planning_argument_workflow requires id")
+        return await legacy(branch_id=id, project_id=project_id)
+
+    if scope == "planning_promotions":
+        if not id:
+            return _err("missing_field", "planning_promotions requires id")
+        return await legacy(branch_id=id, project_id=project_id)
 
     if scope == "semantic_patch_proposals":
         return await legacy(
@@ -2024,6 +2036,9 @@ EXECUTE_OPERATIONS = (
     "create_planning_branch",
     "transition_planning_branch",
     "append_planning_artifact_version",
+    "promote_planning_rq",
+    "prepare_planning_contribution",
+    "ratify_planning_contribution",
     "prepare_semantic_patch_context",
     "create_semantic_patch_proposal",
     "apply_semantic_patch_proposal",
@@ -2274,6 +2289,27 @@ async def dispatch_execute(
 
     if op == "append_planning_artifact_version":
         return await _legacy("rka_append_planning_artifact_version")(
+            branch_id=kw.pop("id", None),
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "promote_planning_rq":
+        return await _legacy("rka_promote_planning_research_question")(
+            branch_id=kw.pop("id", None),
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "prepare_planning_contribution":
+        return await _legacy("rka_prepare_planning_contribution")(
+            branch_id=kw.pop("id", None),
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "ratify_planning_contribution":
+        return await _legacy("rka_ratify_planning_contribution")(
             branch_id=kw.pop("id", None),
             payload=kw,
             project_id=project_id,

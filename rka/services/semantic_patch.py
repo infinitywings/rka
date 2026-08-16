@@ -234,7 +234,14 @@ class SemanticPatchService(BaseService):
         return result
 
     async def create_proposal(self, data: SemanticPatchProposalCreate) -> dict[str, Any]:
-        operations = [operation.model_dump(mode="json", exclude_unset=True) for operation in data.operations]
+        operations = []
+        for operation in data.operations:
+            serialized = operation.model_dump(mode="json", exclude_unset=True)
+            # Pydantic omits a defaulted discriminator when callers construct a
+            # typed operation object instead of validating a raw dictionary.
+            # Persist it unconditionally so every proposal can be parsed later.
+            serialized["operation"] = operation.operation
+            operations.append(serialized)
         proposal_id = generate_id("semantic_patch_proposal")
         async with self.db.transaction():
             # Preview and insert share one BEGIN IMMEDIATE snapshot, so the
@@ -421,6 +428,13 @@ class SemanticPatchService(BaseService):
                     actor=data.actor,
                     reason=data.reason,
                     details={"results": results},
+                )
+                await ManuscriptPlanningService(
+                    self.db, project_id=self.project_id
+                ).record_contribution_application(
+                    proposal_id,
+                    actor=data.actor,
+                    reason=data.reason,
                 )
         # Raise only after committing the conflict transition. Raising inside
         # the transaction would roll back the evidence that explains staleness.
@@ -886,12 +900,9 @@ class SemanticPatchService(BaseService):
         transition: SemanticPatchProposalTransition,
     ) -> dict[str, Any]:
         if isinstance(operation, PlanningArtifactUpsertOperation):
-            append = operation.append.model_copy(
-                update={"created_by": transition.actor, "reason": transition.reason}
-            )
             result = await ManuscriptPlanningService(
                 self.db, project_id=self.project_id
-            ).append_artifact_version(operation.branch_id, append)
+            ).append_artifact_version(operation.branch_id, operation.append)
             return {"operation": operation.operation, "branch_revision": result["branch"]["revision"]}
         manuscript = NativeManuscriptService(self.db, project_id=self.project_id)
         if isinstance(operation, ManuscriptMetadataUpdateOperation):

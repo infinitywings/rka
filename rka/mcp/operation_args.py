@@ -60,6 +60,9 @@ from rka.models.planning import (
     PlanningArtifactVersionAppend,
     PlanningBranchCreate,
     PlanningBranchTransition,
+    PlanningContributionProposalPrepare,
+    PlanningContributionRatification,
+    PlanningResearchQuestionPromotion,
 )
 from rka.models.semantic_patch import (
     ContextManifestCreate,
@@ -576,6 +579,20 @@ class QueryPlanningArtifactVersionsArgs(ProjectScopedArgs):
 
     operation: Literal["planning_artifact_versions"] = "planning_artifact_versions"
     id: Annotated[str, Field(min_length=1, description="Canonical pla_ id.")]
+
+
+class QueryPlanningArgumentWorkflowArgs(ProjectScopedArgs):
+    """[ANY] Read deterministic seed-to-contribution guidance for one branch."""
+
+    operation: Literal["planning_argument_workflow"] = "planning_argument_workflow"
+    id: Annotated[str, Field(min_length=1, description="Canonical mpb_ id.")]
+
+
+class QueryPlanningPromotionsArgs(ProjectScopedArgs):
+    """[ANY] Read append-only promotion lineage for one planning branch."""
+
+    operation: Literal["planning_promotions"] = "planning_promotions"
+    id: Annotated[str, Field(min_length=1, description="Canonical mpb_ id.")]
 
 
 class QuerySemanticPatchProposalsArgs(ProjectScopedArgs):
@@ -1257,6 +1274,8 @@ QueryArgsUnion = Annotated[
         QueryPlanningResumeArgs,
         QueryPlanningCompareArgs,
         QueryPlanningArtifactVersionsArgs,
+        QueryPlanningArgumentWorkflowArgs,
+        QueryPlanningPromotionsArgs,
         QuerySemanticPatchProposalsArgs,
         QuerySemanticPatchSchemaArgs,
         QueryManuscriptArgs,
@@ -2604,6 +2623,37 @@ class AppendPlanningArtifactVersionArgs(
     created_by: Annotated[PlanningActorLit, Field(description="Version author.")]
 
 
+class PromotePlanningResearchQuestionArgs(
+    ProjectScopedArgs, PlanningResearchQuestionPromotion
+):
+    """[PI] Promote one selected RQ candidate into a PI decision."""
+
+    operation: Literal["promote_planning_rq"] = "promote_planning_rq"
+    id: Annotated[str, Field(min_length=1, description="Canonical mpb_ branch id.")]
+
+
+class PreparePlanningContributionArgs(
+    ProjectScopedArgs, PlanningContributionProposalPrepare
+):
+    """[BRAIN/EXECUTOR/PI] Prepare, but never apply, a contribution proposal."""
+
+    operation: Literal["prepare_planning_contribution"] = (
+        "prepare_planning_contribution"
+    )
+    id: Annotated[str, Field(min_length=1, description="Canonical mpb_ branch id.")]
+
+
+class RatifyPlanningContributionArgs(
+    ProjectScopedArgs, PlanningContributionRatification
+):
+    """[PI] Ratify exact applied contribution wording against a PI decision."""
+
+    operation: Literal["ratify_planning_contribution"] = (
+        "ratify_planning_contribution"
+    )
+    id: Annotated[str, Field(min_length=1, description="Canonical mpb_ branch id.")]
+
+
 class PrepareSemanticPatchContextArgs(ProjectScopedArgs, ContextManifestCreate):
     """[ANY] Persist the exact context disclosure before an AI call."""
 
@@ -2877,6 +2927,9 @@ BatchBExecuteUnion = Annotated[
         CreatePlanningBranchArgs,
         TransitionPlanningBranchArgs,
         AppendPlanningArtifactVersionArgs,
+        PromotePlanningResearchQuestionArgs,
+        PreparePlanningContributionArgs,
+        RatifyPlanningContributionArgs,
         PrepareSemanticPatchContextArgs,
         CreateSemanticPatchProposalArgs,
         ApplySemanticPatchProposalArgs,
@@ -4765,6 +4818,9 @@ ExecuteArgsUnion = Annotated[
         CreatePlanningBranchArgs,
         TransitionPlanningBranchArgs,
         AppendPlanningArtifactVersionArgs,
+        PromotePlanningResearchQuestionArgs,
+        PreparePlanningContributionArgs,
+        RatifyPlanningContributionArgs,
         PrepareSemanticPatchContextArgs,
         CreateSemanticPatchProposalArgs,
         ApplySemanticPatchProposalArgs,
@@ -4846,6 +4902,8 @@ __all__ = [
     "QueryPlanningResumeArgs",
     "QueryPlanningCompareArgs",
     "QueryPlanningArtifactVersionsArgs",
+    "QueryPlanningArgumentWorkflowArgs",
+    "QueryPlanningPromotionsArgs",
     "QuerySemanticPatchProposalsArgs",
     "QuerySemanticPatchSchemaArgs",
     "QueryManuscriptArgs",
@@ -4920,6 +4978,9 @@ __all__ = [
     "CreatePlanningBranchArgs",
     "TransitionPlanningBranchArgs",
     "AppendPlanningArtifactVersionArgs",
+    "PromotePlanningResearchQuestionArgs",
+    "PreparePlanningContributionArgs",
+    "RatifyPlanningContributionArgs",
     "PrepareSemanticPatchContextArgs",
     "CreateSemanticPatchProposalArgs",
     "ApplySemanticPatchProposalArgs",

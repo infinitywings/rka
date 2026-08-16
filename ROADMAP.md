@@ -17,14 +17,20 @@ The provisional planning and frozen-branch boundary is recorded in
 [ADR 0005](docs/adr/0005-versioned-manuscript-planning-branches.md).
 The unified human/AI proposal, conflict, and provider boundary is recorded in
 [ADR 0006](docs/adr/0006-unified-semantic-patch-proposals.md).
+The seed-to-contribution guidance, candidate identity, promotion, and exact PI
+ratification boundary is recorded in
+[ADR 0007](docs/adr/0007-seed-to-contribution-guidance-and-promotion.md).
 
 The roadmap is ordered by dependency, not by invented delivery dates. Every
 milestone must satisfy its exit gate before dependent work is treated as ready.
 
 ## Now
 
-**M0, M1, M2, and M3 / PR 5 are complete on `main`. M3 / PR 6 (issue #57),
-unified semantic patch proposals, is the current dependency-ordered target.**
+**M0 through M3 are complete on `main`. M4 / PR 7 (issue #58), the
+seed-through-contribution guided workflow, has satisfied its feature-branch
+release gate in draft PR [#78](https://github.com/infinitywings/rka/pull/78).**
+Review and merge PR 7 before moving the `priority: next` label to M4 / PR 8,
+the evaluation contract and results trace.
 The choice-first Writer delta is reconciled, the authority and AI boundary is
 recorded in ADR 0001, the read-only workbench has passed its real-project exit
 gate, and first-class experiment/run/observation/evidence-locator semantics
@@ -87,6 +93,14 @@ mutates its target before an explicit apply, and AI proposals fail closed when
 they exceed their disclosed target, evidence, or revision boundary. The
 validation record is
 [`2026-08-15-workbench-m3-pr6-exit-evidence.md`](docs/superpowers/specs/2026-08-15-workbench-m3-pr6-exit-evidence.md).
+PR 6 merged in [#77](https://github.com/infinitywings/rka/pull/77). ADR 0007
+now freezes the PR 7 stage, candidate-identity, promotion-ledger,
+semantic-proposal, and exact PI-ratification contract. PR 7 now implements that
+contract and has passed fresh-database plus disposable Invarllm browser gates,
+including exact upstream invalidation, RQ promotion, contribution proposal and
+application, exact-text PI ratification, and restart/resume. The validation
+record is
+[`2026-08-15-workbench-m4-pr7-exit-evidence.md`](docs/superpowers/specs/2026-08-15-workbench-m4-pr7-exit-evidence.md).
 
 ## Dependency map
 

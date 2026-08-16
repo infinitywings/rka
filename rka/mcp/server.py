@@ -4895,6 +4895,34 @@ async def rka_get_planning_artifact_versions(
 
 
 @tool(category="manuscript_planning")
+async def rka_get_planning_argument_workflow(
+    branch_id: str,
+    *,
+    project_id: str,
+) -> str:
+    """Read deterministic seed-to-contribution guidance for one branch."""
+    async with _client(project_id) as c:
+        response = await c.get(
+            f"/api/planning/branches/{branch_id}/argument-workflow"
+        )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="manuscript_planning")
+async def rka_get_planning_promotions(
+    branch_id: str,
+    *,
+    project_id: str,
+) -> str:
+    """Read append-only candidate promotion lineage for one branch."""
+    async with _client(project_id) as c:
+        response = await c.get(f"/api/planning/branches/{branch_id}/promotions")
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="manuscript_planning")
 async def rka_create_planning_branch(payload: dict, *, project_id: str) -> str:
     """Create a project- or manuscript-scoped planning branch."""
     async with _client(project_id) as c:
@@ -4931,6 +4959,57 @@ async def rka_append_planning_artifact_version(
     async with _client(project_id) as c:
         response = await c.post(
             f"/api/planning/branches/{branch_id}/artifacts",
+            json=payload,
+        )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="manuscript_planning")
+async def rka_promote_planning_research_question(
+    branch_id: str,
+    payload: dict,
+    *,
+    project_id: str,
+) -> str:
+    """Promote one selected RQ candidate into a PI decision."""
+    async with _client(project_id) as c:
+        response = await c.post(
+            f"/api/planning/branches/{branch_id}/promote-rq",
+            json=payload,
+        )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="manuscript_planning")
+async def rka_prepare_planning_contribution(
+    branch_id: str,
+    payload: dict,
+    *,
+    project_id: str,
+) -> str:
+    """Prepare a guarded semantic proposal for one selected contribution."""
+    async with _client(project_id) as c:
+        response = await c.post(
+            f"/api/planning/branches/{branch_id}/prepare-contribution",
+            json=payload,
+        )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
+@tool(category="manuscript_planning")
+async def rka_ratify_planning_contribution(
+    branch_id: str,
+    payload: dict,
+    *,
+    project_id: str,
+) -> str:
+    """Ratify exact applied contribution wording against a PI decision."""
+    async with _client(project_id) as c:
+        response = await c.post(
+            f"/api/planning/branches/{branch_id}/ratify-contribution",
             json=payload,
         )
         _raise_with_detail(response)

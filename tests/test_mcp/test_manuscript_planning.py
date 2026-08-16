@@ -64,6 +64,22 @@ async def test_planning_reads_route_exact_context_and_compare(planning_requests)
         }
     )
     await dispatch_query_typed(compared)
+    workflow = TypeAdapter(QueryArgsUnion).validate_python(
+        {
+            "operation": "planning_argument_workflow",
+            "project_id": "prj_test",
+            "id": "mpb_01BASE",
+        }
+    )
+    await dispatch_query_typed(workflow)
+    promotions = TypeAdapter(QueryArgsUnion).validate_python(
+        {
+            "operation": "planning_promotions",
+            "project_id": "prj_test",
+            "id": "mpb_01BASE",
+        }
+    )
+    await dispatch_query_typed(promotions)
     planning_only = [
         request for request in planning_requests if request["path"].startswith("/api/planning/")
     ]
@@ -81,6 +97,18 @@ async def test_planning_reads_route_exact_context_and_compare(planning_requests)
                 "base_branch_id": "mpb_01BASE",
                 "other_branch_id": "mpb_01OTHER",
             },
+            "body": None,
+        },
+        {
+            "method": "GET",
+            "path": "/api/planning/branches/mpb_01BASE/argument-workflow",
+            "query": {},
+            "body": None,
+        },
+        {
+            "method": "GET",
+            "path": "/api/planning/branches/mpb_01BASE/promotions",
+            "query": {},
             "body": None,
         },
     ]
@@ -115,6 +143,20 @@ async def test_planning_write_routes_preserve_typed_payload(planning_requests) -
         }
     )
     await dispatch_execute_typed(appended)
+    promoted = TypeAdapter(ExecuteArgsUnion).validate_python(
+        {
+            "operation": "promote_planning_rq",
+            "project_id": "prj_test",
+            "id": "mpb_01XYZ",
+            "expected_branch_revision": 2,
+            "artifact_id": "pla_01PORTFOLIO",
+            "expected_artifact_version": 1,
+            "candidate_key": "rq-main",
+            "phase": "paper_framing",
+            "reason": "PI selected the bounded RQ.",
+        }
+    )
+    await dispatch_execute_typed(promoted)
     planning_only = [
         request for request in planning_requests if request["path"].startswith("/api/planning/")
     ]
@@ -125,6 +167,8 @@ async def test_planning_write_routes_preserve_typed_payload(planning_requests) -
         "insight": "Treat timing as composable.",
         "audience": [],
     }
+    assert planning_only[2]["path"] == "/api/planning/branches/mpb_01XYZ/promote-rq"
+    assert planning_only[2]["body"]["candidate_key"] == "rq-main"
 
 
 def test_planning_operations_are_complete_and_ai_provenance_is_closed() -> None:
@@ -133,11 +177,16 @@ def test_planning_operations_are_complete_and_ai_provenance_is_closed() -> None:
         "planning_resume",
         "planning_compare",
         "planning_artifact_versions",
+        "planning_argument_workflow",
+        "planning_promotions",
     }
     execute_ops = {
         "create_planning_branch",
         "transition_planning_branch",
         "append_planning_artifact_version",
+        "promote_planning_rq",
+        "prepare_planning_contribution",
+        "ratify_planning_contribution",
     }
     assert query_ops <= set(_QUERY_DISPATCH)
     assert execute_ops <= set(EXECUTE_OPERATIONS)
