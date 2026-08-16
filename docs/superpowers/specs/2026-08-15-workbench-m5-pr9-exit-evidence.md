@@ -3,7 +3,7 @@
 - Date: 2026-08-15
 - Baseline: `a49475b8cefadeea8486023fa010ad36841a8979`
 - Branch: `agent/m5-progressive-outline`
-- Pull request: pending publication
+- Pull request: [#80](https://github.com/infinitywings/rka/pull/80)
 - Scope: progressive L2-L5 manuscript outlines, unit writing rationale,
   evidence-linked edit/expand/condense/reorder proposals, and deterministic
   workbench navigation
@@ -103,8 +103,8 @@ retained only the original disposable project and an empty foreign-key check.
 
 ## Exit decision
 
-PR 9 satisfies its implementation and feature-branch verification gates. Its
-remaining gates are publication as a draft pull request, GitHub CI, and human
-review. PR 10 must remain dependent on PR 9 review and merge; it owns draft
-prose editing and source synchronization rather than expanding this outline
-contract implicitly.
+PR 9 satisfies its implementation and feature-branch verification gates and is
+published for review in draft PR #80. Its remaining gates are GitHub CI and
+human review. PR 10 must remain dependent on PR 9 review and merge; it owns
+draft prose editing and source synchronization rather than expanding this
+outline contract implicitly.

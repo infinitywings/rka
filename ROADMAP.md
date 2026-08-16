@@ -46,6 +46,8 @@ implementation plan is
 Its migration, REST/MCP, proposal, workbench, restart, and knowledge-pack gates
 are recorded in
 [`2026-08-15-workbench-m5-pr9-exit-evidence.md`](docs/superpowers/specs/2026-08-15-workbench-m5-pr9-exit-evidence.md).
+The implementation is published for review in draft PR
+[#80](https://github.com/infinitywings/rka/pull/80).
 PR 10 remains dependent on PR 9 review and merge.
 The choice-first Writer delta is reconciled, the authority and AI boundary is
 recorded in ADR 0001, the read-only workbench has passed its real-project exit
