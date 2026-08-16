@@ -345,6 +345,7 @@ ClaimEvidenceRoleLit = Literal["support", "qualifier", "counterevidence", "conte
 
 # Provisional manuscript-planning branches (rka/models/planning.py).
 PlanningActorLit = Literal["pi", "brain", "executor", "web_ui", "llm", "import"]
+PIConfirmationLit = Literal["pi"]
 PlanningBranchStateLit = Literal["active", "selected", "archived", "superseded"]
 PlanningStageLit = Literal[
     "seed",

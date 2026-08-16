@@ -13,7 +13,10 @@ from rka.models.planning import (
     PlanningArtifactVersionAppend,
     PlanningBranchCreate,
     PlanningBranchTransition,
+    PlanningContributionProposalPrepare,
+    PlanningContributionRatification,
     PlanningEvidenceBindingInput,
+    PlanningResearchQuestionPromotion,
     parse_json_field,
     validate_planning_payload,
 )
@@ -22,6 +25,40 @@ from rka.services.base import BaseService, _now
 
 PLANNING_CONTEXT_SCHEMA_VERSION = "rka.manuscript-planning/v1"
 PLANNING_COMPARISON_SCHEMA_VERSION = "rka.manuscript-planning-comparison/v1"
+ARGUMENT_WORKFLOW_SCHEMA_VERSION = "rka.seed-to-contribution-workflow/v1"
+
+ARGUMENT_STAGE_ORDER = (
+    "seed",
+    "paragraph_spine",
+    "problem_scope",
+    "landscape_gap",
+    "response_mechanism",
+    "challenge_innovation",
+    "rq_contribution",
+)
+_ARGUMENT_STAGE_LABELS = {
+    "seed": "Seed insight",
+    "paragraph_spine": "Paragraph spine",
+    "problem_scope": "Problem and scope",
+    "landscape_gap": "Literature, SOTA, and gap",
+    "response_mechanism": "Insight and response",
+    "challenge_innovation": "Challenges and innovations",
+    "rq_contribution": "Research questions and contributions",
+}
+_ARGUMENT_STAGE_PREREQUISITES = {
+    "seed": (),
+    "paragraph_spine": ("seed",),
+    "problem_scope": ("seed",),
+    "landscape_gap": ("problem_scope",),
+    "response_mechanism": ("seed", "landscape_gap"),
+    "challenge_innovation": ("response_mechanism",),
+    "rq_contribution": (
+        "problem_scope",
+        "landscape_gap",
+        "response_mechanism",
+        "challenge_innovation",
+    ),
+}
 
 
 class PlanningNotFoundError(ValueError):
@@ -469,6 +506,872 @@ class ManuscriptPlanningService(BaseService):
                 for status in ("added", "removed", "changed", "unchanged")
             },
             "changes": changes,
+        }
+
+    async def argument_workflow(self, branch_id: str) -> dict[str, Any]:
+        """Project one branch into deterministic seed-to-contribution guidance.
+
+        This is a read-only view over immutable planning heads. It never calls
+        a model and never promotes a planning selection into canonical RKA
+        semantics.
+        """
+        branch = await self._require_branch(branch_id)
+        artifacts = await self._effective_artifacts(branch_id)
+        by_stage = {
+            stage: [item for item in artifacts if item["stage_type"] == stage]
+            for stage in ARGUMENT_STAGE_ORDER
+        }
+        stage_views: list[dict[str, Any]] = []
+        verdicts: dict[str, str] = {}
+        selected_heads: dict[str, dict[str, Any]] = {}
+
+        for stage in ARGUMENT_STAGE_ORDER:
+            candidates = [
+                item
+                for item in by_stage[stage]
+                if item["version"]["lifecycle"]
+                not in {"parked", "superseded", "archived"}
+            ]
+            selected = [
+                item for item in candidates if item["version"]["lifecycle"] == "selected"
+            ]
+            current = selected[0] if len(selected) == 1 else (
+                candidates[0] if len(candidates) == 1 else None
+            )
+            blockers: list[str] = []
+            warnings: list[str] = []
+            prerequisites = list(_ARGUMENT_STAGE_PREREQUISITES[stage])
+            missing_prerequisites = [
+                prerequisite
+                for prerequisite in prerequisites
+                if verdicts.get(prerequisite) != "Ready"
+            ]
+            if missing_prerequisites:
+                blockers.append(
+                    "Prerequisite stages are not ready: "
+                    + ", ".join(missing_prerequisites)
+                )
+            if len(selected) > 1:
+                blockers.append("Multiple artifacts are marked selected for this stage")
+            elif current is None:
+                if candidates:
+                    warnings.append("Choose or combine one candidate before continuing")
+                else:
+                    blockers.append("No planning artifact has been captured for this stage")
+
+            upstream_conflicts: list[dict[str, Any]] = []
+            if current is not None:
+                version = current["version"]
+                if version["readiness_state"] == "blocked":
+                    blockers.append("The selected artifact is explicitly blocked")
+                if version["readiness_missing"]:
+                    warnings.extend(version["readiness_missing"])
+                if version["unresolved_items"]:
+                    warnings.extend(version["unresolved_items"])
+                if prerequisites:
+                    upstream = version["payload"].get("upstream_versions") or []
+                    if not upstream:
+                        warnings.append("Upstream planning heads have not been pinned")
+                    else:
+                        for reference in upstream:
+                            head = selected_heads.get(str(reference["stage_type"]))
+                            if head is None:
+                                upstream_conflicts.append(
+                                    {"reference": reference, "current": None}
+                                )
+                                continue
+                            head_version = head["version"]
+                            if (
+                                reference["artifact_id"] != head["id"]
+                                or reference["version_id"] != head_version["id"]
+                                or int(reference["version"]) != int(head_version["version"])
+                            ):
+                                upstream_conflicts.append(
+                                    {
+                                        "reference": reference,
+                                        "current": self._comparison_ref(head),
+                                    }
+                                )
+                    if upstream_conflicts:
+                        blockers.append("One or more reviewed upstream artifact heads changed")
+                warnings.extend(self._stage_contract_findings(stage, version))
+
+            if blockers:
+                verdict = "Blocked"
+            elif current is None:
+                verdict = "Exploratory"
+            elif (
+                current["version"]["lifecycle"] == "selected"
+                and current["version"]["readiness_state"] == "ready"
+                and not warnings
+            ):
+                verdict = "Ready"
+            else:
+                verdict = "Needs review"
+            verdicts[stage] = verdict
+            if current is not None and current["version"]["lifecycle"] == "selected":
+                selected_heads[stage] = current
+            stage_views.append(
+                {
+                    "stage_type": stage,
+                    "label": _ARGUMENT_STAGE_LABELS[stage],
+                    "verdict": verdict,
+                    "prerequisites": prerequisites,
+                    "dependents": [
+                        candidate_stage
+                        for candidate_stage, candidate_prerequisites
+                        in _ARGUMENT_STAGE_PREREQUISITES.items()
+                        if stage in candidate_prerequisites
+                    ],
+                    "current_artifact": current,
+                    "candidate_artifacts": candidates,
+                    "blockers": sorted(set(blockers)),
+                    "warnings": sorted(set(warnings)),
+                    "upstream_conflicts": upstream_conflicts,
+                    "next_action": self._stage_next_action(stage, verdict, current),
+                }
+            )
+
+        next_stage = next(
+            (item for item in stage_views if item["verdict"] != "Ready"),
+            None,
+        )
+        return {
+            "schema_version": ARGUMENT_WORKFLOW_SCHEMA_VERSION,
+            "project_id": self.project_id,
+            "branch": branch,
+            "stages": stage_views,
+            "next_recommended_stage": (
+                next_stage["stage_type"] if next_stage is not None else None
+            ),
+            "quick_reader": await self._quick_reader_projection(
+                branch=branch,
+                selected_heads=selected_heads,
+            ),
+            "authority": {
+                "planning": "provisional",
+                "canonical_mutation": "semantic_patch_then_explicit_apply",
+                "ratification": "separate_exact_pi_action",
+                "llm_at_view_time": False,
+            },
+        }
+
+    async def list_promotion_events(
+        self,
+        branch_id: str,
+    ) -> list[dict[str, Any]]:
+        await self._require_branch(branch_id)
+        rows = await self.db.fetchall(
+            """SELECT event.*, proposal.status AS proposal_status,
+                      decision.status AS decision_status
+               FROM manuscript_planning_promotion_events AS event
+               LEFT JOIN semantic_patch_proposals AS proposal
+                 ON proposal.id = event.proposal_id
+                AND proposal.project_id = event.project_id
+               LEFT JOIN decisions AS decision
+                 ON decision.id = event.decision_id
+                AND decision.project_id = event.project_id
+               WHERE event.project_id = ? AND event.branch_id = ?
+               ORDER BY event.created_at, event.id""",
+            [self.project_id, branch_id],
+        )
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["details"] = parse_json_field(item.get("details"), {})
+            result.append(item)
+        return result
+
+    async def promote_research_question(
+        self,
+        branch_id: str,
+        data: PlanningResearchQuestionPromotion,
+    ) -> dict[str, Any]:
+        from rka.models.decision import DecisionCreate
+        from rka.services.decisions import DecisionService
+
+        async with self.db.transaction():
+            branch, artifact, candidate = await self._require_selected_candidate(
+                branch_id=branch_id,
+                expected_branch_revision=data.expected_branch_revision,
+                artifact_id=data.artifact_id,
+                expected_artifact_version=data.expected_artifact_version,
+                candidate_kind="research_question",
+                candidate_key=data.candidate_key,
+            )
+            await self._assert_no_promotion_action(
+                artifact_version_id=str(artifact["version"]["id"]),
+                candidate_kind="research_question",
+                candidate_key=data.candidate_key,
+                action="rq_promoted",
+            )
+            bindings = artifact["version"]["evidence_bindings"]
+            decision = await DecisionService(
+                self.db, project_id=self.project_id
+            ).create(
+                DecisionCreate(
+                    question=str(candidate["question"]),
+                    chosen=str(candidate["question"]),
+                    rationale=(
+                        f"{candidate['rationale']}\n\n"
+                        f"Scope: {candidate['scope']}\n\n"
+                        f"Promotion reason: {data.reason}"
+                    ),
+                    decided_by="pi",
+                    phase=data.phase,
+                    related_literature=sorted(
+                        {
+                            str(item["entity_id"])
+                            for item in bindings
+                            if item["entity_type"] == "literature"
+                        }
+                    ),
+                    related_journal=sorted(
+                        {
+                            str(item["entity_id"])
+                            for item in bindings
+                            if item["entity_type"] == "journal"
+                        }
+                    ),
+                    kind="research_question",
+                    tags=[
+                        "workbench:rq",
+                        f"planning-version:{artifact['version']['id']}",
+                        f"candidate:{data.candidate_key}",
+                    ],
+                    assumptions=candidate.get("assumptions") or None,
+                ),
+                actor="pi",
+            )
+            event = await self._insert_promotion_event(
+                branch=branch,
+                artifact=artifact,
+                candidate_kind="research_question",
+                candidate_key=data.candidate_key,
+                action="rq_promoted",
+                target_type="decision",
+                target_id=decision.id,
+                target_version=None,
+                proposal_id=None,
+                decision_id=decision.id,
+                actor="pi",
+                reason=data.reason,
+                details={"scope": candidate["scope"]},
+            )
+        return {"decision": decision.model_dump(), "promotion_event": event}
+
+    async def prepare_contribution_proposal(
+        self,
+        branch_id: str,
+        data: PlanningContributionProposalPrepare,
+    ) -> dict[str, Any]:
+        from rka.models.semantic_patch import (
+            ArgumentSpineReplaceOperation,
+            SemanticPatchProposalCreate,
+        )
+        from rka.services.manuscript_native import NativeManuscriptService
+        from rka.services.semantic_patch import SemanticPatchService
+
+        async with self.db.transaction():
+            branch, artifact, candidate = await self._require_selected_candidate(
+                branch_id=branch_id,
+                expected_branch_revision=data.expected_branch_revision,
+                artifact_id=data.artifact_id,
+                expected_artifact_version=data.expected_artifact_version,
+                candidate_kind="contribution",
+                candidate_key=data.candidate_key,
+            )
+            if branch.get("manuscript_id") and branch["manuscript_id"] != data.manuscript_id:
+                raise ValueError("contribution target must match the branch manuscript context")
+            await self._assert_no_promotion_action(
+                artifact_version_id=str(artifact["version"]["id"]),
+                candidate_kind="contribution",
+                candidate_key=data.candidate_key,
+                action="contribution_proposal_prepared",
+            )
+            manuscript = NativeManuscriptService(self.db, project_id=self.project_id)
+            current = await manuscript.get(data.manuscript_id)
+            if current is None:
+                raise ValueError(f"manuscript {data.manuscript_id!r} not found")
+            if int(current.revision) != data.expected_manuscript_revision:
+                raise PlanningConflictError(
+                    "manuscript revision changed before contribution proposal preparation"
+                )
+            spine = await manuscript.export_spine_projection(data.manuscript_id)
+            claims = list(spine.get("claims") or [])
+            units = list(spine.get("units") or [])
+            claim_local_key = data.claim_local_key or str(candidate["local_key"])
+            known_unit_keys = {
+                str(unit.get("local_key") or unit.get("unit_id"))
+                for unit in units
+                if unit.get("local_key") or unit.get("unit_id")
+            }
+            claim_spec = {
+                "local_key": claim_local_key,
+                "kind": candidate["contribution_type"],
+                "state": "active",
+                "exact_wording": candidate["exact_wording"],
+                "allowed_wording": candidate["allowed_wording"],
+                "prohibited_wording": candidate["prohibited_wording"],
+                "evidence": {
+                    "support": candidate.get("support_ids", []),
+                    "qualifier": candidate.get("qualifier_ids", []),
+                    "counterevidence": candidate.get("counterevidence_ids", []),
+                },
+                "unit_links": [
+                    {"unit_key": key, "relationship": "advances"}
+                    for key in candidate.get("intended_units", [])
+                    if key in known_unit_keys
+                ],
+            }
+            replaced = False
+            next_claims = []
+            for claim in claims:
+                if (claim.get("local_key") or claim.get("claim_id")) == claim_local_key:
+                    next_claims.append(claim_spec)
+                    replaced = True
+                else:
+                    next_claims.append(claim)
+            if not replaced:
+                next_claims.append(claim_spec)
+            proposal = await SemanticPatchService(
+                self.db, project_id=self.project_id
+            ).create_proposal(
+                SemanticPatchProposalCreate(
+                    origin="human",
+                    intent=f"Promote contribution candidate {data.candidate_key}.",
+                    reason=data.reason,
+                    created_by=data.actor,
+                    operations=[
+                        ArgumentSpineReplaceOperation(
+                            manuscript_id=data.manuscript_id,
+                            expected_revision=data.expected_manuscript_revision,
+                            spine={"claims": next_claims, "units": units},
+                        )
+                    ],
+                )
+            )
+            event = await self._insert_promotion_event(
+                branch=branch,
+                artifact=artifact,
+                candidate_kind="contribution",
+                candidate_key=data.candidate_key,
+                action="contribution_proposal_prepared",
+                target_type="semantic_patch_proposal",
+                target_id=str(proposal["id"]),
+                target_version=None,
+                proposal_id=str(proposal["id"]),
+                decision_id=None,
+                actor=data.actor,
+                reason=data.reason,
+                details={
+                    "manuscript_id": data.manuscript_id,
+                    "claim_local_key": claim_local_key,
+                    "exact_wording": candidate["exact_wording"],
+                },
+            )
+        return {"proposal": proposal, "promotion_event": event}
+
+    async def record_contribution_application(
+        self,
+        proposal_id: str,
+        *,
+        actor: str,
+        reason: str,
+    ) -> list[dict[str, Any]]:
+        """Append claim-version lineage after a prepared proposal is applied."""
+        prepared = await self.db.fetchall(
+            """SELECT * FROM manuscript_planning_promotion_events
+               WHERE project_id = ? AND proposal_id = ?
+                 AND action = 'contribution_proposal_prepared'""",
+            [self.project_id, proposal_id],
+        )
+        events = []
+        for row in prepared:
+            item = dict(row)
+            details = parse_json_field(item.get("details"), {})
+            claim = await self.db.fetchone(
+                """SELECT claim.id, claim.local_key,
+                          version.version, version.exact_wording
+                   FROM manuscript_claims AS claim
+                   JOIN manuscript_claim_versions AS version
+                     ON version.claim_id = claim.id
+                    AND version.project_id = claim.project_id
+                   WHERE claim.project_id = ? AND claim.manuscript_id = ?
+                     AND claim.local_key = ?
+                   ORDER BY version.version DESC LIMIT 1""",
+                [self.project_id, details["manuscript_id"], details["claim_local_key"]],
+            )
+            if claim is None or claim["exact_wording"] != details["exact_wording"]:
+                raise RuntimeError(
+                    "applied contribution proposal did not produce its exact candidate wording"
+                )
+            artifact = await self._promotion_artifact(item)
+            branch = await self._require_branch(str(item["branch_id"]))
+            events.append(
+                await self._insert_promotion_event(
+                    branch=branch,
+                    artifact=artifact,
+                    candidate_kind="contribution",
+                    candidate_key=str(item["candidate_key"]),
+                    action="contribution_proposal_applied",
+                    target_type="manuscript_claim",
+                    target_id=str(claim["id"]),
+                    target_version=int(claim["version"]),
+                    proposal_id=proposal_id,
+                    decision_id=None,
+                    actor=actor,
+                    reason=reason,
+                    details={
+                        "manuscript_id": details["manuscript_id"],
+                        "claim_local_key": details["claim_local_key"],
+                    },
+                )
+            )
+        return events
+
+    async def ratify_contribution(
+        self,
+        branch_id: str,
+        data: PlanningContributionRatification,
+    ) -> dict[str, Any]:
+        from rka.services.manuscript_native import NativeManuscriptService
+
+        async with self.db.transaction():
+            branch, artifact, candidate = await self._require_selected_candidate(
+                branch_id=branch_id,
+                expected_branch_revision=data.expected_branch_revision,
+                artifact_id=data.artifact_id,
+                expected_artifact_version=data.expected_artifact_version,
+                candidate_kind="contribution",
+                candidate_key=data.candidate_key,
+            )
+            application = await self.db.fetchone(
+                """SELECT * FROM manuscript_planning_promotion_events
+                   WHERE project_id = ? AND branch_id = ?
+                     AND artifact_version_id = ? AND candidate_kind = 'contribution'
+                     AND candidate_key = ? AND action = 'contribution_proposal_applied'
+                     AND proposal_id = ?
+                   ORDER BY created_at DESC LIMIT 1""",
+                [
+                    self.project_id,
+                    branch_id,
+                    artifact["version"]["id"],
+                    data.candidate_key,
+                    data.proposal_id,
+                ],
+            )
+            if application is None:
+                raise ValueError("the selected contribution proposal has not been applied")
+            claim_ref = data.claim_ref
+            claim = await self.db.fetchone(
+                """SELECT claim.id, claim.local_key, version.version,
+                          version.exact_wording
+                   FROM manuscript_claims AS claim
+                   JOIN manuscript_claim_versions AS version
+                     ON version.claim_id = claim.id
+                    AND version.project_id = claim.project_id
+                   WHERE claim.project_id = ? AND claim.manuscript_id = ?
+                     AND (claim.id = ? OR claim.local_key = ?)
+                   ORDER BY version.version DESC LIMIT 1""",
+                [self.project_id, data.manuscript_id, claim_ref, claim_ref],
+            )
+            if claim is None:
+                raise ValueError("promoted manuscript claim not found")
+            if claim["id"] != application["target_id"]:
+                raise ValueError("claim does not match the applied contribution proposal")
+            if claim["exact_wording"] != candidate["exact_wording"]:
+                raise PlanningConflictError(
+                    "current manuscript wording no longer matches the selected candidate"
+                )
+            ratification = await NativeManuscriptService(
+                self.db, project_id=self.project_id
+            ).ratify_claim(
+                data.manuscript_id,
+                claim_id=str(claim["id"]),
+                claim_version=int(claim["version"]),
+                decision_id=data.decision_id,
+                expected_revision=data.expected_manuscript_revision,
+                actor="pi",
+            )
+            event = await self._insert_promotion_event(
+                branch=branch,
+                artifact=artifact,
+                candidate_kind="contribution",
+                candidate_key=data.candidate_key,
+                action="contribution_ratified",
+                target_type="manuscript_claim_ratification",
+                target_id=ratification.id,
+                target_version=int(claim["version"]),
+                proposal_id=data.proposal_id,
+                decision_id=data.decision_id,
+                actor="pi",
+                reason=data.reason,
+                details={
+                    "manuscript_id": data.manuscript_id,
+                    "claim_id": claim["id"],
+                    "claim_local_key": claim["local_key"],
+                },
+            )
+        return {
+            "ratification": ratification.model_dump(),
+            "promotion_event": event,
+        }
+
+    async def _require_selected_candidate(
+        self,
+        *,
+        branch_id: str,
+        expected_branch_revision: int,
+        artifact_id: str,
+        expected_artifact_version: int,
+        candidate_kind: str,
+        candidate_key: str,
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        branch = await self._require_branch(branch_id)
+        if branch["state"] != "selected":
+            raise ValueError("only the selected planning branch may promote candidates")
+        if int(branch["revision"]) != expected_branch_revision:
+            raise PlanningConflictError(
+                f"planning branch revision conflict: expected {expected_branch_revision}, "
+                f"found {branch['revision']}"
+            )
+        artifact = next(
+            (
+                item
+                for item in await self._effective_artifacts(branch_id)
+                if item["id"] == artifact_id and item["stage_type"] == "rq_contribution"
+            ),
+            None,
+        )
+        if artifact is None:
+            raise PlanningNotFoundError(
+                f"RQ/contribution artifact {artifact_id!r} not found on this branch"
+            )
+        version = artifact["version"]
+        if int(version["version"]) != expected_artifact_version:
+            raise PlanningConflictError(
+                "planning artifact version changed before candidate promotion"
+            )
+        if version["lifecycle"] != "selected" or version["readiness_state"] != "ready":
+            raise ValueError("candidate promotion requires a selected, ready artifact version")
+        if version["unresolved_items"] or version["readiness_missing"]:
+            raise ValueError("candidate promotion is blocked by unresolved or missing items")
+        key = "research_questions" if candidate_kind == "research_question" else "contributions"
+        candidate = next(
+            (
+                item
+                for item in version["payload"].get(key, [])
+                if isinstance(item, dict) and item.get("local_key") == candidate_key
+            ),
+            None,
+        )
+        if candidate is None:
+            raise PlanningNotFoundError(
+                f"{candidate_kind} candidate {candidate_key!r} not found"
+            )
+        if candidate.get("disposition") != "selected":
+            raise ValueError("candidate must be selected before promotion")
+        findings = self._stage_contract_findings("rq_contribution", version)
+        if findings:
+            raise ValueError("candidate portfolio is not promotion-ready: " + "; ".join(findings))
+        return branch, artifact, candidate
+
+    async def _assert_no_promotion_action(
+        self,
+        *,
+        artifact_version_id: str,
+        candidate_kind: str,
+        candidate_key: str,
+        action: str,
+    ) -> None:
+        row = await self.db.fetchone(
+            """SELECT id FROM manuscript_planning_promotion_events
+               WHERE project_id = ? AND artifact_version_id = ?
+                 AND candidate_kind = ? AND candidate_key = ? AND action = ?
+               LIMIT 1""",
+            [
+                self.project_id,
+                artifact_version_id,
+                candidate_kind,
+                candidate_key,
+                action,
+            ],
+        )
+        if row is not None:
+            raise PlanningConflictError(
+                f"candidate already has a {action.replace('_', ' ')} event"
+            )
+
+    async def _promotion_artifact(self, event: Mapping[str, Any]) -> dict[str, Any]:
+        artifact = await self.db.fetchone(
+            """SELECT * FROM manuscript_planning_artifacts
+               WHERE id = ? AND project_id = ?""",
+            [event["artifact_id"], self.project_id],
+        )
+        version = await self.db.fetchone(
+            """SELECT * FROM manuscript_planning_artifact_versions
+               WHERE id = ? AND artifact_id = ? AND project_id = ?""",
+            [event["artifact_version_id"], event["artifact_id"], self.project_id],
+        )
+        if artifact is None or version is None:
+            raise RuntimeError("planning promotion source artifact is missing")
+        result = dict(artifact)
+        result["version"] = await self._version_row(version)
+        return result
+
+    async def _insert_promotion_event(
+        self,
+        *,
+        branch: Mapping[str, Any],
+        artifact: Mapping[str, Any],
+        candidate_kind: str,
+        candidate_key: str,
+        action: str,
+        target_type: str,
+        target_id: str,
+        target_version: int | None,
+        proposal_id: str | None,
+        decision_id: str | None,
+        actor: str,
+        reason: str,
+        details: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        event_id = generate_id("manuscript_planning_promotion_event")
+        version = artifact["version"]
+        await self.db.execute(
+            """INSERT INTO manuscript_planning_promotion_events
+               (id, project_id, branch_id, artifact_id, artifact_version_id,
+                artifact_version, branch_revision, candidate_kind, candidate_key,
+                action, target_type, target_id, target_version, proposal_id,
+                decision_id, actor, reason, details)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                event_id,
+                self.project_id,
+                branch["id"],
+                artifact["id"],
+                version["id"],
+                version["version"],
+                branch["revision"],
+                candidate_kind,
+                candidate_key,
+                action,
+                target_type,
+                target_id,
+                target_version,
+                proposal_id,
+                decision_id,
+                actor,
+                reason,
+                _canonical_json(dict(details)),
+            ],
+        )
+        row = await self.db.fetchone(
+            "SELECT * FROM manuscript_planning_promotion_events WHERE id = ?",
+            [event_id],
+        )
+        result = dict(row)
+        result["details"] = parse_json_field(result.get("details"), {})
+        return result
+
+    @staticmethod
+    def _stage_contract_findings(stage: str, version: Mapping[str, Any]) -> list[str]:
+        payload = version["payload"]
+        bindings = version["evidence_bindings"]
+        findings: list[str] = []
+        if stage == "problem_scope" and not payload.get("out_of_scope"):
+            findings.append("Excluded scope is not yet explicit")
+        elif stage == "landscape_gap":
+            literature_ids = {
+                binding["entity_id"]
+                for binding in bindings
+                if binding["entity_type"] == "literature"
+            }
+            literature_ids.update(
+                literature_id
+                for row in payload.get("rows", [])
+                for literature_id in row.get("literature_ids", [])
+            )
+            if not literature_ids:
+                findings.append("The SOTA/gap framing has no literature binding")
+        elif stage == "response_mechanism" and not payload.get("boundary_conditions"):
+            findings.append("Mechanism boundary conditions are not explicit")
+        elif stage == "challenge_innovation":
+            pairs = payload.get("pairs", [])
+            if any(not pair.get("local_key") for pair in pairs):
+                findings.append("Challenge/innovation nodes need stable local keys")
+            if any(not pair.get("required_evidence") for pair in pairs):
+                findings.append("Each innovation needs a required-evidence statement")
+        elif stage == "rq_contribution":
+            rqs = [item for item in payload.get("research_questions", []) if isinstance(item, dict)]
+            contributions = [
+                item for item in payload.get("contributions", []) if isinstance(item, dict)
+            ]
+            if not any(item.get("disposition") == "selected" for item in rqs):
+                findings.append("Select at least one bounded RQ candidate")
+            selected_contributions = [
+                item for item in contributions if item.get("disposition") == "selected"
+            ]
+            if not selected_contributions:
+                findings.append("Select at least one bounded contribution candidate")
+            if any(not item.get("support_ids") for item in selected_contributions):
+                findings.append("Each selected contribution needs positive evidence")
+            if any(item.get("missing_evidence") for item in selected_contributions):
+                findings.append("Selected contributions still declare missing evidence")
+        return findings
+
+    @staticmethod
+    def _stage_next_action(
+        stage: str,
+        verdict: str,
+        current: Mapping[str, Any] | None,
+    ) -> str:
+        if current is None:
+            return f"Capture or choose a {_ARGUMENT_STAGE_LABELS[stage].lower()} artifact"
+        if verdict == "Blocked":
+            return "Resolve the blocking dependency or revise the upstream framing"
+        if current["version"]["lifecycle"] != "selected":
+            return "Select, combine, revise, or park the current alternatives"
+        if verdict == "Needs review":
+            return "Review evidence, assumptions, boundaries, and unresolved items"
+        return "Continue to the next non-ready stage"
+
+    async def _quick_reader_projection(
+        self,
+        *,
+        branch: Mapping[str, Any],
+        selected_heads: Mapping[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        slots: list[dict[str, Any]] = []
+        discrepancies: list[dict[str, Any]] = []
+
+        def add_slot(name: str, value: str | None, artifact: dict[str, Any] | None) -> None:
+            if not value or artifact is None:
+                return
+            slots.append(
+                {
+                    "slot": name,
+                    "text": value,
+                    "authority": "provisional",
+                    "source": self._comparison_ref(artifact),
+                }
+            )
+
+        paragraph = selected_heads.get("paragraph_spine")
+        paragraph_payload = paragraph["version"]["payload"] if paragraph else {}
+        problem = selected_heads.get("problem_scope")
+        landscape = selected_heads.get("landscape_gap")
+        response = selected_heads.get("response_mechanism")
+        challenge = selected_heads.get("challenge_innovation")
+        rq_contribution = selected_heads.get("rq_contribution")
+
+        add_slot(
+            "problem",
+            (problem["version"]["payload"].get("problem") if problem else None)
+            or paragraph_payload.get("problem"),
+            problem or paragraph,
+        )
+        add_slot(
+            "gap",
+            (landscape["version"]["payload"].get("gap") if landscape else None)
+            or paragraph_payload.get("gap"),
+            landscape or paragraph,
+        )
+        add_slot(
+            "insight",
+            (response["version"]["payload"].get("insight") if response else None)
+            or paragraph_payload.get("insight"),
+            response or paragraph,
+        )
+        add_slot("response", paragraph_payload.get("response"), paragraph)
+        if challenge:
+            pairs = challenge["version"]["payload"].get("pairs", [])
+            text = " ".join(
+                f"{pair['challenge']} -> {pair['innovation']}" for pair in pairs
+            )
+            add_slot("challenge_innovation", text, challenge)
+        else:
+            add_slot(
+                "challenge_innovation",
+                paragraph_payload.get("challenge_innovation"),
+                paragraph,
+            )
+
+        if rq_contribution:
+            payload = rq_contribution["version"]["payload"]
+            selected_rqs = [
+                item["question"]
+                for item in payload.get("research_questions", [])
+                if isinstance(item, dict) and item.get("disposition") == "selected"
+            ]
+            selected_contributions = [
+                item["exact_wording"]
+                for item in payload.get("contributions", [])
+                if isinstance(item, dict) and item.get("disposition") == "selected"
+            ]
+            add_slot("research_questions", " ".join(selected_rqs), rq_contribution)
+            add_slot("contributions", " ".join(selected_contributions), rq_contribution)
+
+        add_slot("evidence_preview", paragraph_payload.get("evidence"), paragraph)
+        add_slot("reader_payoff", paragraph_payload.get("payoff"), paragraph)
+
+        comparisons = (
+            ("problem", paragraph_payload.get("problem"), problem, "problem"),
+            ("gap", paragraph_payload.get("gap"), landscape, "gap"),
+            ("insight", paragraph_payload.get("insight"), response, "insight"),
+        )
+        for slot, paragraph_value, artifact, field in comparisons:
+            current_value = artifact["version"]["payload"].get(field) if artifact else None
+            if (
+                paragraph_value
+                and current_value
+                and str(paragraph_value).strip() != str(current_value).strip()
+            ):
+                discrepancies.append(
+                    {
+                        "slot": slot,
+                        "paragraph_value": paragraph_value,
+                        "current_stage_value": current_value,
+                        "current_stage_source": self._comparison_ref(artifact),
+                    }
+                )
+
+        canonical_contributions: list[dict[str, Any]] = []
+        if branch.get("manuscript_id"):
+            from rka.services.manuscript_native import NativeManuscriptService
+
+            context = await NativeManuscriptService(
+                self.db, project_id=self.project_id
+            ).get_context(str(branch["manuscript_id"]))
+            for claim in context.get("claims", []):
+                if claim.get("state") != "active":
+                    continue
+                version = int(claim["version"])
+                exact = claim.get("exact_wording")
+                ratified = any(
+                    item.get("claim_version") == version
+                    and item.get("decision_status") == "active"
+                    and item.get("decided_by") == "pi"
+                    and not item.get("superseded_by")
+                    and item.get("chosen") == exact
+                    for item in claim.get("ratifications", [])
+                )
+                canonical_contributions.append(
+                    {
+                        "claim_id": claim["id"],
+                        "local_key": claim["local_key"],
+                        "version": version,
+                        "exact_wording": exact,
+                        "ratified": ratified,
+                    }
+                )
+
+        return {
+            "slots": slots,
+            "canonical_contributions": canonical_contributions,
+            "discrepancies": discrepancies,
+            "llm_generated": False,
         }
 
     async def _effective_artifacts(self, branch_id: str) -> list[dict[str, Any]]:

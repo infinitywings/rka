@@ -12,12 +12,19 @@ from rka.models.planning import (
     PlanningArtifactVersionAppend,
     PlanningBranchCreate,
     PlanningBranchTransition,
+    PlanningContributionProposalPrepare,
+    PlanningContributionRatification,
+    PlanningResearchQuestionPromotion,
 )
+from rka.models.manuscript_native import ManuscriptCreate
+from rka.models.semantic_patch import SemanticPatchProposalTransition
+from rka.services.manuscript_native import NativeManuscriptService
 from rka.services.planning import (
     ManuscriptPlanningService,
     PlanningConflictError,
     PlanningNotFoundError,
 )
+from rka.services.semantic_patch import SemanticPatchService
 
 
 def _seed_version(
@@ -297,4 +304,294 @@ def test_stage_payloads_are_closed_and_ai_provenance_is_required() -> None:
             origin="ai_suggested",
             created_by="llm",
             reason="Require reproducible AI provenance.",
+        )
+
+
+def test_rq_contribution_payload_requires_stable_bound_candidates() -> None:
+    claim_id = "clm_01BOUND"
+    decision_id = "dec_01RQ"
+    parsed = PlanningArtifactVersionAppend(
+        expected_branch_revision=1,
+        local_key="portfolio",
+        stage_type="rq_contribution",
+        lifecycle="selected",
+        summary="One bounded RQ and contribution.",
+        payload={
+            "research_questions": [{
+                "local_key": "rq-composability",
+                "question": "When do timing primitives compose?",
+                "scope": "Two-agent workflows under bounded jitter.",
+                "rationale": "Composition is the central scientific uncertainty.",
+                "evidence_entity_ids": [claim_id],
+                "disposition": "selected",
+            }],
+            "contributions": [{
+                "local_key": "contribution-composition",
+                "exact_wording": "We characterize bounded timing composition.",
+                "contribution_type": "theoretical",
+                "research_question_refs": ["rq-composability", decision_id],
+                "allowed_wording": "Characterizes the tested composition boundary.",
+                "prohibited_wording": ["Universal composition guarantee."],
+                "support_ids": [claim_id],
+                "disposition": "selected",
+            }],
+        },
+        origin="user",
+        readiness_state="ready",
+        created_by="pi",
+        reason="Capture an exact candidate portfolio.",
+        evidence_bindings=[
+            {"entity_type": "claim", "entity_id": claim_id, "role": "support"},
+            {"entity_type": "decision", "entity_id": decision_id, "role": "context"},
+        ],
+    )
+    assert parsed.payload["research_questions"][0]["local_key"] == "rq-composability"
+
+    with pytest.raises(ValidationError, match="absent from evidence bindings"):
+        PlanningArtifactVersionAppend.model_validate(
+            parsed.model_dump(exclude={"evidence_bindings"})
+        )
+
+
+@pytest.mark.asyncio
+async def test_argument_workflow_is_deterministic_and_pins_upstream_heads(
+    db_with_project,
+) -> None:
+    service = ManuscriptPlanningService(db_with_project, project_id="proj_default")
+    branch = await service.create_branch(
+        PlanningBranchCreate(
+            name="guided",
+            purpose="Exercise deterministic argument guidance.",
+            created_by="pi",
+            reason="Start a guided branch.",
+        )
+    )
+    branch_id = branch["branch"]["id"]
+    branch = await service.append_artifact_version(
+        branch_id,
+        PlanningArtifactVersionAppend(
+            expected_branch_revision=1,
+            local_key="core-insight",
+            stage_type="seed",
+            lifecycle="selected",
+            summary="Timing is composable.",
+            payload={"insight": "Treat timing as a composable primitive."},
+            origin="user",
+            readiness_state="ready",
+            created_by="pi",
+            reason="Select the seed.",
+        ),
+    )
+    seed = branch["effective_artifacts"][0]
+    branch = await service.append_artifact_version(
+        branch_id,
+        PlanningArtifactVersionAppend(
+            expected_branch_revision=2,
+            local_key="quick-reader",
+            stage_type="paragraph_spine",
+            lifecycle="selected",
+            summary="A bounded quick-reader spine.",
+            payload={
+                "problem": "Timing defenses are difficult to compose.",
+                "gap": "Existing analyses isolate one timing mechanism.",
+                "insight": "Treat timing as a composable primitive.",
+                "response": "Model and combine bounded timing transformations.",
+                "payoff": "Readers can reason about end-to-end timing defenses.",
+                "upstream_versions": [{
+                    "stage_type": "seed",
+                    "local_key": seed["local_key"],
+                    "artifact_id": seed["id"],
+                    "version_id": seed["version"]["id"],
+                    "version": seed["version"]["version"],
+                }],
+            },
+            origin="user",
+            readiness_state="ready",
+            created_by="pi",
+            reason="Select the paragraph spine.",
+        ),
+    )
+
+    workflow = await service.argument_workflow(branch_id)
+    stages = {item["stage_type"]: item for item in workflow["stages"]}
+    assert stages["seed"]["verdict"] == "Ready"
+    assert stages["paragraph_spine"]["verdict"] == "Ready"
+    assert stages["problem_scope"]["verdict"] == "Blocked"
+    assert workflow["next_recommended_stage"] == "problem_scope"
+    assert [slot["slot"] for slot in workflow["quick_reader"]["slots"]] == [
+        "problem",
+        "gap",
+        "insight",
+        "response",
+        "reader_payoff",
+    ]
+    assert workflow["authority"]["llm_at_view_time"] is False
+
+
+@pytest.mark.asyncio
+async def test_selected_candidates_promote_through_auditable_guarded_lineage(
+    db_with_project,
+) -> None:
+    journal_id = await _journal(db_with_project, "proj_default")
+    claim_id = generate_id("claim")
+    await db_with_project.execute(
+        """INSERT INTO claims
+           (id, source_entry_id, claim_type, content, confidence, verified,
+            evidence_status, stale, project_id)
+           VALUES (?, ?, 'result', 'Composition held under bounded jitter.',
+                   0.9, 1, 'supported', 0, 'proj_default')""",
+        [claim_id, journal_id],
+    )
+    await db_with_project.commit()
+
+    manuscripts = NativeManuscriptService(db_with_project, project_id="proj_default")
+    manuscript = await manuscripts.create(
+        ManuscriptCreate(title="Promotion contract"), actor="pi"
+    )
+    planning = ManuscriptPlanningService(db_with_project, project_id="proj_default")
+    branch = await planning.create_branch(
+        PlanningBranchCreate(
+            manuscript_id=manuscript.id,
+            name="selected",
+            purpose="Exercise independent RQ and contribution promotion.",
+            created_by="pi",
+            reason="Create a selected manuscript planning branch.",
+        )
+    )
+    branch_id = branch["branch"]["id"]
+    branch = await planning.append_artifact_version(
+        branch_id,
+        PlanningArtifactVersionAppend(
+            expected_branch_revision=1,
+            local_key="rq-contribution-portfolio",
+            stage_type="rq_contribution",
+            lifecycle="selected",
+            summary="One bounded RQ and one evidence-backed contribution.",
+            payload={
+                "research_questions": [{
+                    "local_key": "rq-composition",
+                    "question": "When do bounded timing primitives compose?",
+                    "scope": "Two-stage workflows under bounded jitter.",
+                    "rationale": "Composition is the central uncertainty.",
+                    "evidence_entity_ids": [claim_id],
+                    "disposition": "selected",
+                }],
+                "contributions": [{
+                    "local_key": "contribution-composition",
+                    "exact_wording": "We characterize bounded timing composition.",
+                    "contribution_type": "theoretical",
+                    "research_question_refs": ["rq-composition"],
+                    "allowed_wording": "Characterizes the evaluated composition boundary.",
+                    "prohibited_wording": ["Guarantees universal timing composition."],
+                    "support_ids": [claim_id],
+                    "disposition": "selected",
+                }],
+            },
+            origin="user",
+            readiness_state="ready",
+            created_by="pi",
+            reason="Select exact candidates before promotion.",
+            evidence_bindings=[
+                {"entity_type": "claim", "entity_id": claim_id, "role": "support"}
+            ],
+        ),
+    )
+    artifact = branch["effective_artifacts"][0]
+
+    promoted = await planning.promote_research_question(
+        branch_id,
+        PlanningResearchQuestionPromotion(
+            expected_branch_revision=2,
+            artifact_id=artifact["id"],
+            expected_artifact_version=1,
+            candidate_key="rq-composition",
+            phase="paper_framing",
+            reason="PI selected the bounded question.",
+        ),
+    )
+    assert promoted["decision"]["kind"] == "research_question"
+    assert promoted["promotion_event"]["action"] == "rq_promoted"
+    with pytest.raises(PlanningConflictError, match="already has"):
+        await planning.promote_research_question(
+            branch_id,
+            PlanningResearchQuestionPromotion(
+                expected_branch_revision=2,
+                artifact_id=artifact["id"],
+                expected_artifact_version=1,
+                candidate_key="rq-composition",
+                phase="paper_framing",
+                reason="Duplicate promotion must fail.",
+            ),
+        )
+
+    prepared = await planning.prepare_contribution_proposal(
+        branch_id,
+        PlanningContributionProposalPrepare(
+            expected_branch_revision=2,
+            artifact_id=artifact["id"],
+            expected_artifact_version=1,
+            candidate_key="contribution-composition",
+            manuscript_id=manuscript.id,
+            expected_manuscript_revision=1,
+            reason="Prepare exact contribution wording for review.",
+            actor="pi",
+        ),
+    )
+    proposal_id = prepared["proposal"]["id"]
+    assert prepared["proposal"]["status"] == "proposed"
+    assert (await manuscripts.get_context(manuscript.id))["claims"] == []
+
+    await SemanticPatchService(
+        db_with_project, project_id="proj_default"
+    ).apply_proposal(
+        proposal_id,
+        SemanticPatchProposalTransition(
+            expected_revision=1,
+            actor="pi",
+            reason="Apply after inspecting the semantic diff.",
+        ),
+    )
+    context = await manuscripts.get_context(manuscript.id)
+    assert context["manuscript"]["revision"] == 2
+    assert context["claims"][0]["exact_wording"] == (
+        "We characterize bounded timing composition."
+    )
+    claim = context["claims"][0]
+
+    decision_id = generate_id("decision")
+    await db_with_project.execute(
+        """INSERT INTO decisions
+           (id, phase, question, chosen, rationale, decided_by, status, project_id)
+           VALUES (?, 'paper_writing', 'Ratify contribution wording?', ?,
+                   'PI selected the exact wording.', 'pi', 'active', 'proj_default')""",
+        [decision_id, claim["exact_wording"]],
+    )
+    await db_with_project.commit()
+    ratified = await planning.ratify_contribution(
+        branch_id,
+        PlanningContributionRatification(
+            expected_branch_revision=2,
+            artifact_id=artifact["id"],
+            expected_artifact_version=1,
+            candidate_key="contribution-composition",
+            manuscript_id=manuscript.id,
+            claim_ref="contribution-composition",
+            expected_manuscript_revision=2,
+            proposal_id=proposal_id,
+            decision_id=decision_id,
+            reason="PI ratified the exact applied contribution wording.",
+        ),
+    )
+    assert ratified["promotion_event"]["action"] == "contribution_ratified"
+    events = await planning.list_promotion_events(branch_id)
+    assert [event["action"] for event in events] == [
+        "rq_promoted",
+        "contribution_proposal_prepared",
+        "contribution_proposal_applied",
+        "contribution_ratified",
+    ]
+    with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+        await db_with_project.execute(
+            "UPDATE manuscript_planning_promotion_events SET reason = 'rewrite' WHERE id = ?",
+            [events[-1]["id"]],
         )

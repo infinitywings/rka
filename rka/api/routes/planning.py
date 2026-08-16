@@ -12,6 +12,9 @@ from rka.models.planning import (
     PlanningArtifactVersionAppend,
     PlanningBranchCreate,
     PlanningBranchTransition,
+    PlanningContributionProposalPrepare,
+    PlanningContributionRatification,
+    PlanningResearchQuestionPromotion,
 )
 from rka.services.planning import (
     ManuscriptPlanningService,
@@ -83,6 +86,65 @@ async def get_planning_branch(
 ) -> dict[str, Any]:
     try:
         return await service.get_branch(branch_id)
+    except Exception as exc:
+        _raise_planning_error(exc)
+
+
+@router.get("/planning/branches/{branch_id}/argument-workflow")
+async def get_planning_argument_workflow(
+    branch_id: str,
+    service: ManuscriptPlanningService = Depends(get_scoped_manuscript_planning_service),
+) -> dict[str, Any]:
+    """Project one branch into deterministic seed-to-contribution guidance."""
+    try:
+        return await service.argument_workflow(branch_id)
+    except Exception as exc:
+        _raise_planning_error(exc)
+
+
+@router.get("/planning/branches/{branch_id}/promotions")
+async def list_planning_promotion_events(
+    branch_id: str,
+    service: ManuscriptPlanningService = Depends(get_scoped_manuscript_planning_service),
+) -> list[dict[str, Any]]:
+    try:
+        return await service.list_promotion_events(branch_id)
+    except Exception as exc:
+        _raise_planning_error(exc)
+
+
+@router.post("/planning/branches/{branch_id}/promote-rq", status_code=201)
+async def promote_planning_research_question(
+    branch_id: str,
+    data: PlanningResearchQuestionPromotion,
+    service: ManuscriptPlanningService = Depends(get_scoped_manuscript_planning_service),
+) -> dict[str, Any]:
+    try:
+        return await service.promote_research_question(branch_id, data)
+    except Exception as exc:
+        _raise_planning_error(exc)
+
+
+@router.post("/planning/branches/{branch_id}/prepare-contribution", status_code=201)
+async def prepare_planning_contribution(
+    branch_id: str,
+    data: PlanningContributionProposalPrepare,
+    service: ManuscriptPlanningService = Depends(get_scoped_manuscript_planning_service),
+) -> dict[str, Any]:
+    try:
+        return await service.prepare_contribution_proposal(branch_id, data)
+    except Exception as exc:
+        _raise_planning_error(exc)
+
+
+@router.post("/planning/branches/{branch_id}/ratify-contribution", status_code=201)
+async def ratify_planning_contribution(
+    branch_id: str,
+    data: PlanningContributionRatification,
+    service: ManuscriptPlanningService = Depends(get_scoped_manuscript_planning_service),
+) -> dict[str, Any]:
+    try:
+        return await service.ratify_contribution(branch_id, data)
     except Exception as exc:
         _raise_planning_error(exc)
 
