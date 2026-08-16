@@ -151,6 +151,7 @@ _TABLE_CATEGORIES: dict[str, list[str]] = {
         "manuscript_claim_versions",
         "manuscript_claim_ratifications",
         "manuscript_units",
+        "manuscript_unit_outline_profiles",
         "manuscript_claim_evidence",
         "manuscript_unit_evidence",
         "manuscript_claim_units",
@@ -249,6 +250,7 @@ _INSERT_ORDER = (
     "manuscript_claims",
     "manuscript_claim_versions",
     "manuscript_units",
+    "manuscript_unit_outline_profiles",
     "manuscript_claim_evidence",
     "manuscript_unit_evidence",
     "manuscript_claim_units",
@@ -484,6 +486,11 @@ _DIRECT_ID_COLUMNS = {
         "decision_id",
     ),
     "manuscript_units": ("id", "manuscript_id", "artifact_ref"),
+    "manuscript_unit_outline_profiles": (
+        "unit_id",
+        "manuscript_id",
+        "parent_unit_id",
+    ),
     "manuscript_claim_evidence": (
         "manuscript_id",
         "manuscript_claim_id",
@@ -612,6 +619,7 @@ _FK_COLUMNS: dict[str, set[str]] = {
         "decision_id",
     },
     "manuscript_units": {"manuscript_id"},
+    "manuscript_unit_outline_profiles": {"unit_id", "manuscript_id"},
     "manuscript_claim_evidence": {
         "manuscript_id",
         "manuscript_claim_id",
@@ -695,6 +703,13 @@ _PROSE_TEXT_COLUMNS: dict[str, tuple[str, ...]] = {
     "manuscript_units": (
         "allowed_interpretation",
         "prohibited_interpretation",
+    ),
+    "manuscript_unit_outline_profiles": (
+        "communicative_job",
+        "intended_takeaway",
+        "transition_from_previous",
+        "quick_reader_role",
+        "blocker",
     ),
     "manuscript_planning_branches": ("name", "purpose"),
     "manuscript_planning_branch_events": ("reason",),

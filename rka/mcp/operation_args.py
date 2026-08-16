@@ -72,6 +72,7 @@ from rka.models.semantic_patch import (
     SemanticPatchProposalCreate,
     SemanticPatchProposalTransition,
 )
+from rka.models.outline import OutlineProposalRequest
 
 # NOTE: enum aliases from ``rka.mcp._enums`` are imported on a per-batch
 # basis. Batch A (query ops) doesn't directly type any enum field — query
@@ -168,6 +169,7 @@ from rka.mcp._enums import (  # noqa: E402, F811
     ManuscriptEvidenceRoleLit,
     ManuscriptInitialPhaseLit,
     ManuscriptInitialStateLit,
+    ManuscriptOutlineActionLit,
     ManuscriptReadinessPhaseLit,
     ManuscriptStateLit,
     ManuscriptUnitKindLit,
@@ -756,6 +758,17 @@ class QueryManuscriptSpineArgs(ProjectScopedArgs):
     ]
 
 
+class QueryManuscriptOutlineArgs(ProjectScopedArgs):
+    """[ANY] Read L2-L5 outline rationale, bindings, and checkpoint state."""
+
+    operation: Literal["manuscript_outline"] = "manuscript_outline"
+
+    id: Annotated[
+        str,
+        Field(description="Canonical man_ id or compatibility jrn_ alias."),
+    ]
+
+
 class QueryManuscriptWritingCandidatesArgs(ProjectScopedArgs):
     """[ANY] Smooth claims through reviewed clusters and research questions."""
 
@@ -1303,6 +1316,7 @@ QueryArgsUnion = Annotated[
         QueryManuscriptReferenceManifestArgs,
         QueryManuscriptReadinessArgs,
         QueryManuscriptSpineArgs,
+        QueryManuscriptOutlineArgs,
         QueryManuscriptWritingCandidatesArgs,
         QueryChangesSinceArgs,
         QueryManuscriptImpactArgs,
@@ -2694,6 +2708,19 @@ class PreparePlanningEvaluationResultArgs(
     id: Annotated[str, Field(min_length=1, description="Canonical mpb_ branch id.")]
 
 
+class PrepareManuscriptOutlineProposalArgs(ProjectScopedArgs, OutlineProposalRequest):
+    """[PI/WEB_UI] Prepare an edit/expand/condense/reorder outline proposal."""
+
+    operation: Literal["prepare_manuscript_outline_proposal"] = (
+        "prepare_manuscript_outline_proposal"
+    )
+    action: Annotated[
+        ManuscriptOutlineActionLit,
+        Field(description="Deterministic structural outline transformation."),
+    ]
+    id: Annotated[str, Field(min_length=1, description="Canonical man_ manuscript id.")]
+
+
 class PrepareSemanticPatchContextArgs(ProjectScopedArgs, ContextManifestCreate):
     """[ANY] Persist the exact context disclosure before an AI call."""
 
@@ -2972,6 +2999,7 @@ BatchBExecuteUnion = Annotated[
         RatifyPlanningContributionArgs,
         CreatePlanningEvaluationMissionArgs,
         PreparePlanningEvaluationResultArgs,
+        PrepareManuscriptOutlineProposalArgs,
         PrepareSemanticPatchContextArgs,
         CreateSemanticPatchProposalArgs,
         ApplySemanticPatchProposalArgs,
@@ -4865,6 +4893,7 @@ ExecuteArgsUnion = Annotated[
         RatifyPlanningContributionArgs,
         CreatePlanningEvaluationMissionArgs,
         PreparePlanningEvaluationResultArgs,
+        PrepareManuscriptOutlineProposalArgs,
         PrepareSemanticPatchContextArgs,
         CreateSemanticPatchProposalArgs,
         ApplySemanticPatchProposalArgs,
@@ -4956,6 +4985,7 @@ __all__ = [
     "QueryReferenceValidationStatusArgs",
     "ResolveEntitiesArgs",
     "QueryManuscriptContextArgs",
+    "QueryManuscriptOutlineArgs",
     "QueryManuscriptReferenceManifestArgs",
     "QueryManuscriptReadinessArgs",
     "QueryManuscriptSpineArgs",
@@ -5026,6 +5056,7 @@ __all__ = [
     "AppendPlanningArtifactVersionArgs",
     "CreatePlanningEvaluationMissionArgs",
     "PreparePlanningEvaluationResultArgs",
+    "PrepareManuscriptOutlineProposalArgs",
     "PromotePlanningResearchQuestionArgs",
     "PreparePlanningContributionArgs",
     "RatifyPlanningContributionArgs",

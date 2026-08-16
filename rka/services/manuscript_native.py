@@ -993,14 +993,35 @@ class NativeManuscriptService(BaseService):
             claims.append(claim)
 
         unit_rows = await self.db.fetchall(
-            """SELECT * FROM manuscript_units
-               WHERE manuscript_id = ? AND project_id = ?
-               ORDER BY sequence, local_key, id""",
+            """SELECT u.*, p.outline_level, parent.local_key AS parent_unit_key,
+                      p.communicative_job, p.intended_takeaway,
+                      p.transition_from_previous, p.quick_reader_role,
+                      p.evidence_plan, p.figure_intentions,
+                      p.table_intentions, p.citation_intentions, p.blocker
+               FROM manuscript_units AS u
+               LEFT JOIN manuscript_unit_outline_profiles AS p
+                 ON p.unit_id = u.id
+                AND p.manuscript_id = u.manuscript_id
+                AND p.project_id = u.project_id
+               LEFT JOIN manuscript_units AS parent
+                 ON parent.id = p.parent_unit_id
+                AND parent.manuscript_id = p.manuscript_id
+                AND parent.project_id = p.project_id
+               WHERE u.manuscript_id = ? AND u.project_id = ?
+               ORDER BY u.sequence, u.local_key, u.id""",
             [canonical_id, self.project_id],
         )
         units: list[dict[str, Any]] = []
         for row in unit_rows:
             unit = dict(row)
+            unit["outline_level"] = int(unit.get("outline_level") or 4)
+            for field in (
+                "evidence_plan",
+                "figure_intentions",
+                "table_intentions",
+                "citation_intentions",
+            ):
+                unit[field] = self._json_loads(unit.get(field), [])
             unit["evidence"] = await self._unit_evidence(canonical_id, row["id"])
             if unit.get("kind") == "result":
                 unit["artifact_binding"] = await self._artifact_binding(unit.get("artifact_ref"))
@@ -1844,10 +1865,24 @@ class NativeManuscriptService(BaseService):
                 [manuscript_id, self.project_id],
             )
             components["units"] = await self.db.fetchall(
-                """SELECT local_key, kind, location, title, sequence, status
-                   FROM manuscript_units
-                   WHERE manuscript_id = ? AND project_id = ?
-                   ORDER BY sequence, local_key""",
+                """SELECT u.local_key, u.kind, u.location, u.title,
+                          u.sequence, u.status,
+                          coalesce(p.outline_level, 4) AS outline_level,
+                          parent.local_key AS parent_unit_key,
+                          p.communicative_job, p.intended_takeaway,
+                          p.transition_from_previous, p.quick_reader_role,
+                          coalesce(p.evidence_plan, '[]') AS evidence_plan,
+                          coalesce(p.figure_intentions, '[]') AS figure_intentions,
+                          coalesce(p.table_intentions, '[]') AS table_intentions,
+                          coalesce(p.citation_intentions, '[]') AS citation_intentions,
+                          p.blocker
+                   FROM manuscript_units AS u
+                   LEFT JOIN manuscript_unit_outline_profiles AS p
+                     ON p.unit_id = u.id AND p.project_id = u.project_id
+                   LEFT JOIN manuscript_units AS parent
+                     ON parent.id = p.parent_unit_id AND parent.project_id = p.project_id
+                   WHERE u.manuscript_id = ? AND u.project_id = ?
+                   ORDER BY u.sequence, u.local_key""",
                 [manuscript_id, self.project_id],
             )
             components["claim_unit_map"] = await self.db.fetchall(
@@ -2049,6 +2084,17 @@ class NativeManuscriptService(BaseService):
                     "prohibited_interpretation": unit.get("prohibited_interpretation"),
                     "sequence": unit["sequence"],
                     "status": unit["status"],
+                    "outline_level": unit.get("outline_level", 4),
+                    "parent_unit_key": unit.get("parent_unit_key"),
+                    "communicative_job": unit.get("communicative_job"),
+                    "intended_takeaway": unit.get("intended_takeaway"),
+                    "transition_from_previous": unit.get("transition_from_previous"),
+                    "quick_reader_role": unit.get("quick_reader_role"),
+                    "evidence_plan": unit.get("evidence_plan", []),
+                    "figure_intentions": unit.get("figure_intentions", []),
+                    "table_intentions": unit.get("table_intentions", []),
+                    "citation_intentions": unit.get("citation_intentions", []),
+                    "blocker": unit.get("blocker"),
                     "evidence_ids": [
                         item["evidence_claim_id"]
                         for item in unit["evidence"]
@@ -2274,6 +2320,12 @@ class NativeManuscriptService(BaseService):
             evidence = raw.get("evidence") or {}
             if not isinstance(evidence, Mapping):
                 raise ValueError(f"unit {local_key} evidence must be an object")
+            outline_level = int(raw.get("outline_level", 4))
+            if not 2 <= outline_level <= 5:
+                raise ValueError(f"unit {local_key} outline_level must be between 2 and 5")
+            sequence = int(raw.get("sequence", 0))
+            if sequence < 0:
+                raise ValueError(f"unit {local_key} sequence must be non-negative")
             normalized.append(
                 {
                     "local_key": local_key,
@@ -2283,8 +2335,34 @@ class NativeManuscriptService(BaseService):
                     "artifact_ref": raw.get("artifact_ref"),
                     "allowed_interpretation": raw.get("allowed_interpretation"),
                     "prohibited_interpretation": raw.get("prohibited_interpretation"),
-                    "sequence": int(raw.get("sequence", 0)),
+                    "sequence": sequence,
                     "status": status,
+                    "outline_level": outline_level,
+                    "parent_unit_key": (
+                        str(raw.get("parent_unit_key")).strip()
+                        if raw.get("parent_unit_key")
+                        else None
+                    ),
+                    "communicative_job": self._optional_text(raw.get("communicative_job")),
+                    "intended_takeaway": self._optional_text(raw.get("intended_takeaway")),
+                    "transition_from_previous": self._optional_text(
+                        raw.get("transition_from_previous")
+                    ),
+                    "quick_reader_role": self._optional_text(raw.get("quick_reader_role")),
+                    "evidence_plan": self._text_list(
+                        raw.get("evidence_plan", []), f"unit {local_key} evidence plan"
+                    ),
+                    "figure_intentions": self._text_list(
+                        raw.get("figure_intentions", []), f"unit {local_key} figure intentions"
+                    ),
+                    "table_intentions": self._text_list(
+                        raw.get("table_intentions", []), f"unit {local_key} table intentions"
+                    ),
+                    "citation_intentions": self._text_list(
+                        raw.get("citation_intentions", []),
+                        f"unit {local_key} citation intentions",
+                    ),
+                    "blocker": self._optional_text(raw.get("blocker")),
                     "evidence": {
                         "support": self._id_list(
                             evidence.get("support", raw.get("evidence_ids", [])),
@@ -2301,7 +2379,65 @@ class NativeManuscriptService(BaseService):
                     },
                 }
             )
+        self._validate_unit_hierarchy(normalized)
         return normalized
+
+    @staticmethod
+    def _optional_text(value: Any) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("outline rationale fields must be strings")
+        return value.strip() or None
+
+    @staticmethod
+    def _text_list(value: Any, name: str) -> list[str]:
+        if value is None:
+            return []
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+            raise ValueError(f"{name} must be a list")
+        result: list[str] = []
+        for item in value:
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError(f"{name} contains a blank or non-string value")
+            cleaned = item.strip()
+            if cleaned not in result:
+                result.append(cleaned)
+        return result
+
+    @staticmethod
+    def _validate_unit_hierarchy(units: list[dict[str, Any]]) -> None:
+        by_key = {unit["local_key"]: unit for unit in units}
+        for unit in units:
+            parent_key = unit.get("parent_unit_key")
+            if parent_key is None:
+                continue
+            parent = by_key.get(parent_key)
+            if parent is None:
+                raise ValueError(
+                    f"unit {unit['local_key']} references unknown parent {parent_key!r}"
+                )
+            if parent_key == unit["local_key"]:
+                raise ValueError("outline unit cannot be its own parent")
+            if parent.get("status") == "removed" and unit.get("status") != "removed":
+                raise ValueError(f"active unit {unit['local_key']} cannot have a removed parent")
+            if int(parent["outline_level"]) >= int(unit["outline_level"]):
+                raise ValueError(
+                    f"parent {parent_key} must be at a higher outline level than "
+                    f"child {unit['local_key']}"
+                )
+            seen = {unit["local_key"]}
+            cursor = parent
+            while cursor.get("parent_unit_key") is not None:
+                key = str(cursor["parent_unit_key"])
+                if key in seen:
+                    raise ValueError("outline hierarchy contains a cycle")
+                if key not in by_key:
+                    raise ValueError(
+                        f"unit {cursor['local_key']} references unknown parent {key!r}"
+                    )
+                seen.add(key)
+                cursor = by_key[key]
 
     @staticmethod
     def _id_list(value: Any, name: str) -> list[str]:
@@ -2481,6 +2617,50 @@ class NativeManuscriptService(BaseService):
                 )
             await self._replace_unit_evidence(manuscript_id, unit_id, spec["evidence"])
             result[local_key] = unit_id
+
+        for spec in units:
+            unit_id = result[spec["local_key"]]
+            parent_key = spec.get("parent_unit_key")
+            parent_id = result.get(parent_key) if parent_key else None
+            await self.db.execute(
+                """INSERT INTO manuscript_unit_outline_profiles
+                   (unit_id, manuscript_id, project_id, parent_unit_id,
+                    outline_level, communicative_job, intended_takeaway,
+                    transition_from_previous, quick_reader_role, evidence_plan,
+                    figure_intentions, table_intentions, citation_intentions,
+                    blocker)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(unit_id) DO UPDATE SET
+                     parent_unit_id = excluded.parent_unit_id,
+                     outline_level = excluded.outline_level,
+                     communicative_job = excluded.communicative_job,
+                     intended_takeaway = excluded.intended_takeaway,
+                     transition_from_previous = excluded.transition_from_previous,
+                     quick_reader_role = excluded.quick_reader_role,
+                     evidence_plan = excluded.evidence_plan,
+                     figure_intentions = excluded.figure_intentions,
+                     table_intentions = excluded.table_intentions,
+                     citation_intentions = excluded.citation_intentions,
+                     blocker = excluded.blocker,
+                     updated_at = ?""",
+                [
+                    unit_id,
+                    manuscript_id,
+                    self.project_id,
+                    parent_id,
+                    spec["outline_level"],
+                    spec["communicative_job"],
+                    spec["intended_takeaway"],
+                    spec["transition_from_previous"],
+                    spec["quick_reader_role"],
+                    json.dumps(spec["evidence_plan"], sort_keys=True),
+                    json.dumps(spec["figure_intentions"], sort_keys=True),
+                    json.dumps(spec["table_intentions"], sort_keys=True),
+                    json.dumps(spec["citation_intentions"], sort_keys=True),
+                    spec["blocker"],
+                    _now(),
+                ],
+            )
 
         for local_key, row in existing.items():
             if local_key not in seen and row["status"] != "removed":

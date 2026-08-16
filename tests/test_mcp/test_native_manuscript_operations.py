@@ -20,6 +20,7 @@ QUERY_OPERATIONS = {
     "manuscript_reference_manifest",
     "manuscript_readiness",
     "manuscript_spine",
+    "manuscript_outline",
     "manuscript_writing_candidates",
     "changes_since",
     "manuscript_impact",
@@ -35,6 +36,7 @@ EXECUTE_OPERATIONS_NATIVE = {
     "create_manuscript_checkpoint",
     "resolve_manuscript_checkpoint",
     "record_verification_attestation",
+    "prepare_manuscript_outline_proposal",
 }
 
 
@@ -179,6 +181,49 @@ def test_operation_registry_and_typed_unions_are_complete() -> None:
     assert QUERY_OPERATIONS | EXECUTE_OPERATIONS_NATIVE <= set(OPERATIONS_SCHEMA)
     assert OPERATIONS_SCHEMA["register_manuscript"]["tool"] == "rka_execute"
     assert OPERATIONS_SCHEMA["manuscript"]["tool"] == "rka_query"
+
+
+@pytest.mark.asyncio
+async def test_outline_read_and_proposal_route_through_typed_mcp(requests) -> None:
+    query = TypeAdapter(QueryArgsUnion).validate_python({
+        "operation": "manuscript_outline",
+        "project_id": "prj_test",
+        "id": "man_outline",
+    })
+    await server._dispatch_query_typed(query)
+    proposal = TypeAdapter(ExecuteArgsUnion).validate_python({
+        "operation": "prepare_manuscript_outline_proposal",
+        "project_id": "prj_test",
+        "id": "man_outline",
+        "expected_revision": 3,
+        "action": "reorder",
+        "reason": "Lead with the method.",
+        "ordered_unit_keys": ["METHOD", "INTRO"],
+    })
+    await server._dispatch_execute_typed(proposal)
+    outline_requests = [
+        request for request in requests
+        if request["path"].startswith("/api/manuscripts/man_outline/outline")
+    ]
+    assert outline_requests == [
+        {
+            "method": "GET",
+            "path": "/api/manuscripts/man_outline/outline",
+            "params": None,
+        },
+        {
+            "method": "POST",
+            "path": "/api/manuscripts/man_outline/outline/proposals",
+            "json": {
+                "expected_revision": 3,
+                "action": "reorder",
+                "reason": "Lead with the method.",
+                "children": [],
+                "descendant_keys": [],
+                "ordered_unit_keys": ["METHOD", "INTRO"],
+            },
+        },
+    ]
 
 
 @pytest.mark.parametrize(

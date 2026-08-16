@@ -5080,6 +5080,23 @@ async def rka_prepare_planning_evaluation_result(
     return json.dumps(response.json(), indent=2)
 
 
+@tool(category="manuscript")
+async def rka_prepare_manuscript_outline_proposal(
+    manuscript_id: str,
+    payload: dict,
+    *,
+    project_id: str,
+) -> str:
+    """Prepare an outline edit/expand/condense/reorder proposal; never auto-apply."""
+    async with _client(project_id) as c:
+        response = await c.post(
+            f"/api/manuscripts/{manuscript_id}/outline/proposals",
+            json=payload,
+        )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2)
+
+
 @tool(category="semantic_patches")
 async def rka_get_semantic_patch_proposals(
     proposal_id: str | None = None,
@@ -6552,6 +6569,20 @@ async def rka_get_manuscript_spine(
 
 
 @tool(category="manuscript")
+async def rka_get_manuscript_outline(
+    manuscript_id: str,
+    *,
+    project_id: str,
+) -> str:
+    """Read L2-L5 outline rationale, bindings, blockers, and checkpoint state."""
+    async with _client(project_id) as c:
+        r = await c.get(f"/api/manuscripts/{manuscript_id}/outline")
+        _raise_with_detail(r)
+        data = r.json()
+    return json.dumps(data, indent=2)
+
+
+@tool(category="manuscript")
 async def rka_get_manuscript_writing_candidates(
     manuscript_id: str,
     *,
@@ -7239,7 +7270,7 @@ QueryScopeLit = _Literal[
     "experiments", "experiment_runs", "experiment_observations", "manuscript",
     "resolve_entities", "changes_since", "manuscript_context",
     "manuscript_reference_manifest",
-    "manuscript_readiness", "manuscript_spine",
+    "manuscript_readiness", "manuscript_spine", "manuscript_outline",
     "manuscript_writing_candidates", "manuscript_impact",
     "reference_validation_status", "graph",
     "ego_graph", "graph_stats", "graph_mermaid", "provenance", "multi_hop",
@@ -7631,6 +7662,13 @@ async def _rka_query_legacy_impl(
                 indent=2,
             )
         return await _query_get(project_id, f"/api/manuscripts/{id}/spine")
+    if s == "manuscript_outline":
+        if not id:
+            return json.dumps(
+                {"error": "rka_query(scope='manuscript_outline') requires `id`"},
+                indent=2,
+            )
+        return await _query_get(project_id, f"/api/manuscripts/{id}/outline")
     if s == "manuscript_writing_candidates":
         if not id:
             return json.dumps(

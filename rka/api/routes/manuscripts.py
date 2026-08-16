@@ -31,6 +31,7 @@ from rka.models.manuscript_native import (
     ManuscriptReferenceManifestReplace,
     ManuscriptUpdate,
 )
+from rka.models.outline import OutlineProposalRequest
 from rka.models.reference_validation import ReferenceValidationInput
 from rka.services.manuscript import ManuscriptService
 from rka.services.manuscript_native import (
@@ -39,6 +40,7 @@ from rka.services.manuscript_native import (
     NativeManuscriptService,
 )
 from rka.services.notes import NoteService
+from rka.services.outline import ManuscriptOutlineService
 from rka.services.reference_validation import ReferenceValidationService
 
 router = APIRouter()
@@ -170,6 +172,13 @@ def get_scoped_reference_validation_service(
     db: Database = Depends(get_db),
 ) -> ReferenceValidationService:
     return ReferenceValidationService(db=db, project_id=project_id)
+
+
+def get_scoped_outline_service(
+    project_id: str = Depends(require_project),
+    db: Database = Depends(get_db),
+) -> ManuscriptOutlineService:
+    return ManuscriptOutlineService(db=db, project_id=project_id)
 
 
 @router.post("/manuscripts", status_code=201)
@@ -425,6 +434,38 @@ async def export_native_argument_spine(
         return await svc.export_spine_projection(manuscript_id)
     except ManuscriptNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/manuscripts/{manuscript_id}/outline")
+async def get_progressive_manuscript_outline(
+    manuscript_id: str,
+    svc: ManuscriptOutlineService = Depends(get_scoped_outline_service),
+) -> dict[str, Any]:
+    """Project the L2-L5 outline, rationale completeness, and checkpoint state."""
+    try:
+        return await svc.get_outline(manuscript_id)
+    except ManuscriptNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/manuscripts/{manuscript_id}/outline/proposals", status_code=201)
+async def prepare_progressive_outline_proposal(
+    manuscript_id: str,
+    data: OutlineProposalRequest,
+    actor: str = Depends(get_transport_actor),
+    svc: ManuscriptOutlineService = Depends(get_scoped_outline_service),
+) -> dict[str, Any]:
+    """Prepare a structural outline proposal without mutating the manuscript."""
+    try:
+        return await svc.prepare_proposal(manuscript_id, data, actor=actor)
+    except ManuscriptNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ManuscriptRevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

@@ -238,6 +238,17 @@ class ManuscriptUnitCreate(BaseModel):
     prohibited_interpretation: str | None = None
     sequence: int = Field(default=0, ge=0)
     status: ManuscriptUnitStatus = "planned"
+    outline_level: int = Field(default=4, ge=2, le=5)
+    parent_unit_key: str | None = None
+    communicative_job: str | None = None
+    intended_takeaway: str | None = None
+    transition_from_previous: str | None = None
+    quick_reader_role: str | None = None
+    evidence_plan: list[str] = Field(default_factory=list)
+    figure_intentions: list[str] = Field(default_factory=list)
+    table_intentions: list[str] = Field(default_factory=list)
+    citation_intentions: list[str] = Field(default_factory=list)
+    blocker: str | None = None
 
     @model_validator(mode="after")
     def require_result_boundaries(self) -> ManuscriptUnitCreate:
@@ -266,6 +277,17 @@ class ManuscriptUnitUpdate(BaseModel):
     prohibited_interpretation: str | None = None
     sequence: int | None = Field(default=None, ge=0)
     status: ManuscriptUnitStatus | None = None
+    outline_level: int | None = Field(default=None, ge=2, le=5)
+    parent_unit_key: str | None = None
+    communicative_job: str | None = None
+    intended_takeaway: str | None = None
+    transition_from_previous: str | None = None
+    quick_reader_role: str | None = None
+    evidence_plan: list[str] | None = None
+    figure_intentions: list[str] | None = None
+    table_intentions: list[str] | None = None
+    citation_intentions: list[str] | None = None
+    blocker: str | None = None
 
 
 class ManuscriptUnit(BaseModel):
@@ -285,6 +307,17 @@ class ManuscriptUnit(BaseModel):
     status: ManuscriptUnitStatus
     created_at: str
     updated_at: str
+    outline_level: int = 4
+    parent_unit_key: str | None = None
+    communicative_job: str | None = None
+    intended_takeaway: str | None = None
+    transition_from_previous: str | None = None
+    quick_reader_role: str | None = None
+    evidence_plan: list[str] = Field(default_factory=list)
+    figure_intentions: list[str] = Field(default_factory=list)
+    table_intentions: list[str] = Field(default_factory=list)
+    citation_intentions: list[str] = Field(default_factory=list)
+    blocker: str | None = None
 
 
 class ManuscriptClaimEvidenceCreate(BaseModel):

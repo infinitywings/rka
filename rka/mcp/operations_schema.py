@@ -254,6 +254,7 @@ _ENUMS = {
     "semantic_patch_status": [
         "proposed", "applied", "rejected", "conflicted", "superseded", "expired"
     ],
+    "outline_action": ["edit", "expand", "condense", "reorder"],
     "evidence_status": [
         "unassessed",
         "supported",
@@ -1248,6 +1249,31 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "manuscript_context",
         ],
         "notes": "The export is a cache projection, not an independent store.",
+    },
+    "manuscript_outline": {
+        "operation": "manuscript_outline",
+        "tool": "rka_query",
+        "category": "manuscript",
+        "role_tag": "ANY",
+        "summary": "Read L2-L5 outline rationale, bindings, blockers, and checkpoint state.",
+        "signature": "rka_query(operation='manuscript_outline', *, project_id, id)",
+        "required_fields": ["project_id", "id"],
+        "optional_fields": [],
+        "enums": {},
+        "examples": [{
+            "description": "Resume the current progressive outline.",
+            "call": {
+                "operation": "manuscript_outline",
+                "project_id": "prj_01ABC...",
+                "id": "man_01XYZ...",
+            },
+        }],
+        "related_operations": [
+            "prepare_manuscript_outline_proposal",
+            "create_manuscript_checkpoint",
+            "manuscript_spine",
+        ],
+        "notes": "This projection is read-only; structural edits are proposals.",
     },
     "manuscript_writing_candidates": {
         "operation": "manuscript_writing_candidates",
@@ -4982,6 +5008,39 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "apply_semantic_patch_proposal",
         ],
         "notes": "Preparation never mutates the manuscript; apply remains separate.",
+    },
+    "prepare_manuscript_outline_proposal": {
+        "operation": "prepare_manuscript_outline_proposal",
+        "tool": "rka_execute",
+        "category": "manuscript",
+        "role_tag": "PI",
+        "summary": "Prepare an outline edit, expansion, condensation, or reorder proposal.",
+        "signature": (
+            "rka_execute(operation='prepare_manuscript_outline_proposal', *, "
+            "project_id, id, expected_revision, action, reason, ...)"
+        ),
+        "required_fields": ["project_id", "id", "expected_revision", "action", "reason"],
+        "optional_fields": [
+            "unit_key", "patch", "children", "descendant_keys", "ordered_unit_keys",
+        ],
+        "enums": {"action": list(_ENUMS["outline_action"])},
+        "examples": [{
+            "description": "Prepare a complete-set reorder for semantic review.",
+            "call": {
+                "operation": "prepare_manuscript_outline_proposal",
+                "project_id": "prj_01ABC...",
+                "id": "man_01XYZ...",
+                "expected_revision": 6,
+                "action": "reorder",
+                "reason": "Lead with the mechanism for this audience.",
+                "ordered_unit_keys": ["METHOD", "INTRO", "RESULT"],
+            },
+        }],
+        "related_operations": [
+            "manuscript_outline", "semantic_patch_proposals",
+            "apply_semantic_patch_proposal",
+        ],
+        "notes": "Preparation never mutates the manuscript or resolves its Outline checkpoint.",
     },
     # --- unified semantic patch proposals ------------------------------
     "semantic_patch_proposals": {

@@ -539,6 +539,7 @@ ManuscriptUnitStatusLit = Literal[
     "final",
     "removed",
 ]
+ManuscriptOutlineActionLit = Literal["edit", "expand", "condense", "reorder"]
 ManuscriptEvidenceRoleLit = Literal[
     "support",
     "qualifier",
