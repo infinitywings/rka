@@ -1299,4 +1299,10 @@ implementation contract is
 [`ADR 0008`](../../adr/0008-claim-centered-evaluation-contract-and-results-trace.md),
 and its validation record is
 [`2026-08-15-workbench-m4-pr8-exit-evidence.md`](../specs/2026-08-15-workbench-m4-pr8-exit-evidence.md).
-PR 9 remains dependency-blocked until PR 8 review and merge.
+PR 8 merged in #79. **M5 / PR 9: progressive outline and manuscript-unit
+editor** now satisfies its feature-branch release gate. ADR 0009 freezes its
+L2-L5 hierarchy, writing-rationale, binding-preservation, and proposal-first
+editing contract; the implementation and disposable browser/pack validation
+record is
+[`2026-08-15-workbench-m5-pr9-exit-evidence.md`](../specs/2026-08-15-workbench-m5-pr9-exit-evidence.md).
+PR 10 remains dependent on PR 9 review and merge.

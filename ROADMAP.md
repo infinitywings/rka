@@ -23,20 +23,30 @@ ratification boundary is recorded in
 The claim-centered evaluation, adverse-outcome, mission, and result-unit
 boundary is recorded in
 [ADR 0008](docs/adr/0008-claim-centered-evaluation-contract-and-results-trace.md).
+The progressive-outline hierarchy, writing-rationale, binding-preservation,
+and proposal-first editing boundary is recorded in
+[ADR 0009](docs/adr/0009-progressive-outline-and-unit-editor.md).
 
 The roadmap is ordered by dependency, not by invented delivery dates. Every
 milestone must satisfy its exit gate before dependent work is treated as ready.
 
 ## Now
 
-**M0 through M3 and M4 / PR 7 are complete on `main`. M4 / PR 8 (issue #59),
-the evaluation contract and results trace, has satisfied its feature-branch
-release gate in draft PR [#79](https://github.com/infinitywings/rka/pull/79).**
+**M0 through M4 are complete on `main`. M5 / PR 9 (issue #60), the progressive
+outline and manuscript-unit editor, now satisfies its feature-branch release
+gate and is the current review target.**
 PR [#78](https://github.com/infinitywings/rka/pull/78) merged
 the seed-through-contribution dependency; ADR 0008 freezes the evaluation
 contract, and the exact release evidence is recorded in
 [`2026-08-15-workbench-m4-pr8-exit-evidence.md`](docs/superpowers/specs/2026-08-15-workbench-m4-pr8-exit-evidence.md).
-Review and merge PR 8 before starting M4 / PR 9 progressive outline authoring.
+PR [#79](https://github.com/infinitywings/rka/pull/79) merged the evaluation
+contract and result trace. ADR 0009 now freezes the PR 9 editing contract; its
+implementation plan is
+[`2026-08-15-m5-pr9-progressive-outline.md`](docs/superpowers/plans/2026-08-15-m5-pr9-progressive-outline.md).
+Its migration, REST/MCP, proposal, workbench, restart, and knowledge-pack gates
+are recorded in
+[`2026-08-15-workbench-m5-pr9-exit-evidence.md`](docs/superpowers/specs/2026-08-15-workbench-m5-pr9-exit-evidence.md).
+PR 10 remains dependent on PR 9 review and merge.
 The choice-first Writer delta is reconciled, the authority and AI boundary is
 recorded in ADR 0001, the read-only workbench has passed its real-project exit
 gate, and first-class experiment/run/observation/evidence-locator semantics
