@@ -31,7 +31,8 @@ milestone must satisfy its exit gate before dependent work is treated as ready.
 
 **M0 through M3 and M4 / PR 7 are complete on `main`. M4 / PR 8 (issue #59),
 the evaluation contract and results trace, has satisfied its feature-branch
-release gate.** PR [#78](https://github.com/infinitywings/rka/pull/78) merged
+release gate in draft PR [#79](https://github.com/infinitywings/rka/pull/79).**
+PR [#78](https://github.com/infinitywings/rka/pull/78) merged
 the seed-through-contribution dependency; ADR 0008 freezes the evaluation
 contract, and the exact release evidence is recorded in
 [`2026-08-15-workbench-m4-pr8-exit-evidence.md`](docs/superpowers/specs/2026-08-15-workbench-m4-pr8-exit-evidence.md).

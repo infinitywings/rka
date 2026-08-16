@@ -3,6 +3,7 @@
 - Date: 2026-08-15
 - Baseline: `24975997b63093504d43b0a3b9b10c36fe2485e1`
 - Branch: `agent/m4-evaluation-contract`
+- Pull request: [#79](https://github.com/infinitywings/rka/pull/79)
 - Scope: claim-centered evaluation contracts, exact result traces, guarded
   evidence missions, and review-only result-unit promotion
 - Data safety: the live RKA service and source project were read only; every
@@ -140,6 +141,6 @@ intake/hardening concern and is not claimed as solved here.
 ## Exit decision
 
 PR 8 satisfies its implementation and feature-branch verification gates. The
-remaining review gate is GitHub CI and human review after the pull request is
-opened. PR 9 may proceed only after this branch is merged; it remains
+remaining review gate is GitHub CI and human review in draft PR #79. PR 9 may
+proceed only after this branch is merged; it remains
 responsible for progressive outline authoring and manuscript-file drafting.

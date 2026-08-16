@@ -2,7 +2,8 @@
 
 Status: roadmap design source; M0 through M3 and M4 PR 7 are complete on
 `main`. M4 PR 8, the evaluation contract and results trace, has passed its
-feature-branch release gate under ADR 0008 and awaits review and merge.
+feature-branch release gate under ADR 0008 and awaits review and merge in
+draft PR [#79](https://github.com/infinitywings/rka/pull/79).
 
 Date: 2026-08-14
 
