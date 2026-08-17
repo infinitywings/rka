@@ -19,6 +19,44 @@ auditor); **[judgment]** = design opinion; **[inference]** = reasoned
 conclusion not directly executed; **[external]** = observation of an external
 project.
 
+## Resolution addendum (2026-08-17)
+
+This report remains the contemporaneous audit of PR #80 at head `79aa8a1`;
+the baseline, reproductions, and recommendations below have intentionally not
+been rewritten. The correction commit
+[`f0f6fd9`](https://github.com/infinitywings/rka/commit/f0f6fd99c31da1000aca8b3489af7d0c7bcf4cb9)
+subsequently landed on the same PR branch, and PR
+[#80](https://github.com/infinitywings/rka/pull/80) was integrated into
+`main` at that exact head after both GitHub checks passed and GitHub reported
+no base-branch conflicts.
+
+The correction closes all three P1 findings:
+
+- **P1-1:** expansion now writes canonical nested evidence roles and has
+  regression coverage for support, qualifier, counterevidence, and claim
+  narrowing, including explicit removal.
+- **P1-2:** AI proposals require attributed origin/context metadata; AI/MCP
+  callers may prepare but cannot apply or reject outline proposals; ADR 0009,
+  role tags, the Writer skill, and the API/MCP contract now use the same
+  human-review boundary.
+- **P1-3:** the editor is isolated by manuscript identity plus revision and
+  resynchronizes its local order from canonical units.
+
+The same correction also addresses P2-1, P2-2, P2-3, P2-5, P2-10, P2-12,
+and the concrete test/CI defects identified in P2-15. Revalidation recorded in
+[`2026-08-15-workbench-m5-pr9-exit-evidence.md`](2026-08-15-workbench-m5-pr9-exit-evidence.md)
+includes the 3,126-test Python suite, the production web build, focused
+MCP/semantic-patch suites, and a disposable outline run seeded from three
+actual claims in `prj_01KN51HD73DSY9ZR9C56JYRNYZ`.
+
+That real-project run did **not** establish complete live-pack portability.
+The live export contained forward-only staleness fields and a pre-existing
+orphaned entity-link target, so the acceptance run used a documented closed
+four-row subset. The unresolved pack hierarchy/rekey and version-skew
+integrity work therefore remains correctly assigned to PR 9.1 rather than
+being erased from this audit trail. Other non-blocking P2/P3 findings remain
+roadmap inputs unless a later change explicitly closes them.
+
 ---
 
 ## 1. Executive verdict
