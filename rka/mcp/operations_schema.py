@@ -2312,7 +2312,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "operation": "record_pi_selection",
         "tool": "rka_execute",
         "category": "decision",
-        "role_tag": "PI",
+        "role_tag": "ANY",
         "summary": "Record the PI's selection on a presented decision.",
         "signature": (
             "rka_execute(operation='record_pi_selection', *, project_id, "
@@ -5019,11 +5019,18 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "rka_execute(operation='prepare_manuscript_outline_proposal', *, "
             "project_id, id, expected_revision, action, reason, ...)"
         ),
-        "required_fields": ["project_id", "id", "expected_revision", "action", "reason"],
+        "required_fields": [
+            "project_id", "id", "expected_revision", "action", "reason",
+            "origin", "provider", "model", "boundary", "context_manifest_id",
+        ],
         "optional_fields": [
             "unit_key", "patch", "children", "descendant_keys", "ordered_unit_keys",
         ],
-        "enums": {"action": list(_ENUMS["outline_action"])},
+        "enums": {
+            "action": list(_ENUMS["outline_action"]),
+            "origin": list(_ENUMS["semantic_patch_ai_origin"]),
+            "boundary": list(_ENUMS["semantic_patch_ai_boundary"]),
+        },
         "examples": [{
             "description": "Prepare a complete-set reorder for semantic review.",
             "call": {
@@ -5033,6 +5040,11 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
                 "expected_revision": 6,
                 "action": "reorder",
                 "reason": "Lead with the mechanism for this audience.",
+                "origin": "host_agent",
+                "provider": "openai",
+                "model": "gpt-5.6",
+                "boundary": "host_conversation",
+                "context_manifest_id": "pcm_01ABC...",
                 "ordered_unit_keys": ["METHOD", "INTRO", "RESULT"],
             },
         }],
@@ -5040,7 +5052,10 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "manuscript_outline", "semantic_patch_proposals",
             "apply_semantic_patch_proposal",
         ],
-        "notes": "Preparation never mutates the manuscript or resolves its Outline checkpoint.",
+        "notes": (
+            "Preparation never mutates the manuscript or resolves its Outline checkpoint. "
+            "AI-origin proposals require provider, model, boundary, and a matching context manifest."
+        ),
     },
     # --- unified semantic patch proposals ------------------------------
     "semantic_patch_proposals": {
@@ -5136,26 +5151,30 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "origin, intent, reason, created_by, operations, ...)"
         ),
         "required_fields": [
-            "origin", "intent", "reason", "created_by", "operations", "project_id"
+            "origin", "intent", "reason", "created_by", "operations", "project_id",
+            "provider", "model", "boundary", "context_manifest_id",
         ],
         "optional_fields": [
-            "provider", "model", "boundary", "context_manifest_id",
             "supersedes_proposal_id",
         ],
         "enums": {
-            "origin": list(_ENUMS["semantic_patch_origin"]),
+            "origin": list(_ENUMS["semantic_patch_ai_origin"]),
             "created_by": list(_ENUMS["semantic_patch_actor"]),
-            "boundary": list(_ENUMS["semantic_patch_boundary"]),
+            "boundary": list(_ENUMS["semantic_patch_ai_boundary"]),
         },
         "examples": [{
             "description": "Propose a metadata change for review.",
             "call": {
                 "operation": "create_semantic_patch_proposal",
                 "project_id": "prj_01ABC...",
-                "origin": "human",
+                "origin": "host_agent",
                 "intent": "Clarify the title.",
                 "reason": "Improve quick-reader comprehension.",
-                "created_by": "pi",
+                "created_by": "executor",
+                "provider": "openai",
+                "model": "gpt-5.6",
+                "boundary": "host_conversation",
+                "context_manifest_id": "pcm_01ABC...",
                 "operations": [{
                     "operation": "manuscript_metadata_update",
                     "manuscript_id": "man_01XYZ...",
@@ -5165,7 +5184,10 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         }],
         "related_operations": ["semantic_patch_proposals", "apply_semantic_patch_proposal"],
-        "notes": "No target is mutated until a separate explicit apply.",
+        "notes": (
+            "No target is mutated until a separate explicit apply. Typed MCP callers "
+            "must disclose an AI provider boundary; human proposals use local REST/UI."
+        ),
     },
     "apply_semantic_patch_proposal": {
         "operation": "apply_semantic_patch_proposal",

@@ -1050,12 +1050,21 @@ export interface OutlineChildDraft {
   table_intentions?: string[]
   citation_intentions?: string[]
   blocker?: string | null
+  claim_keys?: string[]
+  support_ids?: string[]
+  qualifier_ids?: string[]
+  counterevidence_ids?: string[]
 }
 
 export interface OutlineProposalRequest {
   expected_revision: number
   action: "edit" | "expand" | "condense" | "reorder"
   reason: string
+  origin?: "human" | "host_agent" | "lm_studio"
+  provider?: string | null
+  model?: string | null
+  boundary?: "none" | "host_conversation" | "local_loopback"
+  context_manifest_id?: string | null
   unit_key?: string
   patch?: OutlineUnitPatch
   children?: OutlineChildDraft[]

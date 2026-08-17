@@ -1896,6 +1896,52 @@ class NativeManuscriptService(BaseService):
                    ORDER BY claim_key, unit_key, cu.relationship""",
                 [manuscript_id, self.project_id],
             )
+            components["claim_evidence_map"] = await self.db.fetchall(
+                """SELECT mc.local_key AS manuscript_claim_key,
+                          ce.claim_version, ce.role, ce.ordinal,
+                          c.id AS evidence_claim_id,
+                          c.claim_type, c.content, c.confidence, c.verified,
+                          c.evidence_status, c.stale,
+                          c.source_offset_start, c.source_offset_end,
+                          j.content AS source_content, j.status AS source_status
+                   FROM manuscript_claim_evidence AS ce
+                   JOIN manuscript_claims AS mc
+                     ON mc.id = ce.manuscript_claim_id
+                    AND mc.manuscript_id = ce.manuscript_id
+                    AND mc.project_id = ce.project_id
+                   JOIN claims AS c
+                     ON c.id = ce.evidence_claim_id
+                    AND c.project_id = ce.project_id
+                   LEFT JOIN journal AS j
+                     ON j.id = c.source_entry_id
+                    AND j.project_id = c.project_id
+                   WHERE ce.manuscript_id = ? AND ce.project_id = ?
+                   ORDER BY manuscript_claim_key, ce.claim_version,
+                            ce.role, ce.ordinal, evidence_claim_id""",
+                [manuscript_id, self.project_id],
+            )
+            components["unit_evidence_map"] = await self.db.fetchall(
+                """SELECT u.local_key AS unit_key, ue.role, ue.ordinal,
+                          c.id AS evidence_claim_id,
+                          c.claim_type, c.content, c.confidence, c.verified,
+                          c.evidence_status, c.stale,
+                          c.source_offset_start, c.source_offset_end,
+                          j.content AS source_content, j.status AS source_status
+                   FROM manuscript_unit_evidence AS ue
+                   JOIN manuscript_units AS u
+                     ON u.id = ue.unit_id
+                    AND u.manuscript_id = ue.manuscript_id
+                    AND u.project_id = ue.project_id
+                   JOIN claims AS c
+                     ON c.id = ue.evidence_claim_id
+                    AND c.project_id = ue.project_id
+                   LEFT JOIN journal AS j
+                     ON j.id = c.source_entry_id
+                    AND j.project_id = c.project_id
+                   WHERE ue.manuscript_id = ? AND ue.project_id = ?
+                   ORDER BY unit_key, ue.role, ue.ordinal, evidence_claim_id""",
+                [manuscript_id, self.project_id],
+            )
         elif kind == "table_figure_plan":
             rows = await self.db.fetchall(
                 """SELECT local_key, kind, location, title, artifact_ref,
@@ -2007,7 +2053,7 @@ class NativeManuscriptService(BaseService):
             default=str,
         ).encode()
         return {
-            "schema_version": "rka.checkpoint-dependencies/v1",
+            "schema_version": "rka.checkpoint-dependencies/v2",
             "kind": kind,
             "unit_key": (
                 components.get("unit", {}).get("local_key")
@@ -2421,13 +2467,13 @@ class NativeManuscriptService(BaseService):
                 raise ValueError("outline unit cannot be its own parent")
             if parent.get("status") == "removed" and unit.get("status") != "removed":
                 raise ValueError(f"active unit {unit['local_key']} cannot have a removed parent")
-            if int(parent["outline_level"]) >= int(unit["outline_level"]):
-                raise ValueError(
-                    f"parent {parent_key} must be at a higher outline level than "
-                    f"child {unit['local_key']}"
-                )
+
+        # Detect graph cycles independently of level validation so malformed
+        # imports receive the precise failure instead of an incidental depth
+        # error from whichever edge happens to be visited first.
+        for unit in units:
             seen = {unit["local_key"]}
-            cursor = parent
+            cursor = unit
             while cursor.get("parent_unit_key") is not None:
                 key = str(cursor["parent_unit_key"])
                 if key in seen:
@@ -2438,6 +2484,58 @@ class NativeManuscriptService(BaseService):
                     )
                 seen.add(key)
                 cursor = by_key[key]
+
+        for unit in units:
+            parent_key = unit.get("parent_unit_key")
+            if parent_key is None:
+                continue
+            parent = by_key[str(parent_key)]
+            if int(parent["outline_level"]) >= int(unit["outline_level"]):
+                raise ValueError(
+                    f"parent {parent_key} must be at a shallower outline depth than "
+                    f"child {unit['local_key']}"
+                )
+
+        active_with_index = [
+            (index, unit)
+            for index, unit in enumerate(units)
+            if unit.get("status") != "removed"
+        ]
+        active = [
+            unit
+            for _index, unit in sorted(
+                active_with_index,
+                key=lambda item: (int(item[1]["sequence"]), item[0]),
+            )
+        ]
+        positions = {unit["local_key"]: index for index, unit in enumerate(active)}
+        active_parents = {
+            unit["local_key"]: unit.get("parent_unit_key") for unit in active
+        }
+
+        def descendants(root: str) -> set[str]:
+            found: set[str] = set()
+            frontier = [root]
+            while frontier:
+                current = frontier.pop()
+                for child, parent in active_parents.items():
+                    if parent == current and child not in found:
+                        found.add(child)
+                        frontier.append(child)
+            return found
+
+        for key, parent_key in active_parents.items():
+            if parent_key is not None and positions[parent_key] >= positions[key]:
+                raise ValueError(
+                    f"outline order must place parent {parent_key!r} before child {key!r}"
+                )
+        for key in positions:
+            nested = descendants(key)
+            if not nested:
+                continue
+            occupied = {positions[key], *(positions[item] for item in nested)}
+            if max(occupied) - min(occupied) + 1 != len(occupied):
+                raise ValueError(f"outline order must keep subtree {key!r} contiguous")
 
     @staticmethod
     def _id_list(value: Any, name: str) -> list[str]:

@@ -8,13 +8,15 @@ All notable changes to RKA are documented here. Format loosely follows
 ### Added
 
 - **Progressive L2-L5 manuscript outline.** Native manuscript units now carry
-  hierarchical writing rationale, intended reader takeaways, evidence plans,
+  pure hierarchy depth, writing rationale, intended reader takeaways, evidence plans,
   and figure/table/citation intentions. Direct and AI-assisted edit, expand,
   condense, and reorder actions produce reviewable semantic proposals that
   preserve claim/evidence bindings and report downstream order impact. The
   REST, workbench, and typed MCP surfaces expose resumable outline state and a
   separate explicit Outline checkpoint; the dispatch surface now contains 150
-  operations (67 reads + 83 writes).
+  operations (67 reads + 83 writes). AI-authored outline proposals retain
+  provider/context provenance and remain pending for PI/web review; Outline
+  checkpoint fingerprints include typed claim/unit evidence bindings.
 
 - **Unified semantic patch proposals.** Human workbench edits, host-agent
   suggestions, and local-machine LM Studio suggestions now produce the same

@@ -8,7 +8,11 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from rka.api.deps import get_config, get_scoped_semantic_patch_service
+from rka.api.deps import (
+    get_config,
+    get_scoped_semantic_patch_service,
+    get_transport_actor,
+)
 from rka.config import RKAConfig
 from rka.models.semantic_patch import (
     ContextManifestCreate,
@@ -69,8 +73,17 @@ async def get_context_manifest(
 @router.post("/semantic-patches/proposals", status_code=201)
 async def create_proposal(
     data: SemanticPatchProposalCreate,
+    transport_actor: str = Depends(get_transport_actor),
     service: SemanticPatchService = Depends(get_scoped_semantic_patch_service),
 ) -> dict[str, Any]:
+    if transport_actor == "executor" and data.origin == "human":
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "AI/MCP transports cannot label a semantic proposal as human; "
+                "prepare a matching context manifest and declare the provider origin"
+            ),
+        )
     try:
         return await service.create_proposal(data)
     except Exception as exc:
@@ -104,8 +117,17 @@ async def get_proposal(
 async def apply_proposal(
     proposal_id: str,
     data: SemanticPatchProposalTransition,
+    transport_actor: str = Depends(get_transport_actor),
     service: SemanticPatchService = Depends(get_scoped_semantic_patch_service),
 ) -> dict[str, Any]:
+    if transport_actor != "web_ui" or data.actor != "web_ui":
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "AI/MCP transports may prepare proposals but cannot apply them; "
+                "the reviewer actor must match the local web transport"
+            ),
+        )
     try:
         return await service.apply_proposal(proposal_id, data)
     except Exception as exc:
@@ -116,8 +138,17 @@ async def apply_proposal(
 async def reject_proposal(
     proposal_id: str,
     data: SemanticPatchProposalTransition,
+    transport_actor: str = Depends(get_transport_actor),
     service: SemanticPatchService = Depends(get_scoped_semantic_patch_service),
 ) -> dict[str, Any]:
+    if transport_actor != "web_ui" or data.actor != "web_ui":
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "AI/MCP transports may prepare proposals but cannot reject them; "
+                "the reviewer actor must match the local web transport"
+            ),
+        )
     try:
         return await service.reject_proposal(proposal_id, data)
     except Exception as exc:

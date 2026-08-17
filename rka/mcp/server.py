@@ -5152,7 +5152,7 @@ async def rka_apply_semantic_patch_proposal(
     *,
     project_id: str,
 ) -> str:
-    """Explicitly apply a reviewed proposal under all captured revision guards."""
+    """Request apply; the REST gate rejects AI/MCP transport actors."""
     async with _client(project_id) as c:
         response = await c.post(
             f"/api/semantic-patches/proposals/{proposal_id}/apply", json=payload
@@ -5168,7 +5168,7 @@ async def rka_reject_semantic_patch_proposal(
     *,
     project_id: str,
 ) -> str:
-    """Reject a reviewed proposal without changing its targets."""
+    """Request rejection; the REST gate rejects AI/MCP transport actors."""
     async with _client(project_id) as c:
         response = await c.post(
             f"/api/semantic-patches/proposals/{proposal_id}/reject", json=payload
@@ -6724,7 +6724,11 @@ async def rka_upsert_argument_spine(
     *,
     project_id: str,
 ) -> str:
-    """Atomically replace the native argument-spine projection."""
+    """Deprecated for MCP: the server rejects agent-direct mutation.
+
+    Create an attributed ``argument_spine_replace`` semantic proposal instead;
+    a PI or web user performs the separate apply transition.
+    """
     async with _client(project_id) as c:
         r = await c.put(
             f"/api/manuscripts/{manuscript_id}/argument-spine",

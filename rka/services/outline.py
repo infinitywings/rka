@@ -124,19 +124,31 @@ class ManuscriptOutlineService(BaseService):
         else:
             impact = self._reorder(units, data)
 
-        self._resequence(units)
+        if data.action != "edit":
+            self._resequence(units)
         # Reuse the native closed-schema validator before persisting a proposal.
         native._normalize_claim_specs(claims)
         native._normalize_unit_specs(units)
-        created_by = actor if actor in {"pi", "brain", "executor", "web_ui"} else "executor"
+        if actor not in {"pi", "brain", "executor", "web_ui"}:
+            raise ValueError(f"invalid outline proposal actor {actor!r}")
+        if actor in {"brain", "executor"} and data.origin == "human":
+            raise ValueError(
+                "AI-authored outline proposals must declare their provider origin "
+                "and matching context manifest"
+            )
+        created_by = actor
         proposal = await SemanticPatchService(
             self.db, project_id=self.project_id
         ).create_proposal(
             SemanticPatchProposalCreate(
-                origin="human",
+                origin=data.origin,
                 intent=f"{data.action.capitalize()} the progressive manuscript outline.",
                 reason=data.reason,
                 created_by=created_by,
+                provider=data.provider,
+                model=data.model,
+                boundary=data.boundary,
+                context_manifest_id=data.context_manifest_id,
                 operations=[
                     ArgumentSpineReplaceOperation(
                         manuscript_id=str(spine["manuscript_id"]),
@@ -222,7 +234,17 @@ class ManuscriptOutlineService(BaseService):
                     )
                 selected_evidence[field] = sorted(chosen)
             new_unit = {
-                **{key: value for key, value in parent.items() if key not in {"rka_manuscript_unit_id"}},
+                **{
+                    key: value
+                    for key, value in parent.items()
+                    if key not in {
+                        "rka_manuscript_unit_id",
+                        "evidence",
+                        "evidence_ids",
+                        "qualifier_ids",
+                        "counterevidence_ids",
+                    }
+                },
                 "unit_id": child.local_key,
                 "title": child.title,
                 "location": child.location,
@@ -239,7 +261,11 @@ class ManuscriptOutlineService(BaseService):
                 "table_intentions": child.table_intentions,
                 "citation_intentions": child.citation_intentions,
                 "blocker": child.blocker,
-                **selected_evidence,
+                "evidence": {
+                    "support": selected_evidence["support_ids"],
+                    "qualifier": selected_evidence["qualifier_ids"],
+                    "counterevidence": selected_evidence["counterevidence_ids"],
+                },
             }
             new_unit.pop("claim_ids", None)
             inserted.append(new_unit)
@@ -365,6 +391,7 @@ class ManuscriptOutlineService(BaseService):
         }
         by_key = self._unit_map(units)
         reordered = [by_key[key] for key in data.ordered_unit_keys]
+        self._validate_active_order(reordered)
         removed = [unit for unit in units if unit.get("status") == "removed"]
         units[:] = [*reordered, *removed]
         changed = [
@@ -378,6 +405,40 @@ class ManuscriptOutlineService(BaseService):
             "transition_review_required": changed,
             "preserved": ["claim_links", "typed_evidence_bindings", "unit_content"],
         }
+
+    @staticmethod
+    def _validate_active_order(units: list[dict[str, Any]]) -> None:
+        """Require a depth-first flat order with every parent before its subtree."""
+        positions = {str(unit["unit_id"]): index for index, unit in enumerate(units)}
+        parents = {
+            str(unit["unit_id"]): (
+                str(unit["parent_unit_key"]) if unit.get("parent_unit_key") else None
+            )
+            for unit in units
+        }
+
+        def descendants(root: str) -> set[str]:
+            found: set[str] = set()
+            frontier = [root]
+            while frontier:
+                current = frontier.pop()
+                children = [key for key, parent in parents.items() if parent == current]
+                for child in children:
+                    if child not in found:
+                        found.add(child)
+                        frontier.append(child)
+            return found
+
+        for key, parent in parents.items():
+            if parent is not None and positions[parent] >= positions[key]:
+                raise ValueError(f"outline order must place parent {parent!r} before child {key!r}")
+        for key in positions:
+            nested = descendants(key)
+            if not nested:
+                continue
+            occupied = {positions[key], *(positions[item] for item in nested)}
+            if max(occupied) - min(occupied) + 1 != len(occupied):
+                raise ValueError(f"outline order must keep subtree {key!r} contiguous")
 
     @staticmethod
     def _resequence(units: list[dict[str, Any]]) -> None:

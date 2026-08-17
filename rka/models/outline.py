@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from rka.models.semantic_patch import ProposalOrigin, ProviderBoundary
+
 
 class _ClosedModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -42,7 +44,7 @@ class OutlineUnitPatch(_ClosedModel):
         ):
             value = getattr(self, field)
             if value is not None:
-                setattr(self, field, _clean_strings(value))
+                object.__setattr__(self, field, _clean_strings(value))
         return self
 
 class OutlineChildDraft(_ClosedModel):
@@ -65,21 +67,21 @@ class OutlineChildDraft(_ClosedModel):
 
     @model_validator(mode="after")
     def normalize_lists(self):
-        self.local_key = self.local_key.strip()
-        self.title = self.title.strip()
-        self.location = self.location.strip()
-        self.communicative_job = self.communicative_job.strip()
-        self.intended_takeaway = self.intended_takeaway.strip()
+        object.__setattr__(self, "local_key", self.local_key.strip())
+        object.__setattr__(self, "title", self.title.strip())
+        object.__setattr__(self, "location", self.location.strip())
+        object.__setattr__(self, "communicative_job", self.communicative_job.strip())
+        object.__setattr__(self, "intended_takeaway", self.intended_takeaway.strip())
         for field in (
             "evidence_plan", "figure_intentions", "table_intentions", "citation_intentions"
         ):
-            setattr(self, field, _clean_strings(getattr(self, field)))
+            object.__setattr__(self, field, _clean_strings(getattr(self, field)))
         if self.claim_keys is not None:
-            self.claim_keys = _clean_strings(self.claim_keys)
+            object.__setattr__(self, "claim_keys", _clean_strings(self.claim_keys))
         for field in ("support_ids", "qualifier_ids", "counterevidence_ids"):
             value = getattr(self, field)
             if value is not None:
-                setattr(self, field, _clean_strings(value))
+                object.__setattr__(self, field, _clean_strings(value))
         return self
 
 
@@ -87,6 +89,11 @@ class OutlineProposalRequest(_ClosedModel):
     expected_revision: int = Field(ge=1)
     action: Literal["edit", "expand", "condense", "reorder"]
     reason: str = Field(min_length=1, max_length=10_000)
+    origin: ProposalOrigin = "human"
+    provider: str | None = Field(default=None, max_length=500)
+    model: str | None = Field(default=None, max_length=500)
+    boundary: ProviderBoundary = "none"
+    context_manifest_id: str | None = Field(default=None, max_length=128)
     unit_key: str | None = Field(default=None, max_length=200)
     patch: OutlineUnitPatch | None = None
     children: list[OutlineChildDraft] = Field(default_factory=list, max_length=100)
@@ -100,9 +107,35 @@ class OutlineProposalRequest(_ClosedModel):
 
     @model_validator(mode="after")
     def validate_action_shape(self):
-        self.unit_key = self.unit_key.strip() if self.unit_key else None
-        self.descendant_keys = _clean_strings(self.descendant_keys)
-        self.ordered_unit_keys = _clean_strings(self.ordered_unit_keys)
+        object.__setattr__(
+            self, "unit_key", self.unit_key.strip() if self.unit_key else None
+        )
+        object.__setattr__(
+            self, "provider", self.provider.strip() if self.provider else None
+        )
+        object.__setattr__(self, "model", self.model.strip() if self.model else None)
+        object.__setattr__(
+            self,
+            "context_manifest_id",
+            self.context_manifest_id.strip() if self.context_manifest_id else None,
+        )
+        object.__setattr__(
+            self, "descendant_keys", _clean_strings(self.descendant_keys)
+        )
+        object.__setattr__(
+            self, "ordered_unit_keys", _clean_strings(self.ordered_unit_keys)
+        )
+        if self.origin == "human":
+            if self.provider or self.model or self.boundary != "none" or self.context_manifest_id:
+                raise ValueError("human outline proposals cannot declare an AI provider boundary")
+        else:
+            if not self.provider or not self.model or not self.context_manifest_id:
+                raise ValueError(
+                    "AI outline proposals require provider, model, and context_manifest_id"
+                )
+            expected = "host_conversation" if self.origin == "host_agent" else "local_loopback"
+            if self.boundary != expected:
+                raise ValueError(f"{self.origin} outline proposals require boundary={expected!r}")
         if self.action == "edit" and (not self.unit_key or self.patch is None):
             raise ValueError("edit requires unit_key and patch")
         if self.action == "expand" and (not self.unit_key or not self.children):

@@ -10,6 +10,7 @@ from rka.models.planning import PlanningArtifactVersionAppend
 
 
 ProposalActor = Literal["pi", "brain", "executor", "web_ui"]
+ProposalReviewer = Literal["pi", "web_ui"]
 ProposalOrigin = Literal["human", "host_agent", "lm_studio"]
 ProviderBoundary = Literal["none", "host_conversation", "local_loopback"]
 ProposalStatus = Literal[
@@ -191,7 +192,7 @@ class ContextManifestCreate(_ClosedModel):
 
 class SemanticPatchProposalTransition(_ClosedModel):
     expected_revision: int = Field(ge=1)
-    actor: ProposalActor
+    actor: ProposalReviewer
     reason: str = Field(min_length=1, max_length=10_000)
 
     @field_validator("reason")

@@ -21,6 +21,28 @@ permissions:
   contents: read
 
 jobs:
+  web-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Type-check and build the production frontend
+        run: npm run build
+
   pytest:
     runs-on: ubuntu-latest
     timeout-minutes: 20

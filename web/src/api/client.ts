@@ -45,11 +45,27 @@ async function parseApiError(res: Response): Promise<never> {
   let detail = res.statusText
   try {
     const body = await res.json()
-    detail = body.detail || JSON.stringify(body)
+    detail = formatApiDetail(body.detail ?? body)
   } catch {
     // use statusText
   }
   throw new ApiError(res.status, detail)
+}
+
+function formatApiDetail(value: unknown): string {
+  if (typeof value === "string") return value
+  if (Array.isArray(value)) {
+    return value.map((item) => {
+      if (item && typeof item === "object" && "msg" in item) {
+        const issue = item as { loc?: unknown; msg: unknown }
+        const location = Array.isArray(issue.loc) ? issue.loc.join(".") : "request"
+        return `${location}: ${String(issue.msg)}`
+      }
+      return formatApiDetail(item)
+    }).join("; ")
+  }
+  if (value && typeof value === "object") return JSON.stringify(value)
+  return String(value)
 }
 
 function getFilenameFromDisposition(disposition: string | null, fallback: string): string {

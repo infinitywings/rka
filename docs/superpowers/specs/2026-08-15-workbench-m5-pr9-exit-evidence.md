@@ -38,6 +38,14 @@ The release candidate implements the authority boundary frozen in
 
 ## Automated verification
 
+> **Independent-audit correction (2026-08-17):** the original run below
+> verified default inheritance but did not exercise explicit child-binding
+> narrowing, used a two-unit synthetic browser fixture rather than a real
+> research project, and did not include frontend build CI. Those omissions
+> invalidate the original merge-ready conclusion until the correction suite
+> and real-project exit pass recorded in a later section are complete. The
+> historical command results remain preserved rather than rewritten.
+
 | Gate | Result |
 |---|---|
 | Full Python suite | `3114 passed, 5 warnings in 164.02s` |
@@ -101,10 +109,46 @@ all writing intentions and evidence plans remained exact. Authorized deletion
 of imported project `prj_01M04BBBNEPFY4V3AWTYJ8RTKN` succeeded; the database
 retained only the original disposable project and an empty foreign-key check.
 
+## Independent-audit correction revalidation (2026-08-17)
+
+The P1 and selected P2 corrections from the independent audit were validated
+against the current PR branch after implementation:
+
+| Correction gate | Result |
+|---|---|
+| Full Python suite | `3126 passed, 5 warnings in 188.36s` |
+| Complete MCP plus semantic-patch API suite | `1431 passed in 19.80s` |
+| Focused model-drift/MCP/outline suite | `965 passed in 2.90s` |
+| Production Vite build | Passed; 2,421 modules transformed |
+| Changed-workbench ESLint | Passed with zero findings |
+| Writer skill validation and source/plugin mirror | Passed |
+| Disposable real-project outline run | Passed against three actual claims from `prj_01KN51HD73DSY9ZR9C56JYRNYZ` |
+| SQLite foreign-key check after the real-project run | Empty |
+
+The real-project run exercised an AI-origin expansion proposal with an exact
+host-agent context manifest, verified that the canonical manuscript remained
+unchanged before review, and recorded PI application afterward. One child
+narrowed two inherited support bindings to one and explicitly removed its
+qualifier; a sibling inherited both support bindings and the qualifier. The
+run also rejected child-before-parent ordering, accepted a parent-first
+contiguous subtree order, captured an Outline checkpoint with
+`rka.checkpoint-dependencies/v2`, and superseded that approval after a typed
+support-to-qualifier binding change. Four active units and zero foreign-key
+violations remained at the end.
+
+The installed live server's complete export contained 5,882 rows but could
+not be imported directly into the current-main schema: it carried five
+forward-only staleness fields on claims and evidence clusters and one
+pre-existing orphaned entity-link target. The disposable acceptance therefore
+selected three real claims plus their source journal, explicitly removed 15
+instances of only those forward-only fields, and imported that closed four-row
+subset. This is a documented version-skew/integrity limitation of the source
+pack, not a claim that full-pack portability passed.
+
 ## Exit decision
 
-PR 9 satisfies its implementation and feature-branch verification gates and is
-published for review in draft PR #80. Its remaining gates are GitHub CI and
-human review. PR 10 must remain dependent on PR 9 review and merge; it owns
-draft prose editing and source synchronization rather than expanding this
-outline contract implicitly.
+PR 9 now satisfies the independent-audit correction and feature-branch
+verification gates and remains published for review in draft PR #80. Its
+remaining gates are refreshed GitHub CI and human review. PR 10 must remain
+dependent on PR 9 review and merge; it owns draft prose editing and source
+synchronization rather than expanding this outline contract implicitly.

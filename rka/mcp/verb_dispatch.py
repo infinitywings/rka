@@ -2998,13 +2998,14 @@ async def dispatch_execute_typed(args: "BaseModel") -> str:  # type: ignore[name
     # ``model_dump`` returns a plain dict; ``exclude_none=True`` strips
     # None defaults so downstream ``kw.get(...)`` calls behave the same
     # as the legacy raw-kwarg surface.
-    if op == "update_manuscript":
+    if op in {"update_manuscript", "prepare_manuscript_outline_proposal"}:
         # Preserve explicit nulls for nullable metadata fields (abstract,
-        # venue, workspace_ref) while retaining omission semantics.  The
-        # service uses Pydantic's fields-set to distinguish "clear" from
-        # "leave unchanged", so the dispatch layer carries that set through.
+        # venue, workspace_ref) and outline-patch fields (parent, transition,
+        # quick-reader role, blocker) while retaining omission semantics.
         kw_all = args.model_dump(exclude_unset=True)
-        kw_all["_provided_fields"] = sorted(args.model_fields_set)
+        if op == "update_manuscript":
+            # The metadata service also needs the top-level provided-field set.
+            kw_all["_provided_fields"] = sorted(args.model_fields_set)
     else:
         kw_all = args.model_dump(exclude_none=True)
     kw_all.pop("operation", None)

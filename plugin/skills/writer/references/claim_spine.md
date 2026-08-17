@@ -178,9 +178,10 @@ Dry-run is the default. Review the proposed counts, evidence roles, and diff.
 When the semantic patch service is available, use the dry-run result to create
 an `argument_spine_replace` operation through
 `create_semantic_patch_proposal`. Human and AI candidates use that same
-envelope. Inspect `semantic_diff` and `validation_findings`, then apply through
-the separate `apply_semantic_patch_proposal` operation with the `spp_`
-revision. A stale target becomes a preserved conflict.
+envelope, but AI-authored candidates first persist an exact context manifest
+and retain their origin/provider boundary. Inspect `semantic_diff` and
+`validation_findings`. The Writer stops at `proposed`; the PI or local web UI
+applies or rejects the `spp_`. A stale target becomes a preserved conflict.
 
 The direct CLI apply form remains a local compatibility path:
 
@@ -193,8 +194,8 @@ rka writer import-spine \
   --apply
 ```
 
-Use direct `--apply` only when the proposal service is unavailable and the PI
-explicitly authorizes the compatibility path. The update may create or modify
+Use direct `--apply` only as an explicit human action when the proposal service
+is unavailable and the PI authorizes the compatibility path. The update may create or modify
 claim identities, immutable wording versions,
 evidence roles, units, and bindings. It never imports `ratified_by`, guesses a
 decision, or creates PI authority.

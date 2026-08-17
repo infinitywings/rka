@@ -438,7 +438,7 @@ function StageCanvas({
         )}
         {stage === "evaluation" && <EvaluationView units={units} onInspect={onInspect} />}
         {stage === "outline" && outline && outline.units.length > 0 && (
-          <OutlineEditor key={outline.manuscript_revision} outline={outline} onInspect={onInspect} />
+          <OutlineEditor key={`${outline.manuscript_id}:${outline.manuscript_revision}`} outline={outline} onInspect={onInspect} />
         )}
         {stage === "outline" && outline && outline.units.length === 0 && (
           <EmptyState title="No native manuscript units" detail="Create claim-sized units through a reviewed argument-spine proposal before elaborating the outline." />

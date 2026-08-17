@@ -2,9 +2,10 @@
 
 ## Outcome
 
-Turn a ratified argument spine into a resumable L2-L5 outline whose units carry
-writing rationale, intended claims, and evidence plans. All changes remain
-proposal-first and auditable.
+Turn a ratified argument spine into a resumable outline whose stored L2-L5
+values mean pure hierarchy depth and whose units carry writing rationale,
+intended claims, and evidence plans. All changes remain proposal-first and
+auditable.
 
 ## Contract slice
 
@@ -29,7 +30,11 @@ proposal-first and auditable.
 - Condense unions bindings into the retained parent before descendants are
   removed.
 - Reorder receives the exact active-key set and changes no semantic content.
+- Parent-before-child ordering and contiguous subtrees are mandatory.
 - No proposal creates PI ratification or resolves an Outline checkpoint.
+- AI proposals record context/provider provenance and remain pending until a
+  PI or local web user applies or rejects them.
+- Outline approval fingerprints include typed claim/unit evidence bindings.
 - Old or incomplete units remain visible with categorical blockers.
 - Cross-project parents, claims, evidence, proposals, and checkpoints fail
   closed.
@@ -44,3 +49,11 @@ proposal-first and auditable.
 - Full Python suite, production web build, changed-file lint, isolated restart
   and resume, and a disposable real-project browser walkthrough.
 - No live RKA research project receives semantic writes during acceptance.
+
+## Independent-audit correction gate
+
+Before merge, PR 9 must retain regression coverage for explicit evidence
+narrowing during expansion, non-vacuous condensation union, genuine hierarchy
+cycles, applied reorder, edit-without-resequence, AI provenance and human-only
+review transitions, MCP explicit-null preservation, cross-manuscript editor
+state isolation, and evidence-sensitive Outline checkpoint invalidation.

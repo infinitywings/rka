@@ -123,6 +123,42 @@ def test_create_manuscript_describe_schema_matches_typed_model() -> None:
     assert parsed.state == "active"
 
 
+def test_semantic_patch_transition_schema_rejects_ai_reviewer() -> None:
+    with pytest.raises(ValidationError):
+        TypeAdapter(ExecuteArgsUnion).validate_python({
+            "operation": "apply_semantic_patch_proposal",
+            "project_id": "prj_test",
+            "id": "spp_test",
+            "expected_revision": 1,
+            "actor": "executor",
+            "reason": "AI-authored proposals require a human transition.",
+        })
+
+
+@pytest.mark.parametrize("origin", [None, "human"])
+def test_typed_outline_proposal_requires_ai_provenance(origin: str | None) -> None:
+    payload = {
+        "operation": "prepare_manuscript_outline_proposal",
+        "project_id": "prj_test",
+        "id": "man_test",
+        "expected_revision": 2,
+        "action": "edit",
+        "reason": "Attempt to omit or falsify MCP authorship.",
+        "unit_key": "INTRO",
+        "patch": {"blocker": None},
+    }
+    if origin is not None:
+        payload.update({
+            "origin": origin,
+            "provider": "openai",
+            "model": "gpt-test",
+            "boundary": "host_conversation",
+            "context_manifest_id": "pcm_test",
+        })
+    with pytest.raises(ValidationError):
+        TypeAdapter(ExecuteArgsUnion).validate_python(payload)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("operation", "extra", "expected_path"),
@@ -198,6 +234,11 @@ async def test_outline_read_and_proposal_route_through_typed_mcp(requests) -> No
         "expected_revision": 3,
         "action": "reorder",
         "reason": "Lead with the method.",
+        "origin": "host_agent",
+        "provider": "openai",
+        "model": "gpt-test",
+        "boundary": "host_conversation",
+        "context_manifest_id": "pcm_outline",
         "ordered_unit_keys": ["METHOD", "INTRO"],
     })
     await server._dispatch_execute_typed(proposal)
@@ -218,8 +259,11 @@ async def test_outline_read_and_proposal_route_through_typed_mcp(requests) -> No
                 "expected_revision": 3,
                 "action": "reorder",
                 "reason": "Lead with the method.",
-                "children": [],
-                "descendant_keys": [],
+                "origin": "host_agent",
+                "provider": "openai",
+                "model": "gpt-test",
+                "boundary": "host_conversation",
+                "context_manifest_id": "pcm_outline",
                 "ordered_unit_keys": ["METHOD", "INTRO"],
             },
         },
@@ -628,6 +672,37 @@ _ATTESTATION = {
             {
                 "expected_revision": 3,
                 "spine": {"claims": [], "units": []},
+            },
+        ),
+        (
+            {
+                "operation": "prepare_manuscript_outline_proposal",
+                "project_id": "prj_test",
+                "id": "man_1",
+                "expected_revision": 3,
+                "action": "edit",
+                "reason": "Clear the resolved blocker.",
+                "origin": "host_agent",
+                "provider": "openai",
+                "model": "gpt-test",
+                "boundary": "host_conversation",
+                "context_manifest_id": "pcm_outline",
+                "unit_key": "INTRO",
+                "patch": {"blocker": None},
+            },
+            "POST",
+            "/api/manuscripts/man_1/outline/proposals",
+            {
+                "expected_revision": 3,
+                "action": "edit",
+                "reason": "Clear the resolved blocker.",
+                "origin": "host_agent",
+                "provider": "openai",
+                "model": "gpt-test",
+                "boundary": "host_conversation",
+                "context_manifest_id": "pcm_outline",
+                "unit_key": "INTRO",
+                "patch": {"blocker": None},
             },
         ),
         (

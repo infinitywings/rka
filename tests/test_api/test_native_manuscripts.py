@@ -274,10 +274,18 @@ async def test_native_mutations_record_transport_actor(
         headers=DEFAULT_HEADERS,
         json={
             "expected_revision": 1,
-            "spine": {"claims": [], "units": []},
+            "spine": {
+                "claims": [],
+                "units": [{
+                    "unit_id": "INTRO",
+                    "kind": "introduction",
+                    "location": "sections/introduction.tex",
+                }],
+            },
         },
     )
     assert direct_spine.status_code == 200
+    assert direct_spine.json()["semantic_patch_proposal_id"].startswith("spp_")
     direct_audit = await api_client.get(
         "/api/audit",
         headers=DEFAULT_HEADERS,
@@ -292,6 +300,13 @@ async def test_native_mutations_record_transport_actor(
         "create",
         "update",
     }
+
+    blocked_direct_spine = await api_client.put(
+        f"/api/manuscripts/{direct.json()['id']}/argument-spine",
+        headers={**DEFAULT_HEADERS, "X-RKA-Actor": "executor"},
+        json={"expected_revision": 2, "spine": {"claims": [], "units": []}},
+    )
+    assert blocked_direct_spine.status_code == 403
 
     mcp_headers = {**DEFAULT_HEADERS, "X-RKA-Actor": "executor"}
     proxied = await api_client.post(

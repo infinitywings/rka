@@ -45,10 +45,29 @@ export function OutlineEditor({
       .map((unit) => unit.local_key),
     [outline.units],
   )
-  const [draftOrder, setDraftOrder] = useState(canonicalOrder)
+  const canonicalOrderKey = `${outline.manuscript_id}:${outline.manuscript_revision}:${canonicalOrder.join("\u0000")}`
+  const [draftState, setDraftState] = useState({
+    canonicalOrderKey,
+    order: canonicalOrder,
+  })
+  const draftOrder = draftState.canonicalOrderKey === canonicalOrderKey
+    ? draftState.order
+    : canonicalOrder
+  const setDraftOrder = (update: string[] | ((current: string[]) => string[])) => {
+    setDraftState((current) => {
+      const base = current.canonicalOrderKey === canonicalOrderKey
+        ? current.order
+        : canonicalOrder
+      return {
+        canonicalOrderKey,
+        order: typeof update === "function" ? update(base) : update,
+      }
+    })
+  }
   const [draggedKey, setDraggedKey] = useState<string | null>(null)
   const [editKey, setEditKey] = useState<string | null>(null)
   const [expandKey, setExpandKey] = useState<string | null>(null)
+  const [condenseKey, setCondenseKey] = useState<string | null>(null)
   const [reorderReason, setReorderReason] = useState("")
   const byKey = useMemo(
     () => new Map(outline.units.map((unit) => [unit.local_key, unit])),
@@ -64,6 +83,7 @@ export function OutlineEditor({
       toast.success(`Review proposal prepared for ${affected} outline unit${affected === 1 ? "" : "s"}`)
       setEditKey(null)
       setExpandKey(null)
+      setCondenseKey(null)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not prepare outline proposal")
     }
@@ -154,6 +174,9 @@ export function OutlineEditor({
           <p className="mt-1 opacity-80">
             Edit, expand, condense, and reorder prepare a semantic diff. RKA changes only after separate explicit Apply in Edit proposals; manuscript files remain untouched.
           </p>
+          <p className="mt-1 opacity-80">
+            Apply or reject pending edit proposals before creating a checkpoint; checkpoint creation advances the manuscript revision and makes older proposals stale.
+          </p>
         </div>
         {checkpointStatus(outline) !== "pending" && checkpointStatus(outline) !== "resolved" && (
           <Button
@@ -198,7 +221,13 @@ export function OutlineEditor({
                   {unit.claims.map((claim) => <Badge key={`${unit.id}:${claim.claim_id}`} variant="outline">{claim.claim_key} · {claim.relationship}</Badge>)}
                   <Badge variant="outline">{evidenceIds.length} evidence bindings</Badge>
                   <Badge variant="outline">{unit.evidence_plan.length} evidence-plan items</Badge>
-                  {unit.missing.map((missing) => <Badge key={missing} variant="destructive">missing {missing.replaceAll("_", " ")}</Badge>)}
+                  {unit.missing.map((missing) => (
+                    <Badge key={missing} variant="destructive">
+                      {missing === "declared_blocker"
+                        ? `blocked: ${unit.blocker ?? "reason declared"}`
+                        : `missing ${missing.replaceAll("_", " ")}`}
+                    </Badge>
+                  ))}
                 </div>
               </div>
               <div className="flex flex-wrap gap-1">
@@ -221,13 +250,9 @@ export function OutlineEditor({
                     size="sm"
                     variant="outline"
                     disabled={mutations.prepare.isPending}
-                    onClick={() => void prepare({
-                      expected_revision: outline.manuscript_revision,
-                      action: "condense",
-                      reason: `Condense ${unit.local_key} after reviewing all descendant bindings.`,
-                      unit_key: unit.local_key,
-                      descendant_keys: unitDescendants,
-                    })}
+                    onClick={() => setCondenseKey(
+                      condenseKey === unit.local_key ? null : unit.local_key,
+                    )}
                   >
                     <Merge className="mr-1 h-3.5 w-3.5" /> Condense {unitDescendants.length}
                   </Button>
@@ -320,7 +345,35 @@ export function OutlineEditor({
                 <label className="space-y-1 text-xs font-medium">Evidence plan, one per line<Textarea name="evidence_plan" required /></label>
                 <label className="space-y-1 text-xs font-medium">Reason for expansion<Input name="reason" required /></label>
                 <Button type="submit" className="self-end" disabled={mutations.prepare.isPending}>Prepare expansion proposal</Button>
-                <p className="lg:col-span-2 text-[11px] text-muted-foreground">The parent remains. The child inherits only the parent&apos;s current claim and typed evidence bindings.</p>
+                <p className="lg:col-span-2 text-[11px] text-muted-foreground">The parent remains. This form inherits the parent&apos;s disclosed claim and typed evidence bindings by default; typed API callers may narrow them explicitly.</p>
+              </form>
+            )}
+
+            {condenseKey === unit.local_key && (
+              <form
+                className="mt-3 grid gap-3 rounded-md border bg-muted/20 p-3 lg:grid-cols-[minmax(0,1fr)_auto]"
+                onSubmit={(event: FormEvent<HTMLFormElement>) => {
+                  event.preventDefault()
+                  const form = new FormData(event.currentTarget)
+                  void prepare({
+                    expected_revision: outline.manuscript_revision,
+                    action: "condense",
+                    reason: String(form.get("reason") ?? "").trim(),
+                    unit_key: unit.local_key,
+                    descendant_keys: unitDescendants,
+                  })
+                }}
+              >
+                <div className="text-xs text-muted-foreground">
+                  <p className="font-medium text-foreground">Review the descendants and their bindings in the proposal diff before applying.</p>
+                  <p className="mt-1">This proposal will retire: {unitDescendants.join(", ")}</p>
+                </div>
+                <Button type="button" size="sm" variant="ghost" onClick={() => setCondenseKey(null)}>Cancel</Button>
+                <label className="space-y-1 text-xs font-medium">
+                  Reason for condensation
+                  <Input name="reason" required placeholder="Why should these units become one argument block?" />
+                </label>
+                <Button type="submit" className="self-end" disabled={mutations.prepare.isPending}>Prepare condensation proposal</Button>
               </form>
             )}
           </div>

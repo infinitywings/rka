@@ -104,11 +104,12 @@ Semantic changes follow this order:
 4. Review the diff, evidence roles, result coverage, and prohibited wording.
 5. On a server exposing semantic patches, create an
    `argument_spine_replace` through `create_semantic_patch_proposal`. Review
-   its immutable diff and findings, then separately call
-   `apply_semantic_patch_proposal` with the `spp_` revision. Human and AI
-   suggestions follow this same path; stale bases become conflicts.
-6. The direct CLI form below is a local compatibility path only. Use it only
-   with explicit PI authorization and an expected manuscript revision:
+   its immutable diff and findings. An AI author first persists an exact
+   context manifest and records its origin/provider boundary, then stops at
+   `proposed`. The PI or local web UI separately applies or rejects the `spp_`;
+   stale bases become conflicts.
+6. The direct CLI form below is a local compatibility path only. It must be an
+   explicit human action with PI authorization and an expected manuscript revision:
 
    ```bash
    rka writer import-spine \
@@ -134,25 +135,31 @@ The complete journal-to-prose admission policy is in
 ## Developing the progressive outline
 
 After the claim spine is present, use `manuscript_outline` to resume the
-canonical L2-L5 unit hierarchy. Each major unit must expose its communicative
+canonical unit hierarchy. L2-L5 values express pure depth, not rhetorical
+type; unit `kind` and rationale express the writing role. Each major unit must expose its communicative
 job, intended reader takeaway, intended claim, and evidence plan, together
 with reverse claim/evidence navigation and any completeness blocker.
 
-Direct editing and AI suggestions share one proposal-first route:
+Direct editing and AI suggestions share one proposal-first route, but not the
+same review authority:
 
 1. Read the current outline and manuscript revision.
-2. Prepare `edit`, `expand`, `condense`, or `reorder` through
-   `prepare_manuscript_outline_proposal`.
+2. For AI-authored changes, persist `prepare_semantic_patch_context`. Prepare
+   `edit`, `expand`, `condense`, or `reorder` with that exact provenance
+   through `prepare_manuscript_outline_proposal`.
 3. Inspect the immutable semantic diff, validation findings, binding changes,
    and downstream order impact.
-4. Apply or reject the `spp_` separately. A stale manuscript revision becomes
-   a conflict and must be rebased explicitly.
+4. The Writer stops at `proposed`. The PI or local web UI applies or rejects
+   the `spp_` separately. A stale manuscript revision becomes a conflict and
+   must be rebased explicitly.
 5. Re-query `manuscript_outline`; never infer success from the proposal alone.
 
 Expansion retains its parent and cannot invent undisclosed claim/evidence
 bindings. Condensation unions named descendant bindings into the retained
-parent before removal. Reorder requires the exact active unit-key set and
-changes no semantic content. Creating and resolving the Outline checkpoint are
+parent before removal. Reorder requires the exact active unit-key set, places
+parents before children, keeps subtrees contiguous, and changes no semantic
+content. Outline checkpoint dependencies include typed claim/unit evidence
+bindings. Creating and resolving the Outline checkpoint are
 separate PI-authority operations; neither proposal preparation nor apply
 ratifies the outline. Writer-owned Markdown or LaTeX files remain projections
 until source synchronization is introduced.
