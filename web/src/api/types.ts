@@ -971,6 +971,117 @@ export interface ManuscriptUnitContext {
   status: string
   evidence: ManuscriptEvidenceBinding[]
   artifact_binding?: Record<string, unknown>
+  outline_level: number
+  parent_unit_key: string | null
+  communicative_job: string | null
+  intended_takeaway: string | null
+  transition_from_previous: string | null
+  quick_reader_role: string | null
+  evidence_plan: string[]
+  figure_intentions: string[]
+  table_intentions: string[]
+  citation_intentions: string[]
+  blocker: string | null
+}
+
+export interface ManuscriptOutlineClaimLink {
+  claim_id: string
+  claim_key: string
+  claim_version: number | null
+  exact_wording: string | null
+  relationship: string
+}
+
+export interface ManuscriptOutlineUnit extends ManuscriptUnitContext {
+  claims: ManuscriptOutlineClaimLink[]
+  child_unit_keys: string[]
+  completeness: "complete" | "needs_review"
+  missing: string[]
+}
+
+export interface ManuscriptOutline {
+  schema_version: "rka.manuscript-outline/v1"
+  project_id: string
+  manuscript_id: string
+  manuscript_revision: number
+  units: ManuscriptOutlineUnit[]
+  outline_checkpoint: Record<string, unknown> | null
+  summary: {
+    active_units: number
+    complete_units: number
+    units_needing_review: number
+    levels: number[]
+    checkpoint_ready: boolean
+  }
+  policy: {
+    canonical_unit_identity: "mun_"
+    mutation: "semantic_patch_then_explicit_apply"
+    checkpoint_resolution: "explicit_pi_decision"
+    file_writes: false
+  }
+}
+
+export interface OutlineUnitPatch {
+  title?: string | null
+  location?: string
+  outline_level?: number
+  parent_unit_key?: string | null
+  communicative_job?: string | null
+  intended_takeaway?: string | null
+  transition_from_previous?: string | null
+  quick_reader_role?: string | null
+  evidence_plan?: string[]
+  figure_intentions?: string[]
+  table_intentions?: string[]
+  citation_intentions?: string[]
+  blocker?: string | null
+}
+
+export interface OutlineChildDraft {
+  local_key: string
+  title: string
+  location: string
+  communicative_job: string
+  intended_takeaway: string
+  transition_from_previous?: string | null
+  quick_reader_role?: string | null
+  evidence_plan: string[]
+  figure_intentions?: string[]
+  table_intentions?: string[]
+  citation_intentions?: string[]
+  blocker?: string | null
+  claim_keys?: string[]
+  support_ids?: string[]
+  qualifier_ids?: string[]
+  counterevidence_ids?: string[]
+}
+
+export interface OutlineProposalRequest {
+  expected_revision: number
+  action: "edit" | "expand" | "condense" | "reorder"
+  reason: string
+  origin?: "human" | "host_agent" | "lm_studio"
+  provider?: string | null
+  model?: string | null
+  boundary?: "none" | "host_conversation" | "local_loopback"
+  context_manifest_id?: string | null
+  unit_key?: string
+  patch?: OutlineUnitPatch
+  children?: OutlineChildDraft[]
+  descendant_keys?: string[]
+  ordered_unit_keys?: string[]
+}
+
+export interface OutlineProposalResult {
+  schema_version: "rka.outline-proposal/v1"
+  proposal: SemanticPatchProposal
+  impact: {
+    action: string
+    affected_unit_keys: string[]
+    canonical_mutation: false
+    apply_operation: "semantic_patch_apply"
+    [key: string]: unknown
+  }
 }
 
 export interface ManuscriptContext {
@@ -1013,6 +1124,18 @@ export interface ManuscriptSpineUnit {
   status: string
   evidence_ids: string[]
   claim_ids: string[]
+  sequence: number
+  outline_level: number
+  parent_unit_key: string | null
+  communicative_job: string | null
+  intended_takeaway: string | null
+  transition_from_previous: string | null
+  quick_reader_role: string | null
+  evidence_plan: string[]
+  figure_intentions: string[]
+  table_intentions: string[]
+  citation_intentions: string[]
+  blocker: string | null
 }
 
 export interface ManuscriptSpine {

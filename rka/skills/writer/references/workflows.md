@@ -217,17 +217,41 @@ Procedure:
    mission. Show the complete proposed contribution contract and outline, then
    obtain explicit final confirmation.
 13. Dry-run `rka writer import-spine`. Review the evidence roles, result
-   coverage, and proposed revision; apply only with an explicit expected
-   revision. Import never creates ratifications.
-14. Record the PI's selected framing and one child claim-scope `dec_` per
+   coverage, and proposed revision. Create an attributed semantic proposal;
+   when the Writer authored it, first persist the exact AI context manifest,
+   then stop for PI/web apply or reject. Direct CLI apply is a human-only
+   compatibility action with an explicit expected revision. Import never
+   creates ratifications.
+14. Query `manuscript_outline` and progressively elaborate the active `mun_`
+   hierarchy from shallower L2 units toward deeper L5 argument beats. These
+   values mean hierarchy depth only; `kind` and writing rationale carry the
+   rhetorical role. Every
+   major unit states its communicative job, intended takeaway, intended claim,
+   and evidence plan. Treat citation, figure, table, transition, and location
+   fields as plans until their sources or artifacts exist.
+15. For each direct or AI-assisted change, call
+   `prepare_manuscript_outline_proposal` with `edit`, `expand`, `condense`, or
+   `reorder`. For an AI-authored change, first call
+   `prepare_semantic_patch_context`, then pass the exact origin, provider,
+   model, boundary, and context-manifest ID. Inspect the semantic diff,
+   findings, claim/evidence binding changes, and downstream ordering impact.
+   The Writer stops at `proposed`; the PI or local web UI applies or rejects
+   the `spp_`. Re-query the outline after that human transition. Expansion
+   retains its parent, condensation preserves the union of descendant
+   bindings on the retained parent, and reorder names the complete active
+   unit-key set.
+16. Record the PI's selected framing and one child claim-scope `dec_` per
    selected contribution. Set `chosen` to the exact claim text,
    `decided_by: pi`, and connect the decision to its evidence and Outline
    lineage. Bind each exact native claim version through
    `ratify_manuscript_claim`. A later material edit requires a new version and
    a superseding PI decision.
-15. Resolve the native Outline checkpoint, run `rka writer sync`, and require
-    server readiness. The generated `CONTRIBUTION_CONTRACT.md`,
-    `ARGUMENT_SPINE.md`, and `RESULTS_TRACE.md` are read-only views.
+17. When the outline projection has no rationale blockers, create the native
+    Outline checkpoint and show the exact hierarchy and bindings to the PI.
+    Resolve it only through `resolve_manuscript_checkpoint` with a same-project
+    PI decision. Then run `rka writer sync` and require server readiness. The
+    generated `CONTRIBUTION_CONTRACT.md`,
+   `ARGUMENT_SPINE.md`, and `RESULTS_TRACE.md` are read-only views.
 
 Output: Outline Decision (`dec_`), one exact-wording claim-scope `dec_` per
 contribution with evidence provenance,

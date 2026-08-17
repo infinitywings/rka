@@ -23,20 +23,33 @@ ratification boundary is recorded in
 The claim-centered evaluation, adverse-outcome, mission, and result-unit
 boundary is recorded in
 [ADR 0008](docs/adr/0008-claim-centered-evaluation-contract-and-results-trace.md).
+The progressive-outline hierarchy, writing-rationale, binding-preservation,
+and proposal-first editing boundary is recorded in
+[ADR 0009](docs/adr/0009-progressive-outline-and-unit-editor.md).
 
 The roadmap is ordered by dependency, not by invented delivery dates. Every
 milestone must satisfy its exit gate before dependent work is treated as ready.
 
 ## Now
 
-**M0 through M3 and M4 / PR 7 are complete on `main`. M4 / PR 8 (issue #59),
-the evaluation contract and results trace, has satisfied its feature-branch
-release gate in draft PR [#79](https://github.com/infinitywings/rka/pull/79).**
+**M0 through M4 are complete on `main`. M5 / PR 9 (issue #60), the progressive
+outline and manuscript-unit editor, has passed its independent-audit
+correction gate and is the current review target. It remains draft pending
+refreshed GitHub CI and human review.**
 PR [#78](https://github.com/infinitywings/rka/pull/78) merged
 the seed-through-contribution dependency; ADR 0008 freezes the evaluation
 contract, and the exact release evidence is recorded in
 [`2026-08-15-workbench-m4-pr8-exit-evidence.md`](docs/superpowers/specs/2026-08-15-workbench-m4-pr8-exit-evidence.md).
-Review and merge PR 8 before starting M4 / PR 9 progressive outline authoring.
+PR [#79](https://github.com/infinitywings/rka/pull/79) merged the evaluation
+contract and result trace. ADR 0009 now freezes the PR 9 editing contract; its
+implementation plan is
+[`2026-08-15-m5-pr9-progressive-outline.md`](docs/superpowers/plans/2026-08-15-m5-pr9-progressive-outline.md).
+Its migration, REST/MCP, proposal, workbench, restart, and knowledge-pack gates
+and the correction status of the original acceptance run are recorded in
+[`2026-08-15-workbench-m5-pr9-exit-evidence.md`](docs/superpowers/specs/2026-08-15-workbench-m5-pr9-exit-evidence.md).
+The implementation is published for review in draft PR
+[#80](https://github.com/infinitywings/rka/pull/80).
+PR 10 remains dependent on PR 9 review and merge.
 The choice-first Writer delta is reconciled, the authority and AI boundary is
 recorded in ADR 0001, the read-only workbench has passed its real-project exit
 gate, and first-class experiment/run/observation/evidence-locator semantics
@@ -134,7 +147,7 @@ semantics rather than pretending that M1 is already complete.
 | **M2** | **Read-only manuscript workbench MVP** | Make the current argument and evidence navigable before enabling mutation. | PR 4 workbench shell and Context Capsule. | A researcher can inspect the sentence/paragraph spine, RQs, clusters, claims, sources, manuscript units, evidence, trace paths, and stale-impact warnings without changing canonical state. |
 | **M3** | **Deliberation and safe editing** | Support resumable human/AI collaboration with one auditable mutation path. | PR 5 versioned planning artifacts and branches; PR 6 unified human/AI patch proposals and local-model adapter. | Direct edits and AI proposals use the same semantic diff, validation, conflict, apply/reject, and provenance path; no ratified semantics are silently overwritten. |
 | **M4** | **Contribution and evaluation workflow** | Guide the researcher from framing through bounded contributions and testable evaluation commitments. | PR 7 seed-through-contribution workflow; PR 8 evaluation contract and results trace. | Problem, gap, insight, challenges, innovations, RQs, contributions, and evaluation commitments are linked; PI ratification is explicit; missing evidence becomes visible work. |
-| **M5** | **Outline and drafting** | Turn the ratified spine into an expandable, evidence-linked manuscript. | PR 9 progressive outline and unit editor; PR 10 draft editor and source synchronization. | The researcher can expand and condense claim-sized units, draft in Markdown/LaTeX, navigate provenance, and apply conflict-safe writes without automatic Git operations. |
+| **M5** | **Outline and drafting** | Turn the ratified spine into an expandable, evidence-linked manuscript. | PR 9 progressive outline and unit editor; PR 9.1 integrity hardening; PR 9.2 typed semantic core; PR 10 narrow Markdown source synchronization. | The researcher can expand and condense hierarchical units, draft in Markdown/LaTeX, navigate provenance, and apply conflict-safe writes without automatic Git operations. |
 | **M6** | **Intake, artifact views, and hardening** | Complete source intake, deterministic ARA-inspired views, grounded foresight, and production-quality reliability. | PR 11 Source Inbox; PR 12A artifact profile and deterministic viewer; PR 12B grounded research foresight; PR 13 end-to-end reliability and usability. | Imported sources are safe and traceable; projections are deterministic rather than authoritative; foresight is advisory; real-project, security, accessibility, migration, and concurrency suites pass. |
 
 ## Tracking convention

@@ -86,8 +86,8 @@ def get_transport_actor(
     """Attribute the request transport for audit records.
 
     Direct REST/UI calls default to ``web_ui``. The bundled MCP proxy sends
-    ``executor`` explicitly. This is provenance metadata, not an
-    authentication or authorization decision.
+    ``executor`` explicitly. This is provenance metadata and a local
+    interaction guard, not a network authentication boundary.
     """
     actor = (x_rka_actor or "web_ui").strip()
     if actor not in {"executor", "web_ui"}:

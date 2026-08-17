@@ -234,6 +234,7 @@ class ProjectService(BaseService):
         "manuscript_unit_evidence",
         "manuscript_claim_units",
         "manuscript_checkpoints",
+        "manuscript_unit_outline_profiles",
         "manuscript_reference_members",
         "reference_validation_attestations",
         "manuscript_claim_versions",

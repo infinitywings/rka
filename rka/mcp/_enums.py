@@ -539,6 +539,7 @@ ManuscriptUnitStatusLit = Literal[
     "final",
     "removed",
 ]
+ManuscriptOutlineActionLit = Literal["edit", "expand", "condense", "reorder"]
 ManuscriptEvidenceRoleLit = Literal[
     "support",
     "qualifier",
@@ -581,6 +582,7 @@ SemanticPatchAIOriginLit = Literal["host_agent", "lm_studio"]
 SemanticPatchBoundaryLit = Literal["none", "host_conversation", "local_loopback"]
 SemanticPatchAIBoundaryLit = Literal["host_conversation", "local_loopback"]
 SemanticPatchActorLit = Literal["pi", "brain", "executor", "web_ui"]
+SemanticPatchReviewerLit = Literal["pi", "web_ui"]
 SemanticPatchStatusLit = Literal[
     "proposed", "applied", "rejected", "conflicted", "superseded", "expired"
 ]

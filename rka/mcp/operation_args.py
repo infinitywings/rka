@@ -72,6 +72,7 @@ from rka.models.semantic_patch import (
     SemanticPatchProposalCreate,
     SemanticPatchProposalTransition,
 )
+from rka.models.outline import OutlineProposalRequest
 
 # NOTE: enum aliases from ``rka.mcp._enums`` are imported on a per-batch
 # basis. Batch A (query ops) doesn't directly type any enum field — query
@@ -136,8 +137,7 @@ from rka.mcp._enums import (  # noqa: E402, F811
     SemanticPatchAIOriginLit,
     SemanticPatchAIBoundaryLit,
     SemanticPatchActorLit,
-    SemanticPatchBoundaryLit,
-    SemanticPatchOriginLit,
+    SemanticPatchReviewerLit,
     SemanticPatchStatusLit,
 )
 
@@ -168,6 +168,7 @@ from rka.mcp._enums import (  # noqa: E402, F811
     ManuscriptEvidenceRoleLit,
     ManuscriptInitialPhaseLit,
     ManuscriptInitialStateLit,
+    ManuscriptOutlineActionLit,
     ManuscriptReadinessPhaseLit,
     ManuscriptStateLit,
     ManuscriptUnitKindLit,
@@ -756,6 +757,17 @@ class QueryManuscriptSpineArgs(ProjectScopedArgs):
     ]
 
 
+class QueryManuscriptOutlineArgs(ProjectScopedArgs):
+    """[ANY] Read L2-L5 outline rationale, bindings, and checkpoint state."""
+
+    operation: Literal["manuscript_outline"] = "manuscript_outline"
+
+    id: Annotated[
+        str,
+        Field(description="Canonical man_ id or compatibility jrn_ alias."),
+    ]
+
+
 class QueryManuscriptWritingCandidatesArgs(ProjectScopedArgs):
     """[ANY] Smooth claims through reviewed clusters and research questions."""
 
@@ -1303,6 +1315,7 @@ QueryArgsUnion = Annotated[
         QueryManuscriptReferenceManifestArgs,
         QueryManuscriptReadinessArgs,
         QueryManuscriptSpineArgs,
+        QueryManuscriptOutlineArgs,
         QueryManuscriptWritingCandidatesArgs,
         QueryChangesSinceArgs,
         QueryManuscriptImpactArgs,
@@ -2059,7 +2072,7 @@ class UpdateManuscriptArgs(ProjectScopedArgs):
 
 
 class UpsertArgumentSpineArgs(ProjectScopedArgs):
-    """[ANY] Atomically replace the authoritative argument-spine projection."""
+    """[DEPRECATED] Human REST/CLI compatibility only; MCP callers use proposals."""
 
     operation: Literal["upsert_argument_spine"] = "upsert_argument_spine"
 
@@ -2694,6 +2707,33 @@ class PreparePlanningEvaluationResultArgs(
     id: Annotated[str, Field(min_length=1, description="Canonical mpb_ branch id.")]
 
 
+class PrepareManuscriptOutlineProposalArgs(ProjectScopedArgs, OutlineProposalRequest):
+    """[BRAIN/EXECUTOR] Prepare an attributed outline proposal for human review."""
+
+    operation: Literal["prepare_manuscript_outline_proposal"] = (
+        "prepare_manuscript_outline_proposal"
+    )
+    origin: Annotated[
+        SemanticPatchAIOriginLit,
+        Field(description="AI provider path; typed MCP calls cannot claim human origin."),
+    ]
+    provider: Annotated[str, Field(min_length=1, description="AI provider name.")]
+    model: Annotated[str, Field(min_length=1, description="AI model identifier.")]
+    boundary: Annotated[
+        SemanticPatchAIBoundaryLit,
+        Field(description="Outbound data boundary recorded by the context manifest."),
+    ]
+    context_manifest_id: Annotated[
+        str,
+        Field(min_length=1, description="Matching pcm_ context disclosure manifest."),
+    ]
+    action: Annotated[
+        ManuscriptOutlineActionLit,
+        Field(description="Deterministic structural outline transformation."),
+    ]
+    id: Annotated[str, Field(min_length=1, description="Canonical man_ manuscript id.")]
+
+
 class PrepareSemanticPatchContextArgs(ProjectScopedArgs, ContextManifestCreate):
     """[ANY] Persist the exact context disclosure before an AI call."""
 
@@ -2705,14 +2745,23 @@ class PrepareSemanticPatchContextArgs(ProjectScopedArgs, ContextManifestCreate):
 
 
 class CreateSemanticPatchProposalArgs(ProjectScopedArgs, SemanticPatchProposalCreate):
-    """[ANY] Validate and persist a proposal without mutating its targets."""
+    """[BRAIN/EXECUTOR] Persist an attributed AI proposal without applying it."""
 
     operation: Literal["create_semantic_patch_proposal"] = "create_semantic_patch_proposal"
-    origin: Annotated[SemanticPatchOriginLit, Field(description="Proposal origin.")]
+    origin: Annotated[
+        SemanticPatchAIOriginLit,
+        Field(description="AI provider path; typed MCP calls cannot claim human origin."),
+    ]
     created_by: Annotated[SemanticPatchActorLit, Field(description="Proposal author.")]
+    provider: Annotated[str, Field(min_length=1, description="AI provider name.")]
+    model: Annotated[str, Field(min_length=1, description="AI model identifier.")]
     boundary: Annotated[
-        SemanticPatchBoundaryLit, Field(description="Provider boundary.")
-    ] = "none"
+        SemanticPatchAIBoundaryLit, Field(description="Outbound data boundary.")
+    ]
+    context_manifest_id: Annotated[
+        str,
+        Field(min_length=1, description="Matching pcm_ context disclosure manifest."),
+    ]
 
 
 class ApplySemanticPatchProposalArgs(ProjectScopedArgs, SemanticPatchProposalTransition):
@@ -2720,7 +2769,7 @@ class ApplySemanticPatchProposalArgs(ProjectScopedArgs, SemanticPatchProposalTra
 
     operation: Literal["apply_semantic_patch_proposal"] = "apply_semantic_patch_proposal"
     id: Annotated[str, Field(min_length=1, description="Canonical spp_ id.")]
-    actor: Annotated[SemanticPatchActorLit, Field(description="Applying reviewer.")]
+    actor: Annotated[SemanticPatchReviewerLit, Field(description="Applying reviewer.")]
 
 
 class RejectSemanticPatchProposalArgs(ProjectScopedArgs, SemanticPatchProposalTransition):
@@ -2728,7 +2777,7 @@ class RejectSemanticPatchProposalArgs(ProjectScopedArgs, SemanticPatchProposalTr
 
     operation: Literal["reject_semantic_patch_proposal"] = "reject_semantic_patch_proposal"
     id: Annotated[str, Field(min_length=1, description="Canonical spp_ id.")]
-    actor: Annotated[SemanticPatchActorLit, Field(description="Rejecting reviewer.")]
+    actor: Annotated[SemanticPatchReviewerLit, Field(description="Rejecting reviewer.")]
 
 
 class GenerateLMStudioSemanticPatchArgs(ProjectScopedArgs, LMStudioProposalRequest):
@@ -2972,6 +3021,7 @@ BatchBExecuteUnion = Annotated[
         RatifyPlanningContributionArgs,
         CreatePlanningEvaluationMissionArgs,
         PreparePlanningEvaluationResultArgs,
+        PrepareManuscriptOutlineProposalArgs,
         PrepareSemanticPatchContextArgs,
         CreateSemanticPatchProposalArgs,
         ApplySemanticPatchProposalArgs,
@@ -4865,6 +4915,7 @@ ExecuteArgsUnion = Annotated[
         RatifyPlanningContributionArgs,
         CreatePlanningEvaluationMissionArgs,
         PreparePlanningEvaluationResultArgs,
+        PrepareManuscriptOutlineProposalArgs,
         PrepareSemanticPatchContextArgs,
         CreateSemanticPatchProposalArgs,
         ApplySemanticPatchProposalArgs,
@@ -4956,6 +5007,7 @@ __all__ = [
     "QueryReferenceValidationStatusArgs",
     "ResolveEntitiesArgs",
     "QueryManuscriptContextArgs",
+    "QueryManuscriptOutlineArgs",
     "QueryManuscriptReferenceManifestArgs",
     "QueryManuscriptReadinessArgs",
     "QueryManuscriptSpineArgs",
@@ -5026,6 +5078,7 @@ __all__ = [
     "AppendPlanningArtifactVersionArgs",
     "CreatePlanningEvaluationMissionArgs",
     "PreparePlanningEvaluationResultArgs",
+    "PrepareManuscriptOutlineProposalArgs",
     "PromotePlanningResearchQuestionArgs",
     "PreparePlanningContributionArgs",
     "RatifyPlanningContributionArgs",

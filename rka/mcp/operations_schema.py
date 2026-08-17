@@ -254,6 +254,7 @@ _ENUMS = {
     "semantic_patch_status": [
         "proposed", "applied", "rejected", "conflicted", "superseded", "expired"
     ],
+    "outline_action": ["edit", "expand", "condense", "reorder"],
     "evidence_status": [
         "unassessed",
         "supported",
@@ -1248,6 +1249,31 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "manuscript_context",
         ],
         "notes": "The export is a cache projection, not an independent store.",
+    },
+    "manuscript_outline": {
+        "operation": "manuscript_outline",
+        "tool": "rka_query",
+        "category": "manuscript",
+        "role_tag": "ANY",
+        "summary": "Read L2-L5 outline rationale, bindings, blockers, and checkpoint state.",
+        "signature": "rka_query(operation='manuscript_outline', *, project_id, id)",
+        "required_fields": ["project_id", "id"],
+        "optional_fields": [],
+        "enums": {},
+        "examples": [{
+            "description": "Resume the current progressive outline.",
+            "call": {
+                "operation": "manuscript_outline",
+                "project_id": "prj_01ABC...",
+                "id": "man_01XYZ...",
+            },
+        }],
+        "related_operations": [
+            "prepare_manuscript_outline_proposal",
+            "create_manuscript_checkpoint",
+            "manuscript_spine",
+        ],
+        "notes": "This projection is read-only; structural edits are proposals.",
     },
     "manuscript_writing_candidates": {
         "operation": "manuscript_writing_candidates",
@@ -2286,7 +2312,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "operation": "record_pi_selection",
         "tool": "rka_execute",
         "category": "decision",
-        "role_tag": "PI",
+        "role_tag": "ANY",
         "summary": "Record the PI's selection on a presented decision.",
         "signature": (
             "rka_execute(operation='record_pi_selection', *, project_id, "
@@ -4983,6 +5009,54 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ],
         "notes": "Preparation never mutates the manuscript; apply remains separate.",
     },
+    "prepare_manuscript_outline_proposal": {
+        "operation": "prepare_manuscript_outline_proposal",
+        "tool": "rka_execute",
+        "category": "manuscript",
+        "role_tag": "PI",
+        "summary": "Prepare an outline edit, expansion, condensation, or reorder proposal.",
+        "signature": (
+            "rka_execute(operation='prepare_manuscript_outline_proposal', *, "
+            "project_id, id, expected_revision, action, reason, ...)"
+        ),
+        "required_fields": [
+            "project_id", "id", "expected_revision", "action", "reason",
+            "origin", "provider", "model", "boundary", "context_manifest_id",
+        ],
+        "optional_fields": [
+            "unit_key", "patch", "children", "descendant_keys", "ordered_unit_keys",
+        ],
+        "enums": {
+            "action": list(_ENUMS["outline_action"]),
+            "origin": list(_ENUMS["semantic_patch_ai_origin"]),
+            "boundary": list(_ENUMS["semantic_patch_ai_boundary"]),
+        },
+        "examples": [{
+            "description": "Prepare a complete-set reorder for semantic review.",
+            "call": {
+                "operation": "prepare_manuscript_outline_proposal",
+                "project_id": "prj_01ABC...",
+                "id": "man_01XYZ...",
+                "expected_revision": 6,
+                "action": "reorder",
+                "reason": "Lead with the mechanism for this audience.",
+                "origin": "host_agent",
+                "provider": "openai",
+                "model": "gpt-5.6",
+                "boundary": "host_conversation",
+                "context_manifest_id": "pcm_01ABC...",
+                "ordered_unit_keys": ["METHOD", "INTRO", "RESULT"],
+            },
+        }],
+        "related_operations": [
+            "manuscript_outline", "semantic_patch_proposals",
+            "apply_semantic_patch_proposal",
+        ],
+        "notes": (
+            "Preparation never mutates the manuscript or resolves its Outline checkpoint. "
+            "AI-origin proposals require provider, model, boundary, and a matching context manifest."
+        ),
+    },
     # --- unified semantic patch proposals ------------------------------
     "semantic_patch_proposals": {
         "operation": "semantic_patch_proposals",
@@ -5077,26 +5151,30 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "origin, intent, reason, created_by, operations, ...)"
         ),
         "required_fields": [
-            "origin", "intent", "reason", "created_by", "operations", "project_id"
+            "origin", "intent", "reason", "created_by", "operations", "project_id",
+            "provider", "model", "boundary", "context_manifest_id",
         ],
         "optional_fields": [
-            "provider", "model", "boundary", "context_manifest_id",
             "supersedes_proposal_id",
         ],
         "enums": {
-            "origin": list(_ENUMS["semantic_patch_origin"]),
+            "origin": list(_ENUMS["semantic_patch_ai_origin"]),
             "created_by": list(_ENUMS["semantic_patch_actor"]),
-            "boundary": list(_ENUMS["semantic_patch_boundary"]),
+            "boundary": list(_ENUMS["semantic_patch_ai_boundary"]),
         },
         "examples": [{
             "description": "Propose a metadata change for review.",
             "call": {
                 "operation": "create_semantic_patch_proposal",
                 "project_id": "prj_01ABC...",
-                "origin": "human",
+                "origin": "host_agent",
                 "intent": "Clarify the title.",
                 "reason": "Improve quick-reader comprehension.",
-                "created_by": "pi",
+                "created_by": "executor",
+                "provider": "openai",
+                "model": "gpt-5.6",
+                "boundary": "host_conversation",
+                "context_manifest_id": "pcm_01ABC...",
                 "operations": [{
                     "operation": "manuscript_metadata_update",
                     "manuscript_id": "man_01XYZ...",
@@ -5106,7 +5184,10 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         }],
         "related_operations": ["semantic_patch_proposals", "apply_semantic_patch_proposal"],
-        "notes": "No target is mutated until a separate explicit apply.",
+        "notes": (
+            "No target is mutated until a separate explicit apply. Typed MCP callers "
+            "must disclose an AI provider boundary; human proposals use local REST/UI."
+        ),
     },
     "apply_semantic_patch_proposal": {
         "operation": "apply_semantic_patch_proposal",

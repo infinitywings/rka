@@ -34,6 +34,7 @@ _NATIVE_TABLES = (
     "manuscript_claim_versions",
     "manuscript_claim_ratifications",
     "manuscript_units",
+    "manuscript_unit_outline_profiles",
     "manuscript_claim_evidence",
     "manuscript_unit_evidence",
     "manuscript_claim_units",
@@ -171,6 +172,13 @@ def _spine(
                 "unit_id": "R1",
                 "kind": "result",
                 "location": "sections/results.tex#latency",
+                "parent_unit_key": "M1",
+                "outline_level": 3,
+                "communicative_job": "Report the bounded latency result.",
+                "intended_takeaway": "The measured configuration reduced latency.",
+                "evidence_plan": ["Bind the measured latency observation."],
+                "figure_intentions": ["Show the latency comparison."],
+                "citation_intentions": ["Cite the benchmark protocol."],
                 "artifact_ref": artifact_id,
                 "allowed_interpretation": (
                     "Latency was lower under the measured configuration."
@@ -185,6 +193,11 @@ def _spine(
                 "unit_id": "M1",
                 "kind": "method",
                 "location": "sections/method.tex#provenance",
+                "outline_level": 2,
+                "communicative_job": "Explain the provenance-aware workflow.",
+                "intended_takeaway": "Support and qualifiers remain distinct.",
+                "evidence_plan": ["Use the workflow qualifier record."],
+                "table_intentions": ["Summarize evidence roles."],
                 "qualifier_ids": [evidence_id],
                 "sequence": 1,
             },
@@ -672,6 +685,23 @@ async def test_native_manuscript_round_trip_preserves_history_without_synthesis(
     )
     assert imported_artifact is not None
     assert imported_units["R1"]["artifact_ref"] == imported_artifact["id"]
+    imported_profiles = {
+        row["unit_id"]: row
+        for row in await db.fetchall(
+            """SELECT * FROM manuscript_unit_outline_profiles
+               WHERE project_id = 'proj_native_import'"""
+        )
+    }
+    assert imported_profiles[imported_units["R1"]["id"]]["parent_unit_id"] == (
+        imported_units["M1"]["id"]
+    )
+    assert imported_profiles[imported_units["R1"]["id"]]["outline_level"] == 3
+    assert json.loads(
+        imported_profiles[imported_units["R1"]["id"]]["figure_intentions"]
+    ) == ["Show the latency comparison."]
+    assert json.loads(
+        imported_profiles[imported_units["M1"]["id"]]["table_intentions"]
+    ) == ["Summarize evidence roles."]
 
     imported_evidence = await db.fetchone(
         """SELECT id FROM claims

@@ -2,7 +2,7 @@
 name: rka-writer
 description: "Manuscript-drafting AI for RKA-managed research projects. Interactively elicits paper framing through AI-proposed choices, then produces persuasive, reviewer-resilient prose while keeping every substantive block grounded in current RKA evidence and decisions. Load when initializing or resuming a manuscript, checking Writer readiness, handling a revision mission, reviewing a submission, framing contributions or limitations, or building and validating a claim spine, argument spine, results trace, references, figures, or layout."
 metadata:
-  version: "2.7.2"
+  version: "2.7.3"
 ---
 
 # Writer Skill
@@ -107,8 +107,9 @@ writer readiness` asks RKA for the authoritative target-phase gate.
    choice round instead of restarting the interview.
 6. Verify `.mcp.json` lists `rka` plus `rka-writer-tools`. Pass `project_id` on
    every operation. Native manuscript work uses `manuscript_context`,
-   `manuscript_spine`, `manuscript_readiness`, `upsert_argument_spine`,
-   `ratify_manuscript_claim`, checkpoint operations, and change/impact reads.
+   `manuscript_spine`, `manuscript_outline`, `manuscript_readiness`, semantic
+   proposal preparation, `ratify_manuscript_claim`, checkpoint operations, and
+   change/impact reads. Direct argument-spine upsert is not an agent route.
 7. For every load-bearing `clm_`, inspect `claim_scope`. Resolve any
    `missing`, `stale`, `incomplete`, or `needs_review` contract through the
    Brain/PI before using it as positive support. Do not copy preliminary
@@ -253,7 +254,44 @@ The outline brief uses the strip-then-re-inject pattern that Brain uses for any 
 2. Prune any dominated framing via Pareto non-dominance over scope coverage, novelty positioning, and venue-fit.
 3. Rank by re-injecting PI preference as opposing-critique, not as steering. One option carries `is_recommended`; all surviving options are shown to the PI.
 
-The PI's selection is recorded via `rka_record_pi_selection`. The ratified outline is stored both as a `dec_` and as `.planning/OUTLINE.md`. Per-section sketches go into `.planning/sketches/<section-id>.md` and become the starting prompt for the Section Drafter sub-procedure.
+The PI's selection is recorded via `rka_record_pi_selection`. The canonical
+outline is the native `mun_` hierarchy; L2-L5 values are pure hierarchy depth,
+not rhetorical types. The PI decision and resolved
+Outline checkpoint ratify that exact aggregate revision. `.planning/OUTLINE.md`
+and per-section sketches remain Writer-owned projections and drafting aids,
+not a second semantic authority.
+
+### Progressive outline workbench
+
+After the candidate claim spine exists, query `manuscript_outline` and develop
+the paper from shallower units toward finer argument beats. `outline_level`
+records depth only: L2 is shallowest and L5 deepest. Unit `kind`,
+communicative job, and intended takeaway carry rhetorical meaning; do not
+assume every L2 is a section or every L5 is claim-sized. Every major active unit must state its communicative job,
+intended reader takeaway, intended claim, and evidence plan. Figure, table,
+citation, transition, location, and quick-reader fields are intentions until
+their corresponding artifacts or references exist; never present them as
+evidence by themselves.
+
+All direct or AI-assisted outline changes use
+`prepare_manuscript_outline_proposal` with one of `edit`, `expand`, `condense`,
+or `reorder`. Before an AI-authored change, persist
+`prepare_semantic_patch_context` and pass its exact origin, provider, model,
+boundary, and context-manifest ID into the outline proposal. Review the returned semantic diff, validation findings, binding
+changes, and downstream reorder impact. The Writer stops after proposing and
+presents the pending diff to the PI; only the PI or local web UI may apply or
+reject it. Expansion retains the parent and
+may inherit only disclosed claim/evidence bindings; condensation unions those
+bindings into the retained parent before removing named descendants; reorder
+must contain the complete active unit-key set. Never reconstruct the outline
+by free-form delete-and-recreate operations.
+
+Outline work is resumable while blockers remain. Re-query
+`manuscript_outline` after every applied proposal. Create an Outline checkpoint
+only when the projection reports no rationale blocker, then present the exact
+outline and bindings to the PI. A checkpoint is resolved only through
+`resolve_manuscript_checkpoint` with a same-project PI decision; a proposal,
+an AI recommendation, or a locally edited `OUTLINE.md` cannot resolve it.
 
 ### Mandatory claim-spine substep
 
@@ -283,10 +321,12 @@ the current RKA graph:
    evidence roles, result coverage, and revision. On a server with semantic
    patch operations, submit the final `argument_spine_replace` through
    `create_semantic_patch_proposal`, inspect its semantic diff and warnings,
-   and use a separate `apply_semantic_patch_proposal` call with the proposal
-   revision. The CLI `--apply` path is legacy/local compatibility only and
-   still requires explicit PI authorization and an expected manuscript
-   revision. Neither path creates ratifications.
+   with an exact AI context manifest when the Writer authored it. Inspect the
+   semantic diff and warnings, then stop and present the pending proposal to
+   the PI or local web UI for apply/reject. The CLI `--apply` path is
+   legacy/local compatibility only and must be executed as an explicit human
+   action with an expected manuscript revision. Neither path creates
+   ratifications.
 6. As part of the Outline checkpoint, create one child claim-scope `dec_` per
    selected contribution with `chosen` exactly equal to the selected wording
    and `decided_by: pi`. Bind that decision to the exact `mcl_` version through
@@ -556,8 +596,9 @@ When a revised draft is available, compare it against the prior review comments 
 17. **DON'T** compute or report an accept/reject or numeric quality score. `overclaim_lint.py` is WARN-only; the review writes a gaps list, not a grade (see `quality_review.md` for why LLM-reviewer scores are not gates).
 18. **DON'T** edit synchronized claim-spine or Markdown projections as if they
    were authoritative. Prepare an explicit semantic patch proposal, review its
-   diff and warnings, apply it in a separate call with both proposal and target
-   revision preconditions, and synchronize again.
+   diff and warnings, and stop for PI/web apply or reject. After the human
+   transition, synchronize again. Never label AI-authored content as human or
+   use an MCP actor to self-approve it.
 19. **DON'T** use a `dec_`, `ecl_`, or filled YAML cell as empirical evidence. A decision ratifies wording; empirical support resolves through current verified claims and their terminal sources.
 20. **DON'T** silently strengthen a claim beyond its allowed wording, erase qualifiers or counterevidence, or broaden a result beyond tested conditions. Gather evidence or obtain a new PI decision.
 21. **DON'T** treat claim-spine `ERROR` as advisory or convert it to `PASS`. Missing resolution or currency evidence blocks advancement until repaired.

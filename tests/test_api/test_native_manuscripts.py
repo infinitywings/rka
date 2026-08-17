@@ -274,10 +274,18 @@ async def test_native_mutations_record_transport_actor(
         headers=DEFAULT_HEADERS,
         json={
             "expected_revision": 1,
-            "spine": {"claims": [], "units": []},
+            "spine": {
+                "claims": [],
+                "units": [{
+                    "unit_id": "INTRO",
+                    "kind": "introduction",
+                    "location": "sections/introduction.tex",
+                }],
+            },
         },
     )
     assert direct_spine.status_code == 200
+    assert direct_spine.json()["semantic_patch_proposal_id"].startswith("spp_")
     direct_audit = await api_client.get(
         "/api/audit",
         headers=DEFAULT_HEADERS,
@@ -292,6 +300,13 @@ async def test_native_mutations_record_transport_actor(
         "create",
         "update",
     }
+
+    blocked_direct_spine = await api_client.put(
+        f"/api/manuscripts/{direct.json()['id']}/argument-spine",
+        headers={**DEFAULT_HEADERS, "X-RKA-Actor": "executor"},
+        json={"expected_revision": 2, "spine": {"claims": [], "units": []}},
+    )
+    assert blocked_direct_spine.status_code == 403
 
     mcp_headers = {**DEFAULT_HEADERS, "X-RKA-Actor": "executor"}
     proxied = await api_client.post(
@@ -532,3 +547,67 @@ async def test_bulk_resolver_attests_scope_and_withholds_foreign_content(
     assert foreign["record"] is None
     assert "foreign secret" not in str(foreign)
     assert packet["entities"]["bogus_id"]["outcome"] == "unknown_type"
+
+
+@pytest.mark.asyncio
+async def test_outline_rest_projection_and_proposal_are_separate_from_apply(
+    api_client: httpx.AsyncClient,
+) -> None:
+    created = await api_client.post(
+        "/api/manuscripts/native",
+        headers=DEFAULT_HEADERS,
+        json={"title": "Outline REST manuscript"},
+    )
+    manuscript_id = created.json()["id"]
+    spine = await api_client.put(
+        f"/api/manuscripts/{manuscript_id}/argument-spine",
+        headers=DEFAULT_HEADERS,
+        json={
+            "expected_revision": 1,
+            "spine": {
+                "claims": [],
+                "units": [{
+                    "unit_id": "INTRO",
+                    "kind": "introduction",
+                    "location": "sections/introduction.tex",
+                    "title": "Introduction",
+                }],
+            },
+        },
+    )
+    assert spine.status_code == 200
+
+    outline = await api_client.get(
+        f"/api/manuscripts/{manuscript_id}/outline",
+        headers=DEFAULT_HEADERS,
+    )
+    assert outline.status_code == 200
+    assert outline.json()["units"][0]["missing"] == [
+        "communicative_job",
+        "intended_takeaway",
+        "intended_claim",
+        "evidence_plan",
+    ]
+
+    proposal = await api_client.post(
+        f"/api/manuscripts/{manuscript_id}/outline/proposals",
+        headers=DEFAULT_HEADERS,
+        json={
+            "expected_revision": 2,
+            "action": "edit",
+            "reason": "Record the introduction rationale.",
+            "unit_key": "INTRO",
+            "patch": {
+                "communicative_job": "Establish the scoped problem.",
+                "intended_takeaway": "The problem is concrete.",
+                "evidence_plan": ["Connect a reviewed claim before checkpointing."],
+            },
+        },
+    )
+    assert proposal.status_code == 201
+    assert proposal.json()["proposal"]["status"] == "proposed"
+    unchanged = await api_client.get(
+        f"/api/manuscripts/{manuscript_id}/outline",
+        headers=DEFAULT_HEADERS,
+    )
+    assert unchanged.json()["units"][0]["communicative_job"] is None

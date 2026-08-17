@@ -861,6 +861,47 @@ class SemanticPatchService(BaseService):
                     ),
                     "claim_key": key, "decision_id": left["ratified_by"],
                 })
+        old_units = {item["unit_id"]: item for item in before.get("units", [])}
+        new_units = {item["local_key"]: item for item in after.get("units", [])}
+        reordered: list[str] = []
+        for key in sorted(set(old_units) & set(new_units)):
+            left, right = old_units[key], new_units[key]
+            for old_field, role in (
+                ("evidence_ids", "support"),
+                ("qualifier_ids", "qualifier"),
+                ("counterevidence_ids", "counterevidence"),
+            ):
+                removed = sorted(
+                    set(left.get(old_field) or []) - set(right["evidence"][role])
+                )
+                if removed:
+                    findings.append({
+                        "severity": "warning",
+                        "code": "UNIT_EVIDENCE_BINDING_REMOVED",
+                        "message": f"unit {key} removes {len(removed)} {role} binding(s)",
+                        "unit_key": key,
+                        "role": role,
+                        "entity_ids": removed,
+                    })
+            if left.get("status") != "removed" and right.get("status") == "removed":
+                findings.append({
+                    "severity": "warning",
+                    "code": "OUTLINE_UNIT_REMOVED",
+                    "message": f"unit {key} will leave the active outline",
+                    "unit_key": key,
+                })
+            if int(left.get("sequence", 0)) != int(right.get("sequence", 0)):
+                reordered.append(key)
+        if reordered:
+            findings.append({
+                "severity": "warning",
+                "code": "OUTLINE_ORDER_CHANGED",
+                "message": (
+                    f"{len(reordered)} unit(s) change sequence; review transitions and "
+                    "quick-reader flow before apply"
+                ),
+                "unit_keys": reordered,
+            })
         return findings
 
     async def _current_operation_base(self, operation: SemanticPatchOperation) -> dict[str, Any]:

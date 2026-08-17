@@ -962,6 +962,7 @@ _QUERY_DISPATCH: dict[str, str] = {
     "manuscript_reference_manifest": "rka_get_manuscript_reference_manifest",
     "manuscript_readiness": "rka_get_manuscript_readiness",
     "manuscript_spine": "rka_get_manuscript_spine",
+    "manuscript_outline": "rka_get_manuscript_outline",
     "manuscript_writing_candidates": "rka_get_manuscript_writing_candidates",
     "manuscript_impact": "rka_get_manuscript_impact",
     "reference_validation_status": "rka_get_reference_validation_status",
@@ -1460,6 +1461,7 @@ async def dispatch_query(
     if scope in (
         "manuscript_context",
         "manuscript_spine",
+        "manuscript_outline",
         "manuscript_writing_candidates",
     ):
         if not id:
@@ -2053,6 +2055,7 @@ EXECUTE_OPERATIONS = (
     "ratify_planning_contribution",
     "create_planning_evaluation_mission",
     "prepare_planning_evaluation_result",
+    "prepare_manuscript_outline_proposal",
     "prepare_semantic_patch_context",
     "create_semantic_patch_proposal",
     "apply_semantic_patch_proposal",
@@ -2339,6 +2342,13 @@ async def dispatch_execute(
     if op == "prepare_planning_evaluation_result":
         return await _legacy("rka_prepare_planning_evaluation_result")(
             branch_id=kw.pop("id", None),
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "prepare_manuscript_outline_proposal":
+        return await _legacy("rka_prepare_manuscript_outline_proposal")(
+            manuscript_id=kw.pop("id", None),
             payload=kw,
             project_id=project_id,
         )
@@ -2988,13 +2998,14 @@ async def dispatch_execute_typed(args: "BaseModel") -> str:  # type: ignore[name
     # ``model_dump`` returns a plain dict; ``exclude_none=True`` strips
     # None defaults so downstream ``kw.get(...)`` calls behave the same
     # as the legacy raw-kwarg surface.
-    if op == "update_manuscript":
+    if op in {"update_manuscript", "prepare_manuscript_outline_proposal"}:
         # Preserve explicit nulls for nullable metadata fields (abstract,
-        # venue, workspace_ref) while retaining omission semantics.  The
-        # service uses Pydantic's fields-set to distinguish "clear" from
-        # "leave unchanged", so the dispatch layer carries that set through.
+        # venue, workspace_ref) and outline-patch fields (parent, transition,
+        # quick-reader role, blocker) while retaining omission semantics.
         kw_all = args.model_dump(exclude_unset=True)
-        kw_all["_provided_fields"] = sorted(args.model_fields_set)
+        if op == "update_manuscript":
+            # The metadata service also needs the top-level provided-field set.
+            kw_all["_provided_fields"] = sorted(args.model_fields_set)
     else:
         kw_all = args.model_dump(exclude_none=True)
     kw_all.pop("operation", None)

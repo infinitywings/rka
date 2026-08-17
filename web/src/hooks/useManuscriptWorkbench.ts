@@ -27,6 +27,12 @@ export function useManuscriptWorkbench(manuscriptId: string | null) {
     enabled: aggregateReady,
   })
 
+  const outline = useQuery({
+    queryKey: ["manuscript-workbench", projectId, manuscriptId, "outline"],
+    queryFn: () => api.getManuscriptOutline(manuscriptId!),
+    enabled: aggregateReady,
+  })
+
   const candidates = useQuery({
     queryKey: ["manuscript-workbench", projectId, manuscriptId, "candidates"],
     queryFn: () => api.getManuscriptWritingCandidates(manuscriptId!),
@@ -45,5 +51,5 @@ export function useManuscriptWorkbench(manuscriptId: string | null) {
     enabled: aggregateReady,
   })
 
-  return { context, spine, candidates, readiness, impact }
+  return { context, spine, outline, candidates, readiness, impact }
 }

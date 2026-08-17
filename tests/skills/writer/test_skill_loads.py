@@ -43,7 +43,7 @@ def test_frontmatter_has_name_description_version(skill_md_path: Path) -> None:
     fm = text[4:end]
     assert re.search(r"^name:\s*rka-writer\s*$", fm, re.MULTILINE)
     assert re.search(r"^metadata:\s*$", fm, re.MULTILINE)
-    assert re.search(r'^\s+version:\s*"2\.7\.2"\s*$', fm, re.MULTILINE)
+    assert re.search(r'^\s+version:\s*"2\.7\.3"\s*$', fm, re.MULTILINE)
     assert re.search(r"^description:\s*\S", fm, re.MULTILINE)
 
 

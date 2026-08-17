@@ -599,11 +599,32 @@ call `apply_semantic_patch_proposal` with the proposal revision. Use
 `reject_semantic_patch_proposal` when the candidate should remain in history
 without changing its target.
 
+### 15.4 — Developing the progressive manuscript outline
+
+The Outline stage is a resumable L2-L5 hierarchy of native manuscript units,
+not a free-form text box. `manuscript_outline` shows each unit's communicative
+job, intended takeaway, intended claims, typed evidence, evidence plan,
+parent/children, and any completeness blocker. The workbench provides the same
+projection with deterministic unit-to-claim/evidence navigation.
+
+Editing rationale, expanding a parent into children, condensing descendants,
+or reordering units calls `prepare_manuscript_outline_proposal`. Preparation
+does not mutate the manuscript. Inspect the semantic diff, validation findings,
+binding changes, and downstream order impact, then explicitly apply or reject
+the resulting proposal. Expansion retains its parent; condensation preserves
+the union of descendant bindings on the retained parent; reorder requires the
+complete active unit-key set.
+
+When every major unit has its writing rationale, intended claim, and evidence
+plan, create an Outline checkpoint. Only a separate PI decision can resolve
+that checkpoint. A proposal, AI recommendation, or edited local outline file
+never ratifies itself.
+
 ---
 
 ## Chapter 16: MCP Tools Quick Reference
 
-> **v2.7.0+ dispatch surface.** RKA broadcasts exactly 5 always-on tools: 3 dispatch tools (`rka_query`, `rka_execute`, `rka_describe`) plus 2 escape hatches (`rka_load_tools`, `rka_help`). The tables below list the **operation names** — the values you pass as `operation`: 62 read operations go through `rka_query(args={"operation": ...})` and 77 write/lifecycle operations through `rka_execute(args={"operation": ...})`. There are 139 typed operations total. The pre-v2.7 per-tool names (`rka_add_note`, `rka_get_status`, `rka_trace_provenance`, …) are `tier=deferred` legacy synonyms: they resolve to these operations (typically drop the `rka_`/`get_`/`add_` prefix, e.g. `rka_get_status` → `status`, `rka_add_note` → `record_note`, `rka_trace_provenance` → `provenance`), but on the default surface you call the operation through the dispatch tools rather than the legacy name. The discipline (`source="pi"` + `verbatim_input`, `related_journal=[...]` on decisions, `motivated_by_decision=...` on missions, `project_id` on every call) is unchanged. See `rka_describe(operation="<name>")` for per-operation signatures, or `rka_describe(operation="")` for the full 139-operation index. `rka_set_project` was removed in v2.6 (deprecated no-op) — pin `project_id` at conversation start and thread it on every operation. The LLM-backed `rka_ask` / `rka_generate_summary` features were removed in v2.4.0 and are no longer part of the surface.
+> **v2.7.0+ dispatch surface.** RKA broadcasts exactly 5 always-on tools: 3 dispatch tools (`rka_query`, `rka_execute`, `rka_describe`) plus 2 escape hatches (`rka_load_tools`, `rka_help`). The tables below list the **operation names** — the values you pass as `operation`: 67 read operations go through `rka_query(args={"operation": ...})` and 83 write/lifecycle operations through `rka_execute(args={"operation": ...})`. There are 150 typed operations total. The pre-v2.7 per-tool names (`rka_add_note`, `rka_get_status`, `rka_trace_provenance`, …) are `tier=deferred` legacy synonyms: they resolve to these operations (typically drop the `rka_`/`get_`/`add_` prefix, e.g. `rka_get_status` → `status`, `rka_add_note` → `record_note`, `rka_trace_provenance` → `provenance`), but on the default surface you call the operation through the dispatch tools rather than the legacy name. The discipline (`source="pi"` + `verbatim_input`, `related_journal=[...]` on decisions, `motivated_by_decision=...` on missions, `project_id` on every call) is unchanged. See `rka_describe(operation="<name>")` for per-operation signatures, or `rka_describe(operation="")` for the full 150-operation index. `rka_set_project` was removed in v2.6 (deprecated no-op) — pin `project_id` at conversation start and thread it on every operation. The LLM-backed `rka_ask` / `rka_generate_summary` features were removed in v2.4.0 and are no longer part of the surface.
 
 ### Knowledge Management (`rka_execute`)
 

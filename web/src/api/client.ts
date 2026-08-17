@@ -45,11 +45,27 @@ async function parseApiError(res: Response): Promise<never> {
   let detail = res.statusText
   try {
     const body = await res.json()
-    detail = body.detail || JSON.stringify(body)
+    detail = formatApiDetail(body.detail ?? body)
   } catch {
     // use statusText
   }
   throw new ApiError(res.status, detail)
+}
+
+function formatApiDetail(value: unknown): string {
+  if (typeof value === "string") return value
+  if (Array.isArray(value)) {
+    return value.map((item) => {
+      if (item && typeof item === "object" && "msg" in item) {
+        const issue = item as { loc?: unknown; msg: unknown }
+        const location = Array.isArray(issue.loc) ? issue.loc.join(".") : "request"
+        return `${location}: ${String(issue.msg)}`
+      }
+      return formatApiDetail(item)
+    }).join("; ")
+  }
+  if (value && typeof value === "object") return JSON.stringify(value)
+  return String(value)
 }
 
 function getFilenameFromDisposition(disposition: string | null, fallback: string): string {
@@ -152,6 +168,9 @@ import type {
   ManuscriptImpact,
   ManuscriptReadiness,
   ManuscriptSpine,
+  ManuscriptOutline,
+  OutlineProposalRequest,
+  OutlineProposalResult,
   ManuscriptWritingCandidates,
   InterpretationCandidate,
   InterpretationCandidateDetail,
@@ -505,12 +524,31 @@ export const api = {
   auditLinkSupport: (limit = 200) =>
     get<LinkSupportAudit>(`/verification/link-support?limit=${limit}`),
 
-  // Native manuscript workbench reads. These endpoints are projections over
-  // RKA's canonical aggregate; the prototype intentionally exposes no writes.
+  // Native manuscript workbench. Reads are canonical projections; outline
+  // edits prepare semantic proposals and never bypass explicit apply.
   getManuscriptContext: (manuscriptId: string) =>
     get<ManuscriptContext>(`/manuscripts/${encodeURIComponent(manuscriptId)}/context`),
   getManuscriptSpine: (manuscriptId: string) =>
     get<ManuscriptSpine>(`/manuscripts/${encodeURIComponent(manuscriptId)}/spine`),
+  getManuscriptOutline: (manuscriptId: string) =>
+    get<ManuscriptOutline>(`/manuscripts/${encodeURIComponent(manuscriptId)}/outline`),
+  prepareManuscriptOutlineProposal: (
+    manuscriptId: string,
+    data: OutlineProposalRequest,
+  ) => post<OutlineProposalResult>(
+    `/manuscripts/${encodeURIComponent(manuscriptId)}/outline/proposals`, data,
+  ),
+  createManuscriptCheckpoint: (
+    manuscriptId: string,
+    data: {
+      expected_revision: number
+      kind: string
+      unit_id?: string
+      supersedes_id?: string
+    },
+  ) => post<Record<string, unknown>>(
+    `/manuscripts/${encodeURIComponent(manuscriptId)}/checkpoints`, data,
+  ),
   getManuscriptWritingCandidates: (manuscriptId: string) =>
     get<ManuscriptWritingCandidates>(
       `/manuscripts/${encodeURIComponent(manuscriptId)}/writing-candidates`,

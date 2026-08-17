@@ -363,18 +363,21 @@ Provide four modes over the same objects:
 
 Mode changes affect presentation, not authority or stored semantics.
 
-### 7.3 Progressive elaboration levels
+### 7.3 Progressive elaboration zoom stages
 
-The researcher should be able to collapse or expand the paper at these levels:
+The researcher should be able to collapse or expand the paper at these
+conceptual zoom stages. These `Z` stages are workbench projections; they are
+not the persisted `manuscript_unit_outline_profiles.outline_level` field.
+Persisted L2-L5 values mean hierarchy depth only.
 
-- L0: one-sentence insight;
-- L1: one-paragraph paper spine;
-- L2: problem, landscape/gap, response, challenge, RQ, contribution, evidence;
-- L3: section skeleton and section communicative jobs;
-- L4: claim-sized or paragraph-sized manuscript units;
-- L5: evidence bullets, transitions, figures, tables, and citation intentions;
-- L6: draft prose;
-- L7: polished, venue-adapted manuscript.
+- Z0: one-sentence insight;
+- Z1: one-paragraph paper spine;
+- Z2: problem, landscape/gap, response, challenge, RQ, contribution, evidence;
+- Z3: section skeleton and section communicative jobs;
+- Z4: claim-sized or paragraph-sized manuscript units;
+- Z5: evidence bullets, transitions, figures, tables, and citation intentions;
+- Z6: draft prose;
+- Z7: polished, venue-adapted manuscript.
 
 Every expansion preserves lineage to its parent representation. A user can
 collapse a 30-page draft back to the paragraph spine to check whether the
@@ -1299,4 +1302,11 @@ implementation contract is
 [`ADR 0008`](../../adr/0008-claim-centered-evaluation-contract-and-results-trace.md),
 and its validation record is
 [`2026-08-15-workbench-m4-pr8-exit-evidence.md`](../specs/2026-08-15-workbench-m4-pr8-exit-evidence.md).
-PR 9 remains dependency-blocked until PR 8 review and merge.
+PR 8 merged in #79. **M5 / PR 9: progressive outline and manuscript-unit
+editor** now satisfies its feature-branch release gate. ADR 0009 freezes its
+L2-L5 hierarchy, writing-rationale, binding-preservation, and proposal-first
+editing contract; the implementation and disposable browser/pack validation
+record is
+[`2026-08-15-workbench-m5-pr9-exit-evidence.md`](../specs/2026-08-15-workbench-m5-pr9-exit-evidence.md).
+The implementation is published for review in draft PR #80.
+PR 10 remains dependent on PR 9 review and merge.
