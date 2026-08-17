@@ -833,15 +833,20 @@ class ManuscriptSourceService(BaseService):
                     recovery_state=exc.recovery_state,
                 )
                 raise
+            swap_state = self._source_swap_state(
+                workspace,
+                relative_path,
+                proposal_id=str(row["id"]),
+                expected_content_hash=row["base_content_hash"],
+                proposed_content_hash=proposed_hash,
+            )
             await self._complete_applied_transition(
                 row,
                 data,
                 recovery_path,
                 recovered_after_restart=False,
-                source_recovery_state=(
-                    "retained_base"
-                    if row["base_content_hash"] is not None
-                    else "missing"
+                source_recovery_state=self._retention_state_from_swap_state(
+                    swap_state
                 ),
             )
         return await self.get_proposal(proposal_id)
@@ -905,13 +910,7 @@ class ManuscriptSourceService(BaseService):
                         else "not_observed"
                     ),
                     "final_target_preserved": True,
-                    "source_recovery_state": recovery_state,
-                    "retained_source_path": (
-                        self._retained_source_relative_path(row)
-                        if recovery_state
-                        in {"retained_base", "retained_proposal", "retained_unclassified"}
-                        else None
-                    ),
+                    **self._source_recovery_event_details(row, recovery_state),
                 },
             )
 
@@ -927,6 +926,9 @@ class ManuscriptSourceService(BaseService):
         recovery_relative = recovery_path.relative_to(
             Path(self.db.db_path).resolve().parent
         ).as_posix()
+        recovery_details = self._source_recovery_event_details(
+            row, source_recovery_state
+        )
         async with self.db.transaction():
             current = await self._require_proposal_row(str(row["id"]))
             self._assert_open(current, data.expected_revision)
@@ -941,11 +943,11 @@ class ManuscriptSourceService(BaseService):
                     "after_content_hash": row["proposed_content_hash"],
                     "recovery_manifest_path": recovery_relative,
                     "displaced_source_path": (
-                        self._retained_source_relative_path(row)
-                        if source_recovery_state.startswith("retained_")
+                        recovery_details["retained_source_path"]
+                        if row["base_content_hash"] is not None
                         else None
                     ),
-                    "source_recovery_state": source_recovery_state,
+                    **recovery_details,
                     "recovered_after_restart": recovered_after_restart,
                     "git_operation": False,
                 },
@@ -1212,15 +1214,7 @@ class ManuscriptSourceService(BaseService):
                 expected_content_hash=row["base_content_hash"],
                 proposed_content_hash=str(row["proposed_content_hash"]),
             )
-            return {
-                "source_recovery_state": recovery_state,
-                "retained_source_path": (
-                    self._retained_source_relative_path(row)
-                    if recovery_state
-                    in {"retained_base", "retained_proposal", "retained_unclassified"}
-                    else None
-                ),
-            }
+            return self._source_recovery_event_details(row, recovery_state)
         return {}
 
     def _recovery_components(self, row: Mapping[str, Any]) -> tuple[str, str, str]:
@@ -1590,12 +1584,15 @@ class ManuscriptSourceService(BaseService):
             # Remove only a name positively classified as this operation's
             # immutable proposal bytes. If preparation rejected a pre-existing
             # retained or unknown inode, ownership remains false.
-            if proposal_swap_owned:
-                try:
-                    os.unlink(swap_name, dir_fd=parent_fd)
-                except FileNotFoundError:
-                    pass
-            os.close(parent_fd)
+            try:
+                if proposal_swap_owned:
+                    try:
+                        os.unlink(swap_name, dir_fd=parent_fd)
+                    except FileNotFoundError:
+                        pass
+                    os.fsync(parent_fd)
+            finally:
+                os.close(parent_fd)
 
     def _reconcile_replaced_source(
         self,
@@ -1684,27 +1681,14 @@ class ManuscriptSourceService(BaseService):
         parent_fd, _ = self._open_parent_fd(workspace, PurePosixPath(normalized))
         swap_name = self._source_swap_name(proposal_id)
         try:
-            swap, _ = self._read_source_entry_at(
+            swap_state = self._classify_source_swap_at(
                 parent_fd,
                 swap_name,
-                missing_ok=True,
-                validate_utf8=False,
+                expected_content_hash=expected_content_hash,
+                proposed_content_hash=proposed_content_hash,
             )
-            recovery_state = "missing"
-            if swap is not None:
-                swap_hash = _sha256(swap)
-                if swap_hash == proposed_content_hash:
-                    recovery_state = "retained_proposal"
-                elif expected_content_hash is not None and swap_hash == expected_content_hash:
-                    recovery_state = "retained_base"
-                else:
-                    # This can be a late write through a descriptor opened
-                    # before exchange. It is not safe to classify or delete,
-                    # but retaining and fsyncing it permits a terminal conflict
-                    # without losing either public or displaced bytes.
-                    recovery_state = "retained_unclassified"
             os.fsync(parent_fd)
-            return recovery_state
+            return self._retention_state_from_swap_state(swap_state)
         finally:
             os.close(parent_fd)
 
@@ -1721,14 +1705,35 @@ class ManuscriptSourceService(BaseService):
         normalized, _ = self._normalize_source_path(relative_path)
         parent_fd, _ = self._open_parent_fd(workspace, PurePosixPath(normalized))
         try:
-            swap, _ = self._read_source_entry_at(
+            return self._classify_source_swap_at(
                 parent_fd,
                 self._source_swap_name(proposal_id),
-                missing_ok=True,
-                validate_utf8=False,
+                expected_content_hash=expected_content_hash,
+                proposed_content_hash=proposed_content_hash,
             )
         finally:
             os.close(parent_fd)
+
+    def _classify_source_swap_at(
+        self,
+        parent_fd: int,
+        swap_name: str,
+        *,
+        expected_content_hash: str | None,
+        proposed_content_hash: str,
+    ) -> str:
+        """Boundedly classify recovery bytes without rejecting an oversized inode."""
+        try:
+            swap, _ = self._read_source_entry_at(
+                parent_fd,
+                swap_name,
+                missing_ok=True,
+                validate_utf8=False,
+            )
+        except ValueError as exc:
+            if "exceeds configured size limit" not in str(exc):
+                raise
+            return "oversized"
         if swap is None:
             return "missing"
         swap_hash = _sha256(swap)
@@ -1737,6 +1742,40 @@ class ManuscriptSourceService(BaseService):
         if expected_content_hash is not None and swap_hash == expected_content_hash:
             return "reviewed_base"
         return "unclassified"
+
+    @staticmethod
+    def _retention_state_from_swap_state(swap_state: str) -> str:
+        return {
+            "missing": "missing",
+            "proposal": "retained_proposal",
+            "reviewed_base": "retained_base",
+            "unclassified": "retained_unclassified",
+            "oversized": "retained_oversized",
+        }[swap_state]
+
+    def _source_recovery_event_details(
+        self,
+        row: Mapping[str, Any],
+        recovery_state: str | None,
+    ) -> dict[str, Any]:
+        observed = {
+            None: None,
+            "missing": "missing",
+            "retained_proposal": "proposal",
+            "retained_base": "reviewed_base",
+            "retained_unclassified": "unclassified",
+            "retained_oversized": "oversized",
+        }[recovery_state]
+        retained = bool(recovery_state and recovery_state.startswith("retained_"))
+        return {
+            "source_recovery_state": (
+                "retained" if retained else "missing" if recovery_state else "not_checked"
+            ),
+            "source_recovery_last_observed": observed,
+            "retained_source_path": (
+                self._retained_source_relative_path(row) if retained else None
+            ),
+        }
 
     @staticmethod
     def _source_swap_name(proposal_id: str) -> str:

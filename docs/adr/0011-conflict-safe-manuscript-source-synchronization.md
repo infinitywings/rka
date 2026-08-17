@@ -125,6 +125,20 @@ can become terminally `conflicted`; Reject and Supersede share the same guard.
 Only a swap freshly created and still owned by the current pre-exchange
 invocation may be unlinked automatically. A missing-file hard-link install may
 also drop the redundant hidden name because the same inode remains public.
+Recovery classification is bounded: an oversized retained regular inode is
+reported as `oversized` without reading it into memory, retained in place, and
+does not prevent Apply conflict, Reject, or Supersede from reaching a durable
+terminal state. Symlinks and non-regular recovery objects still fail closed.
+
+Source events separate the durable naming fact from a mutable byte
+classification. `source_recovery_state` says only whether a recovery name was
+retained, missing, or not checked. `source_recovery_last_observed` records the
+last bounded observation (`reviewed_base`, `proposal`, `unclassified`,
+`oversized`, or `missing`) immediately before the transition. It is not a
+promise that a still-open external descriptor cannot change those bytes later;
+the retained path is the durable audit handle. `retained_source_path` is generic;
+`displaced_source_path` is populated only when an original target actually
+existed, never for a redundant proposal hard link from missing-file recovery.
 
 The recovery manifest is durable even if the database event cannot be
 committed after replacement. The service never runs `git add`, commit, reset,

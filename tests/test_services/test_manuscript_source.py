@@ -156,7 +156,10 @@ async def test_prepare_then_apply_is_atomic_mode_preserving_and_recoverable(
     assert applied["events"][-1]["details"]["git_operation"] is False
     displaced_relative = applied["events"][-1]["details"]["displaced_source_path"]
     assert displaced_relative == service._source_swap_name(proposal["id"])
-    assert applied["events"][-1]["details"]["source_recovery_state"] == "retained_base"
+    assert applied["events"][-1]["details"]["source_recovery_state"] == "retained"
+    assert applied["events"][-1]["details"]["source_recovery_last_observed"] == (
+        "reviewed_base"
+    )
     assert (workspace / displaced_relative).read_text() == before
 
 
@@ -220,6 +223,12 @@ async def test_preopened_external_descriptor_remains_linked_after_apply(
         assert os.fstat(editor_fd).st_ino == retained.stat().st_ino
         assert os.fstat(editor_fd).st_nlink >= 1
         assert retained.read_text() == external
+        assert applied["events"][-1]["details"]["source_recovery_state"] == (
+            "retained"
+        )
+        assert applied["events"][-1]["details"][
+            "source_recovery_last_observed"
+        ] == "unclassified"
         recovery = Path(db_with_project.db_path).resolve().parent / applied[
             "recovery_manifest_path"
         ]
@@ -268,6 +277,9 @@ async def test_apply_creates_a_missing_source_with_no_clobber_link(
     assert json.loads(recovery.read_text())["before_existed"] is False
     assert not (recovery.parent / "before.bin").exists()
     assert applied["events"][-1]["details"]["source_recovery_state"] == "missing"
+    assert applied["events"][-1]["details"]["source_recovery_last_observed"] == (
+        "missing"
+    )
 
 
 @pytest.mark.asyncio
@@ -321,10 +333,12 @@ async def test_missing_source_restart_retains_preexisting_proposal_inode(
     assert source.read_text() == after
     assert retained.read_text() == after
     assert source.stat().st_ino == retained.stat().st_ino
-    assert applied["events"][-1]["details"]["source_recovery_state"] == (
-        "retained_proposal"
+    assert applied["events"][-1]["details"]["source_recovery_state"] == "retained"
+    assert applied["events"][-1]["details"]["source_recovery_last_observed"] == (
+        "proposal"
     )
-    assert applied["events"][-1]["details"]["displaced_source_path"] == swap_name
+    assert applied["events"][-1]["details"]["displaced_source_path"] is None
+    assert applied["events"][-1]["details"]["retained_source_path"] == swap_name
 
 
 @pytest.mark.asyncio
@@ -351,6 +365,10 @@ async def test_external_file_appearing_at_missing_source_commit_is_preserved(
         ),
     )
     original_link = os.link
+    original_unlink = os.unlink
+    original_fsync = os.fsync
+    workspace_stat = workspace.stat()
+    source_directory_events: list[str] = []
     injected = False
 
     def inject_before_link(*args, **kwargs):
@@ -360,7 +378,31 @@ async def test_external_file_appearing_at_missing_source_commit_is_preserved(
             source.write_text(external)
         return original_link(*args, **kwargs)
 
+    def track_unlink(*args, **kwargs):
+        directory_fd = kwargs.get("dir_fd")
+        if directory_fd is not None:
+            target = os.fstat(directory_fd)
+            if (
+                stat.S_ISDIR(target.st_mode)
+                and target.st_dev == workspace_stat.st_dev
+                and target.st_ino == workspace_stat.st_ino
+            ):
+                source_directory_events.append("unlink")
+        return original_unlink(*args, **kwargs)
+
+    def track_fsync(fd: int) -> None:
+        target = os.fstat(fd)
+        if (
+            stat.S_ISDIR(target.st_mode)
+            and target.st_dev == workspace_stat.st_dev
+            and target.st_ino == workspace_stat.st_ino
+        ):
+            source_directory_events.append("fsync")
+        original_fsync(fd)
+
     monkeypatch.setattr(os, "link", inject_before_link)
+    monkeypatch.setattr(os, "unlink", track_unlink)
+    monkeypatch.setattr(os, "fsync", track_fsync)
     with pytest.raises(ManuscriptSourceConflictError, match="appeared immediately"):
         await service.apply_proposal(
             proposal["id"],
@@ -373,6 +415,7 @@ async def test_external_file_appearing_at_missing_source_commit_is_preserved(
     assert source.read_text() == external
     assert (await service.get_proposal(proposal["id"]))["status"] == "conflicted"
     assert not (workspace / service._source_swap_name(proposal["id"])).exists()
+    assert source_directory_events[-2:] == ["unlink", "fsync"]
 
 
 @pytest.mark.asyncio
@@ -901,14 +944,20 @@ async def test_terminal_conflict_retains_every_preexisting_recovery_inode(
     if swap_state == "proposed":
         assert swap.read_text() == after
         assert conflicted["events"][-1]["details"]["source_recovery_state"] == (
-            "retained_proposal"
+            "retained"
         )
+        assert conflicted["events"][-1]["details"][
+            "source_recovery_last_observed"
+        ] == "proposal"
         assert conflicted["events"][-1]["details"]["retained_source_path"] == swap.name
     else:
         assert swap.read_text() == unexpected
         assert conflicted["events"][-1]["details"]["source_recovery_state"] == (
-            "retained_unclassified"
+            "retained"
         )
+        assert conflicted["events"][-1]["details"][
+            "source_recovery_last_observed"
+        ] == "unclassified"
         assert conflicted["events"][-1]["details"]["retained_source_path"] == (
             swap.name
         )
@@ -976,8 +1025,9 @@ async def test_restart_base_equivalent_target_never_unlinks_retained_inode(
     assert (workspace / swap_name).read_text() == late
     conflicted = await service.get_proposal(proposal["id"])
     assert conflicted["status"] == "conflicted"
-    assert conflicted["events"][-1]["details"]["source_recovery_state"] == (
-        "retained_base"
+    assert conflicted["events"][-1]["details"]["source_recovery_state"] == "retained"
+    assert conflicted["events"][-1]["details"]["source_recovery_last_observed"] == (
+        "reviewed_base"
     )
     assert conflicted["events"][-1]["details"]["transient_exchange_state"] == (
         "possible"
@@ -1144,8 +1194,97 @@ async def test_restart_external_target_with_retained_base_terminalizes(
     assert source_directory_fsyncs >= 1
     assert source.read_text() == external
     assert (workspace / swap_name).read_text() == before
-    assert prior["events"][-1]["details"]["source_recovery_state"] == "retained_base"
+    assert prior["events"][-1]["details"]["source_recovery_state"] == "retained"
+    assert prior["events"][-1]["details"]["source_recovery_last_observed"] == (
+        "reviewed_base"
+    )
     assert prior["events"][-1]["details"]["retained_source_path"] == swap_name
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("closing_action", ["apply", "reject", "supersede"])
+async def test_oversized_retained_inode_does_not_block_terminal_transition(
+    db_with_project,
+    tmp_path: Path,
+    closing_action: str,
+) -> None:
+    service, _, manuscript_id, workspace, unit_id = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    before = _markdown(unit_id, "Base before an oversized late descriptor write.")
+    after = _markdown(unit_id, "Proposal associated with oversized recovery bytes.")
+    external = _markdown(unit_id, "External public target remains authoritative.")
+    source = workspace / "main.md"
+    source.write_text(before)
+    proposal = await service.create_proposal(
+        manuscript_id,
+        ManuscriptSourceProposalCreate(
+            origin="human",
+            relative_path="main.md",
+            expected_content_hash=_hash(before),
+            content=after,
+            created_by="web_ui",
+            reason="Retain an oversized displaced inode without reading it fully.",
+        ),
+    )
+    row = await service._require_proposal_row(proposal["id"])
+    service._write_recovery(row, before.encode(), 0o644, service._recovery_manifest_path(row))
+    source.write_text(external)
+    swap_name = service._source_swap_name(proposal["id"])
+    retained = workspace / swap_name
+    retained.write_bytes(before.encode())
+    retained_fd = os.open(retained, os.O_WRONLY)
+    try:
+        os.ftruncate(retained_fd, service.config.manuscript_source_max_bytes + 1)
+        os.fsync(retained_fd)
+    finally:
+        os.close(retained_fd)
+
+    if closing_action == "apply":
+        with pytest.raises(ManuscriptSourceConflictError, match="recoverable apply"):
+            await service.apply_proposal(
+                proposal["id"],
+                ManuscriptSourceProposalTransition(
+                    expected_revision=1,
+                    actor="web_ui",
+                    reason="Close oversized recovery as a durable conflict.",
+                ),
+            )
+        prior = await service.get_proposal(proposal["id"])
+        assert prior["status"] == "conflicted"
+    elif closing_action == "reject":
+        prior = await service.reject_proposal(
+            proposal["id"],
+            ManuscriptSourceProposalTransition(
+                expected_revision=1,
+                actor="web_ui",
+                reason="Reject while retaining oversized recovery.",
+            ),
+        )
+        assert prior["status"] == "rejected"
+    else:
+        successor = await service.create_proposal(
+            manuscript_id,
+            ManuscriptSourceProposalCreate(
+                origin="human",
+                relative_path="main.md",
+                expected_content_hash=_hash(external),
+                content=_markdown(unit_id, "Successor after oversized recovery."),
+                created_by="web_ui",
+                reason="Supersede while retaining oversized recovery.",
+                supersedes_proposal_id=proposal["id"],
+            ),
+        )
+        assert successor["status"] == "proposed"
+        prior = await service.get_proposal(proposal["id"])
+        assert prior["status"] == "superseded"
+
+    assert source.read_text() == external
+    assert retained.stat().st_size == service.config.manuscript_source_max_bytes + 1
+    details = prior["events"][-1]["details"]
+    assert details["source_recovery_state"] == "retained"
+    assert details["source_recovery_last_observed"] == "oversized"
+    assert details["retained_source_path"] == swap_name
 
 
 @pytest.mark.asyncio
@@ -1245,8 +1384,11 @@ async def test_proposal_swap_mutation_at_exchange_is_restored_and_retained(
     conflicted = await service.get_proposal(proposal["id"])
     assert conflicted["status"] == "conflicted"
     assert conflicted["events"][-1]["details"]["source_recovery_state"] == (
-        "retained_unclassified"
+        "retained"
     )
+    assert conflicted["events"][-1]["details"][
+        "source_recovery_last_observed"
+    ] == "unclassified"
     assert conflicted["events"][-1]["details"]["retained_source_path"] == swap_name
 
 
@@ -1329,8 +1471,9 @@ async def test_reject_and_supersede_fsync_prior_rollback_state_before_closing(
     assert source.read_text() == external
     assert swap.read_text() == after
     prior = await service.get_proposal(proposal["id"])
-    assert prior["events"][-1]["details"]["source_recovery_state"] == (
-        "retained_proposal"
+    assert prior["events"][-1]["details"]["source_recovery_state"] == "retained"
+    assert prior["events"][-1]["details"]["source_recovery_last_observed"] == (
+        "proposal"
     )
     assert prior["events"][-1]["details"]["retained_source_path"] == swap.name
 
@@ -1493,8 +1636,11 @@ async def test_retry_restores_external_file_displaced_by_interrupted_exchange(
     assert conflicted["status"] == "conflicted"
     assert (workspace / swap_name).read_text() == after
     assert conflicted["events"][-1]["details"]["source_recovery_state"] == (
-        "retained_proposal"
+        "retained"
     )
+    assert conflicted["events"][-1]["details"][
+        "source_recovery_last_observed"
+    ] == "proposal"
 
 
 @pytest.mark.asyncio

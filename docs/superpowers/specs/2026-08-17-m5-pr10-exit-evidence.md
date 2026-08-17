@@ -75,9 +75,9 @@ touch a live research project or invoke a model.
 
 | Gate | Result |
 | --- | --- |
-| Migration/source/API/project/pack corrective suite (command below) | **69 passed** |
+| Migration/source/API/project/pack corrective suite (command below) | **72 passed** |
 | MCP schema/model-drift suite (command below) | **994 passed** |
-| Full Python suite: `.venv/bin/python -m pytest -q` | **3,202 passed in 251.74s** |
+| Full Python suite: `.venv/bin/python -m pytest -q` | **3,205 passed in 211.26s** |
 | Changed Python files: Ruff | **Passed** |
 | Python compile check: `.venv/bin/python -m compileall -q rka` | **Passed** |
 | Git whitespace/error check: `git diff --check 116f76b --` | **Passed** |
@@ -142,6 +142,16 @@ candidate adds deterministic regression coverage for:
 - retention of every pre-existing deterministic recovery inode before terminal
   conflict, including proposal, reviewed-base, and unclassified content, with
   the source directory fsynced and retained path recorded as the ledger closes;
+- bounded classification of an oversized retained regular inode through Apply,
+  Reject, and Supersede, without loading it into memory or leaving the proposal
+  permanently open;
+- separate event fields for durable retention state and the last observed byte
+  classification, so a late descriptor write is not mislabeled as immutable
+  reviewed-base content;
+- a generic retained-source path for crash-left proposal hard links while
+  reserving `displaced_source_path` for an original target that actually existed;
+- a post-unlink source-directory fsync when a fresh pre-exchange swap is cleaned
+  after a missing-target collision;
 - restart classification before any fresh replacement when a valid recovery
   manifest and retained inode exist, including a public target whose bytes have
   returned to the reviewed base;
