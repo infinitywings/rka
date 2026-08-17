@@ -29,6 +29,9 @@ and proposal-first editing boundary is recorded in
 The typed academic-role, evidence-warrant, citation-use, claim-boundary, and
 proportionate-readiness boundary is recorded in
 [ADR 0010](docs/adr/0010-typed-academic-writing-semantics.md).
+The conflict-safe Markdown/LaTeX source, stable-anchor, recovery, and
+public/private drafting boundary is recorded in
+[ADR 0011](docs/adr/0011-conflict-safe-manuscript-source-synchronization.md).
 
 The roadmap is ordered by dependency, not by invented delivery dates. Every
 milestone must satisfy its exit gate before dependent work is treated as ready.
@@ -42,7 +45,11 @@ resolution record merged in PR [#81](https://github.com/infinitywings/rka/pull/8
 PR 9.1 integrity hardening merged in PR
 [#82](https://github.com/infinitywings/rka/pull/82). PR 9.2, the typed
 academic-writing semantic core ([issue #83](https://github.com/infinitywings/rka/issues/83)),
-is now the active implementation target.**
+merged after independent audit in PR
+[#84](https://github.com/infinitywings/rka/pull/84). **PR 10, conflict-safe
+Markdown/LaTeX source synchronization
+([issue #61](https://github.com/infinitywings/rka/issues/61)), is now the active
+implementation target.**
 PR [#78](https://github.com/infinitywings/rka/pull/78) merged
 the seed-through-contribution dependency; ADR 0008 freezes the evaluation
 contract, and the exact release evidence is recorded in
@@ -66,7 +73,9 @@ PR 9.2 is based on the merged PR 9.1 foundation and is specified in
 Its migration, typed-binding, MCP, workbench, baseline-comparison, and
 real-project-derived pilot evidence is recorded in
 [`2026-08-17-m5-pr9-2-exit-evidence.md`](docs/superpowers/specs/2026-08-17-m5-pr9-2-exit-evidence.md).
-PR 10 remains dependent on this typed semantic core.
+PR 10 is specified in
+[`2026-08-17-m5-pr10-source-sync.md`](docs/superpowers/plans/2026-08-17-m5-pr10-source-sync.md)
+and governed by ADR 0011.
 The choice-first Writer delta is reconciled, the authority and AI boundary is
 recorded in ADR 0001, the read-only workbench has passed its real-project exit
 gate, and first-class experiment/run/observation/evidence-locator semantics
