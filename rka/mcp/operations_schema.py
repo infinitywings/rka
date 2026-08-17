@@ -326,6 +326,35 @@ _ENUMS = {
         "final",
         "removed",
     ],
+    "manuscript_unit_role": [
+        "unspecified",
+        "section",
+        "argument_block",
+        "paragraph_plan",
+        "result",
+        "caption",
+        "appendix",
+        "other",
+    ],
+    "manuscript_rhetorical_move": [
+        "unspecified",
+        "frame_problem",
+        "establish_gap",
+        "state_insight",
+        "explain_mechanism",
+        "address_challenge",
+        "present_innovation",
+        "pose_research_question",
+        "state_contribution",
+        "describe_method",
+        "present_result",
+        "interpret_result",
+        "compare_prior_work",
+        "state_limitation",
+        "transition",
+        "summarize",
+        "other",
+    ],
     "manuscript_evidence_role": [
         "support",
         "qualifier",
@@ -336,6 +365,19 @@ _ENUMS = {
         "tests",
         "bounds",
         "mentions",
+    ],
+    "manuscript_citation_role": [
+        "imports",
+        "bounds",
+        "baseline",
+        "extends",
+        "refutes",
+    ],
+    "manuscript_citation_verification_state": [
+        "unverified",
+        "self_attested",
+        "verified",
+        "rejected",
     ],
     "manuscript_checkpoint_kind": [
         "venue",
@@ -2752,8 +2794,13 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "operation": "upsert_argument_spine",
         "tool": "rka_execute",
         "category": "manuscript",
+        # role_tag remains an actor-routing contract. Lifecycle status is
+        # conveyed by the summary/notes and the structured dispatch result.
         "role_tag": "ANY",
-        "summary": "Atomically replace the authoritative argument spine.",
+        "summary": (
+            "Deprecated agent-direct mutation; returns a structured migration "
+            "error and performs no write."
+        ),
         "signature": (
             "rka_execute(operation='upsert_argument_spine', *, project_id, "
             "id, expected_revision, spine={'claims': [...], 'units': [...]})"
@@ -2770,12 +2817,19 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "manuscript_claim_state",
             "manuscript_unit_kind",
             "manuscript_unit_status",
+            "manuscript_unit_role",
+            "manuscript_rhetorical_move",
             "manuscript_evidence_role",
             "manuscript_claim_unit_relationship",
+            "manuscript_citation_role",
+            "manuscript_citation_verification_state",
         ),
         "examples": [
             {
-                "description": "Install one claim and one result unit.",
+                "description": (
+                    "Legacy payload retained only so older clients receive the "
+                    "structured migration error."
+                ),
                 "call": {
                     "operation": "upsert_argument_spine",
                     "project_id": "prj_01ABC...",
@@ -2813,13 +2867,19 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
+            "prepare_semantic_patch_context",
+            "create_semantic_patch_proposal",
+            "apply_semantic_patch_proposal",
             "ratify_manuscript_claim",
             "manuscript_spine",
             "manuscript_readiness",
         ],
         "notes": (
-            "This is a full replacement: omitted claims are retired and "
-            "omitted units are removed. Both claims and units lists are required."
+            "This legacy operation performs no write. Use "
+            "prepare_semantic_patch_context followed by an attributed "
+            "create_semantic_patch_proposal containing argument_spine_replace. "
+            "A PI or web user must apply that full-replacement proposal "
+            "separately; omitted claims are retired and omitted units are removed."
         ),
     },
     "replace_manuscript_reference_manifest": {

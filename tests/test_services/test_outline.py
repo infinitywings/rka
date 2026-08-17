@@ -129,6 +129,165 @@ async def test_outline_projection_joins_rationale_claims_and_evidence(db_with_pr
 
 
 @pytest.mark.asyncio
+async def test_academic_readiness_blocks_only_explicit_claim_bearing_units(
+    db_with_project,
+) -> None:
+    manuscript_id, evidence_id = await _seed_outline(db_with_project)
+    native = NativeManuscriptService(db_with_project, project_id="proj_default")
+    outlines = ManuscriptOutlineService(db_with_project, project_id="proj_default")
+
+    advisory = await outlines.get_outline(manuscript_id)
+    dimensions = {
+        item["name"]: item for item in advisory["academic_readiness"]["dimensions"]
+    }
+    assert advisory["academic_readiness"]["ready"] is True
+    assert dimensions["claim_boundaries"]["verdict"] == "warn"
+    assert dimensions["claim_boundaries"]["blocking"] is False
+    assert dimensions["rhetorical_annotation"]["verdict"] == "warn"
+
+    spine = _spine(evidence_id)
+    spine["units"][0]["unit_role"] = "argument_block"
+    spine["claims"][0]["unit_links"] = [
+        {"unit_key": "METHOD", "relationship": "advances"}
+    ]
+    await native.upsert_argument_spine(
+        manuscript_id,
+        expected_revision=2,
+        spine=spine,
+        actor="pi",
+    )
+    blocked = await outlines.get_outline(manuscript_id)
+    claim_dimension = next(
+        item
+        for item in blocked["academic_readiness"]["dimensions"]
+        if item["name"] == "claim_allocation"
+    )
+    assert blocked["academic_readiness"]["ready"] is False
+    assert claim_dimension["blocking"] is True
+    assert claim_dimension["findings"][0]["unit_key"] == "INTRO"
+
+    spine["units"][0]["unit_role"] = "section"
+    await native.upsert_argument_spine(
+        manuscript_id,
+        expected_revision=3,
+        spine=spine,
+        actor="pi",
+    )
+    container = await outlines.get_outline(manuscript_id)
+    assert container["academic_readiness"]["ready"] is True
+    claim_dimension = next(
+        item
+        for item in container["academic_readiness"]["dimensions"]
+        if item["name"] == "claim_allocation"
+    )
+    assert claim_dimension["verdict"] == "warn"
+    assert claim_dimension["blocking"] is False
+
+
+@pytest.mark.asyncio
+async def test_outline_exposes_unallocated_claim_adverse_evidence_as_private_advisory(
+    db_with_project,
+) -> None:
+    support_id = await _evidence_claim(db_with_project)
+    qualifier_id = await _evidence_claim(db_with_project)
+    counterevidence_id = await _evidence_claim(db_with_project)
+    spine = _spine(support_id)
+    spine["claims"][0]["qualifier_ids"] = [qualifier_id]
+    spine["claims"][0]["counterevidence_ids"] = [counterevidence_id]
+
+    native = NativeManuscriptService(db_with_project, project_id="proj_default")
+    manuscript = await native.create(ManuscriptCreate(title="Visible private cautions"))
+    await native.upsert_argument_spine(
+        manuscript.id,
+        expected_revision=1,
+        spine=spine,
+        actor="pi",
+    )
+
+    outline = await ManuscriptOutlineService(
+        db_with_project, project_id="proj_default"
+    ).get_outline(manuscript.id)
+    claim = outline["units"][0]["claims"][0]
+    assert {
+        (item["role"], item["evidence_claim_id"])
+        for item in claim["unallocated_adverse_evidence"]
+    } == {
+        ("qualifier", qualifier_id),
+        ("counterevidence", counterevidence_id),
+    }
+    assert len(claim["evidence"]) == 3
+    dimension = next(
+        item
+        for item in outline["academic_readiness"]["dimensions"]
+        if item["name"] == "adverse_evidence_allocation"
+    )
+    assert dimension["verdict"] == "warn"
+    assert dimension["blocking"] is False
+    assert {
+        (item["claim_key"], item["role"], item["evidence_claim_id"])
+        for item in dimension["findings"]
+    } == {
+        ("C1", "qualifier", qualifier_id),
+        ("C1", "counterevidence", counterevidence_id),
+    }
+    assert outline["academic_readiness"]["ready"] is True
+
+
+@pytest.mark.parametrize("conflict_kind", ["evidence", "citation"])
+def test_condense_rejects_colliding_typed_metadata(db_with_project, conflict_kind: str) -> None:
+    parent = {
+        "unit_id": "PARENT",
+        "status": "active",
+        "parent_unit_key": None,
+        "evidence": {
+            "support": [{
+                "evidence_claim_id": "clm_shared",
+                "supported_proposition": "Parent proposition.",
+                "warrant": "Parent warrant.",
+            }],
+            "qualifier": [],
+            "counterevidence": [],
+        },
+        "citations": [{
+            "citation_key": "author2026",
+            "citation_role": "baseline",
+            "supported_proposition": "Prior baseline.",
+            "verification_state": "verified",
+            "comparison_axis": "latency",
+        }],
+    }
+    child = {
+        "unit_id": "CHILD",
+        "status": "active",
+        "parent_unit_key": "PARENT",
+        "evidence": {
+            "support": [dict(parent["evidence"]["support"][0])],
+            "qualifier": [],
+            "counterevidence": [],
+        },
+        "citations": [dict(parent["citations"][0])],
+    }
+    if conflict_kind == "evidence":
+        child["evidence"]["support"][0]["warrant"] = "Conflicting child warrant."
+    else:
+        child["citations"][0]["comparison_axis"] = "throughput"
+
+    service = ManuscriptOutlineService(db_with_project, project_id="proj_default")
+    with pytest.raises(ValueError, match=f"condense {conflict_kind} conflict"):
+        service._condense(
+            [],
+            [parent, child],
+            OutlineProposalRequest(
+                expected_revision=1,
+                action="condense",
+                unit_key="PARENT",
+                descendant_keys=["CHILD"],
+                reason="Test conflicting semantics.",
+            ),
+        )
+
+
+@pytest.mark.asyncio
 async def test_expand_is_proposal_first_and_inherits_typed_bindings(db_with_project) -> None:
     manuscript_id, evidence_id = await _seed_outline(db_with_project)
     outlines = ManuscriptOutlineService(db_with_project, project_id="proj_default")

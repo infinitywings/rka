@@ -123,6 +123,102 @@ def test_create_manuscript_describe_schema_matches_typed_model() -> None:
     assert parsed.state == "active"
 
 
+@pytest.mark.asyncio
+async def test_typed_spine_direct_mutation_is_deprecated_without_network(requests) -> None:
+    schema = OPERATIONS_SCHEMA["upsert_argument_spine"]
+    assert schema["role_tag"] == "ANY"
+    assert schema["enums"]["manuscript_unit_role"] == [
+        "unspecified",
+        "section",
+        "argument_block",
+        "paragraph_plan",
+        "result",
+        "caption",
+        "appendix",
+        "other",
+    ]
+    payload = {
+        "operation": "upsert_argument_spine",
+        "project_id": "prj_test",
+        "id": "man_test",
+        "expected_revision": 4,
+        "spine": {
+            "claims": [{
+                "local_key": "C1",
+                "kind": "empirical",
+                "state": "active",
+                "exact_wording": "Latency was lower in the testbed.",
+                "allowed_wording": "Latency was lower in the evaluated testbed.",
+                "prohibited_wording": ["Latency is always lower."],
+                "conditions": ["Evaluated testbed only."],
+                "falsification_criteria": ["The direction does not reproduce."],
+                "unit_links": [{"unit_key": "R1", "relationship": "tests"}],
+            }],
+            "units": [{
+                "local_key": "R1",
+                "kind": "result",
+                "location": "results#latency",
+                "artifact_ref": "art_latency",
+                "allowed_interpretation": "Lower in the testbed.",
+                "prohibited_interpretation": "Lower everywhere.",
+                "unit_role": "result",
+                "rhetorical_move": "present_result",
+                "evidence": {"support": [{
+                    "evidence_claim_id": "clm_result",
+                    "supported_proposition": "Latency was lower.",
+                    "warrant": "The observation measures the stated contrast.",
+                }]},
+                "citations": [{
+                    "citation_key": "author2025",
+                    "citation_role": "baseline",
+                    "supported_proposition": "This is the established baseline.",
+                    "verification_state": "verified",
+                    "comparison_axis": "latency",
+                }],
+            }],
+        },
+    }
+    parsed = TypeAdapter(ExecuteArgsUnion).validate_python(payload)
+    result = json.loads(await server._dispatch_execute_typed(parsed))
+
+    assert result["error"] == "deprecated_operation"
+    assert result["replacement_operations"] == [
+        "prepare_semantic_patch_context",
+        "create_semantic_patch_proposal",
+        "apply_semantic_patch_proposal",
+    ]
+    assert result["received"]["spine_keys"] == ["claims", "units"]
+    assert not any(
+        item["path"] == "/api/manuscripts/man_test/argument-spine"
+        for item in requests
+    )
+
+
+def test_typed_spine_rejects_invalid_academic_enums() -> None:
+    payload = {
+        "operation": "upsert_argument_spine",
+        "project_id": "prj_test",
+        "id": "man_test",
+        "expected_revision": 1,
+        "spine": {
+            "claims": [],
+            "units": [{
+                "local_key": "I1",
+                "kind": "introduction",
+                "location": "intro",
+                "unit_role": "paragraph",
+                "citations": [{
+                    "citation_key": "x",
+                    "citation_role": "mentions",
+                    "supported_proposition": "Prior work exists.",
+                }],
+            }],
+        },
+    }
+    with pytest.raises(ValidationError):
+        TypeAdapter(ExecuteArgsUnion).validate_python(payload)
+
+
 def test_semantic_patch_transition_schema_rejects_ai_reviewer() -> None:
     with pytest.raises(ValidationError):
         TypeAdapter(ExecuteArgsUnion).validate_python({
@@ -658,21 +754,6 @@ _ATTESTATION = {
             "PATCH",
             "/api/manuscripts/man_1",
             {"expected_revision": 2, "venue": None},
-        ),
-        (
-            {
-                "operation": "upsert_argument_spine",
-                "project_id": "prj_test",
-                "id": "man_1",
-                "expected_revision": 3,
-                "spine": {"claims": [], "units": []},
-            },
-            "PUT",
-            "/api/manuscripts/man_1/argument-spine",
-            {
-                "expected_revision": 3,
-                "spine": {"claims": [], "units": []},
-            },
         ),
         (
             {

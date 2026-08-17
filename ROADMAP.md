@@ -26,6 +26,9 @@ boundary is recorded in
 The progressive-outline hierarchy, writing-rationale, binding-preservation,
 and proposal-first editing boundary is recorded in
 [ADR 0009](docs/adr/0009-progressive-outline-and-unit-editor.md).
+The typed academic-role, evidence-warrant, citation-use, claim-boundary, and
+proportionate-readiness boundary is recorded in
+[ADR 0010](docs/adr/0010-typed-academic-writing-semantics.md).
 
 The roadmap is ordered by dependency, not by invented delivery dates. Every
 milestone must satisfy its exit gate before dependent work is treated as ready.
@@ -36,7 +39,10 @@ milestone must satisfy its exit gate before dependent work is treated as ready.
 outline and manuscript-unit editor, merged in PR
 [#80](https://github.com/infinitywings/rka/pull/80); its independent audit and
 resolution record merged in PR [#81](https://github.com/infinitywings/rka/pull/81).
-PR 9.1 integrity hardening is now the active implementation target.**
+PR 9.1 integrity hardening merged in PR
+[#82](https://github.com/infinitywings/rka/pull/82). PR 9.2, the typed
+academic-writing semantic core ([issue #83](https://github.com/infinitywings/rka/issues/83)),
+is now the active implementation target.**
 PR [#78](https://github.com/infinitywings/rka/pull/78) merged
 the seed-through-contribution dependency; ADR 0008 freezes the evaluation
 contract, and the exact release evidence is recorded in
@@ -55,8 +61,12 @@ contract is
 Its migration, pack, semantic-cursor, no-op-write, frontend-build, and
 real-project-derived validation record is
 [`2026-08-17-workbench-m5-pr9-1-exit-evidence.md`](docs/superpowers/specs/2026-08-17-workbench-m5-pr9-1-exit-evidence.md).
-PR 9.2 remains dependent on PR 9.1; PR 10 remains dependent on the typed
-semantic core in PR 9.2.
+PR 9.2 is based on the merged PR 9.1 foundation and is specified in
+[`2026-08-17-m5-pr9-2-typed-academic-writing-core.md`](docs/superpowers/plans/2026-08-17-m5-pr9-2-typed-academic-writing-core.md).
+Its migration, typed-binding, MCP, workbench, baseline-comparison, and
+real-project-derived pilot evidence is recorded in
+[`2026-08-17-m5-pr9-2-exit-evidence.md`](docs/superpowers/specs/2026-08-17-m5-pr9-2-exit-evidence.md).
+PR 10 remains dependent on this typed semantic core.
 The choice-first Writer delta is reconciled, the authority and AI boundary is
 recorded in ADR 0001, the read-only workbench has passed its real-project exit
 gate, and first-class experiment/run/observation/evidence-locator semantics

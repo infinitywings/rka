@@ -6724,19 +6724,36 @@ async def rka_upsert_argument_spine(
     *,
     project_id: str,
 ) -> str:
-    """Deprecated for MCP: the server rejects agent-direct mutation.
+    """Report the deprecated agent-direct spine mutation contract.
 
     Create an attributed ``argument_spine_replace`` semantic proposal instead;
     a PI or web user performs the separate apply transition.
     """
-    async with _client(project_id) as c:
-        r = await c.put(
-            f"/api/manuscripts/{manuscript_id}/argument-spine",
-            json={"expected_revision": expected_revision, "spine": spine},
-        )
-        _raise_with_detail(r)
-        data = r.json()
-    return json.dumps(data, indent=2)
+    return json.dumps(
+        {
+            "error": "deprecated_operation",
+            "operation": "upsert_argument_spine",
+            "message": (
+                "Agent-direct argument-spine replacement is not permitted. "
+                "Prepare context with prepare_semantic_patch_context, then "
+                "create an attributed argument_spine_replace proposal with "
+                "create_semantic_patch_proposal; a PI or web user applies it "
+                "in a separate transition."
+            ),
+            "replacement_operations": [
+                "prepare_semantic_patch_context",
+                "create_semantic_patch_proposal",
+                "apply_semantic_patch_proposal",
+            ],
+            "received": {
+                "manuscript_id": manuscript_id,
+                "expected_revision": expected_revision,
+                "spine_keys": sorted(spine),
+                "project_id": project_id,
+            },
+        },
+        indent=2,
+    )
 
 
 @tool(category="manuscript")

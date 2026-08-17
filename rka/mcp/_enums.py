@@ -539,6 +539,35 @@ ManuscriptUnitStatusLit = Literal[
     "final",
     "removed",
 ]
+ManuscriptUnitRoleLit = Literal[
+    "unspecified",
+    "section",
+    "argument_block",
+    "paragraph_plan",
+    "result",
+    "caption",
+    "appendix",
+    "other",
+]
+ManuscriptRhetoricalMoveLit = Literal[
+    "unspecified",
+    "frame_problem",
+    "establish_gap",
+    "state_insight",
+    "explain_mechanism",
+    "address_challenge",
+    "present_innovation",
+    "pose_research_question",
+    "state_contribution",
+    "describe_method",
+    "present_result",
+    "interpret_result",
+    "compare_prior_work",
+    "state_limitation",
+    "transition",
+    "summarize",
+    "other",
+]
 ManuscriptOutlineActionLit = Literal["edit", "expand", "condense", "reorder"]
 ManuscriptEvidenceRoleLit = Literal[
     "support",
@@ -550,6 +579,19 @@ ManuscriptClaimUnitRelationshipLit = Literal[
     "tests",
     "bounds",
     "mentions",
+]
+ManuscriptCitationRoleLit = Literal[
+    "imports",
+    "bounds",
+    "baseline",
+    "extends",
+    "refutes",
+]
+ManuscriptCitationVerificationStateLit = Literal[
+    "unverified",
+    "self_attested",
+    "verified",
+    "rejected",
 ]
 
 # PI checkpoint lifecycle.

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from pydantic import TypeAdapter
@@ -797,7 +797,13 @@ class SemanticPatchService(BaseService):
                 ("qualifier", "qualifier_ids"),
                 ("counterevidence", "counterevidence_ids"),
             ):
-                refs.update(evidence.get(field, item.get(legacy, [])) or [])
+                for value in evidence.get(field, item.get(legacy, [])) or []:
+                    if isinstance(value, str):
+                        refs.add(value)
+                    elif isinstance(value, Mapping):
+                        entity_id = value.get("evidence_claim_id") or value.get("claim_id")
+                        if isinstance(entity_id, str):
+                            refs.add(entity_id)
         return refs
 
     async def _validate_spine_references(
@@ -805,7 +811,11 @@ class SemanticPatchService(BaseService):
     ) -> None:
         claim_ids = sorted(
             {
-                entity_id
+                (
+                    entity_id
+                    if isinstance(entity_id, str)
+                    else str(entity_id["evidence_claim_id"])
+                )
                 for item in [*claims, *units]
                 for entity_id in (
                     item["evidence"]["support"]
@@ -827,6 +837,15 @@ class SemanticPatchService(BaseService):
 
     @staticmethod
     def _spine_findings(before: dict[str, Any], after: dict[str, Any]) -> list[dict[str, Any]]:
+        def evidence_ids(values: Iterable[Any]) -> set[str]:
+            return {
+                value
+                if isinstance(value, str)
+                else str(value.get("evidence_claim_id") or value.get("claim_id") or "")
+                for value in values
+                if isinstance(value, str) or isinstance(value, Mapping)
+            } - {""}
+
         old = {item["claim_id"]: item for item in before.get("claims", [])}
         new = {item["local_key"]: item for item in after.get("claims", [])}
         findings: list[dict[str, Any]] = []
@@ -837,7 +856,10 @@ class SemanticPatchService(BaseService):
                 ("counterevidence_ids", "counterevidence", "COUNTEREVIDENCE_REMOVED"),
             )
             for old_field, new_field, code in checks:
-                removed = sorted(set(left.get(old_field) or []) - set(right["evidence"][new_field]))
+                removed = sorted(
+                    set(left.get(old_field) or [])
+                    - evidence_ids(right["evidence"][new_field])
+                )
                 if removed:
                     findings.append(
                         {
@@ -897,7 +919,10 @@ class SemanticPatchService(BaseService):
                 ("qualifier_ids", "qualifier"),
                 ("counterevidence_ids", "counterevidence"),
             ):
-                removed = sorted(set(parent.get(old_field) or []) - set(right["evidence"][role]))
+                removed = sorted(
+                    set(parent.get(old_field) or [])
+                    - evidence_ids(right["evidence"][role])
+                )
                 if removed:
                     findings.append(
                         {
@@ -920,7 +945,10 @@ class SemanticPatchService(BaseService):
                 ("qualifier_ids", "qualifier"),
                 ("counterevidence_ids", "counterevidence"),
             ):
-                removed = sorted(set(left.get(old_field) or []) - set(right["evidence"][role]))
+                removed = sorted(
+                    set(left.get(old_field) or [])
+                    - evidence_ids(right["evidence"][role])
+                )
                 if removed:
                     findings.append(
                         {
