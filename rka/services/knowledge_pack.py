@@ -788,6 +788,10 @@ _JSON_ID_COLUMNS = {
         "conditions",
         "falsification_criteria",
     ),
+    # Expanded checkpoint snapshots carry auditable nested identities. Import
+    # re-keys their components below and recomputes the digest. Older hash-only
+    # snapshots are opaque and therefore cannot be made portable retroactively.
+    "manuscript_checkpoints": ("dependency_snapshot",),
     "manuscript_unit_outline_profiles": (
         "evidence_plan",
         "figure_intentions",
@@ -1653,6 +1657,25 @@ class KnowledgePackService(BaseService):
                 remapped[column] = _EMBEDDED_ID_RE.sub(
                     lambda m: id_map.get(m.group(0), m.group(0)), value
                 )
+
+        if table == "manuscript_checkpoints" and remapped.get("dependency_snapshot"):
+            try:
+                checkpoint_snapshot = json.loads(remapped["dependency_snapshot"])
+            except (TypeError, json.JSONDecodeError):
+                checkpoint_snapshot = None
+            if isinstance(checkpoint_snapshot, dict) and isinstance(
+                checkpoint_snapshot.get("components"), dict
+            ):
+                encoded_components = json.dumps(
+                    checkpoint_snapshot["components"],
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                ).encode()
+                checkpoint_snapshot["sha256"] = hashlib.sha256(
+                    encoded_components
+                ).hexdigest()
+                remapped["dependency_snapshot"] = json.dumps(checkpoint_snapshot)
 
         if table == "semantic_patch_context_manifests":
             manifest_payload = {

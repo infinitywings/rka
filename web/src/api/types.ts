@@ -1021,6 +1021,9 @@ export interface ManuscriptOutlineClaimLink {
   claim_version: number | null
   exact_wording: string | null
   relationship: string
+  /** Private planning context; it is not manuscript prose. */
+  evidence: ManuscriptEvidenceBinding[]
+  unallocated_adverse_evidence: ManuscriptEvidenceBinding[]
 }
 
 export interface ManuscriptOutlineUnit extends ManuscriptUnitContext {
@@ -1053,6 +1056,7 @@ export interface ManuscriptOutline {
         claim_id?: string
         claim_key?: string
         evidence_claim_id?: string
+        role?: "support" | "qualifier" | "counterevidence"
         citation_id?: string
         citation_key?: string
       }>

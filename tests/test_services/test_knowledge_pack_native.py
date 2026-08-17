@@ -404,7 +404,7 @@ async def _seed_native_manuscript(db) -> dict[str, str]:
         ),
         expected_revision=8,
     )
-    await service.create_checkpoint(
+    outline_checkpoint = await service.create_checkpoint(
         ManuscriptCheckpointCreate(
             manuscript_id=manuscript.id,
             kind="outline",
@@ -543,6 +543,25 @@ async def _seed_native_manuscript(db) -> dict[str, str]:
         ),
         expected_revision=12,
     )
+    outline_decision_id = generate_id("decision")
+    await db.execute(
+        """INSERT INTO decisions
+           (id, phase, question, chosen, rationale, decided_by, status, project_id)
+           VALUES (?, 'paper_writing', 'Approve outline?', 'Approve current outline',
+                   'PI approved the typed outline dependencies.',
+                   'pi', 'active', ?)""",
+        [outline_decision_id, project_id],
+    )
+    await db.commit()
+    await service.resolve_checkpoint(
+        outline_checkpoint.id,
+        ManuscriptCheckpointResolve(
+            decision_id=outline_decision_id,
+            status="resolved",
+            resolved_at="2026-07-23T10:04:00Z",
+        ),
+        expected_revision=13,
+    )
 
     return {
         "manuscript_id": manuscript.id,
@@ -566,6 +585,7 @@ async def _seed_native_manuscript(db) -> dict[str, str]:
         "active_reference_id": active_reference_id,
         "citation_use_id": citation_use_id,
         "reference_set_checkpoint_id": reference_set_checkpoint.id,
+        "outline_checkpoint_id": outline_checkpoint.id,
     }
 
 
@@ -651,7 +671,7 @@ async def test_native_manuscript_round_trip_preserves_history_without_synthesis(
     )
     assert imported_manuscript is not None
     assert imported_manuscript["id"] != source["manuscript_id"]
-    assert imported_manuscript["revision"] == 13
+    assert imported_manuscript["revision"] == 14
 
     imported_legacy = await db.fetchone(
         """SELECT id FROM journal
@@ -935,6 +955,21 @@ async def test_native_manuscript_round_trip_preserves_history_without_synthesis(
         if checkpoint["kind"] == "reference_set"
     )
     assert imported_reference_checkpoint["dependency_current"] is True
+    imported_outline_checkpoint = next(
+        checkpoint
+        for checkpoint in imported_context["checkpoints"]
+        if checkpoint["kind"] == "outline"
+    )
+    assert imported_outline_checkpoint["status"] == "resolved"
+    current_outline_dependencies = await NativeManuscriptService(
+        db, project_id="proj_native_import"
+    )._checkpoint_dependency_snapshot(
+        imported_manuscript["id"], kind="outline", unit_id=None
+    )
+    assert imported_outline_checkpoint["dependency_snapshot"] == (
+        current_outline_dependencies
+    )
+    assert imported_outline_checkpoint["dependency_current"] is True
 
     target_cursor = await db.fetchone(
         """SELECT min(cursor) AS cursor

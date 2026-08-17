@@ -288,6 +288,34 @@ export function OutlineEditor({
                     </Badge>
                   ))}
                 </div>
+                {unit.claims.some((claim) => claim.evidence.length > 0) && (
+                  <details className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/5 p-2 text-xs">
+                    <summary className="cursor-pointer font-medium">Private claim evidence and cautions</summary>
+                    <div className="mt-2 space-y-2">
+                      {unit.claims.map((claim) => (
+                        <div key={`claim-evidence:${unit.id}:${claim.claim_id}`} className="rounded border p-2">
+                          <div className="flex flex-wrap gap-1">
+                            <Badge variant="outline">{claim.claim_key}</Badge>
+                            <Badge variant="outline">{claim.evidence.length} claim-level records</Badge>
+                            {claim.unallocated_adverse_evidence.length > 0 && (
+                              <Badge variant="destructive">
+                                {claim.unallocated_adverse_evidence.length} adverse records unallocated
+                              </Badge>
+                            )}
+                          </div>
+                          {claim.evidence.map((item) => (
+                            <p key={`${claim.claim_id}:${item.role}:${item.evidence_claim_id}`} className="mt-1 text-muted-foreground">
+                              <strong>{humanize(item.role)}:</strong> <code className="text-[10px]">{item.evidence_claim_id}</code>
+                              {claim.unallocated_adverse_evidence.some((adverse) =>
+                                adverse.role === item.role && adverse.evidence_claim_id === item.evidence_claim_id
+                              ) ? " · not allocated to an active unit" : ""}
+                            </p>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                )}
                 {(unit.evidence.length > 0 || unit.citations.length > 0) && (
                   <details className="mt-3 rounded-md border bg-muted/10 p-2 text-xs">
                     <summary className="cursor-pointer font-medium">Academic support</summary>
@@ -307,7 +335,11 @@ export function OutlineEditor({
                           <div className="flex flex-wrap gap-1">
                             <Badge variant="outline">{citation.citation_key}</Badge>
                             <Badge variant="outline">{citation.citation_role}</Badge>
-                            <Badge variant={citation.verification_state === "verified" ? "secondary" : "outline"}>{humanize(citation.verification_state)}</Badge>
+                            <Badge variant={citation.verification_state === "verified" && citation.verification_current === true ? "secondary" : "outline"}>
+                              {citation.verification_state === "verified" && citation.verification_current !== true
+                                ? "verification stale"
+                                : humanize(citation.verification_state)}
+                            </Badge>
                           </div>
                           <p className="mt-1"><strong>Supports:</strong> {citation.supported_proposition}</p>
                           {citation.comparison_axis && <p className="mt-1 text-muted-foreground"><strong>Comparison axis:</strong> {citation.comparison_axis}</p>}

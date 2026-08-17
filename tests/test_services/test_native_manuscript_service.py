@@ -1477,3 +1477,160 @@ async def test_checkpoint_snapshots_detect_artifact_and_literature_drift(
     after_literature = await service.get_context(manuscript.id)
     literature_by_id = {row["id"]: row for row in after_literature["checkpoints"]}
     assert literature_by_id[checkpoints["reference_set"]]["dependency_current"] is False
+
+
+@pytest.mark.asyncio
+async def test_draft_section_checkpoint_tracks_typed_semantics_only_for_its_unit(
+    db_with_project,
+) -> None:
+    evidence_id = await _seed_ready_claim(db_with_project)
+    service = NativeManuscriptService(db_with_project, project_id="proj_default")
+    manuscript = await service.create(ManuscriptCreate(title="Scoped section approval"))
+    spine = _spine(evidence_id)
+    spine["units"][0].update({
+        "unit_role": "result",
+        "rhetorical_move": "present_result",
+        "evidence": {
+            "support": [{
+                "evidence_claim_id": evidence_id,
+                "supported_proposition": "Latency was lower.",
+                "warrant": "The observation measures the stated contrast.",
+            }],
+            "qualifier": [],
+            "counterevidence": [],
+        },
+    })
+    spine["units"].append({
+        "unit_id": "R2",
+        "kind": "discussion",
+        "location": "sections/discussion.tex",
+        "sequence": 2,
+        "unit_role": "paragraph_plan",
+        "rhetorical_move": "interpret_result",
+    })
+    context = await service.upsert_argument_spine(
+        manuscript.id,
+        expected_revision=1,
+        spine=spine,
+        actor="pi",
+    )
+    units = {item["local_key"]: item for item in context["units"]}
+
+    literature_id = await _seed_literature(db_with_project)
+    reference_id = generate_id("manuscript_reference")
+    await db_with_project.execute(
+        """INSERT INTO manuscript_reference_members
+           (id, manuscript_id, project_id, citation_key, literature_id)
+           VALUES (?, ?, 'proj_default', 'author2025', ?)""",
+        [reference_id, manuscript.id, literature_id],
+    )
+    await db_with_project.execute(
+        """INSERT INTO manuscript_unit_citations
+           (id, manuscript_id, project_id, unit_id, reference_member_id,
+            citation_role, supported_proposition, verification_state,
+            comparison_axis)
+           VALUES (?, ?, 'proj_default', ?, ?, 'baseline',
+                   'The prior work is the measured baseline.', 'self_attested',
+                   'latency')""",
+        [
+            generate_id("manuscript_unit_citation"),
+            manuscript.id,
+            units["R1"]["id"],
+            reference_id,
+        ],
+    )
+    await db_with_project.commit()
+
+    baseline = await service._checkpoint_dependency_snapshot(
+        manuscript.id, kind="draft_section", unit_id=units["R1"]["id"]
+    )
+    mutations = [
+        (
+            "UPDATE manuscript_unit_evidence SET supported_proposition = ? "
+            "WHERE unit_id = ? AND project_id = 'proj_default'",
+            "Changed proposition.",
+            "Latency was lower.",
+        ),
+        (
+            "UPDATE manuscript_unit_evidence SET warrant = ? "
+            "WHERE unit_id = ? AND project_id = 'proj_default'",
+            "Changed warrant.",
+            "The observation measures the stated contrast.",
+        ),
+        (
+            "UPDATE manuscript_unit_outline_profiles SET unit_role = ? "
+            "WHERE unit_id = ? AND project_id = 'proj_default'",
+            "argument_block",
+            "result",
+        ),
+        (
+            "UPDATE manuscript_unit_outline_profiles SET rhetorical_move = ? "
+            "WHERE unit_id = ? AND project_id = 'proj_default'",
+            "interpret_result",
+            "present_result",
+        ),
+        (
+            "UPDATE manuscript_unit_citations SET verification_state = ? "
+            "WHERE unit_id = ? AND project_id = 'proj_default'",
+            "verified",
+            "self_attested",
+        ),
+        (
+            "UPDATE manuscript_unit_citations SET comparison_axis = ? "
+            "WHERE unit_id = ? AND project_id = 'proj_default'",
+            "throughput",
+            "latency",
+        ),
+    ]
+    for statement, changed_value, original_value in mutations:
+        async with db_with_project.transaction(write=True):
+            await db_with_project.execute(statement, [changed_value, units["R1"]["id"]])
+        changed = await service._checkpoint_dependency_snapshot(
+            manuscript.id, kind="draft_section", unit_id=units["R1"]["id"]
+        )
+        assert changed["sha256"] != baseline["sha256"]
+        async with db_with_project.transaction(write=True):
+            await db_with_project.execute(statement, [original_value, units["R1"]["id"]])
+        restored = await service._checkpoint_dependency_snapshot(
+            manuscript.id, kind="draft_section", unit_id=units["R1"]["id"]
+        )
+        assert restored == baseline
+
+    revision = (await service.get(manuscript.id)).revision
+    checkpoints: dict[str, str] = {}
+    for unit_key in ("R1", "R2"):
+        checkpoint = await service.create_checkpoint(
+            ManuscriptCheckpointCreate(
+                manuscript_id=manuscript.id,
+                kind="draft_section",
+                unit_id=units[unit_key]["id"],
+            ),
+            expected_revision=revision,
+        )
+        revision += 1
+        decision_id = await _seed_pi_decision(
+            db_with_project,
+            chosen=f"Approve {unit_key}",
+        )
+        await service.resolve_checkpoint(
+            checkpoint.id,
+            ManuscriptCheckpointResolve(
+                decision_id=decision_id,
+                status="resolved",
+                resolved_at="2026-07-22T12:00:00Z",
+            ),
+            expected_revision=revision,
+        )
+        revision += 1
+        checkpoints[unit_key] = checkpoint.id
+
+    async with db_with_project.transaction(write=True):
+        await db_with_project.execute(
+            "UPDATE manuscript_unit_evidence SET warrant = ? "
+            "WHERE unit_id = ? AND project_id = 'proj_default'",
+            ["A materially changed warrant.", units["R1"]["id"]],
+        )
+    refreshed = await service.get_context(manuscript.id)
+    by_id = {item["id"]: item for item in refreshed["checkpoints"]}
+    assert by_id[checkpoints["R1"]]["dependency_current"] is False
+    assert by_id[checkpoints["R2"]]["dependency_current"] is True

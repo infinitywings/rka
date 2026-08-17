@@ -70,8 +70,33 @@ dimension reports `pass`, `warn`, or `not_applicable`, plus findings and a
 `blocking` flag.  Only deterministic structural failures—invalid hierarchy,
 missing claim allocation, or missing required evidence presence—may block.
 Missing roles, warrants, claim boundaries, or verified citation use warn.
+Claim-level qualifiers and counterevidence that are not allocated to any
+active unit also warn with exact IDs. They remain visible in the private
+workbench substrate; materiality remains a PI/Writer judgment rather than a
+deterministic blocker.
 Rhetorical fit, coherence, venue fit, persuasiveness, and reviewer simulation
 remain human/LLM judgments and cannot acquit or block canonical state.
+
+### Human approvals bind to complete, portable dependencies
+
+Draft-section checkpoints cover the selected unit's role, rhetorical move,
+claim boundaries, evidence propositions and warrants, and citation-use
+semantics. Outline checkpoints cover the corresponding manuscript-wide maps.
+Snapshots retain normalized dependency components beside their digest for
+auditability. Knowledge-pack import rekeys those components and recomputes the
+digest, so a faithful import preserves approval currency while a same-unit
+semantic change invalidates only the affected approval.
+
+Condense proposals fail closed when the parent and child assign different
+semantics to the same evidence or citation identity. RKA never chooses one
+warrant, verification state, or comparison axis by insertion order.
+
+### Agents propose spine replacement; humans apply it
+
+The legacy MCP `upsert_argument_spine` name remains parseable for compatibility
+but performs no write and returns a structured deprecation response. Agents
+prepare attributable `argument_spine_replace` semantic-patch proposals. A PI or
+web user applies the reviewed full-replacement proposal separately.
 
 ### Private analysis and public prose stay separate
 
@@ -86,9 +111,11 @@ to omit a material concern.
 
 - The migration is additive and project-scoped.
 - Knowledge packs must round-trip and rekey every new binding.
+- Knowledge-pack import recomputes checkpoint digests after rekeying their
+  auditable dependency components.
 - Outline proposals and bulk spine synchronization preserve the new fields.
 - The workbench uses progressive disclosure: role/move are primary controls;
-  warrants and citation-use details appear next to the binding they qualify.
+  warrants, citation-use currency, and private adverse evidence appear next to
+  the binding or claim they qualify.
 - Markdown/LaTeX file synchronization, anchors, and merge policy remain PR 10.
 - No embedded LLM or automatic Git operation is introduced.
-

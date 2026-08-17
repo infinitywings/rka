@@ -2794,8 +2794,11 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "operation": "upsert_argument_spine",
         "tool": "rka_execute",
         "category": "manuscript",
-        "role_tag": "ANY",
-        "summary": "Atomically replace the authoritative argument spine.",
+        "role_tag": "DEPRECATED",
+        "summary": (
+            "Deprecated agent-direct mutation; returns a structured migration "
+            "error and performs no write."
+        ),
         "signature": (
             "rka_execute(operation='upsert_argument_spine', *, project_id, "
             "id, expected_revision, spine={'claims': [...], 'units': [...]})"
@@ -2821,7 +2824,10 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "examples": [
             {
-                "description": "Install one claim and one result unit.",
+                "description": (
+                    "Legacy payload retained only so older clients receive the "
+                    "structured migration error."
+                ),
                 "call": {
                     "operation": "upsert_argument_spine",
                     "project_id": "prj_01ABC...",
@@ -2859,13 +2865,19 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": [
+            "prepare_semantic_patch_context",
+            "create_semantic_patch_proposal",
+            "apply_semantic_patch_proposal",
             "ratify_manuscript_claim",
             "manuscript_spine",
             "manuscript_readiness",
         ],
         "notes": (
-            "This is a full replacement: omitted claims are retired and "
-            "omitted units are removed. Both claims and units lists are required."
+            "This legacy operation performs no write. Use "
+            "prepare_semantic_patch_context followed by an attributed "
+            "create_semantic_patch_proposal containing argument_spine_replace. "
+            "A PI or web user must apply that full-replacement proposal "
+            "separately; omitted claims are retired and omitted units are removed."
         ),
     },
     "replace_manuscript_reference_manifest": {

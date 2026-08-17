@@ -124,7 +124,7 @@ def test_create_manuscript_describe_schema_matches_typed_model() -> None:
 
 
 @pytest.mark.asyncio
-async def test_typed_spine_preserves_academic_semantics_to_rest(requests) -> None:
+async def test_typed_spine_direct_mutation_is_deprecated_without_network(requests) -> None:
     schema = OPERATIONS_SCHEMA["upsert_argument_spine"]
     assert schema["enums"]["manuscript_unit_role"] == [
         "unspecified",
@@ -178,20 +178,19 @@ async def test_typed_spine_preserves_academic_semantics_to_rest(requests) -> Non
         },
     }
     parsed = TypeAdapter(ExecuteArgsUnion).validate_python(payload)
-    await server._dispatch_execute_typed(parsed)
+    result = json.loads(await server._dispatch_execute_typed(parsed))
 
-    request = next(
-        item
+    assert result["error"] == "deprecated_operation"
+    assert result["replacement_operations"] == [
+        "prepare_semantic_patch_context",
+        "create_semantic_patch_proposal",
+        "apply_semantic_patch_proposal",
+    ]
+    assert result["received"]["spine_keys"] == ["claims", "units"]
+    assert not any(
+        item["path"] == "/api/manuscripts/man_test/argument-spine"
         for item in requests
-        if item["path"] == "/api/manuscripts/man_test/argument-spine"
     )
-    assert request["method"] == "PUT"
-    assert request["path"] == "/api/manuscripts/man_test/argument-spine"
-    unit = request["json"]["spine"]["units"][0]
-    assert unit["unit_role"] == "result"
-    assert unit["rhetorical_move"] == "present_result"
-    assert unit["evidence"]["support"][0]["warrant"].startswith("The observation")
-    assert unit["citations"][0]["citation_role"] == "baseline"
 
 
 def test_typed_spine_rejects_invalid_academic_enums() -> None:
@@ -754,21 +753,6 @@ _ATTESTATION = {
             "PATCH",
             "/api/manuscripts/man_1",
             {"expected_revision": 2, "venue": None},
-        ),
-        (
-            {
-                "operation": "upsert_argument_spine",
-                "project_id": "prj_test",
-                "id": "man_1",
-                "expected_revision": 3,
-                "spine": {"claims": [], "units": []},
-            },
-            "PUT",
-            "/api/manuscripts/man_1/argument-spine",
-            {
-                "expected_revision": 3,
-                "spine": {"claims": [], "units": []},
-            },
         ),
         (
             {

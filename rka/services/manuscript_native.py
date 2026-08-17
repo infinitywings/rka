@@ -1974,7 +1974,11 @@ class NativeManuscriptService(BaseService):
                 """SELECT u.local_key AS unit_key, mr.citation_key,
                           uc.citation_role, uc.supported_proposition,
                           uc.verification_state, uc.comparison_axis,
-                          mr.literature_id
+                          mr.literature_id,
+                          l.title AS literature_title,
+                          l.authors AS literature_authors,
+                          l.year AS literature_year, l.doi AS literature_doi,
+                          l.url AS literature_url
                    FROM manuscript_unit_citations AS uc
                    JOIN manuscript_units AS u
                      ON u.id = uc.unit_id
@@ -1984,6 +1988,9 @@ class NativeManuscriptService(BaseService):
                      ON mr.id = uc.reference_member_id
                     AND mr.manuscript_id = uc.manuscript_id
                     AND mr.project_id = uc.project_id
+                   LEFT JOIN literature AS l
+                     ON l.id = mr.literature_id
+                    AND l.project_id = mr.project_id
                    WHERE uc.manuscript_id = ? AND uc.project_id = ?
                    ORDER BY unit_key, uc.citation_role,
                             mr.citation_key COLLATE NOCASE,
@@ -2034,11 +2041,26 @@ class NativeManuscriptService(BaseService):
             ]
         elif kind == "draft_section":
             unit = await self.db.fetchone(
-                """SELECT local_key, kind, location, title, artifact_ref,
-                          allowed_interpretation, prohibited_interpretation,
-                          sequence, status
-                   FROM manuscript_units
-                   WHERE id = ? AND manuscript_id = ? AND project_id = ?""",
+                """SELECT u.local_key, u.kind, u.location, u.title,
+                          u.artifact_ref, u.allowed_interpretation,
+                          u.prohibited_interpretation, u.sequence, u.status,
+                          coalesce(p.outline_level, 4) AS outline_level,
+                          coalesce(p.unit_role, 'unspecified') AS unit_role,
+                          coalesce(p.rhetorical_move, 'unspecified') AS rhetorical_move,
+                          parent.local_key AS parent_unit_key,
+                          p.communicative_job, p.intended_takeaway,
+                          p.transition_from_previous, p.quick_reader_role,
+                          coalesce(p.evidence_plan, '[]') AS evidence_plan,
+                          coalesce(p.figure_intentions, '[]') AS figure_intentions,
+                          coalesce(p.table_intentions, '[]') AS table_intentions,
+                          coalesce(p.citation_intentions, '[]') AS citation_intentions,
+                          p.blocker
+                   FROM manuscript_units AS u
+                   LEFT JOIN manuscript_unit_outline_profiles AS p
+                     ON p.unit_id = u.id AND p.project_id = u.project_id
+                   LEFT JOIN manuscript_units AS parent
+                     ON parent.id = p.parent_unit_id AND parent.project_id = p.project_id
+                   WHERE u.id = ? AND u.manuscript_id = ? AND u.project_id = ?""",
                 [unit_id, manuscript_id, self.project_id],
             )
             if unit is not None:
@@ -2048,7 +2070,8 @@ class NativeManuscriptService(BaseService):
             components["claims"] = await self.db.fetchall(
                 """SELECT c.local_key, c.kind, c.state, v.version,
                           v.exact_wording, v.allowed_wording,
-                          v.prohibited_wording, cu.relationship
+                          v.prohibited_wording, v.conditions,
+                          v.falsification_criteria, cu.relationship
                    FROM manuscript_claim_units AS cu
                    JOIN manuscript_claims AS c
                      ON c.id = cu.manuscript_claim_id
@@ -2061,7 +2084,9 @@ class NativeManuscriptService(BaseService):
                 [unit_id, manuscript_id, self.project_id],
             )
             components["evidence"] = await self.db.fetchall(
-                """SELECT e.role, c.content, c.confidence, c.verified,
+                """SELECT e.role, e.ordinal, e.supported_proposition,
+                          e.warrant, c.id AS evidence_claim_id,
+                          c.content, c.confidence, c.verified,
                           c.evidence_status, c.stale, j.content AS source_content,
                           j.status AS source_status
                    FROM manuscript_unit_evidence AS e
@@ -2073,7 +2098,31 @@ class NativeManuscriptService(BaseService):
                     AND j.project_id = c.project_id
                    WHERE e.unit_id = ? AND e.manuscript_id = ?
                      AND e.project_id = ?
-                   ORDER BY e.role, c.content""",
+                   ORDER BY e.role, e.ordinal, evidence_claim_id""",
+                [unit_id, manuscript_id, self.project_id],
+            )
+            components["citations"] = await self.db.fetchall(
+                """SELECT mr.citation_key, uc.citation_role,
+                          uc.supported_proposition, uc.verification_state,
+                          uc.comparison_axis,
+                          mr.literature_id,
+                          l.title AS literature_title,
+                          l.authors AS literature_authors,
+                          l.year AS literature_year, l.doi AS literature_doi,
+                          l.url AS literature_url
+                   FROM manuscript_unit_citations AS uc
+                   JOIN manuscript_reference_members AS mr
+                     ON mr.id = uc.reference_member_id
+                    AND mr.manuscript_id = uc.manuscript_id
+                    AND mr.project_id = uc.project_id
+                   LEFT JOIN literature AS l
+                     ON l.id = mr.literature_id
+                    AND l.project_id = mr.project_id
+                   WHERE uc.unit_id = ? AND uc.manuscript_id = ?
+                     AND uc.project_id = ?
+                   ORDER BY uc.citation_role,
+                            mr.citation_key COLLATE NOCASE,
+                            uc.supported_proposition""",
                 [unit_id, manuscript_id, self.project_id],
             )
         elif kind == "final_layout":
@@ -2108,6 +2157,10 @@ class NativeManuscriptService(BaseService):
                 if isinstance(components.get("unit"), Mapping)
                 else None
             ),
+            # Keep the normalized dependency material beside its digest. This
+            # makes approvals independently auditable and lets knowledge-pack
+            # import re-key any legacy/local identities before comparison.
+            "components": components,
             "sha256": hashlib.sha256(encoded).hexdigest(),
         }
 

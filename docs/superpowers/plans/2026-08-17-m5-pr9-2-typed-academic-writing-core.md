@@ -39,9 +39,15 @@ backfilled from heuristics.
   reference validation are present.
 - Exact replays remain no-ops; changed warrants/citations bump revision and
   invalidate only affected outline/draft approvals.
+- Draft-section approval dependencies include unit roles/moves, linked claim
+  boundaries, evidence propositions/warrants, and citation semantics. Stored
+  normalized components make the digest auditable and pack-rekeyable.
 - Outline edit/expand/condense preserves typed use metadata.
-- REST and typed MCP reuse the existing manuscript-spine and outline-proposal
-  operations; no parallel mutation path is added.
+- Condense fails closed on conflicting same-identity evidence or citation
+  semantics instead of selecting the first record.
+- The legacy direct MCP spine upsert is a no-write deprecation surface. Agents
+  use an attributed `argument_spine_replace` semantic proposal and a PI/web
+  user applies it separately; no parallel mutation path is added.
 
 ## Readiness v2
 
@@ -53,6 +59,7 @@ The outline projection adds `academic_readiness` with deterministic dimensions:
 - evidence-use explanation;
 - claim boundaries;
 - citation support; and
+- adverse evidence allocation; and
 - rhetorical annotation.
 
 Every dimension is `pass`, `warn`, or `not_applicable`.  Findings name exact
@@ -65,6 +72,9 @@ blocking finding, and only from deterministic absence or invalidity.
   proposal form.
 - Evidence proposition/warrant and citation-use state are shown alongside the
   unit, behind an academic-support disclosure.
+- A verified citation is labeled current only when its validation is current;
+  claim-level qualifiers/counterevidence remain visible in a private disclosure
+  even before they are allocated to a unit.
 - Readiness is summarized with the next actionable deterministic gap; detailed
   findings remain available without turning the screen into a compliance form.
 - Private reviewer-risk material is never rendered as manuscript prose.
@@ -74,7 +84,8 @@ blocking finding, and only from deterministic absence or invalidity.
 - migration fresh/restart/late-application tests;
 - service no-op and one-field-change tests;
 - stable-identifier and reference-validation enforcement;
-- REST/MCP typed schema and dispatch parity;
+- REST/MCP typed schema, authorization, proposal routing, and deprecation
+  behavior;
 - knowledge-pack export/import/rekey, deletion, and change-cursor tests;
 - frontend type/build/lint tests;
 - disposable real-project-derived outline with one support warrant, one
@@ -88,4 +99,3 @@ blocking finding, and only from deterministic absence or invalidity.
 Source-file synchronization, stable source anchors, three-way merge, LaTeX
 macro parsing, argument dependency graphs, embedded model orchestration,
 automatic Git actions, Source Inbox, ARA viewer, and reviewer-score prediction.
-

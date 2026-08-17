@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from rka.infra.ids import generate_id
+from rka.infra.database import Database
 
 
 MIGRATION_049 = (
@@ -119,6 +120,95 @@ def test_late_application_preserves_existing_rows_with_honest_defaults(
 
 
 @pytest.mark.asyncio
+async def test_migration_049_rolls_back_all_prior_alters_on_mid_script_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = Database(str(tmp_path / "rollback-049.db"))
+    await database.connect()
+    migration_dir = tmp_path / "migrations"
+    migration_dir.mkdir()
+    (migration_dir / MIGRATION_049.name).write_text(MIGRATION_049.read_text())
+    monkeypatch.setattr(
+        Database,
+        "_migrations_directory",
+        staticmethod(lambda: migration_dir),
+    )
+    try:
+        await database.conn.executescript(
+            """
+            CREATE TABLE manuscript_units (
+                id TEXT NOT NULL, manuscript_id TEXT NOT NULL,
+                project_id TEXT NOT NULL, PRIMARY KEY (id),
+                UNIQUE (id, manuscript_id, project_id)
+            );
+            CREATE TABLE manuscript_reference_members (
+                id TEXT NOT NULL, manuscript_id TEXT NOT NULL,
+                project_id TEXT NOT NULL, PRIMARY KEY (id),
+                UNIQUE (id, manuscript_id, project_id)
+            );
+            CREATE TABLE manuscript_unit_outline_profiles (
+                unit_id TEXT PRIMARY KEY, manuscript_id TEXT NOT NULL,
+                project_id TEXT NOT NULL, outline_level INTEGER NOT NULL DEFAULT 4
+            );
+            CREATE TABLE manuscript_unit_evidence (
+                manuscript_id TEXT NOT NULL, project_id TEXT NOT NULL,
+                unit_id TEXT NOT NULL, evidence_claim_id TEXT NOT NULL,
+                role TEXT NOT NULL, ordinal INTEGER NOT NULL,
+                PRIMARY KEY (unit_id, evidence_claim_id, role)
+            );
+            CREATE TABLE manuscript_claim_versions (
+                claim_id TEXT NOT NULL, version INTEGER NOT NULL,
+                manuscript_id TEXT NOT NULL, project_id TEXT NOT NULL,
+                exact_wording TEXT NOT NULL, allowed_wording TEXT NOT NULL,
+                prohibited_wording TEXT NOT NULL,
+                PRIMARY KEY (claim_id, version)
+            );
+            CREATE TABLE change_events (
+                cursor INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id TEXT NOT NULL, source_table TEXT NOT NULL,
+                operation TEXT NOT NULL, entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL, manuscript_id TEXT,
+                manuscript_claim_id TEXT, manuscript_unit_id TEXT,
+                related_entity_type TEXT, related_entity_id TEXT, details TEXT
+            );
+            -- Force failure after all ALTER statements have executed.
+            CREATE TABLE manuscript_unit_citations (id TEXT PRIMARY KEY);
+            """
+        )
+
+        with pytest.raises(sqlite3.OperationalError, match="already exists"):
+            await database.run_migrations()
+
+        profile_columns = {
+            row["name"]
+            for row in await database.fetchall(
+                "PRAGMA table_info(manuscript_unit_outline_profiles)"
+            )
+        }
+        evidence_columns = {
+            row["name"]
+            for row in await database.fetchall("PRAGMA table_info(manuscript_unit_evidence)")
+        }
+        claim_columns = {
+            row["name"]
+            for row in await database.fetchall("PRAGMA table_info(manuscript_claim_versions)")
+        }
+        assert "unit_role" not in profile_columns
+        assert "rhetorical_move" not in profile_columns
+        assert "supported_proposition" not in evidence_columns
+        assert "warrant" not in evidence_columns
+        assert "conditions" not in claim_columns
+        assert "falsification_criteria" not in claim_columns
+        assert await database.fetchone(
+            "SELECT 1 FROM schema_migrations WHERE filename = ?",
+            [MIGRATION_049.name],
+        ) is None
+    finally:
+        await database.close()
+
+
+@pytest.mark.asyncio
 async def test_typed_academic_columns_and_citation_events(db_with_project) -> None:
     manuscript_id = generate_id("manuscript")
     unit_id = generate_id("manuscript_unit")
@@ -186,6 +276,81 @@ async def test_typed_academic_columns_and_citation_events(db_with_project) -> No
         "related_entity_type": "manuscript_reference",
         "related_entity_id": reference_id,
     }
+
+    await db_with_project.execute(
+        """UPDATE manuscript_unit_citations
+           SET verification_state = 'verified'
+           WHERE id = ? AND project_id = 'proj_default'""",
+        [citation_id],
+    )
+    await db_with_project.execute(
+        "DELETE FROM manuscript_unit_citations WHERE id = ? AND project_id = 'proj_default'",
+        [citation_id],
+    )
+    operations = await db_with_project.fetchall(
+        """SELECT operation, details
+           FROM change_events
+           WHERE source_table = 'manuscript_unit_citations' AND entity_id = ?
+           ORDER BY cursor""",
+        [citation_id],
+    )
+    assert [row["operation"] for row in operations] == ["insert", "update", "delete"]
+    assert '"verification_state":"verified"' in operations[1]["details"]
+
+
+@pytest.mark.asyncio
+async def test_citation_composite_foreign_keys_reject_cross_project_bindings(
+    db_with_project,
+) -> None:
+    other_manuscript = generate_id("manuscript")
+    other_literature = generate_id("literature")
+    other_reference = generate_id("manuscript_reference")
+    await db_with_project.execute(
+        "INSERT INTO projects (id, name) VALUES ('proj_other', 'Other project')"
+    )
+    await db_with_project.execute(
+        """INSERT INTO manuscripts (id, project_id, title)
+           VALUES (?, 'proj_other', 'Other manuscript')""",
+        [other_manuscript],
+    )
+    await db_with_project.execute(
+        """INSERT INTO literature
+           (id, title, authors, status, added_by, project_id)
+           VALUES (?, 'Other citation', '[]', 'cited', 'pi', 'proj_other')""",
+        [other_literature],
+    )
+    await db_with_project.execute(
+        """INSERT INTO manuscript_reference_members
+           (id, manuscript_id, project_id, citation_key, literature_id)
+           VALUES (?, ?, 'proj_other', 'other2026', ?)""",
+        [other_reference, other_manuscript, other_literature],
+    )
+    default_manuscript = generate_id("manuscript")
+    default_unit = generate_id("manuscript_unit")
+    await db_with_project.execute(
+        """INSERT INTO manuscripts (id, project_id, title)
+           VALUES (?, 'proj_default', 'Default manuscript')""",
+        [default_manuscript],
+    )
+    await db_with_project.execute(
+        """INSERT INTO manuscript_units
+           (id, manuscript_id, project_id, local_key, kind, location)
+           VALUES (?, ?, 'proj_default', 'R1', 'other', 'results')""",
+        [default_unit, default_manuscript],
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
+        await db_with_project.execute(
+            """INSERT INTO manuscript_unit_citations
+               (id, manuscript_id, project_id, unit_id, reference_member_id,
+                citation_role, supported_proposition)
+               VALUES (?, ?, 'proj_default', ?, ?, 'imports', 'Cross-project use.')""",
+            [
+                generate_id("manuscript_unit_citation"),
+                default_manuscript,
+                default_unit,
+                other_reference,
+            ],
+        )
 
 
 @pytest.mark.asyncio

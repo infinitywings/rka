@@ -21,8 +21,26 @@ class ManuscriptOutlineService(BaseService):
     async def get_outline(self, manuscript_id: str) -> dict[str, Any]:
         native = NativeManuscriptService(self.db, project_id=self.project_id)
         context = await native.get_context(manuscript_id)
+        active_units = [unit for unit in context["units"] if unit["status"] != "removed"]
+        allocated_by_role = {
+            role: {
+                str(item["evidence_claim_id"])
+                for unit in active_units
+                for item in unit.get("evidence", [])
+                if item.get("role") == role
+            }
+            for role in ("support", "qualifier", "counterevidence")
+        }
         claims_by_unit: dict[str, list[dict[str, Any]]] = {}
         for claim in context["claims"]:
+            claim_evidence = [dict(item) for item in claim.get("evidence", [])]
+            unallocated_adverse = [
+                dict(item)
+                for item in claim_evidence
+                if item.get("role") in {"qualifier", "counterevidence"}
+                and str(item.get("evidence_claim_id"))
+                not in allocated_by_role[str(item["role"])]
+            ]
             for link in claim["unit_links"]:
                 claims_by_unit.setdefault(str(link["unit_id"]), []).append(
                     {
@@ -31,10 +49,14 @@ class ManuscriptOutlineService(BaseService):
                         "claim_version": claim.get("version"),
                         "exact_wording": claim.get("exact_wording"),
                         "relationship": link["relationship"],
+                        # Claim-level evidence is private planning context.  It
+                        # remains visible behind progressive disclosure even
+                        # when a unit has not yet allocated it for public prose.
+                        "evidence": claim_evidence,
+                        "unallocated_adverse_evidence": unallocated_adverse,
                     }
                 )
 
-        active_units = [unit for unit in context["units"] if unit["status"] != "removed"]
         children: dict[str, list[str]] = {}
         for unit in active_units:
             if unit.get("parent_unit_key"):
@@ -228,6 +250,50 @@ class ManuscriptOutlineService(BaseService):
                     }
                 )
         add_dimension("claim_boundaries", boundary_findings, applicable=bool(active_claims))
+
+        allocated_by_role = {
+            role: {
+                str(item["evidence_claim_id"])
+                for unit in units
+                for item in unit.get("evidence", [])
+                if item.get("role") == role
+            }
+            for role in ("qualifier", "counterevidence")
+        }
+        adverse_allocation_findings = []
+        for claim in active_claims:
+            for item in claim.get("evidence", []):
+                role = item.get("role")
+                evidence_claim_id = str(item.get("evidence_claim_id") or "")
+                if (
+                    role not in allocated_by_role
+                    or not evidence_claim_id
+                    or evidence_claim_id in allocated_by_role[role]
+                ):
+                    continue
+                adverse_allocation_findings.append(
+                    {
+                        "code": "CLAIM_ADVERSE_EVIDENCE_UNALLOCATED",
+                        "message": (
+                            "claim-level qualifier or counterevidence is not allocated "
+                            "to any active outline unit"
+                        ),
+                        "claim_id": claim["id"],
+                        "claim_key": claim["local_key"],
+                        "evidence_claim_id": evidence_claim_id,
+                        "role": role,
+                        "blocking": False,
+                    }
+                )
+        add_dimension(
+            "adverse_evidence_allocation",
+            adverse_allocation_findings,
+            applicable=any(
+                item.get("role") in {"qualifier", "counterevidence"}
+                for claim in active_claims
+                for item in claim.get("evidence", [])
+            ),
+        )
 
         citation_findings = []
         citation_applicable = False
@@ -540,13 +606,20 @@ class ManuscriptOutlineService(BaseService):
             ("qualifier", "qualifier_ids"),
             ("counterevidence", "counterevidence_ids"),
         ):
-            by_id = {
-                str(use["evidence_claim_id"]): use
-                for use in (parent.get("evidence") or {}).get(role, [])
-            }
+            by_id: dict[str, dict[str, Any]] = {}
+            for use in (parent.get("evidence") or {}).get(role, []):
+                by_id[str(use["evidence_claim_id"])] = use
             for unit in selected.values():
                 for use in (unit.get("evidence") or {}).get(role, []):
-                    by_id.setdefault(str(use["evidence_claim_id"]), use)
+                    evidence_id = str(use["evidence_claim_id"])
+                    existing = by_id.get(evidence_id)
+                    if existing is not None and existing != use:
+                        raise ValueError(
+                            "condense evidence conflict for "
+                            f"{evidence_id!r} in role {role!r}; resolve the "
+                            "supported proposition and warrant explicitly"
+                        )
+                    by_id[evidence_id] = use
             parent.setdefault("evidence", {})[role] = [by_id[key] for key in sorted(by_id)]
             parent[evidence_field] = sorted(by_id)
         for plan_field in (
@@ -582,7 +655,14 @@ class ManuscriptOutlineService(BaseService):
                     str(item["citation_role"]),
                     str(item["supported_proposition"]),
                 )
-                citation_by_identity.setdefault(identity, item)
+                existing = citation_by_identity.get(identity)
+                if existing is not None and existing != item:
+                    raise ValueError(
+                        "condense citation conflict for "
+                        f"{item['citation_key']!r} ({item['citation_role']}); "
+                        "resolve verification state and comparison axis explicitly"
+                    )
+                citation_by_identity[identity] = item
         parent["citations"] = [citation_by_identity[key] for key in sorted(citation_by_identity)]
         selected_keys = set(selected)
         for claim in claims:

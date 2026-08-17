@@ -1,7 +1,7 @@
 # M5 PR 9.2 Exit Evidence: Typed Academic-Writing Core
 
-Date: 2026-08-17  
-Baseline: `origin/main` at `f70d360`  
+Date: 2026-08-17
+Baseline: `origin/main` at `f70d360`
 Implementation branch: `codex/m5-typed-writing-core`
 
 ## Scope exercised
@@ -19,6 +19,14 @@ Implementation branch: `codex/m5-typed-writing-core`
 - MCP typed-operation parity and workbench rendering/edit controls.
 - Deterministic academic-readiness v2 with structural blockers and advisory
   judgment checks.
+- Draft-section dependency snapshots cover section-local claim boundaries,
+  propositions, warrants, citations, unit roles, and rhetorical moves.
+- Private claim-level qualifiers and counterevidence remain visible through
+  progressive disclosure, with non-blocking allocation advisories.
+- Pack rekeying rewrites auditable checkpoint components and recomputes their
+  digest; ambiguous condense collisions fail closed.
+- The legacy MCP direct-upsert operation is explicitly deprecated and performs
+  no network write; agents use attributed semantic-patch proposals instead.
 
 ## Disposable real-project-derived pilot
 
@@ -43,34 +51,71 @@ Expected readiness behavior also passed: structure, claim allocation, evidence
 presence, evidence-use explanation, claim boundaries, and rhetorical annotation
 pass; the self-attested citation produces a non-blocking citation warning.
 
+## Independent-audit remediation
+
+The first independent audit of commit `fa30021` found three P1 acceptance
+defects and four P2/P3 contract or evidence defects. The remediation adds
+adversarial coverage for:
+
+- same-unit approval invalidation and unrelated-unit approval preservation;
+- conflicting same-ID evidence and citation metadata during condense;
+- unallocated private qualifier/counterevidence visibility;
+- resolved outline-checkpoint export/import/rekey currency;
+- MCP deprecation without an unreachable REST write;
+- stale-current citation rendering; and
+- migration cross-project FKs, update/delete events, and transactional rollback.
+
+The PR remains draft until the corrected snapshot receives a fresh independent
+audit.
+
 ## Automated evidence
 
 | Gate | Result |
 | --- | --- |
-| Focused migration/service/MCP/model-drift suite | **1,006 passed** |
-| Disposable INVARLLM pilot | **1 passed** (included above) |
-| Changed Python files: Ruff lint | **Passed** |
-| Python compile check | **Passed** |
-| Git whitespace/error check | **Passed** |
-| Web production build | **Passed**; existing large-chunk warning remains |
-| Changed web files: ESLint | **Passed** |
-| Full Python suite | **3,114 passed, 21 skipped, 11 failed** |
+| Corrective migration/service/outline/pack/MCP suite (command below) | **91 passed** |
+| MCP schema/model-drift suite (command below) | **994 passed** |
+| Disposable INVARLLM pilot (command below) | **1 passed** |
+| Changed Python files: Ruff lint (commands below) | **Passed** |
+| Python compile check: `python -m compileall -q rka` | **Passed** |
+| Git whitespace/error check: `git diff --check f70d360 --` | **Passed** |
+| Web production build: `(cd web && npm run build)` | **Passed**; existing large-chunk warning remains |
+| Changed web files: `(cd web && npx eslint src/api/types.ts src/components/workbench/OutlineEditor.tsx)` | **Passed** |
+| Full Python suite: `python -m pytest -q` | **3,152 passed, 5 warnings in 220.62s** |
 
-The 11 full-suite failures are confined to pre-existing embedding/backfill
-metadata tests. Re-running the exact five affected test files on both this
-branch and a detached clean `origin/main` worktree produced the same result:
-**11 failed, 24 passed, 6 skipped**. None of the failing modules is modified by
-PR 9.2.
+Corrective suite command:
 
-Full-tree web lint reports seven errors and two warnings in unchanged UI files
-(`badge.tsx`, `button.tsx`, `tabs.tsx`, `useTheme.tsx`, `Journal.tsx`,
-`ResearchMap.tsx`, and `Settings.tsx`). The two PR 9.2 web files pass ESLint.
+```text
+python -m pytest -q tests/test_db/test_migration_049.py tests/test_services/test_outline.py tests/test_services/test_native_manuscript_service.py tests/test_services/test_knowledge_pack_native.py tests/test_mcp/test_native_manuscript_operations.py
+```
+
+MCP schema/model-drift command:
+
+```text
+python -m pytest -q tests/test_mcp/test_v270_model_drift.py tests/test_mcp/test_mcp_tool_surface.py tests/test_mcp/test_native_manuscript_operations.py
+```
+
+Disposable pilot command:
+
+```text
+python -m pytest -q tests/test_services/test_native_manuscript_service.py::test_invarllm_derived_pilot_preserves_argument_boundaries_and_tradeoffs
+```
+
+Ruff commands:
+
+```text
+python -m ruff check rka/mcp/operations_schema.py rka/services/knowledge_pack.py rka/services/manuscript_native.py rka/services/outline.py tests/test_db/test_migration_049.py tests/test_mcp/test_native_manuscript_operations.py tests/test_services/test_knowledge_pack_native.py tests/test_services/test_native_manuscript_service.py tests/test_services/test_outline.py
+python -m ruff check --ignore E402,F401,F841 rka/mcp/server.py
+```
+
+The narrow ignores on the legacy monolithic MCP server are recorded explicitly;
+they suppress only pre-existing file-wide import-placement and unused-symbol
+findings. The modified deprecation handler is exercised by the corrective test
+suite.
 
 ## Review interpretation
 
-The implementation is ready for draft-PR review. The focused change surface,
-MCP parity, migration paths, web build, and real-project-derived academic
-workflow are green. The repository-wide embedding and legacy lint baselines
-remain separately visible and must not be represented as PR 9.2 regressions or
-as fixed by this change.
-
+The implementation remains in draft-PR review. The focused change surface,
+migration paths, web build, and real-project-derived academic workflow are
+green. Repository-wide status and the second independent verdict are recorded
+only after they complete; no narrower check is described as production
+readiness.
