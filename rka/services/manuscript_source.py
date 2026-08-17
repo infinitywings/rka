@@ -54,6 +54,10 @@ class ManuscriptSourceNotFoundError(ValueError):
 class ManuscriptSourceConflictError(ValueError):
     """The proposal or file optimistic guard is stale."""
 
+    def __init__(self, message: str, *, transient_exchange: bool = False):
+        super().__init__(message)
+        self.transient_exchange = transient_exchange
+
 
 class ManuscriptSourceSecurityError(ValueError):
     """A workspace or relative path violates the local filesystem boundary."""
@@ -706,9 +710,8 @@ class ManuscriptSourceService(BaseService):
             recovery_path = self._recovery_manifest_path(row)
 
             if current_hash != row["base_content_hash"]:
-                if current_hash == proposed_hash and self._valid_recovery_manifest(
-                    recovery_path, row
-                ):
+                has_valid_recovery = self._valid_recovery_manifest(recovery_path, row)
+                if current_hash == proposed_hash and has_valid_recovery:
                     try:
                         self._reconcile_replaced_source(
                             workspace,
@@ -717,13 +720,14 @@ class ManuscriptSourceService(BaseService):
                             expected_content_hash=row["base_content_hash"],
                             proposed_content_hash=proposed_hash,
                         )
-                    except ManuscriptSourceConflictError:
+                    except ManuscriptSourceConflictError as exc:
                         latest, _ = self._read_current(workspace, relative_path)
                         latest_hash = _sha256(latest) if latest is not None else None
                         await self._mark_conflicted(
                             row,
                             data,
                             current_content_hash=latest_hash,
+                            transient_exchange=exc.transient_exchange,
                         )
                         raise
                     await self._complete_applied_transition(
@@ -733,10 +737,22 @@ class ManuscriptSourceService(BaseService):
                         recovered_after_restart=True,
                     )
                     return await self.get_proposal(proposal_id)
+                if has_valid_recovery:
+                    # A previous attempt may have restored an external object
+                    # but failed the rollback directory fsync. Do not close the
+                    # ledger until that naming state (and any proposal-only swap
+                    # cleanup) is durably committed.
+                    self._finalize_conflicted_source_state(
+                        workspace,
+                        relative_path,
+                        proposal_id=str(row["id"]),
+                        proposed_content_hash=proposed_hash,
+                    )
                 await self._mark_conflicted(
                     row,
                     data,
                     current_content_hash=current_hash,
+                    transient_exchange=None if has_valid_recovery else False,
                 )
                 raise ManuscriptSourceConflictError(
                     "source changed after proposal creation; current and proposed versions were preserved"
@@ -773,13 +789,14 @@ class ManuscriptSourceService(BaseService):
                     proposal_id=str(row["id"]),
                     expected_content_hash=row["base_content_hash"],
                 )
-            except ManuscriptSourceConflictError:
+            except ManuscriptSourceConflictError as exc:
                 latest, _ = self._read_current(workspace, relative_path)
                 latest_hash = _sha256(latest) if latest is not None else None
                 await self._mark_conflicted(
                     row,
                     data,
                     current_content_hash=latest_hash,
+                    transient_exchange=exc.transient_exchange,
                 )
                 raise
             await self._complete_applied_transition(
@@ -821,6 +838,7 @@ class ManuscriptSourceService(BaseService):
         data: ManuscriptSourceProposalTransition,
         *,
         current_content_hash: str | None,
+        transient_exchange: bool | None = False,
     ) -> None:
         async with self.db.transaction():
             current = await self._require_proposal_row(str(row["id"]))
@@ -835,7 +853,16 @@ class ManuscriptSourceService(BaseService):
                     "expected_content_hash": row["base_content_hash"],
                     "current_content_hash": current_content_hash,
                     "proposed_content_hash": row["proposed_content_hash"],
-                    "file_written": False,
+                    "file_written": transient_exchange,
+                    "transient_exchange": transient_exchange,
+                    "transient_exchange_state": (
+                        "possible"
+                        if transient_exchange is None
+                        else "observed"
+                        if transient_exchange
+                        else "not_observed"
+                    ),
+                    "final_target_preserved": True,
                 },
             )
 
@@ -863,6 +890,11 @@ class ManuscriptSourceService(BaseService):
                     "before_content_hash": row["base_content_hash"],
                     "after_content_hash": row["proposed_content_hash"],
                     "recovery_manifest_path": recovery_relative,
+                    "displaced_source_path": (
+                        self._retained_source_relative_path(row)
+                        if row["base_content_hash"] is not None
+                        else None
+                    ),
                     "recovered_after_restart": recovered_after_restart,
                     "git_operation": False,
                 },
@@ -1115,12 +1147,18 @@ class ManuscriptSourceService(BaseService):
         current, _ = self._read_current(workspace, str(row["relative_path"]))
         current_hash = _sha256(current) if current is not None else None
         recovery_path = self._recovery_manifest_path(row)
-        if current_hash == row["proposed_content_hash"] and self._valid_recovery_manifest(
-            recovery_path, row
-        ):
+        has_valid_recovery = self._valid_recovery_manifest(recovery_path, row)
+        if current_hash == row["proposed_content_hash"] and has_valid_recovery:
             raise ManuscriptSourceConflictError(
                 "proposal content is already on disk with valid recovery metadata; "
                 f"retry apply to reconcile the ledger before {action}"
+            )
+        if has_valid_recovery:
+            self._finalize_conflicted_source_state(
+                workspace,
+                str(row["relative_path"]),
+                proposal_id=str(row["id"]),
+                proposed_content_hash=str(row["proposed_content_hash"]),
             )
 
     def _recovery_components(self, row: Mapping[str, Any]) -> tuple[str, str, str]:
@@ -1213,6 +1251,11 @@ class ManuscriptSourceService(BaseService):
             "before_content_hash": _sha256(before) if before is not None else None,
             "before_mode": mode,
             "after_content_hash": row["proposed_content_hash"],
+            "displaced_source_path": (
+                self._retained_source_relative_path(row)
+                if before is not None
+                else None
+            ),
             "created_at": _now(),
         }
         try:
@@ -1361,6 +1404,7 @@ class ManuscriptSourceService(BaseService):
         parent_fd, name = self._open_parent_fd(workspace, PurePosixPath(normalized))
         swap_name = self._source_swap_name(proposal_id)
         exchanged = False
+        retain_swap = False
         try:
             self._prepare_source_swap(
                 parent_fd,
@@ -1407,16 +1451,22 @@ class ManuscriptSourceService(BaseService):
             except (OSError, ValueError, ManuscriptSourceSecurityError) as exc:
                 raise ManuscriptSourceConflictError(
                     "source became unsafe immediately before replacement; the exact "
-                    "displaced version will be restored"
+                    "displaced version will be restored",
+                    transient_exchange=True,
                 ) from exc
             assert displaced is not None
             if _sha256(displaced) != expected_content_hash:
                 raise ManuscriptSourceConflictError(
                     "source changed immediately before replacement; the exact "
-                    "displaced version will be restored"
+                    "displaced version will be restored",
+                    transient_exchange=True,
                 )
 
-            os.unlink(swap_name, dir_fd=parent_fd)
+            # Keep the exact displaced inode linked at its deterministic hidden
+            # name. An editor that opened the original target before exchange
+            # can still write through that descriptor; retaining the inode is
+            # the only way to ensure those later bytes remain recoverable.
+            retain_swap = True
             exchanged = False
             os.fsync(parent_fd)
         except Exception:
@@ -1435,7 +1485,7 @@ class ManuscriptSourceService(BaseService):
             # Before an exchange the swap contains only proposal bytes and is
             # safe to remove. If rollback itself failed, `exchanged` remains
             # true and both names are deliberately retained for recovery.
-            if not exchanged:
+            if not exchanged and not retain_swap:
                 try:
                     os.unlink(swap_name, dir_fd=parent_fd)
                 except FileNotFoundError:
@@ -1478,7 +1528,8 @@ class ManuscriptSourceService(BaseService):
                     ) from rollback_error
                 raise ManuscriptSourceConflictError(
                     "an unsafe external source version was restored after an "
-                    "interrupted replacement"
+                    "interrupted replacement",
+                    transient_exchange=True,
                 ) from exc
 
             if displaced is None:
@@ -1496,8 +1547,8 @@ class ManuscriptSourceService(BaseService):
                 return
             if displaced_hash == expected_content_hash:
                 # Exchange completed and the exact reviewed base is retained at
-                # the swap name. Recovery is already durable, so finish cleanup.
-                os.unlink(swap_name, dir_fd=parent_fd)
+                # the hidden recovery name. Keep that inode linked permanently:
+                # a pre-opened editor descriptor may still write through it.
                 os.fsync(parent_fd)
                 return
 
@@ -1507,14 +1558,49 @@ class ManuscriptSourceService(BaseService):
             os.unlink(swap_name, dir_fd=parent_fd)
             os.fsync(parent_fd)
             raise ManuscriptSourceConflictError(
-                "an external source version was restored after an interrupted replacement"
+                "an external source version was restored after an interrupted replacement",
+                transient_exchange=True,
             )
+        finally:
+            os.close(parent_fd)
+
+    def _finalize_conflicted_source_state(
+        self,
+        workspace: Path,
+        relative_path: str,
+        *,
+        proposal_id: str,
+        proposed_content_hash: str,
+    ) -> None:
+        """Durably finish a prior rollback before closing as conflicted."""
+        normalized, _ = self._normalize_source_path(relative_path)
+        parent_fd, _ = self._open_parent_fd(workspace, PurePosixPath(normalized))
+        swap_name = self._source_swap_name(proposal_id)
+        try:
+            swap, _ = self._read_source_entry_at(
+                parent_fd,
+                swap_name,
+                missing_ok=True,
+                validate_utf8=False,
+            )
+            if swap is not None:
+                if _sha256(swap) != proposed_content_hash:
+                    raise ManuscriptSourceSecurityError(
+                        "unexpected source swap remains after rollback; refusing to "
+                        "close the proposal"
+                    )
+                os.unlink(swap_name, dir_fd=parent_fd)
+            os.fsync(parent_fd)
         finally:
             os.close(parent_fd)
 
     @staticmethod
     def _source_swap_name(proposal_id: str) -> str:
-        return f".rka-source-{_sha256(proposal_id.encode())[:32]}.swap"
+        return f".rka-source-{_sha256(proposal_id.encode())[:32]}.recovery"
+
+    def _retained_source_relative_path(self, row: Mapping[str, Any]) -> str:
+        source = PurePosixPath(str(row["relative_path"]))
+        return (source.parent / self._source_swap_name(str(row["id"]))).as_posix()
 
     def _prepare_source_swap(
         self,

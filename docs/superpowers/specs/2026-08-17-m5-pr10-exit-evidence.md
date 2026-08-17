@@ -18,7 +18,8 @@ Design authority: ADR 0011
   provenance validation against current manuscript bindings.
 - Prepare, review, apply, reject, supersede, hash-conflict, crash-recovery,
   nonblocking same-file transition serialization, mode-preserving atomic
-  replacement, and durable recovery manifests without Git operations.
+  exchange, durable managed manifests, and retained displaced-inode recovery
+  without Git operations.
 - Quick-reader source ranges and a separate private reviewer-risk projection for
   boundaries, qualifiers, counterevidence, and citation-verification warnings.
 - Local-web-only REST authorization; arbitrary manuscript source content is not
@@ -74,9 +75,9 @@ touch a live research project or invoke a model.
 
 | Gate | Result |
 | --- | --- |
-| Migration/source/API/project/pack corrective suite (command below) | **54 passed** |
+| Migration/source/API/project/pack corrective suite (command below) | **60 passed** |
 | MCP schema/model-drift suite (command below) | **994 passed** |
-| Full Python suite: `.venv/bin/python -m pytest -q` | **3,187 passed in 209.99s** |
+| Full Python suite: `.venv/bin/python -m pytest -q` | **3,193 passed in 209.03s** |
 | Changed Python files: Ruff | **Passed** |
 | Python compile check: `.venv/bin/python -m compileall -q rka` | **Passed** |
 | Git whitespace/error check: `git diff --check 116f76b --` | **Passed** |
@@ -125,6 +126,9 @@ candidate adds deterministic regression coverage for:
 - apply racing reject and supersede after the filesystem commit point;
 - a late external edit injected at the final atomic-exchange call, with the exact
   displaced external object restored instead of overwritten;
+- an editor descriptor opened before Apply writing after displaced-byte
+  validation, with that exact inode still linked at the recorded hidden recovery
+  path after the public target and ledger become applied;
 - missing-file creation with a no-clobber hard link, including an external file
   appearing at the commit point;
 - database interruption after exchange, interrupted exchange with the reviewed
@@ -133,6 +137,10 @@ candidate adds deterministic regression coverage for:
 - restoration of an external object retained by a crash-interrupted exchange;
 - retry of every recovery-ancestor directory-fsync barrier and the failed source
   directory fsync before the ledger may become applied;
+- retry of a failed rollback-directory fsync before Apply may record conflict,
+  plus the same durable cleanup guard for Reject and Supersede;
+- cleanup of only a known proposal-byte swap before terminal conflict, with an
+  unexpected swap preserved and the ledger left open;
 - rejection of a crash-applied proposal until Apply reconciles the ledger;
 - deletion of a service-created three-proposal supersession history;
 - private projection of unallocated claim-level qualifier and counterevidence;

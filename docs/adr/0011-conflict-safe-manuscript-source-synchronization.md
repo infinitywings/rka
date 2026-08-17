@@ -77,7 +77,13 @@ or Supersede cannot record a false terminal state.
 Apply re-reads the file and compares its SHA-256 hash with the proposal's base
 hash. A missing file is represented by the explicit sentinel `null`; an empty
 file has the normal SHA-256 of empty bytes. Any mismatch marks the proposal
-`conflicted`, preserves both versions, and performs no file write.
+`conflicted` and preserves both versions. A mismatch found before the commit
+point performs no exchange. A mismatch discovered by inspecting the exact
+displaced object after exchange triggers an immediate reverse exchange; the
+proposal can therefore be transiently observable to another local reader, but
+the final public target is restored before the conflict becomes terminal.
+Conflict events distinguish an observed exchange, no observed exchange, and a
+recovery-era state where an earlier exchange is possible but no longer provable.
 
 For a matching base, apply:
 
@@ -94,8 +100,12 @@ For a matching base, apply:
    second exchange if it is not the reviewed base;
 6. for a missing target, installs the proposed inode with a no-clobber hard link
    so a file that appears at the commit point wins and is never overwritten;
-7. removes the validated displaced/swap name and fsyncs the source directory;
-8. records the applied event with before, after, and recovery hashes.
+7. for an existing target, retains the exact displaced inode at its deterministic
+   hidden recovery name so writes through an editor descriptor opened before
+   exchange cannot be destroyed by unlink; for a missing target, removes the
+   redundant proposal hard link;
+8. fsyncs the source directory and records the applied event with before, after,
+   recovery, and retained-displaced paths.
 
 The name-exchange primitive is `renameatx_np(..., RENAME_SWAP)` on macOS and
 `renameat2(..., RENAME_EXCHANGE)` on Linux. A deployment without an atomic
@@ -103,7 +113,11 @@ exchange primitive fails closed instead of falling back to a check-then-rename
 sequence. A deterministic swap left by a crash is reconciled before the ledger
 can become `applied`: the service either finishes cleanup and repeats the source
 directory fsync, or restores the exact displaced external object and records a
-conflict.
+conflict. A retry that sees the restored external target with valid recovery
+metadata likewise removes only a verified proposal-byte swap and repeats the
+source-directory fsync before the ledger can become terminally `conflicted`;
+Reject and Supersede share the same guard. An unexpected swap fails closed and
+remains available for inspection.
 
 The recovery manifest is durable even if the database event cannot be
 committed after replacement. The service never runs `git add`, commit, reset,
@@ -177,6 +191,10 @@ and does not invalidate PI checkpoints by itself.
   citations while keeping the limits of that link visible.
 - Candidate prose is reviewable and auditable without being promoted to
   semantic truth.
+- Each successful existing-file Apply retains one hidden displaced-inode
+  recovery artifact next to the source. This deliberate storage cost is what
+  preserves late writes through pre-opened editor descriptors; PR 10 never
+  deletes those artifacts automatically.
 - Filesystem and database failure cannot be made perfectly atomic; the durable
   recovery-before-exchange protocol and deterministic swap make every expected
   partial naming state observable and repairable.
@@ -188,7 +206,9 @@ and does not invalidate PI checkpoints by itself.
 - path traversal, symlink, special-file, size, encoding, and foreign-project
   attempts fail closed;
 - human and AI edits use the same proposal service and only PI/web may apply;
-- an external edit produces a durable conflict and leaves the file untouched;
+- an external edit produces a durable conflict and restores the exact external
+  target before the ledger becomes terminal, even if a transient exchange was
+  observable;
 - same-file apply/reject/supersede races yield rather than blocking the event
   loop and cannot produce a file/ledger terminal-state mismatch;
 - applied writes are atomic, mode-preserving, and recoverable;

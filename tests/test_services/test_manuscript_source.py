@@ -154,6 +154,79 @@ async def test_prepare_then_apply_is_atomic_mode_preserving_and_recoverable(
     assert payload["after_content_hash"] == _hash(after)
     assert (recovery.parent / "before.bin").read_text() == before
     assert applied["events"][-1]["details"]["git_operation"] is False
+    displaced_relative = applied["events"][-1]["details"]["displaced_source_path"]
+    assert displaced_relative == service._source_swap_name(proposal["id"])
+    assert (workspace / displaced_relative).read_text() == before
+
+
+@pytest.mark.asyncio
+async def test_preopened_external_descriptor_remains_linked_after_apply(
+    db_with_project,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _, manuscript_id, workspace, unit_id = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    before = _markdown(unit_id, "Base inode opened by an external editor.")
+    after = _markdown(unit_id, "Reviewed proposal installed at the public target.")
+    external = _markdown(unit_id, "External bytes written through the pre-opened inode.")
+    source = workspace / "main.md"
+    source.write_text(before)
+    proposal = await service.create_proposal(
+        manuscript_id,
+        ManuscriptSourceProposalCreate(
+            origin="human",
+            relative_path="main.md",
+            expected_content_hash=_hash(before),
+            content=after,
+            created_by="web_ui",
+            reason="Retain the exact displaced inode across late descriptor writes.",
+        ),
+    )
+    swap_name = service._source_swap_name(proposal["id"])
+    editor_fd = os.open(source, os.O_RDWR)
+    original_read = service._read_source_entry_at
+    injected = False
+
+    def write_after_displaced_read(*args, **kwargs):
+        nonlocal injected
+        result = original_read(*args, **kwargs)
+        if args[1] == swap_name and result[0] is not None and not injected:
+            injected = True
+            os.lseek(editor_fd, 0, os.SEEK_SET)
+            view = memoryview(external.encode())
+            while view:
+                written = os.write(editor_fd, view)
+                view = view[written:]
+            os.ftruncate(editor_fd, len(external.encode()))
+            os.fsync(editor_fd)
+        return result
+
+    monkeypatch.setattr(service, "_read_source_entry_at", write_after_displaced_read)
+    try:
+        applied = await service.apply_proposal(
+            proposal["id"],
+            ManuscriptSourceProposalTransition(
+                expected_revision=1,
+                actor="web_ui",
+                reason="Apply while preserving a late write to the displaced inode.",
+            ),
+        )
+        retained = workspace / swap_name
+        assert applied["status"] == "applied"
+        assert source.read_text() == after
+        assert os.fstat(editor_fd).st_ino == retained.stat().st_ino
+        assert os.fstat(editor_fd).st_nlink >= 1
+        assert retained.read_text() == external
+        recovery = Path(db_with_project.db_path).resolve().parent / applied[
+            "recovery_manifest_path"
+        ]
+        assert (recovery.parent / "before.bin").read_text() == before
+        assert json.loads(recovery.read_text())["displaced_source_path"] == swap_name
+    finally:
+        os.close(editor_fd)
+    assert (workspace / swap_name).read_text() == external
 
 
 @pytest.mark.asyncio
@@ -282,6 +355,12 @@ async def test_external_edit_creates_durable_conflict_without_overwrite(
     conflicted = await service.get_proposal(proposal["id"])
     assert conflicted["status"] == "conflicted"
     assert conflicted["events"][-1]["details"]["file_written"] is False
+    assert conflicted["events"][-1]["details"]["transient_exchange"] is False
+    assert (
+        conflicted["events"][-1]["details"]["transient_exchange_state"]
+        == "not_observed"
+    )
+    assert conflicted["events"][-1]["details"]["final_target_preserved"] is True
     assert conflicted["events"][-1]["details"]["current_content_hash"] == _hash(external)
 
 
@@ -543,6 +622,13 @@ async def test_external_edit_after_recovery_is_preserved_before_final_replace(
     assert conflicted["events"][-1]["details"]["current_content_hash"] == _hash(
         external
     )
+    assert conflicted["events"][-1]["details"]["file_written"] is True
+    assert conflicted["events"][-1]["details"]["transient_exchange"] is True
+    assert (
+        conflicted["events"][-1]["details"]["transient_exchange_state"]
+        == "observed"
+    )
+    assert conflicted["events"][-1]["details"]["final_target_preserved"] is True
     recovery = service._recovery_manifest_path(conflicted)
     assert (recovery.parent / "before.bin").read_text() == before
 
@@ -617,6 +703,230 @@ async def test_retry_reconciles_failure_after_replace_before_directory_fsync(
     assert recovered["status"] == "applied"
     assert recovered["events"][-1]["details"]["recovered_after_restart"] is True
     assert retry_directory_fsyncs >= 1
+
+
+@pytest.mark.asyncio
+async def test_retry_fsyncs_restored_external_source_before_terminal_conflict(
+    db_with_project,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _, manuscript_id, workspace, unit_id = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    before = _markdown(unit_id, "Base before rollback durability failure.")
+    after = _markdown(unit_id, "Proposal involved in rollback durability failure.")
+    external = _markdown(unit_id, "External object restored before fsync failure.")
+    source = workspace / "main.md"
+    source.write_text(before)
+    proposal = await service.create_proposal(
+        manuscript_id,
+        ManuscriptSourceProposalCreate(
+            origin="human",
+            relative_path="main.md",
+            expected_content_hash=_hash(before),
+            content=after,
+            created_by="web_ui",
+            reason="Retry the rollback durability barrier before terminal conflict.",
+        ),
+    )
+    original_exchange = service._atomic_exchange_at
+    injected = False
+
+    def inject_external_before_exchange(*args, **kwargs):
+        nonlocal injected
+        if not injected:
+            injected = True
+            source.write_text(external)
+        original_exchange(*args, **kwargs)
+
+    monkeypatch.setattr(
+        service, "_atomic_exchange_at", inject_external_before_exchange
+    )
+    original_fsync = os.fsync
+    workspace_stat = workspace.stat()
+    source_directory_fsyncs = 0
+
+    def fail_rollback_directory_fsync(fd: int) -> None:
+        nonlocal source_directory_fsyncs
+        target = os.fstat(fd)
+        if (
+            stat.S_ISDIR(target.st_mode)
+            and target.st_dev == workspace_stat.st_dev
+            and target.st_ino == workspace_stat.st_ino
+        ):
+            source_directory_fsyncs += 1
+            if source_directory_fsyncs == 2:
+                raise OSError("simulated rollback source-directory fsync failure")
+        original_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", fail_rollback_directory_fsync)
+    transition = ManuscriptSourceProposalTransition(
+        expected_revision=1,
+        actor="web_ui",
+        reason="Preserve and durably restore the external source.",
+    )
+    with pytest.raises(
+        ManuscriptSourceSecurityError, match="could not be rolled back safely"
+    ):
+        await service.apply_proposal(proposal["id"], transition)
+    assert source.read_text() == external
+    assert (await service.get_proposal(proposal["id"]))["status"] == "proposed"
+    assert not (workspace / service._source_swap_name(proposal["id"])).exists()
+
+    retry_directory_fsyncs = 0
+
+    def count_retry_directory_fsync(fd: int) -> None:
+        nonlocal retry_directory_fsyncs
+        target = os.fstat(fd)
+        if (
+            stat.S_ISDIR(target.st_mode)
+            and target.st_dev == workspace_stat.st_dev
+            and target.st_ino == workspace_stat.st_ino
+        ):
+            retry_directory_fsyncs += 1
+        original_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", count_retry_directory_fsync)
+    with pytest.raises(ManuscriptSourceConflictError, match="source changed"):
+        await service.apply_proposal(proposal["id"], transition)
+    assert retry_directory_fsyncs >= 1
+    assert source.read_text() == external
+    assert (await service.get_proposal(proposal["id"]))["status"] == "conflicted"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("swap_state", ["proposed", "unexpected"])
+async def test_terminal_conflict_cleans_only_a_known_proposal_swap(
+    db_with_project,
+    tmp_path: Path,
+    swap_state: str,
+) -> None:
+    service, _, manuscript_id, workspace, unit_id = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    before = _markdown(unit_id, "Base before conflict-side swap cleanup.")
+    after = _markdown(unit_id, "Proposal retained at the deterministic swap name.")
+    external = _markdown(unit_id, "External source already restored at target.")
+    unexpected = _markdown(unit_id, "Unexpected object at deterministic swap name.")
+    source = workspace / "main.md"
+    source.write_text(before)
+    proposal = await service.create_proposal(
+        manuscript_id,
+        ManuscriptSourceProposalCreate(
+            origin="human",
+            relative_path="main.md",
+            expected_content_hash=_hash(before),
+            content=after,
+            created_by="web_ui",
+            reason="Reconcile a conflict-side deterministic swap.",
+        ),
+    )
+    row = await service._require_proposal_row(proposal["id"])
+    recovery = service._recovery_manifest_path(row)
+    service._write_recovery(row, before.encode(), 0o644, recovery)
+    source.write_text(external)
+    swap = workspace / service._source_swap_name(proposal["id"])
+    swap.write_text(after if swap_state == "proposed" else unexpected)
+    transition = ManuscriptSourceProposalTransition(
+        expected_revision=1,
+        actor="web_ui",
+        reason="Finish conflict-side recovery safely.",
+    )
+
+    if swap_state == "proposed":
+        with pytest.raises(ManuscriptSourceConflictError, match="source changed"):
+            await service.apply_proposal(proposal["id"], transition)
+        assert not swap.exists()
+        assert (await service.get_proposal(proposal["id"]))["status"] == "conflicted"
+    else:
+        with pytest.raises(
+            ManuscriptSourceSecurityError, match="unexpected source swap"
+        ):
+            await service.apply_proposal(proposal["id"], transition)
+        assert swap.read_text() == unexpected
+        assert (await service.get_proposal(proposal["id"]))["status"] == "proposed"
+    assert source.read_text() == external
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("closing_action", ["reject", "supersede"])
+async def test_reject_and_supersede_fsync_prior_rollback_state_before_closing(
+    db_with_project,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    closing_action: str,
+) -> None:
+    service, _, manuscript_id, workspace, unit_id = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    before = _markdown(unit_id, "Base before rollback-aware terminal close.")
+    after = _markdown(unit_id, "Proposal left at swap after rollback.")
+    external = _markdown(unit_id, "External target restored before terminal close.")
+    superseding = _markdown(unit_id, "Replacement proposal after durable cleanup.")
+    source = workspace / "main.md"
+    source.write_text(before)
+    proposal = await service.create_proposal(
+        manuscript_id,
+        ManuscriptSourceProposalCreate(
+            origin="human",
+            relative_path="main.md",
+            expected_content_hash=_hash(before),
+            content=after,
+            created_by="web_ui",
+            reason="Exercise rollback-aware reject and supersede.",
+        ),
+    )
+    row = await service._require_proposal_row(proposal["id"])
+    recovery = service._recovery_manifest_path(row)
+    service._write_recovery(row, before.encode(), 0o644, recovery)
+    source.write_text(external)
+    swap = workspace / service._source_swap_name(proposal["id"])
+    swap.write_text(after)
+    original_fsync = os.fsync
+    workspace_stat = workspace.stat()
+    source_directory_fsyncs = 0
+
+    def count_source_directory_fsync(fd: int) -> None:
+        nonlocal source_directory_fsyncs
+        target = os.fstat(fd)
+        if (
+            stat.S_ISDIR(target.st_mode)
+            and target.st_dev == workspace_stat.st_dev
+            and target.st_ino == workspace_stat.st_ino
+        ):
+            source_directory_fsyncs += 1
+        original_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", count_source_directory_fsync)
+    if closing_action == "reject":
+        result = await service.reject_proposal(
+            proposal["id"],
+            ManuscriptSourceProposalTransition(
+                expected_revision=1,
+                actor="web_ui",
+                reason="Reject only after durable rollback cleanup.",
+            ),
+        )
+        assert result["status"] == "rejected"
+    else:
+        result = await service.create_proposal(
+            manuscript_id,
+            ManuscriptSourceProposalCreate(
+                origin="human",
+                relative_path="main.md",
+                expected_content_hash=_hash(external),
+                content=superseding,
+                created_by="web_ui",
+                reason="Supersede only after durable rollback cleanup.",
+                supersedes_proposal_id=proposal["id"],
+            ),
+        )
+        assert result["status"] == "proposed"
+        assert (await service.get_proposal(proposal["id"]))["status"] == "superseded"
+    assert source_directory_fsyncs >= 1
+    assert source.read_text() == external
+    assert not swap.exists()
 
 
 @pytest.mark.asyncio
@@ -723,7 +1033,7 @@ async def test_retry_finishes_interrupted_exchange_with_exact_base_in_swap(
     )
     assert recovered["status"] == "applied"
     assert recovered["events"][-1]["details"]["recovered_after_restart"] is True
-    assert not (workspace / swap_name).exists()
+    assert (workspace / swap_name).read_text() == before
 
 
 @pytest.mark.asyncio
