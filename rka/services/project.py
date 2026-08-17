@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
 import sqlite3
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from rka.constants import DEFAULT_PROJECT_ID, SENTINEL_PROJECT_ID
 from rka.infra.ids import generate_id
@@ -343,7 +344,11 @@ class ProjectService(BaseService):
         """Delete a project and all its scoped data. Requires confirm=True."""
         knowledge_pack_dir: Path | None = None
         source_recovery_dir: Path | None = None
+        retained_source_artifacts: list[dict[str, str]] = []
         async with self.db.transaction():
+            retained_source_artifacts = await self._retained_source_artifact_candidates(
+                project_id
+            )
             if confirm:
                 # Preflight the only filesystem path this service owns before
                 # mutating the database. Filesystem removal itself happens
@@ -353,6 +358,29 @@ class ProjectService(BaseService):
                     project_id
                 )
             result = await self._delete_project(project_id, confirm)
+
+        result["retained_workspace_artifacts"] = {
+            "status": (
+                "manual_review_required"
+                if retained_source_artifacts
+                else "none_recorded"
+            ),
+            "auto_deleted": False,
+            "items": retained_source_artifacts,
+            "message": (
+                "Source-adjacent hidden recovery artifacts are never auto-deleted; "
+                "the listed deterministic paths may exist and must be inspected "
+                "after all editor descriptors are closed."
+                if retained_source_artifacts
+                else "No source-adjacent recovery artifact candidates were recorded."
+            ),
+        }
+        if confirm and retained_source_artifacts:
+            result["message"] = (
+                f"Project '{result['project_name']}' was permanently deleted from "
+                "RKA-managed storage; source-adjacent recovery artifacts were "
+                "intentionally retained and are listed in retained_workspace_artifacts."
+            )
 
         if knowledge_pack_dir is not None:
             try:
@@ -400,6 +428,48 @@ class ProjectService(BaseService):
                     "status": "deleted" if removed else "not_present",
                     "path": str(source_recovery_dir),
                 }
+        return result
+
+    async def _retained_source_artifact_candidates(
+        self, project_id: str
+    ) -> list[dict[str, str]]:
+        """Enumerate deterministic source-side names before deleting their ledger."""
+        try:
+            rows = await self.db.fetchall(
+                """SELECT p.id AS proposal_id, p.manuscript_id, p.relative_path,
+                          p.status, m.workspace_ref
+                   FROM manuscript_source_proposals AS p
+                   JOIN manuscripts AS m
+                     ON m.id = p.manuscript_id AND m.project_id = p.project_id
+                   WHERE p.project_id = ?
+                   ORDER BY p.created_at, p.id""",
+                [project_id],
+            )
+        except sqlite3.OperationalError as exc:
+            if "no such table" in str(exc).lower() or "no such column" in str(exc).lower():
+                return []
+            raise
+
+        result: list[dict[str, str]] = []
+        for raw in rows:
+            row = dict(raw)
+            source = PurePosixPath(str(row["relative_path"]))
+            swap_name = (
+                ".rka-source-"
+                f"{hashlib.sha256(str(row['proposal_id']).encode()).hexdigest()[:32]}"
+                ".recovery"
+            )
+            retained_relative = (source.parent / swap_name).as_posix()
+            result.append(
+                {
+                    "proposal_id": str(row["proposal_id"]),
+                    "manuscript_id": str(row["manuscript_id"]),
+                    "proposal_status": str(row["status"]),
+                    "workspace_ref": str(row["workspace_ref"] or ""),
+                    "source_relative_path": str(row["relative_path"]),
+                    "retained_relative_path": retained_relative,
+                }
+            )
         return result
 
     def _manuscript_source_recovery_project_dir(self, project_id: str) -> Path:
@@ -561,7 +631,11 @@ class ProjectService(BaseService):
                 "entity_counts": counts,
                 "total_rows": sum(counts.values()),
                 "confirmed": False,
-                "message": "Set confirm=true to permanently delete this project and all its data.",
+                "message": (
+                    "Set confirm=true to permanently delete this project and its "
+                    "RKA-managed data. Source-adjacent recovery candidates, when "
+                    "listed, are intentionally retained."
+                ),
             }
 
         await self.db.execute(
@@ -636,7 +710,10 @@ class ProjectService(BaseService):
             "entity_counts": counts,
             "total_rows": sum(counts.values()),
             "confirmed": True,
-            "message": f"Project '{project_name}' and all its data have been permanently deleted.",
+            "message": (
+                f"Project '{project_name}' and all RKA-managed database records "
+                "have been permanently deleted."
+            ),
         }
 
     def _row_to_model(self, row: dict) -> ProjectState:

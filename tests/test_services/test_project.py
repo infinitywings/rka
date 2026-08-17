@@ -12,7 +12,10 @@ import pytest
 from rka.config import RKAConfig
 from rka.infra.ids import generate_id
 from rka.models.manuscript_native import ManuscriptCreate
-from rka.models.manuscript_source import ManuscriptSourceProposalCreate
+from rka.models.manuscript_source import (
+    ManuscriptSourceProposalCreate,
+    ManuscriptSourceProposalTransition,
+)
 from rka.models.project import ProjectCreate
 from rka.models.claim import ClaimCreate, ClaimScopeCondition, ClaimScopeWrite
 from rka.models.interpretation import InterpretationCandidateCreate
@@ -535,6 +538,82 @@ async def test_delete_project_removes_source_proposals_and_owned_recovery(db) ->
     assert await db.fetchone(
         "SELECT id FROM manuscript_source_proposals WHERE id = ?", [proposal_id]
     ) is None
+
+
+@pytest.mark.asyncio
+async def test_delete_project_reports_retained_source_adjacent_artifact(
+    db,
+    tmp_path: Path,
+) -> None:
+    projects = ProjectService(db)
+    project_id = "proj_delete_retained_source"
+    await projects.create_project(
+        ProjectCreate(id=project_id, name="Delete Retained Source"),
+        actor="system",
+    )
+    workspace = tmp_path / "retained-source-workspace"
+    workspace.mkdir()
+    manuscript = await NativeManuscriptService(db, project_id=project_id).create(
+        ManuscriptCreate(title="Retained source", workspace_ref=str(workspace)),
+        actor="pi",
+    )
+    config = RKAConfig(
+        project_dir=tmp_path,
+        db_path=Path(db.db_path),
+        data_dir=tmp_path / "data",
+        llm_enabled=False,
+        embeddings_enabled=False,
+        manuscript_workspace_roots=str(tmp_path),
+    )
+    sources = ManuscriptSourceService(db, config=config, project_id=project_id)
+    before = "# Retained source base\n"
+    after = "# Retained source proposal\n"
+    source = workspace / "main.md"
+    source.write_text(before)
+    proposal = await sources.create_proposal(
+        manuscript.id,
+        ManuscriptSourceProposalCreate(
+            origin="human",
+            relative_path="main.md",
+            expected_content_hash=hashlib.sha256(before.encode()).hexdigest(),
+            content=after,
+            created_by="web_ui",
+            reason="Create a source-adjacent retained inode.",
+        ),
+    )
+    applied = await sources.apply_proposal(
+        proposal["id"],
+        ManuscriptSourceProposalTransition(
+            expected_revision=1,
+            actor="web_ui",
+            reason="Apply before project deletion.",
+        ),
+    )
+    retained = workspace / sources._source_swap_name(proposal["id"])
+    assert applied["status"] == "applied"
+    assert retained.read_text() == before
+
+    preview = await projects.delete_project(project_id, confirm=False)
+    report = preview["retained_workspace_artifacts"]
+    assert report["status"] == "manual_review_required"
+    assert report["auto_deleted"] is False
+    assert report["items"] == [
+        {
+            "proposal_id": proposal["id"],
+            "manuscript_id": manuscript.id,
+            "proposal_status": "applied",
+            "workspace_ref": str(workspace),
+            "source_relative_path": "main.md",
+            "retained_relative_path": retained.name,
+        }
+    ]
+
+    result = await projects.delete_project(project_id, confirm=True)
+    assert result["retained_workspace_artifacts"] == report
+    assert "intentionally retained" in result["message"]
+    assert retained.read_text() == before
+    managed = Path(db.db_path).resolve().parent / "manuscript-source-recovery" / project_id
+    assert not managed.exists()
 
 
 @pytest.mark.asyncio

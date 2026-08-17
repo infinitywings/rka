@@ -96,8 +96,9 @@ For a matching base, apply:
    preserves the existing regular-file mode, fsyncs the file, and fsyncs its
    containing directory;
 5. for an existing target, atomically exchanges the target and swap names,
-   hashes the exact displaced target, and restores that displaced object by a
-   second exchange if it is not the reviewed base;
+   verifies both the installed proposal and the exact displaced target, and
+   restores the prior target by a second exchange if either boundary object
+   differs from its reviewed hash;
 6. for a missing target, installs the proposed inode with a no-clobber hard link
    so a file that appears at the commit point wins and is never overwritten;
 7. for an existing target, retains the exact displaced inode at its deterministic
@@ -113,11 +114,17 @@ exchange primitive fails closed instead of falling back to a check-then-rename
 sequence. A deterministic swap left by a crash is reconciled before the ledger
 can become `applied`: the service either finishes cleanup and repeats the source
 directory fsync, or restores the exact displaced external object and records a
-conflict. A retry that sees the restored external target with valid recovery
-metadata likewise removes only a verified proposal-byte swap and repeats the
-source-directory fsync before the ledger can become terminally `conflicted`;
-Reject and Supersede share the same guard. An unexpected swap fails closed and
-remains available for inspection.
+conflict. Recovery classification runs before any fresh replacement, including
+when the public target has returned to base-equivalent bytes. A retry that sees
+an external or base-equivalent target with valid recovery metadata retains any
+pre-existing deterministic recovery inode, whether it currently contains
+proposal, reviewed-base, or unclassified bytes. This also protects a descriptor
+opened while proposal bytes were transiently public during a rolled-back
+exchange. The service then repeats the source-directory fsync before the ledger
+can become terminally `conflicted`; Reject and Supersede share the same guard.
+Only a swap freshly created and still owned by the current pre-exchange
+invocation may be unlinked automatically. A missing-file hard-link install may
+also drop the redundant hidden name because the same inode remains public.
 
 The recovery manifest is durable even if the database event cannot be
 committed after replacement. The service never runs `git add`, commit, reset,
@@ -194,7 +201,10 @@ and does not invalidate PI checkpoints by itself.
 - Each successful existing-file Apply retains one hidden displaced-inode
   recovery artifact next to the source. This deliberate storage cost is what
   preserves late writes through pre-opened editor descriptors; PR 10 never
-  deletes those artifacts automatically.
+  deletes those artifacts automatically. Project-deletion preview and result
+  enumerate their deterministic candidate paths before deleting the RKA ledger;
+  cleanup remains a deliberate researcher action after all editor descriptors
+  are closed.
 - Filesystem and database failure cannot be made perfectly atomic; the durable
   recovery-before-exchange protocol and deterministic swap make every expected
   partial naming state observable and repairable.

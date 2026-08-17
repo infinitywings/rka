@@ -75,9 +75,9 @@ touch a live research project or invoke a model.
 
 | Gate | Result |
 | --- | --- |
-| Migration/source/API/project/pack corrective suite (command below) | **60 passed** |
+| Migration/source/API/project/pack corrective suite (command below) | **69 passed** |
 | MCP schema/model-drift suite (command below) | **994 passed** |
-| Full Python suite: `.venv/bin/python -m pytest -q` | **3,193 passed in 209.03s** |
+| Full Python suite: `.venv/bin/python -m pytest -q` | **3,202 passed in 251.74s** |
 | Changed Python files: Ruff | **Passed** |
 | Python compile check: `.venv/bin/python -m compileall -q rka` | **Passed** |
 | Git whitespace/error check: `git diff --check 116f76b --` | **Passed** |
@@ -138,11 +138,20 @@ candidate adds deterministic regression coverage for:
 - retry of every recovery-ancestor directory-fsync barrier and the failed source
   directory fsync before the ledger may become applied;
 - retry of a failed rollback-directory fsync before Apply may record conflict,
-  plus the same durable cleanup guard for Reject and Supersede;
-- cleanup of only a known proposal-byte swap before terminal conflict, with an
-  unexpected swap preserved and the ledger left open;
+  plus the same durable recovery guard for Reject and Supersede;
+- retention of every pre-existing deterministic recovery inode before terminal
+  conflict, including proposal, reviewed-base, and unclassified content, with
+  the source directory fsynced and retained path recorded as the ledger closes;
+- restart classification before any fresh replacement when a valid recovery
+  manifest and retained inode exist, including a public target whose bytes have
+  returned to the reviewed base;
+- boundary verification of both installed proposal and displaced target, with a
+  mutated proposal inode restored to its hidden recovery name instead of being
+  unlinked;
 - rejection of a crash-applied proposal until Apply reconciles the ledger;
-- deletion of a service-created three-proposal supersession history;
+- deletion of a service-created three-proposal supersession history, plus
+  explicit preview/result reporting of source-adjacent recovery candidates that
+  are intentionally not auto-deleted;
 - private projection of unallocated claim-level qualifier and counterevidence;
 - direct invalid-UTF-8 and configured-size-limit reads; and
 - an automatic clean-editor reload followed by a background refetch preserving

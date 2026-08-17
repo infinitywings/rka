@@ -654,6 +654,16 @@ database, and atomically replaces the file. If an external editor changed the
 file, the proposal becomes conflicted and neither version is overwritten. RKA
 never performs a Git operation for source synchronization.
 
+For an existing file, Apply also keeps the exact displaced inode at a hidden
+`.rka-source-*.recovery` name beside that file. This preserves writes made later
+through an editor descriptor opened before Apply. These source-adjacent files
+are intentionally not deleted automatically, including when the RKA project is
+deleted. Project-deletion preview and result list deterministic candidate paths
+under `retained_workspace_artifacts`; inspect them after all editors are closed,
+then remove only artifacts you have deliberately verified are no longer needed.
+Managed recovery beneath the RKA data directory is still removed by confirmed
+project deletion.
+
 The adjacent **Quick reader** view shows the ordered argument path and anchor
 health. **Reviewer risk (private)** shows prohibited wording, qualifiers,
 counterevidence, and citation-verification warnings. Private risk material is
