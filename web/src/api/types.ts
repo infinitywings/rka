@@ -1084,6 +1084,138 @@ export interface ManuscriptOutline {
   }
 }
 
+// ---- Local manuscript Markdown/LaTeX source synchronization ----
+
+export interface ManuscriptSourceFinding {
+  severity: "error" | "warning"
+  code: string
+  message: string
+  unit_id?: string
+  line?: number
+  kind?: "claim" | "evidence" | "citation"
+  value?: string
+}
+
+export interface ManuscriptSourceAnchor {
+  unit_id: string
+  start_line: number
+  content_start_line: number
+  content_end_line: number
+  end_line: number
+  content_hash: string
+}
+
+export interface ManuscriptSourceProvenance {
+  unit_id: string
+  kind: "claim" | "evidence" | "citation"
+  value: string
+  line: number
+  verified: boolean
+}
+
+export interface ManuscriptSourceFile {
+  schema_version: "rka.manuscript-source/v1"
+  project_id: string
+  manuscript_id: string
+  relative_path: string
+  source_format: "markdown" | "latex"
+  content: string
+  content_hash: string
+  size_bytes: number
+  mode: number
+  anchors: ManuscriptSourceAnchor[]
+  provenance: ManuscriptSourceProvenance[]
+  findings: ManuscriptSourceFinding[]
+}
+
+export interface ManuscriptSourceOverview {
+  schema_version: "rka.manuscript-source/v1"
+  project_id: string
+  manuscript_id: string
+  workspace_ref: string
+  files: Array<{
+    relative_path: string
+    source_format: "markdown" | "latex"
+    content_hash: string
+    size_bytes: number
+    anchor_count: number
+    finding_count: number
+    blocking: boolean
+  }>
+  warnings: Array<{ relative_path?: string; code: string; message: string }>
+  quick_reader: Array<{
+    unit_id: string
+    local_key: string
+    title: string | null
+    communicative_job: string | null
+    intended_takeaway: string | null
+    quick_reader_role: string | null
+    anchors: Array<{
+      relative_path: string
+      start_line: number
+      end_line: number
+      content_hash: string
+    }>
+    anchor_state: "linked" | "missing"
+  }>
+  private_reviewer_risks: Array<{
+    kind: string
+    unit_id: string
+    message: string
+    claim_id?: string
+    evidence_claim_id?: string
+    citation_key?: string
+    content?: string | null
+    items?: string[]
+    verification_state?: string
+    verification_current?: boolean
+  }>
+  public_private_boundary: {
+    draft_source: string
+    private_reviewer_risks: string
+  }
+}
+
+export interface ManuscriptSourceProposal {
+  schema_version: "rka.manuscript-source-proposal/v1"
+  id: string
+  project_id: string
+  manuscript_id: string
+  status: "proposed" | "applied" | "rejected" | "conflicted" | "superseded" | "expired"
+  revision: number
+  origin: "human" | "host_agent" | "lm_studio"
+  relative_path: string
+  source_format: "markdown" | "latex"
+  base_content_hash: string | null
+  proposed_content?: string
+  proposed_content_hash: string
+  created_by: "pi" | "brain" | "executor" | "web_ui"
+  reason: string
+  validation_findings: ManuscriptSourceFinding[]
+  recovery_manifest_path: string | null
+  created_at: string
+  updated_at: string
+  events?: Array<{
+    id: string
+    proposal_revision: number
+    action: string
+    actor: string
+    reason: string
+    details: Record<string, unknown>
+    created_at: string
+  }>
+}
+
+export interface ManuscriptSourceProposalCreate {
+  origin: "human"
+  relative_path: string
+  expected_content_hash: string | null
+  content: string
+  created_by: "web_ui"
+  reason: string
+  supersedes_proposal_id?: string
+}
+
 export interface OutlineUnitPatch {
   title?: string | null
   location?: string

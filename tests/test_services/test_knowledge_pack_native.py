@@ -631,6 +631,15 @@ async def test_native_manuscript_round_trip_preserves_history_without_synthesis(
                 "Diagnostics from the source installation's legacy migration, "
                 "not manuscript semantic state."
             ),
+            "manuscript_source_events": (
+                "Source-file apply and recovery events refer to installation-local "
+                "paths and are omitted with their source proposals."
+            ),
+            "manuscript_source_proposals": (
+                "Candidate source text, local workspace paths, and recovery state "
+                "are installation-local authoring data; export the manuscript files "
+                "separately."
+            ),
             "reference_validation_migration_issues": (
                 "Diagnostics from source-installation reference-validation "
                 "migration, not portable manuscript semantic state."
@@ -643,6 +652,8 @@ async def test_native_manuscript_round_trip_preserves_history_without_synthesis(
             "change_events",
             "jobs",
             "manuscript_migration_issues",
+            "manuscript_source_events",
+            "manuscript_source_proposals",
             "reference_validation_migration_issues",
         }
         & manifest["tables"].keys()

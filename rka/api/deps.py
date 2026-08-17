@@ -41,6 +41,7 @@ from rka.services.interpretation import InterpretationService
 from rka.services.experiments import ExperimentService
 from rka.services.planning import ManuscriptPlanningService
 from rka.services.semantic_patch import SemanticPatchService
+from rka.services.manuscript_source import ManuscriptSourceService
 
 logger = logging.getLogger(__name__)
 
@@ -449,6 +450,14 @@ def get_scoped_semantic_patch_service(
     db: Database = Depends(get_db),
 ) -> SemanticPatchService:
     return SemanticPatchService(db, project_id=project_id)
+
+
+def get_scoped_manuscript_source_service(
+    config: RKAConfig = Depends(get_config),
+    project_id: str = Depends(require_project),
+    db: Database = Depends(get_db),
+) -> ManuscriptSourceService:
+    return ManuscriptSourceService(db, config=config, project_id=project_id)
 
 
 def get_scoped_cluster_service(

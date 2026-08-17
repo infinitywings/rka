@@ -46,6 +46,14 @@ _PORTABILITY_EXCLUSIONS: dict[str, str] = {
         "Diagnostics from source-installation reference-validation migration, "
         "not portable manuscript semantic state."
     ),
+    "manuscript_source_proposals": (
+        "Candidate source text, local workspace paths, and recovery state are "
+        "installation-local authoring data; export the manuscript files separately."
+    ),
+    "manuscript_source_events": (
+        "Source-file apply and recovery events refer to installation-local paths "
+        "and are omitted with their source proposals."
+    ),
 }
 
 
@@ -189,6 +197,8 @@ _TABLE_CATEGORIES: dict[str, list[str]] = {
         "jobs",
         "manuscript_migration_issues",
         "reference_validation_migration_issues",
+        "manuscript_source_proposals",
+        "manuscript_source_events",
         "project_deletion_authorizations",
         "kv_store",
         "embedding_metadata",
