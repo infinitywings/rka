@@ -128,13 +128,16 @@ also drop the redundant hidden name because the same inode remains public.
 Recovery classification is bounded: an oversized retained regular inode is
 reported as `oversized` without reading it into memory, retained in place, and
 does not prevent Apply conflict, Reject, or Supersede from reaching a durable
-terminal state. Symlinks and non-regular recovery objects still fail closed.
+terminal state. An unreadable, symlinked, or non-regular hidden recovery object
+is classified as `unsafe`, retained in place, and never exchanged into the
+public manuscript path; after the source-directory fsync, Apply records a
+terminal restart-era conflict.
 
 Source events separate the durable naming fact from a mutable byte
 classification. `source_recovery_state` says only whether a recovery name was
 retained, missing, or not checked. `source_recovery_last_observed` records the
 last bounded observation (`reviewed_base`, `proposal`, `unclassified`,
-`oversized`, or `missing`) immediately before the transition. It is not a
+`oversized`, `unsafe`, or `missing`) immediately before the transition. It is not a
 promise that a still-open external descriptor cannot change those bytes later;
 the retained path is the durable audit handle. `retained_source_path` is generic;
 `displaced_source_path` is populated only when an original target actually

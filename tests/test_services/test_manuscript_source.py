@@ -1288,6 +1288,98 @@ async def test_oversized_retained_inode_does_not_block_terminal_transition(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("unsafe_kind", ["symlink", "fifo", "directory"])
+async def test_unsafe_hidden_recovery_never_replaces_public_source(
+    db_with_project,
+    tmp_path: Path,
+    unsafe_kind: str,
+) -> None:
+    service, _, manuscript_id, workspace, unit_id = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    before = _markdown(unit_id, "Base before unsafe restart recovery.")
+    after = _markdown(unit_id, "Public proposal must remain a regular file.")
+    source = workspace / "main.md"
+    source.write_text(before)
+    proposal = await service.create_proposal(
+        manuscript_id,
+        ManuscriptSourceProposalCreate(
+            origin="human",
+            relative_path="main.md",
+            expected_content_hash=_hash(before),
+            content=after,
+            created_by="web_ui",
+            reason="Never promote an unsafe hidden recovery object.",
+        ),
+    )
+    row = await service._require_proposal_row(proposal["id"])
+    service._write_recovery(row, before.encode(), 0o644, service._recovery_manifest_path(row))
+    parent_fd, name = service._open_parent_fd(workspace, Path("main.md"))
+    swap_name = service._source_swap_name(proposal["id"])
+    try:
+        service._prepare_source_swap(parent_fd, swap_name, after.encode(), 0o644)
+        service._atomic_exchange_at(parent_fd, swap_name, parent_fd, name)
+        os.fsync(parent_fd)
+    finally:
+        os.close(parent_fd)
+    hidden = workspace / swap_name
+    hidden.unlink()
+    if unsafe_kind == "symlink":
+        hidden.symlink_to(workspace / "outside.md")
+    elif unsafe_kind == "fifo":
+        os.mkfifo(hidden)
+    else:
+        hidden.mkdir()
+
+    with pytest.raises(ManuscriptSourceConflictError, match="unclassifiable hidden recovery"):
+        await service.apply_proposal(
+            proposal["id"],
+            ManuscriptSourceProposalTransition(
+                expected_revision=1,
+                actor="web_ui",
+                reason="Retain unsafe recovery without moving it into public.",
+            ),
+        )
+    assert source.is_file()
+    assert not source.is_symlink()
+    assert source.read_text() == after
+    if unsafe_kind == "symlink":
+        assert hidden.is_symlink()
+    elif unsafe_kind == "fifo":
+        assert stat.S_ISFIFO(hidden.lstat().st_mode)
+    else:
+        assert hidden.is_dir()
+    conflicted = await service.get_proposal(proposal["id"])
+    assert conflicted["status"] == "conflicted"
+    details = conflicted["events"][-1]["details"]
+    assert details["source_recovery_state"] == "retained"
+    assert details["source_recovery_last_observed"] == "unsafe"
+    assert details["retained_source_path"] == swap_name
+    assert details["transient_exchange_state"] == "possible"
+
+    successor = await service.create_proposal(
+        manuscript_id,
+        ManuscriptSourceProposalCreate(
+            origin="human",
+            relative_path="main.md",
+            expected_content_hash=_hash(after),
+            content=_markdown(unit_id, "Successor after unsafe recovery conflict."),
+            created_by="web_ui",
+            reason="Continue explicitly after inspecting the unsafe recovery path.",
+            supersedes_proposal_id=proposal["id"],
+        ),
+    )
+    assert successor["status"] == "proposed"
+    assert (await service.get_proposal(proposal["id"]))["status"] == "superseded"
+    if unsafe_kind == "symlink":
+        assert hidden.is_symlink()
+    elif unsafe_kind == "fifo":
+        assert stat.S_ISFIFO(hidden.lstat().st_mode)
+    else:
+        assert hidden.is_dir()
+
+
+@pytest.mark.asyncio
 async def test_atomic_replace_never_unlinks_an_unowned_source_swap(
     db_with_project,
     tmp_path: Path,

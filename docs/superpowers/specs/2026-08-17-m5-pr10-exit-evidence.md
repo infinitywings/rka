@@ -75,9 +75,9 @@ touch a live research project or invoke a model.
 
 | Gate | Result |
 | --- | --- |
-| Migration/source/API/project/pack corrective suite (command below) | **72 passed** |
+| Migration/source/API/project/pack corrective suite (command below) | **75 passed** |
 | MCP schema/model-drift suite (command below) | **994 passed** |
-| Full Python suite: `.venv/bin/python -m pytest -q` | **3,205 passed in 211.26s** |
+| Full Python suite: `.venv/bin/python -m pytest -q` | **3,208 passed in 321.37s** |
 | Changed Python files: Ruff | **Passed** |
 | Python compile check: `.venv/bin/python -m compileall -q rka` | **Passed** |
 | Git whitespace/error check: `git diff --check 116f76b --` | **Passed** |
@@ -145,6 +145,10 @@ candidate adds deterministic regression coverage for:
 - bounded classification of an oversized retained regular inode through Apply,
   Reject, and Supersede, without loading it into memory or leaving the proposal
   permanently open;
+- retention and terminal conflict for unreadable, symlinked, FIFO, or directory
+  recovery objects without ever exchanging them into the public manuscript path;
+- explicit successor creation after an unsafe-object conflict, while the retained
+  object remains available for inspection;
 - separate event fields for durable retention state and the last observed byte
   classification, so a late descriptor write is not mislabeled as immutable
   reviewed-base content;

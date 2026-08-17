@@ -58,7 +58,7 @@ class ManuscriptSourceConflictError(ValueError):
         self,
         message: str,
         *,
-        transient_exchange: bool = False,
+        transient_exchange: bool | None = False,
         recovery_state: str | None = None,
     ):
         super().__init__(message)
@@ -1201,7 +1201,11 @@ class ManuscriptSourceService(BaseService):
         current_hash = _sha256(current) if current is not None else None
         recovery_path = self._recovery_manifest_path(row)
         has_valid_recovery = self._valid_recovery_manifest(recovery_path, row)
-        if current_hash == row["proposed_content_hash"] and has_valid_recovery:
+        if (
+            row["status"] == "proposed"
+            and current_hash == row["proposed_content_hash"]
+            and has_valid_recovery
+        ):
             raise ManuscriptSourceConflictError(
                 "proposal content is already on disk with valid recovery metadata; "
                 f"retry apply to reconcile the ledger before {action}"
@@ -1616,22 +1620,22 @@ class ManuscriptSourceService(BaseService):
                     validate_utf8=False,
                 )
             except (OSError, ValueError, ManuscriptSourceSecurityError) as exc:
-                # The deterministic swap name can only contain the object that
-                # was about to replace the target or the exact target displaced
-                # by the exchange. Restore the latter even when it cannot be
-                # decoded or bounded safely enough to inspect.
-                try:
-                    self._atomic_exchange_at(parent_fd, swap_name, parent_fd, name)
-                    os.fsync(parent_fd)
-                except Exception as rollback_error:
-                    raise ManuscriptSourceSecurityError(
-                        "interrupted source exchange could not be reconciled safely"
-                    ) from rollback_error
+                # Never promote an unreadable, symlinked, or non-regular hidden
+                # recovery object into the public manuscript path. Preserve the
+                # current regular proposal and the unsafe object, then durably
+                # terminalize as a restart-era conflict.
+                swap_state = self._classify_source_swap_at(
+                    parent_fd,
+                    swap_name,
+                    expected_content_hash=expected_content_hash,
+                    proposed_content_hash=proposed_content_hash,
+                )
+                os.fsync(parent_fd)
                 raise ManuscriptSourceConflictError(
-                    "an unsafe external source version was restored after an "
+                    "an unclassifiable hidden recovery state was retained after an "
                     "interrupted replacement",
-                    transient_exchange=True,
-                    recovery_state="retained_proposal",
+                    transient_exchange=None,
+                    recovery_state=self._retention_state_from_swap_state(swap_state),
                 ) from exc
 
             if displaced is None:
@@ -1730,6 +1734,8 @@ class ManuscriptSourceService(BaseService):
                 missing_ok=True,
                 validate_utf8=False,
             )
+        except (OSError, ManuscriptSourceSecurityError):
+            return "unsafe"
         except ValueError as exc:
             if "exceeds configured size limit" not in str(exc):
                 raise
@@ -1751,6 +1757,7 @@ class ManuscriptSourceService(BaseService):
             "reviewed_base": "retained_base",
             "unclassified": "retained_unclassified",
             "oversized": "retained_oversized",
+            "unsafe": "retained_unsafe",
         }[swap_state]
 
     def _source_recovery_event_details(
@@ -1765,6 +1772,7 @@ class ManuscriptSourceService(BaseService):
             "retained_base": "reviewed_base",
             "retained_unclassified": "unclassified",
             "retained_oversized": "oversized",
+            "retained_unsafe": "unsafe",
         }[recovery_state]
         retained = bool(recovery_state and recovery_state.startswith("retained_"))
         return {
