@@ -1066,13 +1066,16 @@ class NativeManuscriptService(BaseService):
             checkpoint["dependency_snapshot"] = self._json_loads(
                 checkpoint.get("dependency_snapshot"), {}
             )
-            checkpoint["dependency_current"] = checkpoint.get("status") in {
-                "resolved",
-                "rejected",
-            } and checkpoint["dependency_snapshot"] == await self._checkpoint_dependency_snapshot(
+            current_snapshot = await self._checkpoint_dependency_snapshot(
                 canonical_id,
                 kind=checkpoint["kind"],
                 unit_id=checkpoint.get("unit_id"),
+            )
+            checkpoint["dependency_current"] = checkpoint.get("status") in {
+                "resolved",
+                "rejected",
+            } and self._checkpoint_snapshots_equivalent(
+                checkpoint["dependency_snapshot"], current_snapshot
             )
         verifications = await self.db.fetchall(
             """SELECT * FROM manuscript_claim_verification_attestations
@@ -2164,6 +2167,30 @@ class NativeManuscriptService(BaseService):
             "sha256": hashlib.sha256(encoded).hexdigest(),
         }
 
+    @staticmethod
+    def _checkpoint_snapshots_equivalent(
+        stored: Any,
+        current: Any,
+    ) -> bool:
+        """Compare snapshots without invalidating pre-components v2 approvals.
+
+        Early v2 snapshots persisted only the identity fields and semantic
+        digest. The expanded v2 representation keeps the exact normalized
+        components for auditability, but that diagnostic addition must not by
+        itself supersede an approval. Once components have been persisted,
+        exact equality remains mandatory so no material can be ignored.
+        """
+        if stored == current:
+            return True
+        if not isinstance(stored, Mapping) or not isinstance(current, Mapping):
+            return False
+        legacy_keys = {"schema_version", "kind", "unit_key", "sha256"}
+        return (
+            "components" not in stored
+            and set(stored) == legacy_keys
+            and all(stored.get(key) == current.get(key) for key in legacy_keys)
+        )
+
     async def export_spine_projection(self, manuscript_id: str) -> dict[str, Any]:
         """Export the current RKA aggregate as a deterministic Writer cache."""
         context = await self.get_context(manuscript_id)
@@ -2367,7 +2394,9 @@ class NativeManuscriptService(BaseService):
                 kind=checkpoint["kind"],
                 unit_id=checkpoint.get("unit_id"),
             )
-            if stored_snapshot != current_snapshot:
+            if not self._checkpoint_snapshots_equivalent(
+                stored_snapshot, current_snapshot
+            ):
                 stale_ids.append(str(checkpoint["id"]))
         if not stale_ids:
             return

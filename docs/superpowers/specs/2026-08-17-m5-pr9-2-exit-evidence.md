@@ -25,8 +25,11 @@ Implementation branch: `codex/m5-typed-writing-core`
   progressive disclosure, with non-blocking allocation advisories.
 - Pack rekeying rewrites auditable checkpoint components and recomputes their
   digest; ambiguous condense collisions fail closed.
+- Pre-components v2 checkpoint snapshots remain current when their semantic
+  digest matches, while a real dependency change still supersedes them.
 - The legacy MCP direct-upsert operation is explicitly deprecated and performs
-  no network write; agents use attributed semantic-patch proposals instead.
+  no network write; its actor-routing role remains within the documented role
+  vocabulary, and agents use attributed semantic-patch proposals instead.
 
 ## Disposable real-project-derived pilot
 
@@ -64,6 +67,14 @@ adversarial coverage for:
 - MCP deprecation without an unreachable REST write;
 - stale-current citation rendering; and
 - migration cross-project FKs, update/delete events, and transactional rollback.
+- backward-compatible approval currency across the v2 snapshot representation
+  expansion, without weakening semantic-change invalidation.
+
+The second exact-commit audit of `2461e457` confirmed the original remediation
+and found one upgrade-compatibility P1 plus one schema-contract P3. The current
+candidate preserves matching hash-only v2 approvals, invalidates them after a
+real semantic change, and keeps `role_tag` within its documented actor-routing
+vocabulary while reporting operation deprecation separately.
 
 The PR remains draft until the corrected snapshot receives a fresh independent
 audit.
@@ -72,7 +83,7 @@ audit.
 
 | Gate | Result |
 | --- | --- |
-| Corrective migration/service/outline/pack/MCP suite (command below) | **91 passed** |
+| Corrective migration/service/outline/pack/MCP suite (command below) | **92 passed** |
 | MCP schema/model-drift suite (command below) | **994 passed** |
 | Disposable INVARLLM pilot (command below) | **1 passed** |
 | Changed Python files: Ruff lint (commands below) | **Passed** |
@@ -80,7 +91,7 @@ audit.
 | Git whitespace/error check: `git diff --check f70d360 --` | **Passed** |
 | Web production build: `(cd web && npm run build)` | **Passed**; existing large-chunk warning remains |
 | Changed web files: `(cd web && npx eslint src/api/types.ts src/components/workbench/OutlineEditor.tsx)` | **Passed** |
-| Full Python suite: `python -m pytest -q` | **3,152 passed, 5 warnings in 220.62s** |
+| Full Python suite: `python -m pytest -q` | **3,153 passed in 210.41s** |
 
 Corrective suite command:
 
@@ -111,6 +122,13 @@ The narrow ignores on the legacy monolithic MCP server are recorded explicitly;
 they suppress only pre-existing file-wide import-placement and unused-symbol
 findings. The modified deprecation handler is exercised by the corrective test
 suite.
+
+The disposable local virtual environment omitted the optional `llm` extra, so
+the full-suite run made its cached `sqlite-vec` 0.1.9 package available on
+`PYTHONPATH`. This is equivalent to running the canonical command in a complete
+development environment with the sqlite-vec dependency installed; without it,
+embedding-persistence tests fail because vector storage is intentionally
+disabled.
 
 ## Review interpretation
 

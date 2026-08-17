@@ -126,6 +126,7 @@ def test_create_manuscript_describe_schema_matches_typed_model() -> None:
 @pytest.mark.asyncio
 async def test_typed_spine_direct_mutation_is_deprecated_without_network(requests) -> None:
     schema = OPERATIONS_SCHEMA["upsert_argument_spine"]
+    assert schema["role_tag"] == "ANY"
     assert schema["enums"]["manuscript_unit_role"] == [
         "unspecified",
         "section",

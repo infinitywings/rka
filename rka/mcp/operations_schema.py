@@ -2794,7 +2794,9 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "operation": "upsert_argument_spine",
         "tool": "rka_execute",
         "category": "manuscript",
-        "role_tag": "DEPRECATED",
+        # role_tag remains an actor-routing contract. Lifecycle status is
+        # conveyed by the summary/notes and the structured dispatch result.
+        "role_tag": "ANY",
         "summary": (
             "Deprecated agent-direct mutation; returns a structured migration "
             "error and performs no write."

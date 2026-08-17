@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 
 import pytest
@@ -1477,6 +1478,84 @@ async def test_checkpoint_snapshots_detect_artifact_and_literature_drift(
     after_literature = await service.get_context(manuscript.id)
     literature_by_id = {row["id"]: row for row in after_literature["checkpoints"]}
     assert literature_by_id[checkpoints["reference_set"]]["dependency_current"] is False
+
+
+@pytest.mark.asyncio
+async def test_legacy_v2_checkpoint_digest_remains_current_until_semantics_change(
+    db_with_project,
+) -> None:
+    service = NativeManuscriptService(db_with_project, project_id="proj_default")
+    manuscript = await service.create(
+        ManuscriptCreate(title="Legacy checkpoint", venue="IEEE S&P")
+    )
+    checkpoint = await service.create_checkpoint(
+        ManuscriptCheckpointCreate(
+            manuscript_id=manuscript.id,
+            kind="venue",
+        ),
+        expected_revision=1,
+    )
+    decision_id = await _seed_pi_decision(
+        db_with_project,
+        chosen="Approve IEEE S&P",
+    )
+    await service.resolve_checkpoint(
+        checkpoint.id,
+        ManuscriptCheckpointResolve(
+            decision_id=decision_id,
+            status="resolved",
+            resolved_at="2026-07-22T12:00:00Z",
+        ),
+        expected_revision=2,
+    )
+
+    # Simulate a checkpoint written before normalized components were retained.
+    current = await service.get_context(manuscript.id)
+    resolved = next(item for item in current["checkpoints"] if item["id"] == checkpoint.id)
+    legacy_snapshot = {
+        key: value
+        for key, value in resolved["dependency_snapshot"].items()
+        if key != "components"
+    }
+    await db_with_project.execute(
+        """UPDATE manuscript_checkpoints
+           SET dependency_snapshot = ?
+           WHERE id = ? AND project_id = 'proj_default'""",
+        [json.dumps(legacy_snapshot, sort_keys=True), checkpoint.id],
+    )
+    await db_with_project.commit()
+
+    compatible = await service.get_context(manuscript.id)
+    compatible_checkpoint = next(
+        item for item in compatible["checkpoints"] if item["id"] == checkpoint.id
+    )
+    assert compatible_checkpoint["status"] == "resolved"
+    assert compatible_checkpoint["dependency_current"] is True
+
+    # Re-applying the same dependency must not rewrite or supersede the legacy
+    # approval when its digest still represents the same venue.
+    await service.update(
+        manuscript.id,
+        ManuscriptUpdate(expected_revision=3, venue="IEEE S&P"),
+    )
+    after_no_op = await service.get_context(manuscript.id)
+    preserved = next(
+        item for item in after_no_op["checkpoints"] if item["id"] == checkpoint.id
+    )
+    assert preserved["status"] == "resolved"
+    assert preserved["dependency_current"] is True
+
+    # A real semantic change still invalidates the legacy approval.
+    await service.update(
+        manuscript.id,
+        ManuscriptUpdate(expected_revision=4, venue="USENIX Security"),
+    )
+    after_change = await service.get_context(manuscript.id)
+    invalidated = next(
+        item for item in after_change["checkpoints"] if item["id"] == checkpoint.id
+    )
+    assert invalidated["status"] == "superseded"
+    assert invalidated["dependency_current"] is False
 
 
 @pytest.mark.asyncio

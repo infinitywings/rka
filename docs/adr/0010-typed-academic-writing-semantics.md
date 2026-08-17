@@ -85,7 +85,11 @@ semantics. Outline checkpoints cover the corresponding manuscript-wide maps.
 Snapshots retain normalized dependency components beside their digest for
 auditability. Knowledge-pack import rekeys those components and recomputes the
 digest, so a faithful import preserves approval currency while a same-unit
-semantic change invalidates only the affected approval.
+semantic change invalidates only the affected approval. Earlier v2 snapshots
+that contain only the identity fields and semantic digest remain current when
+that digest still matches; adding auditable components during an upgrade does
+not itself revoke a PI approval. Once components are stored, exact snapshot
+equality is required.
 
 Condense proposals fail closed when the parent and child assign different
 semantics to the same evidence or citation identity. RKA never chooses one
