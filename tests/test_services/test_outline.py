@@ -44,19 +44,21 @@ async def _evidence_claim(db) -> str:
 
 def _spine(evidence_id: str) -> dict:
     return {
-        "claims": [{
-            "claim_id": "C1",
-            "claim_type": "empirical",
-            "status": "active",
-            "text": "The mechanism produced the bounded effect.",
-            "allowed_wording": "The mechanism produced the bounded effect.",
-            "prohibited_wording": ["The mechanism always works."],
-            "evidence_ids": [evidence_id],
-            "unit_links": [
-                {"unit_key": "INTRO", "relationship": "advances"},
-                {"unit_key": "METHOD", "relationship": "advances"},
-            ],
-        }],
+        "claims": [
+            {
+                "claim_id": "C1",
+                "claim_type": "empirical",
+                "status": "active",
+                "text": "The mechanism produced the bounded effect.",
+                "allowed_wording": "The mechanism produced the bounded effect.",
+                "prohibited_wording": ["The mechanism always works."],
+                "evidence_ids": [evidence_id],
+                "unit_links": [
+                    {"unit_key": "INTRO", "relationship": "advances"},
+                    {"unit_key": "METHOD", "relationship": "advances"},
+                ],
+            }
+        ],
         "units": [
             {
                 "unit_id": "INTRO",
@@ -101,11 +103,7 @@ async def _seed_outline(db):
 
 def _evidence_ids_by_role(unit: dict) -> dict[str, list[str]]:
     return {
-        role: sorted(
-            item["evidence_claim_id"]
-            for item in unit["evidence"]
-            if item["role"] == role
-        )
+        role: sorted(item["evidence_claim_id"] for item in unit["evidence"] if item["role"] == role)
         for role in ("support", "qualifier", "counterevidence")
     }
 
@@ -122,6 +120,7 @@ async def test_outline_projection_joins_rationale_claims_and_evidence(db_with_pr
         "complete_units": 2,
         "units_needing_review": 0,
         "levels": [2],
+        "rationale_complete": True,
         "checkpoint_ready": True,
     }
     assert outline["units"][0]["claims"][0]["claim_key"] == "C1"
@@ -239,6 +238,18 @@ async def test_expand_preserves_explicit_binding_narrowing(db_with_project) -> N
         ),
         actor="web_ui",
     )
+    narrowing_findings = [
+        finding
+        for finding in prepared["proposal"]["validation_findings"]
+        if finding["code"] == "INHERITED_UNIT_EVIDENCE_NARROWED"
+    ]
+    assert {
+        (finding["unit_key"], finding["parent_unit_key"], finding["role"]): finding["entity_ids"]
+        for finding in narrowing_findings
+    } == {
+        ("INTRO.NARROW", "INTRO", "support"): [support_ids[1]],
+        ("INTRO.NARROW", "INTRO", "qualifier"): [qualifier_id],
+    }
     await patches.apply_proposal(
         prepared["proposal"]["id"],
         SemanticPatchProposalTransition(
@@ -249,12 +260,8 @@ async def test_expand_preserves_explicit_binding_narrowing(db_with_project) -> N
     )
 
     context = await native.get_context(manuscript.id)
-    narrowed = next(
-        unit for unit in context["units"] if unit["local_key"] == "INTRO.NARROW"
-    )
-    inherited = next(
-        unit for unit in context["units"] if unit["local_key"] == "INTRO.INHERIT"
-    )
+    narrowed = next(unit for unit in context["units"] if unit["local_key"] == "INTRO.NARROW")
+    inherited = next(unit for unit in context["units"] if unit["local_key"] == "INTRO.INHERIT")
     assert _evidence_ids_by_role(narrowed) == {
         "support": [support_ids[0]],
         "qualifier": [],
@@ -281,14 +288,16 @@ async def test_condense_unions_bindings_and_removes_only_selected_descendants(
             action="expand",
             unit_key="INTRO",
             reason="Create one child.",
-            children=[{
-                "local_key": "INTRO.CHILD",
-                "title": "Child",
-                "location": "sections/introduction.tex#child",
-                "communicative_job": "Carry one paragraph job.",
-                "intended_takeaway": "The child preserves the parent promise.",
-                "evidence_plan": ["Use C1 evidence."],
-            }],
+            children=[
+                {
+                    "local_key": "INTRO.CHILD",
+                    "title": "Child",
+                    "location": "sections/introduction.tex#child",
+                    "communicative_job": "Carry one paragraph job.",
+                    "intended_takeaway": "The child preserves the parent promise.",
+                    "evidence_plan": ["Use C1 evidence."],
+                }
+            ],
         ),
         actor="pi",
     )
@@ -320,9 +329,9 @@ async def test_condense_unions_bindings_and_removes_only_selected_descendants(
             expected_revision=1, actor="pi", reason="Approve condensation."
         ),
     )
-    context = await NativeManuscriptService(
-        db_with_project, project_id="proj_default"
-    ).get_context(manuscript_id)
+    context = await NativeManuscriptService(db_with_project, project_id="proj_default").get_context(
+        manuscript_id
+    )
     parent = next(unit for unit in context["units"] if unit["local_key"] == "INTRO")
     child = next(unit for unit in context["units"] if unit["local_key"] == "INTRO.CHILD")
     assert child["status"] == "removed"
@@ -353,15 +362,17 @@ async def test_condense_unions_distinct_child_evidence_into_parent(db_with_proje
             action="expand",
             unit_key="INTRO",
             reason="Create a child with one distinct evidence binding.",
-            children=[{
-                "local_key": "INTRO.CHILD",
-                "title": "Child",
-                "location": "sections/introduction.tex#child",
-                "communicative_job": "Carry the second evidence-backed beat.",
-                "intended_takeaway": "The child uses distinct evidence.",
-                "evidence_plan": ["Use the second support record."],
-                "support_ids": [child_evidence],
-            }],
+            children=[
+                {
+                    "local_key": "INTRO.CHILD",
+                    "title": "Child",
+                    "location": "sections/introduction.tex#child",
+                    "communicative_job": "Carry the second evidence-backed beat.",
+                    "intended_takeaway": "The child uses distinct evidence.",
+                    "evidence_plan": ["Use the second support record."],
+                    "support_ids": [child_evidence],
+                }
+            ],
         ),
         actor="pi",
     )
@@ -405,9 +416,7 @@ async def test_condense_unions_distinct_child_evidence_into_parent(db_with_proje
     context = await native.get_context(manuscript.id)
     parent = next(unit for unit in context["units"] if unit["local_key"] == "INTRO")
     child = next(unit for unit in context["units"] if unit["local_key"] == "INTRO.CHILD")
-    assert _evidence_ids_by_role(parent)["support"] == sorted(
-        [parent_evidence, child_evidence]
-    )
+    assert _evidence_ids_by_role(parent)["support"] == sorted([parent_evidence, child_evidence])
     assert child["status"] == "removed"
 
 
@@ -434,9 +443,7 @@ async def test_reorder_reports_changed_predecessors_without_losing_bindings(
         for finding in prepared["proposal"]["validation_findings"]
     )
 
-    await SemanticPatchService(
-        db_with_project, project_id="proj_default"
-    ).apply_proposal(
+    await SemanticPatchService(db_with_project, project_id="proj_default").apply_proposal(
         prepared["proposal"]["id"],
         SemanticPatchProposalTransition(
             expected_revision=1,
@@ -484,14 +491,16 @@ async def test_reorder_rejects_parent_after_child_and_split_subtree(db_with_proj
             action="expand",
             unit_key="INTRO",
             reason="Create one child for hierarchy-order checks.",
-            children=[{
-                "local_key": "INTRO.CHILD",
-                "title": "Child",
-                "location": "sections/introduction.tex#child",
-                "communicative_job": "Carry one child beat.",
-                "intended_takeaway": "The child remains under its parent.",
-                "evidence_plan": ["Use the inherited support."],
-            }],
+            children=[
+                {
+                    "local_key": "INTRO.CHILD",
+                    "title": "Child",
+                    "location": "sections/introduction.tex#child",
+                    "communicative_job": "Carry one child beat.",
+                    "intended_takeaway": "The child remains under its parent.",
+                    "evidence_plan": ["Use the inherited support."],
+                }
+            ],
         ),
         actor="pi",
     )
@@ -579,9 +588,7 @@ async def test_host_agent_outline_proposal_records_ai_provenance_and_waits_for_p
 async def test_executor_cannot_mislabel_outline_proposal_as_human(db_with_project) -> None:
     manuscript_id, _evidence_id = await _seed_outline(db_with_project)
     with pytest.raises(ValueError, match="must declare their provider origin"):
-        await ManuscriptOutlineService(
-            db_with_project, project_id="proj_default"
-        ).prepare_proposal(
+        await ManuscriptOutlineService(db_with_project, project_id="proj_default").prepare_proposal(
             manuscript_id,
             OutlineProposalRequest(
                 expected_revision=2,
@@ -645,6 +652,7 @@ async def test_applied_outline_edit_supersedes_resolved_outline_checkpoint(
     )
     outline = await outlines.get_outline(manuscript_id)
     assert outline["outline_checkpoint"]["status"] == "superseded"
+    assert outline["summary"]["rationale_complete"] is True
     assert outline["summary"]["checkpoint_ready"] is True
 
 
@@ -678,10 +686,7 @@ async def test_outline_checkpoint_v2_tracks_typed_evidence_bindings(db_with_proj
         expected_revision=3,
         actor="pi",
     )
-    assert (
-        resolved.dependency_snapshot["schema_version"]
-        == "rka.checkpoint-dependencies/v2"
-    )
+    assert resolved.dependency_snapshot["schema_version"] == "rka.checkpoint-dependencies/v2"
 
     spine = await native.export_spine_projection(manuscript_id)
     intro = next(unit for unit in spine["units"] if unit["unit_id"] == "INTRO")

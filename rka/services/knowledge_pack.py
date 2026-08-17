@@ -18,6 +18,7 @@ from rka.models.knowledge_pack import KnowledgePackImportResult
 from rka.models.planning import validate_planning_payload
 from rka.models.semantic_patch import SemanticPatchProposalCreate
 from rka.services.base import BaseService, _now
+from rka.services.outline_integrity import validate_unit_hierarchy
 
 PACK_SCHEMA_VERSION = 7
 PACK_FILE_SUFFIX = ".rka-pack.zip"
@@ -86,6 +87,7 @@ _CRITICAL_INTEGRITY_CATEGORIES: frozenset[str] = frozenset(
         "semantic_patch_proposal_event_head_mismatch",
         "semantic_patch_provider_event_chain_invalid",
         "semantic_patch_payload_invalid",
+        "outline_hierarchy_invalid",
     }
 )
 
@@ -373,7 +375,7 @@ _DIRECT_ID_COLUMNS = {
     ),
     "journal": ("id", "related_mission", "supersedes", "superseded_by"),
     "checkpoints": ("id", "mission_id", "linked_decision_id"),
-    "claims": ("id", "source_entry_id"),
+    "claims": ("id", "source_entry_id", "staleness_resolution_journal_id"),
     "claim_scope_versions": (
         "id",
         "claim_id",
@@ -408,7 +410,11 @@ _DIRECT_ID_COLUMNS = {
         "observation_id",
         "candidate_id",
     ),
-    "evidence_clusters": ("id", "research_question_id"),
+    "evidence_clusters": (
+        "id",
+        "research_question_id",
+        "staleness_resolution_journal_id",
+    ),
     "claim_edges": ("id", "source_claim_id", "target_claim_id", "cluster_id"),
     "decision_options": ("id", "decision_id", "dominated_by"),
     "calibration_outcomes": ("id", "decision_id"),
@@ -619,7 +625,11 @@ _FK_COLUMNS: dict[str, set[str]] = {
         "decision_id",
     },
     "manuscript_units": {"manuscript_id"},
-    "manuscript_unit_outline_profiles": {"unit_id", "manuscript_id"},
+    "manuscript_unit_outline_profiles": {
+        "unit_id",
+        "manuscript_id",
+        "parent_unit_id",
+    },
     "manuscript_claim_evidence": {
         "manuscript_id",
         "manuscript_claim_id",
@@ -664,7 +674,7 @@ _PROSE_TEXT_COLUMNS: dict[str, tuple[str, ...]] = {
     "decisions": ("question", "rationale", "chosen", "abandonment_reason", "options"),
     "missions": ("objective", "context", "tasks", "acceptance_criteria"),
     "literature": ("abstract", "notes"),
-    "claims": ("content",),
+    "claims": ("content", "staleness_resolution"),
     "claim_scope_versions": (
         "uncertainty_note",
         "falsifier",
@@ -696,7 +706,7 @@ _PROSE_TEXT_COLUMNS: dict[str, tuple[str, ...]] = {
     ),
     "evidence_locators": ("label", "locator_value"),
     "claim_evidence_relations": ("review_reason", "revocation_reason"),
-    "evidence_clusters": ("label", "synthesis"),
+    "evidence_clusters": ("label", "synthesis", "staleness_resolution"),
     "checkpoints": ("description",),
     "events": ("summary",),
     "manuscript_claim_versions": ("exact_wording", "allowed_wording"),
@@ -755,6 +765,12 @@ _JSON_ID_COLUMNS = {
     "audit_log": ("details",),
     "reference_validation_attestations": ("full_json_payload",),
     "manuscript_claim_versions": ("prohibited_wording",),
+    "manuscript_unit_outline_profiles": (
+        "evidence_plan",
+        "figure_intentions",
+        "table_intentions",
+        "citation_intentions",
+    ),
     "manuscript_planning_branch_events": ("details",),
     "manuscript_planning_artifact_versions": (
         "payload",
@@ -1487,6 +1503,39 @@ class KnowledgePackService(BaseService):
                     f"project or absent from this pack: {log.get('session_id')!r}"
                 )
 
+        manuscript_units = {
+            str(row["id"]): str(row.get("manuscript_id") or "")
+            for row in tables.get("manuscript_units", [])
+            if row.get("id") and row.get("project_id") == project_id
+        }
+        for profile in tables.get("manuscript_unit_outline_profiles", []):
+            unit_id = str(profile.get("unit_id") or "")
+            manuscript_id = str(profile.get("manuscript_id") or "")
+            if unit_id not in manuscript_units:
+                raise ValueError(
+                    "Knowledge pack outline profile contains a unit outside the "
+                    f"project or absent from this pack: {unit_id!r}"
+                )
+            if manuscript_units[unit_id] != manuscript_id:
+                raise ValueError(
+                    "Knowledge pack outline profile manuscript does not match its unit: "
+                    f"{unit_id!r}"
+                )
+            parent_id = profile.get("parent_unit_id")
+            if parent_id is None:
+                continue
+            parent_id = str(parent_id)
+            if parent_id not in manuscript_units:
+                raise ValueError(
+                    "Knowledge pack outline profile contains a parent outside the "
+                    f"project or absent from this pack: {parent_id!r}"
+                )
+            if manuscript_units[parent_id] != manuscript_id:
+                raise ValueError(
+                    "Knowledge pack outline profile parent belongs to a different manuscript: "
+                    f"{parent_id!r}"
+                )
+
     def _remap_tables(
         self,
         tables: dict[str, list[dict[str, Any]]],
@@ -1722,7 +1771,17 @@ class KnowledgePackService(BaseService):
         if isinstance(value, str):
             if value == source_project_id:
                 return target_project_id
-            return id_map.get(value, value)
+            direct = id_map.get(value)
+            if direct is not None:
+                return direct
+            # JSON intention fields and provider payloads may contain IDs in
+            # explanatory strings rather than as whole scalar values. Rewrite
+            # only tokens present in this pack's id_map, preserving all other
+            # prose byte-for-byte.
+            return _EMBEDDED_ID_RE.sub(
+                lambda match: id_map.get(match.group(0), match.group(0)),
+                value,
+            )
         if isinstance(value, list):
             return [
                 self._rewrite_nested_refs(item, id_map, source_project_id, target_project_id)
@@ -1834,8 +1893,7 @@ class KnowledgePackService(BaseService):
                 dependencies = {
                     str(row[key])
                     for key in dependency_keys
-                    if row.get(key) is not None
-                    and str(row[key]) in remaining
+                    if row.get(key) is not None and str(row[key]) in remaining
                 }
                 if dependencies.issubset(placed):
                     ordered.append(row)
@@ -2148,6 +2206,7 @@ class KnowledgePackService(BaseService):
         "semantic_patch_proposal_event_head_mismatch": "critical",
         "semantic_patch_provider_event_chain_invalid": "critical",
         "semantic_patch_payload_invalid": "critical",
+        "outline_hierarchy_invalid": "critical",
         "claim_count_mismatch": "warning",
     }
 
@@ -2158,6 +2217,66 @@ class KnowledgePackService(BaseService):
         non-blocking by default."""
         return cls._SEVERITY_BY_CATEGORY.get(category, "warning")
 
+    async def _outline_hierarchy_integrity_issues(self, project_id: str) -> list[dict]:
+        rows = await self.db.fetchall(
+            """SELECT u.manuscript_id, u.id AS unit_id, u.local_key,
+                      u.status, u.sequence, p.outline_level,
+                      p.parent_unit_id, parent.local_key AS parent_unit_key
+               FROM manuscript_units AS u
+               LEFT JOIN manuscript_unit_outline_profiles AS p
+                 ON p.unit_id = u.id
+                AND p.manuscript_id = u.manuscript_id
+                AND p.project_id = u.project_id
+               LEFT JOIN manuscript_units AS parent
+                 ON parent.id = p.parent_unit_id
+                AND parent.manuscript_id = p.manuscript_id
+                AND parent.project_id = p.project_id
+               WHERE u.project_id = ?
+               ORDER BY u.manuscript_id, u.sequence, u.local_key, u.id""",
+            [project_id],
+        )
+        by_manuscript: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            parent_key = row.get("parent_unit_key")
+            if row.get("parent_unit_id") and parent_key is None:
+                # Preserve the declared reference so a database created with
+                # foreign-key checks disabled still fails closed here.
+                parent_key = f"__missing_parent__:{row['parent_unit_id']}"
+            by_manuscript.setdefault(str(row["manuscript_id"]), []).append(
+                {
+                    "local_key": str(row["local_key"]),
+                    "status": str(row.get("status") or "planned"),
+                    "sequence": int(row.get("sequence") or 0),
+                    "outline_level": int(row.get("outline_level") or 4),
+                    "parent_unit_key": parent_key,
+                }
+            )
+
+        failures: list[dict[str, str]] = []
+        for manuscript_id, units in by_manuscript.items():
+            try:
+                validate_unit_hierarchy(units)
+            except ValueError as exc:
+                failures.append({"manuscript_id": manuscript_id, "reason": str(exc)})
+                if len(failures) >= 50:
+                    break
+        if not failures:
+            return []
+        category = "outline_hierarchy_invalid"
+        return [
+            {
+                "category": category,
+                "severity": self._severity_for(category),
+                "count": len(failures),
+                "ids": [item["manuscript_id"] for item in failures[:10]],
+                "description": "manuscript outlines that violate the canonical hierarchy",
+                "failures": failures[:10],
+                "fix_action": (
+                    "Repair parent/depth/order relationships through a reviewed spine edit"
+                ),
+            }
+        ]
+
     async def check_integrity(self, project_id: str | None = None) -> list[dict]:
         """Verify knowledge base integrity — check for orphaned edges, missing refs, count mismatches.
 
@@ -2167,6 +2286,7 @@ class KnowledgePackService(BaseService):
         """
         pid = project_id or self.project_id
         issues: list[dict] = []
+        issues.extend(await self._outline_hierarchy_integrity_issues(pid))
 
         source_exists = self._typed_entity_link_endpoint_sql(
             type_column="source_type", id_column="source_id"
@@ -2877,7 +2997,7 @@ class KnowledgePackService(BaseService):
             f"""SELECT binding.id
                 FROM manuscript_planning_evidence_bindings AS binding
                 WHERE binding.project_id = ?
-                  AND NOT ({' OR '.join(binding_clauses)})
+                  AND NOT ({" OR ".join(binding_clauses)})
                 LIMIT 50""",
             [pid],
         )

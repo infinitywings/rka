@@ -182,7 +182,7 @@ export function OutlineEditor({
           <Button
             size="sm"
             variant="outline"
-            disabled={!outline.summary.checkpoint_ready || mutations.createCheckpoint.isPending}
+            disabled={!outline.summary.rationale_complete || mutations.createCheckpoint.isPending}
             onClick={() => void createCheckpoint()}
           >
             <CheckCircle2 className="mr-1 h-4 w-4" /> Create Outline checkpoint

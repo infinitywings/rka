@@ -1011,6 +1011,8 @@ export interface ManuscriptOutline {
     complete_units: number
     units_needing_review: number
     levels: number[]
+    rationale_complete: boolean
+    /** @deprecated Use rationale_complete; this does not report checkpoint state. */
     checkpoint_ready: boolean
   }
   policy: {
