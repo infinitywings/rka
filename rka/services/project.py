@@ -231,6 +231,7 @@ class ProjectService(BaseService):
         "manuscript_claim_verification_attestations",
         "manuscript_claim_ratifications",
         "manuscript_claim_evidence",
+        "manuscript_unit_citations",
         "manuscript_unit_evidence",
         "manuscript_claim_units",
         "manuscript_checkpoints",

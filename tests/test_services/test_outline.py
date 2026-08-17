@@ -129,6 +129,62 @@ async def test_outline_projection_joins_rationale_claims_and_evidence(db_with_pr
 
 
 @pytest.mark.asyncio
+async def test_academic_readiness_blocks_only_explicit_claim_bearing_units(
+    db_with_project,
+) -> None:
+    manuscript_id, evidence_id = await _seed_outline(db_with_project)
+    native = NativeManuscriptService(db_with_project, project_id="proj_default")
+    outlines = ManuscriptOutlineService(db_with_project, project_id="proj_default")
+
+    advisory = await outlines.get_outline(manuscript_id)
+    dimensions = {
+        item["name"]: item for item in advisory["academic_readiness"]["dimensions"]
+    }
+    assert advisory["academic_readiness"]["ready"] is True
+    assert dimensions["claim_boundaries"]["verdict"] == "warn"
+    assert dimensions["claim_boundaries"]["blocking"] is False
+    assert dimensions["rhetorical_annotation"]["verdict"] == "warn"
+
+    spine = _spine(evidence_id)
+    spine["units"][0]["unit_role"] = "argument_block"
+    spine["claims"][0]["unit_links"] = [
+        {"unit_key": "METHOD", "relationship": "advances"}
+    ]
+    await native.upsert_argument_spine(
+        manuscript_id,
+        expected_revision=2,
+        spine=spine,
+        actor="pi",
+    )
+    blocked = await outlines.get_outline(manuscript_id)
+    claim_dimension = next(
+        item
+        for item in blocked["academic_readiness"]["dimensions"]
+        if item["name"] == "claim_allocation"
+    )
+    assert blocked["academic_readiness"]["ready"] is False
+    assert claim_dimension["blocking"] is True
+    assert claim_dimension["findings"][0]["unit_key"] == "INTRO"
+
+    spine["units"][0]["unit_role"] = "section"
+    await native.upsert_argument_spine(
+        manuscript_id,
+        expected_revision=3,
+        spine=spine,
+        actor="pi",
+    )
+    container = await outlines.get_outline(manuscript_id)
+    assert container["academic_readiness"]["ready"] is True
+    claim_dimension = next(
+        item
+        for item in container["academic_readiness"]["dimensions"]
+        if item["name"] == "claim_allocation"
+    )
+    assert claim_dimension["verdict"] == "warn"
+    assert claim_dimension["blocking"] is False
+
+
+@pytest.mark.asyncio
 async def test_expand_is_proposal_first_and_inherits_typed_bindings(db_with_project) -> None:
     manuscript_id, evidence_id = await _seed_outline(db_with_project)
     outlines = ManuscriptOutlineService(db_with_project, project_id="proj_default")

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 import pytest
 
 from rka.infra.ids import generate_id
@@ -285,6 +287,394 @@ async def test_spine_upsert_is_atomic_and_versions_wording(db_with_project) -> N
     )
     assert changed["manuscript"]["revision"] == 3
     assert changed["claims"][0]["version"] == 2
+
+
+@pytest.mark.asyncio
+async def test_typed_academic_writing_core_round_trips_and_replays_as_noop(
+    db_with_project,
+) -> None:
+    evidence_id = await _seed_ready_claim(db_with_project)
+    service = NativeManuscriptService(db_with_project, project_id="proj_default")
+    manuscript = await service.create(ManuscriptCreate(title="Typed writing core"))
+    literature_id = await _seed_literature(db_with_project)
+    await service.replace_reference_manifest(
+        manuscript.id,
+        ManuscriptReferenceManifestReplace(
+            expected_revision=1,
+            members=[{"citation_key": "author2025", "literature_id": literature_id}],
+        ),
+    )
+    await _seed_reference_validation(
+        db_with_project,
+        manuscript_id=manuscript.id,
+        literature_id=literature_id,
+        completed_at="2099-01-01T00:00:00Z",
+    )
+
+    spine = _spine(evidence_id)
+    spine["claims"][0]["conditions"] = ["Evaluated local testbed only."]
+    spine["claims"][0]["falsification_criteria"] = [
+        "Repeated trials do not reproduce lower latency."
+    ]
+    spine["units"][0].update(
+        {
+            "unit_role": "result",
+            "rhetorical_move": "present_result",
+            "evidence": {
+                "support": [
+                    {
+                        "evidence_claim_id": evidence_id,
+                        "supported_proposition": "Latency was lower in the testbed.",
+                        "warrant": "The bound observation reports that exact measured contrast.",
+                    }
+                ],
+                "qualifier": [],
+                "counterevidence": [],
+            },
+            "citations": [
+                {
+                    "citation_key": "author2025",
+                    "citation_role": "baseline",
+                    "supported_proposition": "The comparison uses the established baseline.",
+                    "verification_state": "verified",
+                    "comparison_axis": "latency",
+                }
+            ],
+        }
+    )
+    # Typed bindings are authoritative when no legacy membership alias is
+    # supplied.  This also exercises an input shape produced by typed MCP.
+    spine["units"][0].pop("evidence_ids")
+
+    installed = await service.upsert_argument_spine(
+        manuscript.id,
+        expected_revision=2,
+        spine=spine,
+        actor="pi",
+    )
+    assert installed["manuscript"]["revision"] == 3
+    assert installed["claims"][0]["conditions"] == ["Evaluated local testbed only."]
+    assert installed["claims"][0]["falsification_criteria"]
+    unit = installed["units"][0]
+    assert unit["unit_role"] == "result"
+    assert unit["rhetorical_move"] == "present_result"
+    assert unit["evidence"][0]["supported_proposition"] == (
+        "Latency was lower in the testbed."
+    )
+    assert unit["evidence"][0]["warrant"].startswith("The bound observation")
+    assert unit["citations"][0]["citation_role"] == "baseline"
+    assert unit["citations"][0]["verification_current"] is True
+
+    replay = await service.upsert_argument_spine(
+        manuscript.id,
+        expected_revision=3,
+        spine=spine,
+        actor="pi",
+    )
+    assert replay["manuscript"]["revision"] == 3
+
+    revised = deepcopy(spine)
+    revised["units"][0]["evidence"]["support"][0]["warrant"] = (
+        "The current scoped observation measures the exact contrast used here."
+    )
+    changed = await service.upsert_argument_spine(
+        manuscript.id,
+        expected_revision=3,
+        spine=revised,
+        actor="pi",
+    )
+    assert changed["manuscript"]["revision"] == 4
+    assert changed["claims"][0]["version"] == 1
+
+
+@pytest.mark.asyncio
+async def test_invarllm_derived_pilot_preserves_argument_boundaries_and_tradeoffs(
+    db_with_project,
+) -> None:
+    """Exercise the typed core with a disposable slice of a real RKA project.
+
+    The IDs and bounded findings mirror project prj_01KN51HD73DSY9ZR9C56JYRNYZ,
+    but every row below lives only in the isolated test database.  The pilot
+    deliberately keeps the favorable result, its qualifier, and contrary
+    result together so a strength-first draft cannot erase the audit trail.
+    """
+
+    journal_id = generate_id("journal")
+    await db_with_project.execute(
+        """INSERT INTO journal
+           (id, type, content, source, confidence, importance, status, project_id)
+           VALUES (?, 'log', 'Disposable INVARLLM Mission 6 pilot evidence.',
+                   'executor', 'tested', 'high', 'active', 'proj_default')""",
+        [journal_id],
+    )
+    pilot_claims = {
+        "support": (
+            "clm_01KQJG1D4KAEBWFE0MHGKBAQT7",
+            "Path A improved eTaF1 by 4.86 points (5.6x) and precision on HAI 21.03.",
+        ),
+        "qualifier": (
+            "clm_01KQJG1D43ZRJ1CF42QZBX0X8T",
+            "The same run reduced recall and detected three fewer scenarios.",
+        ),
+        "counterevidence": (
+            "clm_01KQJG1D4SKFKCVWEHKSK30305",
+            "The predicted AffF1 recovery did not materialize under the expanded set.",
+        ),
+    }
+    for claim_id, content in pilot_claims.values():
+        await db_with_project.execute(
+            """INSERT INTO claims
+               (id, source_entry_id, claim_type, content, confidence, verified,
+                evidence_status, stale, project_id)
+               VALUES (?, ?, 'result', ?, 0.95, 1, 'supported', 0,
+                       'proj_default')""",
+            [claim_id, journal_id, content],
+        )
+    await db_with_project.commit()
+    for claim_id, _content in pilot_claims.values():
+        await ClaimService(db_with_project, project_id="proj_default").append_scope(
+            claim_id,
+            _reviewed_scope(),
+        )
+
+    service = NativeManuscriptService(db_with_project, project_id="proj_default")
+    manuscript = await service.create(
+        ManuscriptCreate(title="INVARLLM disposable writing pilot")
+    )
+    alarm_title = "ALARM: temporally ordered anomaly-detection evaluation"
+    alarm_id = await _seed_literature(
+        db_with_project,
+        title=alarm_title,
+        doi="10.48550/arXiv.2510.17562",
+    )
+    dataset_id = await _seed_literature(
+        db_with_project,
+        title="NoBoom process-anomaly dataset",
+        doi=None,
+    )
+    await service.replace_reference_manifest(
+        manuscript.id,
+        ManuscriptReferenceManifestReplace(
+            expected_revision=1,
+            members=[
+                {"citation_key": "alarm2025", "literature_id": alarm_id},
+                {"citation_key": "noboom2025", "literature_id": dataset_id},
+            ],
+        ),
+    )
+    await _seed_reference_validation(
+        db_with_project,
+        manuscript_id=manuscript.id,
+        literature_id=alarm_id,
+        input_doi="10.48550/arXiv.2510.17562",
+        input_title=alarm_title,
+        completed_at="2099-01-01T00:00:00Z",
+    )
+
+    support_id = pilot_claims["support"][0]
+    qualifier_id = pilot_claims["qualifier"][0]
+    counterevidence_id = pilot_claims["counterevidence"][0]
+    spine = {
+        "claims": [
+            {
+                "claim_id": "C-EARLY",
+                "claim_type": "empirical",
+                "status": "active",
+                "text": "Path A materially improves early detection in the evaluated setting.",
+                "allowed_wording": (
+                    "Path A materially improves early detection in the evaluated setting."
+                ),
+                "prohibited_wording": [
+                    "Path A is uniformly better on every detection metric and testbed."
+                ],
+                "conditions": [
+                    "HAI 21.03 with the Mission 6 Path A configuration.",
+                    "The result is about early-detection and precision metrics, not universal superiority.",
+                ],
+                "falsification_criteria": [
+                    "A protocol-matched rerun fails to reproduce the eTaF1 direction."
+                ],
+                "evidence_ids": [support_id],
+                "qualifier_ids": [qualifier_id],
+                "counterevidence_ids": [counterevidence_id],
+                "unit_links": [
+                    {"unit_key": "INTRO.PROMISE", "relationship": "advances"},
+                    {"unit_key": "RESULTS.TRADEOFF", "relationship": "tests"},
+                ],
+            }
+        ],
+        "units": [
+            {
+                "unit_id": "INTRO.PROMISE",
+                "kind": "introduction",
+                "location": "sections/introduction.tex#promise",
+                "title": "Promise earlier, more precise detection",
+                "sequence": 0,
+                "outline_level": 3,
+                "unit_role": "argument_block",
+                "rhetorical_move": "state_contribution",
+                "communicative_job": "State the strongest bounded paper promise.",
+                "intended_takeaway": "The method improves a security-relevant timing objective.",
+                "evidence": {
+                    "support": [
+                        {
+                            "evidence_claim_id": support_id,
+                            "supported_proposition": "Early detection improved on HAI 21.03.",
+                            "warrant": "The Mission 6 result measures eTaF1 under the claimed configuration.",
+                        }
+                    ],
+                    "qualifier": [],
+                    "counterevidence": [],
+                },
+                "citations": [
+                    {
+                        "citation_key": "alarm2025",
+                        "citation_role": "baseline",
+                        "supported_proposition": "eTaF1 captures temporally ordered detection quality.",
+                        "verification_state": "verified",
+                        "comparison_axis": "early detection",
+                    }
+                ],
+            },
+            {
+                "unit_id": "RESULTS.TRADEOFF",
+                "kind": "result",
+                "location": "sections/results.tex#tradeoff",
+                "title": "Separate the early-detection gain from metric tradeoffs",
+                "sequence": 10,
+                "outline_level": 3,
+                "unit_role": "result",
+                "rhetorical_move": "interpret_result",
+                "artifact_ref": "artifacts/mission-6/path-a-metrics.csv",
+                "allowed_interpretation": (
+                    "Path A improved early-detection and precision metrics in the evaluated setting."
+                ),
+                "prohibited_interpretation": (
+                    "Path A dominates every metric, testbed, and operating point."
+                ),
+                "communicative_job": "Present the favorable result with its exact boundary.",
+                "intended_takeaway": "The gain is meaningful but metric-specific.",
+                "evidence": {
+                    "support": [
+                        {
+                            "evidence_claim_id": support_id,
+                            "supported_proposition": "eTaF1 and precision improved.",
+                            "warrant": "The result records the exact protocol-matched deltas.",
+                        }
+                    ],
+                    "qualifier": [
+                        {
+                            "evidence_claim_id": qualifier_id,
+                            "supported_proposition": "Recall and scenario coverage declined.",
+                            "warrant": "The same run reports both losses alongside the gain.",
+                        }
+                    ],
+                    "counterevidence": [
+                        {
+                            "evidence_claim_id": counterevidence_id,
+                            "supported_proposition": "AffF1 recovery was not reproduced.",
+                            "warrant": "The expanded-set evaluation falsified the earlier AffF1 forecast.",
+                        }
+                    ],
+                },
+                "citations": [
+                    {
+                        "citation_key": "noboom2025",
+                        "citation_role": "bounds",
+                        "supported_proposition": "The planned extension uses process-anomaly data.",
+                        "verification_state": "self_attested",
+                        "comparison_axis": "testbed scope",
+                    }
+                ],
+            },
+        ],
+    }
+
+    installed = await service.upsert_argument_spine(
+        manuscript.id,
+        expected_revision=2,
+        spine=spine,
+        actor="pi",
+    )
+    result_unit = next(
+        unit for unit in installed["units"] if unit["local_key"] == "RESULTS.TRADEOFF"
+    )
+    assert {item["role"] for item in result_unit["evidence"]} == {
+        "support",
+        "qualifier",
+        "counterevidence",
+    }
+    assert installed["claims"][0]["conditions"] == spine["claims"][0]["conditions"]
+    assert installed["claims"][0]["falsification_criteria"]
+
+    from rka.services.outline import ManuscriptOutlineService
+
+    outline = await ManuscriptOutlineService(
+        db_with_project,
+        project_id="proj_default",
+    ).get_outline(manuscript.id)
+    readiness = outline["academic_readiness"]
+    dimensions = {item["name"]: item for item in readiness["dimensions"]}
+    assert readiness["ready"] is True
+    assert dimensions["claim_boundaries"]["verdict"] == "pass"
+    assert dimensions["evidence_use_explanation"]["verdict"] == "pass"
+    assert dimensions["rhetorical_annotation"]["verdict"] == "pass"
+    assert dimensions["citation_support"]["verdict"] == "warn"
+    assert dimensions["citation_support"]["findings"][0]["citation_key"] == (
+        "noboom2025"
+    )
+
+    replay = await service.upsert_argument_spine(
+        manuscript.id,
+        expected_revision=3,
+        spine=spine,
+        actor="pi",
+    )
+    assert replay["manuscript"]["revision"] == 3
+
+
+@pytest.mark.asyncio
+async def test_verified_citation_use_requires_current_matching_validation(
+    db_with_project,
+) -> None:
+    evidence_id = await _seed_ready_claim(db_with_project)
+    service = NativeManuscriptService(db_with_project, project_id="proj_default")
+    manuscript = await service.create(ManuscriptCreate(title="Citation validation gate"))
+    literature_id = await _seed_literature(db_with_project)
+    await service.replace_reference_manifest(
+        manuscript.id,
+        ManuscriptReferenceManifestReplace(
+            expected_revision=1,
+            members=[{"citation_key": "unverified2025", "literature_id": literature_id}],
+        ),
+    )
+    spine = _spine(evidence_id)
+    spine["units"][0]["citations"] = [
+        {
+            "citation_key": "unverified2025",
+            "citation_role": "imports",
+            "supported_proposition": "The unit imports the prior definition.",
+            "verification_state": "verified",
+        }
+    ]
+    with pytest.raises(ValueError, match="current matching reference validation"):
+        await service.upsert_argument_spine(
+            manuscript.id,
+            expected_revision=2,
+            spine=spine,
+            actor="pi",
+        )
+
+    spine["units"][0]["citations"][0]["verification_state"] = "self_attested"
+    accepted = await service.upsert_argument_spine(
+        manuscript.id,
+        expected_revision=2,
+        spine=spine,
+        actor="pi",
+    )
+    assert accepted["units"][0]["citations"][0]["verification_state"] == (
+        "self_attested"
+    )
 
 
 @pytest.mark.asyncio

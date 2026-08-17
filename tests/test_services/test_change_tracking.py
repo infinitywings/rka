@@ -298,6 +298,60 @@ async def test_canonical_reference_attestation_is_manuscript_wide(db) -> None:
 
 
 @pytest.mark.asyncio
+async def test_typed_citation_change_maps_to_exact_unit_and_adjacent_claim(db) -> None:
+    project_id = "prj_citation_impact"
+    await _seed_project(db, project_id)
+    await _seed_core_claim(
+        db,
+        project_id=project_id,
+        journal_id="jrn_bound",
+        claim_id="clm_bound",
+    )
+    await _seed_native_manuscript(db, project_id)
+    await db.execute(
+        """INSERT INTO literature
+           (id, title, authors, year, doi, status, added_by, project_id)
+           VALUES ('lit_cursor', 'Prior baseline', '[]', 2025,
+                   '10.1000/cursor', 'cited', 'pi', ?)""",
+        [project_id],
+    )
+    await db.execute(
+        """INSERT INTO manuscript_reference_members
+           (id, manuscript_id, project_id, citation_key, literature_id)
+           VALUES ('mrf_cursor', 'man_cursor', ?, 'prior2025', 'lit_cursor')""",
+        [project_id],
+    )
+    await db.commit()
+    baseline = await _latest_cursor(db)
+
+    await db.execute(
+        """INSERT INTO manuscript_unit_citations
+           (id, manuscript_id, project_id, unit_id, reference_member_id,
+            citation_role, supported_proposition, verification_state)
+           VALUES ('muc_cursor', 'man_cursor', ?, 'mun_cursor', 'mrf_cursor',
+                   'baseline', 'The result uses the prior baseline.',
+                   'self_attested')""",
+        [project_id],
+    )
+    await db.commit()
+
+    impact = await ChangeTrackingService(
+        db, project_id=project_id
+    ).get_manuscript_impact("man_cursor", since_cursor=baseline)
+    assert impact["impact_state"] == "relevant_changes"
+    assert [item["id"] for item in impact["affected_units"]] == ["mun_cursor"]
+    assert [item["id"] for item in impact["affected_manuscript_claims"]] == [
+        "mcl_cursor"
+    ]
+    citation_change = next(
+        item
+        for item in impact["relevant_changes"]
+        if item["entity_type"] == "manuscript_citation"
+    )
+    assert citation_change["affected_unit_ids"] == ["mun_cursor"]
+
+
+@pytest.mark.asyncio
 async def test_active_reference_literature_change_is_manuscript_wide(db) -> None:
     project_id = "prj_reference_literature_impact"
     await _seed_project(db, project_id)

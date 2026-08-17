@@ -165,13 +165,17 @@ from rka.mcp._enums import (  # noqa: E402, F811
     ManuscriptClaimKindLit,
     ManuscriptClaimStateLit,
     ManuscriptClaimUnitRelationshipLit,
+    ManuscriptCitationRoleLit,
+    ManuscriptCitationVerificationStateLit,
     ManuscriptEvidenceRoleLit,
     ManuscriptInitialPhaseLit,
     ManuscriptInitialStateLit,
     ManuscriptOutlineActionLit,
     ManuscriptReadinessPhaseLit,
+    ManuscriptRhetoricalMoveLit,
     ManuscriptStateLit,
     ManuscriptUnitKindLit,
+    ManuscriptUnitRoleLit,
     ManuscriptUnitStatusLit,
     ManuscriptVerificationDimensionVerdictLit,
     ManuscriptVerificationVerdictLit,
@@ -1926,6 +1930,58 @@ class _ManuscriptSpineEvidenceArgs(BaseModel):
         return self
 
 
+class _ManuscriptSpineEvidenceUseArgs(BaseModel):
+    """One unit-local use of an RKA evidence claim."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_claim_id: Annotated[str, Field(pattern=r"^clm_")]
+    supported_proposition: Annotated[Optional[str], Field(min_length=1)] = None
+    warrant: Annotated[Optional[str], Field(min_length=1)] = None
+
+
+class _ManuscriptSpineUnitEvidenceArgs(BaseModel):
+    """Evidence-use buckets; strings remain a compatibility input."""
+
+    model_config = ConfigDict(extra="forbid", use_enum_values=True)
+
+    support: list[Union[str, _ManuscriptSpineEvidenceUseArgs]] = Field(
+        default_factory=list
+    )
+    qualifier: list[Union[str, _ManuscriptSpineEvidenceUseArgs]] = Field(
+        default_factory=list
+    )
+    counterevidence: list[Union[str, _ManuscriptSpineEvidenceUseArgs]] = Field(
+        default_factory=list
+    )
+
+    @model_validator(mode="after")
+    def _require_unique_claim_ids(self) -> "_ManuscriptSpineUnitEvidenceArgs":
+        for role in ManuscriptEvidenceRoleLit.__args__:
+            values = getattr(self, role)
+            ids = [
+                value if isinstance(value, str) else value.evidence_claim_id
+                for value in values
+            ]
+            if len(ids) != len(set(ids)):
+                raise ValueError(f"duplicate evidence ID in {role}")
+            if any(not value.startswith("clm_") for value in ids):
+                raise ValueError(f"{role} evidence must contain only clm_ IDs")
+        return self
+
+
+class _ManuscriptSpineCitationUseArgs(BaseModel):
+    """One typed use of an existing manuscript reference member."""
+
+    model_config = ConfigDict(extra="forbid", use_enum_values=True)
+
+    citation_key: Annotated[str, Field(min_length=1)]
+    citation_role: ManuscriptCitationRoleLit
+    supported_proposition: Annotated[str, Field(min_length=1)]
+    verification_state: ManuscriptCitationVerificationStateLit = "unverified"
+    comparison_axis: Annotated[Optional[str], Field(min_length=1)] = None
+
+
 class _ManuscriptSpineUnitLinkArgs(BaseModel):
     """Typed claim-to-unit relationship in an argument-spine replacement."""
 
@@ -1949,6 +2005,10 @@ class _ManuscriptSpineClaimArgs(BaseModel):
     exact_wording: Annotated[str, Field(min_length=1)]
     allowed_wording: Annotated[str, Field(min_length=1)]
     prohibited_wording: Annotated[list[str], Field(min_length=1)]
+    conditions: list[Annotated[str, Field(min_length=1)]] = Field(default_factory=list)
+    falsification_criteria: list[Annotated[str, Field(min_length=1)]] = Field(
+        default_factory=list
+    )
     evidence: _ManuscriptSpineEvidenceArgs = Field(default_factory=_ManuscriptSpineEvidenceArgs)
     unit_links: list[_ManuscriptSpineUnitLinkArgs] = Field(default_factory=list)
 
@@ -1976,7 +2036,23 @@ class _ManuscriptSpineUnitArgs(BaseModel):
     prohibited_interpretation: Optional[str] = None
     sequence: Annotated[int, Field(ge=0)] = 0
     status: ManuscriptUnitStatusLit = "planned"
-    evidence: _ManuscriptSpineEvidenceArgs = Field(default_factory=_ManuscriptSpineEvidenceArgs)
+    outline_level: Annotated[int, Field(ge=2, le=5)] = 4
+    unit_role: ManuscriptUnitRoleLit = "unspecified"
+    rhetorical_move: ManuscriptRhetoricalMoveLit = "unspecified"
+    parent_unit_key: Optional[str] = None
+    communicative_job: Optional[str] = None
+    intended_takeaway: Optional[str] = None
+    transition_from_previous: Optional[str] = None
+    quick_reader_role: Optional[str] = None
+    evidence_plan: list[str] = Field(default_factory=list)
+    figure_intentions: list[str] = Field(default_factory=list)
+    table_intentions: list[str] = Field(default_factory=list)
+    citation_intentions: list[str] = Field(default_factory=list)
+    blocker: Optional[str] = None
+    evidence: _ManuscriptSpineUnitEvidenceArgs = Field(
+        default_factory=_ManuscriptSpineUnitEvidenceArgs
+    )
+    citations: list[_ManuscriptSpineCitationUseArgs] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _require_result_boundaries(self) -> "_ManuscriptSpineUnitArgs":

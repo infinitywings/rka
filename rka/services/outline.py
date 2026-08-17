@@ -79,6 +79,7 @@ class ManuscriptOutlineService(BaseService):
         ]
         latest_checkpoint = checkpoints[-1] if checkpoints else None
         rationale_complete = bool(projected) and blocker_count == 0
+        academic_readiness = self._academic_readiness(projected, context["claims"])
         return {
             "schema_version": "rka.manuscript-outline/v1",
             "project_id": self.project_id,
@@ -86,6 +87,7 @@ class ManuscriptOutlineService(BaseService):
             "manuscript_revision": context["manuscript"]["revision"],
             "units": projected,
             "outline_checkpoint": latest_checkpoint,
+            "academic_readiness": academic_readiness,
             "summary": {
                 "active_units": len(projected),
                 "complete_units": len(projected) - blocker_count,
@@ -102,6 +104,193 @@ class ManuscriptOutlineService(BaseService):
                 "checkpoint_resolution": "explicit_pi_decision",
                 "deprecated_fields": {"summary.checkpoint_ready": "summary.rationale_complete"},
                 "file_writes": False,
+            },
+        }
+
+    @staticmethod
+    def _academic_readiness(
+        units: list[dict[str, Any]],
+        claims: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Compute deterministic academic-writing readiness without model judgment."""
+
+        dimensions: list[dict[str, Any]] = []
+
+        def add_dimension(
+            name: str,
+            findings: list[dict[str, Any]],
+            *,
+            applicable: bool = True,
+        ) -> None:
+            dimensions.append(
+                {
+                    "name": name,
+                    "verdict": (
+                        "not_applicable"
+                        if not applicable
+                        else "warn"
+                        if findings
+                        else "pass"
+                    ),
+                    "blocking": any(item.get("blocking") is True for item in findings),
+                    "findings": findings,
+                }
+            )
+
+        structure_findings = []
+        if not units:
+            structure_findings.append(
+                {
+                    "code": "OUTLINE_EMPTY",
+                    "message": "the manuscript has no active outline units",
+                    "blocking": True,
+                }
+            )
+        add_dimension("structure", structure_findings)
+
+        claim_required_roles = {"argument_block", "paragraph_plan", "result"}
+        claim_findings = []
+        for unit in units:
+            if unit.get("claims"):
+                continue
+            unit_role = unit.get("unit_role") or "unspecified"
+            claim_findings.append(
+                {
+                    "code": "UNIT_CLAIM_UNALLOCATED",
+                    "message": "active unit has no manuscript claim allocation",
+                    "unit_id": unit["id"],
+                    "unit_key": unit["local_key"],
+                    # Structural containers and as-yet-unclassified legacy
+                    # rows may legitimately carry no direct claim.  A missing
+                    # allocation blocks only where the explicit academic role
+                    # promises a claim-bearing unit.
+                    "blocking": unit_role in claim_required_roles,
+                }
+            )
+        add_dimension("claim_allocation", claim_findings, applicable=bool(units))
+
+        evidence_presence = []
+        explanation_findings = []
+        for unit in units:
+            support = [item for item in unit.get("evidence", []) if item.get("role") == "support"]
+            if unit.get("claims") and not support:
+                evidence_presence.append(
+                    {
+                        "code": "UNIT_SUPPORT_MISSING",
+                        "message": "claim-carrying unit has no support binding",
+                        "unit_id": unit["id"],
+                        "unit_key": unit["local_key"],
+                        "blocking": unit.get("kind") == "result"
+                        or unit.get("unit_role") == "result",
+                    }
+                )
+            for item in unit.get("evidence", []):
+                missing = [
+                    field
+                    for field in ("supported_proposition", "warrant")
+                    if not str(item.get(field) or "").strip()
+                ]
+                if missing:
+                    explanation_findings.append(
+                        {
+                            "code": "EVIDENCE_USE_UNEXPLAINED",
+                            "message": "evidence use lacks " + " and ".join(missing),
+                            "unit_id": unit["id"],
+                            "unit_key": unit["local_key"],
+                            "evidence_claim_id": item.get("evidence_claim_id"),
+                            "role": item.get("role"),
+                            "blocking": False,
+                        }
+                    )
+        add_dimension("evidence_presence", evidence_presence, applicable=bool(units))
+        add_dimension(
+            "evidence_use_explanation",
+            explanation_findings,
+            applicable=any(unit.get("evidence") for unit in units),
+        )
+
+        boundary_findings = []
+        active_claims = [claim for claim in claims if claim.get("state") == "active"]
+        for claim in active_claims:
+            missing = []
+            if not claim.get("conditions"):
+                missing.append("conditions")
+            if not claim.get("falsification_criteria"):
+                missing.append("falsification criteria")
+            if missing:
+                boundary_findings.append(
+                    {
+                        "code": "CLAIM_BOUNDARY_INCOMPLETE",
+                        "message": "active claim lacks " + " and ".join(missing),
+                        "claim_id": claim["id"],
+                        "claim_key": claim["local_key"],
+                        "blocking": False,
+                    }
+                )
+        add_dimension("claim_boundaries", boundary_findings, applicable=bool(active_claims))
+
+        citation_findings = []
+        citation_applicable = False
+        for unit in units:
+            citations = unit.get("citations", [])
+            citation_applicable = citation_applicable or bool(
+                citations or unit.get("citation_intentions")
+            )
+            if unit.get("citation_intentions") and not citations:
+                citation_findings.append(
+                    {
+                        "code": "CITATION_INTENTION_UNTYPED",
+                        "message": "free-text citation intention has no typed citation use",
+                        "unit_id": unit["id"],
+                        "unit_key": unit["local_key"],
+                        "blocking": False,
+                    }
+                )
+            for citation in citations:
+                if (
+                    citation.get("verification_state") != "verified"
+                    or citation.get("verification_current") is not True
+                ):
+                    citation_findings.append(
+                        {
+                            "code": "CITATION_USE_NOT_VERIFIED",
+                            "message": "citation use is not backed by current verified identity",
+                            "unit_id": unit["id"],
+                            "unit_key": unit["local_key"],
+                            "citation_id": citation.get("id"),
+                            "citation_key": citation.get("citation_key"),
+                            "blocking": False,
+                        }
+                    )
+        add_dimension("citation_support", citation_findings, applicable=citation_applicable)
+
+        rhetorical_findings = []
+        for unit in units:
+            missing = []
+            if unit.get("unit_role") in {None, "unspecified"}:
+                missing.append("unit role")
+            if unit.get("rhetorical_move") in {None, "unspecified"}:
+                missing.append("rhetorical move")
+            if missing:
+                rhetorical_findings.append(
+                    {
+                        "code": "RHETORICAL_ANNOTATION_MISSING",
+                        "message": "unit lacks " + " and ".join(missing),
+                        "unit_id": unit["id"],
+                        "unit_key": unit["local_key"],
+                        "blocking": False,
+                    }
+                )
+        add_dimension("rhetorical_annotation", rhetorical_findings, applicable=bool(units))
+
+        return {
+            "schema_version": "rka.academic-readiness/v2",
+            "ready": not any(dimension["blocking"] for dimension in dimensions),
+            "dimensions": dimensions,
+            "policy": {
+                "deterministic_only": True,
+                "judgment_checks": "advisory_only",
+                "verdicts": ["pass", "warn", "not_applicable"],
             },
         }
 
@@ -222,6 +411,7 @@ class ManuscriptOutlineService(BaseService):
             "qualifier_ids": set(parent.get("qualifier_ids") or []),
             "counterevidence_ids": set(parent.get("counterevidence_ids") or []),
         }
+        parent_evidence_uses = parent.get("evidence") or {}
 
         inserted: list[dict[str, Any]] = []
         for child in data.children:
@@ -258,6 +448,8 @@ class ManuscriptOutlineService(BaseService):
                 "sequence": int(parent["sequence"]) + len(inserted) + 1,
                 "status": "planned",
                 "outline_level": parent_level + 1,
+                "unit_role": child.unit_role,
+                "rhetorical_move": child.rhetorical_move,
                 "parent_unit_key": parent["unit_id"],
                 "communicative_job": child.communicative_job,
                 "intended_takeaway": child.intended_takeaway,
@@ -269,10 +461,23 @@ class ManuscriptOutlineService(BaseService):
                 "citation_intentions": child.citation_intentions,
                 "blocker": child.blocker,
                 "evidence": {
-                    "support": selected_evidence["support_ids"],
-                    "qualifier": selected_evidence["qualifier_ids"],
-                    "counterevidence": selected_evidence["counterevidence_ids"],
+                    role: [
+                        use
+                        for use in parent_evidence_uses.get(role, [])
+                        if use.get("evidence_claim_id")
+                        in selected_evidence[
+                            {
+                                "support": "support_ids",
+                                "qualifier": "qualifier_ids",
+                                "counterevidence": "counterevidence_ids",
+                            }[role]
+                        ]
+                    ]
+                    for role in ("support", "qualifier", "counterevidence")
                 },
+                # Citation support is unit-specific authorial intent.  Expansion
+                # never silently attributes the parent's citations to a child.
+                "citations": [],
             }
             new_unit.pop("claim_ids", None)
             inserted.append(new_unit)
@@ -330,17 +535,20 @@ class ManuscriptOutlineService(BaseService):
             if unit["parent_unit_key"] in selected and unit["unit_id"] not in selected:
                 raise ValueError("condense must include active descendants of every removed unit")
 
-        for evidence_field in ("evidence_ids", "qualifier_ids", "counterevidence_ids"):
-            parent[evidence_field] = sorted(
-                {
-                    *(parent.get(evidence_field) or []),
-                    *(
-                        value
-                        for unit in selected.values()
-                        for value in unit.get(evidence_field) or []
-                    ),
-                }
-            )
+        for role, evidence_field in (
+            ("support", "evidence_ids"),
+            ("qualifier", "qualifier_ids"),
+            ("counterevidence", "counterevidence_ids"),
+        ):
+            by_id = {
+                str(use["evidence_claim_id"]): use
+                for use in (parent.get("evidence") or {}).get(role, [])
+            }
+            for unit in selected.values():
+                for use in (unit.get("evidence") or {}).get(role, []):
+                    by_id.setdefault(str(use["evidence_claim_id"]), use)
+            parent.setdefault("evidence", {})[role] = [by_id[key] for key in sorted(by_id)]
+            parent[evidence_field] = sorted(by_id)
         for plan_field in (
             "evidence_plan",
             "figure_intentions",
@@ -359,6 +567,23 @@ class ManuscriptOutlineService(BaseService):
                     ]
                 )
             )
+        citation_by_identity = {
+            (
+                str(item["citation_key"]).casefold(),
+                str(item["citation_role"]),
+                str(item["supported_proposition"]),
+            ): item
+            for item in parent.get("citations", [])
+        }
+        for unit in selected.values():
+            for item in unit.get("citations", []):
+                identity = (
+                    str(item["citation_key"]).casefold(),
+                    str(item["citation_role"]),
+                    str(item["supported_proposition"]),
+                )
+                citation_by_identity.setdefault(identity, item)
+        parent["citations"] = [citation_by_identity[key] for key in sorted(citation_by_identity)]
         selected_keys = set(selected)
         for claim in claims:
             links = claim.setdefault("unit_links", [])

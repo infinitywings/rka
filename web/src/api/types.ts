@@ -929,6 +929,32 @@ export interface ManuscriptEvidenceBinding {
   scope_readiness?: ClaimScopeReadiness
   scope_contract?: ClaimScopeVersion | null
   scope_findings?: ClaimScopeFinding[]
+  supported_proposition?: string | null
+  warrant?: string | null
+}
+
+export type ManuscriptUnitRole =
+  | "unspecified" | "section" | "argument_block" | "paragraph_plan"
+  | "result" | "caption" | "appendix" | "other"
+
+export type ManuscriptRhetoricalMove =
+  | "unspecified" | "frame_problem" | "establish_gap" | "state_insight"
+  | "explain_mechanism" | "address_challenge" | "present_innovation"
+  | "pose_research_question" | "state_contribution" | "describe_method"
+  | "present_result" | "interpret_result" | "compare_prior_work"
+  | "state_limitation" | "transition" | "summarize" | "other"
+
+export interface ManuscriptCitationUse {
+  id?: string
+  reference_member_id?: string
+  literature_id?: string
+  citation_key: string
+  citation_role: "imports" | "bounds" | "baseline" | "extends" | "refutes"
+  supported_proposition: string
+  verification_state: "unverified" | "self_attested" | "verified" | "rejected"
+  verification_current?: boolean
+  comparison_axis: string | null
+  stable_identifier?: string | null
 }
 
 export interface ManuscriptClaimContext {
@@ -940,6 +966,8 @@ export interface ManuscriptClaimContext {
   exact_wording: string | null
   allowed_wording: string | null
   prohibited_wording: string[]
+  conditions: string[]
+  falsification_criteria: string[]
   evidence: ManuscriptEvidenceBinding[]
   ratifications: Array<{
     decision_id: string
@@ -972,6 +1000,8 @@ export interface ManuscriptUnitContext {
   evidence: ManuscriptEvidenceBinding[]
   artifact_binding?: Record<string, unknown>
   outline_level: number
+  unit_role: ManuscriptUnitRole
+  rhetorical_move: ManuscriptRhetoricalMove
   parent_unit_key: string | null
   communicative_job: string | null
   intended_takeaway: string | null
@@ -982,6 +1012,7 @@ export interface ManuscriptUnitContext {
   table_intentions: string[]
   citation_intentions: string[]
   blocker: string | null
+  citations: ManuscriptCitationUse[]
 }
 
 export interface ManuscriptOutlineClaimLink {
@@ -1006,6 +1037,32 @@ export interface ManuscriptOutline {
   manuscript_revision: number
   units: ManuscriptOutlineUnit[]
   outline_checkpoint: Record<string, unknown> | null
+  academic_readiness: {
+    schema_version: "rka.academic-readiness/v2"
+    ready: boolean
+    dimensions: Array<{
+      name: string
+      verdict: "pass" | "warn" | "not_applicable"
+      blocking: boolean
+      findings: Array<{
+        code: string
+        message: string
+        blocking: boolean
+        unit_id?: string
+        unit_key?: string
+        claim_id?: string
+        claim_key?: string
+        evidence_claim_id?: string
+        citation_id?: string
+        citation_key?: string
+      }>
+    }>
+    policy: {
+      deterministic_only: true
+      judgment_checks: "advisory_only"
+      verdicts: Array<"pass" | "warn" | "not_applicable">
+    }
+  }
   summary: {
     active_units: number
     complete_units: number
@@ -1027,6 +1084,8 @@ export interface OutlineUnitPatch {
   title?: string | null
   location?: string
   outline_level?: number
+  unit_role?: ManuscriptUnitRole
+  rhetorical_move?: ManuscriptRhetoricalMove
   parent_unit_key?: string | null
   communicative_job?: string | null
   intended_takeaway?: string | null
@@ -1043,6 +1102,8 @@ export interface OutlineChildDraft {
   local_key: string
   title: string
   location: string
+  unit_role?: ManuscriptUnitRole
+  rhetorical_move?: ManuscriptRhetoricalMove
   communicative_job: string
   intended_takeaway: string
   transition_from_previous?: string | null
@@ -1108,6 +1169,8 @@ export interface ManuscriptSpineClaim {
   text: string | null
   allowed_wording: string | null
   prohibited_wording: string[]
+  conditions: string[]
+  falsification_criteria: string[]
   ratified_by: string | null
   evidence_ids: string[]
   qualifier_ids: string[]
@@ -1125,9 +1188,19 @@ export interface ManuscriptSpineUnit {
   prohibited_interpretation: string | null
   status: string
   evidence_ids: string[]
+  qualifier_ids: string[]
+  counterevidence_ids: string[]
+  evidence: {
+    support: Array<Pick<ManuscriptEvidenceBinding, "evidence_claim_id" | "supported_proposition" | "warrant">>
+    qualifier: Array<Pick<ManuscriptEvidenceBinding, "evidence_claim_id" | "supported_proposition" | "warrant">>
+    counterevidence: Array<Pick<ManuscriptEvidenceBinding, "evidence_claim_id" | "supported_proposition" | "warrant">>
+  }
+  citations: ManuscriptCitationUse[]
   claim_ids: string[]
   sequence: number
   outline_level: number
+  unit_role: ManuscriptUnitRole
+  rhetorical_move: ManuscriptRhetoricalMove
   parent_unit_key: string | null
   communicative_job: string | null
   intended_takeaway: string | null

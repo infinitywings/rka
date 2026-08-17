@@ -31,6 +31,25 @@ function checkpointStatus(outline: ManuscriptOutline): string {
   return String(outline.outline_checkpoint?.status ?? "not created")
 }
 
+const UNIT_ROLES = [
+  "unspecified", "section", "argument_block", "paragraph_plan", "result",
+  "caption", "appendix", "other",
+] as const
+
+const RHETORICAL_MOVES = [
+  "unspecified", "frame_problem", "establish_gap", "state_insight",
+  "explain_mechanism", "address_challenge", "present_innovation",
+  "pose_research_question", "state_contribution", "describe_method",
+  "present_result", "interpret_result", "compare_prior_work",
+  "state_limitation", "transition", "summarize", "other",
+] as const
+
+function humanize(value: string): string {
+  return value.replaceAll("_", " ")
+}
+
+const selectClassName = "h-8 w-full rounded-lg border border-input bg-background px-2.5 text-sm"
+
 export function OutlineEditor({
   outline,
   onInspect,
@@ -75,6 +94,11 @@ export function OutlineEditor({
   )
   const ordered = draftOrder.map((key) => byKey.get(key)).filter(Boolean) as ManuscriptOutlineUnit[]
   const orderChanged = draftOrder.some((key, index) => canonicalOrder[index] !== key)
+  const readinessFindings = outline.academic_readiness.dimensions.flatMap((dimension) =>
+    dimension.findings.map((finding) => ({ ...finding, dimension: dimension.name })),
+  )
+  const nextReadinessFinding = readinessFindings.find((finding) => finding.blocking)
+    ?? readinessFindings[0]
 
   const prepare = async (request: Parameters<typeof mutations.prepare.mutateAsync>[0]) => {
     try {
@@ -168,6 +192,38 @@ export function OutlineEditor({
         </div>
       </div>
 
+      <div className="rounded-lg border bg-card p-3 text-xs">
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="font-medium">Academic readiness</p>
+          <Badge variant={outline.academic_readiness.ready ? "secondary" : "destructive"}>
+            {outline.academic_readiness.ready ? "structurally ready" : "structural gap"}
+          </Badge>
+          {outline.academic_readiness.dimensions.map((dimension) => (
+            <Badge key={dimension.name} variant={dimension.blocking ? "destructive" : "outline"}>
+              {humanize(dimension.name)} · {humanize(dimension.verdict)}
+            </Badge>
+          ))}
+        </div>
+        <p className="mt-2 text-muted-foreground">
+          {nextReadinessFinding
+            ? `Next ${nextReadinessFinding.blocking ? "required" : "advisory"} gap: ${nextReadinessFinding.message}${nextReadinessFinding.unit_key ? ` (${nextReadinessFinding.unit_key})` : ""}.`
+            : "All deterministic academic-structure checks pass. Rhetorical and venue judgment remain advisory."}
+        </p>
+        {readinessFindings.length > 0 && (
+          <details className="mt-2">
+            <summary className="cursor-pointer font-medium">Review all {readinessFindings.length} findings</summary>
+            <ul className="mt-2 space-y-1 pl-4 text-muted-foreground">
+              {readinessFindings.map((finding, index) => (
+                <li key={`${finding.code}:${finding.unit_id ?? finding.claim_id ?? index}`}>
+                  <strong className="text-foreground">{humanize(finding.dimension)}:</strong> {finding.message}
+                  {finding.unit_key ? ` · ${finding.unit_key}` : finding.claim_key ? ` · ${finding.claim_key}` : ""}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+      </div>
+
       <div className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-950 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-100">
         <div className="max-w-3xl">
           <p className="font-medium">Proposal-first outline editing</p>
@@ -209,6 +265,8 @@ export function OutlineEditor({
                   <ListTree className="h-4 w-4 text-muted-foreground" />
                   <h3 className="text-sm font-semibold">{unit.local_key} · {unit.title ?? unit.kind}</h3>
                   <Badge variant="outline">L{unit.outline_level}</Badge>
+                  <Badge variant="outline">{humanize(unit.unit_role)}</Badge>
+                  <Badge variant="outline">{humanize(unit.rhetorical_move)}</Badge>
                   <Badge variant={unit.completeness === "complete" ? "secondary" : "destructive"}>
                     {unit.completeness.replaceAll("_", " ")}
                   </Badge>
@@ -220,6 +278,7 @@ export function OutlineEditor({
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {unit.claims.map((claim) => <Badge key={`${unit.id}:${claim.claim_id}`} variant="outline">{claim.claim_key} · {claim.relationship}</Badge>)}
                   <Badge variant="outline">{evidenceIds.length} evidence bindings</Badge>
+                  <Badge variant="outline">{unit.citations.length} citation uses</Badge>
                   <Badge variant="outline">{unit.evidence_plan.length} evidence-plan items</Badge>
                   {unit.missing.map((missing) => (
                     <Badge key={missing} variant="destructive">
@@ -229,6 +288,34 @@ export function OutlineEditor({
                     </Badge>
                   ))}
                 </div>
+                {(unit.evidence.length > 0 || unit.citations.length > 0) && (
+                  <details className="mt-3 rounded-md border bg-muted/10 p-2 text-xs">
+                    <summary className="cursor-pointer font-medium">Academic support</summary>
+                    <div className="mt-2 space-y-3">
+                      {unit.evidence.map((item) => (
+                        <div key={`${item.role}:${item.evidence_claim_id}`} className="rounded border p-2">
+                          <div className="flex flex-wrap gap-1">
+                            <Badge variant="outline">{item.role}</Badge>
+                            <code className="text-[10px]">{item.evidence_claim_id}</code>
+                          </div>
+                          <p className="mt-1"><strong>Supports:</strong> {item.supported_proposition ?? "Not explained"}</p>
+                          <p className="mt-1 text-muted-foreground"><strong>Warrant:</strong> {item.warrant ?? "Not explained"}</p>
+                        </div>
+                      ))}
+                      {unit.citations.map((citation) => (
+                        <div key={`${citation.citation_key}:${citation.citation_role}:${citation.supported_proposition}`} className="rounded border p-2">
+                          <div className="flex flex-wrap gap-1">
+                            <Badge variant="outline">{citation.citation_key}</Badge>
+                            <Badge variant="outline">{citation.citation_role}</Badge>
+                            <Badge variant={citation.verification_state === "verified" ? "secondary" : "outline"}>{humanize(citation.verification_state)}</Badge>
+                          </div>
+                          <p className="mt-1"><strong>Supports:</strong> {citation.supported_proposition}</p>
+                          {citation.comparison_axis && <p className="mt-1 text-muted-foreground"><strong>Comparison axis:</strong> {citation.comparison_axis}</p>}
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                )}
               </div>
               <div className="flex flex-wrap gap-1">
                 <Button size="icon" variant="ghost" aria-label={`Move ${unit.local_key} up`} disabled={index === 0} onClick={() => move(unit.local_key, -1)}>
@@ -288,6 +375,8 @@ export function OutlineEditor({
                     reason: String(form.get("reason") ?? "").trim(),
                     unit_key: unit.local_key,
                     patch: {
+                      unit_role: String(form.get("unit_role")) as ManuscriptOutlineUnit["unit_role"],
+                      rhetorical_move: String(form.get("rhetorical_move")) as ManuscriptOutlineUnit["rhetorical_move"],
                       communicative_job: String(form.get("job") ?? "").trim(),
                       intended_takeaway: String(form.get("takeaway") ?? "").trim(),
                       transition_from_previous: String(form.get("transition") ?? "").trim() || null,
@@ -301,6 +390,8 @@ export function OutlineEditor({
                   })
                 }}
               >
+                <label className="space-y-1 text-xs font-medium">Unit role<select name="unit_role" defaultValue={unit.unit_role} className={selectClassName}>{UNIT_ROLES.map((value) => <option key={value} value={value}>{humanize(value)}</option>)}</select></label>
+                <label className="space-y-1 text-xs font-medium">Rhetorical move<select name="rhetorical_move" defaultValue={unit.rhetorical_move} className={selectClassName}>{RHETORICAL_MOVES.map((value) => <option key={value} value={value}>{humanize(value)}</option>)}</select></label>
                 <label className="space-y-1 text-xs font-medium">Communicative job<Textarea name="job" required defaultValue={unit.communicative_job ?? ""} /></label>
                 <label className="space-y-1 text-xs font-medium">Intended reader takeaway<Textarea name="takeaway" required defaultValue={unit.intended_takeaway ?? ""} /></label>
                 <label className="space-y-1 text-xs font-medium">Transition from prior unit<Textarea name="transition" defaultValue={unit.transition_from_previous ?? ""} /></label>
@@ -330,6 +421,8 @@ export function OutlineEditor({
                       local_key: String(form.get("local_key") ?? "").trim(),
                       title: String(form.get("title") ?? "").trim(),
                       location: String(form.get("location") ?? "").trim(),
+                      unit_role: String(form.get("unit_role")) as ManuscriptOutlineUnit["unit_role"],
+                      rhetorical_move: String(form.get("rhetorical_move")) as ManuscriptOutlineUnit["rhetorical_move"],
                       communicative_job: String(form.get("job") ?? "").trim(),
                       intended_takeaway: String(form.get("takeaway") ?? "").trim(),
                       evidence_plan: lines(form.get("evidence_plan")),
@@ -337,6 +430,8 @@ export function OutlineEditor({
                   })
                 }}
               >
+                <label className="space-y-1 text-xs font-medium">Unit role<select name="unit_role" defaultValue="paragraph_plan" className={selectClassName}>{UNIT_ROLES.map((value) => <option key={value} value={value}>{humanize(value)}</option>)}</select></label>
+                <label className="space-y-1 text-xs font-medium">Rhetorical move<select name="rhetorical_move" defaultValue="unspecified" className={selectClassName}>{RHETORICAL_MOVES.map((value) => <option key={value} value={value}>{humanize(value)}</option>)}</select></label>
                 <label className="space-y-1 text-xs font-medium">Stable child key<Input name="local_key" required placeholder={`${unit.local_key}.DETAIL`} /></label>
                 <label className="space-y-1 text-xs font-medium">Child title<Input name="title" required /></label>
                 <label className="space-y-1 text-xs font-medium">Planned location<Input name="location" required defaultValue={`${unit.location}#detail`} /></label>

@@ -7,6 +7,18 @@ All notable changes to RKA are documented here. Format loosely follows
 
 ### Added
 
+- **Typed academic-writing semantic core.** Manuscript units now separate pure
+  outline depth from structural role and rhetorical move. Unit-evidence uses
+  can state the supported proposition and authorial warrant; immutable claim
+  versions carry applicability conditions and falsification criteria; and
+  unit citation uses bind typed literature moves to the existing verified
+  reference authority without duplicating bibliography metadata.
+- **Proportionate academic readiness.** The outline projection reports
+  deterministic structure, claim allocation, evidence presence, evidence-use
+  explanation, claim-boundary, citation, and rhetorical-annotation dimensions.
+  Only missing structure or required claim/evidence bindings block; judgmental
+  writing-quality checks remain advisory. The workbench exposes role/move
+  controls and progressively disclosed evidence/citation rationale.
 - **Portable outline integrity and staleness provenance.** The reserved
   staleness-resolution schema now round-trips without dropping deployed
   agentic fields. Knowledge-pack import rekeys resolution and outline-intention

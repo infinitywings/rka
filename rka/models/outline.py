@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from rka.models.semantic_patch import ProposalOrigin, ProviderBoundary
+from rka.models.manuscript_native import ManuscriptRhetoricalMove, ManuscriptUnitRole
 
 
 class _ClosedModel(BaseModel):
@@ -24,6 +25,8 @@ class OutlineUnitPatch(_ClosedModel):
     title: str | None = Field(default=None, max_length=20_000)
     location: str | None = Field(default=None, min_length=1, max_length=20_000)
     outline_level: int | None = Field(default=None, ge=2, le=5)
+    unit_role: ManuscriptUnitRole | None = None
+    rhetorical_move: ManuscriptRhetoricalMove | None = None
     parent_unit_key: str | None = Field(default=None, max_length=200)
     communicative_job: str | None = Field(default=None, max_length=20_000)
     intended_takeaway: str | None = Field(default=None, max_length=20_000)
@@ -51,6 +54,8 @@ class OutlineChildDraft(_ClosedModel):
     local_key: str = Field(min_length=1, max_length=200)
     title: str = Field(min_length=1, max_length=20_000)
     location: str = Field(min_length=1, max_length=20_000)
+    unit_role: ManuscriptUnitRole = "unspecified"
+    rhetorical_move: ManuscriptRhetoricalMove = "unspecified"
     communicative_job: str = Field(min_length=1, max_length=20_000)
     intended_takeaway: str = Field(min_length=1, max_length=20_000)
     transition_from_previous: str | None = Field(default=None, max_length=20_000)

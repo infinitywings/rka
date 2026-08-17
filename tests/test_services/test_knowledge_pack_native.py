@@ -38,6 +38,7 @@ _NATIVE_TABLES = (
     "manuscript_unit_outline_profiles",
     "manuscript_claim_evidence",
     "manuscript_unit_evidence",
+    "manuscript_unit_citations",
     "manuscript_claim_units",
     "manuscript_checkpoints",
     "manuscript_claim_verification_attestations",
@@ -141,6 +142,8 @@ def _spine(
                 "text": empirical_wording,
                 "allowed_wording": empirical_wording,
                 "prohibited_wording": ["The system eliminates every latency source."],
+                "conditions": ["Measured testbed configuration only."],
+                "falsification_criteria": ["The measured direction does not reproduce."],
                 "evidence_ids": [evidence_id],
                 "qualifier_ids": [],
                 "counterevidence_ids": [],
@@ -166,6 +169,8 @@ def _spine(
                 "location": "sections/results.tex#latency",
                 "parent_unit_key": "M1",
                 "outline_level": 3,
+                "unit_role": "result",
+                "rhetorical_move": "present_result",
                 "communicative_job": "Report the bounded latency result.",
                 "intended_takeaway": "The measured configuration reduced latency.",
                 "evidence_plan": [f"Bind the measured observation {evidence_id}."],
@@ -175,6 +180,15 @@ def _spine(
                 "allowed_interpretation": ("Latency was lower under the measured configuration."),
                 "prohibited_interpretation": ("Latency is lower under every configuration."),
                 "evidence_ids": [evidence_id],
+                "evidence": {
+                    "support": [{
+                        "evidence_claim_id": evidence_id,
+                        "supported_proposition": "Latency was lower in the measured testbed.",
+                        "warrant": "The observation records the exact bounded contrast.",
+                    }],
+                    "qualifier": [],
+                    "counterevidence": [],
+                },
                 "sequence": 2,
             },
             {
@@ -182,6 +196,8 @@ def _spine(
                 "kind": "method",
                 "location": "sections/method.tex#provenance",
                 "outline_level": 2,
+                "unit_role": "argument_block",
+                "rhetorical_move": "describe_method",
                 "communicative_job": "Explain the provenance-aware workflow.",
                 "intended_takeaway": "Support and qualifiers remain distinct.",
                 "evidence_plan": [f"Use qualifier {evidence_id}."],
@@ -427,6 +443,7 @@ async def _seed_native_manuscript(db) -> dict[str, str]:
 
     validation_job_id = generate_id("job")
     validation_id = generate_id("reference_validation")
+    citation_use_id = generate_id("manuscript_unit_citation")
     await db.execute(
         """INSERT INTO jobs
            (id, job_type, project_id, entity_type, entity_id, payload)
@@ -473,6 +490,22 @@ async def _seed_native_manuscript(db) -> dict[str, str]:
                 },
                 sort_keys=True,
             ),
+        ],
+    )
+    await db.execute(
+        """INSERT INTO manuscript_unit_citations
+           (id, manuscript_id, project_id, unit_id, reference_member_id,
+            citation_role, supported_proposition, verification_state,
+            comparison_axis)
+           VALUES (?, ?, ?, ?, ?, 'baseline',
+                   'The result compares against the established baseline.',
+                   'verified', 'latency')""",
+        [
+            citation_use_id,
+            manuscript.id,
+            project_id,
+            units["R1"]["id"],
+            active_reference_id,
         ],
     )
     await db.execute(
@@ -531,6 +564,7 @@ async def _seed_native_manuscript(db) -> dict[str, str]:
         "active_literature_id": active_literature_id,
         "retired_reference_id": retired_reference_id,
         "active_reference_id": active_reference_id,
+        "citation_use_id": citation_use_id,
         "reference_set_checkpoint_id": reference_set_checkpoint.id,
     }
 
@@ -638,7 +672,8 @@ async def test_native_manuscript_round_trip_preserves_history_without_synthesis(
     assert imported_claims["C2"]["id"] != source["c2_id"]
 
     imported_versions = await db.fetchall(
-        """SELECT claim_id, version, exact_wording
+        """SELECT claim_id, version, exact_wording, conditions,
+                  falsification_criteria
            FROM manuscript_claim_versions
            WHERE project_id = 'proj_native_import'
            ORDER BY claim_id, version"""
@@ -653,6 +688,9 @@ async def test_native_manuscript_round_trip_preserves_history_without_synthesis(
     assert [row["exact_wording"] for row in versions_by_claim[imported_claims["C1"]["id"]]] == [
         "The system reduced latency.",
         "Latency was lower in the measured testbed.",
+    ]
+    assert json.loads(versions_by_claim[imported_claims["C1"]["id"]][-1]["conditions"]) == [
+        "Measured testbed configuration only."
     ]
 
     imported_ratifications = await db.fetchall(
@@ -697,6 +735,10 @@ async def test_native_manuscript_round_trip_preserves_history_without_synthesis(
         == (imported_units["M1"]["id"])
     )
     assert imported_profiles[imported_units["R1"]["id"]]["outline_level"] == 3
+    assert imported_profiles[imported_units["R1"]["id"]]["unit_role"] == "result"
+    assert imported_profiles[imported_units["R1"]["id"]]["rhetorical_move"] == (
+        "present_result"
+    )
     imported_evidence = await db.fetchone(
         """SELECT * FROM claims
            WHERE project_id = 'proj_native_import'"""
@@ -737,7 +779,7 @@ async def test_native_manuscript_round_trip_preserves_history_without_synthesis(
         "role": "support",
     }
     unit_support = await db.fetchone(
-        """SELECT evidence_claim_id, role
+        """SELECT evidence_claim_id, role, supported_proposition, warrant
            FROM manuscript_unit_evidence
            WHERE project_id = 'proj_native_import'
              AND unit_id = ?""",
@@ -746,6 +788,8 @@ async def test_native_manuscript_round_trip_preserves_history_without_synthesis(
     assert unit_support == {
         "evidence_claim_id": imported_evidence["id"],
         "role": "support",
+        "supported_proposition": "Latency was lower in the measured testbed.",
+        "warrant": "The observation records the exact bounded contrast.",
     }
     claim_unit = await db.fetchone(
         """SELECT unit_id, relationship
@@ -839,6 +883,24 @@ async def test_native_manuscript_round_trip_preserves_history_without_synthesis(
     assert imported_by_state["retired"]["citation_key"] == "earlier2024"
     assert imported_by_state["retired"]["literature_id"] == imported_literature["Earlier citation"]
     assert imported_by_state["retired"]["retired_at"] is not None
+    imported_citation_use = await db.fetchone(
+        """SELECT id, unit_id, reference_member_id, citation_role,
+                  supported_proposition, verification_state, comparison_axis
+           FROM manuscript_unit_citations
+           WHERE project_id = 'proj_native_import'"""
+    )
+    assert imported_citation_use is not None
+    assert {key: value for key, value in imported_citation_use.items() if key != "id"} == {
+        "unit_id": imported_units["R1"]["id"],
+        "reference_member_id": imported_by_state["active"]["id"],
+        "citation_role": "baseline",
+        "supported_proposition": (
+            "The result compares against the established baseline."
+        ),
+        "verification_state": "verified",
+        "comparison_axis": "latency",
+    }
+    assert imported_citation_use["id"] != source["citation_use_id"]
     assert imported_reference_validation["literature_id"] == imported_literature["Current citation"]
     assert json.loads(imported_reference_validation["full_json_payload"]) == {
         "claim_id": imported_claims["C1"]["id"],
