@@ -82,6 +82,22 @@ class RKAConfig(BaseSettings):
         description="LM Studio proposal request timeout in seconds",
     )
 
+    # Manuscript source synchronization is deliberately opt-in. A
+    # manuscript.workspace_ref never grants filesystem authority on its own;
+    # it must resolve below one of these os.pathsep-separated roots.
+    manuscript_workspace_roots: str = Field(
+        default="",
+        description=(
+            "os.pathsep-separated allowlist of local manuscript workspace roots"
+        ),
+    )
+    manuscript_source_max_bytes: int = Field(
+        default=2 * 1024 * 1024,
+        ge=1,
+        le=20 * 1024 * 1024,
+        description="Maximum UTF-8 bytes in one synchronized manuscript source file",
+    )
+
     # Embeddings — v2.4.0 (Mission D) flips the default to ON. Persistent
     # backend config lives at /data/embedding_config.json; this env var
     # remains the master enable/disable switch for the in-process

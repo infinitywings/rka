@@ -62,6 +62,9 @@ itself. The server must also be configured with one or more
 
 An unconfigured, missing, foreign, or unsafe workspace fails closed. Source
 content is never exposed through MCP in PR 10; it is a local web/REST surface.
+The bundled Docker deployment binds the unauthenticated dashboard/API port to
+host loopback. Remote access requires a separately reviewed authentication and
+transport boundary; changing `X-RKA-Actor` is provenance, not authentication.
 
 ### 4. Make every replacement optimistic, atomic, and recoverable
 
@@ -72,7 +75,8 @@ file has the normal SHA-256 of empty bytes. Any mismatch marks the proposal
 
 For a matching base, apply:
 
-1. writes a recovery copy and manifest beneath RKA's persistent `data_dir`;
+1. writes a recovery copy and manifest beneath the managed storage directory
+   beside the active RKA database;
 2. fsyncs the recovery file and manifest;
 3. writes the proposed bytes to a same-directory temporary regular file;
 4. preserves the existing regular-file mode when applicable;

@@ -1,6 +1,7 @@
 # M5 PR 10 implementation plan: manuscript source synchronization
 
 - Date: 2026-08-17
+- Status: implementation candidate complete; independent audit pending
 - Tracking issue: #61
 - Depends on: merged PR #84 / typed academic-writing core
 - Design authority: ADR 0011

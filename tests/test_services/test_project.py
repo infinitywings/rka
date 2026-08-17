@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from rka.infra.ids import generate_id
 from rka.models.project import ProjectCreate
 from rka.models.claim import ClaimCreate, ClaimScopeCondition, ClaimScopeWrite
 from rka.models.interpretation import InterpretationCandidateCreate
@@ -473,6 +474,87 @@ async def test_delete_project_removes_only_service_owned_knowledge_pack_dir(
     assert not project_pack_dir.exists()
     assert (sibling_dir / "keep.bin").read_bytes() == b"keep"
     assert external_artifact.read_text(encoding="utf-8") == "user-owned"
+
+
+@pytest.mark.asyncio
+async def test_delete_project_removes_source_proposals_and_owned_recovery(db) -> None:
+    svc = ProjectService(db)
+    project_id = "proj_delete_source_recovery"
+    await svc.create_project(
+        ProjectCreate(id=project_id, name="Delete Source Recovery"),
+        actor="system",
+    )
+    manuscript_id = generate_id("manuscript")
+    proposal_id = generate_id("manuscript_source_proposal")
+    await db.execute(
+        """INSERT INTO manuscripts
+           (id, project_id, title, phase, state)
+           VALUES (?, ?, 'Source cleanup', 'planning', 'active')""",
+        [manuscript_id, project_id],
+    )
+    await db.execute(
+        """INSERT INTO manuscript_source_proposals
+           (id, project_id, manuscript_id, origin, relative_path, source_format,
+            base_content_hash, proposed_content, proposed_content_hash,
+            created_by, reason, boundary)
+           VALUES (?, ?, ?, 'human', 'main.md', 'markdown', ?, 'after', ?,
+                   'web_ui', 'Cleanup fixture.', 'none')""",
+        [proposal_id, project_id, manuscript_id, "a" * 64, "b" * 64],
+    )
+    await db.execute(
+        """INSERT INTO manuscript_source_events
+           (id, proposal_id, project_id, proposal_revision, action, actor, reason)
+           VALUES (?, ?, ?, 1, 'proposed', 'web_ui', 'Cleanup fixture.')""",
+        [generate_id("manuscript_source_event"), proposal_id, project_id],
+    )
+    await db.commit()
+    recovery = (
+        Path(db.db_path).resolve().parent
+        / "manuscript-source-recovery"
+        / project_id
+        / manuscript_id
+        / proposal_id
+    )
+    recovery.mkdir(parents=True)
+    (recovery / "manifest.json").write_text("{}")
+
+    preview = await svc.delete_project(project_id, confirm=False)
+    assert preview["entity_counts"]["manuscript_source_proposals"] == 1
+    assert preview["entity_counts"]["manuscript_source_events"] == 1
+    assert recovery.exists()
+
+    result = await svc.delete_project(project_id, confirm=True)
+    assert result["manuscript_source_recovery_cleanup"]["status"] == "deleted"
+    assert not recovery.parents[1].exists()
+    assert await db.fetchone(
+        "SELECT id FROM manuscript_source_proposals WHERE id = ?", [proposal_id]
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_delete_project_rejects_symlinked_source_recovery_dir(
+    db,
+    tmp_path: Path,
+) -> None:
+    svc = ProjectService(db)
+    project_id = "proj_symlink_source_recovery"
+    await svc.create_project(
+        ProjectCreate(id=project_id, name="Symlink Source Recovery"),
+        actor="system",
+    )
+    external = tmp_path / "external-recovery"
+    external.mkdir()
+    marker = external / "keep.bin"
+    marker.write_bytes(b"keep")
+    recovery_root = Path(db.db_path).resolve().parent / "manuscript-source-recovery"
+    recovery_root.mkdir()
+    (recovery_root / project_id).symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="must not be a symbolic link"):
+        await svc.delete_project(project_id, confirm=True)
+
+    assert marker.read_bytes() == b"keep"
+    assert await db.fetchone("SELECT id FROM projects WHERE id = ?", [project_id])
 
 
 @pytest.mark.asyncio

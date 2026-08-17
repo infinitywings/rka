@@ -42,7 +42,10 @@ services:
     build: .
     container_name: rka-server
     ports:
-      - "9712:9712"
+      # Keep the unauthenticated local dashboard/API off the LAN. The server
+      # still listens on all interfaces inside the container so Docker health
+      # checks and the worker can reach it.
+      - "127.0.0.1:9712:9712"
     volumes:
       - rka-data:/data
     environment:

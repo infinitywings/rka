@@ -67,6 +67,8 @@ _PREFIXES = {
     "semantic_patch_proposal_event": "spe",
     "semantic_patch_provider_call": "spc",
     "semantic_patch_provider_event": "pce",
+    "manuscript_source_proposal": "msp",
+    "manuscript_source_event": "mse",
 }
 
 

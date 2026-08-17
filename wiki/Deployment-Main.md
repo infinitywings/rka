@@ -250,7 +250,7 @@ Two rows, both running:
 
 ```
 NAME         IMAGE     STATUS                   PORTS
-rka-server   rka-rka   Up X minutes (healthy)   0.0.0.0:9712->9712/tcp
+rka-server   rka-rka   Up X minutes (healthy)   127.0.0.1:9712->9712/tcp
 rka-worker   rka-rka   Up X minutes
 ```
 

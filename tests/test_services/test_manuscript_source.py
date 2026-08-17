@@ -1,0 +1,590 @@
+"""Conflict, recovery, anchor, and path-safety tests for source synchronization."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import zipfile
+from pathlib import Path
+
+import pytest
+
+from rka.config import RKAConfig
+from rka.infra.ids import generate_id
+from rka.models.manuscript_native import ManuscriptCreate
+from rka.models.manuscript_native import ManuscriptUpdate
+from rka.models.manuscript_source import (
+    ManuscriptSourceProposalCreate,
+    ManuscriptSourceProposalTransition,
+)
+from rka.models.semantic_patch import ContextManifestCreate
+from rka.services.manuscript_native import NativeManuscriptService
+from rka.services.manuscript_source import (
+    ManuscriptSourceConflictError,
+    ManuscriptSourceSecurityError,
+    ManuscriptSourceService,
+)
+from rka.services.semantic_patch import SemanticPatchService
+from rka.services.knowledge_pack import KnowledgePackService
+
+
+def _hash(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+async def _source_fixture(db, tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    config = RKAConfig(
+        project_dir=tmp_path,
+        db_path=tmp_path / "source.db",
+        data_dir=tmp_path / "data",
+        llm_enabled=False,
+        embeddings_enabled=False,
+        manuscript_workspace_roots=str(tmp_path),
+    )
+    native = NativeManuscriptService(db, project_id="proj_default")
+    manuscript = await native.create(
+        ManuscriptCreate(title="Source paper", workspace_ref=str(workspace))
+    )
+    context = await native.upsert_argument_spine(
+        manuscript.id,
+        expected_revision=1,
+        spine={
+            "claims": [],
+            "units": [
+                {
+                    "unit_id": "U1",
+                    "kind": "introduction",
+                    "location": "main.md#u1",
+                    "status": "planned",
+                    "outline_level": 3,
+                    "unit_role": "argument_block",
+                    "rhetorical_move": "frame_problem",
+                    "communicative_job": "Frame the bounded problem.",
+                    "intended_takeaway": "The problem matters in the evaluated setting.",
+                    "evidence_plan": ["Link one bounded source."],
+                    "quick_reader_role": "Problem in one sentence.",
+                }
+            ],
+        },
+        actor="web_ui",
+    )
+    unit_id = context["units"][0]["id"]
+    service = ManuscriptSourceService(db, config=config, project_id="proj_default")
+    return service, config, manuscript.id, workspace, unit_id
+
+
+def _markdown(unit_id: str, sentence: str) -> str:
+    return (
+        "# Paper\n\n"
+        f"<!-- rka:unit {unit_id} begin -->\n"
+        f"{sentence}\n"
+        f"<!-- rka:unit {unit_id} end -->\n"
+    )
+
+
+@pytest.mark.asyncio
+async def test_prepare_then_apply_is_atomic_mode_preserving_and_recoverable(
+    db_with_project,
+    tmp_path: Path,
+) -> None:
+    service, _, manuscript_id, workspace, unit_id = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    before = _markdown(unit_id, "Old bounded prose.")
+    after = _markdown(unit_id, "New bounded prose.")
+    source = workspace / "main.md"
+    source.write_text(before)
+    source.chmod(0o640)
+
+    proposal = await service.create_proposal(
+        manuscript_id,
+        ManuscriptSourceProposalCreate(
+            origin="human",
+            relative_path="main.md",
+            expected_content_hash=_hash(before),
+            content=after,
+            created_by="web_ui",
+            reason="Review and apply the revised introduction.",
+        ),
+    )
+    assert proposal["status"] == "proposed"
+    assert source.read_text() == before
+
+    applied = await service.apply_proposal(
+        proposal["id"],
+        ManuscriptSourceProposalTransition(
+            expected_revision=1,
+            actor="web_ui",
+            reason="PI accepted the source diff.",
+        ),
+    )
+    assert applied["status"] == "applied"
+    assert source.read_text() == after
+    assert source.stat().st_mode & 0o777 == 0o640
+    recovery = Path(db_with_project.db_path).resolve().parent / applied[
+        "recovery_manifest_path"
+    ]
+    payload = json.loads(recovery.read_text())
+    assert payload["before_content_hash"] == _hash(before)
+    assert payload["after_content_hash"] == _hash(after)
+    assert (recovery.parent / "before.bin").read_text() == before
+    assert applied["events"][-1]["details"]["git_operation"] is False
+
+
+@pytest.mark.asyncio
+async def test_external_edit_creates_durable_conflict_without_overwrite(
+    db_with_project,
+    tmp_path: Path,
+) -> None:
+    service, _, manuscript_id, workspace, unit_id = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    before = _markdown(unit_id, "Initial prose.")
+    proposed = _markdown(unit_id, "Proposed prose.")
+    external = _markdown(unit_id, "Externally edited prose.")
+    source = workspace / "main.md"
+    source.write_text(before)
+    proposal = await service.create_proposal(
+        manuscript_id,
+        ManuscriptSourceProposalCreate(
+            origin="human",
+            relative_path="main.md",
+            expected_content_hash=_hash(before),
+            content=proposed,
+            created_by="web_ui",
+            reason="Prepare a bounded revision.",
+        ),
+    )
+    source.write_text(external)
+
+    with pytest.raises(ManuscriptSourceConflictError, match="source changed"):
+        await service.apply_proposal(
+            proposal["id"],
+            ManuscriptSourceProposalTransition(
+                expected_revision=1,
+                actor="web_ui",
+                reason="Attempt apply after an external edit.",
+            ),
+        )
+    assert source.read_text() == external
+    conflicted = await service.get_proposal(proposal["id"])
+    assert conflicted["status"] == "conflicted"
+    assert conflicted["events"][-1]["details"]["file_written"] is False
+    assert conflicted["events"][-1]["details"]["current_content_hash"] == _hash(external)
+
+
+@pytest.mark.asyncio
+async def test_retry_completes_ledger_after_replace_before_transition_failure(
+    db_with_project,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _, manuscript_id, workspace, unit_id = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    before = _markdown(unit_id, "Before interrupted apply.")
+    after = _markdown(unit_id, "After interrupted apply.")
+    source = workspace / "main.md"
+    source.write_text(before)
+    proposal = await service.create_proposal(
+        manuscript_id,
+        ManuscriptSourceProposalCreate(
+            origin="human",
+            relative_path="main.md",
+            expected_content_hash=_hash(before),
+            content=after,
+            created_by="web_ui",
+            reason="Exercise recovery after the filesystem commit point.",
+        ),
+    )
+    complete = service._complete_applied_transition
+
+    async def fail_transition(*_args, **_kwargs) -> None:
+        raise RuntimeError("simulated database interruption")
+
+    monkeypatch.setattr(service, "_complete_applied_transition", fail_transition)
+    transition = ManuscriptSourceProposalTransition(
+        expected_revision=1,
+        actor="web_ui",
+        reason="Apply with a simulated post-replace interruption.",
+    )
+    with pytest.raises(RuntimeError, match="simulated database interruption"):
+        await service.apply_proposal(proposal["id"], transition)
+    assert source.read_text() == after
+    assert (await service.get_proposal(proposal["id"]))["status"] == "proposed"
+
+    monkeypatch.setattr(service, "_complete_applied_transition", complete)
+    recovered = await service.apply_proposal(proposal["id"], transition)
+    assert recovered["status"] == "applied"
+    assert recovered["events"][-1]["details"]["recovered_after_restart"] is True
+    assert source.read_text() == after
+
+
+@pytest.mark.asyncio
+async def test_markdown_and_latex_anchors_round_trip_and_invalid_links_block(
+    db_with_project,
+    tmp_path: Path,
+) -> None:
+    service, _, manuscript_id, workspace, unit_id = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    markdown = _markdown(unit_id, "Bounded prose.")
+    (workspace / "main.md").write_text(markdown)
+    snapshot = await service.read_file(manuscript_id, "main.md")
+    assert snapshot["anchors"][0]["unit_id"] == unit_id
+    assert not [item for item in snapshot["findings"] if item["severity"] == "error"]
+
+    latex = (
+        f"% rka:unit {unit_id} begin\n"
+        "Bounded \\LaTeX{} prose.\n"
+        f"% rka:unit {unit_id} end\n"
+    )
+    (workspace / "main.tex").write_text(latex)
+    latex_snapshot = await service.read_file(manuscript_id, "main.tex")
+    assert latex_snapshot["source_format"] == "latex"
+    assert latex_snapshot["anchors"][0]["unit_id"] == unit_id
+
+    invalid = markdown.replace(unit_id, "mun_01ZZZZZZZZZZZZZZZZZZZZZZZZ")
+    with pytest.raises(ValueError, match="blocking anchor"):
+        await service.create_proposal(
+            manuscript_id,
+            ManuscriptSourceProposalCreate(
+                origin="human",
+                relative_path="main.md",
+                expected_content_hash=_hash(markdown),
+                content=invalid,
+                created_by="web_ui",
+                reason="This foreign anchor must be rejected.",
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_path_traversal_symlink_and_unconfigured_root_fail_closed(
+    db_with_project,
+    tmp_path: Path,
+) -> None:
+    service, config, manuscript_id, workspace, _ = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    with pytest.raises(ManuscriptSourceSecurityError):
+        await service.read_file(manuscript_id, "../secret.md")
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.md").write_text("secret")
+    (workspace / "linked").symlink_to(outside, target_is_directory=True)
+    with pytest.raises((ManuscriptSourceSecurityError, OSError)):
+        await service.read_file(manuscript_id, "linked/secret.md")
+
+    fifo = workspace / "blocking.md"
+    os.mkfifo(fifo)
+    with pytest.raises(ManuscriptSourceSecurityError, match="regular file"):
+        await service.read_file(manuscript_id, "blocking.md")
+
+    disabled = ManuscriptSourceService(
+        db_with_project,
+        config=config.model_copy(update={"manuscript_workspace_roots": ""}),
+        project_id="proj_default",
+    )
+    with pytest.raises(ManuscriptSourceSecurityError, match="disabled"):
+        await disabled.list_files(manuscript_id)
+
+
+@pytest.mark.asyncio
+async def test_symlinked_workspace_ref_fails_closed(
+    db_with_project,
+    tmp_path: Path,
+) -> None:
+    service, _, manuscript_id, workspace, unit_id = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    (workspace / "main.md").write_text(_markdown(unit_id, "Bounded prose."))
+    alias = tmp_path / "workspace-alias"
+    alias.symlink_to(workspace, target_is_directory=True)
+    await db_with_project.execute(
+        "UPDATE manuscripts SET workspace_ref = ? WHERE id = ? AND project_id = ?",
+        [str(alias), manuscript_id, "proj_default"],
+    )
+    await db_with_project.commit()
+
+    with pytest.raises(ManuscriptSourceSecurityError, match="symlink component"):
+        await service.read_file(manuscript_id, "main.md")
+
+
+@pytest.mark.asyncio
+async def test_symlinked_recovery_directory_fails_before_source_write(
+    db_with_project,
+    tmp_path: Path,
+) -> None:
+    service, _, manuscript_id, workspace, unit_id = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    before = _markdown(unit_id, "Before unsafe recovery path.")
+    after = _markdown(unit_id, "After unsafe recovery path.")
+    source = workspace / "main.md"
+    source.write_text(before)
+    proposal = await service.create_proposal(
+        manuscript_id,
+        ManuscriptSourceProposalCreate(
+            origin="human",
+            relative_path="main.md",
+            expected_content_hash=_hash(before),
+            content=after,
+            created_by="web_ui",
+            reason="This must fail before writing through a recovery symlink.",
+        ),
+    )
+    external = tmp_path / "external-locks"
+    external.mkdir()
+    marker = external / "keep.bin"
+    marker.write_bytes(b"keep")
+    recovery_root = Path(db_with_project.db_path).resolve().parent / (
+        "manuscript-source-recovery"
+    )
+    recovery_root.mkdir(exist_ok=True)
+    (recovery_root / "locks").symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(ManuscriptSourceSecurityError, match="recovery path"):
+        await service.apply_proposal(
+            proposal["id"],
+            ManuscriptSourceProposalTransition(
+                expected_revision=1,
+                actor="web_ui",
+                reason="Reject the unsafe recovery path.",
+            ),
+        )
+    assert source.read_text() == before
+    assert marker.read_bytes() == b"keep"
+
+
+@pytest.mark.asyncio
+async def test_overview_separates_quick_reader_from_private_risk(
+    db_with_project,
+    tmp_path: Path,
+) -> None:
+    service, _, manuscript_id, workspace, unit_id = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    (workspace / "main.md").write_text(_markdown(unit_id, "Bounded prose."))
+    overview = await service.get_overview(manuscript_id)
+    assert overview["quick_reader"][0]["anchor_state"] == "linked"
+    assert overview["quick_reader"][0]["quick_reader_role"] == "Problem in one sentence."
+    assert overview["public_private_boundary"]["draft_source"] == "public authoring artifact"
+    assert "never copied automatically" in overview["public_private_boundary"][
+        "private_reviewer_risks"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_provenance_comments_must_match_current_unit_bindings(
+    db_with_project,
+    tmp_path: Path,
+) -> None:
+    service, _, manuscript_id, workspace, unit_id = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    journal_id = generate_id("journal")
+    evidence_id = generate_id("claim")
+    manuscript_claim_id = generate_id("manuscript_claim")
+    literature_id = generate_id("literature")
+    reference_id = generate_id("manuscript_reference")
+    await db_with_project.execute(
+        """INSERT INTO journal
+           (id, type, content, source, confidence, importance, status, project_id)
+           VALUES (?, 'log', 'Observed bounded result.', 'executor',
+                   'tested', 'high', 'active', 'proj_default')""",
+        [journal_id],
+    )
+    await db_with_project.execute(
+        """INSERT INTO claims
+           (id, source_entry_id, claim_type, content, confidence, verified,
+            evidence_status, stale, project_id)
+           VALUES (?, ?, 'result', 'Observed bounded result.', 0.9, 1,
+                   'supported', 0, 'proj_default')""",
+        [evidence_id, journal_id],
+    )
+    await db_with_project.execute(
+        """INSERT INTO manuscript_claims
+           (id, manuscript_id, project_id, local_key, kind, state)
+           VALUES (?, ?, 'proj_default', 'C1', 'empirical', 'active')""",
+        [manuscript_claim_id, manuscript_id],
+    )
+    await db_with_project.execute(
+        """INSERT INTO manuscript_claim_versions
+           (claim_id, version, manuscript_id, project_id, exact_wording,
+            allowed_wording, prohibited_wording)
+           VALUES (?, 1, ?, 'proj_default', 'The bounded result held.',
+                   'The bounded result held in the evaluated setting.',
+                   '["The result always holds."]')""",
+        [manuscript_claim_id, manuscript_id],
+    )
+    await db_with_project.execute(
+        """INSERT INTO manuscript_claim_units
+           (manuscript_id, project_id, manuscript_claim_id, claim_version,
+            unit_id, relationship)
+           VALUES (?, 'proj_default', ?, 1, ?, 'advances')""",
+        [manuscript_id, manuscript_claim_id, unit_id],
+    )
+    await db_with_project.execute(
+        """INSERT INTO manuscript_unit_evidence
+           (manuscript_id, project_id, unit_id, evidence_claim_id, role, ordinal)
+           VALUES (?, 'proj_default', ?, ?, 'support', 0)""",
+        [manuscript_id, unit_id, evidence_id],
+    )
+    await db_with_project.execute(
+        """INSERT INTO literature
+           (id, title, authors, year, doi, status, added_by, project_id)
+           VALUES (?, 'Prior bounded study', '[]', 2025, '10.1000/source-sync',
+                   'cited', 'pi', 'proj_default')""",
+        [literature_id],
+    )
+    await db_with_project.execute(
+        """INSERT INTO manuscript_reference_members
+           (id, manuscript_id, project_id, citation_key, literature_id)
+           VALUES (?, ?, 'proj_default', 'prior2025', ?)""",
+        [reference_id, manuscript_id, literature_id],
+    )
+    await db_with_project.execute(
+        """INSERT INTO manuscript_unit_citations
+           (id, manuscript_id, project_id, unit_id, reference_member_id,
+            citation_role, supported_proposition, verification_state)
+           VALUES (?, ?, 'proj_default', ?, ?, 'bounds',
+                   'Prior work bounds the comparison.', 'self_attested')""",
+        [
+            generate_id("manuscript_unit_citation"),
+            manuscript_id,
+            unit_id,
+            reference_id,
+        ],
+    )
+    await db_with_project.commit()
+
+    valid = (
+        f"<!-- rka:unit {unit_id} begin -->\n"
+        "Bounded prose.\n"
+        f"<!-- rka:provenance claim={manuscript_claim_id} "
+        f"evidence={evidence_id} citation=prior2025 -->\n"
+        f"<!-- rka:unit {unit_id} end -->\n"
+    )
+    (workspace / "main.md").write_text(valid)
+    snapshot = await service.read_file(manuscript_id, "main.md")
+    assert len(snapshot["provenance"]) == 3
+    assert all(item["verified"] for item in snapshot["provenance"])
+
+    invalid = valid.replace("citation=prior2025", "citation=unbound2025")
+    with pytest.raises(ValueError, match="blocking anchor or provenance"):
+        await service.create_proposal(
+            manuscript_id,
+            ManuscriptSourceProposalCreate(
+                origin="human",
+                relative_path="main.md",
+                expected_content_hash=_hash(valid),
+                content=invalid,
+                created_by="web_ui",
+                reason="Reject an unbound citation marker.",
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_ai_source_proposal_requires_current_target_manifest(
+    db_with_project,
+    tmp_path: Path,
+) -> None:
+    service, _, manuscript_id, workspace, unit_id = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    before = _markdown(unit_id, "Before AI proposal.")
+    (workspace / "main.md").write_text(before)
+    patches = SemanticPatchService(db_with_project, project_id="proj_default")
+    manifest = await patches.create_context_manifest(
+        ContextManifestCreate(
+            origin="host_agent",
+            provider="openai",
+            model="host-model",
+            boundary="host_conversation",
+            targets=[{"target_type": "manuscript", "target_id": manuscript_id}],
+            constraints=["Preserve current evidence boundaries."],
+        )
+    )
+    proposal = await service.create_proposal(
+        manuscript_id,
+        ManuscriptSourceProposalCreate(
+            origin="host_agent",
+            relative_path="main.md",
+            expected_content_hash=_hash(before),
+            content=_markdown(unit_id, "AI-proposed bounded revision."),
+            created_by="web_ui",
+            reason="Prepare disclosed host-agent prose for PI review.",
+            provider="openai",
+            model="host-model",
+            boundary="host_conversation",
+            context_manifest_id=manifest["id"],
+        ),
+    )
+    assert proposal["context_manifest_id"] == manifest["id"]
+    assert proposal["status"] == "proposed"
+
+    native = NativeManuscriptService(db_with_project, project_id="proj_default")
+    current = await native.get(manuscript_id)
+    assert current is not None
+    await native.update(
+        manuscript_id,
+        ManuscriptUpdate(expected_revision=current.revision, title="Revised source paper"),
+        actor="pi",
+    )
+    with pytest.raises(ManuscriptSourceConflictError, match="revision is stale"):
+        await service.create_proposal(
+            manuscript_id,
+            ManuscriptSourceProposalCreate(
+                origin="host_agent",
+                relative_path="main.md",
+                expected_content_hash=_hash(before),
+                content=_markdown(unit_id, "Stale-context proposal."),
+                created_by="web_ui",
+                reason="This must not pass with a stale disclosure manifest.",
+                provider="openai",
+                model="host-model",
+                boundary="host_conversation",
+                context_manifest_id=manifest["id"],
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_knowledge_pack_omits_local_source_candidate_and_ledger(
+    db_with_project,
+    tmp_path: Path,
+) -> None:
+    service, _, manuscript_id, workspace, unit_id = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    before = _markdown(unit_id, "Portable semantic context only.")
+    sentinel = "LOCAL-CANDIDATE-MUST-NOT-ENTER-KNOWLEDGE-PACK"
+    (workspace / "main.md").write_text(before)
+    await service.create_proposal(
+        manuscript_id,
+        ManuscriptSourceProposalCreate(
+            origin="human",
+            relative_path="main.md",
+            expected_content_hash=_hash(before),
+            content=_markdown(unit_id, sentinel),
+            created_by="web_ui",
+            reason="Keep installation-local source out of the portable pack.",
+        ),
+    )
+
+    pack_path, _ = await KnowledgePackService(
+        db_with_project, project_id="proj_default"
+    ).export_pack()
+    with zipfile.ZipFile(pack_path) as archive:
+        manifest_bytes = archive.read("manifest.json")
+        manifest = json.loads(manifest_bytes)
+    assert "manuscript_source_proposals" not in manifest["tables"]
+    assert "manuscript_source_events" not in manifest["tables"]
+    assert "manuscript_source_proposals" in manifest["portability"]["excluded_tables"]
+    assert sentinel.encode() not in manifest_bytes

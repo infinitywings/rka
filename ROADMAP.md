@@ -48,8 +48,9 @@ academic-writing semantic core ([issue #83](https://github.com/infinitywings/rka
 merged after independent audit in PR
 [#84](https://github.com/infinitywings/rka/pull/84). **PR 10, conflict-safe
 Markdown/LaTeX source synchronization
-([issue #61](https://github.com/infinitywings/rka/issues/61)), is now the active
-implementation target.**
+([issue #61](https://github.com/infinitywings/rka/issues/61)), now has an
+implementation candidate and passed its automated and browser exit gates; its
+exact commit remains subject to the required independent audit before merge.**
 PR [#78](https://github.com/infinitywings/rka/pull/78) merged
 the seed-through-contribution dependency; ADR 0008 freezes the evaluation
 contract, and the exact release evidence is recorded in
@@ -75,7 +76,10 @@ real-project-derived pilot evidence is recorded in
 [`2026-08-17-m5-pr9-2-exit-evidence.md`](docs/superpowers/specs/2026-08-17-m5-pr9-2-exit-evidence.md).
 PR 10 is specified in
 [`2026-08-17-m5-pr10-source-sync.md`](docs/superpowers/plans/2026-08-17-m5-pr10-source-sync.md)
-and governed by ADR 0011.
+and governed by ADR 0011. Its migration, source-security, recovery,
+authorization, workbench, responsive-browser, and restart evidence is recorded
+in
+[`2026-08-17-m5-pr10-exit-evidence.md`](docs/superpowers/specs/2026-08-17-m5-pr10-exit-evidence.md).
 The choice-first Writer delta is reconciled, the authority and AI boundary is
 recorded in ADR 0001, the read-only workbench has passed its real-project exit
 gate, and first-class experiment/run/observation/evidence-locator semantics

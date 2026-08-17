@@ -169,6 +169,10 @@ import type {
   ManuscriptReadiness,
   ManuscriptSpine,
   ManuscriptOutline,
+  ManuscriptSourceFile,
+  ManuscriptSourceOverview,
+  ManuscriptSourceProposal,
+  ManuscriptSourceProposalCreate,
   OutlineProposalRequest,
   OutlineProposalResult,
   ManuscriptWritingCandidates,
@@ -560,6 +564,39 @@ export const api = {
   getManuscriptImpact: (manuscriptId: string, sinceCursor = 0, limit = 100) =>
     get<ManuscriptImpact>(
       `/manuscripts/${encodeURIComponent(manuscriptId)}/impact?since_cursor=${sinceCursor}&limit=${limit}`,
+    ),
+  getManuscriptSourceOverview: (manuscriptId: string) =>
+    get<ManuscriptSourceOverview>(
+      `/manuscripts/${encodeURIComponent(manuscriptId)}/source`,
+    ),
+  readManuscriptSource: (manuscriptId: string, relativePath: string) =>
+    post<ManuscriptSourceFile>(
+      `/manuscripts/${encodeURIComponent(manuscriptId)}/source/read`,
+      { relative_path: relativePath },
+    ),
+  listManuscriptSourceProposals: (manuscriptId: string) =>
+    get<ManuscriptSourceProposal[]>(
+      `/manuscripts/${encodeURIComponent(manuscriptId)}/source/proposals`,
+    ),
+  getManuscriptSourceProposal: (proposalId: string) =>
+    get<ManuscriptSourceProposal>(
+      `/manuscript-source-proposals/${encodeURIComponent(proposalId)}`,
+    ),
+  createManuscriptSourceProposal: (
+    manuscriptId: string,
+    data: ManuscriptSourceProposalCreate,
+  ) => post<ManuscriptSourceProposal>(
+    `/manuscripts/${encodeURIComponent(manuscriptId)}/source/proposals`, data,
+  ),
+  applyManuscriptSourceProposal: (proposalId: string, expectedRevision: number, reason: string) =>
+    post<ManuscriptSourceProposal>(
+      `/manuscript-source-proposals/${encodeURIComponent(proposalId)}/apply`,
+      { expected_revision: expectedRevision, actor: "web_ui", reason },
+    ),
+  rejectManuscriptSourceProposal: (proposalId: string, expectedRevision: number, reason: string) =>
+    post<ManuscriptSourceProposal>(
+      `/manuscript-source-proposals/${encodeURIComponent(proposalId)}/reject`,
+      { expected_revision: expectedRevision, actor: "web_ui", reason },
     ),
 
   // Versioned, provisional workbench deliberation. These writes never mutate

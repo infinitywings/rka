@@ -620,6 +620,45 @@ plan, create an Outline checkpoint. Only a separate PI decision can resolve
 that checkpoint. A proposal, AI recommendation, or edited local outline file
 never ratifies itself.
 
+### 15.5 — Synchronizing Markdown and LaTeX source
+
+The Outline stage can open local `.md`, `.markdown`, and `.tex` files beneath a
+native manuscript's `workspace_ref`. This is opt-in: the workspace must also be
+beneath one of the roots in `RKA_MANUSCRIPT_WORKSPACE_ROOTS`. RKA rejects
+hidden paths, traversal, symlinks, special files, oversized content, and files
+outside that explicit allowlist. Source content is available only to the local
+web interface and is not added to the MCP tool surface. The bundled Docker
+configuration publishes the dashboard/API only on `127.0.0.1`; do not expose
+the unauthenticated REST port to a LAN or public interface.
+
+Use stable unit-range comments to connect public prose to native manuscript
+units:
+
+```markdown
+<!-- rka:unit mun_... begin -->
+Public manuscript prose.
+<!-- rka:provenance claim=mcl_... evidence=clm_... citation=Smith2026 -->
+<!-- rka:unit mun_... end -->
+```
+
+LaTeX uses the equivalent `% rka:unit ... begin/end` and
+`% rka:provenance ...` comments. The diagnostics verify that IDs and citation
+keys are currently bound to that unit; the comment is an auditable link, not
+proof that the prose accurately represents the evidence.
+
+Editing remains prepare-then-apply. Preparing stores an immutable candidate
+without touching the file. Open **Review source diff** to compare the current
+and proposed text; only then is the apply action available. Apply rechecks the
+exact SHA-256 base, saves managed recovery metadata beside the active RKA
+database, and atomically replaces the file. If an external editor changed the
+file, the proposal becomes conflicted and neither version is overwritten. RKA
+never performs a Git operation for source synchronization.
+
+The adjacent **Quick reader** view shows the ordered argument path and anchor
+health. **Reviewer risk (private)** shows prohibited wording, qualifiers,
+counterevidence, and citation-verification warnings. Private risk material is
+planning context and is never inserted into public source automatically.
+
 ---
 
 ## Chapter 16: MCP Tools Quick Reference
@@ -811,6 +850,8 @@ Studio model for a schema-constrained, unapplied semantic proposal:
 | `RKA_WORKBENCH_LM_STUDIO_BASE_URL` | Docker: `http://host.docker.internal:1234/v1`; non-Docker: `http://127.0.0.1:1234/v1` | Local-machine OpenAI-compatible endpoint |
 | `RKA_WORKBENCH_LM_STUDIO_MODEL` | empty | Exact served model ID; required to use the adapter |
 | `RKA_WORKBENCH_LM_STUDIO_TIMEOUT` | `120` | Request timeout in seconds (1–600) |
+| `RKA_MANUSCRIPT_WORKSPACE_ROOTS` | empty (source access disabled) | `os.pathsep`-separated allowlist of local manuscript workspace roots |
+| `RKA_MANUSCRIPT_SOURCE_MAX_BYTES` | `2097152` | Maximum UTF-8 bytes per synchronized source file (up to 20 MiB) |
 
 This adapter is not a background enrichment engine. It receives an explicit
 context manifest, records provider-call provenance, cannot use credentials or
@@ -818,6 +859,25 @@ a non-local URL, never falls back to cloud, and never applies its own output.
 The manifest must disclose every target and referenced evidence entity. A
 target revision change during generation, an undisclosed target, or an
 undisclosed evidence binding causes the proposal to fail closed.
+
+For a Docker deployment, explicitly mount only the parent directories that
+contain manuscripts you want RKA to edit, then allowlist the corresponding
+container paths. For example, add this opt-in override rather than granting the
+container access to an entire home directory:
+
+```yaml
+services:
+  rka:
+    volumes:
+      - /absolute/host/path/to/papers:/manuscripts:rw
+    environment:
+      RKA_MANUSCRIPT_WORKSPACE_ROOTS: /manuscripts
+```
+
+Set each manuscript's `workspace_ref` to its container-visible directory, such
+as `/manuscripts/example-paper`. Multiple roots use the host platform's path
+separator (`:` on macOS/Linux). Recreate the RKA service after changing mounts
+or environment settings.
 
 ---
 

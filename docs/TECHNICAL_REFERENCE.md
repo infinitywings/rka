@@ -86,6 +86,8 @@ Core runtime settings use the `RKA_` prefix. Common settings include:
 | `RKA_HOST` | `127.0.0.1` | API bind address outside Docker. |
 | `RKA_PORT` | `9712` | API port. |
 | `RKA_DB_PATH` | `rka.db` | Database path outside the default Docker deployment. |
+| `RKA_MANUSCRIPT_WORKSPACE_ROOTS` | empty | `os.pathsep`-separated allowlist for local Markdown/LaTeX source access; an empty value disables source synchronization. |
+| `RKA_MANUSCRIPT_SOURCE_MAX_BYTES` | `2097152` | Maximum UTF-8 bytes accepted for one synchronized manuscript source file. |
 | `RKA_SKILL_TOOLS` | unset | Promote ChatGPT skill-adapter tools on the connector surface. |
 | `RKA_LEGACY_TOOLS` | unset | Restore the compatibility always-on tool surface when required. |
 
