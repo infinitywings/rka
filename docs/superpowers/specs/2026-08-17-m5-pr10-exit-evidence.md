@@ -57,11 +57,11 @@ The browser workbench demonstrated that:
 5. The Quick reader linked the canonical unit to both Markdown and LaTeX ranges.
    The private tab showed the claim boundary, qualifier, counterevidence, and
    stale citation warning without placing them in the public editor.
-6. An external edit made after an unsent browser change was detected by the
-   active workbench's ten-second source poll without pressing the manual check
-   button. The explicit conflict banner appeared, Prepare disabled, and the
-   unique unsent draft remained intact. Reload remained a separate user action;
-   no overwrite occurred.
+6. A clean editor adopted an external source change through the ten-second poll
+   without a manual check. After a keyboard-entered unsent draft, the next
+   external edit updated the displayed source hash but preserved the draft,
+   raised the explicit conflict banner, and disabled Prepare. Reload remained a
+   separate user action; no overwrite occurred.
 7. A 390x844 responsive check initially exposed a narrow tab/header overflow.
    The panel was corrected with wrapping, minimum-width, and mobile-select rules,
    then visually rechecked successfully.
@@ -74,9 +74,9 @@ touch a live research project or invoke a model.
 
 | Gate | Result |
 | --- | --- |
-| Migration/source/API/project/pack corrective suite (command below) | **46 passed** |
+| Migration/source/API/project/pack corrective suite (command below) | **54 passed** |
 | MCP schema/model-drift suite (command below) | **994 passed** |
-| Full Python suite: `.venv/bin/python -m pytest -q` | **3,179 passed in 260.88s** |
+| Full Python suite: `.venv/bin/python -m pytest -q` | **3,187 passed in 209.99s** |
 | Changed Python files: Ruff | **Passed** |
 | Python compile check: `.venv/bin/python -m compileall -q rka` | **Passed** |
 | Git whitespace/error check: `git diff --check 116f76b --` | **Passed** |
@@ -123,15 +123,22 @@ candidate adds deterministic regression coverage for:
 
 - two concurrent same-file applies completing without event-loop deadlock;
 - apply racing reject and supersede after the filesystem commit point;
-- a late external edit injected after durable recovery but before replacement;
-- database interruption after replace and failure between replace and directory
-  fsync, both reconciled by retrying Apply;
+- a late external edit injected at the final atomic-exchange call, with the exact
+  displaced external object restored instead of overwritten;
+- missing-file creation with a no-clobber hard link, including an external file
+  appearing at the commit point;
+- database interruption after exchange, interrupted exchange with the reviewed
+  base retained at the deterministic swap name, and failure between cleanup and
+  source-directory fsync, all reconciled by retrying Apply;
+- restoration of an external object retained by a crash-interrupted exchange;
+- retry of every recovery-ancestor directory-fsync barrier and the failed source
+  directory fsync before the ledger may become applied;
 - rejection of a crash-applied proposal until Apply reconciles the ledger;
 - deletion of a service-created three-proposal supersession history;
 - private projection of unallocated claim-level qualifier and counterevidence;
 - direct invalid-UTF-8 and configured-size-limit reads; and
-- an automatic background source refetch preserving a dirty browser draft and
-  disabling Prepare.
+- an automatic clean-editor reload followed by a background refetch preserving
+  a dirty browser draft and disabling Prepare.
 
 The browser pilot remains complementary disposable evidence rather than a
 committed test artifact. The concurrency, recovery, deletion, and risk

@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
+import errno
 import fcntl
 import hashlib
 import json
 import os
 import re
 import stat
+import sys
 from collections import Counter, defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path, PurePosixPath
@@ -706,6 +709,23 @@ class ManuscriptSourceService(BaseService):
                 if current_hash == proposed_hash and self._valid_recovery_manifest(
                     recovery_path, row
                 ):
+                    try:
+                        self._reconcile_replaced_source(
+                            workspace,
+                            relative_path,
+                            proposal_id=str(row["id"]),
+                            expected_content_hash=row["base_content_hash"],
+                            proposed_content_hash=proposed_hash,
+                        )
+                    except ManuscriptSourceConflictError:
+                        latest, _ = self._read_current(workspace, relative_path)
+                        latest_hash = _sha256(latest) if latest is not None else None
+                        await self._mark_conflicted(
+                            row,
+                            data,
+                            current_content_hash=latest_hash,
+                        )
+                        raise
                     await self._complete_applied_transition(
                         row,
                         data,
@@ -750,6 +770,7 @@ class ManuscriptSourceService(BaseService):
                     relative_path,
                     proposed,
                     mode,
+                    proposal_id=str(row["id"]),
                     expected_content_hash=row["base_content_hash"],
                 )
             except ManuscriptSourceConflictError:
@@ -961,36 +982,49 @@ class ManuscriptSourceService(BaseService):
         normalized, _ = self._normalize_source_path(relative_path)
         parent_fd, name = self._open_parent_fd(workspace, PurePosixPath(normalized))
         try:
-            try:
-                file_fd = os.open(
-                    name,
-                    os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
-                    dir_fd=parent_fd,
-                )
-            except FileNotFoundError:
-                return None, None
-            try:
-                file_stat = os.fstat(file_fd)
-                if not stat.S_ISREG(file_stat.st_mode):
-                    raise ManuscriptSourceSecurityError("source target is not a regular file")
-                if file_stat.st_size > self.config.manuscript_source_max_bytes:
-                    raise ValueError("manuscript source file exceeds configured size limit")
-                chunks = []
-                remaining = self.config.manuscript_source_max_bytes + 1
-                while remaining > 0:
-                    chunk = os.read(file_fd, min(64 * 1024, remaining))
-                    if not chunk:
-                        break
-                    chunks.append(chunk)
-                    remaining -= len(chunk)
-                value = b"".join(chunks)
-                self._assert_size(value)
-                self._decode(value)
-                return value, stat.S_IMODE(file_stat.st_mode)
-            finally:
-                os.close(file_fd)
+            return self._read_source_entry_at(parent_fd, name, missing_ok=True)
         finally:
             os.close(parent_fd)
+
+    def _read_source_entry_at(
+        self,
+        directory_fd: int,
+        name: str,
+        *,
+        missing_ok: bool,
+        validate_utf8: bool = True,
+    ) -> tuple[bytes | None, int | None]:
+        try:
+            file_fd = os.open(
+                name,
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                dir_fd=directory_fd,
+            )
+        except FileNotFoundError:
+            if missing_ok:
+                return None, None
+            raise
+        try:
+            file_stat = os.fstat(file_fd)
+            if not stat.S_ISREG(file_stat.st_mode):
+                raise ManuscriptSourceSecurityError("source target is not a regular file")
+            if file_stat.st_size > self.config.manuscript_source_max_bytes:
+                raise ValueError("manuscript source file exceeds configured size limit")
+            chunks = []
+            remaining = self.config.manuscript_source_max_bytes + 1
+            while remaining > 0:
+                chunk = os.read(file_fd, min(64 * 1024, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            value = b"".join(chunks)
+            self._assert_size(value)
+            if validate_utf8:
+                self._decode(value)
+            return value, stat.S_IMODE(file_stat.st_mode)
+        finally:
+            os.close(file_fd)
 
     @staticmethod
     def _open_parent_fd(workspace: Path, relative_path: PurePosixPath) -> tuple[int, str]:
@@ -1126,6 +1160,11 @@ class ManuscriptSourceService(BaseService):
                         os.mkdir(component, mode=0o700, dir_fd=current_fd)
                     except FileExistsError:
                         pass
+                    # Persist every hierarchy edge, including an edge whose
+                    # preceding fsync failed and is being retried. Merely
+                    # fsyncing the leaf cannot make newly created ancestors
+                    # durable across a power loss.
+                    os.fsync(current_fd)
                 try:
                     next_fd = os.open(component, flags, dir_fd=current_fd)
                 except OSError as exc:
@@ -1315,48 +1354,249 @@ class ManuscriptSourceService(BaseService):
         value: bytes,
         previous_mode: int | None,
         *,
+        proposal_id: str,
         expected_content_hash: str | None,
     ) -> None:
         normalized, _ = self._normalize_source_path(relative_path)
         parent_fd, name = self._open_parent_fd(workspace, PurePosixPath(normalized))
-        temp_name = f".{name}.rka-{generate_id('manuscript_source_proposal')}"
-        temp_fd = None
+        swap_name = self._source_swap_name(proposal_id)
+        exchanged = False
+        try:
+            self._prepare_source_swap(
+                parent_fd,
+                swap_name,
+                value,
+                previous_mode if previous_mode is not None else 0o644,
+            )
+
+            if expected_content_hash is None:
+                try:
+                    os.link(
+                        swap_name,
+                        name,
+                        src_dir_fd=parent_fd,
+                        dst_dir_fd=parent_fd,
+                        follow_symlinks=False,
+                    )
+                except FileExistsError as exc:
+                    raise ManuscriptSourceConflictError(
+                        "source appeared immediately before creation; current and "
+                        "proposed versions were preserved"
+                    ) from exc
+                os.unlink(swap_name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
+                return
+
+            try:
+                self._atomic_exchange_at(parent_fd, swap_name, parent_fd, name)
+            except OSError as exc:
+                if exc.errno in {errno.ENOENT, errno.ENOTDIR}:
+                    raise ManuscriptSourceConflictError(
+                        "source changed immediately before replacement; current and "
+                        "proposed versions were preserved"
+                    ) from exc
+                raise
+            exchanged = True
+            try:
+                displaced, _ = self._read_source_entry_at(
+                    parent_fd,
+                    swap_name,
+                    missing_ok=False,
+                    validate_utf8=False,
+                )
+            except (OSError, ValueError, ManuscriptSourceSecurityError) as exc:
+                raise ManuscriptSourceConflictError(
+                    "source became unsafe immediately before replacement; the exact "
+                    "displaced version will be restored"
+                ) from exc
+            assert displaced is not None
+            if _sha256(displaced) != expected_content_hash:
+                raise ManuscriptSourceConflictError(
+                    "source changed immediately before replacement; the exact "
+                    "displaced version will be restored"
+                )
+
+            os.unlink(swap_name, dir_fd=parent_fd)
+            exchanged = False
+            os.fsync(parent_fd)
+        except Exception:
+            if exchanged:
+                try:
+                    self._atomic_exchange_at(parent_fd, swap_name, parent_fd, name)
+                    exchanged = False
+                    os.unlink(swap_name, dir_fd=parent_fd)
+                    os.fsync(parent_fd)
+                except Exception as rollback_error:
+                    raise ManuscriptSourceSecurityError(
+                        "source exchange failed and could not be rolled back safely"
+                    ) from rollback_error
+            raise
+        finally:
+            # Before an exchange the swap contains only proposal bytes and is
+            # safe to remove. If rollback itself failed, `exchanged` remains
+            # true and both names are deliberately retained for recovery.
+            if not exchanged:
+                try:
+                    os.unlink(swap_name, dir_fd=parent_fd)
+                except FileNotFoundError:
+                    pass
+            os.close(parent_fd)
+
+    def _reconcile_replaced_source(
+        self,
+        workspace: Path,
+        relative_path: str,
+        *,
+        proposal_id: str,
+        expected_content_hash: str | None,
+        proposed_content_hash: str,
+    ) -> None:
+        """Finish a crash-interrupted replacement before updating its ledger."""
+        normalized, _ = self._normalize_source_path(relative_path)
+        parent_fd, name = self._open_parent_fd(workspace, PurePosixPath(normalized))
+        swap_name = self._source_swap_name(proposal_id)
+        try:
+            try:
+                displaced, _ = self._read_source_entry_at(
+                    parent_fd,
+                    swap_name,
+                    missing_ok=True,
+                    validate_utf8=False,
+                )
+            except (OSError, ValueError, ManuscriptSourceSecurityError) as exc:
+                # The deterministic swap name can only contain the object that
+                # was about to replace the target or the exact target displaced
+                # by the exchange. Restore the latter even when it cannot be
+                # decoded or bounded safely enough to inspect.
+                try:
+                    self._atomic_exchange_at(parent_fd, swap_name, parent_fd, name)
+                    os.unlink(swap_name, dir_fd=parent_fd)
+                    os.fsync(parent_fd)
+                except Exception as rollback_error:
+                    raise ManuscriptSourceSecurityError(
+                        "interrupted source exchange could not be reconciled safely"
+                    ) from rollback_error
+                raise ManuscriptSourceConflictError(
+                    "an unsafe external source version was restored after an "
+                    "interrupted replacement"
+                ) from exc
+
+            if displaced is None:
+                # The rename/link and cleanup completed, but a previous source
+                # directory fsync or the SQLite transition may have failed.
+                os.fsync(parent_fd)
+                return
+
+            displaced_hash = _sha256(displaced)
+            if expected_content_hash is None or displaced_hash == proposed_content_hash:
+                # Missing-file creation leaves a second hard link until cleanup;
+                # an identical proposed swap is also safe to discard.
+                os.unlink(swap_name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
+                return
+            if displaced_hash == expected_content_hash:
+                # Exchange completed and the exact reviewed base is retained at
+                # the swap name. Recovery is already durable, so finish cleanup.
+                os.unlink(swap_name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
+                return
+
+            # An external editor won the race immediately before the exchange.
+            # Restore that exact displaced inode and leave the proposal conflicted.
+            self._atomic_exchange_at(parent_fd, swap_name, parent_fd, name)
+            os.unlink(swap_name, dir_fd=parent_fd)
+            os.fsync(parent_fd)
+            raise ManuscriptSourceConflictError(
+                "an external source version was restored after an interrupted replacement"
+            )
+        finally:
+            os.close(parent_fd)
+
+    @staticmethod
+    def _source_swap_name(proposal_id: str) -> str:
+        return f".rka-source-{_sha256(proposal_id.encode())[:32]}.swap"
+
+    def _prepare_source_swap(
+        self,
+        parent_fd: int,
+        swap_name: str,
+        value: bytes,
+        mode: int,
+    ) -> None:
         try:
             temp_fd = os.open(
-                temp_name,
+                swap_name,
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                 0o600,
                 dir_fd=parent_fd,
             )
-            view = memoryview(value)
-            while view:
-                written = os.write(temp_fd, view)
-                view = view[written:]
-            os.fchmod(temp_fd, previous_mode if previous_mode is not None else 0o644)
-            os.fsync(temp_fd)
-            os.close(temp_fd)
-            temp_fd = None
-
-            # This is the last synchronous observation before replacement. The
-            # recovery copy was written from the same expected version, so a
-            # mismatch preserves both the external file and the proposal.
-            current, _ = self._read_current(workspace, normalized)
-            current_hash = _sha256(current) if current is not None else None
-            if current_hash != expected_content_hash:
-                raise ManuscriptSourceConflictError(
-                    "source changed immediately before replacement; current and "
-                    "proposed versions were preserved"
+        except FileExistsError:
+            existing, _ = self._read_source_entry_at(
+                parent_fd,
+                swap_name,
+                missing_ok=False,
+                validate_utf8=False,
+            )
+            assert existing is not None
+            if _sha256(existing) != _sha256(value):
+                raise ManuscriptSourceSecurityError(
+                    "existing source swap does not match this proposal"
                 )
-            os.replace(temp_name, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
-            os.fsync(parent_fd)
-        finally:
-            if temp_fd is not None:
-                os.close(temp_fd)
+        else:
             try:
-                os.unlink(temp_name, dir_fd=parent_fd)
-            except FileNotFoundError:
-                pass
-            os.close(parent_fd)
+                view = memoryview(value)
+                while view:
+                    written = os.write(temp_fd, view)
+                    view = view[written:]
+                os.fchmod(temp_fd, mode)
+                os.fsync(temp_fd)
+            finally:
+                os.close(temp_fd)
+        # Make the proposed swap name durable before exchanging it. A crash can
+        # then leave either the pre- or post-exchange naming state, both recoverable.
+        os.fsync(parent_fd)
+
+    @staticmethod
+    def _atomic_exchange_at(
+        old_directory_fd: int,
+        old_name: str,
+        new_directory_fd: int,
+        new_name: str,
+    ) -> None:
+        """Atomically exchange two names or fail closed on unsupported platforms."""
+        libc = ctypes.CDLL(None, use_errno=True)
+        if sys.platform == "darwin":
+            function_name = "renameatx_np"
+        elif sys.platform.startswith("linux"):
+            function_name = "renameat2"
+        else:
+            raise ManuscriptSourceSecurityError(
+                "atomic source exchange is unsupported on this platform"
+            )
+        try:
+            exchange = getattr(libc, function_name)
+        except AttributeError as exc:
+            raise ManuscriptSourceSecurityError(
+                "atomic source exchange is unavailable; refusing an unsafe replacement"
+            ) from exc
+        exchange.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        exchange.restype = ctypes.c_int
+        result = exchange(
+            old_directory_fd,
+            os.fsencode(old_name),
+            new_directory_fd,
+            os.fsencode(new_name),
+            0x2,
+        )
+        if result != 0:
+            error_number = ctypes.get_errno()
+            raise OSError(error_number, os.strerror(error_number))
 
     async def _require_proposal_row(self, proposal_id: str) -> dict[str, Any]:
         row = await self.db.fetchone(

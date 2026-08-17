@@ -169,12 +169,20 @@ function SourceFileWorkspace({
   pending: ManuscriptSourceProposal[]
   sources: ReturnType<typeof useManuscriptSources>
 }) {
-  const [draft, setDraft] = useState(snapshot.content)
-  const [loadedContent, setLoadedContent] = useState(snapshot.content)
-  const [loadedHash, setLoadedHash] = useState(snapshot.content_hash)
+  const [editor, setEditor] = useState({
+    draft: snapshot.content,
+    loadedContent: snapshot.content,
+    loadedHash: snapshot.content_hash,
+  })
   const [dirty, setDirty] = useState(false)
   const [reason, setReason] = useState("Revise the public source while preserving the reviewed manuscript-unit boundary.")
   const [reviewedProposal, setReviewedProposal] = useState<ManuscriptSourceProposal | null>(null)
+  // A clean editor follows background snapshots directly. Once the researcher
+  // types, freeze the exact base content/hash alongside the draft so polling can
+  // reveal a conflict without replacing unsent work.
+  const draft = dirty ? editor.draft : snapshot.content
+  const loadedContent = dirty ? editor.loadedContent : snapshot.content
+  const loadedHash = dirty ? editor.loadedHash : snapshot.content_hash
   const externalConflict = dirty && snapshot.content_hash !== loadedHash
 
   const checkExternal = async () => {
@@ -188,18 +196,23 @@ function SourceFileWorkspace({
       toast.warning("External edit detected; your unsent draft was preserved")
       return
     }
-    setDraft(current.content)
-    setLoadedContent(current.content)
-    setLoadedHash(current.content_hash)
+    setEditor({
+      draft: current.content,
+      loadedContent: current.content,
+      loadedHash: current.content_hash,
+    })
+    setDirty(false)
     toast.success("Reloaded the external source change")
   }
 
   const reloadCurrent = () => {
     const current = sources.file.data
     if (!current) return
-    setDraft(current.content)
-    setLoadedContent(current.content)
-    setLoadedHash(current.content_hash)
+    setEditor({
+      draft: current.content,
+      loadedContent: current.content,
+      loadedHash: current.content_hash,
+    })
     setDirty(false)
   }
 
@@ -229,9 +242,11 @@ function SourceFileWorkspace({
         reason: "PI applied the reviewed source diff in the manuscript workbench.",
       })
       const appliedContent = applied.proposed_content ?? draft
-      setDraft(appliedContent)
-      setLoadedContent(appliedContent)
-      setLoadedHash(applied.proposed_content_hash)
+      setEditor({
+        draft: appliedContent,
+        loadedContent: appliedContent,
+        loadedHash: applied.proposed_content_hash,
+      })
       setDirty(false)
       setReviewedProposal(null)
       toast.success("Source file replaced atomically; recovery metadata was retained")
@@ -288,8 +303,13 @@ function SourceFileWorkspace({
             spellCheck={false}
             value={draft}
             onChange={(event) => {
-              setDraft(event.target.value)
-              setDirty(event.target.value !== loadedContent)
+              const nextDraft = event.target.value
+              setEditor({
+                draft: nextDraft,
+                loadedContent,
+                loadedHash,
+              })
+              setDirty(nextDraft !== loadedContent)
             }}
           />
         </div>

@@ -84,14 +84,26 @@ For a matching base, apply:
 1. re-reads after asynchronous validation and requires the same base hash;
 2. writes a recovery copy and manifest beneath the managed storage directory
    beside the active RKA database;
-3. fsyncs the recovery file and manifest;
-4. writes the proposed bytes to a same-directory temporary regular file;
-5. preserves the existing regular-file mode and fsyncs the temporary file;
-6. re-reads synchronously immediately before replacement and again requires the
-   same base hash;
-7. atomically replaces the target with `os.replace`;
-8. fsyncs the containing directory;
-9. records the applied event with before, after, and recovery hashes.
+3. fsyncs the recovery file, manifest, leaf directory, and every newly ensured
+   ancestor edge so a fresh recovery hierarchy is durable;
+4. writes the proposed bytes to a deterministic same-directory swap file,
+   preserves the existing regular-file mode, fsyncs the file, and fsyncs its
+   containing directory;
+5. for an existing target, atomically exchanges the target and swap names,
+   hashes the exact displaced target, and restores that displaced object by a
+   second exchange if it is not the reviewed base;
+6. for a missing target, installs the proposed inode with a no-clobber hard link
+   so a file that appears at the commit point wins and is never overwritten;
+7. removes the validated displaced/swap name and fsyncs the source directory;
+8. records the applied event with before, after, and recovery hashes.
+
+The name-exchange primitive is `renameatx_np(..., RENAME_SWAP)` on macOS and
+`renameat2(..., RENAME_EXCHANGE)` on Linux. A deployment without an atomic
+exchange primitive fails closed instead of falling back to a check-then-rename
+sequence. A deterministic swap left by a crash is reconciled before the ledger
+can become `applied`: the service either finishes cleanup and repeats the source
+directory fsync, or restores the exact displaced external object and records a
+conflict.
 
 The recovery manifest is durable even if the database event cannot be
 committed after replacement. The service never runs `git add`, commit, reset,
@@ -166,8 +178,8 @@ and does not invalidate PI checkpoints by itself.
 - Candidate prose is reviewable and auditable without being promoted to
   semantic truth.
 - Filesystem and database failure cannot be made perfectly atomic; the durable
-  recovery-before-replace protocol makes the partial state observable and
-  repairable.
+  recovery-before-exchange protocol and deterministic swap make every expected
+  partial naming state observable and repairable.
 - Deployments must explicitly mount and allowlist manuscript workspaces.
 
 ## PR 10 exit gate

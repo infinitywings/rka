@@ -157,6 +157,93 @@ async def test_prepare_then_apply_is_atomic_mode_preserving_and_recoverable(
 
 
 @pytest.mark.asyncio
+async def test_apply_creates_a_missing_source_with_no_clobber_link(
+    db_with_project,
+    tmp_path: Path,
+) -> None:
+    service, _, manuscript_id, workspace, unit_id = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    after = _markdown(unit_id, "Create a previously missing source.")
+    source = workspace / "main.md"
+    proposal = await service.create_proposal(
+        manuscript_id,
+        ManuscriptSourceProposalCreate(
+            origin="human",
+            relative_path="main.md",
+            expected_content_hash=None,
+            content=after,
+            created_by="web_ui",
+            reason="Exercise atomic missing-file creation.",
+        ),
+    )
+
+    applied = await service.apply_proposal(
+        proposal["id"],
+        ManuscriptSourceProposalTransition(
+            expected_revision=1,
+            actor="web_ui",
+            reason="Create the reviewed source without clobbering.",
+        ),
+    )
+    assert applied["status"] == "applied"
+    assert source.read_text() == after
+    recovery = Path(db_with_project.db_path).resolve().parent / applied[
+        "recovery_manifest_path"
+    ]
+    assert json.loads(recovery.read_text())["before_existed"] is False
+    assert not (recovery.parent / "before.bin").exists()
+
+
+@pytest.mark.asyncio
+async def test_external_file_appearing_at_missing_source_commit_is_preserved(
+    db_with_project,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _, manuscript_id, workspace, unit_id = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    proposed = _markdown(unit_id, "Proposed missing source.")
+    external = _markdown(unit_id, "External source won the creation race.")
+    source = workspace / "main.md"
+    proposal = await service.create_proposal(
+        manuscript_id,
+        ManuscriptSourceProposalCreate(
+            origin="human",
+            relative_path="main.md",
+            expected_content_hash=None,
+            content=proposed,
+            created_by="web_ui",
+            reason="Exercise a missing-file creation race.",
+        ),
+    )
+    original_link = os.link
+    injected = False
+
+    def inject_before_link(*args, **kwargs):
+        nonlocal injected
+        if not injected:
+            injected = True
+            source.write_text(external)
+        return original_link(*args, **kwargs)
+
+    monkeypatch.setattr(os, "link", inject_before_link)
+    with pytest.raises(ManuscriptSourceConflictError, match="appeared immediately"):
+        await service.apply_proposal(
+            proposal["id"],
+            ManuscriptSourceProposalTransition(
+                expected_revision=1,
+                actor="web_ui",
+                reason="Preserve the external creation winner.",
+            ),
+        )
+    assert source.read_text() == external
+    assert (await service.get_proposal(proposal["id"]))["status"] == "conflicted"
+    assert not (workspace / service._source_swap_name(proposal["id"])).exists()
+
+
+@pytest.mark.asyncio
 async def test_external_edit_creates_durable_conflict_without_overwrite(
     db_with_project,
     tmp_path: Path,
@@ -429,13 +516,17 @@ async def test_external_edit_after_recovery_is_preserved_before_final_replace(
             reason="Exercise final pre-replace hash verification.",
         ),
     )
-    original_write_recovery = service._write_recovery
+    original_exchange = service._atomic_exchange_at
+    injected = False
 
     def inject_external_edit(*args, **kwargs):
-        original_write_recovery(*args, **kwargs)
-        source.write_text(external)
+        nonlocal injected
+        if not injected:
+            injected = True
+            source.write_text(external)
+        original_exchange(*args, **kwargs)
 
-    monkeypatch.setattr(service, "_write_recovery", inject_external_edit)
+    monkeypatch.setattr(service, "_atomic_exchange_at", inject_external_edit)
     with pytest.raises(ManuscriptSourceConflictError, match="immediately before"):
         await service.apply_proposal(
             proposal["id"],
@@ -481,13 +572,19 @@ async def test_retry_reconciles_failure_after_replace_before_directory_fsync(
         ),
     )
     original_fsync = os.fsync
-    directory_fsyncs = 0
+    workspace_stat = workspace.stat()
+    source_directory_fsyncs = 0
 
     def fail_second_directory_fsync(fd: int) -> None:
-        nonlocal directory_fsyncs
-        if stat.S_ISDIR(os.fstat(fd).st_mode):
-            directory_fsyncs += 1
-            if directory_fsyncs == 2:
+        nonlocal source_directory_fsyncs
+        target = os.fstat(fd)
+        if (
+            stat.S_ISDIR(target.st_mode)
+            and target.st_dev == workspace_stat.st_dev
+            and target.st_ino == workspace_stat.st_ino
+        ):
+            source_directory_fsyncs += 1
+            if source_directory_fsyncs == 2:
                 raise OSError("simulated source-directory fsync failure")
         original_fsync(fd)
 
@@ -502,10 +599,182 @@ async def test_retry_reconciles_failure_after_replace_before_directory_fsync(
     assert source.read_text() == after
     assert (await service.get_proposal(proposal["id"]))["status"] == "proposed"
 
-    monkeypatch.setattr(os, "fsync", original_fsync)
+    retry_directory_fsyncs = 0
+
+    def count_retry_directory_fsync(fd: int) -> None:
+        nonlocal retry_directory_fsyncs
+        target = os.fstat(fd)
+        if (
+            stat.S_ISDIR(target.st_mode)
+            and target.st_dev == workspace_stat.st_dev
+            and target.st_ino == workspace_stat.st_ino
+        ):
+            retry_directory_fsyncs += 1
+        original_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", count_retry_directory_fsync)
     recovered = await service.apply_proposal(proposal["id"], transition)
     assert recovered["status"] == "applied"
     assert recovered["events"][-1]["details"]["recovered_after_restart"] is True
+    assert retry_directory_fsyncs >= 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_index", [1, 2, 3, 4])
+async def test_recovery_hierarchy_retries_every_parent_directory_fsync(
+    db_with_project,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_index: int,
+) -> None:
+    service, _, manuscript_id, workspace, unit_id = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    before = _markdown(unit_id, "Base for durable recovery hierarchy.")
+    after = _markdown(unit_id, "Proposed durable recovery hierarchy.")
+    source = workspace / "main.md"
+    source.write_text(before)
+    proposal = await service.create_proposal(
+        manuscript_id,
+        ManuscriptSourceProposalCreate(
+            origin="human",
+            relative_path="main.md",
+            expected_content_hash=_hash(before),
+            content=after,
+            created_by="web_ui",
+            reason="Exercise every recovery hierarchy durability barrier.",
+        ),
+    )
+    row = await service._require_proposal_row(proposal["id"])
+    recovery = service._recovery_manifest_path(row)
+    original_fsync = os.fsync
+    directory_fsyncs = 0
+
+    def fail_selected_directory_fsync(fd: int) -> None:
+        nonlocal directory_fsyncs
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            directory_fsyncs += 1
+            if directory_fsyncs == failure_index:
+                raise OSError(f"simulated recovery hierarchy fsync {failure_index}")
+        original_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", fail_selected_directory_fsync)
+    with pytest.raises(OSError, match="recovery hierarchy fsync"):
+        service._write_recovery(
+            row,
+            before.encode(),
+            source.stat().st_mode & 0o777,
+            recovery,
+        )
+
+    monkeypatch.setattr(os, "fsync", original_fsync)
+    service._write_recovery(
+        row,
+        before.encode(),
+        source.stat().st_mode & 0o777,
+        recovery,
+    )
+    assert service._valid_recovery_manifest(recovery, row)
+    assert source.read_text() == before
+
+
+@pytest.mark.asyncio
+async def test_retry_finishes_interrupted_exchange_with_exact_base_in_swap(
+    db_with_project,
+    tmp_path: Path,
+) -> None:
+    service, _, manuscript_id, workspace, unit_id = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    before = _markdown(unit_id, "Base retained by interrupted exchange.")
+    after = _markdown(unit_id, "Proposed content visible after interrupted exchange.")
+    source = workspace / "main.md"
+    source.write_text(before)
+    proposal = await service.create_proposal(
+        manuscript_id,
+        ManuscriptSourceProposalCreate(
+            origin="human",
+            relative_path="main.md",
+            expected_content_hash=_hash(before),
+            content=after,
+            created_by="web_ui",
+            reason="Reconcile a crash after exchange and before cleanup.",
+        ),
+    )
+    row = await service._require_proposal_row(proposal["id"])
+    recovery = service._recovery_manifest_path(row)
+    service._write_recovery(row, before.encode(), 0o644, recovery)
+    parent_fd, name = service._open_parent_fd(workspace, Path("main.md"))
+    swap_name = service._source_swap_name(proposal["id"])
+    try:
+        service._prepare_source_swap(parent_fd, swap_name, after.encode(), 0o644)
+        service._atomic_exchange_at(parent_fd, swap_name, parent_fd, name)
+    finally:
+        os.close(parent_fd)
+
+    assert source.read_text() == after
+    recovered = await service.apply_proposal(
+        proposal["id"],
+        ManuscriptSourceProposalTransition(
+            expected_revision=1,
+            actor="web_ui",
+            reason="Resume the interrupted exchange.",
+        ),
+    )
+    assert recovered["status"] == "applied"
+    assert recovered["events"][-1]["details"]["recovered_after_restart"] is True
+    assert not (workspace / swap_name).exists()
+
+
+@pytest.mark.asyncio
+async def test_retry_restores_external_file_displaced_by_interrupted_exchange(
+    db_with_project,
+    tmp_path: Path,
+) -> None:
+    service, _, manuscript_id, workspace, unit_id = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    before = _markdown(unit_id, "Base before interrupted external race.")
+    after = _markdown(unit_id, "Proposed content after interrupted external race.")
+    external = _markdown(unit_id, "External content displaced at the exchange point.")
+    source = workspace / "main.md"
+    source.write_text(before)
+    proposal = await service.create_proposal(
+        manuscript_id,
+        ManuscriptSourceProposalCreate(
+            origin="human",
+            relative_path="main.md",
+            expected_content_hash=_hash(before),
+            content=after,
+            created_by="web_ui",
+            reason="Restore an external inode captured by an interrupted exchange.",
+        ),
+    )
+    row = await service._require_proposal_row(proposal["id"])
+    recovery = service._recovery_manifest_path(row)
+    service._write_recovery(row, before.encode(), 0o644, recovery)
+    source.write_text(external)
+    parent_fd, name = service._open_parent_fd(workspace, Path("main.md"))
+    swap_name = service._source_swap_name(proposal["id"])
+    try:
+        service._prepare_source_swap(parent_fd, swap_name, after.encode(), 0o644)
+        service._atomic_exchange_at(parent_fd, swap_name, parent_fd, name)
+    finally:
+        os.close(parent_fd)
+
+    assert source.read_text() == after
+    with pytest.raises(ManuscriptSourceConflictError, match="external source version"):
+        await service.apply_proposal(
+            proposal["id"],
+            ManuscriptSourceProposalTransition(
+                expected_revision=1,
+                actor="web_ui",
+                reason="Restore the displaced external source.",
+            ),
+        )
+    assert source.read_text() == external
+    assert (await service.get_proposal(proposal["id"]))["status"] == "conflicted"
+    assert not (workspace / swap_name).exists()
 
 
 @pytest.mark.asyncio
