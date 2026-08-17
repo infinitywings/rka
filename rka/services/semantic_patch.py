@@ -28,9 +28,7 @@ from rka.services.planning import ManuscriptPlanningService
 SEMANTIC_PATCH_SCHEMA_VERSION = "rka.semantic-patch/v1"
 CONTEXT_MANIFEST_SCHEMA_VERSION = "rka.context-manifest/v1"
 _OPERATION_ADAPTER = TypeAdapter(SemanticPatchOperation)
-_PROPOSAL_STATUSES = {
-    "proposed", "applied", "rejected", "conflicted", "superseded", "expired"
-}
+_PROPOSAL_STATUSES = {"proposed", "applied", "rejected", "conflicted", "superseded", "expired"}
 
 
 class SemanticPatchNotFoundError(ValueError):
@@ -64,9 +62,13 @@ def _semantic_diff(before: Any, after: Any, path: str = "") -> list[dict[str, An
         for key in sorted(set(before) | set(after)):
             child = f"{path}/{key}"
             if key not in before:
-                changes.append({"path": child, "change": "added", "before": None, "after": after[key]})
+                changes.append(
+                    {"path": child, "change": "added", "before": None, "after": after[key]}
+                )
             elif key not in after:
-                changes.append({"path": child, "change": "removed", "before": before[key], "after": None})
+                changes.append(
+                    {"path": child, "change": "removed", "before": before[key], "after": None}
+                )
             else:
                 changes.extend(_semantic_diff(before[key], after[key], child))
         return changes
@@ -101,9 +103,7 @@ def _semantic_diff(before: Any, after: Any, path: str = "") -> list[dict[str, An
                         }
                     )
                 else:
-                    changes.extend(
-                        _semantic_diff(before_items[key], after_items[key], child)
-                    )
+                    changes.extend(_semantic_diff(before_items[key], after_items[key], child))
             return changes
     return [{"path": path or "/", "change": "changed", "before": before, "after": after}]
 
@@ -274,7 +274,9 @@ class SemanticPatchService(BaseService):
                     or manifest["model"] != data.model
                     or manifest["boundary"] != data.boundary
                 ):
-                    raise ValueError("proposal provider boundary does not match its context manifest")
+                    raise ValueError(
+                        "proposal provider boundary does not match its context manifest"
+                    )
                 self._validate_ai_manifest_scope(
                     manifest=manifest,
                     operations=data.operations,
@@ -596,13 +598,14 @@ class SemanticPatchService(BaseService):
                 raise SemanticPatchConflictError("planning artifact version is already stale")
             stored_before = artifact["version"] if artifact else None
             before = self._planning_semantic_snapshot(stored_before)
-            after = self._planning_semantic_snapshot(
-                operation.append.model_dump(mode="json")
-            )
+            after = self._planning_semantic_snapshot(operation.append.model_dump(mode="json"))
             base = {
-                "target": {"type": "planning_artifact", "branch_id": operation.branch_id,
-                           "stage_type": operation.append.stage_type,
-                           "local_key": operation.append.local_key},
+                "target": {
+                    "type": "planning_artifact",
+                    "branch_id": operation.branch_id,
+                    "stage_type": operation.append.stage_type,
+                    "local_key": operation.append.local_key,
+                },
                 "branch_revision": int(branch["revision"]),
                 "artifact_version": previous_version,
                 "fingerprint": _hash(stored_before),
@@ -814,9 +817,13 @@ class SemanticPatchService(BaseService):
         if not claim_ids:
             return
         packet = await EntityResolverService(self.db).resolve_entities(self.project_id, claim_ids)
-        unresolved = [entity_id for entity_id in claim_ids if not packet["entities"][entity_id]["found"]]
+        unresolved = [
+            entity_id for entity_id in claim_ids if not packet["entities"][entity_id]["found"]
+        ]
         if unresolved:
-            raise ValueError("spine references unavailable evidence claims: " + ", ".join(unresolved))
+            raise ValueError(
+                "spine references unavailable evidence claims: " + ", ".join(unresolved)
+            )
 
     @staticmethod
     def _spine_findings(before: dict[str, Any], after: dict[str, Any]) -> list[dict[str, Any]]:
@@ -832,38 +839,80 @@ class SemanticPatchService(BaseService):
             for old_field, new_field, code in checks:
                 removed = sorted(set(left.get(old_field) or []) - set(right["evidence"][new_field]))
                 if removed:
-                    findings.append({
-                        "severity": "warning", "code": code,
-                        "message": f"claim {key} removes {len(removed)} {new_field} binding(s)",
-                        "claim_key": key, "entity_ids": removed,
-                    })
+                    findings.append(
+                        {
+                            "severity": "warning",
+                            "code": code,
+                            "message": f"claim {key} removes {len(removed)} {new_field} binding(s)",
+                            "claim_key": key,
+                            "entity_ids": removed,
+                        }
+                    )
             removed_wording = sorted(
                 set(left.get("prohibited_wording") or []) - set(right["prohibited_wording"])
             )
             if removed_wording:
-                findings.append({
-                    "severity": "warning", "code": "PROHIBITED_WORDING_REMOVED",
-                    "message": f"claim {key} removes wording boundaries",
-                    "claim_key": key, "removed": removed_wording,
-                })
+                findings.append(
+                    {
+                        "severity": "warning",
+                        "code": "PROHIBITED_WORDING_REMOVED",
+                        "message": f"claim {key} removes wording boundaries",
+                        "claim_key": key,
+                        "removed": removed_wording,
+                    }
+                )
             if left.get("allowed_wording") != right.get("allowed_wording"):
-                findings.append({
-                    "severity": "warning", "code": "ALLOWED_WORDING_CHANGED",
-                    "message": f"claim {key} changes its allowed-wording boundary",
-                    "claim_key": key,
-                })
+                findings.append(
+                    {
+                        "severity": "warning",
+                        "code": "ALLOWED_WORDING_CHANGED",
+                        "message": f"claim {key} changes its allowed-wording boundary",
+                        "claim_key": key,
+                    }
+                )
             if left.get("ratified_by") and left.get("text") != right.get("exact_wording"):
-                findings.append({
-                    "severity": "warning", "code": "RATIFIED_WORDING_CHANGED",
-                    "message": (
-                        f"claim {key} has ratified wording; apply appends unratified wording "
-                        "and does not overwrite the ratification"
-                    ),
-                    "claim_key": key, "decision_id": left["ratified_by"],
-                })
+                findings.append(
+                    {
+                        "severity": "warning",
+                        "code": "RATIFIED_WORDING_CHANGED",
+                        "message": (
+                            f"claim {key} has ratified wording; apply appends unratified wording "
+                            "and does not overwrite the ratification"
+                        ),
+                        "claim_key": key,
+                        "decision_id": left["ratified_by"],
+                    }
+                )
         old_units = {item["unit_id"]: item for item in before.get("units", [])}
         new_units = {item["local_key"]: item for item in after.get("units", [])}
         reordered: list[str] = []
+        for key in sorted(set(new_units) - set(old_units)):
+            right = new_units[key]
+            parent_key = right.get("parent_unit_key")
+            parent = old_units.get(parent_key)
+            if parent is None:
+                continue
+            for old_field, role in (
+                ("evidence_ids", "support"),
+                ("qualifier_ids", "qualifier"),
+                ("counterevidence_ids", "counterevidence"),
+            ):
+                removed = sorted(set(parent.get(old_field) or []) - set(right["evidence"][role]))
+                if removed:
+                    findings.append(
+                        {
+                            "severity": "warning",
+                            "code": "INHERITED_UNIT_EVIDENCE_NARROWED",
+                            "message": (
+                                f"new unit {key} narrows {len(removed)} inherited "
+                                f"{role} binding(s) from {parent_key}"
+                            ),
+                            "unit_key": key,
+                            "parent_unit_key": parent_key,
+                            "role": role,
+                            "entity_ids": removed,
+                        }
+                    )
         for key in sorted(set(old_units) & set(new_units)):
             left, right = old_units[key], new_units[key]
             for old_field, role in (
@@ -871,37 +920,41 @@ class SemanticPatchService(BaseService):
                 ("qualifier_ids", "qualifier"),
                 ("counterevidence_ids", "counterevidence"),
             ):
-                removed = sorted(
-                    set(left.get(old_field) or []) - set(right["evidence"][role])
-                )
+                removed = sorted(set(left.get(old_field) or []) - set(right["evidence"][role]))
                 if removed:
-                    findings.append({
-                        "severity": "warning",
-                        "code": "UNIT_EVIDENCE_BINDING_REMOVED",
-                        "message": f"unit {key} removes {len(removed)} {role} binding(s)",
-                        "unit_key": key,
-                        "role": role,
-                        "entity_ids": removed,
-                    })
+                    findings.append(
+                        {
+                            "severity": "warning",
+                            "code": "UNIT_EVIDENCE_BINDING_REMOVED",
+                            "message": f"unit {key} removes {len(removed)} {role} binding(s)",
+                            "unit_key": key,
+                            "role": role,
+                            "entity_ids": removed,
+                        }
+                    )
             if left.get("status") != "removed" and right.get("status") == "removed":
-                findings.append({
-                    "severity": "warning",
-                    "code": "OUTLINE_UNIT_REMOVED",
-                    "message": f"unit {key} will leave the active outline",
-                    "unit_key": key,
-                })
+                findings.append(
+                    {
+                        "severity": "warning",
+                        "code": "OUTLINE_UNIT_REMOVED",
+                        "message": f"unit {key} will leave the active outline",
+                        "unit_key": key,
+                    }
+                )
             if int(left.get("sequence", 0)) != int(right.get("sequence", 0)):
                 reordered.append(key)
         if reordered:
-            findings.append({
-                "severity": "warning",
-                "code": "OUTLINE_ORDER_CHANGED",
-                "message": (
-                    f"{len(reordered)} unit(s) change sequence; review transitions and "
-                    "quick-reader flow before apply"
-                ),
-                "unit_keys": reordered,
-            })
+            findings.append(
+                {
+                    "severity": "warning",
+                    "code": "OUTLINE_ORDER_CHANGED",
+                    "message": (
+                        f"{len(reordered)} unit(s) change sequence; review transitions and "
+                        "quick-reader flow before apply"
+                    ),
+                    "unit_keys": reordered,
+                }
+            )
         return findings
 
     async def _current_operation_base(self, operation: SemanticPatchOperation) -> dict[str, Any]:
@@ -909,16 +962,22 @@ class SemanticPatchService(BaseService):
             planning = ManuscriptPlanningService(self.db, project_id=self.project_id)
             context = await planning.get_branch(operation.branch_id)
             artifact = next(
-                (item for item in context["effective_artifacts"]
-                 if item["stage_type"] == operation.append.stage_type
-                 and item["local_key"] == operation.append.local_key),
+                (
+                    item
+                    for item in context["effective_artifacts"]
+                    if item["stage_type"] == operation.append.stage_type
+                    and item["local_key"] == operation.append.local_key
+                ),
                 None,
             )
             before = artifact["version"] if artifact else None
             return {
-                "target": {"type": "planning_artifact", "branch_id": operation.branch_id,
-                           "stage_type": operation.append.stage_type,
-                           "local_key": operation.append.local_key},
+                "target": {
+                    "type": "planning_artifact",
+                    "branch_id": operation.branch_id,
+                    "stage_type": operation.append.stage_type,
+                    "local_key": operation.append.local_key,
+                },
                 "branch_revision": int(context["branch"]["revision"]),
                 "artifact_version": int(artifact["version"]["version"]) if artifact else 0,
                 "fingerprint": _hash(before),
@@ -951,7 +1010,10 @@ class SemanticPatchService(BaseService):
             result = await ManuscriptPlanningService(
                 self.db, project_id=self.project_id
             ).append_artifact_version(operation.branch_id, operation.append)
-            return {"operation": operation.operation, "branch_revision": result["branch"]["revision"]}
+            return {
+                "operation": operation.operation,
+                "branch_revision": result["branch"]["revision"],
+            }
         manuscript = NativeManuscriptService(self.db, project_id=self.project_id)
         if isinstance(operation, ManuscriptMetadataUpdateOperation):
             fields = {
@@ -989,9 +1051,9 @@ class SemanticPatchService(BaseService):
                 "fingerprint": _hash(context),
                 "snapshot": context,
             }
-        context = await NativeManuscriptService(
-            self.db, project_id=self.project_id
-        ).get_context(target_id)
+        context = await NativeManuscriptService(self.db, project_id=self.project_id).get_context(
+            target_id
+        )
         return {
             "target": {"type": target_type, "id": target_id},
             "revision": int(context["manuscript"]["revision"]),
@@ -1038,14 +1100,27 @@ class SemanticPatchService(BaseService):
                    applied_at = CASE WHEN ? = 'applied' THEN ? ELSE applied_at END,
                    closed_at = ?
                WHERE id = ? AND project_id = ? AND status = ? AND revision = ?""",
-            [status, timestamp, status, timestamp, timestamp,
-             row["id"], self.project_id, row["status"], row["revision"]],
+            [
+                status,
+                timestamp,
+                status,
+                timestamp,
+                timestamp,
+                row["id"],
+                self.project_id,
+                row["status"],
+                row["revision"],
+            ],
         )
         if cursor.rowcount != 1:
             raise SemanticPatchConflictError("proposal changed concurrently")
         await self._insert_event(
-            str(row["id"]), revision=revision, action=status,
-            actor=actor, reason=reason, details=details,
+            str(row["id"]),
+            revision=revision,
+            action=status,
+            actor=actor,
+            reason=reason,
+            details=details,
         )
 
     async def _insert_event(
@@ -1062,6 +1137,14 @@ class SemanticPatchService(BaseService):
             """INSERT INTO semantic_patch_proposal_events
                (id, proposal_id, project_id, proposal_revision, action, actor, reason, details)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            [generate_id("semantic_patch_proposal_event"), proposal_id, self.project_id,
-             revision, action, actor, reason, _canonical_json(details)],
+            [
+                generate_id("semantic_patch_proposal_event"),
+                proposal_id,
+                self.project_id,
+                revision,
+                action,
+                actor,
+                reason,
+                _canonical_json(details),
+            ],
         )

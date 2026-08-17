@@ -113,7 +113,7 @@ function makeStageVerdicts(
     rqs: rqs.length > 0 ? "Ready" : "Blocked",
     contributions: activeClaims.length > 0 ? (readiness?.ready ? "Ready" : "Needs review") : candidateClaims.length > 0 ? "Needs review" : "Blocked",
     evaluation: resultUnits.length > 0 ? "Needs review" : "Blocked",
-    outline: outline?.summary.checkpoint_ready
+    outline: outline?.summary.rationale_complete
       ? checkpointStatusForStage(outline) === "resolved" ? "Ready" : "Needs review"
       : units.length > 0 ? "Needs review" : "Blocked",
   }

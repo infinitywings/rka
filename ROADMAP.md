@@ -33,9 +33,10 @@ milestone must satisfy its exit gate before dependent work is treated as ready.
 ## Now
 
 **M0 through M4 are complete on `main`. M5 / PR 9 (issue #60), the progressive
-outline and manuscript-unit editor, has passed its independent-audit
-correction gate and is the current review target. It remains draft pending
-refreshed GitHub CI and human review.**
+outline and manuscript-unit editor, merged in PR
+[#80](https://github.com/infinitywings/rka/pull/80); its independent audit and
+resolution record merged in PR [#81](https://github.com/infinitywings/rka/pull/81).
+PR 9.1 integrity hardening is now the active implementation target.**
 PR [#78](https://github.com/infinitywings/rka/pull/78) merged
 the seed-through-contribution dependency; ADR 0008 freezes the evaluation
 contract, and the exact release evidence is recorded in
@@ -47,9 +48,15 @@ implementation plan is
 Its migration, REST/MCP, proposal, workbench, restart, and knowledge-pack gates
 and the correction status of the original acceptance run are recorded in
 [`2026-08-15-workbench-m5-pr9-exit-evidence.md`](docs/superpowers/specs/2026-08-15-workbench-m5-pr9-exit-evidence.md).
-The implementation is published for review in draft PR
-[#80](https://github.com/infinitywings/rka/pull/80).
-PR 10 remains dependent on PR 9 review and merge.
+The merged foundation is recorded in PR
+[#80](https://github.com/infinitywings/rka/pull/80), and the PR 9.1 hardening
+contract is
+[`2026-08-17-m5-pr9-1-integrity-hardening.md`](docs/superpowers/plans/2026-08-17-m5-pr9-1-integrity-hardening.md).
+Its migration, pack, semantic-cursor, no-op-write, frontend-build, and
+real-project-derived validation record is
+[`2026-08-17-workbench-m5-pr9-1-exit-evidence.md`](docs/superpowers/specs/2026-08-17-workbench-m5-pr9-1-exit-evidence.md).
+PR 9.2 remains dependent on PR 9.1; PR 10 remains dependent on the typed
+semantic core in PR 9.2.
 The choice-first Writer delta is reconciled, the authority and AI boundary is
 recorded in ADR 0001, the read-only workbench has passed its real-project exit
 gate, and first-class experiment/run/observation/evidence-locator semantics

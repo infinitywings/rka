@@ -22,6 +22,7 @@ from rka.models.manuscript_native import (
 )
 from rka.services.knowledge_pack import (
     PACK_SCHEMA_VERSION,
+    KnowledgePackIntegrityError,
     KnowledgePackService,
 )
 from rka.services.manuscript_native import NativeManuscriptService
@@ -65,9 +66,7 @@ async def test_v2_pack_conservatively_backfills_legacy_manuscript_identity(
             [tag, legacy_id],
         )
     await db.commit()
-    project = await db.fetchone(
-        "SELECT * FROM projects WHERE id = 'proj_default'"
-    )
+    project = await db.fetchone("SELECT * FROM projects WHERE id = 'proj_default'")
     journal = await db.fetchone(
         "SELECT * FROM journal WHERE id = ?",
         [legacy_id],
@@ -118,10 +117,13 @@ async def test_v2_pack_conservatively_backfills_legacy_manuscript_identity(
     assert manuscript["abstract"] == "Imported abstract."
     assert manuscript["venue"] == "USENIX Security"
     assert manuscript["phase"] == "drafting"
-    assert await db.fetchall(
-        """SELECT * FROM manuscript_claims
+    assert (
+        await db.fetchall(
+            """SELECT * FROM manuscript_claims
            WHERE project_id = 'proj_legacy_pack'"""
-    ) == []
+        )
+        == []
+    )
 
 
 def _spine(
@@ -138,33 +140,23 @@ def _spine(
                 "status": "active",
                 "text": empirical_wording,
                 "allowed_wording": empirical_wording,
-                "prohibited_wording": [
-                    "The system eliminates every latency source."
-                ],
+                "prohibited_wording": ["The system eliminates every latency source."],
                 "evidence_ids": [evidence_id],
                 "qualifier_ids": [],
                 "counterevidence_ids": [],
-                "unit_links": [
-                    {"unit_key": "R1", "relationship": "tests"}
-                ],
+                "unit_links": [{"unit_key": "R1", "relationship": "tests"}],
             },
             {
                 "claim_id": "C2",
                 "claim_type": "methodological",
                 "status": "candidate",
                 "text": "The workflow separates support from qualifiers.",
-                "allowed_wording": (
-                    "The workflow records support and qualifiers separately."
-                ),
-                "prohibited_wording": [
-                    "The workflow proves that every result is correct."
-                ],
+                "allowed_wording": ("The workflow records support and qualifiers separately."),
+                "prohibited_wording": ["The workflow proves that every result is correct."],
                 "evidence_ids": [],
                 "qualifier_ids": [evidence_id],
                 "counterevidence_ids": [],
-                "unit_links": [
-                    {"unit_key": "M1", "relationship": "advances"}
-                ],
+                "unit_links": [{"unit_key": "M1", "relationship": "advances"}],
             },
         ],
         "units": [
@@ -176,16 +168,12 @@ def _spine(
                 "outline_level": 3,
                 "communicative_job": "Report the bounded latency result.",
                 "intended_takeaway": "The measured configuration reduced latency.",
-                "evidence_plan": ["Bind the measured latency observation."],
-                "figure_intentions": ["Show the latency comparison."],
-                "citation_intentions": ["Cite the benchmark protocol."],
+                "evidence_plan": [f"Bind the measured observation {evidence_id}."],
+                "figure_intentions": [f"Render artifact {artifact_id} with support {evidence_id}."],
+                "citation_intentions": [f"Cite the source of {evidence_id}."],
                 "artifact_ref": artifact_id,
-                "allowed_interpretation": (
-                    "Latency was lower under the measured configuration."
-                ),
-                "prohibited_interpretation": (
-                    "Latency is lower under every configuration."
-                ),
+                "allowed_interpretation": ("Latency was lower under the measured configuration."),
+                "prohibited_interpretation": ("Latency is lower under every configuration."),
                 "evidence_ids": [evidence_id],
                 "sequence": 2,
             },
@@ -196,8 +184,8 @@ def _spine(
                 "outline_level": 2,
                 "communicative_job": "Explain the provenance-aware workflow.",
                 "intended_takeaway": "Support and qualifiers remain distinct.",
-                "evidence_plan": ["Use the workflow qualifier record."],
-                "table_intentions": ["Summarize evidence roles."],
+                "evidence_plan": [f"Use qualifier {evidence_id}."],
+                "table_intentions": [f"Summarize evidence role for {evidence_id}."],
                 "qualifier_ids": [evidence_id],
                 "sequence": 1,
             },
@@ -244,6 +232,21 @@ async def _seed_native_manuscript(db) -> dict[str, str]:
            VALUES (?, ?, 'result', 'Latency was 14 percent lower.',
                    0.9, 1, 'supported', 0, ?)""",
         [evidence_id, source_journal_id, project_id],
+    )
+    await db.execute(
+        """UPDATE claims
+           SET staleness_reviewed_at = '2026-08-17T12:00:00Z',
+               staleness_verdict = 'historical',
+               staleness_resolution = ?,
+               staleness_resolution_journal_id = ?,
+               staleness_resolved_by = 'pi'
+           WHERE id = ? AND project_id = ?""",
+        [
+            f"Bounded by review note {source_journal_id}.",
+            source_journal_id,
+            evidence_id,
+            project_id,
+        ],
     )
     await db.execute(
         """INSERT INTO artifacts
@@ -543,9 +546,9 @@ async def test_native_manuscript_round_trip_preserves_history_without_synthesis(
            FROM change_events WHERE project_id = 'proj_default'"""
     )
     assert source_cursor and source_cursor["cursor"] is not None
-    source_context = await NativeManuscriptService(
-        db, project_id="proj_default"
-    ).get_context(source["manuscript_id"])
+    source_context = await NativeManuscriptService(db, project_id="proj_default").get_context(
+        source["manuscript_id"]
+    )
     source_reference_checkpoint = next(
         checkpoint
         for checkpoint in source_context["checkpoints"]
@@ -553,9 +556,7 @@ async def test_native_manuscript_round_trip_preserves_history_without_synthesis(
     )
     assert source_reference_checkpoint["dependency_current"] is True
 
-    pack_path, _ = await KnowledgePackService(
-        db, project_id="proj_default"
-    ).export_pack()
+    pack_path, _ = await KnowledgePackService(db, project_id="proj_default").export_pack()
     with zipfile.ZipFile(pack_path) as archive:
         manifest = json.loads(archive.read("manifest.json"))
 
@@ -583,18 +584,20 @@ async def test_native_manuscript_round_trip_preserves_history_without_synthesis(
         },
         "validation_job_links_on_import": "cleared",
     }
-    assert not {
-        "change_events",
-        "jobs",
-        "manuscript_migration_issues",
-        "reference_validation_migration_issues",
-    } & manifest["tables"].keys()
+    assert (
+        not {
+            "change_events",
+            "jobs",
+            "manuscript_migration_issues",
+            "reference_validation_migration_issues",
+        }
+        & manifest["tables"].keys()
+    )
     for table in _NATIVE_TABLES:
         assert manifest["table_counts"][table] > 0
 
     version_keys = [
-        (row["claim_id"], row["version"])
-        for row in manifest["tables"]["manuscript_claim_versions"]
+        (row["claim_id"], row["version"]) for row in manifest["tables"]["manuscript_claim_versions"]
     ]
     assert version_keys == sorted(version_keys)
 
@@ -647,10 +650,7 @@ async def test_native_manuscript_round_trip_preserves_history_without_synthesis(
         1,
         2,
     ]
-    assert [
-        row["exact_wording"]
-        for row in versions_by_claim[imported_claims["C1"]["id"]]
-    ] == [
+    assert [row["exact_wording"] for row in versions_by_claim[imported_claims["C1"]["id"]]] == [
         "The system reduced latency.",
         "Latency was lower in the measured testbed.",
     ]
@@ -692,22 +692,38 @@ async def test_native_manuscript_round_trip_preserves_history_without_synthesis(
                WHERE project_id = 'proj_native_import'"""
         )
     }
-    assert imported_profiles[imported_units["R1"]["id"]]["parent_unit_id"] == (
-        imported_units["M1"]["id"]
+    assert (
+        imported_profiles[imported_units["R1"]["id"]]["parent_unit_id"]
+        == (imported_units["M1"]["id"])
     )
     assert imported_profiles[imported_units["R1"]["id"]]["outline_level"] == 3
-    assert json.loads(
-        imported_profiles[imported_units["R1"]["id"]]["figure_intentions"]
-    ) == ["Show the latency comparison."]
-    assert json.loads(
-        imported_profiles[imported_units["M1"]["id"]]["table_intentions"]
-    ) == ["Summarize evidence roles."]
-
     imported_evidence = await db.fetchone(
-        """SELECT id FROM claims
+        """SELECT * FROM claims
            WHERE project_id = 'proj_native_import'"""
     )
     assert imported_evidence is not None
+    imported_source_journal = await db.fetchone(
+        """SELECT id FROM journal
+           WHERE project_id = 'proj_native_import'
+             AND content = 'Measured 14 percent lower latency.'"""
+    )
+    assert imported_source_journal is not None
+    assert imported_evidence["staleness_reviewed_at"] == "2026-08-17T12:00:00Z"
+    assert imported_evidence["staleness_verdict"] == "historical"
+    assert imported_evidence["staleness_resolved_by"] == "pi"
+    assert imported_evidence["staleness_resolution_journal_id"] == imported_source_journal["id"]
+    assert imported_evidence["staleness_resolution"] == (
+        f"Bounded by review note {imported_source_journal['id']}."
+    )
+    assert json.loads(imported_profiles[imported_units["R1"]["id"]]["figure_intentions"]) == [
+        f"Render artifact {imported_artifact['id']} with support {imported_evidence['id']}."
+    ]
+    assert json.loads(imported_profiles[imported_units["R1"]["id"]]["citation_intentions"]) == [
+        f"Cite the source of {imported_evidence['id']}."
+    ]
+    assert json.loads(imported_profiles[imported_units["M1"]["id"]]["table_intentions"]) == [
+        f"Summarize evidence role for {imported_evidence['id']}."
+    ]
     claim_support = await db.fetchone(
         """SELECT evidence_claim_id, role
            FROM manuscript_claim_evidence
@@ -749,32 +765,20 @@ async def test_native_manuscript_round_trip_preserves_history_without_synthesis(
            WHERE project_id = 'proj_native_import'
            ORDER BY created_at, id"""
     )
-    venue_checkpoints = [
-        checkpoint for checkpoint in checkpoints
-        if checkpoint["kind"] == "venue"
-    ]
+    venue_checkpoints = [checkpoint for checkpoint in checkpoints if checkpoint["kind"] == "venue"]
     assert len(venue_checkpoints) == 2
     first_imported = next(
-        checkpoint for checkpoint in venue_checkpoints
-        if checkpoint["status"] == "superseded"
+        checkpoint for checkpoint in venue_checkpoints if checkpoint["status"] == "superseded"
     )
     replacement_imported = next(
-        checkpoint for checkpoint in venue_checkpoints
-        if checkpoint["status"] == "pending"
+        checkpoint for checkpoint in venue_checkpoints if checkpoint["status"] == "pending"
     )
     assert replacement_imported["supersedes_id"] == first_imported["id"]
-    assert first_imported["approved_choice"] == (
-        "The workflow separates support from qualifiers."
-    )
-    outline = next(
-        checkpoint for checkpoint in checkpoints
-        if checkpoint["kind"] == "outline"
-    )
+    assert first_imported["approved_choice"] == ("The workflow separates support from qualifiers.")
+    outline = next(checkpoint for checkpoint in checkpoints if checkpoint["kind"] == "outline")
     assert outline["supersedes_id"] is None
     imported_reference_checkpoint = next(
-        checkpoint
-        for checkpoint in checkpoints
-        if checkpoint["kind"] == "reference_set"
+        checkpoint for checkpoint in checkpoints if checkpoint["kind"] == "reference_set"
     )
     assert imported_reference_checkpoint["status"] == "resolved"
 
@@ -809,14 +813,8 @@ async def test_native_manuscript_round_trip_preserves_history_without_synthesis(
     assert imported_reference_validation is not None
     assert imported_reference_validation["id"] != source["validation_id"]
     assert imported_reference_validation["manuscript_id"] == imported_manuscript["id"]
-    assert (
-        imported_reference_validation["canonical_manuscript_id"]
-        == imported_manuscript["id"]
-    )
-    assert (
-        imported_reference_validation["legacy_journal_id"]
-        == imported_legacy["id"]
-    )
+    assert imported_reference_validation["canonical_manuscript_id"] == imported_manuscript["id"]
+    assert imported_reference_validation["legacy_journal_id"] == imported_legacy["id"]
     assert imported_reference_validation["validation_job_id"] is None
     imported_literature = {
         row["title"]: row["id"]
@@ -832,30 +830,16 @@ async def test_native_manuscript_round_trip_preserves_history_without_synthesis(
            ORDER BY state, citation_key"""
     )
     assert len(imported_reference_members) == 2
-    imported_by_state = {
-        row["state"]: row for row in imported_reference_members
-    }
+    imported_by_state = {row["state"]: row for row in imported_reference_members}
     assert imported_by_state["active"]["id"] != source["active_reference_id"]
     assert imported_by_state["active"]["citation_key"] == "current2025"
-    assert (
-        imported_by_state["active"]["literature_id"]
-        == imported_literature["Current citation"]
-    )
+    assert imported_by_state["active"]["literature_id"] == imported_literature["Current citation"]
     assert imported_by_state["active"]["retired_at"] is None
-    assert (
-        imported_by_state["retired"]["id"]
-        != source["retired_reference_id"]
-    )
+    assert imported_by_state["retired"]["id"] != source["retired_reference_id"]
     assert imported_by_state["retired"]["citation_key"] == "earlier2024"
-    assert (
-        imported_by_state["retired"]["literature_id"]
-        == imported_literature["Earlier citation"]
-    )
+    assert imported_by_state["retired"]["literature_id"] == imported_literature["Earlier citation"]
     assert imported_by_state["retired"]["retired_at"] is not None
-    assert (
-        imported_reference_validation["literature_id"]
-        == imported_literature["Current citation"]
-    )
+    assert imported_reference_validation["literature_id"] == imported_literature["Current citation"]
     assert json.loads(imported_reference_validation["full_json_payload"]) == {
         "claim_id": imported_claims["C1"]["id"],
         "job_id": "domain-specific-non-worker-value",
@@ -914,3 +898,99 @@ async def test_native_manuscript_round_trip_preserves_history_without_synthesis(
                SET overall_verdict = 'warn'
                WHERE project_id = 'proj_native_import'"""
         )
+
+
+def _rewrite_pack_manifest(source: str, destination: Path, mutate) -> None:
+    with zipfile.ZipFile(source) as archive:
+        entries = {name: archive.read(name) for name in archive.namelist()}
+    manifest = json.loads(entries["manifest.json"])
+    mutate(manifest["tables"])
+    entries["manifest.json"] = json.dumps(manifest, indent=2, sort_keys=True).encode()
+    with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in entries.items():
+            archive.writestr(name, payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "corruption",
+    ["cycle", "depth", "removed_parent", "parent_order", "subtree_contiguity"],
+)
+async def test_pack_import_rolls_back_outline_hierarchy_corruption(
+    db_with_project,
+    tmp_path: Path,
+    corruption: str,
+) -> None:
+    db = db_with_project
+    await _seed_native_manuscript(db)
+    pack_path, _ = await KnowledgePackService(db, project_id="proj_default").export_pack()
+    corrupt_path = tmp_path / f"outline-{corruption}.rka-pack.zip"
+
+    def corrupt(tables: dict[str, list[dict]]) -> None:
+        units = {row["local_key"]: row for row in tables["manuscript_units"]}
+        profiles = {row["unit_id"]: row for row in tables["manuscript_unit_outline_profiles"]}
+        parent = units["M1"]
+        child = units["R1"]
+        if corruption == "cycle":
+            profiles[parent["id"]]["parent_unit_id"] = child["id"]
+        elif corruption == "depth":
+            profiles[child["id"]]["outline_level"] = profiles[parent["id"]]["outline_level"]
+        elif corruption == "removed_parent":
+            parent["status"] = "removed"
+        elif corruption == "parent_order":
+            parent["sequence"] = 20
+            child["sequence"] = 10
+        else:
+            sibling = dict(parent)
+            sibling["id"] = generate_id("manuscript_unit")
+            sibling["local_key"] = "OTHER"
+            sibling["location"] = "sections/other.tex"
+            sibling["sequence"] = 20
+            tables["manuscript_units"].append(sibling)
+            sibling_profile = dict(profiles[parent["id"]])
+            sibling_profile["unit_id"] = sibling["id"]
+            sibling_profile["parent_unit_id"] = None
+            tables["manuscript_unit_outline_profiles"].append(sibling_profile)
+            parent["sequence"] = 10
+            child["sequence"] = 30
+
+    _rewrite_pack_manifest(pack_path, corrupt_path, corrupt)
+    target_project = f"proj_outline_{corruption}"
+    with corrupt_path.open("rb") as pack_file:
+        with pytest.raises(KnowledgePackIntegrityError) as excinfo:
+            await KnowledgePackService(db).import_pack(
+                pack_file,
+                project_id=target_project,
+                project_name=f"Outline corruption {corruption}",
+            )
+    assert {issue["category"] for issue in excinfo.value.issues} == {"outline_hierarchy_invalid"}
+    assert await db.fetchone("SELECT id FROM projects WHERE id = ?", [target_project]) is None
+
+
+@pytest.mark.asyncio
+async def test_pack_import_rejects_outline_parent_absent_from_pack(
+    db_with_project,
+    tmp_path: Path,
+) -> None:
+    db = db_with_project
+    await _seed_native_manuscript(db)
+    pack_path, _ = await KnowledgePackService(db, project_id="proj_default").export_pack()
+    corrupt_path = tmp_path / "outline-missing-parent.rka-pack.zip"
+
+    def corrupt(tables: dict[str, list[dict]]) -> None:
+        units = {row["local_key"]: row for row in tables["manuscript_units"]}
+        profiles = {row["unit_id"]: row for row in tables["manuscript_unit_outline_profiles"]}
+        profiles[units["R1"]["id"]]["parent_unit_id"] = generate_id("manuscript_unit")
+
+    _rewrite_pack_manifest(pack_path, corrupt_path, corrupt)
+    with corrupt_path.open("rb") as pack_file:
+        with pytest.raises(ValueError, match="parent outside the project or absent"):
+            await KnowledgePackService(db).import_pack(
+                pack_file,
+                project_id="proj_outline_missing_parent",
+                project_name="Outline missing parent",
+            )
+    assert (
+        await db.fetchone("SELECT id FROM projects WHERE id = 'proj_outline_missing_parent'")
+        is None
+    )

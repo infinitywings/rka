@@ -78,6 +78,7 @@ class ManuscriptOutlineService(BaseService):
             checkpoint for checkpoint in context["checkpoints"] if checkpoint["kind"] == "outline"
         ]
         latest_checkpoint = checkpoints[-1] if checkpoints else None
+        rationale_complete = bool(projected) and blocker_count == 0
         return {
             "schema_version": "rka.manuscript-outline/v1",
             "project_id": self.project_id,
@@ -90,12 +91,16 @@ class ManuscriptOutlineService(BaseService):
                 "complete_units": len(projected) - blocker_count,
                 "units_needing_review": blocker_count,
                 "levels": sorted({unit["outline_level"] for unit in projected}),
-                "checkpoint_ready": bool(projected) and blocker_count == 0,
+                "rationale_complete": rationale_complete,
+                # Compatibility alias. This field never represented checkpoint
+                # state; clients should migrate to rationale_complete.
+                "checkpoint_ready": rationale_complete,
             },
             "policy": {
                 "canonical_unit_identity": "mun_",
                 "mutation": "semantic_patch_then_explicit_apply",
                 "checkpoint_resolution": "explicit_pi_decision",
+                "deprecated_fields": {"summary.checkpoint_ready": "summary.rationale_complete"},
                 "file_writes": False,
             },
         }
@@ -137,9 +142,7 @@ class ManuscriptOutlineService(BaseService):
                 "and matching context manifest"
             )
         created_by = actor
-        proposal = await SemanticPatchService(
-            self.db, project_id=self.project_id
-        ).create_proposal(
+        proposal = await SemanticPatchService(self.db, project_id=self.project_id).create_proposal(
             SemanticPatchProposalCreate(
                 origin=data.origin,
                 intent=f"{data.action.capitalize()} the progressive manuscript outline.",
@@ -208,7 +211,8 @@ class ManuscriptOutlineService(BaseService):
         parent_claims: dict[str, list[dict[str, Any]]] = {}
         for claim in claims:
             links = [
-                link for link in claim.get("unit_links", [])
+                link
+                for link in claim.get("unit_links", [])
                 if (link.get("unit_key") or link.get("unit_id")) == parent["unit_id"]
             ]
             if links:
@@ -223,7 +227,9 @@ class ManuscriptOutlineService(BaseService):
         for child in data.children:
             selected_claims = set(child.claim_keys or parent_claims)
             if not selected_claims <= set(parent_claims):
-                raise ValueError("expanded child claim_keys must be a subset of the parent bindings")
+                raise ValueError(
+                    "expanded child claim_keys must be a subset of the parent bindings"
+                )
             selected_evidence: dict[str, list[str]] = {}
             for field in ("support_ids", "qualifier_ids", "counterevidence_ids"):
                 requested = getattr(child, field)
@@ -237,7 +243,8 @@ class ManuscriptOutlineService(BaseService):
                 **{
                     key: value
                     for key, value in parent.items()
-                    if key not in {
+                    if key
+                    not in {
                         "rka_manuscript_unit_id",
                         "evidence",
                         "evidence_ids",
@@ -283,7 +290,7 @@ class ManuscriptOutlineService(BaseService):
                     )
 
         parent_index = units.index(parent)
-        units[parent_index + 1:parent_index + 1] = inserted
+        units[parent_index + 1 : parent_index + 1] = inserted
         return {
             "action": "expand",
             "affected_unit_keys": [parent["unit_id"], *child_keys],
@@ -327,17 +334,28 @@ class ManuscriptOutlineService(BaseService):
             parent[evidence_field] = sorted(
                 {
                     *(parent.get(evidence_field) or []),
-                    *(value for unit in selected.values() for value in unit.get(evidence_field) or []),
+                    *(
+                        value
+                        for unit in selected.values()
+                        for value in unit.get(evidence_field) or []
+                    ),
                 }
             )
         for plan_field in (
-            "evidence_plan", "figure_intentions", "table_intentions", "citation_intentions"
+            "evidence_plan",
+            "figure_intentions",
+            "table_intentions",
+            "citation_intentions",
         ):
             parent[plan_field] = list(
                 dict.fromkeys(
                     [
                         *(parent.get(plan_field) or []),
-                        *(value for unit in selected.values() for value in unit.get(plan_field) or []),
+                        *(
+                            value
+                            for unit in selected.values()
+                            for value in unit.get(plan_field) or []
+                        ),
                     ]
                 )
             )
@@ -345,7 +363,8 @@ class ManuscriptOutlineService(BaseService):
         for claim in claims:
             links = claim.setdefault("unit_links", [])
             inherited = [
-                link for link in links
+                link
+                for link in links
                 if (link.get("unit_key") or link.get("unit_id")) in selected_keys
             ]
             parent_relationships = {
@@ -354,12 +373,12 @@ class ManuscriptOutlineService(BaseService):
                 if (link.get("unit_key") or link.get("unit_id")) == parent["unit_id"]
             }
             for relationship in sorted(
-                {link.get("relationship", "advances") for link in inherited}
-                - parent_relationships
+                {link.get("relationship", "advances") for link in inherited} - parent_relationships
             ):
                 links.append({"unit_key": parent["unit_id"], "relationship": relationship})
             claim["unit_links"] = [
-                link for link in links
+                link
+                for link in links
                 if (link.get("unit_key") or link.get("unit_id")) not in selected_keys
             ]
         for unit in selected.values():
@@ -372,9 +391,7 @@ class ManuscriptOutlineService(BaseService):
             "parent_retained": True,
         }
 
-    def _reorder(
-        self, units: list[dict[str, Any]], data: OutlineProposalRequest
-    ) -> dict[str, Any]:
+    def _reorder(self, units: list[dict[str, Any]], data: OutlineProposalRequest) -> dict[str, Any]:
         active = [unit for unit in units if unit.get("status") != "removed"]
         active_keys = [str(unit["unit_id"]) for unit in active]
         if len(data.ordered_unit_keys) != len(set(data.ordered_unit_keys)):
@@ -386,8 +403,7 @@ class ManuscriptOutlineService(BaseService):
                 f"reorder requires the exact active unit set; missing={missing}, unknown={unknown}"
             )
         old_predecessor = {
-            key: active_keys[index - 1] if index else None
-            for index, key in enumerate(active_keys)
+            key: active_keys[index - 1] if index else None for index, key in enumerate(active_keys)
         }
         by_key = self._unit_map(units)
         reordered = [by_key[key] for key in data.ordered_unit_keys]
@@ -395,7 +411,8 @@ class ManuscriptOutlineService(BaseService):
         removed = [unit for unit in units if unit.get("status") == "removed"]
         units[:] = [*reordered, *removed]
         changed = [
-            key for index, key in enumerate(data.ordered_unit_keys)
+            key
+            for index, key in enumerate(data.ordered_unit_keys)
             if old_predecessor[key] != (data.ordered_unit_keys[index - 1] if index else None)
         ]
         return {

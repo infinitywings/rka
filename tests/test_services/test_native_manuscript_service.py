@@ -226,9 +226,7 @@ async def test_create_update_and_legacy_alias(db_with_project) -> None:
 async def test_spine_upsert_is_atomic_and_versions_wording(db_with_project) -> None:
     evidence_id = await _seed_ready_claim(db_with_project)
     service = NativeManuscriptService(db_with_project, project_id="proj_default")
-    manuscript = await service.create(
-        ManuscriptCreate(title="Atomic spine", venue="IEEE S&P")
-    )
+    manuscript = await service.create(ManuscriptCreate(title="Atomic spine", venue="IEEE S&P"))
 
     invalid = _spine(evidence_id)
     invalid["claims"][0]["unit_links"][0]["unit_key"] = "missing"
@@ -251,21 +249,92 @@ async def test_spine_upsert_is_atomic_and_versions_wording(db_with_project) -> N
     assert first["manuscript"]["revision"] == 2
     assert first["claims"][0]["version"] == 1
 
+    events_before_noop = await db_with_project.fetchone(
+        "SELECT count(*) AS count FROM change_events WHERE manuscript_id = ?",
+        [manuscript.id],
+    )
+    audits_before_noop = await db_with_project.fetchone(
+        """SELECT count(*) AS count FROM audit_log
+           WHERE entity_type = 'manuscript' AND entity_id = ?""",
+        [manuscript.id],
+    )
+
     same = await service.upsert_argument_spine(
         manuscript.id,
         expected_revision=2,
         spine=_spine(evidence_id),
     )
-    assert same["manuscript"]["revision"] == 3
+    assert same["manuscript"]["revision"] == 2
     assert same["claims"][0]["version"] == 1
+    events_after_noop = await db_with_project.fetchone(
+        "SELECT count(*) AS count FROM change_events WHERE manuscript_id = ?",
+        [manuscript.id],
+    )
+    audits_after_noop = await db_with_project.fetchone(
+        """SELECT count(*) AS count FROM audit_log
+           WHERE entity_type = 'manuscript' AND entity_id = ?""",
+        [manuscript.id],
+    )
+    assert events_after_noop == events_before_noop
+    assert audits_after_noop == audits_before_noop
 
     changed = await service.upsert_argument_spine(
         manuscript.id,
-        expected_revision=3,
+        expected_revision=2,
         spine=_spine(evidence_id, wording="Latency was lower in our testbed."),
     )
-    assert changed["manuscript"]["revision"] == 4
+    assert changed["manuscript"]["revision"] == 3
     assert changed["claims"][0]["version"] == 2
+
+
+@pytest.mark.asyncio
+async def test_spine_upsert_emits_only_semantic_profile_change_events(db_with_project) -> None:
+    evidence_id = await _seed_ready_claim(db_with_project)
+    service = NativeManuscriptService(db_with_project, project_id="proj_default")
+    manuscript = await service.create(ManuscriptCreate(title="Quiet spine writes"))
+    await service.upsert_argument_spine(
+        manuscript.id,
+        expected_revision=1,
+        spine=_spine(evidence_id),
+    )
+    before_rows = await db_with_project.fetchall(
+        """SELECT source_table, count(*) AS count
+           FROM change_events
+           WHERE manuscript_id = ?
+           GROUP BY source_table""",
+        [manuscript.id],
+    )
+    before = {row["source_table"]: int(row["count"]) for row in before_rows}
+
+    revised = _spine(evidence_id)
+    revised["units"][0]["communicative_job"] = "Present the bounded latency result."
+    context = await service.upsert_argument_spine(
+        manuscript.id,
+        expected_revision=2,
+        spine=revised,
+    )
+    assert context["manuscript"]["revision"] == 3
+
+    after_rows = await db_with_project.fetchall(
+        """SELECT source_table, count(*) AS count
+           FROM change_events
+           WHERE manuscript_id = ?
+           GROUP BY source_table""",
+        [manuscript.id],
+    )
+    after = {row["source_table"]: int(row["count"]) for row in after_rows}
+    assert after["manuscript_unit_outline_profiles"] == (
+        before.get("manuscript_unit_outline_profiles", 0) + 1
+    )
+    for source_table in (
+        "manuscript_claims",
+        "manuscript_claim_versions",
+        "manuscript_claim_evidence",
+        "manuscript_units",
+        "manuscript_unit_evidence",
+        "manuscript_claim_units",
+    ):
+        assert after.get(source_table, 0) == before.get(source_table, 0)
 
 
 @pytest.mark.asyncio
@@ -273,9 +342,7 @@ async def test_reference_manifest_replacement_is_atomic_and_historical(
     db_with_project,
 ) -> None:
     service = NativeManuscriptService(db_with_project, project_id="proj_default")
-    manuscript = await service.create(
-        ManuscriptCreate(title="Reference replacement")
-    )
+    manuscript = await service.create(ManuscriptCreate(title="Reference replacement"))
     first_literature = await _seed_literature(
         db_with_project,
         title="First study",
@@ -374,15 +441,11 @@ async def test_reference_readiness_uses_latest_exact_bound_validation(
     db_with_project,
 ) -> None:
     service = NativeManuscriptService(db_with_project, project_id="proj_default")
-    manuscript = await service.create(
-        ManuscriptCreate(title="Reference readiness")
-    )
+    manuscript = await service.create(ManuscriptCreate(title="Reference readiness"))
     literature_id = await _seed_literature(db_with_project)
 
     absent = await service.get_readiness(manuscript.id, target_phase="review")
-    assert "REFERENCE_MANIFEST_REQUIRED" in {
-        finding["code"] for finding in absent["findings"]
-    }
+    assert "REFERENCE_MANIFEST_REQUIRED" in {finding["code"] for finding in absent["findings"]}
 
     await service.replace_reference_manifest(
         manuscript.id,
@@ -397,9 +460,7 @@ async def test_reference_readiness_uses_latest_exact_bound_validation(
         ),
     )
     missing = await service.get_readiness(manuscript.id, target_phase="review")
-    assert "REFERENCE_VALIDATION_MISSING" in {
-        finding["code"] for finding in missing["findings"]
-    }
+    assert "REFERENCE_VALIDATION_MISSING" in {finding["code"] for finding in missing["findings"]}
 
     verified_id = await _seed_reference_validation(
         db_with_project,
@@ -426,9 +487,7 @@ async def test_reference_readiness_uses_latest_exact_bound_validation(
         manuscript.id,
         target_phase="review",
     )
-    assert "REFERENCE_NOT_VERIFIED" in {
-        finding["code"] for finding in failed_readiness["findings"]
-    }
+    assert "REFERENCE_NOT_VERIFIED" in {finding["code"] for finding in failed_readiness["findings"]}
 
     mismatched_id = await _seed_reference_validation(
         db_with_project,
@@ -440,9 +499,7 @@ async def test_reference_readiness_uses_latest_exact_bound_validation(
     mismatched = await service.get_reference_manifest(manuscript.id)
     assert mismatched["approved_citation_keys"] == []
     assert mismatched["members"][0]["validation"]["id"] == mismatched_id
-    assert (
-        mismatched["members"][0]["validation"]["identity_matches"] is False
-    )
+    assert mismatched["members"][0]["validation"]["identity_matches"] is False
     mismatch_readiness = await service.get_readiness(
         manuscript.id,
         target_phase="review",
@@ -477,13 +534,11 @@ async def test_ratification_and_checkpoint_readiness(db_with_project) -> None:
     )
     assert ratification.claim_version == 1
 
-    before_checkpoints = await service.get_readiness(
-        manuscript.id, target_phase="drafting"
-    )
+    before_checkpoints = await service.get_readiness(manuscript.id, target_phase="drafting")
     assert before_checkpoints["verdict"] == "BLOCK"
-    assert {
-        finding["code"] for finding in before_checkpoints["findings"]
-    } == {"CHECKPOINT_REQUIRED"}
+    assert {finding["code"] for finding in before_checkpoints["findings"]} == {
+        "CHECKPOINT_REQUIRED"
+    }
 
     revision = 3
     for kind in ("venue", "outline"):
@@ -510,9 +565,7 @@ async def test_ratification_and_checkpoint_readiness(db_with_project) -> None:
         )
         revision += 1
 
-    readiness = await service.get_readiness(
-        manuscript.id, target_phase="drafting"
-    )
+    readiness = await service.get_readiness(manuscript.id, target_phase="drafting")
     assert readiness["verdict"] == "PASS"
     assert readiness["ready"] is True
     assert readiness["findings"] == []
@@ -567,10 +620,7 @@ async def test_projection_omits_superseded_ratification(db_with_project) -> None
     stale = await service.export_spine_projection(manuscript.id)
     assert stale["claims"][0]["ratified_by"] is None
     readiness = await service.get_readiness(manuscript.id)
-    assert any(
-        finding["code"] == "CLAIM_NOT_RATIFIED"
-        for finding in readiness["findings"]
-    )
+    assert any(finding["code"] == "CLAIM_NOT_RATIFIED" for finding in readiness["findings"])
 
 
 @pytest.mark.asyncio
@@ -683,8 +733,7 @@ async def test_canonical_legacy_alias_remains_manuscript_evidence_after_tag_remo
         target_phase="planning",
     )
     assert any(
-        finding["code"] == "EVIDENCE_NOT_MANUSCRIPT_READY"
-        for finding in readiness["findings"]
+        finding["code"] == "EVIDENCE_NOT_MANUSCRIPT_READY" for finding in readiness["findings"]
     )
 
 
@@ -749,10 +798,7 @@ async def test_checkpoint_resolution_requires_paper_writing_decision_and_snapsho
         manuscript.id,
         target_phase="drafting",
     )
-    assert any(
-        finding["code"] == "CHECKPOINT_REQUIRED"
-        for finding in readiness["findings"]
-    )
+    assert any(finding["code"] == "CHECKPOINT_REQUIRED" for finding in readiness["findings"])
 
 
 @pytest.mark.asyncio
@@ -795,9 +841,7 @@ async def test_writing_candidates_smooth_claims_through_reviewed_cluster_and_rq(
     db_with_project,
 ) -> None:
     service = NativeManuscriptService(db_with_project, project_id="proj_default")
-    manuscript = await service.create(
-        ManuscriptCreate(title="Smoothed candidates")
-    )
+    manuscript = await service.create(ManuscriptCreate(title="Smoothed candidates"))
     rq_id = generate_id("decision")
     cluster_id = generate_id("cluster")
     journal_id = generate_id("journal")
@@ -862,9 +906,7 @@ async def test_writing_candidates_smooth_claims_through_reviewed_cluster_and_rq(
     assert candidate["ratified_by"] is None
     assert candidate["evidence_ids"] == sorted(claim_ids)
     assert len(candidate["scope_contract_ids"]) == 2
-    assert candidate["prohibited_wording"] == [
-        "Do not generalize beyond the evaluated testbed."
-    ]
+    assert candidate["prohibited_wording"] == ["Do not generalize beyond the evaluated testbed."]
     cluster = proposal["clusters"][0]
     assert cluster["disposition"] == "eligible"
     assert cluster["duplicate_support_groups"] == [sorted(claim_ids)]
@@ -914,9 +956,7 @@ async def test_checkpoint_snapshots_detect_artifact_and_literature_drift(
     spine = _spine(evidence_id)
     spine["units"][0]["artifact_ref"] = artifact_id
     service = NativeManuscriptService(db_with_project, project_id="proj_default")
-    manuscript = await service.create(
-        ManuscriptCreate(title="Dependency drift", venue="IEEE S&P")
-    )
+    manuscript = await service.create(ManuscriptCreate(title="Dependency drift", venue="IEEE S&P"))
     await service.upsert_argument_spine(
         manuscript.id,
         expected_revision=1,
@@ -985,8 +1025,7 @@ async def test_checkpoint_snapshots_detect_artifact_and_literature_drift(
     current = await service.get_context(manuscript.id)
     current_by_id = {row["id"]: row for row in current["checkpoints"]}
     assert all(
-        current_by_id[checkpoint_id]["dependency_current"]
-        for checkpoint_id in checkpoints.values()
+        current_by_id[checkpoint_id]["dependency_current"] for checkpoint_id in checkpoints.values()
     )
 
     # Projection synchronization and no-op metadata writes must preserve PI
@@ -996,7 +1035,6 @@ async def test_checkpoint_snapshots_detect_artifact_and_literature_drift(
         expected_revision=revision,
         spine=spine,
     )
-    revision += 1
     await service.update(
         manuscript.id,
         ManuscriptUpdate(
@@ -1006,9 +1044,7 @@ async def test_checkpoint_snapshots_detect_artifact_and_literature_drift(
     )
     revision += 1
     after_no_ops = await service.get_context(manuscript.id)
-    no_op_by_id = {
-        row["id"]: row for row in after_no_ops["checkpoints"]
-    }
+    no_op_by_id = {row["id"]: row for row in after_no_ops["checkpoints"]}
     assert all(
         no_op_by_id[checkpoint_id]["status"] == "resolved"
         and no_op_by_id[checkpoint_id]["dependency_current"]
@@ -1037,14 +1073,8 @@ async def test_checkpoint_snapshots_detect_artifact_and_literature_drift(
     await db_with_project.commit()
     after_artifact = await service.get_context(manuscript.id)
     artifact_by_id = {row["id"]: row for row in after_artifact["checkpoints"]}
-    assert (
-        artifact_by_id[checkpoints["table_figure_plan"]]["dependency_current"]
-        is False
-    )
-    assert (
-        artifact_by_id[checkpoints["reference_set"]]["dependency_current"]
-        is True
-    )
+    assert artifact_by_id[checkpoints["table_figure_plan"]]["dependency_current"] is False
+    assert artifact_by_id[checkpoints["reference_set"]]["dependency_current"] is True
 
     await db_with_project.execute(
         """UPDATE literature
@@ -1055,10 +1085,5 @@ async def test_checkpoint_snapshots_detect_artifact_and_literature_drift(
     )
     await db_with_project.commit()
     after_literature = await service.get_context(manuscript.id)
-    literature_by_id = {
-        row["id"]: row for row in after_literature["checkpoints"]
-    }
-    assert (
-        literature_by_id[checkpoints["reference_set"]]["dependency_current"]
-        is False
-    )
+    literature_by_id = {row["id"]: row for row in after_literature["checkpoints"]}
+    assert literature_by_id[checkpoints["reference_set"]]["dependency_current"] is False

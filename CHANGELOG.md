@@ -7,6 +7,19 @@ All notable changes to RKA are documented here. Format loosely follows
 
 ### Added
 
+- **Portable outline integrity and staleness provenance.** The reserved
+  staleness-resolution schema now round-trips without dropping deployed
+  agentic fields. Knowledge-pack import rekeys resolution and outline-intention
+  references, rejects malformed outline hierarchies, and records attributed
+  outline-profile insert, update, and delete events.
+- **Semantic spine write quieting.** Replaying an unchanged argument spine no
+  longer bumps the manuscript revision, invalidates checkpoints, appends an
+  audit row, or emits delete/reinsert churn. Partial edits update only the
+  affected semantic rows and bindings.
+- **Explicit outline rationale readiness.** Outline responses now expose
+  `rationale_complete`; `checkpoint_ready` remains a deprecated compatibility
+  alias while the workbench uses the accurately named field.
+
 - **Progressive L2-L5 manuscript outline.** Native manuscript units now carry
   pure hierarchy depth, writing rationale, intended reader takeaways, evidence plans,
   and figure/table/citation intentions. Direct and AI-assisted edit, expand,

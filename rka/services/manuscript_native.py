@@ -29,6 +29,7 @@ from rka.models.manuscript_native import (
 )
 from rka.services.base import BaseService, _now
 from rka.services.claims import ClaimService
+from rka.services.outline_integrity import validate_unit_hierarchy
 
 
 def _normalized_reference_doi(value: Any) -> str | None:
@@ -349,14 +350,17 @@ class NativeManuscriptService(BaseService):
 
         async with self.db.transaction():
             await self._assert_revision(canonical_id, expected_revision)
-            claim_versions = await self._upsert_claims(canonical_id, claims)
-            unit_ids = await self._upsert_units(canonical_id, units)
-            await self._replace_claim_unit_bindings(
+            claim_versions, claims_changed = await self._upsert_claims(canonical_id, claims)
+            unit_ids, units_changed = await self._upsert_units(canonical_id, units)
+            bindings_changed = await self._replace_claim_unit_bindings(
                 canonical_id,
                 claims,
                 claim_versions=claim_versions,
                 unit_ids=unit_ids,
             )
+            changed = claims_changed or units_changed or bindings_changed
+            if not changed:
+                return await self.get_context(canonical_id)
             await self._invalidate_resolved_checkpoints(
                 canonical_id,
                 kinds={
@@ -2453,89 +2457,7 @@ class NativeManuscriptService(BaseService):
 
     @staticmethod
     def _validate_unit_hierarchy(units: list[dict[str, Any]]) -> None:
-        by_key = {unit["local_key"]: unit for unit in units}
-        for unit in units:
-            parent_key = unit.get("parent_unit_key")
-            if parent_key is None:
-                continue
-            parent = by_key.get(parent_key)
-            if parent is None:
-                raise ValueError(
-                    f"unit {unit['local_key']} references unknown parent {parent_key!r}"
-                )
-            if parent_key == unit["local_key"]:
-                raise ValueError("outline unit cannot be its own parent")
-            if parent.get("status") == "removed" and unit.get("status") != "removed":
-                raise ValueError(f"active unit {unit['local_key']} cannot have a removed parent")
-
-        # Detect graph cycles independently of level validation so malformed
-        # imports receive the precise failure instead of an incidental depth
-        # error from whichever edge happens to be visited first.
-        for unit in units:
-            seen = {unit["local_key"]}
-            cursor = unit
-            while cursor.get("parent_unit_key") is not None:
-                key = str(cursor["parent_unit_key"])
-                if key in seen:
-                    raise ValueError("outline hierarchy contains a cycle")
-                if key not in by_key:
-                    raise ValueError(
-                        f"unit {cursor['local_key']} references unknown parent {key!r}"
-                    )
-                seen.add(key)
-                cursor = by_key[key]
-
-        for unit in units:
-            parent_key = unit.get("parent_unit_key")
-            if parent_key is None:
-                continue
-            parent = by_key[str(parent_key)]
-            if int(parent["outline_level"]) >= int(unit["outline_level"]):
-                raise ValueError(
-                    f"parent {parent_key} must be at a shallower outline depth than "
-                    f"child {unit['local_key']}"
-                )
-
-        active_with_index = [
-            (index, unit)
-            for index, unit in enumerate(units)
-            if unit.get("status") != "removed"
-        ]
-        active = [
-            unit
-            for _index, unit in sorted(
-                active_with_index,
-                key=lambda item: (int(item[1]["sequence"]), item[0]),
-            )
-        ]
-        positions = {unit["local_key"]: index for index, unit in enumerate(active)}
-        active_parents = {
-            unit["local_key"]: unit.get("parent_unit_key") for unit in active
-        }
-
-        def descendants(root: str) -> set[str]:
-            found: set[str] = set()
-            frontier = [root]
-            while frontier:
-                current = frontier.pop()
-                for child, parent in active_parents.items():
-                    if parent == current and child not in found:
-                        found.add(child)
-                        frontier.append(child)
-            return found
-
-        for key, parent_key in active_parents.items():
-            if parent_key is not None and positions[parent_key] >= positions[key]:
-                raise ValueError(
-                    f"outline order must place parent {parent_key!r} before child {key!r}"
-                )
-        for key in positions:
-            nested = descendants(key)
-            if not nested:
-                continue
-            occupied = {positions[key], *(positions[item] for item in nested)}
-            if max(occupied) - min(occupied) + 1 != len(occupied):
-                raise ValueError(f"outline order must keep subtree {key!r} contiguous")
+        validate_unit_hierarchy(units)
 
     @staticmethod
     def _id_list(value: Any, name: str) -> list[str]:
@@ -2560,7 +2482,7 @@ class NativeManuscriptService(BaseService):
         self,
         manuscript_id: str,
         claims: list[dict[str, Any]],
-    ) -> dict[str, tuple[str, int]]:
+    ) -> tuple[dict[str, tuple[str, int]], bool]:
         existing_rows = await self.db.fetchall(
             """SELECT * FROM manuscript_claims
                WHERE manuscript_id = ? AND project_id = ?""",
@@ -2569,6 +2491,7 @@ class NativeManuscriptService(BaseService):
         existing = {row["local_key"]: row for row in existing_rows}
         seen: set[str] = set()
         result: dict[str, tuple[str, int]] = {}
+        changed = False
         for spec in claims:
             local_key = spec["local_key"]
             seen.add(local_key)
@@ -2589,24 +2512,27 @@ class NativeManuscriptService(BaseService):
                     ],
                 )
                 previous_version = 0
+                changed = True
             else:
                 claim_id = row["id"]
                 if row["kind"] != spec["kind"]:
                     raise ValueError(
                         f"claim {local_key} kind is immutable; retire it and create a new local_key"
                     )
-                await self.db.execute(
-                    """UPDATE manuscript_claims
-                       SET state = ?, updated_at = ?
-                       WHERE id = ? AND manuscript_id = ? AND project_id = ?""",
-                    [
-                        spec["state"],
-                        _now(),
-                        claim_id,
-                        manuscript_id,
-                        self.project_id,
-                    ],
-                )
+                if row["state"] != spec["state"]:
+                    await self.db.execute(
+                        """UPDATE manuscript_claims
+                           SET state = ?, updated_at = ?
+                           WHERE id = ? AND manuscript_id = ? AND project_id = ?""",
+                        [
+                            spec["state"],
+                            _now(),
+                            claim_id,
+                            manuscript_id,
+                            self.project_id,
+                        ],
+                    )
+                    changed = True
                 previous_version = await self._latest_claim_version(claim_id) or 0
 
             latest = None
@@ -2640,7 +2566,14 @@ class NativeManuscriptService(BaseService):
                         json.dumps(spec["prohibited_wording"], sort_keys=True),
                     ],
                 )
-            await self._replace_claim_evidence(manuscript_id, claim_id, version, spec["evidence"])
+                changed = True
+            evidence_changed = await self._replace_claim_evidence(
+                manuscript_id,
+                claim_id,
+                version,
+                spec["evidence"],
+            )
+            changed = changed or evidence_changed
             result[local_key] = (claim_id, version)
 
         for local_key, row in existing.items():
@@ -2651,21 +2584,29 @@ class NativeManuscriptService(BaseService):
                        WHERE id = ? AND project_id = ?""",
                     [_now(), row["id"], self.project_id],
                 )
-        return result
+                changed = True
+        return result, changed
 
     async def _upsert_units(
         self,
         manuscript_id: str,
         units: list[dict[str, Any]],
-    ) -> dict[str, str]:
+    ) -> tuple[dict[str, str], bool]:
         existing_rows = await self.db.fetchall(
             """SELECT * FROM manuscript_units
                WHERE manuscript_id = ? AND project_id = ?""",
             [manuscript_id, self.project_id],
         )
         existing = {row["local_key"]: row for row in existing_rows}
+        profile_rows = await self.db.fetchall(
+            """SELECT * FROM manuscript_unit_outline_profiles
+               WHERE manuscript_id = ? AND project_id = ?""",
+            [manuscript_id, self.project_id],
+        )
+        profiles = {row["unit_id"]: row for row in profile_rows}
         seen: set[str] = set()
         result: dict[str, str] = {}
+        changed = False
         for spec in units:
             local_key = spec["local_key"]
             seen.add(local_key)
@@ -2696,32 +2637,80 @@ class NativeManuscriptService(BaseService):
                         *fields,
                     ],
                 )
+                changed = True
             else:
                 unit_id = row["id"]
-                await self.db.execute(
-                    """UPDATE manuscript_units
-                       SET kind = ?, location = ?, title = ?, artifact_ref = ?,
-                           allowed_interpretation = ?,
-                           prohibited_interpretation = ?, sequence = ?,
-                           status = ?, updated_at = ?
-                       WHERE id = ? AND manuscript_id = ? AND project_id = ?""",
-                    [
-                        *fields,
-                        _now(),
-                        unit_id,
-                        manuscript_id,
-                        self.project_id,
-                    ],
-                )
-            await self._replace_unit_evidence(manuscript_id, unit_id, spec["evidence"])
+                current_fields = [
+                    row["kind"],
+                    row["location"],
+                    row.get("title"),
+                    row.get("artifact_ref"),
+                    row.get("allowed_interpretation"),
+                    row.get("prohibited_interpretation"),
+                    int(row["sequence"]),
+                    row["status"],
+                ]
+                if current_fields != fields:
+                    await self.db.execute(
+                        """UPDATE manuscript_units
+                           SET kind = ?, location = ?, title = ?, artifact_ref = ?,
+                               allowed_interpretation = ?,
+                               prohibited_interpretation = ?, sequence = ?,
+                               status = ?, updated_at = ?
+                           WHERE id = ? AND manuscript_id = ? AND project_id = ?""",
+                        [
+                            *fields,
+                            _now(),
+                            unit_id,
+                            manuscript_id,
+                            self.project_id,
+                        ],
+                    )
+                    changed = True
+            evidence_changed = await self._replace_unit_evidence(
+                manuscript_id,
+                unit_id,
+                spec["evidence"],
+            )
+            changed = changed or evidence_changed
             result[local_key] = unit_id
 
         for spec in units:
             unit_id = result[spec["local_key"]]
             parent_key = spec.get("parent_unit_key")
             parent_id = result.get(parent_key) if parent_key else None
-            await self.db.execute(
-                """INSERT INTO manuscript_unit_outline_profiles
+            profile_values = [
+                parent_id,
+                spec["outline_level"],
+                spec["communicative_job"],
+                spec["intended_takeaway"],
+                spec["transition_from_previous"],
+                spec["quick_reader_role"],
+                spec["evidence_plan"],
+                spec["figure_intentions"],
+                spec["table_intentions"],
+                spec["citation_intentions"],
+                spec["blocker"],
+            ]
+            profile = profiles.get(unit_id)
+            current_profile_values = None
+            if profile is not None:
+                current_profile_values = [
+                    profile.get("parent_unit_id"),
+                    int(profile["outline_level"]),
+                    profile.get("communicative_job"),
+                    profile.get("intended_takeaway"),
+                    profile.get("transition_from_previous"),
+                    profile.get("quick_reader_role"),
+                    self._json_loads(profile.get("evidence_plan"), []),
+                    self._json_loads(profile.get("figure_intentions"), []),
+                    self._json_loads(profile.get("table_intentions"), []),
+                    self._json_loads(profile.get("citation_intentions"), []),
+                    profile.get("blocker"),
+                ]
+            if current_profile_values != profile_values:
+                await self.db.execute(
+                    """INSERT INTO manuscript_unit_outline_profiles
                    (unit_id, manuscript_id, project_id, parent_unit_id,
                     outline_level, communicative_job, intended_takeaway,
                     transition_from_previous, quick_reader_role, evidence_plan,
@@ -2741,24 +2730,25 @@ class NativeManuscriptService(BaseService):
                      citation_intentions = excluded.citation_intentions,
                      blocker = excluded.blocker,
                      updated_at = ?""",
-                [
-                    unit_id,
-                    manuscript_id,
-                    self.project_id,
-                    parent_id,
-                    spec["outline_level"],
-                    spec["communicative_job"],
-                    spec["intended_takeaway"],
-                    spec["transition_from_previous"],
-                    spec["quick_reader_role"],
-                    json.dumps(spec["evidence_plan"], sort_keys=True),
-                    json.dumps(spec["figure_intentions"], sort_keys=True),
-                    json.dumps(spec["table_intentions"], sort_keys=True),
-                    json.dumps(spec["citation_intentions"], sort_keys=True),
-                    spec["blocker"],
-                    _now(),
-                ],
-            )
+                    [
+                        unit_id,
+                        manuscript_id,
+                        self.project_id,
+                        parent_id,
+                        spec["outline_level"],
+                        spec["communicative_job"],
+                        spec["intended_takeaway"],
+                        spec["transition_from_previous"],
+                        spec["quick_reader_role"],
+                        json.dumps(spec["evidence_plan"], sort_keys=True),
+                        json.dumps(spec["figure_intentions"], sort_keys=True),
+                        json.dumps(spec["table_intentions"], sort_keys=True),
+                        json.dumps(spec["citation_intentions"], sort_keys=True),
+                        spec["blocker"],
+                        _now(),
+                    ],
+                )
+                changed = True
 
         for local_key, row in existing.items():
             if local_key not in seen and row["status"] != "removed":
@@ -2768,7 +2758,8 @@ class NativeManuscriptService(BaseService):
                        WHERE id = ? AND project_id = ?""",
                     [_now(), row["id"], self.project_id],
                 )
-        return result
+                changed = True
+        return result, changed
 
     async def _replace_claim_evidence(
         self,
@@ -2776,7 +2767,24 @@ class NativeManuscriptService(BaseService):
         claim_id: str,
         version: int,
         evidence: Mapping[str, list[str]],
-    ) -> None:
+    ) -> bool:
+        desired = [
+            (role, evidence_id, ordinal)
+            for role in ("support", "qualifier", "counterevidence")
+            for ordinal, evidence_id in enumerate(evidence[role])
+        ]
+        rows = await self.db.fetchall(
+            """SELECT role, evidence_claim_id, ordinal
+               FROM manuscript_claim_evidence
+               WHERE manuscript_claim_id = ? AND claim_version = ?
+                 AND project_id = ?""",
+            [claim_id, version, self.project_id],
+        )
+        existing = sorted(
+            (str(row["role"]), str(row["evidence_claim_id"]), int(row["ordinal"])) for row in rows
+        )
+        if existing == sorted(desired):
+            return False
         await self.db.execute(
             """DELETE FROM manuscript_claim_evidence
                WHERE manuscript_claim_id = ? AND claim_version = ?
@@ -2800,13 +2808,30 @@ class NativeManuscriptService(BaseService):
                         ordinal,
                     ],
                 )
+        return True
 
     async def _replace_unit_evidence(
         self,
         manuscript_id: str,
         unit_id: str,
         evidence: Mapping[str, list[str]],
-    ) -> None:
+    ) -> bool:
+        desired = [
+            (role, evidence_id, ordinal)
+            for role in ("support", "qualifier", "counterevidence")
+            for ordinal, evidence_id in enumerate(evidence[role])
+        ]
+        rows = await self.db.fetchall(
+            """SELECT role, evidence_claim_id, ordinal
+               FROM manuscript_unit_evidence
+               WHERE unit_id = ? AND project_id = ?""",
+            [unit_id, self.project_id],
+        )
+        existing = sorted(
+            (str(row["role"]), str(row["evidence_claim_id"]), int(row["ordinal"])) for row in rows
+        )
+        if existing == sorted(desired):
+            return False
         await self.db.execute(
             """DELETE FROM manuscript_unit_evidence
                WHERE unit_id = ? AND project_id = ?""",
@@ -2828,6 +2853,7 @@ class NativeManuscriptService(BaseService):
                         ordinal,
                     ],
                 )
+        return True
 
     async def _replace_claim_unit_bindings(
         self,
@@ -2836,15 +2862,11 @@ class NativeManuscriptService(BaseService):
         *,
         claim_versions: Mapping[str, tuple[str, int]],
         unit_ids: Mapping[str, str],
-    ) -> None:
+    ) -> bool:
+        changed = False
         for spec in claims:
             claim_id, version = claim_versions[spec["local_key"]]
-            await self.db.execute(
-                """DELETE FROM manuscript_claim_units
-                   WHERE manuscript_claim_id = ? AND claim_version = ?
-                     AND project_id = ?""",
-                [claim_id, version, self.project_id],
-            )
+            desired = []
             for link in spec["unit_links"]:
                 unit_key = str(link.get("unit_key") or "").strip()
                 relationship = str(link.get("relationship") or "").strip()
@@ -2854,6 +2876,24 @@ class NativeManuscriptService(BaseService):
                     )
                 if relationship not in {"advances", "tests", "bounds", "mentions"}:
                     raise ValueError(f"claim {spec['local_key']} has invalid unit relationship")
+                desired.append((unit_ids[unit_key], relationship))
+            rows = await self.db.fetchall(
+                """SELECT unit_id, relationship
+                   FROM manuscript_claim_units
+                   WHERE manuscript_claim_id = ? AND claim_version = ?
+                     AND project_id = ?""",
+                [claim_id, version, self.project_id],
+            )
+            existing = sorted((str(row["unit_id"]), str(row["relationship"])) for row in rows)
+            if existing == sorted(desired):
+                continue
+            await self.db.execute(
+                """DELETE FROM manuscript_claim_units
+                   WHERE manuscript_claim_id = ? AND claim_version = ?
+                     AND project_id = ?""",
+                [claim_id, version, self.project_id],
+            )
+            for unit_id, relationship in desired:
                 await self.db.execute(
                     """INSERT INTO manuscript_claim_units
                        (manuscript_id, project_id, manuscript_claim_id,
@@ -2864,10 +2904,12 @@ class NativeManuscriptService(BaseService):
                         self.project_id,
                         claim_id,
                         version,
-                        unit_ids[unit_key],
+                        unit_id,
                         relationship,
                     ],
                 )
+            changed = True
+        return changed
 
     async def _find_claim(
         self,
