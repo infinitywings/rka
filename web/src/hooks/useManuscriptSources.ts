@@ -16,6 +16,11 @@ export function useManuscriptSources(manuscriptId: string, relativePath: string 
     queryKey: [...rootKey, "file", effectiveRelativePath],
     queryFn: () => api.readManuscriptSource(manuscriptId, effectiveRelativePath!),
     enabled: Boolean(effectiveRelativePath),
+    // A researcher may edit the same source in another local editor while the
+    // workbench remains open. Poll only while this query is mounted; the editor
+    // derives a conflict from the returned hash without replacing an unsent draft.
+    refetchInterval: 10_000,
+    refetchIntervalInBackground: false,
   })
   const proposals = useQuery({
     queryKey: [...rootKey, "proposals"],

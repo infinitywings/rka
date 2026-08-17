@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS manuscript_source_proposals (
     UNIQUE (id, project_id),
     FOREIGN KEY (manuscript_id, project_id) REFERENCES manuscripts(id, project_id) ON DELETE RESTRICT,
     FOREIGN KEY (context_manifest_id, project_id) REFERENCES semantic_patch_context_manifests(id, project_id) ON DELETE RESTRICT,
-    FOREIGN KEY (supersedes_proposal_id, project_id) REFERENCES manuscript_source_proposals(id, project_id) ON DELETE RESTRICT,
+    FOREIGN KEY (supersedes_proposal_id, project_id) REFERENCES manuscript_source_proposals(id, project_id) ON DELETE CASCADE,
     CHECK ((origin = 'human' AND context_manifest_id IS NULL AND provider IS NULL AND model IS NULL AND boundary = 'none')
         OR (origin <> 'human' AND context_manifest_id IS NOT NULL AND provider IS NOT NULL AND model IS NOT NULL AND boundary <> 'none'))
 );

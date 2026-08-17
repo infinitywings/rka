@@ -170,11 +170,12 @@ function SourceFileWorkspace({
   sources: ReturnType<typeof useManuscriptSources>
 }) {
   const [draft, setDraft] = useState(snapshot.content)
+  const [loadedContent, setLoadedContent] = useState(snapshot.content)
   const [loadedHash, setLoadedHash] = useState(snapshot.content_hash)
   const [dirty, setDirty] = useState(false)
-  const [externalConflict, setExternalConflict] = useState(false)
   const [reason, setReason] = useState("Revise the public source while preserving the reviewed manuscript-unit boundary.")
   const [reviewedProposal, setReviewedProposal] = useState<ManuscriptSourceProposal | null>(null)
+  const externalConflict = dirty && snapshot.content_hash !== loadedHash
 
   const checkExternal = async () => {
     const result = await sources.file.refetch()
@@ -184,13 +185,12 @@ function SourceFileWorkspace({
       return
     }
     if (dirty) {
-      setExternalConflict(true)
       toast.warning("External edit detected; your unsent draft was preserved")
       return
     }
     setDraft(current.content)
+    setLoadedContent(current.content)
     setLoadedHash(current.content_hash)
-    setExternalConflict(false)
     toast.success("Reloaded the external source change")
   }
 
@@ -198,9 +198,9 @@ function SourceFileWorkspace({
     const current = sources.file.data
     if (!current) return
     setDraft(current.content)
+    setLoadedContent(current.content)
     setLoadedHash(current.content_hash)
     setDirty(false)
-    setExternalConflict(false)
   }
 
   const prepare = async () => {
@@ -228,10 +228,11 @@ function SourceFileWorkspace({
         revision: proposal.revision,
         reason: "PI applied the reviewed source diff in the manuscript workbench.",
       })
-      if (applied.proposed_content !== undefined) setDraft(applied.proposed_content)
+      const appliedContent = applied.proposed_content ?? draft
+      setDraft(appliedContent)
+      setLoadedContent(appliedContent)
       setLoadedHash(applied.proposed_content_hash)
       setDirty(false)
-      setExternalConflict(false)
       setReviewedProposal(null)
       toast.success("Source file replaced atomically; recovery metadata was retained")
     } catch (error) {
@@ -288,7 +289,7 @@ function SourceFileWorkspace({
             value={draft}
             onChange={(event) => {
               setDraft(event.target.value)
-              setDirty(event.target.value !== snapshot.content)
+              setDirty(event.target.value !== loadedContent)
             }}
           />
         </div>

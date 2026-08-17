@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
+import stat
 import zipfile
 from pathlib import Path
 
@@ -83,6 +85,26 @@ def _markdown(unit_id: str, sentence: str) -> str:
         f"{sentence}\n"
         f"<!-- rka:unit {unit_id} end -->\n"
     )
+
+
+async def _evidence_claim(db, content: str) -> str:
+    journal_id = generate_id("journal")
+    claim_id = generate_id("claim")
+    await db.execute(
+        """INSERT INTO journal
+           (id, type, content, source, confidence, importance, status, project_id)
+           VALUES (?, 'log', ?, 'executor', 'tested', 'high', 'active', 'proj_default')""",
+        [journal_id, content],
+    )
+    await db.execute(
+        """INSERT INTO claims
+           (id, source_entry_id, claim_type, content, confidence, verified,
+            evidence_status, stale, project_id)
+           VALUES (?, ?, 'result', ?, 0.9, 1, 'supported', 0, 'proj_default')""",
+        [claim_id, journal_id, content],
+    )
+    await db.commit()
+    return claim_id
 
 
 @pytest.mark.asyncio
@@ -216,11 +238,274 @@ async def test_retry_completes_ledger_after_replace_before_transition_failure(
     assert source.read_text() == after
     assert (await service.get_proposal(proposal["id"]))["status"] == "proposed"
 
+    with pytest.raises(ManuscriptSourceConflictError, match="already on disk"):
+        await service.reject_proposal(
+            proposal["id"],
+            ManuscriptSourceProposalTransition(
+                expected_revision=1,
+                actor="web_ui",
+                reason="Do not let reject falsify the crash-applied ledger.",
+            ),
+        )
+    assert (await service.get_proposal(proposal["id"]))["status"] == "proposed"
+
     monkeypatch.setattr(service, "_complete_applied_transition", complete)
     recovered = await service.apply_proposal(proposal["id"], transition)
     assert recovered["status"] == "applied"
     assert recovered["events"][-1]["details"]["recovered_after_restart"] is True
     assert source.read_text() == after
+
+
+@pytest.mark.asyncio
+async def test_same_file_concurrent_applies_yield_without_event_loop_deadlock(
+    db_with_project,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _, manuscript_id, workspace, unit_id = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    before = _markdown(unit_id, "Before concurrent applies.")
+    first_after = _markdown(unit_id, "First concurrent proposal.")
+    second_after = _markdown(unit_id, "Second concurrent proposal.")
+    source = workspace / "main.md"
+    source.write_text(before)
+    proposals = []
+    for content in (first_after, second_after):
+        proposals.append(
+            await service.create_proposal(
+                manuscript_id,
+                ManuscriptSourceProposalCreate(
+                    origin="human",
+                    relative_path="main.md",
+                    expected_content_hash=_hash(before),
+                    content=content,
+                    created_by="web_ui",
+                    reason="Exercise serialized same-file apply.",
+                ),
+            )
+        )
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original_inspect = service.inspect_content
+
+    async def pause_first(*args, **kwargs):
+        if args[3] == first_after:
+            entered.set()
+            await release.wait()
+        return await original_inspect(*args, **kwargs)
+
+    monkeypatch.setattr(service, "inspect_content", pause_first)
+    transition = ManuscriptSourceProposalTransition(
+        expected_revision=1,
+        actor="web_ui",
+        reason="Apply one of two concurrent proposals.",
+    )
+    first_task = asyncio.create_task(
+        service.apply_proposal(proposals[0]["id"], transition)
+    )
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    second_task = asyncio.create_task(
+        service.apply_proposal(proposals[1]["id"], transition)
+    )
+    await asyncio.sleep(0.05)
+    assert not second_task.done()
+    release.set()
+    results = await asyncio.wait_for(
+        asyncio.gather(first_task, second_task, return_exceptions=True), timeout=2
+    )
+
+    assert results[0]["status"] == "applied"
+    assert isinstance(results[1], ManuscriptSourceConflictError)
+    assert source.read_text() == first_after
+    assert (await service.get_proposal(proposals[1]["id"]))["status"] == "conflicted"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("closing_action", ["reject", "supersede"])
+async def test_apply_serializes_reject_and_supersede_after_filesystem_commit(
+    db_with_project,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    closing_action: str,
+) -> None:
+    service, _, manuscript_id, workspace, unit_id = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    before = _markdown(unit_id, "Before terminal-state race.")
+    after = _markdown(unit_id, "Applied content wins the serialized race.")
+    source = workspace / "main.md"
+    source.write_text(before)
+    proposal = await service.create_proposal(
+        manuscript_id,
+        ManuscriptSourceProposalCreate(
+            origin="human",
+            relative_path="main.md",
+            expected_content_hash=_hash(before),
+            content=after,
+            created_by="web_ui",
+            reason="Exercise terminal-state serialization.",
+        ),
+    )
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original_complete = service._complete_applied_transition
+
+    async def pause_after_replace(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        await original_complete(*args, **kwargs)
+
+    monkeypatch.setattr(service, "_complete_applied_transition", pause_after_replace)
+    transition = ManuscriptSourceProposalTransition(
+        expected_revision=1,
+        actor="web_ui",
+        reason="Apply before a competing terminal transition.",
+    )
+    apply_task = asyncio.create_task(service.apply_proposal(proposal["id"], transition))
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    if closing_action == "reject":
+        close_task = asyncio.create_task(
+            service.reject_proposal(
+                proposal["id"],
+                ManuscriptSourceProposalTransition(
+                    expected_revision=1,
+                    actor="web_ui",
+                    reason="Competing rejection must not falsify the ledger.",
+                ),
+            )
+        )
+    else:
+        close_task = asyncio.create_task(
+            service.create_proposal(
+                manuscript_id,
+                ManuscriptSourceProposalCreate(
+                    origin="human",
+                    relative_path="main.md",
+                    expected_content_hash=_hash(after),
+                    content=_markdown(unit_id, "Attempted superseding content."),
+                    created_by="web_ui",
+                    reason="Competing supersession must not falsify the ledger.",
+                    supersedes_proposal_id=proposal["id"],
+                ),
+            )
+        )
+    await asyncio.sleep(0.05)
+    assert not close_task.done()
+    release.set()
+    applied, close_result = await asyncio.wait_for(
+        asyncio.gather(apply_task, close_task, return_exceptions=True), timeout=2
+    )
+
+    assert applied["status"] == "applied"
+    assert isinstance(close_result, ManuscriptSourceConflictError)
+    assert (await service.get_proposal(proposal["id"]))["status"] == "applied"
+    assert source.read_text() == after
+
+
+@pytest.mark.asyncio
+async def test_external_edit_after_recovery_is_preserved_before_final_replace(
+    db_with_project,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _, manuscript_id, workspace, unit_id = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    before = _markdown(unit_id, "Before late external edit.")
+    proposed = _markdown(unit_id, "Proposed content.")
+    external = _markdown(unit_id, "External edit after recovery.")
+    source = workspace / "main.md"
+    source.write_text(before)
+    proposal = await service.create_proposal(
+        manuscript_id,
+        ManuscriptSourceProposalCreate(
+            origin="human",
+            relative_path="main.md",
+            expected_content_hash=_hash(before),
+            content=proposed,
+            created_by="web_ui",
+            reason="Exercise final pre-replace hash verification.",
+        ),
+    )
+    original_write_recovery = service._write_recovery
+
+    def inject_external_edit(*args, **kwargs):
+        original_write_recovery(*args, **kwargs)
+        source.write_text(external)
+
+    monkeypatch.setattr(service, "_write_recovery", inject_external_edit)
+    with pytest.raises(ManuscriptSourceConflictError, match="immediately before"):
+        await service.apply_proposal(
+            proposal["id"],
+            ManuscriptSourceProposalTransition(
+                expected_revision=1,
+                actor="web_ui",
+                reason="Do not overwrite the late external edit.",
+            ),
+        )
+
+    assert source.read_text() == external
+    conflicted = await service.get_proposal(proposal["id"])
+    assert conflicted["status"] == "conflicted"
+    assert conflicted["events"][-1]["details"]["current_content_hash"] == _hash(
+        external
+    )
+    recovery = service._recovery_manifest_path(conflicted)
+    assert (recovery.parent / "before.bin").read_text() == before
+
+
+@pytest.mark.asyncio
+async def test_retry_reconciles_failure_after_replace_before_directory_fsync(
+    db_with_project,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _, manuscript_id, workspace, unit_id = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    before = _markdown(unit_id, "Before directory fsync failure.")
+    after = _markdown(unit_id, "After directory fsync failure.")
+    source = workspace / "main.md"
+    source.write_text(before)
+    proposal = await service.create_proposal(
+        manuscript_id,
+        ManuscriptSourceProposalCreate(
+            origin="human",
+            relative_path="main.md",
+            expected_content_hash=_hash(before),
+            content=after,
+            created_by="web_ui",
+            reason="Exercise the replace-to-directory-fsync crash window.",
+        ),
+    )
+    original_fsync = os.fsync
+    directory_fsyncs = 0
+
+    def fail_second_directory_fsync(fd: int) -> None:
+        nonlocal directory_fsyncs
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            directory_fsyncs += 1
+            if directory_fsyncs == 2:
+                raise OSError("simulated source-directory fsync failure")
+        original_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", fail_second_directory_fsync)
+    transition = ManuscriptSourceProposalTransition(
+        expected_revision=1,
+        actor="web_ui",
+        reason="Apply across a simulated directory-fsync failure.",
+    )
+    with pytest.raises(OSError, match="source-directory fsync failure"):
+        await service.apply_proposal(proposal["id"], transition)
+    assert source.read_text() == after
+    assert (await service.get_proposal(proposal["id"]))["status"] == "proposed"
+
+    monkeypatch.setattr(os, "fsync", original_fsync)
+    recovered = await service.apply_proposal(proposal["id"], transition)
+    assert recovered["status"] == "applied"
+    assert recovered["events"][-1]["details"]["recovered_after_restart"] is True
 
 
 @pytest.mark.asyncio
@@ -346,7 +631,7 @@ async def test_symlinked_recovery_directory_fails_before_source_write(
         "manuscript-source-recovery"
     )
     recovery_root.mkdir(exist_ok=True)
-    (recovery_root / "locks").symlink_to(external, target_is_directory=True)
+    (recovery_root / "proj_default").symlink_to(external, target_is_directory=True)
 
     with pytest.raises(ManuscriptSourceSecurityError, match="recovery path"):
         await service.apply_proposal(
@@ -377,6 +662,97 @@ async def test_overview_separates_quick_reader_from_private_risk(
     assert "never copied automatically" in overview["public_private_boundary"][
         "private_reviewer_risks"
     ]
+
+
+@pytest.mark.asyncio
+async def test_overview_projects_unallocated_claim_adverse_evidence_privately(
+    db_with_project,
+    tmp_path: Path,
+) -> None:
+    service, _, manuscript_id, workspace, unit_id = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    support_id = await _evidence_claim(db_with_project, "Measured bounded support.")
+    qualifier_id = await _evidence_claim(db_with_project, "Observed boundary condition.")
+    counterevidence_id = await _evidence_claim(db_with_project, "Observed adverse case.")
+    native = NativeManuscriptService(db_with_project, project_id="proj_default")
+    manuscript = await native.get(manuscript_id)
+    assert manuscript is not None
+    context = await native.upsert_argument_spine(
+        manuscript_id,
+        expected_revision=manuscript.revision,
+        spine={
+            "claims": [
+                {
+                    "claim_id": "C1",
+                    "claim_type": "empirical",
+                    "status": "active",
+                    "text": "The bounded mechanism produced the measured effect.",
+                    "allowed_wording": "The effect held in the evaluated setting.",
+                    "prohibited_wording": ["The mechanism always works."],
+                    "evidence_ids": [support_id],
+                    "qualifier_ids": [qualifier_id],
+                    "counterevidence_ids": [counterevidence_id],
+                    "unit_links": [{"unit_key": "U1", "relationship": "advances"}],
+                }
+            ],
+            "units": [
+                {
+                    "unit_id": "U1",
+                    "kind": "introduction",
+                    "location": "main.md#u1",
+                    "status": "planned",
+                    "outline_level": 3,
+                    "unit_role": "argument_block",
+                    "rhetorical_move": "frame_problem",
+                    "communicative_job": "Frame the bounded problem.",
+                    "intended_takeaway": "The problem matters in the evaluated setting.",
+                    "evidence_plan": ["Link one bounded source."],
+                    "quick_reader_role": "Problem in one sentence.",
+                    "evidence_ids": [support_id],
+                }
+            ],
+        },
+        actor="web_ui",
+    )
+    assert context["units"][0]["id"] == unit_id
+    (workspace / "main.md").write_text(_markdown(unit_id, "Bounded prose."))
+
+    overview = await service.get_overview(manuscript_id)
+    assert {
+        (risk["kind"], risk.get("claim_id"), risk.get("evidence_claim_id"))
+        for risk in overview["private_reviewer_risks"]
+        if risk["kind"].startswith("unallocated_")
+    } == {
+        ("unallocated_qualifier", context["claims"][0]["id"], qualifier_id),
+        (
+            "unallocated_counterevidence",
+            context["claims"][0]["id"],
+            counterevidence_id,
+        ),
+    }
+
+
+@pytest.mark.asyncio
+async def test_direct_source_reads_reject_invalid_utf8_and_configured_oversize(
+    db_with_project,
+    tmp_path: Path,
+) -> None:
+    service, config, manuscript_id, workspace, _ = await _source_fixture(
+        db_with_project, tmp_path
+    )
+    (workspace / "invalid.md").write_bytes(b"\xff\xfe")
+    with pytest.raises(ValueError, match="valid UTF-8"):
+        await service.read_file(manuscript_id, "invalid.md")
+
+    bounded = ManuscriptSourceService(
+        db_with_project,
+        config=config.model_copy(update={"manuscript_source_max_bytes": 32}),
+        project_id="proj_default",
+    )
+    (workspace / "oversize.md").write_bytes(b"x" * 33)
+    with pytest.raises(ValueError, match="size limit"):
+        await bounded.read_file(manuscript_id, "oversize.md")
 
 
 @pytest.mark.asyncio

@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import sqlite3
 from pathlib import Path
 
 import pytest
 
+from rka.config import RKAConfig
 from rka.infra.ids import generate_id
+from rka.models.manuscript_native import ManuscriptCreate
+from rka.models.manuscript_source import ManuscriptSourceProposalCreate
 from rka.models.project import ProjectCreate
 from rka.models.claim import ClaimCreate, ClaimScopeCondition, ClaimScopeWrite
 from rka.models.interpretation import InterpretationCandidateCreate
@@ -17,6 +21,8 @@ from rka.models.planning import PlanningArtifactVersionAppend, PlanningBranchCre
 from rka.services.claims import ClaimService
 from rka.services.experiments import ExperimentService
 from rka.services.interpretation import InterpretationService
+from rka.services.manuscript_native import NativeManuscriptService
+from rka.services.manuscript_source import ManuscriptSourceService
 from rka.services.planning import ManuscriptPlanningService
 from rka.services.project import ProjectService
 
@@ -529,6 +535,67 @@ async def test_delete_project_removes_source_proposals_and_owned_recovery(db) ->
     assert await db.fetchone(
         "SELECT id FROM manuscript_source_proposals WHERE id = ?", [proposal_id]
     ) is None
+
+
+@pytest.mark.asyncio
+async def test_delete_project_removes_service_created_source_supersession_chain(
+    db,
+    tmp_path: Path,
+) -> None:
+    projects = ProjectService(db)
+    project_id = "proj_delete_source_chain"
+    await projects.create_project(
+        ProjectCreate(id=project_id, name="Delete Source Chain"),
+        actor="system",
+    )
+    workspace = tmp_path / "source-chain-workspace"
+    workspace.mkdir()
+    manuscript = await NativeManuscriptService(db, project_id=project_id).create(
+        ManuscriptCreate(title="Source chain", workspace_ref=str(workspace)),
+        actor="pi",
+    )
+    config = RKAConfig(
+        project_dir=tmp_path,
+        db_path=Path(db.db_path),
+        data_dir=tmp_path / "data",
+        llm_enabled=False,
+        embeddings_enabled=False,
+        manuscript_workspace_roots=str(tmp_path),
+    )
+    sources = ManuscriptSourceService(db, config=config, project_id=project_id)
+    before = "# Source chain\n"
+    source = workspace / "main.md"
+    source.write_text(before)
+    expected_hash = hashlib.sha256(before.encode()).hexdigest()
+
+    previous_id = None
+    proposal_ids = []
+    for index in range(3):
+        proposal = await sources.create_proposal(
+            manuscript.id,
+            ManuscriptSourceProposalCreate(
+                origin="human",
+                relative_path="main.md",
+                expected_content_hash=expected_hash,
+                content=f"# Source chain proposal {index}\n",
+                created_by="web_ui",
+                reason=f"Create supersession history {index}.",
+                supersedes_proposal_id=previous_id,
+            ),
+        )
+        previous_id = proposal["id"]
+        proposal_ids.append(proposal["id"])
+
+    preview = await projects.delete_project(project_id, confirm=False)
+    assert preview["entity_counts"]["manuscript_source_proposals"] == 3
+    assert preview["entity_counts"]["manuscript_source_events"] == 5
+
+    result = await projects.delete_project(project_id, confirm=True)
+    assert result["confirmed"] is True
+    for proposal_id in proposal_ids:
+        assert await db.fetchone(
+            "SELECT id FROM manuscript_source_proposals WHERE id = ?", [proposal_id]
+        ) is None
 
 
 @pytest.mark.asyncio

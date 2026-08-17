@@ -68,6 +68,12 @@ transport boundary; changing `X-RKA-Actor` is provenance, not authentication.
 
 ### 4. Make every replacement optimistic, atomic, and recoverable
 
+Create, apply, reject, and supersede share a per-file advisory lock. Lock
+acquisition uses nonblocking retries that yield to the async event loop, and the
+lock remains held through the database terminal transition. A crash-applied
+file with valid recovery metadata must be reconciled by retrying Apply; Reject
+or Supersede cannot record a false terminal state.
+
 Apply re-reads the file and compares its SHA-256 hash with the proposal's base
 hash. A missing file is represented by the explicit sentinel `null`; an empty
 file has the normal SHA-256 of empty bytes. Any mismatch marks the proposal
@@ -75,14 +81,17 @@ file has the normal SHA-256 of empty bytes. Any mismatch marks the proposal
 
 For a matching base, apply:
 
-1. writes a recovery copy and manifest beneath the managed storage directory
+1. re-reads after asynchronous validation and requires the same base hash;
+2. writes a recovery copy and manifest beneath the managed storage directory
    beside the active RKA database;
-2. fsyncs the recovery file and manifest;
-3. writes the proposed bytes to a same-directory temporary regular file;
-4. preserves the existing regular-file mode when applicable;
-5. fsyncs and atomically replaces the target with `os.replace`;
-6. fsyncs the containing directory;
-7. records the applied event with before, after, and recovery hashes.
+3. fsyncs the recovery file and manifest;
+4. writes the proposed bytes to a same-directory temporary regular file;
+5. preserves the existing regular-file mode and fsyncs the temporary file;
+6. re-reads synchronously immediately before replacement and again requires the
+   same base hash;
+7. atomically replaces the target with `os.replace`;
+8. fsyncs the containing directory;
+9. records the applied event with before, after, and recovery hashes.
 
 The recovery manifest is durable even if the database event cannot be
 committed after replacement. The service never runs `git add`, commit, reset,
@@ -168,6 +177,8 @@ and does not invalidate PI checkpoints by itself.
   attempts fail closed;
 - human and AI edits use the same proposal service and only PI/web may apply;
 - an external edit produces a durable conflict and leaves the file untouched;
+- same-file apply/reject/supersede races yield rather than blocking the event
+  loop and cannot produce a file/ledger terminal-state mismatch;
 - applied writes are atomic, mode-preserving, and recoverable;
 - Markdown and LaTeX anchors round-trip and invalid anchors are actionable;
 - provenance comments are checked against current typed bindings;

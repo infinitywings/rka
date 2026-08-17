@@ -16,16 +16,18 @@ Design authority: ADR 0011
   symlink, special-file, UTF-8, and size-boundary checks.
 - Balanced `mun_` source ranges and exact claim, evidence, and citation
   provenance validation against current manuscript bindings.
-- Prepare, review, apply, reject, hash-conflict, crash-recovery, mode-preserving
-  atomic replacement, and durable recovery manifests without Git operations.
+- Prepare, review, apply, reject, supersede, hash-conflict, crash-recovery,
+  nonblocking same-file transition serialization, mode-preserving atomic
+  replacement, and durable recovery manifests without Git operations.
 - Quick-reader source ranges and a separate private reviewer-risk projection for
   boundaries, qualifiers, counterevidence, and citation-verification warnings.
 - Local-web-only REST authorization; arbitrary manuscript source content is not
   added to the MCP surface or portable KnowledgePack payloads. The bundled
   Docker port is now host-loopback-only so this unauthenticated surface is not
   published to the LAN by default.
-- Project deletion removes source-ledger rows and managed recovery data while
-  failing closed on a replaced recovery-directory symlink.
+- Project deletion removes chained source-proposal histories, ledger rows, and
+  managed recovery data while failing closed on a replaced recovery-directory
+  symlink.
 - Responsive workbench controls for file selection, public source editing,
   preview, diagnostics, external-change detection, and explicit review/apply.
 
@@ -55,9 +57,11 @@ The browser workbench demonstrated that:
 5. The Quick reader linked the canonical unit to both Markdown and LaTeX ranges.
    The private tab showed the claim boundary, qualifier, counterevidence, and
    stale citation warning without placing them in the public editor.
-6. An external edit made after an unsent browser change produced the explicit
-   conflict banner and preserved the unique unsent draft text. Reload remained
-   a separate user action; no overwrite occurred.
+6. An external edit made after an unsent browser change was detected by the
+   active workbench's ten-second source poll without pressing the manual check
+   button. The explicit conflict banner appeared, Prepare disabled, and the
+   unique unsent draft remained intact. Reload remained a separate user action;
+   no overwrite occurred.
 7. A 390x844 responsive check initially exposed a narrow tab/header overflow.
    The panel was corrected with wrapping, minimum-width, and mobile-select rules,
    then visually rechecked successfully.
@@ -70,16 +74,16 @@ touch a live research project or invoke a model.
 
 | Gate | Result |
 | --- | --- |
-| Migration/source/API/project/pack corrective suite (command below) | **38 passed** |
+| Migration/source/API/project/pack corrective suite (command below) | **46 passed** |
 | MCP schema/model-drift suite (command below) | **994 passed** |
-| Full Python suite: `.venv/bin/python -m pytest -q` | **3,171 passed in 225.33s** |
+| Full Python suite: `.venv/bin/python -m pytest -q` | **3,179 passed in 260.88s** |
 | Changed Python files: Ruff | **Passed** |
 | Python compile check: `.venv/bin/python -m compileall -q rka` | **Passed** |
 | Git whitespace/error check: `git diff --check 116f76b --` | **Passed** |
 | Docker Compose validation: `docker compose config --quiet` | **Passed** |
 | Web production build: `(cd web && npm run build)` | **Passed**; existing large-chunk warning remains |
 | Changed web files: ESLint | **Passed** |
-| Browser prepare/review/apply/restart/conflict/private-risk pilot | **Passed** |
+| Browser prepare/review/apply/restart/automatic-conflict/private-risk pilot | **Passed** |
 
 Corrective suite command:
 
@@ -108,6 +112,30 @@ cd web && npx eslint src/api/client.ts src/api/types.ts src/components/workbench
 The disposable virtual environment uses the repository-locked
 `sqlite-vec==0.1.6`; no temporary dependency override was needed for the final
 full-suite result.
+
+## Independent-audit corrections
+
+The first exact-commit audit kept the candidate in draft and identified
+same-file event-loop blocking, terminal-transition races, a late external-edit
+overwrite window, deletion failure for supersession chains, omitted unallocated
+adverse evidence, and a UI guard that depended on manual refresh. The corrected
+candidate adds deterministic regression coverage for:
+
+- two concurrent same-file applies completing without event-loop deadlock;
+- apply racing reject and supersede after the filesystem commit point;
+- a late external edit injected after durable recovery but before replacement;
+- database interruption after replace and failure between replace and directory
+  fsync, both reconciled by retrying Apply;
+- rejection of a crash-applied proposal until Apply reconciles the ledger;
+- deletion of a service-created three-proposal supersession history;
+- private projection of unallocated claim-level qualifier and counterevidence;
+- direct invalid-UTF-8 and configured-size-limit reads; and
+- an automatic background source refetch preserving a dirty browser draft and
+  disabling Prepare.
+
+The browser pilot remains complementary disposable evidence rather than a
+committed test artifact. The concurrency, recovery, deletion, and risk
+semantics above are established by committed deterministic tests.
 
 ## Review interpretation
 

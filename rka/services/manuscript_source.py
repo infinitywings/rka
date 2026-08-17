@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import fcntl
 import hashlib
 import json
@@ -9,6 +10,7 @@ import os
 import re
 import stat
 from collections import Counter, defaultdict
+from contextlib import asynccontextmanager
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
@@ -184,11 +186,19 @@ class ManuscriptSourceService(BaseService):
             self.db, project_id=self.project_id
         ).get_context(manuscript["id"])
         claims = {claim["id"]: claim for claim in context["claims"]}
+        active_units = [unit for unit in context["units"] if unit["status"] != "removed"]
+        allocated_adverse_by_role = {
+            role: {
+                str(binding["evidence_claim_id"])
+                for unit in active_units
+                for binding in unit.get("evidence", [])
+                if binding.get("role") == role
+            }
+            for role in ("qualifier", "counterevidence")
+        }
         quick_reader = []
         private_risks: list[dict[str, Any]] = []
-        for unit in sorted(context["units"], key=lambda value: (value["sequence"], value["id"])):
-            if unit["status"] == "removed":
-                continue
+        for unit in sorted(active_units, key=lambda value: (value["sequence"], value["id"])):
             unit_claims = [
                 claim
                 for claim in claims.values()
@@ -217,6 +227,26 @@ class ManuscriptSourceService(BaseService):
                             "message": "Prohibited wording is private review context, not draft prose.",
                         }
                     )
+                for binding in claim.get("evidence", []):
+                    role = binding.get("role")
+                    evidence_claim_id = str(binding.get("evidence_claim_id"))
+                    if (
+                        role in allocated_adverse_by_role
+                        and evidence_claim_id not in allocated_adverse_by_role[role]
+                    ):
+                        private_risks.append(
+                            {
+                                "kind": f"unallocated_{role}",
+                                "unit_id": unit["id"],
+                                "claim_id": claim["id"],
+                                "evidence_claim_id": evidence_claim_id,
+                                "content": binding.get("content"),
+                                "message": (
+                                    "Claim-level adverse evidence is not allocated to an "
+                                    "active manuscript unit and requires deliberate treatment."
+                                ),
+                            }
+                        )
             for binding in unit.get("evidence", []):
                 if binding["role"] in {"qualifier", "counterevidence"}:
                     private_risks.append(
@@ -498,93 +528,104 @@ class ManuscriptSourceService(BaseService):
         relative_path, source_format = self._normalize_source_path(data.relative_path)
         proposed = data.content.encode("utf-8")
         self._assert_size(proposed)
-        current, _ = self._read_current(workspace, relative_path)
-        current_hash = _sha256(current) if current is not None else None
-        if current_hash != data.expected_content_hash:
-            raise ManuscriptSourceConflictError(
-                f"source hash conflict: expected {data.expected_content_hash!r}, found {current_hash!r}"
+        async with self._source_lock(manuscript["id"], relative_path):
+            current, _ = self._read_current(workspace, relative_path)
+            current_hash = _sha256(current) if current is not None else None
+            if current_hash != data.expected_content_hash:
+                raise ManuscriptSourceConflictError(
+                    "source hash conflict: "
+                    f"expected {data.expected_content_hash!r}, found {current_hash!r}"
+                )
+            proposed_hash = _sha256(proposed)
+            if proposed_hash == current_hash:
+                raise ValueError("source proposal has no content changes")
+            inspection = await self.inspect_content(
+                manuscript["id"], relative_path, source_format, data.content
             )
-        proposed_hash = _sha256(proposed)
-        if proposed_hash == current_hash:
-            raise ValueError("source proposal has no content changes")
-        inspection = await self.inspect_content(
-            manuscript["id"], relative_path, source_format, data.content
-        )
-        if any(item["severity"] == "error" for item in inspection["findings"]):
-            raise ValueError("source proposal contains blocking anchor or provenance findings")
+            if any(item["severity"] == "error" for item in inspection["findings"]):
+                raise ValueError(
+                    "source proposal contains blocking anchor or provenance findings"
+                )
 
-        proposal_id = generate_id("manuscript_source_proposal")
-        async with self.db.transaction():
-            context_manifest_id = None
-            if data.origin != "human":
-                await self._validate_ai_context(
-                    manuscript,
-                    str(data.context_manifest_id),
-                    origin=data.origin,
-                    provider=str(data.provider),
-                    model=str(data.model),
-                    boundary=data.boundary,
-                )
-                context_manifest_id = data.context_manifest_id
-            if data.supersedes_proposal_id:
-                previous = await self._require_proposal_row(data.supersedes_proposal_id)
-                if previous["status"] not in {"proposed", "conflicted"}:
-                    raise ManuscriptSourceConflictError(
-                        "only proposed or conflicted source proposals may be superseded"
+            proposal_id = generate_id("manuscript_source_proposal")
+            async with self.db.transaction():
+                context_manifest_id = None
+                if data.origin != "human":
+                    await self._validate_ai_context(
+                        manuscript,
+                        str(data.context_manifest_id),
+                        origin=data.origin,
+                        provider=str(data.provider),
+                        model=str(data.model),
+                        boundary=data.boundary,
                     )
-                if (
-                    previous["manuscript_id"] != manuscript["id"]
-                    or previous["relative_path"] != relative_path
-                ):
-                    raise ValueError("a source proposal may supersede only the same file")
-                await self._transition_row(
-                    previous,
-                    status="superseded",
-                    actor=data.created_by,
-                    reason=f"Superseded by {proposal_id}: {data.reason}",
-                    details={"superseded_by": proposal_id},
+                    context_manifest_id = data.context_manifest_id
+                if data.supersedes_proposal_id:
+                    previous = await self._require_proposal_row(
+                        data.supersedes_proposal_id
+                    )
+                    if previous["status"] not in {"proposed", "conflicted"}:
+                        raise ManuscriptSourceConflictError(
+                            "only proposed or conflicted source proposals may be superseded"
+                        )
+                    if (
+                        previous["manuscript_id"] != manuscript["id"]
+                        or previous["relative_path"] != relative_path
+                    ):
+                        raise ValueError(
+                            "a source proposal may supersede only the same file"
+                        )
+                    self._assert_not_written_before_close(
+                        previous, workspace, action="supersede"
+                    )
+                    await self._transition_row(
+                        previous,
+                        status="superseded",
+                        actor=data.created_by,
+                        reason=f"Superseded by {proposal_id}: {data.reason}",
+                        details={"superseded_by": proposal_id},
+                    )
+                await self.db.execute(
+                    """INSERT INTO manuscript_source_proposals
+                       (id, project_id, manuscript_id, origin, relative_path,
+                        source_format, base_content_hash, proposed_content,
+                        proposed_content_hash, created_by, reason,
+                        validation_findings, context_manifest_id, provider, model,
+                        boundary, supersedes_proposal_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    [
+                        proposal_id,
+                        self.project_id,
+                        manuscript["id"],
+                        data.origin,
+                        relative_path,
+                        source_format,
+                        current_hash,
+                        data.content,
+                        proposed_hash,
+                        data.created_by,
+                        data.reason,
+                        _canonical_json(inspection["findings"]),
+                        context_manifest_id,
+                        data.provider,
+                        data.model,
+                        data.boundary,
+                        data.supersedes_proposal_id,
+                    ],
                 )
-            await self.db.execute(
-                """INSERT INTO manuscript_source_proposals
-                   (id, project_id, manuscript_id, origin, relative_path,
-                    source_format, base_content_hash, proposed_content,
-                    proposed_content_hash, created_by, reason,
-                    validation_findings, context_manifest_id, provider, model,
-                    boundary, supersedes_proposal_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                [
+                await self._insert_event(
                     proposal_id,
-                    self.project_id,
-                    manuscript["id"],
-                    data.origin,
-                    relative_path,
-                    source_format,
-                    current_hash,
-                    data.content,
-                    proposed_hash,
-                    data.created_by,
-                    data.reason,
-                    _canonical_json(inspection["findings"]),
-                    context_manifest_id,
-                    data.provider,
-                    data.model,
-                    data.boundary,
-                    data.supersedes_proposal_id,
-                ],
-            )
-            await self._insert_event(
-                proposal_id,
-                revision=1,
-                action="proposed",
-                actor=data.created_by,
-                reason=data.reason,
-                details={
-                    "relative_path": relative_path,
-                    "base_content_hash": current_hash,
-                    "proposed_content_hash": proposed_hash,
-                    "finding_count": len(inspection["findings"]),
-                },
-            )
+                    revision=1,
+                    action="proposed",
+                    actor=data.created_by,
+                    reason=data.reason,
+                    details={
+                        "relative_path": relative_path,
+                        "base_content_hash": current_hash,
+                        "proposed_content_hash": proposed_hash,
+                        "finding_count": len(inspection["findings"]),
+                    },
+                )
         return await self.get_proposal(proposal_id)
 
     async def get_proposal(self, proposal_id: str) -> dict[str, Any]:
@@ -652,9 +693,7 @@ class ManuscriptSourceService(BaseService):
         self._assert_open(row, data.expected_revision)
         manuscript, workspace = await self._resolve_workspace(row["manuscript_id"])
         relative_path, _ = self._normalize_source_path(row["relative_path"])
-        lock_fd = self._open_lock_fd(manuscript["id"], relative_path)
-        try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        async with self._source_lock(manuscript["id"], relative_path):
             row = await self._require_proposal_row(proposal_id)
             self._assert_open(row, data.expected_revision)
             current, mode = self._read_current(workspace, relative_path)
@@ -674,22 +713,11 @@ class ManuscriptSourceService(BaseService):
                         recovered_after_restart=True,
                     )
                     return await self.get_proposal(proposal_id)
-                async with self.db.transaction():
-                    row = await self._require_proposal_row(proposal_id)
-                    self._assert_open(row, data.expected_revision)
-                    await self._transition_row(
-                        row,
-                        status="conflicted",
-                        actor=data.actor,
-                        reason=data.reason,
-                        details={
-                            "relative_path": relative_path,
-                            "expected_content_hash": row["base_content_hash"],
-                            "current_content_hash": current_hash,
-                            "proposed_content_hash": proposed_hash,
-                            "file_written": False,
-                        },
-                    )
+                await self._mark_conflicted(
+                    row,
+                    data,
+                    current_content_hash=current_hash,
+                )
                 raise ManuscriptSourceConflictError(
                     "source changed after proposal creation; current and proposed versions were preserved"
                 )
@@ -699,19 +727,46 @@ class ManuscriptSourceService(BaseService):
             )
             if any(item["severity"] == "error" for item in inspection["findings"]):
                 raise ValueError("source proposal no longer passes anchor/provenance validation")
+
+            # Validation awaits database reads. Re-read afterwards so an editor
+            # change during that await is never recovered as the wrong base.
+            current, mode = self._read_current(workspace, relative_path)
+            current_hash = _sha256(current) if current is not None else None
+            if current_hash != row["base_content_hash"]:
+                await self._mark_conflicted(
+                    row,
+                    data,
+                    current_content_hash=current_hash,
+                )
+                raise ManuscriptSourceConflictError(
+                    "source changed during proposal validation; current and proposed "
+                    "versions were preserved"
+                )
+
             self._write_recovery(row, current, mode, recovery_path)
-            self._atomic_replace(workspace, relative_path, proposed, mode)
+            try:
+                self._atomic_replace(
+                    workspace,
+                    relative_path,
+                    proposed,
+                    mode,
+                    expected_content_hash=row["base_content_hash"],
+                )
+            except ManuscriptSourceConflictError:
+                latest, _ = self._read_current(workspace, relative_path)
+                latest_hash = _sha256(latest) if latest is not None else None
+                await self._mark_conflicted(
+                    row,
+                    data,
+                    current_content_hash=latest_hash,
+                )
+                raise
             await self._complete_applied_transition(
                 row,
                 data,
                 recovery_path,
                 recovered_after_restart=False,
             )
-        finally:
-            try:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
-            finally:
-                os.close(lock_fd)
         return await self.get_proposal(proposal_id)
 
     async def reject_proposal(
@@ -719,17 +774,49 @@ class ManuscriptSourceService(BaseService):
         proposal_id: str,
         data: ManuscriptSourceProposalTransition,
     ) -> dict[str, Any]:
-        async with self.db.transaction():
+        row = await self._require_proposal_row(proposal_id)
+        self._assert_open(row, data.expected_revision)
+        manuscript, workspace = await self._resolve_workspace(row["manuscript_id"])
+        relative_path, _ = self._normalize_source_path(row["relative_path"])
+        async with self._source_lock(manuscript["id"], relative_path):
             row = await self._require_proposal_row(proposal_id)
             self._assert_open(row, data.expected_revision)
+            self._assert_not_written_before_close(row, workspace, action="reject")
+            async with self.db.transaction():
+                row = await self._require_proposal_row(proposal_id)
+                self._assert_open(row, data.expected_revision)
+                await self._transition_row(
+                    row,
+                    status="rejected",
+                    actor=data.actor,
+                    reason=data.reason,
+                    details={},
+                )
+        return await self.get_proposal(proposal_id)
+
+    async def _mark_conflicted(
+        self,
+        row: Mapping[str, Any],
+        data: ManuscriptSourceProposalTransition,
+        *,
+        current_content_hash: str | None,
+    ) -> None:
+        async with self.db.transaction():
+            current = await self._require_proposal_row(str(row["id"]))
+            self._assert_open(current, data.expected_revision)
             await self._transition_row(
-                row,
-                status="rejected",
+                current,
+                status="conflicted",
                 actor=data.actor,
                 reason=data.reason,
-                details={},
+                details={
+                    "relative_path": row["relative_path"],
+                    "expected_content_hash": row["base_content_hash"],
+                    "current_content_hash": current_content_hash,
+                    "proposed_content_hash": row["proposed_content_hash"],
+                    "file_written": False,
+                },
             )
-        return await self.get_proposal(proposal_id)
 
     async def _complete_applied_transition(
         self,
@@ -965,6 +1052,43 @@ class ManuscriptSourceService(BaseService):
         finally:
             os.close(directory_fd)
 
+    @asynccontextmanager
+    async def _source_lock(self, manuscript_id: str, relative_path: str):
+        """Serialize same-file state transitions without blocking the event loop."""
+        lock_fd = self._open_lock_fd(manuscript_id, relative_path)
+        try:
+            while True:
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    await asyncio.sleep(0.01)
+            yield
+        finally:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            finally:
+                os.close(lock_fd)
+
+    def _assert_not_written_before_close(
+        self,
+        row: Mapping[str, Any],
+        workspace: Path,
+        *,
+        action: str,
+    ) -> None:
+        """Keep a crash-applied proposal open until Apply reconciles its ledger."""
+        current, _ = self._read_current(workspace, str(row["relative_path"]))
+        current_hash = _sha256(current) if current is not None else None
+        recovery_path = self._recovery_manifest_path(row)
+        if current_hash == row["proposed_content_hash"] and self._valid_recovery_manifest(
+            recovery_path, row
+        ):
+            raise ManuscriptSourceConflictError(
+                "proposal content is already on disk with valid recovery metadata; "
+                f"retry apply to reconcile the ledger before {action}"
+            )
+
     def _recovery_components(self, row: Mapping[str, Any]) -> tuple[str, str, str]:
         components = (
             self.project_id,
@@ -1190,6 +1314,8 @@ class ManuscriptSourceService(BaseService):
         relative_path: str,
         value: bytes,
         previous_mode: int | None,
+        *,
+        expected_content_hash: str | None,
     ) -> None:
         normalized, _ = self._normalize_source_path(relative_path)
         parent_fd, name = self._open_parent_fd(workspace, PurePosixPath(normalized))
@@ -1210,6 +1336,17 @@ class ManuscriptSourceService(BaseService):
             os.fsync(temp_fd)
             os.close(temp_fd)
             temp_fd = None
+
+            # This is the last synchronous observation before replacement. The
+            # recovery copy was written from the same expected version, so a
+            # mismatch preserves both the external file and the proposal.
+            current, _ = self._read_current(workspace, normalized)
+            current_hash = _sha256(current) if current is not None else None
+            if current_hash != expected_content_hash:
+                raise ManuscriptSourceConflictError(
+                    "source changed immediately before replacement; current and "
+                    "proposed versions were preserved"
+                )
             os.replace(temp_name, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
             os.fsync(parent_fd)
         finally:
