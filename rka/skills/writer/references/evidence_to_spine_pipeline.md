@@ -255,21 +255,35 @@ units:
 2. Build one private evidence packet. Merge duplicate and closely related
    records into evidence bundles; do not preserve record order.
 3. Distill the packet into a small set of reader-facing propositions and
-   arrange them into the section's logic ladder.
+   arrange them into the section's logic ladder. Keep citation keys on
+   propositions that attribute specific prior work. Populate
+   `mandatory_disclosure_ids` with every M1/M2 item and required active
+   counterevidence.
 4. Group those propositions into paragraphs with an opening, development,
-   takeaway, and bridge to the next paragraph. Paragraph boundaries follow
-   rhetorical continuity rather than RKA entity or unit boundaries.
+   takeaway, bridge to the next paragraph, proposition IDs, and native-unit
+   keys. Record them in `.planning/DISCOURSE_<section-id>.yaml`. Paragraph
+   boundaries follow rhetorical continuity rather than RKA entity or unit
+   boundaries.
 5. Draft clean, plain academic prose from the logic ladder and paragraph
    plan. Keep IDs and private risk labels out of the public text.
 6. Stay within the allowed interpretation and apply M1-M4/S public placement.
-7. Revise section argument and paragraph coherence before sentence-level style
-   polishing. Use `discourse_synthesis.md` for this pass.
+   Map every mandatory disclosure to a public location before advancing.
+7. Have a different fresh-context reviewer revise section argument and
+   paragraph coherence before provenance attachment or sentence-level style
+   polishing. Persist the review in the discourse artifact.
 8. Attach hidden provenance and citations in a separate pass, then validate
-   them. Do not fragment coherent prose merely to simplify provenance mapping.
+   them. Do not fragment coherent prose merely to simplify provenance mapping;
+   retain proposition-level citation bindings for prior-work attribution.
 9. Run the quick-reader checks in `persuasive_framing.md`; revise the framing
    or escalate an unresolved materiality decision.
-10. Update affected unit statuses through a revision-guarded aggregate change,
-    synchronize projections, and re-run readiness.
+10. After the last prose change, re-run coherence, provenance, citation,
+    mandatory-disclosure, and discourse-artifact validation until one pass
+    makes no further prose change. Escalate after three unsuccessful passes.
+11. Require the union of paragraph-card `unit_keys` to equal the section's
+    `required_unit_keys`. Advance a unit to `drafted` only when all cards mapped
+    to it are committed and all final checks pass. Apply the revision-guarded
+    aggregate change, synchronize projections, re-run readiness, and read back
+    the affected units.
 
 Generated projections aid review but never supply evidence. A local prose edit
 does not change RKA semantics.

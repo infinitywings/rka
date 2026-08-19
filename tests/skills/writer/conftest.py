@@ -22,7 +22,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-
 SCRIPTS_DIR = (
     Path(__file__).resolve().parents[3] / "rka" / "skills" / "writer" / "scripts"
 )
@@ -75,6 +74,11 @@ def verify_citations():
 @pytest.fixture
 def overclaim_lint():
     return _load_module("overclaim_lint")
+
+
+@pytest.fixture
+def validate_discourse_artifacts():
+    return _load_module("validate_discourse_artifacts")
 
 
 @pytest.fixture

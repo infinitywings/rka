@@ -165,7 +165,7 @@ The linter loads the project's `ai_tic_config.yaml` if present, applies override
 
 The linter `scripts/ai_tic_lint.py` implements all Tier 1 + Tier 2 + Tier 3 lexical patterns, the four structural detectors (sentence-length variance, transition-word ratio, parallel-triplet density, bridge-repetition delegation to `bridge_repetition_check.py`), absolute bans, the style score formula, and the per-project override mechanism. Output is `ai_tic_report.json` with per-rule hit counts and per-hit line numbers, plus the computed style score.
 
-Further additions:
+Future additions (not implemented):
 
 - LLM-assisted rewrite suggestions for flagged passages.
 - Cross-manuscript trend tracking (is the project drifting toward AI-tic patterns over revisions).

@@ -11,9 +11,11 @@ All notable changes to RKA are documented here. Format loosely follows
   separates RKA's evidence graph from the manuscript's reader-facing discourse
   graph. Section drafting compresses records into evidence bundles, builds a
   logic ladder and paragraph plan, drafts clean prose, and attaches provenance
-  post-hoc. A sample-calibration workflow captures an author's positive style
-  without copying source text, while the AI-tic linter is explicitly limited
-  to negative surface checks rather than treated as a coherence score.
+  post-hoc. Lightweight style-profile and per-section discourse artifacts make
+  sample calibration, disclosure coverage, native-unit mapping, and fresh-
+  context review inspectable without adding a second knowledge base. A
+  structural validator enforces those handoffs without pretending to score
+  coherence, while the AI-tic linter remains a negative surface check.
 - **Typed academic-writing semantic core.** Manuscript units now separate pure
   outline depth from structural role and rhetorical move. Unit-evidence uses
   can state the supported proposition and authorial warrant; immutable claim

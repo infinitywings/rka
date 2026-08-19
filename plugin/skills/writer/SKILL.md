@@ -2,7 +2,7 @@
 name: rka-writer
 description: "Manuscript-drafting AI for RKA-managed research projects. Interactively elicits paper framing through AI-proposed choices, synthesizes the research graph into a coherent logic ladder, and produces plain, persuasive, reviewer-resilient prose while keeping every substantive block grounded in current RKA evidence and decisions. Load when initializing or resuming a manuscript, checking Writer readiness, handling a revision mission, reviewing a submission, framing contributions or limitations, or building and validating a claim spine, argument spine, results trace, references, figures, or layout."
 metadata:
-  version: "2.7.4"
+  version: "2.7.5"
 ---
 
 # Writer Skill
@@ -45,7 +45,10 @@ checkpoints, readiness, and currency. `.planning/RKA_CLAIM_SPINE.yaml`,
 `.planning/CONTRIBUTION_CONTRACT.md`, `.planning/ARGUMENT_SPINE.md`, and
 `.planning/RESULTS_TRACE.md` are deterministic read-only projections. Refresh
 them with `rka writer sync`; change semantics only through revision-guarded RKA
-commands.
+commands. `.planning/STYLE_PROFILE.yaml` and per-section
+`.planning/DISCOURSE_<section-id>.yaml` are disposable private authoring state;
+they guide prose and validation but never become evidence or override native
+readiness.
 
 ## Supplementary references (load on demand)
 
@@ -62,7 +65,8 @@ commands.
   candidates, native units, and drafting.
 - [`references/discourse_synthesis.md`](references/discourse_synthesis.md):
   separation of evidence and discourse graphs, plain academic style target,
-  section logic ladders, paragraph formation, and post-hoc provenance.
+  section logic ladders, paragraph formation, private planning artifacts,
+  fresh-context review, and post-hoc provenance.
 - [`references/persuasive_framing.md`](references/persuasive_framing.md):
   two-channel author/manuscript discipline, limitation materiality triage,
   strength-first defense patterns, and the quick-reader path.
@@ -162,6 +166,11 @@ categorical report. Core manuscript validation queues the slow external work;
 the worker keeps retraction checking enabled and persists an immutable
 validation attestation. A pending job is not a verified reference.
 `overclaim_lint.py` scans drafts for calibration/overclaim wording (`verified`, `guaranteed`, `eliminates`, `model-agnostic`, ...) and emits `overclaim_report.json`. WARN-only, never BLOCK; ranks a hit higher when its backing `jrn_`/`clm_` is at `hypothesis`/`tested` confidence. Advisory input to the pre-submission review.
+`validate_discourse_artifacts.py` validates the private style profile and
+per-section discourse plan. It BLOCKs incomplete sample-profile approval,
+missing proposition/paragraph mappings, prior-work propositions without
+citation keys, non-exact mandatory-disclosure or native-unit coverage, and an
+incomplete fresh-context review. It does not score or certify prose coherence.
 `fetch_template.py` performs registry lookup, download, SHA-256 verification, cache reuse, and fail-closed PI pin handling.
 `claim_spine.py` safely loads both the legacy `rka-claim-spine/v1` migration
 format and the native `rka-claim-spine/v2` server projection. It validates
@@ -638,6 +647,10 @@ When a revised draft is available, compare it against the prior review comments 
 28. **DON'T** treat provenance coverage or an AI-tic score as evidence of
     coherence. Verify the logic ladder, paragraph bridges, and section
     takeaway before surface polishing.
+29. **DON'T** advance a section from an unrecorded discourse plan. Validate the
+    section artifact, exact required-unit and mandatory-disclosure coverage,
+    current provenance/citations, and fresh-context coherence review after the
+    final prose change.
 
 ---
 

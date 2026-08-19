@@ -42,9 +42,12 @@ def test_section_drafter_runs_coherence_before_surface_lint(skill_dir: Path) -> 
     )
     section = workflows[workflows.index("### 5. Section drafter") :]
     coherence = section.index("Run the discourse-synthesis coherence review")
+    provenance = section.index(
+        "attaches hidden provenance comments and citations post-hoc"
+    )
     lint = section.index("scripts/ai_tic_lint.py")
 
-    assert coherence < lint
+    assert coherence < provenance < lint
     assert "groups duplicate or closely related records into evidence bundles" in (
         _squash(section)
     )
@@ -55,6 +58,8 @@ def test_section_drafter_runs_coherence_before_surface_lint(skill_dir: Path) -> 
         _squash(section)
     )
     assert "The score cannot establish logic or fluency" in section
+    assert "Any prose change" in section
+    assert "validate_discourse_artifacts.py" in section
 
 
 def test_plain_academic_profile_is_positive_and_sample_calibratable(
@@ -70,3 +75,20 @@ def test_plain_academic_profile_is_positive_and_sample_calibratable(
     assert "concrete problem, consequence, or observation" in discourse
     assert "do not copy sentences" in discourse.lower()
     assert "Do not imitate grammar errors" in discourse
+    assert ".planning/STYLE_PROFILE.yaml" in discourse
+    assert "status: approved" in discourse
+
+
+def test_security_sections_and_contrastive_example_are_actionable(
+    skill_dir: Path,
+) -> None:
+    discourse = (
+        skill_dir / "references" / "discourse_synthesis.md"
+    ).read_text(encoding="utf-8")
+
+    assert "**Related work**" in discourse
+    assert "**Threat model or security assumptions**" in discourse
+    assert "diagnostic patterns, not fill-in templates" in discourse
+    assert "Synthetic contrastive example" in discourse
+    assert "Record-shaped:" in discourse
+    assert "Synthesized:" in discourse

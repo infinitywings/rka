@@ -87,7 +87,8 @@ PATCH 2).
 
 - `.mcp.json`, `.latexmkrc`, `ai_tic_config.yaml`, `main.tex`, `refs.bib`.
 - `.planning/`: `ACTIVE_WORKFLOW.md`, `FRAMING_SESSION.yaml`, `PRECIS.md`,
-  `OUTLINE.md`, `REVIEW_STATE.md`.
+  `OUTLINE.md`, `REVIEW_STATE.md`, `STYLE_PROFILE.yaml`, and
+  `DISCOURSE_TEMPLATE.yaml`.
 - Directory placeholders: `sections/`, `figures/`, `tables/`, `charts/`,
   `styles/`.
 

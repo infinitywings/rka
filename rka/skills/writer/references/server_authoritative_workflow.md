@@ -26,6 +26,8 @@ Writer owns:
 - LaTeX, Word, Markdown, figures, tables, and other manuscript files;
 - venue structure, citation formatting, rendering, and layout checks;
 - `.planning/ACTIVE_WORKFLOW.md` as disposable authoring-session state;
+- `.planning/STYLE_PROFILE.yaml` and per-section `DISCOURSE_*.yaml` as
+  disposable, validated authoring plans that never supply research evidence;
 - deterministic projections such as `RKA_CLAIM_SPINE.yaml`,
   `CONTRIBUTION_CONTRACT.md`, `ARGUMENT_SPINE.md`, and `RESULTS_TRACE.md`.
 
@@ -71,6 +73,10 @@ resolved `man_...` identifier.
 6. Continue only when the server returns a non-blocking categorical verdict.
    Local renderers may add stricter file-level findings, but cannot override a
    server `BLOCK` or `ERROR`.
+7. Before a section advances to `drafted`, validate its style/discourse
+   artifacts, exact unit and mandatory-disclosure coverage, current
+   provenance/citations, and fresh-context coherence review. These local gates
+   may block advancement but cannot authorize it when server readiness blocks.
 
 The synchronized cursor is captured before the aggregate projection is read.
 This is intentionally conservative: a concurrent change may be reported again,
