@@ -7,6 +7,13 @@ All notable changes to RKA are documented here. Format loosely follows
 
 ### Added
 
+- **Writer discourse synthesis and plain academic style.** The Writer now
+  separates RKA's evidence graph from the manuscript's reader-facing discourse
+  graph. Section drafting compresses records into evidence bundles, builds a
+  logic ladder and paragraph plan, drafts clean prose, and attaches provenance
+  post-hoc. A sample-calibration workflow captures an author's positive style
+  without copying source text, while the AI-tic linter is explicitly limited
+  to negative surface checks rather than treated as a coherence score.
 - **Typed academic-writing semantic core.** Manuscript units now separate pure
   outline depth from structural role and rhetorical move. Unit-evidence uses
   can state the supported proposition and authorial warrant; immutable claim

@@ -1,8 +1,8 @@
 ---
 name: rka-writer
-description: "Manuscript-drafting AI for RKA-managed research projects. Interactively elicits paper framing through AI-proposed choices, then produces persuasive, reviewer-resilient prose while keeping every substantive block grounded in current RKA evidence and decisions. Load when initializing or resuming a manuscript, checking Writer readiness, handling a revision mission, reviewing a submission, framing contributions or limitations, or building and validating a claim spine, argument spine, results trace, references, figures, or layout."
+description: "Manuscript-drafting AI for RKA-managed research projects. Interactively elicits paper framing through AI-proposed choices, synthesizes the research graph into a coherent logic ladder, and produces plain, persuasive, reviewer-resilient prose while keeping every substantive block grounded in current RKA evidence and decisions. Load when initializing or resuming a manuscript, checking Writer readiness, handling a revision mission, reviewing a submission, framing contributions or limitations, or building and validating a claim spine, argument spine, results trace, references, figures, or layout."
 metadata:
-  version: "2.7.3"
+  version: "2.7.4"
 ---
 
 # Writer Skill
@@ -30,6 +30,14 @@ only for custom alternatives, missing evidence, disagreements not covered by
 the choices, or exact wording corrections. Follow
 [`references/framing_elicitation.md`](references/framing_elicitation.md).
 
+Discourse Law: **the evidence graph constrains prose but does not organize
+it.** Never translate journals, claims, clusters, or manuscript units into
+sentences one by one. First compress them into reader-facing propositions,
+arrange a section-level logic ladder, and form coherent paragraphs. Draft
+plain academic prose from that discourse plan; attach provenance and citations
+afterward. Follow
+[`references/discourse_synthesis.md`](references/discourse_synthesis.md).
+
 The native claim spine is part of RKA's manuscript aggregate, not a second
 knowledge base or orchestrator. RKA is authoritative for manuscript identity,
 claim wording and versions, evidence roles, PI ratifications, units,
@@ -52,6 +60,9 @@ commands.
   mandatory noise-smoothing path from journal records through grounded claims,
   Brain-reviewed clusters and research questions, PI-scoped contribution
   candidates, native units, and drafting.
+- [`references/discourse_synthesis.md`](references/discourse_synthesis.md):
+  separation of evidence and discourse graphs, plain academic style target,
+  section logic ladders, paragraph formation, and post-hoc provenance.
 - [`references/persuasive_framing.md`](references/persuasive_framing.md):
   two-channel author/manuscript discipline, limitation materiality triage,
   strength-first defense patterns, and the quick-reader path.
@@ -169,6 +180,12 @@ findings (`PASS`, `WARN`, `BLOCK`, `ERROR`), never a numeric quality score.
 
 When the PI describes a section or report scope in prose, do NOT rely on a single search. Call `rka_query(args={"operation": "collect_report_context", "project_id": "prj_...", "query": <the PI's description>, "filters": {"angle_queries": [3-5 short queries from different angles]}})` to assemble the candidate node set: it unions multi-angle search seeds with provenance-weighted graph expansion and returns per-node `included_via` so every inclusion is auditable. Then verify borderline nodes by fetching their content, and re-search any report dimension that came back thin. Iterative retrieval measured 0.80 to 1.00 recall vs 0.32 for one-shot paragraph search (eval-v3). The full strategy lives in the Brain skill section "Retrieval Strategy" (drive RKA through several calls, never one-shot it).
 
+Treat that node set as an evidence packet, not a prose plan. Merge duplicate or
+closely related records into evidence bundles, distill the few propositions
+the reader needs, and order them by the section's rhetorical logic. Do not
+preserve retrieval rank, record chronology, entity type, or unit boundaries in
+the public prose unless one of them is itself relevant to the argument.
+
 ---
 
 ## Source Attribution
@@ -285,6 +302,11 @@ may inherit only disclosed claim/evidence bindings; condensation unions those
 bindings into the retained parent before removing named descendants; reorder
 must contain the complete active unit-key set. Never reconstruct the outline
 by free-form delete-and-recreate operations.
+
+Outline depth and bindings support audit and change impact. They do not impose
+a one-unit-to-one-paragraph mapping. During drafting, group active units into
+paragraphs according to rhetorical continuity and the section-level logic
+ladder in `references/discourse_synthesis.md`.
 
 Outline work is resumable while blockers remain. Re-query
 `manuscript_outline` after every applied proposal. Create an Outline checkpoint
@@ -610,6 +632,12 @@ When a revised draft is available, compare it against the prior review comments 
 26. **DON'T** record a framing micro-selection as evidence, claim ratification,
    or a formal PI decision. Persist it in `FRAMING_SESSION.yaml` until final
    confirmation.
+27. **DON'T** turn the RKA graph into prose by iterating records, assigning one
+    sentence per source, or assigning one paragraph per claim or manuscript
+    unit. Build and draft from a reader-facing discourse plan.
+28. **DON'T** treat provenance coverage or an AI-tic score as evidence of
+    coherence. Verify the logic ladder, paragraph bridges, and section
+    takeaway before surface polishing.
 
 ---
 
@@ -623,6 +651,8 @@ When a revised draft is available, compare it against the prior review comments 
   [`references/framing_elicitation.md`](references/framing_elicitation.md).
 - Persuasive framing, limitation triage, and quick-reader guidance:
   [`references/persuasive_framing.md`](references/persuasive_framing.md).
+- Discourse synthesis, plain academic style, and paragraph construction:
+  [`references/discourse_synthesis.md`](references/discourse_synthesis.md).
 - Implemented reference validation pipeline: [`references/reference_pipeline.md`](references/reference_pipeline.md).
 - Anti-AI-tic full tier table, replacements, structural detectors: [`references/ai_tics.md`](references/ai_tics.md).
 - Venue files: [`references/venue/CHI.md`](references/venue/CHI.md), [`references/venue/EMNLP.md`](references/venue/EMNLP.md).
