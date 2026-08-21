@@ -17,6 +17,7 @@ from rka.api.deps import (
     get_db,
     get_embeddings,
     get_llm,
+    get_scoped_semantic_patch_service,
     get_transport_actor,
     require_project,
 )
@@ -31,7 +32,12 @@ from rka.models.manuscript_native import (
     ManuscriptReferenceManifestReplace,
     ManuscriptUpdate,
 )
+from rka.models.outline import OutlineProposalRequest
 from rka.models.reference_validation import ReferenceValidationInput
+from rka.models.semantic_patch import (
+    SemanticPatchProposalCreate,
+    SemanticPatchProposalTransition,
+)
 from rka.services.manuscript import ManuscriptService
 from rka.services.manuscript_native import (
     ManuscriptNotFoundError,
@@ -39,7 +45,12 @@ from rka.services.manuscript_native import (
     NativeManuscriptService,
 )
 from rka.services.notes import NoteService
+from rka.services.outline import ManuscriptOutlineService
 from rka.services.reference_validation import ReferenceValidationService
+from rka.services.semantic_patch import (
+    SemanticPatchConflictError,
+    SemanticPatchService,
+)
 
 router = APIRouter()
 
@@ -71,12 +82,17 @@ class ReferenceValidationRequest(ReferenceValidationInput):
 
 
 class ArgumentSpineUpsertRequest(BaseModel):
-    """Replace the current native argument-spine projection."""
+    """Explicit human bulk replacement, retained for CLI compatibility."""
 
     model_config = ConfigDict(extra="forbid")
 
     expected_revision: int = Field(..., ge=1)
     spine: dict[str, Any]
+    reason: str = Field(
+        default="Explicitly apply the reviewed bulk argument-spine replacement.",
+        min_length=1,
+        max_length=10_000,
+    )
 
 
 class ManuscriptMetadataUpdateRequest(BaseModel):
@@ -170,6 +186,13 @@ def get_scoped_reference_validation_service(
     db: Database = Depends(get_db),
 ) -> ReferenceValidationService:
     return ReferenceValidationService(db=db, project_id=project_id)
+
+
+def get_scoped_outline_service(
+    project_id: str = Depends(require_project),
+    db: Database = Depends(get_db),
+) -> ManuscriptOutlineService:
+    return ManuscriptOutlineService(db=db, project_id=project_id)
 
 
 @router.post("/manuscripts", status_code=201)
@@ -282,17 +305,56 @@ async def upsert_argument_spine(
     data: ArgumentSpineUpsertRequest,
     actor: str = Depends(get_transport_actor),
     svc: NativeManuscriptService = Depends(get_scoped_native_manuscript_service),
+    patches: SemanticPatchService = Depends(get_scoped_semantic_patch_service),
 ) -> dict[str, Any]:
-    try:
-        return await svc.upsert_argument_spine(
-            manuscript_id,
-            expected_revision=data.expected_revision,
-            spine=data.spine,
-            actor=actor,
+    """Apply an explicitly requested human bulk import through the proposal ledger.
+
+    Agents and MCP callers must create an AI-attributed semantic proposal and
+    leave its apply transition to a PI or web user. The native service method
+    remains the internal primitive used by semantic-patch apply and pack import.
+    """
+    if actor != "web_ui":
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "direct argument-spine replacement is restricted to explicit "
+                "human/web use; create an attributed semantic patch proposal instead"
+            ),
         )
+    try:
+        # Preserve the route family's uniform 404 contract before proposal
+        # preview converts a missing target into a generic validation error.
+        await svc.get_context(manuscript_id)
+        proposal = await patches.create_proposal(
+            SemanticPatchProposalCreate(
+                origin="human",
+                intent="Replace the reviewed argument-spine projection.",
+                reason=data.reason,
+                created_by="web_ui",
+                operations=[
+                    {
+                        "operation": "argument_spine_replace",
+                        "manuscript_id": manuscript_id,
+                        "expected_revision": data.expected_revision,
+                        "spine": data.spine,
+                    }
+                ],
+            )
+        )
+        await patches.apply_proposal(
+            proposal["id"],
+            SemanticPatchProposalTransition(
+                expected_revision=1,
+                actor="web_ui",
+                reason=data.reason,
+            ),
+        )
+        context = await svc.get_context(manuscript_id)
+        context["semantic_patch_proposal_id"] = proposal["id"]
+        return context
     except ManuscriptNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ManuscriptRevisionConflict as exc:
+    except (ManuscriptRevisionConflict, SemanticPatchConflictError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -425,6 +487,38 @@ async def export_native_argument_spine(
         return await svc.export_spine_projection(manuscript_id)
     except ManuscriptNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/manuscripts/{manuscript_id}/outline")
+async def get_progressive_manuscript_outline(
+    manuscript_id: str,
+    svc: ManuscriptOutlineService = Depends(get_scoped_outline_service),
+) -> dict[str, Any]:
+    """Project the L2-L5 outline, rationale completeness, and checkpoint state."""
+    try:
+        return await svc.get_outline(manuscript_id)
+    except ManuscriptNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/manuscripts/{manuscript_id}/outline/proposals", status_code=201)
+async def prepare_progressive_outline_proposal(
+    manuscript_id: str,
+    data: OutlineProposalRequest,
+    actor: str = Depends(get_transport_actor),
+    svc: ManuscriptOutlineService = Depends(get_scoped_outline_service),
+) -> dict[str, Any]:
+    """Prepare a structural outline proposal without mutating the manuscript."""
+    try:
+        return await svc.prepare_proposal(manuscript_id, data, actor=actor)
+    except ManuscriptNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ManuscriptRevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
+from copy import deepcopy
+
 import pytest
 
 from rka.infra.ids import generate_id
+from rka.models.claim import ClaimScopeCondition, ClaimScopeWrite
 from rka.models.manuscript_native import (
     ManuscriptCheckpointCreate,
     ManuscriptCheckpointResolve,
@@ -16,6 +20,29 @@ from rka.services.manuscript_native import (
     ManuscriptRevisionConflict,
     NativeManuscriptService,
 )
+from rka.services.claims import ClaimService
+
+
+def _reviewed_scope(expected_revision: int = 0) -> ClaimScopeWrite:
+    return ClaimScopeWrite(
+        expected_revision=expected_revision,
+        actor="brain",
+        reason="Test fixture reviewed the bounded operating context.",
+        conditions=[
+            ClaimScopeCondition(
+                kind="environment",
+                key="testbed",
+                operator="equals",
+                value="local evaluated testbed",
+            )
+        ],
+        uncertainty="low",
+        extension_policy="exact_only",
+        prohibited_extensions=["Do not generalize beyond the evaluated testbed."],
+        falsifier_status="applicable",
+        falsifier="Repeated evaluation does not reproduce the direction.",
+        review_status="reviewed",
+    )
 
 
 async def _seed_ready_claim(db, *, project_id: str = "proj_default") -> str:
@@ -37,6 +64,10 @@ async def _seed_ready_claim(db, *, project_id: str = "proj_default") -> str:
         [claim_id, journal_id, project_id],
     )
     await db.commit()
+    await ClaimService(db, project_id=project_id).append_scope(
+        claim_id,
+        _reviewed_scope(),
+    )
     return claim_id
 
 
@@ -198,9 +229,7 @@ async def test_create_update_and_legacy_alias(db_with_project) -> None:
 async def test_spine_upsert_is_atomic_and_versions_wording(db_with_project) -> None:
     evidence_id = await _seed_ready_claim(db_with_project)
     service = NativeManuscriptService(db_with_project, project_id="proj_default")
-    manuscript = await service.create(
-        ManuscriptCreate(title="Atomic spine", venue="IEEE S&P")
-    )
+    manuscript = await service.create(ManuscriptCreate(title="Atomic spine", venue="IEEE S&P"))
 
     invalid = _spine(evidence_id)
     invalid["claims"][0]["unit_links"][0]["unit_key"] = "missing"
@@ -223,21 +252,480 @@ async def test_spine_upsert_is_atomic_and_versions_wording(db_with_project) -> N
     assert first["manuscript"]["revision"] == 2
     assert first["claims"][0]["version"] == 1
 
+    events_before_noop = await db_with_project.fetchone(
+        "SELECT count(*) AS count FROM change_events WHERE manuscript_id = ?",
+        [manuscript.id],
+    )
+    audits_before_noop = await db_with_project.fetchone(
+        """SELECT count(*) AS count FROM audit_log
+           WHERE entity_type = 'manuscript' AND entity_id = ?""",
+        [manuscript.id],
+    )
+
     same = await service.upsert_argument_spine(
         manuscript.id,
         expected_revision=2,
         spine=_spine(evidence_id),
     )
-    assert same["manuscript"]["revision"] == 3
+    assert same["manuscript"]["revision"] == 2
     assert same["claims"][0]["version"] == 1
+    events_after_noop = await db_with_project.fetchone(
+        "SELECT count(*) AS count FROM change_events WHERE manuscript_id = ?",
+        [manuscript.id],
+    )
+    audits_after_noop = await db_with_project.fetchone(
+        """SELECT count(*) AS count FROM audit_log
+           WHERE entity_type = 'manuscript' AND entity_id = ?""",
+        [manuscript.id],
+    )
+    assert events_after_noop == events_before_noop
+    assert audits_after_noop == audits_before_noop
 
     changed = await service.upsert_argument_spine(
         manuscript.id,
-        expected_revision=3,
+        expected_revision=2,
         spine=_spine(evidence_id, wording="Latency was lower in our testbed."),
     )
-    assert changed["manuscript"]["revision"] == 4
+    assert changed["manuscript"]["revision"] == 3
     assert changed["claims"][0]["version"] == 2
+
+
+@pytest.mark.asyncio
+async def test_typed_academic_writing_core_round_trips_and_replays_as_noop(
+    db_with_project,
+) -> None:
+    evidence_id = await _seed_ready_claim(db_with_project)
+    service = NativeManuscriptService(db_with_project, project_id="proj_default")
+    manuscript = await service.create(ManuscriptCreate(title="Typed writing core"))
+    literature_id = await _seed_literature(db_with_project)
+    await service.replace_reference_manifest(
+        manuscript.id,
+        ManuscriptReferenceManifestReplace(
+            expected_revision=1,
+            members=[{"citation_key": "author2025", "literature_id": literature_id}],
+        ),
+    )
+    await _seed_reference_validation(
+        db_with_project,
+        manuscript_id=manuscript.id,
+        literature_id=literature_id,
+        completed_at="2099-01-01T00:00:00Z",
+    )
+
+    spine = _spine(evidence_id)
+    spine["claims"][0]["conditions"] = ["Evaluated local testbed only."]
+    spine["claims"][0]["falsification_criteria"] = [
+        "Repeated trials do not reproduce lower latency."
+    ]
+    spine["units"][0].update(
+        {
+            "unit_role": "result",
+            "rhetorical_move": "present_result",
+            "evidence": {
+                "support": [
+                    {
+                        "evidence_claim_id": evidence_id,
+                        "supported_proposition": "Latency was lower in the testbed.",
+                        "warrant": "The bound observation reports that exact measured contrast.",
+                    }
+                ],
+                "qualifier": [],
+                "counterevidence": [],
+            },
+            "citations": [
+                {
+                    "citation_key": "author2025",
+                    "citation_role": "baseline",
+                    "supported_proposition": "The comparison uses the established baseline.",
+                    "verification_state": "verified",
+                    "comparison_axis": "latency",
+                }
+            ],
+        }
+    )
+    # Typed bindings are authoritative when no legacy membership alias is
+    # supplied.  This also exercises an input shape produced by typed MCP.
+    spine["units"][0].pop("evidence_ids")
+
+    installed = await service.upsert_argument_spine(
+        manuscript.id,
+        expected_revision=2,
+        spine=spine,
+        actor="pi",
+    )
+    assert installed["manuscript"]["revision"] == 3
+    assert installed["claims"][0]["conditions"] == ["Evaluated local testbed only."]
+    assert installed["claims"][0]["falsification_criteria"]
+    unit = installed["units"][0]
+    assert unit["unit_role"] == "result"
+    assert unit["rhetorical_move"] == "present_result"
+    assert unit["evidence"][0]["supported_proposition"] == (
+        "Latency was lower in the testbed."
+    )
+    assert unit["evidence"][0]["warrant"].startswith("The bound observation")
+    assert unit["citations"][0]["citation_role"] == "baseline"
+    assert unit["citations"][0]["verification_current"] is True
+
+    replay = await service.upsert_argument_spine(
+        manuscript.id,
+        expected_revision=3,
+        spine=spine,
+        actor="pi",
+    )
+    assert replay["manuscript"]["revision"] == 3
+
+    revised = deepcopy(spine)
+    revised["units"][0]["evidence"]["support"][0]["warrant"] = (
+        "The current scoped observation measures the exact contrast used here."
+    )
+    changed = await service.upsert_argument_spine(
+        manuscript.id,
+        expected_revision=3,
+        spine=revised,
+        actor="pi",
+    )
+    assert changed["manuscript"]["revision"] == 4
+    assert changed["claims"][0]["version"] == 1
+
+
+@pytest.mark.asyncio
+async def test_invarllm_derived_pilot_preserves_argument_boundaries_and_tradeoffs(
+    db_with_project,
+) -> None:
+    """Exercise the typed core with a disposable slice of a real RKA project.
+
+    The IDs and bounded findings mirror project prj_01KN51HD73DSY9ZR9C56JYRNYZ,
+    but every row below lives only in the isolated test database.  The pilot
+    deliberately keeps the favorable result, its qualifier, and contrary
+    result together so a strength-first draft cannot erase the audit trail.
+    """
+
+    journal_id = generate_id("journal")
+    await db_with_project.execute(
+        """INSERT INTO journal
+           (id, type, content, source, confidence, importance, status, project_id)
+           VALUES (?, 'log', 'Disposable INVARLLM Mission 6 pilot evidence.',
+                   'executor', 'tested', 'high', 'active', 'proj_default')""",
+        [journal_id],
+    )
+    pilot_claims = {
+        "support": (
+            "clm_01KQJG1D4KAEBWFE0MHGKBAQT7",
+            "Path A improved eTaF1 by 4.86 points (5.6x) and precision on HAI 21.03.",
+        ),
+        "qualifier": (
+            "clm_01KQJG1D43ZRJ1CF42QZBX0X8T",
+            "The same run reduced recall and detected three fewer scenarios.",
+        ),
+        "counterevidence": (
+            "clm_01KQJG1D4SKFKCVWEHKSK30305",
+            "The predicted AffF1 recovery did not materialize under the expanded set.",
+        ),
+    }
+    for claim_id, content in pilot_claims.values():
+        await db_with_project.execute(
+            """INSERT INTO claims
+               (id, source_entry_id, claim_type, content, confidence, verified,
+                evidence_status, stale, project_id)
+               VALUES (?, ?, 'result', ?, 0.95, 1, 'supported', 0,
+                       'proj_default')""",
+            [claim_id, journal_id, content],
+        )
+    await db_with_project.commit()
+    for claim_id, _content in pilot_claims.values():
+        await ClaimService(db_with_project, project_id="proj_default").append_scope(
+            claim_id,
+            _reviewed_scope(),
+        )
+
+    service = NativeManuscriptService(db_with_project, project_id="proj_default")
+    manuscript = await service.create(
+        ManuscriptCreate(title="INVARLLM disposable writing pilot")
+    )
+    alarm_title = "ALARM: temporally ordered anomaly-detection evaluation"
+    alarm_id = await _seed_literature(
+        db_with_project,
+        title=alarm_title,
+        doi="10.48550/arXiv.2510.17562",
+    )
+    dataset_id = await _seed_literature(
+        db_with_project,
+        title="NoBoom process-anomaly dataset",
+        doi=None,
+    )
+    await service.replace_reference_manifest(
+        manuscript.id,
+        ManuscriptReferenceManifestReplace(
+            expected_revision=1,
+            members=[
+                {"citation_key": "alarm2025", "literature_id": alarm_id},
+                {"citation_key": "noboom2025", "literature_id": dataset_id},
+            ],
+        ),
+    )
+    await _seed_reference_validation(
+        db_with_project,
+        manuscript_id=manuscript.id,
+        literature_id=alarm_id,
+        input_doi="10.48550/arXiv.2510.17562",
+        input_title=alarm_title,
+        completed_at="2099-01-01T00:00:00Z",
+    )
+
+    support_id = pilot_claims["support"][0]
+    qualifier_id = pilot_claims["qualifier"][0]
+    counterevidence_id = pilot_claims["counterevidence"][0]
+    spine = {
+        "claims": [
+            {
+                "claim_id": "C-EARLY",
+                "claim_type": "empirical",
+                "status": "active",
+                "text": "Path A materially improves early detection in the evaluated setting.",
+                "allowed_wording": (
+                    "Path A materially improves early detection in the evaluated setting."
+                ),
+                "prohibited_wording": [
+                    "Path A is uniformly better on every detection metric and testbed."
+                ],
+                "conditions": [
+                    "HAI 21.03 with the Mission 6 Path A configuration.",
+                    "The result is about early-detection and precision metrics, not universal superiority.",
+                ],
+                "falsification_criteria": [
+                    "A protocol-matched rerun fails to reproduce the eTaF1 direction."
+                ],
+                "evidence_ids": [support_id],
+                "qualifier_ids": [qualifier_id],
+                "counterevidence_ids": [counterevidence_id],
+                "unit_links": [
+                    {"unit_key": "INTRO.PROMISE", "relationship": "advances"},
+                    {"unit_key": "RESULTS.TRADEOFF", "relationship": "tests"},
+                ],
+            }
+        ],
+        "units": [
+            {
+                "unit_id": "INTRO.PROMISE",
+                "kind": "introduction",
+                "location": "sections/introduction.tex#promise",
+                "title": "Promise earlier, more precise detection",
+                "sequence": 0,
+                "outline_level": 3,
+                "unit_role": "argument_block",
+                "rhetorical_move": "state_contribution",
+                "communicative_job": "State the strongest bounded paper promise.",
+                "intended_takeaway": "The method improves a security-relevant timing objective.",
+                "evidence": {
+                    "support": [
+                        {
+                            "evidence_claim_id": support_id,
+                            "supported_proposition": "Early detection improved on HAI 21.03.",
+                            "warrant": "The Mission 6 result measures eTaF1 under the claimed configuration.",
+                        }
+                    ],
+                    "qualifier": [],
+                    "counterevidence": [],
+                },
+                "citations": [
+                    {
+                        "citation_key": "alarm2025",
+                        "citation_role": "baseline",
+                        "supported_proposition": "eTaF1 captures temporally ordered detection quality.",
+                        "verification_state": "verified",
+                        "comparison_axis": "early detection",
+                    }
+                ],
+            },
+            {
+                "unit_id": "RESULTS.TRADEOFF",
+                "kind": "result",
+                "location": "sections/results.tex#tradeoff",
+                "title": "Separate the early-detection gain from metric tradeoffs",
+                "sequence": 10,
+                "outline_level": 3,
+                "unit_role": "result",
+                "rhetorical_move": "interpret_result",
+                "artifact_ref": "artifacts/mission-6/path-a-metrics.csv",
+                "allowed_interpretation": (
+                    "Path A improved early-detection and precision metrics in the evaluated setting."
+                ),
+                "prohibited_interpretation": (
+                    "Path A dominates every metric, testbed, and operating point."
+                ),
+                "communicative_job": "Present the favorable result with its exact boundary.",
+                "intended_takeaway": "The gain is meaningful but metric-specific.",
+                "evidence": {
+                    "support": [
+                        {
+                            "evidence_claim_id": support_id,
+                            "supported_proposition": "eTaF1 and precision improved.",
+                            "warrant": "The result records the exact protocol-matched deltas.",
+                        }
+                    ],
+                    "qualifier": [
+                        {
+                            "evidence_claim_id": qualifier_id,
+                            "supported_proposition": "Recall and scenario coverage declined.",
+                            "warrant": "The same run reports both losses alongside the gain.",
+                        }
+                    ],
+                    "counterevidence": [
+                        {
+                            "evidence_claim_id": counterevidence_id,
+                            "supported_proposition": "AffF1 recovery was not reproduced.",
+                            "warrant": "The expanded-set evaluation falsified the earlier AffF1 forecast.",
+                        }
+                    ],
+                },
+                "citations": [
+                    {
+                        "citation_key": "noboom2025",
+                        "citation_role": "bounds",
+                        "supported_proposition": "The planned extension uses process-anomaly data.",
+                        "verification_state": "self_attested",
+                        "comparison_axis": "testbed scope",
+                    }
+                ],
+            },
+        ],
+    }
+
+    installed = await service.upsert_argument_spine(
+        manuscript.id,
+        expected_revision=2,
+        spine=spine,
+        actor="pi",
+    )
+    result_unit = next(
+        unit for unit in installed["units"] if unit["local_key"] == "RESULTS.TRADEOFF"
+    )
+    assert {item["role"] for item in result_unit["evidence"]} == {
+        "support",
+        "qualifier",
+        "counterevidence",
+    }
+    assert installed["claims"][0]["conditions"] == spine["claims"][0]["conditions"]
+    assert installed["claims"][0]["falsification_criteria"]
+
+    from rka.services.outline import ManuscriptOutlineService
+
+    outline = await ManuscriptOutlineService(
+        db_with_project,
+        project_id="proj_default",
+    ).get_outline(manuscript.id)
+    readiness = outline["academic_readiness"]
+    dimensions = {item["name"]: item for item in readiness["dimensions"]}
+    assert readiness["ready"] is True
+    assert dimensions["claim_boundaries"]["verdict"] == "pass"
+    assert dimensions["evidence_use_explanation"]["verdict"] == "pass"
+    assert dimensions["rhetorical_annotation"]["verdict"] == "pass"
+    assert dimensions["citation_support"]["verdict"] == "warn"
+    assert dimensions["citation_support"]["findings"][0]["citation_key"] == (
+        "noboom2025"
+    )
+
+    replay = await service.upsert_argument_spine(
+        manuscript.id,
+        expected_revision=3,
+        spine=spine,
+        actor="pi",
+    )
+    assert replay["manuscript"]["revision"] == 3
+
+
+@pytest.mark.asyncio
+async def test_verified_citation_use_requires_current_matching_validation(
+    db_with_project,
+) -> None:
+    evidence_id = await _seed_ready_claim(db_with_project)
+    service = NativeManuscriptService(db_with_project, project_id="proj_default")
+    manuscript = await service.create(ManuscriptCreate(title="Citation validation gate"))
+    literature_id = await _seed_literature(db_with_project)
+    await service.replace_reference_manifest(
+        manuscript.id,
+        ManuscriptReferenceManifestReplace(
+            expected_revision=1,
+            members=[{"citation_key": "unverified2025", "literature_id": literature_id}],
+        ),
+    )
+    spine = _spine(evidence_id)
+    spine["units"][0]["citations"] = [
+        {
+            "citation_key": "unverified2025",
+            "citation_role": "imports",
+            "supported_proposition": "The unit imports the prior definition.",
+            "verification_state": "verified",
+        }
+    ]
+    with pytest.raises(ValueError, match="current matching reference validation"):
+        await service.upsert_argument_spine(
+            manuscript.id,
+            expected_revision=2,
+            spine=spine,
+            actor="pi",
+        )
+
+    spine["units"][0]["citations"][0]["verification_state"] = "self_attested"
+    accepted = await service.upsert_argument_spine(
+        manuscript.id,
+        expected_revision=2,
+        spine=spine,
+        actor="pi",
+    )
+    assert accepted["units"][0]["citations"][0]["verification_state"] == (
+        "self_attested"
+    )
+
+
+@pytest.mark.asyncio
+async def test_spine_upsert_emits_only_semantic_profile_change_events(db_with_project) -> None:
+    evidence_id = await _seed_ready_claim(db_with_project)
+    service = NativeManuscriptService(db_with_project, project_id="proj_default")
+    manuscript = await service.create(ManuscriptCreate(title="Quiet spine writes"))
+    await service.upsert_argument_spine(
+        manuscript.id,
+        expected_revision=1,
+        spine=_spine(evidence_id),
+    )
+    before_rows = await db_with_project.fetchall(
+        """SELECT source_table, count(*) AS count
+           FROM change_events
+           WHERE manuscript_id = ?
+           GROUP BY source_table""",
+        [manuscript.id],
+    )
+    before = {row["source_table"]: int(row["count"]) for row in before_rows}
+
+    revised = _spine(evidence_id)
+    revised["units"][0]["communicative_job"] = "Present the bounded latency result."
+    context = await service.upsert_argument_spine(
+        manuscript.id,
+        expected_revision=2,
+        spine=revised,
+    )
+    assert context["manuscript"]["revision"] == 3
+
+    after_rows = await db_with_project.fetchall(
+        """SELECT source_table, count(*) AS count
+           FROM change_events
+           WHERE manuscript_id = ?
+           GROUP BY source_table""",
+        [manuscript.id],
+    )
+    after = {row["source_table"]: int(row["count"]) for row in after_rows}
+    assert after["manuscript_unit_outline_profiles"] == (
+        before.get("manuscript_unit_outline_profiles", 0) + 1
+    )
+    for source_table in (
+        "manuscript_claims",
+        "manuscript_claim_versions",
+        "manuscript_claim_evidence",
+        "manuscript_units",
+        "manuscript_unit_evidence",
+        "manuscript_claim_units",
+    ):
+        assert after.get(source_table, 0) == before.get(source_table, 0)
 
 
 @pytest.mark.asyncio
@@ -245,9 +733,7 @@ async def test_reference_manifest_replacement_is_atomic_and_historical(
     db_with_project,
 ) -> None:
     service = NativeManuscriptService(db_with_project, project_id="proj_default")
-    manuscript = await service.create(
-        ManuscriptCreate(title="Reference replacement")
-    )
+    manuscript = await service.create(ManuscriptCreate(title="Reference replacement"))
     first_literature = await _seed_literature(
         db_with_project,
         title="First study",
@@ -346,15 +832,11 @@ async def test_reference_readiness_uses_latest_exact_bound_validation(
     db_with_project,
 ) -> None:
     service = NativeManuscriptService(db_with_project, project_id="proj_default")
-    manuscript = await service.create(
-        ManuscriptCreate(title="Reference readiness")
-    )
+    manuscript = await service.create(ManuscriptCreate(title="Reference readiness"))
     literature_id = await _seed_literature(db_with_project)
 
     absent = await service.get_readiness(manuscript.id, target_phase="review")
-    assert "REFERENCE_MANIFEST_REQUIRED" in {
-        finding["code"] for finding in absent["findings"]
-    }
+    assert "REFERENCE_MANIFEST_REQUIRED" in {finding["code"] for finding in absent["findings"]}
 
     await service.replace_reference_manifest(
         manuscript.id,
@@ -369,9 +851,7 @@ async def test_reference_readiness_uses_latest_exact_bound_validation(
         ),
     )
     missing = await service.get_readiness(manuscript.id, target_phase="review")
-    assert "REFERENCE_VALIDATION_MISSING" in {
-        finding["code"] for finding in missing["findings"]
-    }
+    assert "REFERENCE_VALIDATION_MISSING" in {finding["code"] for finding in missing["findings"]}
 
     verified_id = await _seed_reference_validation(
         db_with_project,
@@ -398,9 +878,7 @@ async def test_reference_readiness_uses_latest_exact_bound_validation(
         manuscript.id,
         target_phase="review",
     )
-    assert "REFERENCE_NOT_VERIFIED" in {
-        finding["code"] for finding in failed_readiness["findings"]
-    }
+    assert "REFERENCE_NOT_VERIFIED" in {finding["code"] for finding in failed_readiness["findings"]}
 
     mismatched_id = await _seed_reference_validation(
         db_with_project,
@@ -412,9 +890,7 @@ async def test_reference_readiness_uses_latest_exact_bound_validation(
     mismatched = await service.get_reference_manifest(manuscript.id)
     assert mismatched["approved_citation_keys"] == []
     assert mismatched["members"][0]["validation"]["id"] == mismatched_id
-    assert (
-        mismatched["members"][0]["validation"]["identity_matches"] is False
-    )
+    assert mismatched["members"][0]["validation"]["identity_matches"] is False
     mismatch_readiness = await service.get_readiness(
         manuscript.id,
         target_phase="review",
@@ -449,13 +925,11 @@ async def test_ratification_and_checkpoint_readiness(db_with_project) -> None:
     )
     assert ratification.claim_version == 1
 
-    before_checkpoints = await service.get_readiness(
-        manuscript.id, target_phase="drafting"
-    )
+    before_checkpoints = await service.get_readiness(manuscript.id, target_phase="drafting")
     assert before_checkpoints["verdict"] == "BLOCK"
-    assert {
-        finding["code"] for finding in before_checkpoints["findings"]
-    } == {"CHECKPOINT_REQUIRED"}
+    assert {finding["code"] for finding in before_checkpoints["findings"]} == {
+        "CHECKPOINT_REQUIRED"
+    }
 
     revision = 3
     for kind in ("venue", "outline"):
@@ -482,9 +956,7 @@ async def test_ratification_and_checkpoint_readiness(db_with_project) -> None:
         )
         revision += 1
 
-    readiness = await service.get_readiness(
-        manuscript.id, target_phase="drafting"
-    )
+    readiness = await service.get_readiness(manuscript.id, target_phase="drafting")
     assert readiness["verdict"] == "PASS"
     assert readiness["ready"] is True
     assert readiness["findings"] == []
@@ -539,10 +1011,7 @@ async def test_projection_omits_superseded_ratification(db_with_project) -> None
     stale = await service.export_spine_projection(manuscript.id)
     assert stale["claims"][0]["ratified_by"] is None
     readiness = await service.get_readiness(manuscript.id)
-    assert any(
-        finding["code"] == "CLAIM_NOT_RATIFIED"
-        for finding in readiness["findings"]
-    )
+    assert any(finding["code"] == "CLAIM_NOT_RATIFIED" for finding in readiness["findings"])
 
 
 @pytest.mark.asyncio
@@ -655,8 +1124,7 @@ async def test_canonical_legacy_alias_remains_manuscript_evidence_after_tag_remo
         target_phase="planning",
     )
     assert any(
-        finding["code"] == "EVIDENCE_NOT_MANUSCRIPT_READY"
-        for finding in readiness["findings"]
+        finding["code"] == "EVIDENCE_NOT_MANUSCRIPT_READY" for finding in readiness["findings"]
     )
 
 
@@ -721,10 +1189,7 @@ async def test_checkpoint_resolution_requires_paper_writing_decision_and_snapsho
         manuscript.id,
         target_phase="drafting",
     )
-    assert any(
-        finding["code"] == "CHECKPOINT_REQUIRED"
-        for finding in readiness["findings"]
-    )
+    assert any(finding["code"] == "CHECKPOINT_REQUIRED" for finding in readiness["findings"])
 
 
 @pytest.mark.asyncio
@@ -767,9 +1232,7 @@ async def test_writing_candidates_smooth_claims_through_reviewed_cluster_and_rq(
     db_with_project,
 ) -> None:
     service = NativeManuscriptService(db_with_project, project_id="proj_default")
-    manuscript = await service.create(
-        ManuscriptCreate(title="Smoothed candidates")
-    )
+    manuscript = await service.create(ManuscriptCreate(title="Smoothed candidates"))
     rq_id = generate_id("decision")
     cluster_id = generate_id("cluster")
     journal_id = generate_id("journal")
@@ -818,6 +1281,10 @@ async def test_writing_candidates_smooth_claims_through_reviewed_cluster_and_rq(
         )
     await db_with_project.commit()
 
+    claims_service = ClaimService(db_with_project, project_id="proj_default")
+    for claim_id in claim_ids:
+        await claims_service.append_scope(claim_id, _reviewed_scope())
+
     proposal = await service.get_writing_candidates(manuscript.id)
     assert proposal["summary"] == {
         "clusters_total": 1,
@@ -829,6 +1296,8 @@ async def test_writing_candidates_smooth_claims_through_reviewed_cluster_and_rq(
     assert candidate["status"] == "candidate"
     assert candidate["ratified_by"] is None
     assert candidate["evidence_ids"] == sorted(claim_ids)
+    assert len(candidate["scope_contract_ids"]) == 2
+    assert candidate["prohibited_wording"] == ["Do not generalize beyond the evaluated testbed."]
     cluster = proposal["clusters"][0]
     assert cluster["disposition"] == "eligible"
     assert cluster["duplicate_support_groups"] == [sorted(claim_ids)]
@@ -878,9 +1347,7 @@ async def test_checkpoint_snapshots_detect_artifact_and_literature_drift(
     spine = _spine(evidence_id)
     spine["units"][0]["artifact_ref"] = artifact_id
     service = NativeManuscriptService(db_with_project, project_id="proj_default")
-    manuscript = await service.create(
-        ManuscriptCreate(title="Dependency drift", venue="IEEE S&P")
-    )
+    manuscript = await service.create(ManuscriptCreate(title="Dependency drift", venue="IEEE S&P"))
     await service.upsert_argument_spine(
         manuscript.id,
         expected_revision=1,
@@ -949,8 +1416,7 @@ async def test_checkpoint_snapshots_detect_artifact_and_literature_drift(
     current = await service.get_context(manuscript.id)
     current_by_id = {row["id"]: row for row in current["checkpoints"]}
     assert all(
-        current_by_id[checkpoint_id]["dependency_current"]
-        for checkpoint_id in checkpoints.values()
+        current_by_id[checkpoint_id]["dependency_current"] for checkpoint_id in checkpoints.values()
     )
 
     # Projection synchronization and no-op metadata writes must preserve PI
@@ -960,7 +1426,6 @@ async def test_checkpoint_snapshots_detect_artifact_and_literature_drift(
         expected_revision=revision,
         spine=spine,
     )
-    revision += 1
     await service.update(
         manuscript.id,
         ManuscriptUpdate(
@@ -970,9 +1435,7 @@ async def test_checkpoint_snapshots_detect_artifact_and_literature_drift(
     )
     revision += 1
     after_no_ops = await service.get_context(manuscript.id)
-    no_op_by_id = {
-        row["id"]: row for row in after_no_ops["checkpoints"]
-    }
+    no_op_by_id = {row["id"]: row for row in after_no_ops["checkpoints"]}
     assert all(
         no_op_by_id[checkpoint_id]["status"] == "resolved"
         and no_op_by_id[checkpoint_id]["dependency_current"]
@@ -1001,14 +1464,8 @@ async def test_checkpoint_snapshots_detect_artifact_and_literature_drift(
     await db_with_project.commit()
     after_artifact = await service.get_context(manuscript.id)
     artifact_by_id = {row["id"]: row for row in after_artifact["checkpoints"]}
-    assert (
-        artifact_by_id[checkpoints["table_figure_plan"]]["dependency_current"]
-        is False
-    )
-    assert (
-        artifact_by_id[checkpoints["reference_set"]]["dependency_current"]
-        is True
-    )
+    assert artifact_by_id[checkpoints["table_figure_plan"]]["dependency_current"] is False
+    assert artifact_by_id[checkpoints["reference_set"]]["dependency_current"] is True
 
     await db_with_project.execute(
         """UPDATE literature
@@ -1019,10 +1476,240 @@ async def test_checkpoint_snapshots_detect_artifact_and_literature_drift(
     )
     await db_with_project.commit()
     after_literature = await service.get_context(manuscript.id)
-    literature_by_id = {
-        row["id"]: row for row in after_literature["checkpoints"]
-    }
-    assert (
-        literature_by_id[checkpoints["reference_set"]]["dependency_current"]
-        is False
+    literature_by_id = {row["id"]: row for row in after_literature["checkpoints"]}
+    assert literature_by_id[checkpoints["reference_set"]]["dependency_current"] is False
+
+
+@pytest.mark.asyncio
+async def test_legacy_v2_checkpoint_digest_remains_current_until_semantics_change(
+    db_with_project,
+) -> None:
+    service = NativeManuscriptService(db_with_project, project_id="proj_default")
+    manuscript = await service.create(
+        ManuscriptCreate(title="Legacy checkpoint", venue="IEEE S&P")
     )
+    checkpoint = await service.create_checkpoint(
+        ManuscriptCheckpointCreate(
+            manuscript_id=manuscript.id,
+            kind="venue",
+        ),
+        expected_revision=1,
+    )
+    decision_id = await _seed_pi_decision(
+        db_with_project,
+        chosen="Approve IEEE S&P",
+    )
+    await service.resolve_checkpoint(
+        checkpoint.id,
+        ManuscriptCheckpointResolve(
+            decision_id=decision_id,
+            status="resolved",
+            resolved_at="2026-07-22T12:00:00Z",
+        ),
+        expected_revision=2,
+    )
+
+    # Simulate a checkpoint written before normalized components were retained.
+    current = await service.get_context(manuscript.id)
+    resolved = next(item for item in current["checkpoints"] if item["id"] == checkpoint.id)
+    legacy_snapshot = {
+        key: value
+        for key, value in resolved["dependency_snapshot"].items()
+        if key != "components"
+    }
+    await db_with_project.execute(
+        """UPDATE manuscript_checkpoints
+           SET dependency_snapshot = ?
+           WHERE id = ? AND project_id = 'proj_default'""",
+        [json.dumps(legacy_snapshot, sort_keys=True), checkpoint.id],
+    )
+    await db_with_project.commit()
+
+    compatible = await service.get_context(manuscript.id)
+    compatible_checkpoint = next(
+        item for item in compatible["checkpoints"] if item["id"] == checkpoint.id
+    )
+    assert compatible_checkpoint["status"] == "resolved"
+    assert compatible_checkpoint["dependency_current"] is True
+
+    # Re-applying the same dependency must not rewrite or supersede the legacy
+    # approval when its digest still represents the same venue.
+    await service.update(
+        manuscript.id,
+        ManuscriptUpdate(expected_revision=3, venue="IEEE S&P"),
+    )
+    after_no_op = await service.get_context(manuscript.id)
+    preserved = next(
+        item for item in after_no_op["checkpoints"] if item["id"] == checkpoint.id
+    )
+    assert preserved["status"] == "resolved"
+    assert preserved["dependency_current"] is True
+
+    # A real semantic change still invalidates the legacy approval.
+    await service.update(
+        manuscript.id,
+        ManuscriptUpdate(expected_revision=4, venue="USENIX Security"),
+    )
+    after_change = await service.get_context(manuscript.id)
+    invalidated = next(
+        item for item in after_change["checkpoints"] if item["id"] == checkpoint.id
+    )
+    assert invalidated["status"] == "superseded"
+    assert invalidated["dependency_current"] is False
+
+
+@pytest.mark.asyncio
+async def test_draft_section_checkpoint_tracks_typed_semantics_only_for_its_unit(
+    db_with_project,
+) -> None:
+    evidence_id = await _seed_ready_claim(db_with_project)
+    service = NativeManuscriptService(db_with_project, project_id="proj_default")
+    manuscript = await service.create(ManuscriptCreate(title="Scoped section approval"))
+    spine = _spine(evidence_id)
+    spine["units"][0].update({
+        "unit_role": "result",
+        "rhetorical_move": "present_result",
+        "evidence": {
+            "support": [{
+                "evidence_claim_id": evidence_id,
+                "supported_proposition": "Latency was lower.",
+                "warrant": "The observation measures the stated contrast.",
+            }],
+            "qualifier": [],
+            "counterevidence": [],
+        },
+    })
+    spine["units"].append({
+        "unit_id": "R2",
+        "kind": "discussion",
+        "location": "sections/discussion.tex",
+        "sequence": 2,
+        "unit_role": "paragraph_plan",
+        "rhetorical_move": "interpret_result",
+    })
+    context = await service.upsert_argument_spine(
+        manuscript.id,
+        expected_revision=1,
+        spine=spine,
+        actor="pi",
+    )
+    units = {item["local_key"]: item for item in context["units"]}
+
+    literature_id = await _seed_literature(db_with_project)
+    reference_id = generate_id("manuscript_reference")
+    await db_with_project.execute(
+        """INSERT INTO manuscript_reference_members
+           (id, manuscript_id, project_id, citation_key, literature_id)
+           VALUES (?, ?, 'proj_default', 'author2025', ?)""",
+        [reference_id, manuscript.id, literature_id],
+    )
+    await db_with_project.execute(
+        """INSERT INTO manuscript_unit_citations
+           (id, manuscript_id, project_id, unit_id, reference_member_id,
+            citation_role, supported_proposition, verification_state,
+            comparison_axis)
+           VALUES (?, ?, 'proj_default', ?, ?, 'baseline',
+                   'The prior work is the measured baseline.', 'self_attested',
+                   'latency')""",
+        [
+            generate_id("manuscript_unit_citation"),
+            manuscript.id,
+            units["R1"]["id"],
+            reference_id,
+        ],
+    )
+    await db_with_project.commit()
+
+    baseline = await service._checkpoint_dependency_snapshot(
+        manuscript.id, kind="draft_section", unit_id=units["R1"]["id"]
+    )
+    mutations = [
+        (
+            "UPDATE manuscript_unit_evidence SET supported_proposition = ? "
+            "WHERE unit_id = ? AND project_id = 'proj_default'",
+            "Changed proposition.",
+            "Latency was lower.",
+        ),
+        (
+            "UPDATE manuscript_unit_evidence SET warrant = ? "
+            "WHERE unit_id = ? AND project_id = 'proj_default'",
+            "Changed warrant.",
+            "The observation measures the stated contrast.",
+        ),
+        (
+            "UPDATE manuscript_unit_outline_profiles SET unit_role = ? "
+            "WHERE unit_id = ? AND project_id = 'proj_default'",
+            "argument_block",
+            "result",
+        ),
+        (
+            "UPDATE manuscript_unit_outline_profiles SET rhetorical_move = ? "
+            "WHERE unit_id = ? AND project_id = 'proj_default'",
+            "interpret_result",
+            "present_result",
+        ),
+        (
+            "UPDATE manuscript_unit_citations SET verification_state = ? "
+            "WHERE unit_id = ? AND project_id = 'proj_default'",
+            "verified",
+            "self_attested",
+        ),
+        (
+            "UPDATE manuscript_unit_citations SET comparison_axis = ? "
+            "WHERE unit_id = ? AND project_id = 'proj_default'",
+            "throughput",
+            "latency",
+        ),
+    ]
+    for statement, changed_value, original_value in mutations:
+        async with db_with_project.transaction(write=True):
+            await db_with_project.execute(statement, [changed_value, units["R1"]["id"]])
+        changed = await service._checkpoint_dependency_snapshot(
+            manuscript.id, kind="draft_section", unit_id=units["R1"]["id"]
+        )
+        assert changed["sha256"] != baseline["sha256"]
+        async with db_with_project.transaction(write=True):
+            await db_with_project.execute(statement, [original_value, units["R1"]["id"]])
+        restored = await service._checkpoint_dependency_snapshot(
+            manuscript.id, kind="draft_section", unit_id=units["R1"]["id"]
+        )
+        assert restored == baseline
+
+    revision = (await service.get(manuscript.id)).revision
+    checkpoints: dict[str, str] = {}
+    for unit_key in ("R1", "R2"):
+        checkpoint = await service.create_checkpoint(
+            ManuscriptCheckpointCreate(
+                manuscript_id=manuscript.id,
+                kind="draft_section",
+                unit_id=units[unit_key]["id"],
+            ),
+            expected_revision=revision,
+        )
+        revision += 1
+        decision_id = await _seed_pi_decision(
+            db_with_project,
+            chosen=f"Approve {unit_key}",
+        )
+        await service.resolve_checkpoint(
+            checkpoint.id,
+            ManuscriptCheckpointResolve(
+                decision_id=decision_id,
+                status="resolved",
+                resolved_at="2026-07-22T12:00:00Z",
+            ),
+            expected_revision=revision,
+        )
+        revision += 1
+        checkpoints[unit_key] = checkpoint.id
+
+    async with db_with_project.transaction(write=True):
+        await db_with_project.execute(
+            "UPDATE manuscript_unit_evidence SET warrant = ? "
+            "WHERE unit_id = ? AND project_id = 'proj_default'",
+            ["A materially changed warrant.", units["R1"]["id"]],
+        )
+    refreshed = await service.get_context(manuscript.id)
+    by_id = {item["id"]: item for item in refreshed["checkpoints"]}
+    assert by_id[checkpoints["R1"]]["dependency_current"] is False
+    assert by_id[checkpoints["R2"]]["dependency_current"] is True

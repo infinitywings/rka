@@ -18,13 +18,13 @@ The rka MCP server ships a **discriminated-union dispatch surface**. Five tools 
 
 | Always-on tool | Purpose |
 |---|---|
-| `rka_query(args)` | All 51 read operations (status, context, journal, research map, native manuscripts, writing candidates, reference manifests, change impact, etc.) |
-| `rka_execute(args)` | All 58 write/lifecycle operations (notes, decisions, missions, native manuscripts, reference manifests, checkpoints, claims, hooks, maintenance) |
+| `rka_query(args)` | All 67 read operations (status, context, journal, research map, planning branches, semantic proposals, claim scope, experiments, native manuscripts, outlines, change impact, etc.) |
+| `rka_execute(args)` | All 83 write/lifecycle operations (notes, decisions, missions, planning artifacts, semantic proposals, interpretation promotion, experiment evidence, claim-scope review, manuscript outlines, checkpoints, maintenance) |
 | `rka_describe(operation)` | Schema lookup + worked example for any operation; `rka_describe('')` returns the <250-token index |
 | `rka_load_tools(names)` | Escape hatch — brings deferred legacy tools online when you specifically need backwards-compat access |
 | `rka_help(name)` | Deprecated alias for `rka_describe`; retained always-on for cockpits that learned the v2.6.3 navigator vocabulary |
 
-`args` is a **typed Pydantic model** discriminated by `operation`. There are 109 models in `rka/mcp/operation_args.py`. FastMCP renders them as `inputSchema.oneOf` with per-branch enum constraints + required-field arrays. **The schema layer rejects wrong enum values, missing required fields, and missing provenance BEFORE the call is dispatched** — the historical `confidence='confirmed'` hallucination class is structurally impossible at the inputSchema level.
+`args` is a **typed Pydantic model** discriminated by `operation`. There are 150 models in `rka/mcp/operation_args.py`. FastMCP renders them as `inputSchema.oneOf` with per-branch enum constraints + required-field arrays. **The schema layer rejects wrong enum values, missing required fields, and missing provenance BEFORE the call is dispatched** — the historical `confidence='confirmed'` hallucination class is structurally impossible at the inputSchema level.
 
 ### Worked examples
 
@@ -54,7 +54,7 @@ rka_execute(args={"operation": "record_decision", "project_id": "prj_01...",
 
 # Schema lookup
 rka_describe(operation="record_decision")  # signature + example + enums
-rka_describe(operation="")                 # <250-token index of all 109 ops
+rka_describe(operation="")                 # compact index of all 150 ops
 ```
 
 When a workflow below references a legacy tool name like `rka_add_decision`, treat it as a synonym for `rka_execute(args={"operation": "record_decision", ...})`. The mapping is in `rka_describe('')`. The typed-arg surface obviates `rka_load_tools` for normal work; only use it for explicit legacy access (e.g., orchestrator subprocess running with `RKA_LEGACY_TOOLS=1`).
@@ -190,6 +190,18 @@ support. `verified` records the categorical grounding review;
 **Confidence cap without full text**: claims extracted from abstracts or search snippets cap at **0.65**. To exceed that, you need full-text grounding with a direct quote.
 
 Full procedure with worked examples and cluster-assignment heuristic: `workflows.md` § "Claim Extraction".
+
+### Canonical claim-scope review
+
+Do not cluster or offer a `clm_` as manuscript support merely because its
+source grounding is verified. Inspect its canonical research boundary with
+`rka_query(args={"operation": "claim_scope", "project_id": <pinned>, "id":
+"clm_..."})`. If scope is missing, stale, incomplete, or unreviewed, append a
+revision with `set_claim_scope`; never infer a legacy boundary from claim prose.
+A reviewed contract records typed conditions, resolved uncertainty, an exact or
+bounded extension policy, prohibited extensions, and resolved falsifier
+applicability. Keep `scope_readiness`, `evidence_status`, contradiction, and
+staleness as separate review axes.
 
 ## Literature ingestion + Zotero linkage
 

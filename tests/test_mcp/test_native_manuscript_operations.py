@@ -20,6 +20,7 @@ QUERY_OPERATIONS = {
     "manuscript_reference_manifest",
     "manuscript_readiness",
     "manuscript_spine",
+    "manuscript_outline",
     "manuscript_writing_candidates",
     "changes_since",
     "manuscript_impact",
@@ -35,6 +36,7 @@ EXECUTE_OPERATIONS_NATIVE = {
     "create_manuscript_checkpoint",
     "resolve_manuscript_checkpoint",
     "record_verification_attestation",
+    "prepare_manuscript_outline_proposal",
 }
 
 
@@ -122,6 +124,138 @@ def test_create_manuscript_describe_schema_matches_typed_model() -> None:
 
 
 @pytest.mark.asyncio
+async def test_typed_spine_direct_mutation_is_deprecated_without_network(requests) -> None:
+    schema = OPERATIONS_SCHEMA["upsert_argument_spine"]
+    assert schema["role_tag"] == "ANY"
+    assert schema["enums"]["manuscript_unit_role"] == [
+        "unspecified",
+        "section",
+        "argument_block",
+        "paragraph_plan",
+        "result",
+        "caption",
+        "appendix",
+        "other",
+    ]
+    payload = {
+        "operation": "upsert_argument_spine",
+        "project_id": "prj_test",
+        "id": "man_test",
+        "expected_revision": 4,
+        "spine": {
+            "claims": [{
+                "local_key": "C1",
+                "kind": "empirical",
+                "state": "active",
+                "exact_wording": "Latency was lower in the testbed.",
+                "allowed_wording": "Latency was lower in the evaluated testbed.",
+                "prohibited_wording": ["Latency is always lower."],
+                "conditions": ["Evaluated testbed only."],
+                "falsification_criteria": ["The direction does not reproduce."],
+                "unit_links": [{"unit_key": "R1", "relationship": "tests"}],
+            }],
+            "units": [{
+                "local_key": "R1",
+                "kind": "result",
+                "location": "results#latency",
+                "artifact_ref": "art_latency",
+                "allowed_interpretation": "Lower in the testbed.",
+                "prohibited_interpretation": "Lower everywhere.",
+                "unit_role": "result",
+                "rhetorical_move": "present_result",
+                "evidence": {"support": [{
+                    "evidence_claim_id": "clm_result",
+                    "supported_proposition": "Latency was lower.",
+                    "warrant": "The observation measures the stated contrast.",
+                }]},
+                "citations": [{
+                    "citation_key": "author2025",
+                    "citation_role": "baseline",
+                    "supported_proposition": "This is the established baseline.",
+                    "verification_state": "verified",
+                    "comparison_axis": "latency",
+                }],
+            }],
+        },
+    }
+    parsed = TypeAdapter(ExecuteArgsUnion).validate_python(payload)
+    result = json.loads(await server._dispatch_execute_typed(parsed))
+
+    assert result["error"] == "deprecated_operation"
+    assert result["replacement_operations"] == [
+        "prepare_semantic_patch_context",
+        "create_semantic_patch_proposal",
+        "apply_semantic_patch_proposal",
+    ]
+    assert result["received"]["spine_keys"] == ["claims", "units"]
+    assert not any(
+        item["path"] == "/api/manuscripts/man_test/argument-spine"
+        for item in requests
+    )
+
+
+def test_typed_spine_rejects_invalid_academic_enums() -> None:
+    payload = {
+        "operation": "upsert_argument_spine",
+        "project_id": "prj_test",
+        "id": "man_test",
+        "expected_revision": 1,
+        "spine": {
+            "claims": [],
+            "units": [{
+                "local_key": "I1",
+                "kind": "introduction",
+                "location": "intro",
+                "unit_role": "paragraph",
+                "citations": [{
+                    "citation_key": "x",
+                    "citation_role": "mentions",
+                    "supported_proposition": "Prior work exists.",
+                }],
+            }],
+        },
+    }
+    with pytest.raises(ValidationError):
+        TypeAdapter(ExecuteArgsUnion).validate_python(payload)
+
+
+def test_semantic_patch_transition_schema_rejects_ai_reviewer() -> None:
+    with pytest.raises(ValidationError):
+        TypeAdapter(ExecuteArgsUnion).validate_python({
+            "operation": "apply_semantic_patch_proposal",
+            "project_id": "prj_test",
+            "id": "spp_test",
+            "expected_revision": 1,
+            "actor": "executor",
+            "reason": "AI-authored proposals require a human transition.",
+        })
+
+
+@pytest.mark.parametrize("origin", [None, "human"])
+def test_typed_outline_proposal_requires_ai_provenance(origin: str | None) -> None:
+    payload = {
+        "operation": "prepare_manuscript_outline_proposal",
+        "project_id": "prj_test",
+        "id": "man_test",
+        "expected_revision": 2,
+        "action": "edit",
+        "reason": "Attempt to omit or falsify MCP authorship.",
+        "unit_key": "INTRO",
+        "patch": {"blocker": None},
+    }
+    if origin is not None:
+        payload.update({
+            "origin": origin,
+            "provider": "openai",
+            "model": "gpt-test",
+            "boundary": "host_conversation",
+            "context_manifest_id": "pcm_test",
+        })
+    with pytest.raises(ValidationError):
+        TypeAdapter(ExecuteArgsUnion).validate_python(payload)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("operation", "extra", "expected_path"),
     [
@@ -179,6 +313,57 @@ def test_operation_registry_and_typed_unions_are_complete() -> None:
     assert QUERY_OPERATIONS | EXECUTE_OPERATIONS_NATIVE <= set(OPERATIONS_SCHEMA)
     assert OPERATIONS_SCHEMA["register_manuscript"]["tool"] == "rka_execute"
     assert OPERATIONS_SCHEMA["manuscript"]["tool"] == "rka_query"
+
+
+@pytest.mark.asyncio
+async def test_outline_read_and_proposal_route_through_typed_mcp(requests) -> None:
+    query = TypeAdapter(QueryArgsUnion).validate_python({
+        "operation": "manuscript_outline",
+        "project_id": "prj_test",
+        "id": "man_outline",
+    })
+    await server._dispatch_query_typed(query)
+    proposal = TypeAdapter(ExecuteArgsUnion).validate_python({
+        "operation": "prepare_manuscript_outline_proposal",
+        "project_id": "prj_test",
+        "id": "man_outline",
+        "expected_revision": 3,
+        "action": "reorder",
+        "reason": "Lead with the method.",
+        "origin": "host_agent",
+        "provider": "openai",
+        "model": "gpt-test",
+        "boundary": "host_conversation",
+        "context_manifest_id": "pcm_outline",
+        "ordered_unit_keys": ["METHOD", "INTRO"],
+    })
+    await server._dispatch_execute_typed(proposal)
+    outline_requests = [
+        request for request in requests
+        if request["path"].startswith("/api/manuscripts/man_outline/outline")
+    ]
+    assert outline_requests == [
+        {
+            "method": "GET",
+            "path": "/api/manuscripts/man_outline/outline",
+            "params": None,
+        },
+        {
+            "method": "POST",
+            "path": "/api/manuscripts/man_outline/outline/proposals",
+            "json": {
+                "expected_revision": 3,
+                "action": "reorder",
+                "reason": "Lead with the method.",
+                "origin": "host_agent",
+                "provider": "openai",
+                "model": "gpt-test",
+                "boundary": "host_conversation",
+                "context_manifest_id": "pcm_outline",
+                "ordered_unit_keys": ["METHOD", "INTRO"],
+            },
+        },
+    ]
 
 
 @pytest.mark.parametrize(
@@ -572,17 +757,33 @@ _ATTESTATION = {
         ),
         (
             {
-                "operation": "upsert_argument_spine",
+                "operation": "prepare_manuscript_outline_proposal",
                 "project_id": "prj_test",
                 "id": "man_1",
                 "expected_revision": 3,
-                "spine": {"claims": [], "units": []},
+                "action": "edit",
+                "reason": "Clear the resolved blocker.",
+                "origin": "host_agent",
+                "provider": "openai",
+                "model": "gpt-test",
+                "boundary": "host_conversation",
+                "context_manifest_id": "pcm_outline",
+                "unit_key": "INTRO",
+                "patch": {"blocker": None},
             },
-            "PUT",
-            "/api/manuscripts/man_1/argument-spine",
+            "POST",
+            "/api/manuscripts/man_1/outline/proposals",
             {
                 "expected_revision": 3,
-                "spine": {"claims": [], "units": []},
+                "action": "edit",
+                "reason": "Clear the resolved blocker.",
+                "origin": "host_agent",
+                "provider": "openai",
+                "model": "gpt-test",
+                "boundary": "host_conversation",
+                "context_manifest_id": "pcm_outline",
+                "unit_key": "INTRO",
+                "patch": {"blocker": None},
             },
         ),
         (

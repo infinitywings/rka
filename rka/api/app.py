@@ -29,6 +29,7 @@ from rka.api.routes import (
     literature as literature_routes,
     llm as llm_routes,
     manuscripts as manuscripts_routes,
+    manuscript_sources as manuscript_source_routes,
     missions as missions_routes,
     notes as notes_routes,
     project as project_routes,
@@ -46,6 +47,10 @@ from rka.api.routes import (
     verification as verification_routes,
     researcher_tools as researcher_tools_routes,
     hooks as hooks_routes,
+    interpretations as interpretations_routes,
+    experiments as experiments_routes,
+    planning as planning_routes,
+    semantic_patches as semantic_patch_routes,
     zotero_config as zotero_config_routes,
 )
 from rka.config import RKAConfig
@@ -294,6 +299,11 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
     app.include_router(project_routes.router, prefix="/api", tags=["project"])
     app.include_router(notes_routes.router, prefix="/api", tags=["notes"])
     app.include_router(manuscripts_routes.router, prefix="/api", tags=["manuscripts"])
+    app.include_router(
+        manuscript_source_routes.router,
+        prefix="/api",
+        tags=["manuscript-sources"],
+    )
     app.include_router(decisions_routes.router, prefix="/api", tags=["decisions"])
     app.include_router(literature_routes.router, prefix="/api", tags=["literature"])
     app.include_router(missions_routes.router, prefix="/api", tags=["missions"])
@@ -313,6 +323,26 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
     app.include_router(artifact_routes.router, prefix="/api", tags=["artifacts"])
     app.include_router(llm_routes.router, prefix="/api", tags=["llm"])
     app.include_router(claims_routes.router, prefix="/api", tags=["claims"])
+    app.include_router(
+        interpretations_routes.router,
+        prefix="/api",
+        tags=["interpretation-staging"],
+    )
+    app.include_router(
+        experiments_routes.router,
+        prefix="/api",
+        tags=["experiments"],
+    )
+    app.include_router(
+        planning_routes.router,
+        prefix="/api",
+        tags=["manuscript-planning"],
+    )
+    app.include_router(
+        semantic_patch_routes.router,
+        prefix="/api",
+        tags=["semantic-patches"],
+    )
     app.include_router(clusters_routes.router, prefix="/api", tags=["clusters"])
     app.include_router(topics_routes.router, prefix="/api", tags=["topics"])
     app.include_router(research_map_routes.router, prefix="/api", tags=["research-map"])

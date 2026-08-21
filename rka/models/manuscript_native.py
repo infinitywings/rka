@@ -54,6 +54,39 @@ ManuscriptUnitKind = Literal[
 ]
 ManuscriptUnitStatus = Literal["planned", "drafted", "reviewed", "final", "removed"]
 ManuscriptEvidenceRole = Literal["support", "qualifier", "counterevidence"]
+ManuscriptUnitRole = Literal[
+    "unspecified",
+    "section",
+    "argument_block",
+    "paragraph_plan",
+    "result",
+    "caption",
+    "appendix",
+    "other",
+]
+ManuscriptRhetoricalMove = Literal[
+    "unspecified",
+    "frame_problem",
+    "establish_gap",
+    "state_insight",
+    "explain_mechanism",
+    "address_challenge",
+    "present_innovation",
+    "pose_research_question",
+    "state_contribution",
+    "describe_method",
+    "present_result",
+    "interpret_result",
+    "compare_prior_work",
+    "state_limitation",
+    "transition",
+    "summarize",
+    "other",
+]
+ManuscriptCitationRole = Literal["imports", "bounds", "baseline", "extends", "refutes"]
+ManuscriptCitationVerificationState = Literal[
+    "unverified", "self_attested", "verified", "rejected"
+]
 ManuscriptClaimUnitRelationship = Literal["advances", "tests", "bounds", "mentions"]
 ManuscriptCheckpointKind = Literal[
     "venue",
@@ -179,6 +212,8 @@ class ManuscriptClaimVersionCreate(BaseModel):
     exact_wording: NonEmptyStr
     allowed_wording: NonEmptyStr
     prohibited_wording: list[NonEmptyStr] = Field(min_length=1)
+    conditions: list[NonEmptyStr] = Field(default_factory=list, max_length=500)
+    falsification_criteria: list[NonEmptyStr] = Field(default_factory=list, max_length=500)
 
 
 class ManuscriptClaimVersion(BaseModel):
@@ -191,10 +226,16 @@ class ManuscriptClaimVersion(BaseModel):
     exact_wording: str
     allowed_wording: str
     prohibited_wording: list[str]
+    conditions: list[str] = Field(default_factory=list)
+    falsification_criteria: list[str] = Field(default_factory=list)
     created_at: str
 
     _parse_prohibited_wording = field_validator(
         "prohibited_wording", mode="before"
+    )(_json_value)
+    _parse_conditions = field_validator("conditions", mode="before")(_json_value)
+    _parse_falsification_criteria = field_validator(
+        "falsification_criteria", mode="before"
     )(_json_value)
 
 
@@ -238,6 +279,19 @@ class ManuscriptUnitCreate(BaseModel):
     prohibited_interpretation: str | None = None
     sequence: int = Field(default=0, ge=0)
     status: ManuscriptUnitStatus = "planned"
+    outline_level: int = Field(default=4, ge=2, le=5)
+    unit_role: ManuscriptUnitRole = "unspecified"
+    rhetorical_move: ManuscriptRhetoricalMove = "unspecified"
+    parent_unit_key: str | None = None
+    communicative_job: str | None = None
+    intended_takeaway: str | None = None
+    transition_from_previous: str | None = None
+    quick_reader_role: str | None = None
+    evidence_plan: list[str] = Field(default_factory=list)
+    figure_intentions: list[str] = Field(default_factory=list)
+    table_intentions: list[str] = Field(default_factory=list)
+    citation_intentions: list[str] = Field(default_factory=list)
+    blocker: str | None = None
 
     @model_validator(mode="after")
     def require_result_boundaries(self) -> ManuscriptUnitCreate:
@@ -266,6 +320,19 @@ class ManuscriptUnitUpdate(BaseModel):
     prohibited_interpretation: str | None = None
     sequence: int | None = Field(default=None, ge=0)
     status: ManuscriptUnitStatus | None = None
+    outline_level: int | None = Field(default=None, ge=2, le=5)
+    unit_role: ManuscriptUnitRole | None = None
+    rhetorical_move: ManuscriptRhetoricalMove | None = None
+    parent_unit_key: str | None = None
+    communicative_job: str | None = None
+    intended_takeaway: str | None = None
+    transition_from_previous: str | None = None
+    quick_reader_role: str | None = None
+    evidence_plan: list[str] | None = None
+    figure_intentions: list[str] | None = None
+    table_intentions: list[str] | None = None
+    citation_intentions: list[str] | None = None
+    blocker: str | None = None
 
 
 class ManuscriptUnit(BaseModel):
@@ -285,6 +352,19 @@ class ManuscriptUnit(BaseModel):
     status: ManuscriptUnitStatus
     created_at: str
     updated_at: str
+    outline_level: int = 4
+    unit_role: ManuscriptUnitRole = "unspecified"
+    rhetorical_move: ManuscriptRhetoricalMove = "unspecified"
+    parent_unit_key: str | None = None
+    communicative_job: str | None = None
+    intended_takeaway: str | None = None
+    transition_from_previous: str | None = None
+    quick_reader_role: str | None = None
+    evidence_plan: list[str] = Field(default_factory=list)
+    figure_intentions: list[str] = Field(default_factory=list)
+    table_intentions: list[str] = Field(default_factory=list)
+    citation_intentions: list[str] = Field(default_factory=list)
+    blocker: str | None = None
 
 
 class ManuscriptClaimEvidenceCreate(BaseModel):
@@ -317,6 +397,8 @@ class ManuscriptUnitEvidenceCreate(BaseModel):
     evidence_claim_id: str
     role: ManuscriptEvidenceRole
     ordinal: int = Field(default=0, ge=0)
+    supported_proposition: NonEmptyStr | None = None
+    warrant: NonEmptyStr | None = None
 
 
 class ManuscriptUnitEvidence(ManuscriptUnitEvidenceCreate):
@@ -324,6 +406,32 @@ class ManuscriptUnitEvidence(ManuscriptUnitEvidenceCreate):
 
     project_id: str
     created_at: str
+
+
+class ManuscriptUnitCitationCreate(BaseModel):
+    """Bind one unit to an existing manuscript reference membership."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    manuscript_id: str
+    unit_id: str
+    citation_key: NonEmptyStr
+    citation_role: ManuscriptCitationRole
+    supported_proposition: NonEmptyStr
+    verification_state: ManuscriptCitationVerificationState = "unverified"
+    comparison_axis: NonEmptyStr | None = None
+
+
+class ManuscriptUnitCitation(ManuscriptUnitCitationCreate):
+    """Stored unit citation use without duplicated bibliography metadata."""
+
+    id: str
+    project_id: str
+    reference_member_id: str
+    literature_id: str
+    stable_identifier: str | None = None
+    created_at: str
+    updated_at: str
 
 
 class ManuscriptClaimUnitCreate(BaseModel):

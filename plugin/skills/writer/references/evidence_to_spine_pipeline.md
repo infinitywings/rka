@@ -12,9 +12,17 @@ in RKA but does not silently enter the manuscript.
 ```text
 jrn_ observations and decisions
         |
-        | extraction fidelity, source linkage, currency
+        | exact locator, epistemic kind, explicit review
+        v
+icd_ interpretation candidates
+        |
+        | promotion with grounding fidelity and immutable lineage
         v
 clm_ atomic claims
+        |
+        | typed applicability, uncertainty, extension limits, falsifier
+        v
+csc_ canonical claim-scope versions
         |
         | cluster membership, duplicate grouping, contradiction edges
         v
@@ -74,6 +82,15 @@ true:
 - project ownership is attested;
 - the source is not manuscript prose;
 - unresolved contradiction edges do not touch the claim.
+- its current canonical `csc_` contract is complete, reviewed, and still
+  matches the claim's current content and type.
+
+Candidate scope on `icd_` is source-bounded extraction context. Canonical scope
+on `csc_` is the research-level applicability contract. Manuscript wording on
+`mcl_` is paper-specific and PI-ratified. Do not collapse these layers. Legacy
+claims with no `csc_` remain `scope_readiness=missing`, and a claim edit makes
+its older contract stale. Scope readiness never replaces grounding,
+scientific-support, contradiction, or currency checks.
 
 Claims that fail admission stay visible in the candidate report with reason
 codes. They are not silently discarded or converted into qualifiers.
@@ -130,6 +147,8 @@ The response includes:
 - qualifiers and counterevidence;
 - an unratified candidate spine;
 - candidate-to-cluster/RQ lineage.
+- canonical `csc_` IDs and prohibited extensions for every admitted support
+  claim.
 
 ## 4. Contribution contract
 
@@ -260,7 +279,7 @@ authorizing new semantics.
 
 | Condition | Action |
 |---|---|
-| journal only, no grounded claim | return to Brain extraction |
+| journal only, no grounded claim | inspect pending `icd_` candidates; return to Brain staging/review and explicit promotion |
 | unverified or weak claim | keep excluded with reason |
 | duplicate claim | group; preserve all lineage |
 | stale cluster | Brain reprocesses cluster |

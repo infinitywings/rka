@@ -14,15 +14,18 @@ from rka import __version__
 from rka.infra.database import Database
 from rka.models.decision import DecisionCreate, DecisionOption
 from rka.models.journal import JournalEntryCreate
+from rka.models.interpretation import InterpretationCandidateCreate, InterpretationTriage
 from rka.models.literature import LiteratureCreate
 from rka.models.mission import MissionCreate
 from rka.models.project import ProjectCreate
 from rka.services.artifacts import ArtifactService
+from rka.services.claims import ClaimService
 from rka.services.decisions import DecisionService
 from rka.services.knowledge_pack import KnowledgePackService
 from rka.services.literature import LiteratureService
 from rka.services.missions import MissionService
 from rka.services.notes import NoteService
+from rka.services.interpretation import InterpretationService
 from rka.services.project import ProjectService
 
 
@@ -164,6 +167,120 @@ async def test_knowledge_pack_round_trip_imports_into_same_db_with_remapped_ids_
         assert Path(imported_artifact["filepath"]).exists()
         assert Path(imported_artifact["filepath"]).read_text(encoding="utf-8") == "artifact payload"
         assert sorted(row["id"] for row in fts_rows) == sorted([note.id, imported_note["id"]])
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_knowledge_pack_round_trip_preserves_interpretation_promotion_lineage(
+    tmp_path: Path,
+) -> None:
+    db = await _make_db(tmp_path / "interpretation-round-trip.db")
+    try:
+        await ProjectService(db).create_project(
+            ProjectCreate(id="proj_interpretation_export", name="Interpretation Export"),
+            actor="system",
+        )
+        note = await NoteService(db, project_id="proj_interpretation_export").create(
+            JournalEntryCreate(
+                content="The isolated evaluation measured 42 ms under the configured workload.",
+                type="log",
+                source="executor",
+                confidence="tested",
+            ),
+            actor="executor",
+        )
+        staging = InterpretationService(db, project_id="proj_interpretation_export")
+        candidate = await staging.create(
+            InterpretationCandidateCreate(
+                source_type="journal",
+                source_id=note.id,
+                locator_kind="record",
+                locator_value="full_record",
+                statement="The isolated evaluation measured 42 ms.",
+                epistemic_kind="observation",
+                scope_conditions=["configured workload"],
+                uncertainty="low",
+                falsifier="A repeated evaluation does not reproduce the measurement.",
+                proposed_claim_type="result",
+                created_by="executor",
+                extraction_tool="pytest",
+            )
+        )
+        reviewing = await staging.triage(
+            candidate.id,
+            InterpretationTriage(
+                action="start_review",
+                expected_revision=candidate.revision,
+                actor="brain",
+            ),
+        )
+        promoted = await staging.triage(
+            candidate.id,
+            InterpretationTriage(
+                action="promote",
+                expected_revision=reviewing.revision,
+                actor="brain",
+                reason="Checked the exact journal record and its stated scope.",
+                grounding_verified=True,
+                claim_confidence=0.82,
+            ),
+        )
+
+        pack_path, _ = await KnowledgePackService(
+            db,
+            project_id="proj_interpretation_export",
+        ).export_pack()
+        with open(pack_path, "rb") as pack_file:
+            result = await KnowledgePackService(db).import_pack(
+                pack_file,
+                project_id="proj_interpretation_import",
+                project_name="Interpretation Import",
+            )
+
+        imported_candidate_row = await db.fetchone(
+            "SELECT id FROM interpretation_candidates WHERE project_id = ?",
+            [result.project_id],
+        )
+        assert imported_candidate_row is not None
+        imported = await InterpretationService(
+            db,
+            project_id=result.project_id,
+        ).get_detail(imported_candidate_row["id"])
+        assert imported is not None
+        assert imported.id != candidate.id
+        assert imported.source_id != note.id
+        assert imported.review_status == "resolved"
+        assert imported.disposition == "promoted"
+        assert imported.active_claim_id is not None
+        assert imported.active_claim_id != promoted.active_claim_id
+        assert imported.scope_conditions == ["configured workload"]
+        assert [event.action for event in imported.review_events] == [
+            "created",
+            "start_review",
+            "promote",
+        ]
+        assert imported.promotions[0].claim_id == imported.active_claim_id
+        assert imported.promotions[0].status == "active"
+        imported_claim = await db.fetchone(
+            "SELECT * FROM claims WHERE id = ? AND project_id = ?",
+            [imported.active_claim_id, result.project_id],
+        )
+        assert imported_claim["source_entry_id"] == imported.source_id
+        assert imported_claim["verified"] == 1
+        assert imported_claim["evidence_status"] == "unassessed"
+        assert imported_claim["scope_revision"] == 1
+        imported_scope = await ClaimService(
+            db,
+            project_id=result.project_id,
+        ).get_scope_history(imported.active_claim_id)
+        assert imported_scope is not None
+        assert imported_scope.scope_readiness == "incomplete"
+        assert imported_scope.current is not None
+        assert imported_scope.current.source_candidate_id == imported.id
+        assert imported_scope.current.conditions[0].value == "configured workload"
+        assert imported_scope.current.falsifier_status == "applicable"
+        assert await db.fetchall("PRAGMA foreign_key_check") == []
     finally:
         await db.close()
 

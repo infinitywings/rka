@@ -37,6 +37,11 @@ from rka.services.researcher_tools import ResearcherToolsService
 from rka.services.decision_options import DecisionOptionsService
 from rka.services.calibration import CalibrationService
 from rka.services.hooks_service import HooksService
+from rka.services.interpretation import InterpretationService
+from rka.services.experiments import ExperimentService
+from rka.services.planning import ManuscriptPlanningService
+from rka.services.semantic_patch import SemanticPatchService
+from rka.services.manuscript_source import ManuscriptSourceService
 
 logger = logging.getLogger(__name__)
 
@@ -82,8 +87,8 @@ def get_transport_actor(
     """Attribute the request transport for audit records.
 
     Direct REST/UI calls default to ``web_ui``. The bundled MCP proxy sends
-    ``executor`` explicitly. This is provenance metadata, not an
-    authentication or authorization decision.
+    ``executor`` explicitly. This is provenance metadata and a local
+    interaction guard, not a network authentication boundary.
     """
     actor = (x_rka_actor or "web_ui").strip()
     if actor not in {"executor", "web_ui"}:
@@ -415,6 +420,44 @@ def get_scoped_claim_service(
     embeddings: EmbeddingService | None = Depends(get_embeddings),
 ) -> ClaimService:
     return ClaimService(db, llm=llm, embeddings=embeddings, project_id=project_id)
+
+
+def get_scoped_interpretation_service(
+    project_id: str = Depends(require_project),
+    db: Database = Depends(get_db),
+    embeddings: EmbeddingService | None = Depends(get_embeddings),
+) -> InterpretationService:
+    return InterpretationService(db, embeddings=embeddings, project_id=project_id)
+
+
+def get_scoped_experiment_service(
+    project_id: str = Depends(require_project),
+    db: Database = Depends(get_db),
+    embeddings: EmbeddingService | None = Depends(get_embeddings),
+) -> ExperimentService:
+    return ExperimentService(db, embeddings=embeddings, project_id=project_id)
+
+
+def get_scoped_manuscript_planning_service(
+    project_id: str = Depends(require_project),
+    db: Database = Depends(get_db),
+) -> ManuscriptPlanningService:
+    return ManuscriptPlanningService(db, project_id=project_id)
+
+
+def get_scoped_semantic_patch_service(
+    project_id: str = Depends(require_project),
+    db: Database = Depends(get_db),
+) -> SemanticPatchService:
+    return SemanticPatchService(db, project_id=project_id)
+
+
+def get_scoped_manuscript_source_service(
+    config: RKAConfig = Depends(get_config),
+    project_id: str = Depends(require_project),
+    db: Database = Depends(get_db),
+) -> ManuscriptSourceService:
+    return ManuscriptSourceService(db, config=config, project_id=project_id)
 
 
 def get_scoped_cluster_service(

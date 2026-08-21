@@ -183,12 +183,12 @@ def test_audit_symmetry_state_writes_match_schema_keys():
 
 
 # ---------------------------------------------------------------------------
-# Bookkeeper invariant — git diff main -- rka/ MUST be empty
-# Worker invariant   — git diff main -- rka/services/worker.py MUST be empty
+# Bookkeeper invariant — git diff origin/main -- rka/ MUST be empty
+# Worker invariant   — git diff origin/main -- rka/services/worker.py MUST be empty
 #
 # CLAUDE.md (agentic) commits to: any change under rka/ from the agentic
 # branch requires an explicit checkpoint and Brain greenlight. Until then,
-# `git diff main -- rka/` is the structural enforcement. v2.6.0+agentic
+# `git diff origin/main -- rka/` is the structural enforcement. v2.6.0+agentic
 # release-prep surfaced a stale merge-conflict residue in
 # rka/skills/executor/SKILL.md that had been violating this invariant for
 # ~24 hours — these tests close that gap so the next regression fails
@@ -197,25 +197,30 @@ def test_audit_symmetry_state_writes_match_schema_keys():
 
 
 def _git_diff_against_main(path_filter: str) -> tuple[bool, str]:
-    """Run `git diff main -- <path_filter>` from the repo root. Returns
-    `(ran_successfully, output)`. If `main` is unreachable (shallow clone,
-    detached HEAD with no remote), returns `(False, reason)` so the test
-    can skip gracefully rather than fail.
+    """Diff against the current remote main, with local main as fallback.
+
+    Returns ``(ran_successfully, output)``. If neither ref is reachable,
+    returns ``(False, reason)`` so the test can skip gracefully.
     """
     import subprocess
 
     repo_root = ORCHESTRATOR_DIR.parent.parent
-    # First confirm that the `main` ref is locally resolvable. In shallow
-    # CI clones or test fixtures this may not exist.
-    rev_parse = subprocess.run(
-        ["git", "-C", str(repo_root), "rev-parse", "--verify", "main"],
-        capture_output=True,
-        text=True,
-    )
-    if rev_parse.returncode != 0:
-        return (False, f"main ref unresolvable: {rev_parse.stderr.strip()}")
+    baseline = None
+    last_error = ""
+    for candidate in ("origin/main", "main"):
+        rev_parse = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "--verify", candidate],
+            capture_output=True,
+            text=True,
+        )
+        if rev_parse.returncode == 0:
+            baseline = candidate
+            break
+        last_error = rev_parse.stderr.strip()
+    if baseline is None:
+        return (False, f"main ref unresolvable: {last_error}")
     diff = subprocess.run(
-        ["git", "-C", str(repo_root), "diff", "main", "--", path_filter],
+        ["git", "-C", str(repo_root), "diff", baseline, "--", path_filter],
         capture_output=True,
         text=True,
     )
@@ -225,7 +230,7 @@ def _git_diff_against_main(path_filter: str) -> tuple[bool, str]:
 
 
 def test_bookkeeper_invariant_rka_untouched_by_agentic():
-    """git diff main -- rka/ MUST be empty on the agentic branch. Any
+    """git diff origin/main -- rka/ MUST be empty on the agentic branch. Any
     change under rka/ requires an explicit checkpoint per CLAUDE.md.
 
     Skips gracefully if `main` is unreachable (shallow clone, CI lane
@@ -237,7 +242,7 @@ def test_bookkeeper_invariant_rka_untouched_by_agentic():
     if not ran:
         pytest.skip(f"bookkeeper invariant test skipped: {output}")
     assert output == "", (
-        "BOOKKEEPER INVARIANT VIOLATED — git diff main -- rka/ is non-empty.\n"
+        "BOOKKEEPER INVARIANT VIOLATED — main baseline diff for rka/ is non-empty.\n"
         "Any change under rka/ on the agentic branch requires an explicit "
         "checkpoint + Brain greenlight per CLAUDE.md. The first 600 chars of "
         f"the diff:\n{output[:600]}"
@@ -245,7 +250,7 @@ def test_bookkeeper_invariant_rka_untouched_by_agentic():
 
 
 def test_worker_invariant_worker_py_untouched_by_agentic():
-    """git diff main -- rka/services/worker.py MUST be empty. Same
+    """git diff origin/main -- rka/services/worker.py MUST be empty. Same
     discipline as the bookkeeper invariant, scoped to the worker
     surface where a side-effect-divergence would break the embedding /
     enrichment pipeline."""
@@ -253,7 +258,7 @@ def test_worker_invariant_worker_py_untouched_by_agentic():
     if not ran:
         pytest.skip(f"worker invariant test skipped: {output}")
     assert output == "", (
-        "WORKER INVARIANT VIOLATED — git diff main -- rka/services/worker.py "
+        "WORKER INVARIANT VIOLATED — main baseline diff for rka/services/worker.py "
         f"is non-empty. First 600 chars:\n{output[:600]}"
     )
 

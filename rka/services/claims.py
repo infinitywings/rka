@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 
 from rka.infra.ids import generate_id
@@ -10,6 +12,11 @@ from rka.models.claim import (
     ClaimCreate,
     ClaimEdge,
     ClaimEdgeCreate,
+    ClaimScopeFinding,
+    ClaimScopeHistory,
+    ClaimScopeReadiness,
+    ClaimScopeVersion,
+    ClaimScopeWrite,
     ClaimUpdate,
     EvidenceStatus,
 )
@@ -21,6 +28,10 @@ logger = logging.getLogger(__name__)
 
 class ClaimNotFoundError(ValueError):
     """Raised when a claim is absent from the active project scope."""
+
+
+class ClaimScopeConflictError(ValueError):
+    """Raised when a scope append loses its optimistic revision race."""
 
 
 class ClaimService(BaseService):
@@ -48,13 +59,50 @@ class ClaimService(BaseService):
         ) AS contradicted
     """
 
+    _SCOPE_PROJECTION = """
+        scope.id AS scope_id,
+        scope.claim_id AS scope_claim_id,
+        scope.revision AS scope_version_revision,
+        scope.claim_content_hash AS scope_claim_content_hash,
+        scope.conditions AS scope_conditions,
+        scope.uncertainty AS scope_uncertainty,
+        scope.uncertainty_note AS scope_uncertainty_note,
+        scope.extension_policy AS scope_extension_policy,
+        scope.allowed_extensions AS scope_allowed_extensions,
+        scope.prohibited_extensions AS scope_prohibited_extensions,
+        scope.falsifier_status AS scope_falsifier_status,
+        scope.falsifier AS scope_falsifier,
+        scope.falsifier_rationale AS scope_falsifier_rationale,
+        scope.disconfirming_claim_ids AS scope_disconfirming_claim_ids,
+        scope.review_status AS scope_review_status,
+        scope.created_by AS scope_created_by,
+        scope.reason AS scope_reason,
+        scope.source_candidate_id AS scope_source_candidate_id,
+        scope.supersedes_scope_id AS scope_supersedes_scope_id,
+        scope.created_at AS scope_created_at
+    """
+
+    _SCOPE_JOIN = """
+        LEFT JOIN claim_scope_versions AS scope
+          ON scope.claim_id = c.id
+         AND scope.project_id = c.project_id
+         AND scope.revision = c.scope_revision
+    """
+
     def _job_dedupe_key(self, entity_id: str, operation: str) -> str:
         return f"{self.project_id}:claim:{entity_id}:{operation}"
 
     # ── CRUD ─────────────────────────────────────────────────
 
-    async def create(self, data: ClaimCreate) -> Claim:
-        """Create a new claim."""
+    async def create(self, data: ClaimCreate, *, actor: str = "llm") -> Claim:
+        """Create a new claim through an explicit canonical write.
+
+        ``actor`` is provenance only. Automated extraction now stops in
+        Interpretation Staging; direct callers retain this method for
+        intentionally canonical claims and candidate promotion composes it
+        transactionally.
+        """
+        self._validate_actor(actor)
         claim_id = generate_id("claim")
         async with self.db.transaction():
             source = await self.db.fetchone(
@@ -63,9 +111,7 @@ class ClaimService(BaseService):
                 [data.source_entry_id, self.project_id],
             )
             if source is None:
-                raise ValueError(
-                    "source journal entry is not available in this project"
-                )
+                raise ValueError("source journal entry is not available in this project")
             await self.db.execute(
                 """INSERT INTO claims
                    (id, source_entry_id, claim_type, content, confidence, verified,
@@ -93,7 +139,7 @@ class ClaimService(BaseService):
                 link_type="derived_from",
                 target_type="journal",
                 target_ids=[data.source_entry_id],
-                created_by="llm",
+                created_by=actor,
             )
 
             if self.embeddings:
@@ -107,13 +153,15 @@ class ClaimService(BaseService):
                     priority=125,
                 )
 
-            await self.audit("create", "claim", claim_id, "llm")
+            await self.audit("create", "claim", claim_id, actor)
         return await self.get(claim_id)
 
     async def get(self, claim_id: str) -> Claim | None:
         row = await self.db.fetchone(
-            f"""SELECT c.*, {self._CONTRADICTED_PROJECTION}
+            f"""SELECT c.*, {self._CONTRADICTED_PROJECTION},
+                       {self._SCOPE_PROJECTION}
                 FROM claims AS c
+                {self._SCOPE_JOIN}
                 WHERE c.id = ? AND c.project_id = ?""",
             [claim_id, self.project_id],
         )
@@ -164,17 +212,21 @@ class ClaimService(BaseService):
 
         if cluster_id:
             sql = f"""
-                SELECT c.*, {self._CONTRADICTED_PROJECTION}
+                SELECT c.*, {self._CONTRADICTED_PROJECTION},
+                       {self._SCOPE_PROJECTION}
                 FROM claims AS c
                 JOIN claim_edges AS membership
                   ON membership.source_claim_id = c.id
                  AND membership.relation = 'member_of'
+                {self._SCOPE_JOIN}
                 WHERE {where}
                 ORDER BY c.created_at DESC LIMIT ? OFFSET ?
             """
         else:
-            sql = f"""SELECT c.*, {self._CONTRADICTED_PROJECTION}
+            sql = f"""SELECT c.*, {self._CONTRADICTED_PROJECTION},
+                       {self._SCOPE_PROJECTION}
                 FROM claims AS c
+                {self._SCOPE_JOIN}
                 WHERE {where}
                 ORDER BY c.created_at DESC LIMIT ? OFFSET ?"""
 
@@ -187,8 +239,7 @@ class ClaimService(BaseService):
             current = await self.get(claim_id)
             if current is None:
                 raise ClaimNotFoundError(
-                    f"claim {claim_id!r} not found in project "
-                    f"{self.project_id}"
+                    f"claim {claim_id!r} not found in project {self.project_id}"
                 )
             return current
 
@@ -208,8 +259,7 @@ class ClaimService(BaseService):
             )
             if cursor.rowcount != 1:
                 raise ClaimNotFoundError(
-                    f"claim {claim_id!r} not found in project "
-                    f"{self.project_id}"
+                    f"claim {claim_id!r} not found in project {self.project_id}"
                 )
 
             # v2.7.0.7 — re-sync derived indexes when the searchable/embeddable
@@ -249,6 +299,162 @@ class ClaimService(BaseService):
         """Get all claims extracted from a specific journal entry."""
         return await self.list(source_entry_id=entry_id)
 
+    # ── Immutable claim-scope contracts ─────────────────────
+
+    async def get_scope_history(self, claim_id: str) -> ClaimScopeHistory | None:
+        claim = await self.get(claim_id)
+        if claim is None:
+            return None
+        rows = await self.db.fetchall(
+            """SELECT * FROM claim_scope_versions
+               WHERE claim_id = ? AND project_id = ?
+               ORDER BY revision DESC""",
+            [claim_id, self.project_id],
+        )
+        versions = [self._scope_row_to_model(row) for row in rows]
+        return ClaimScopeHistory(
+            claim_id=claim.id,
+            project_id=claim.project_id,
+            current_revision=claim.scope_revision,
+            scope_readiness=claim.scope_readiness,
+            findings=claim.scope_findings,
+            current=claim.scope_contract,
+            versions=versions,
+        )
+
+    async def append_scope(
+        self,
+        claim_id: str,
+        data: ClaimScopeWrite,
+    ) -> ClaimScopeHistory:
+        """Append and select one immutable, revision-guarded scope contract."""
+        self._validate_actor(data.actor)
+        async with self.db.transaction():
+            claim = await self.db.fetchone(
+                """SELECT id, claim_type, content, scope_revision
+                   FROM claims WHERE id = ? AND project_id = ?""",
+                [claim_id, self.project_id],
+            )
+            if claim is None:
+                raise ClaimNotFoundError(
+                    f"claim {claim_id!r} not found in project {self.project_id}"
+                )
+            current_revision = int(claim.get("scope_revision") or 0)
+            if current_revision != data.expected_revision:
+                raise ClaimScopeConflictError(
+                    "claim scope revision changed; reload before appending"
+                )
+
+            if data.source_candidate_id:
+                candidate = await self.db.fetchone(
+                    """SELECT 1 FROM interpretation_candidates
+                       WHERE id = ? AND project_id = ?""",
+                    [data.source_candidate_id, self.project_id],
+                )
+                if candidate is None:
+                    raise ValueError("source candidate is not available in this project")
+
+            if claim_id in data.disconfirming_claim_ids:
+                raise ValueError("a claim cannot disconfirm itself")
+            if data.disconfirming_claim_ids:
+                placeholders = ",".join("?" for _ in data.disconfirming_claim_ids)
+                rows = await self.db.fetchall(
+                    f"""SELECT id FROM claims
+                        WHERE project_id = ? AND id IN ({placeholders})""",
+                    [self.project_id, *data.disconfirming_claim_ids],
+                )
+                found = {row["id"] for row in rows}
+                missing = sorted(set(data.disconfirming_claim_ids) - found)
+                if missing:
+                    raise ValueError(
+                        "disconfirming claims are not available in this project: "
+                        + ", ".join(missing)
+                    )
+
+            supersedes_scope_id = None
+            if current_revision:
+                previous = await self.db.fetchone(
+                    """SELECT id FROM claim_scope_versions
+                       WHERE claim_id = ? AND project_id = ? AND revision = ?""",
+                    [claim_id, self.project_id, current_revision],
+                )
+                if previous is None:
+                    raise ClaimScopeConflictError(
+                        "claim scope pointer is inconsistent with immutable history"
+                    )
+                supersedes_scope_id = previous["id"]
+
+            scope_id = generate_id("claim_scope")
+            next_revision = current_revision + 1
+            content_hash = self._claim_content_hash(claim["claim_type"], claim["content"])
+            await self.db.execute(
+                """INSERT INTO claim_scope_versions (
+                       id, claim_id, project_id, revision, claim_content_hash,
+                       conditions, uncertainty, uncertainty_note,
+                       extension_policy, allowed_extensions,
+                       prohibited_extensions, falsifier_status, falsifier,
+                       falsifier_rationale, disconfirming_claim_ids,
+                       review_status, created_by, reason, source_candidate_id,
+                       supersedes_scope_id
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    scope_id,
+                    claim_id,
+                    self.project_id,
+                    next_revision,
+                    content_hash,
+                    json.dumps(
+                        [condition.model_dump(mode="json") for condition in data.conditions],
+                        sort_keys=True,
+                    ),
+                    data.uncertainty,
+                    data.uncertainty_note,
+                    data.extension_policy,
+                    json.dumps(data.allowed_extensions, sort_keys=True),
+                    json.dumps(data.prohibited_extensions, sort_keys=True),
+                    data.falsifier_status,
+                    data.falsifier,
+                    data.falsifier_rationale,
+                    json.dumps(data.disconfirming_claim_ids, sort_keys=True),
+                    data.review_status,
+                    data.actor,
+                    data.reason,
+                    data.source_candidate_id,
+                    supersedes_scope_id,
+                ],
+            )
+            cursor = await self.db.execute(
+                """UPDATE claims SET scope_revision = ?, updated_at = ?
+                   WHERE id = ? AND project_id = ? AND scope_revision = ?""",
+                [
+                    next_revision,
+                    _now(),
+                    claim_id,
+                    self.project_id,
+                    data.expected_revision,
+                ],
+            )
+            if cursor.rowcount != 1:
+                raise ClaimScopeConflictError(
+                    "claim scope revision changed; reload before appending"
+                )
+            await self.audit(
+                "create",
+                "claim_scope",
+                scope_id,
+                data.actor,
+                {
+                    "claim_id": claim_id,
+                    "revision": next_revision,
+                    "review_status": data.review_status,
+                },
+            )
+
+        history = await self.get_scope_history(claim_id)
+        if history is None:  # pragma: no cover - claim exists transactionally
+            raise ClaimNotFoundError(f"claim {claim_id!r} disappeared")
+        return history
+
     # ── Claim Edges ──────────────────────────────────────────
 
     async def create_edge(self, data: ClaimEdgeCreate) -> ClaimEdge:
@@ -256,18 +462,12 @@ class ClaimService(BaseService):
         async with self.db.transaction():
             if data.relation == "member_of":
                 if data.cluster_id is None or data.target_claim_id is not None:
-                    raise ValueError(
-                        "member_of edges require one cluster and no target claim"
-                    )
+                    raise ValueError("member_of edges require one cluster and no target claim")
             elif data.relation == "contradicts":
                 if data.target_claim_id is None and data.cluster_id is None:
-                    raise ValueError(
-                        "contradicts edges require a target claim or cluster"
-                    )
+                    raise ValueError("contradicts edges require a target claim or cluster")
             elif data.target_claim_id is None:
-                raise ValueError(
-                    f"{data.relation} edges require a target claim"
-                )
+                raise ValueError(f"{data.relation} edges require a target claim")
             if data.target_claim_id == data.source_claim_id:
                 raise ValueError("claim edges cannot target their source claim")
 
@@ -277,9 +477,7 @@ class ClaimService(BaseService):
                 [data.source_claim_id, self.project_id],
             )
             if source is None:
-                raise ValueError(
-                    "source claim is not available in this project"
-                )
+                raise ValueError("source claim is not available in this project")
             if data.target_claim_id is not None:
                 target = await self.db.fetchone(
                     """SELECT 1 FROM claims
@@ -287,9 +485,7 @@ class ClaimService(BaseService):
                     [data.target_claim_id, self.project_id],
                 )
                 if target is None:
-                    raise ValueError(
-                        "target claim is not available in this project"
-                    )
+                    raise ValueError("target claim is not available in this project")
             if data.cluster_id is not None:
                 cluster = await self.db.fetchone(
                     """SELECT 1 FROM evidence_clusters
@@ -297,9 +493,7 @@ class ClaimService(BaseService):
                     [data.cluster_id, self.project_id],
                 )
                 if cluster is None:
-                    raise ValueError(
-                        "cluster is not available in this project"
-                    )
+                    raise ValueError("cluster is not available in this project")
             await self.db.execute(
                 """INSERT INTO claim_edges
                    (id, source_claim_id, target_claim_id, cluster_id, relation,
@@ -367,7 +561,7 @@ class ClaimService(BaseService):
     # ── Background job handlers ──────────────────────────────
 
     async def process_extract_claims_job(self, entry_id: str) -> dict:
-        """Extract claims from a journal entry using the LLM."""
+        """Extract reviewable interpretation candidates from a journal entry."""
         row = await self.db.fetchone(
             "SELECT content FROM journal WHERE id = ? AND project_id = ?",
             [entry_id, self.project_id],
@@ -377,29 +571,77 @@ class ClaimService(BaseService):
         if not self.llm:
             return {"outcome": "skipped", "reason": "llm_disabled"}
 
-        # Get existing claims for dedup
-        existing = await self.db.fetchall(
+        # Give the model both canonical and staged statements as duplicate
+        # context. The model output is still only a hint; no row is promoted.
+        existing_claims = await self.db.fetchall(
             "SELECT content FROM claims WHERE source_entry_id = ? AND project_id = ? AND stale = 0",
             [entry_id, self.project_id],
         )
-        existing_contents = [r["content"] for r in existing]
+        existing_candidates = await self.db.fetchall(
+            """SELECT statement FROM interpretation_candidates
+               WHERE source_type = 'journal' AND source_id = ?
+                 AND project_id = ?""",
+            [entry_id, self.project_id],
+        )
+        existing_contents = [r["content"] for r in existing_claims]
+        existing_contents.extend(r["statement"] for r in existing_candidates)
 
         # Extract claims via LLM
         result = await self.llm.extract_claims(row["content"], existing_contents or None)
 
+        from rka.models.interpretation import InterpretationCandidateCreate
+        from rka.services.interpretation import InterpretationService
+
+        interpretation = InterpretationService(self.db, project_id=self.project_id)
+        extraction_model = (
+            getattr(getattr(self.llm, "config", None), "llm_model", None)
+            or self.llm.__class__.__name__
+        )
+
         created_ids = []
         async with self.db.transaction():
             for extracted in result.claims:
-                claim = await self.create(ClaimCreate(
-                    source_entry_id=entry_id,
-                    claim_type=extracted.claim_type,
-                    content=extracted.content,
-                    source_offset_start=extracted.source_offset_start,
-                    source_offset_end=extracted.source_offset_end,
-                ))
-                created_ids.append(claim.id)
+                start = extracted.source_offset_start
+                end = extracted.source_offset_end
+                if start is None:
+                    locator_kind = "record"
+                    locator_value = "full_record"
+                else:
+                    locator_kind = "text_offset"
+                    locator_value = None
+                epistemic_kind = {
+                    "hypothesis": "hypothesis",
+                    "observation": "observation",
+                    "evidence": "reported_fact",
+                    "result": "reported_fact",
+                    "method": "reported_fact",
+                    "assumption": "hypothesis",
+                }.get(extracted.claim_type, "inference")
+                candidate = await interpretation.create(
+                    InterpretationCandidateCreate(
+                        source_type="journal",
+                        source_id=entry_id,
+                        locator_kind=locator_kind,
+                        locator_start=start,
+                        locator_end=end,
+                        locator_value=locator_value,
+                        statement=extracted.content,
+                        epistemic_kind=epistemic_kind,
+                        proposed_claim_type=extracted.claim_type,
+                        created_by="llm",
+                        extraction_tool="rka_background_claim_extractor",
+                        extraction_model=extraction_model,
+                    )
+                )
+                created_ids.append(candidate.id)
 
-        return {"outcome": "updated", "claims_created": len(created_ids), "claim_ids": created_ids}
+        return {
+            "outcome": "updated",
+            "candidates_created": len(created_ids),
+            "candidate_ids": created_ids,
+            "claims_created": 0,
+            "claim_ids": [],
+        }
 
     async def process_verify_claim_job(self, claim_id: str) -> dict:
         """Verify extraction fidelity against source text.
@@ -471,28 +713,36 @@ class ClaimService(BaseService):
         if not self.embeddings:
             return {"outcome": "skipped", "reason": "embeddings_disabled"}
 
-        await self.embeddings.embed_and_store("claim", claim_id, row["content"], project_id=self.project_id)
+        await self.embeddings.embed_and_store(
+            "claim", claim_id, row["content"], project_id=self.project_id
+        )
         return {"outcome": "updated", "char_count": len(row["content"])}
 
     async def _flag_for_review(self, item_id: str, item_type: str, issues: list[str]) -> None:
         """Flag an item for Brain review."""
-        import json
         review_id = generate_id("review")
         await self.db.execute(
             """INSERT OR IGNORE INTO review_queue
                (id, item_type, item_id, flag, context, priority, project_id)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             [
-                review_id, item_type, item_id, "low_confidence_cluster",
-                json.dumps({"issues": issues}), 80, self.project_id,
+                review_id,
+                item_type,
+                item_id,
+                "low_confidence_cluster",
+                json.dumps({"issues": issues}),
+                80,
+                self.project_id,
             ],
         )
         await self.db.commit()
 
     # ── Helpers ──────────────────────────────────────────────
 
-    @staticmethod
-    def _row_to_model(row: dict) -> Claim:
+    @classmethod
+    def _row_to_model(cls, row: dict) -> Claim:
+        scope = cls._scope_projection_to_model(row)
+        readiness, findings = cls._assess_scope(row, scope)
         return Claim(
             id=row["id"],
             source_entry_id=row["source_entry_id"],
@@ -505,10 +755,202 @@ class ClaimService(BaseService):
             stale=bool(row.get("stale", 0)),
             source_offset_start=row.get("source_offset_start"),
             source_offset_end=row.get("source_offset_end"),
+            scope_revision=int(row.get("scope_revision") or 0),
+            scope_readiness=readiness,
+            scope_contract=scope,
+            scope_findings=findings,
             project_id=row["project_id"],
             created_at=row.get("created_at"),
             updated_at=row.get("updated_at"),
         )
+
+    @staticmethod
+    def _claim_content_hash(claim_type: str, content: str) -> str:
+        material = f"{claim_type}\0{content}".encode("utf-8")
+        return hashlib.sha256(material).hexdigest()
+
+    @staticmethod
+    def _json_list(raw: object) -> list:
+        if isinstance(raw, list):
+            return raw
+        if not isinstance(raw, str) or not raw:
+            return []
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, list) else []
+
+    @classmethod
+    def _scope_projection_to_model(cls, row: dict) -> ClaimScopeVersion | None:
+        if not row.get("scope_id"):
+            return None
+        return ClaimScopeVersion(
+            id=row["scope_id"],
+            claim_id=row["scope_claim_id"],
+            project_id=row["project_id"],
+            revision=int(row["scope_version_revision"]),
+            claim_content_hash=row["scope_claim_content_hash"],
+            conditions=cls._json_list(row.get("scope_conditions")),
+            uncertainty=row.get("scope_uncertainty") or "unknown",
+            uncertainty_note=row.get("scope_uncertainty_note"),
+            extension_policy=row.get("scope_extension_policy"),
+            allowed_extensions=cls._json_list(row.get("scope_allowed_extensions")),
+            prohibited_extensions=cls._json_list(row.get("scope_prohibited_extensions")),
+            falsifier_status=row.get("scope_falsifier_status") or "unknown",
+            falsifier=row.get("scope_falsifier"),
+            falsifier_rationale=row.get("scope_falsifier_rationale"),
+            disconfirming_claim_ids=cls._json_list(row.get("scope_disconfirming_claim_ids")),
+            review_status=row.get("scope_review_status") or "draft",
+            created_by=row.get("scope_created_by") or "import",
+            reason=row.get("scope_reason") or "Imported scope history",
+            source_candidate_id=row.get("scope_source_candidate_id"),
+            supersedes_scope_id=row.get("scope_supersedes_scope_id"),
+            created_at=row.get("scope_created_at"),
+        )
+
+    @classmethod
+    def _scope_row_to_model(cls, row: dict) -> ClaimScopeVersion:
+        return ClaimScopeVersion(
+            id=row["id"],
+            claim_id=row["claim_id"],
+            project_id=row["project_id"],
+            revision=int(row["revision"]),
+            claim_content_hash=row["claim_content_hash"],
+            conditions=cls._json_list(row.get("conditions")),
+            uncertainty=row.get("uncertainty") or "unknown",
+            uncertainty_note=row.get("uncertainty_note"),
+            extension_policy=row.get("extension_policy"),
+            allowed_extensions=cls._json_list(row.get("allowed_extensions")),
+            prohibited_extensions=cls._json_list(row.get("prohibited_extensions")),
+            falsifier_status=row.get("falsifier_status") or "unknown",
+            falsifier=row.get("falsifier"),
+            falsifier_rationale=row.get("falsifier_rationale"),
+            disconfirming_claim_ids=cls._json_list(row.get("disconfirming_claim_ids")),
+            review_status=row.get("review_status") or "draft",
+            created_by=row["created_by"],
+            reason=row["reason"],
+            source_candidate_id=row.get("source_candidate_id"),
+            supersedes_scope_id=row.get("supersedes_scope_id"),
+            created_at=row.get("created_at"),
+        )
+
+    @classmethod
+    def _assess_scope(
+        cls,
+        row: dict,
+        scope: ClaimScopeVersion | None,
+    ) -> tuple[ClaimScopeReadiness, list[ClaimScopeFinding]]:
+        findings: list[ClaimScopeFinding] = []
+
+        def add(code: str, severity: str, message: str) -> None:
+            findings.append(
+                ClaimScopeFinding(
+                    code=code,
+                    severity=severity,
+                    message=message,
+                )
+            )
+
+        if scope is None:
+            readiness: ClaimScopeReadiness = "missing"
+            add(
+                "CLAIM_SCOPE_MISSING",
+                "block",
+                "canonical claim has no reviewed reuse boundary",
+            )
+            if int(row.get("scope_revision") or 0) > 0:
+                add(
+                    "CLAIM_SCOPE_POINTER_BROKEN",
+                    "block",
+                    "claim scope pointer does not resolve to immutable history",
+                )
+        elif scope.claim_content_hash != cls._claim_content_hash(row["claim_type"], row["content"]):
+            readiness = "stale"
+            add(
+                "CLAIM_SCOPE_STALE",
+                "block",
+                "claim content or type changed after this scope version",
+            )
+        else:
+            incomplete = False
+            checks = [
+                (
+                    not scope.conditions,
+                    "CLAIM_SCOPE_CONDITIONS_MISSING",
+                    "at least one applicability condition is required",
+                ),
+                (
+                    scope.uncertainty == "unknown",
+                    "CLAIM_SCOPE_UNCERTAINTY_UNKNOWN",
+                    "uncertainty has not been resolved",
+                ),
+                (
+                    scope.extension_policy is None,
+                    "CLAIM_SCOPE_EXTENSION_POLICY_MISSING",
+                    "exact-only or bounded extension policy is required",
+                ),
+                (
+                    scope.extension_policy == "bounded" and not scope.allowed_extensions,
+                    "CLAIM_SCOPE_ALLOWED_EXTENSIONS_MISSING",
+                    "bounded policy requires at least one allowed extension",
+                ),
+                (
+                    not scope.prohibited_extensions,
+                    "CLAIM_SCOPE_PROHIBITED_EXTENSIONS_MISSING",
+                    "at least one prohibited extension is required",
+                ),
+                (
+                    scope.falsifier_status == "unknown",
+                    "CLAIM_SCOPE_FALSIFIER_UNRESOLVED",
+                    "falsifier applicability has not been resolved",
+                ),
+            ]
+            for failed, code, message in checks:
+                if failed:
+                    incomplete = True
+                    add(code, "block", message)
+            if incomplete:
+                readiness = "incomplete"
+            elif scope.review_status != "reviewed":
+                readiness = "needs_review"
+                add(
+                    "CLAIM_SCOPE_REVIEW_REQUIRED",
+                    "block",
+                    "complete scope contract has not been explicitly reviewed",
+                )
+            else:
+                readiness = "ready"
+
+            if scope.disconfirming_claim_ids:
+                add(
+                    "CLAIM_SCOPE_DISCONFIRMING_OBSERVATIONS",
+                    "warn",
+                    "scope cites canonical claims that may bound or disconfirm use",
+                )
+
+        if bool(row.get("stale", 0)):
+            add(
+                "CLAIM_NOT_CURRENT",
+                "block",
+                "claim is marked stale independently of its scope contract",
+            )
+        if bool(row.get("contradicted", 0)):
+            add(
+                "CLAIM_CONTRADICTION_PRESENT",
+                "block",
+                "claim graph contains an unresolved contradiction",
+            )
+        if row.get("evidence_status") == "contradicted":
+            add(
+                "CLAIM_EVIDENCE_CONTRADICTED",
+                "block",
+                "scientific evidence assessment is contradicted",
+            )
+        elif row.get("evidence_status") == "unassessed":
+            add(
+                "CLAIM_EVIDENCE_UNASSESSED",
+                "info",
+                "scope readiness does not establish scientific support",
+            )
+        return readiness, findings
 
     @staticmethod
     def _edge_to_model(row: dict) -> ClaimEdge:

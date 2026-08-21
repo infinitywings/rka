@@ -298,6 +298,60 @@ async def test_canonical_reference_attestation_is_manuscript_wide(db) -> None:
 
 
 @pytest.mark.asyncio
+async def test_typed_citation_change_maps_to_exact_unit_and_adjacent_claim(db) -> None:
+    project_id = "prj_citation_impact"
+    await _seed_project(db, project_id)
+    await _seed_core_claim(
+        db,
+        project_id=project_id,
+        journal_id="jrn_bound",
+        claim_id="clm_bound",
+    )
+    await _seed_native_manuscript(db, project_id)
+    await db.execute(
+        """INSERT INTO literature
+           (id, title, authors, year, doi, status, added_by, project_id)
+           VALUES ('lit_cursor', 'Prior baseline', '[]', 2025,
+                   '10.1000/cursor', 'cited', 'pi', ?)""",
+        [project_id],
+    )
+    await db.execute(
+        """INSERT INTO manuscript_reference_members
+           (id, manuscript_id, project_id, citation_key, literature_id)
+           VALUES ('mrf_cursor', 'man_cursor', ?, 'prior2025', 'lit_cursor')""",
+        [project_id],
+    )
+    await db.commit()
+    baseline = await _latest_cursor(db)
+
+    await db.execute(
+        """INSERT INTO manuscript_unit_citations
+           (id, manuscript_id, project_id, unit_id, reference_member_id,
+            citation_role, supported_proposition, verification_state)
+           VALUES ('muc_cursor', 'man_cursor', ?, 'mun_cursor', 'mrf_cursor',
+                   'baseline', 'The result uses the prior baseline.',
+                   'self_attested')""",
+        [project_id],
+    )
+    await db.commit()
+
+    impact = await ChangeTrackingService(
+        db, project_id=project_id
+    ).get_manuscript_impact("man_cursor", since_cursor=baseline)
+    assert impact["impact_state"] == "relevant_changes"
+    assert [item["id"] for item in impact["affected_units"]] == ["mun_cursor"]
+    assert [item["id"] for item in impact["affected_manuscript_claims"]] == [
+        "mcl_cursor"
+    ]
+    citation_change = next(
+        item
+        for item in impact["relevant_changes"]
+        if item["entity_type"] == "manuscript_citation"
+    )
+    assert citation_change["affected_unit_ids"] == ["mun_cursor"]
+
+
+@pytest.mark.asyncio
 async def test_active_reference_literature_change_is_manuscript_wide(db) -> None:
     project_id = "prj_reference_literature_impact"
     await _seed_project(db, project_id)
@@ -484,3 +538,120 @@ async def test_unrelated_changes_do_not_leak_into_manuscript_changed_sources(db)
     ).get_manuscript_impact("man_cursor", since_cursor=baseline)
     assert impact["impact_state"] == "no_relevant_changes"
     assert impact["changed_sources"] == []
+
+
+@pytest.mark.asyncio
+async def test_experiment_locator_change_maps_through_reviewed_claim_to_writer(db) -> None:
+    project_id = "prj_experiment_impact"
+    await _seed_project(db, project_id)
+    await _seed_core_claim(
+        db,
+        project_id=project_id,
+        journal_id="jrn_bound",
+        claim_id="clm_bound",
+    )
+    await _seed_native_manuscript(db, project_id)
+    await db.execute(
+        """INSERT INTO experiments (
+               id, project_id, title, status, current_plan_version,
+               revision, created_by
+           ) VALUES (
+               'exp_impact', ?, 'Impact experiment', 'active', 1, 2, 'brain'
+           )""",
+        [project_id],
+    )
+    await db.execute(
+        """INSERT INTO experiment_plan_versions (
+               id, experiment_id, project_id, version, objective, protocol,
+               created_by, reason
+           ) VALUES (
+               'epv_impact', 'exp_impact', ?, 1, 'Test bounded result',
+               'Run exact benchmark', 'brain', 'Test manuscript evidence'
+           )""",
+        [project_id],
+    )
+    await db.execute(
+        """INSERT INTO experiment_runs (
+               id, experiment_id, project_id, plan_version, label, runner,
+               status, started_at, revision, created_by
+           ) VALUES (
+               'run_impact', 'exp_impact', ?, 1, 'impact run', 'local',
+               'running', '2026-08-15T12:00:00Z', 2, 'executor'
+           )""",
+        [project_id],
+    )
+    await db.execute(
+        """INSERT INTO experiment_observations (
+               id, run_id, project_id, name, kind, direction, summary,
+               value_real, unit, observed_at, recorded_by
+           ) VALUES (
+               'obs_impact', 'run_impact', ?, 'bounded result', 'metric',
+               'positive', 'The bounded result was measured.', 1.0, 'score',
+               '2026-08-15T12:01:00Z', 'executor'
+           )""",
+        [project_id],
+    )
+    await db.execute(
+        """INSERT INTO interpretation_candidates (
+               id, project_id, source_type, source_id, locator_kind,
+               locator_value, statement, epistemic_kind, created_by,
+               extraction_tool, review_status, disposition,
+               disposition_reason, disposition_target_type,
+               disposition_target_id, reviewed_by, reviewed_at, revision
+           ) VALUES (
+               'icd_impact', ?, 'experiment_observation', 'obs_impact',
+               'record', 'full_record', 'The bounded result was measured.',
+               'observation', 'brain', 'impact_test', 'resolved',
+               'classified_evidence', 'Reviewed exact evidence.', 'claim',
+               'clm_bound', 'pi', '2026-08-15T12:02:00Z', 2
+           )""",
+        [project_id],
+    )
+    await db.execute(
+        """INSERT INTO claim_evidence_relations (
+               id, project_id, claim_id, observation_id, candidate_id,
+               role, reviewed_by, review_reason
+           ) VALUES (
+               'evr_impact', ?, 'clm_bound', 'obs_impact', 'icd_impact',
+               'support', 'pi', 'Reviewed exact evidence.'
+           )""",
+        [project_id],
+    )
+    await db.commit()
+    baseline = await _latest_cursor(db)
+
+    await db.execute(
+        """INSERT INTO evidence_locators (
+               id, observation_id, project_id, source_kind, repository_url,
+               commit_sha, relative_path, locator_kind, locator_value,
+               content_hash, created_by
+           ) VALUES (
+               'elc_impact', 'obs_impact', ?, 'repository',
+               'https://github.com/example/evaluation',
+               '0123456789abcdef0123456789abcdef01234567',
+               'results/impact.json', 'json_pointer', '/result', ?, 'executor'
+           )""",
+        [project_id, "c" * 64],
+    )
+    await db.commit()
+
+    impact = await ChangeTrackingService(
+        db, project_id=project_id
+    ).get_manuscript_impact("man_cursor", since_cursor=baseline)
+
+    assert impact["impact_state"] == "relevant_changes"
+    assert impact["changed_evidence_claim_ids"] == ["clm_bound"]
+    assert [item["id"] for item in impact["affected_manuscript_claims"]] == [
+        "mcl_cursor"
+    ]
+    assert [item["id"] for item in impact["affected_units"]] == ["mun_cursor"]
+    assert impact["file_locations"] == ["sections/results.tex#bounded-result"]
+    assert impact["relevant_changes"][0]["source_table"] == "evidence_locators"
+    assert {
+        (item["entity_type"], item["entity_id"])
+        for item in impact["changed_sources"]
+    } >= {
+        ("evidence_locator", "elc_impact"),
+        ("experiment_observation", "obs_impact"),
+        ("claim", "clm_bound"),
+    }

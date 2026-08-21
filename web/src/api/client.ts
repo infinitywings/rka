@@ -45,16 +45,32 @@ async function parseApiError(res: Response): Promise<never> {
   let detail = res.statusText
   try {
     const body = await res.json()
-    detail = body.detail || JSON.stringify(body)
+    detail = formatApiDetail(body.detail ?? body)
   } catch {
     // use statusText
   }
   throw new ApiError(res.status, detail)
 }
 
+function formatApiDetail(value: unknown): string {
+  if (typeof value === "string") return value
+  if (Array.isArray(value)) {
+    return value.map((item) => {
+      if (item && typeof item === "object" && "msg" in item) {
+        const issue = item as { loc?: unknown; msg: unknown }
+        const location = Array.isArray(issue.loc) ? issue.loc.join(".") : "request"
+        return `${location}: ${String(issue.msg)}`
+      }
+      return formatApiDetail(item)
+    }).join("; ")
+  }
+  if (value && typeof value === "object") return JSON.stringify(value)
+  return String(value)
+}
+
 function getFilenameFromDisposition(disposition: string | null, fallback: string): string {
   if (!disposition) return fallback
-  const match = disposition.match(/filename=\"?([^\";]+)\"?/)
+  const match = disposition.match(/filename="?([^";]+)"?/)
   return match?.[1] ?? fallback
 }
 
@@ -148,6 +164,43 @@ import type {
   ReportContextResult,
   StalenessReviewFiling,
   LinkSupportAudit,
+  ManuscriptContext,
+  ManuscriptImpact,
+  ManuscriptReadiness,
+  ManuscriptSpine,
+  ManuscriptOutline,
+  ManuscriptSourceFile,
+  ManuscriptSourceOverview,
+  ManuscriptSourceProposal,
+  ManuscriptSourceProposalCreate,
+  OutlineProposalRequest,
+  OutlineProposalResult,
+  ManuscriptWritingCandidates,
+  InterpretationCandidate,
+  InterpretationCandidateDetail,
+  InterpretationReviewStatus,
+  InterpretationTriageRequest,
+  ClaimScopeHistory,
+  ClaimScopeReadiness,
+  ClaimScopeWrite,
+  PlanningBranch,
+  PlanningBranchComparison,
+  PlanningBranchCreate,
+  PlanningBranchTransition,
+  PlanningContext,
+  PlanningArgumentWorkflow,
+  PlanningPromotionEvent,
+  PlanningResearchQuestionPromotion,
+  PlanningContributionProposalPrepare,
+  PlanningContributionRatification,
+  PlanningEvaluationWorkflow,
+  PlanningEvaluationEvent,
+  PlanningEvaluationMissionCreate,
+  PlanningEvaluationResultProposalPrepare,
+  SemanticPatchProposal,
+  SemanticPatchProposalCreate,
+  SemanticPatchTransition,
+  LMStudioSemanticPatchRequest,
 } from "./types"
 
 export const api = {
@@ -389,15 +442,64 @@ export const api = {
     put<EvidenceClusterData>(`/clusters/${clusterId}`, data),
 
   // v2.0: Claims
-  listClaims: (params?: { source_entry_id?: string; cluster_id?: string; claim_type?: string; limit?: number }) => {
+  listClaims: (params?: {
+    source_entry_id?: string
+    cluster_id?: string
+    claim_type?: string
+    limit?: number
+    scope_readiness?: ClaimScopeReadiness
+  }) => {
     const search = new URLSearchParams()
     if (params?.source_entry_id) search.set("source_entry_id", params.source_entry_id)
     if (params?.cluster_id) search.set("cluster_id", params.cluster_id)
     if (params?.claim_type) search.set("claim_type", params.claim_type)
     if (params?.limit) search.set("limit", String(params.limit))
     const qs = search.toString()
-    return get<ClaimData[]>(`/claims${qs ? `?${qs}` : ""}`)
+    return get<ClaimData[]>(`/claims${qs ? `?${qs}` : ""}`).then((claims) => (
+      params?.scope_readiness
+        ? claims.filter((claim) => claim.scope_readiness === params.scope_readiness)
+        : claims
+    ))
   },
+  getClaimScope: (claimId: string) =>
+    get<ClaimScopeHistory>(`/claims/${encodeURIComponent(claimId)}/scope`),
+  appendClaimScope: (claimId: string, data: ClaimScopeWrite) =>
+    post<ClaimScopeHistory>(
+      `/claims/${encodeURIComponent(claimId)}/scope`,
+      data,
+    ),
+
+  // M1: reviewable source interpretations. A candidate is not a claim until
+  // the explicit, revision-guarded promote action succeeds.
+  listInterpretationCandidates: (params?: {
+    review_status?: InterpretationReviewStatus
+    disposition?: string
+    epistemic_kind?: string
+    source_type?: string
+    source_id?: string
+    limit?: number
+  }) => {
+    const search = new URLSearchParams()
+    if (params?.review_status) search.set("review_status", params.review_status)
+    if (params?.disposition) search.set("disposition", params.disposition)
+    if (params?.epistemic_kind) search.set("epistemic_kind", params.epistemic_kind)
+    if (params?.source_type) search.set("source_type", params.source_type)
+    if (params?.source_id) search.set("source_id", params.source_id)
+    search.set("limit", String(params?.limit ?? 200))
+    return get<InterpretationCandidate[]>(`/interpretations?${search.toString()}`)
+  },
+  getInterpretationCandidate: (candidateId: string) =>
+    get<InterpretationCandidateDetail>(
+      `/interpretations/${encodeURIComponent(candidateId)}`,
+    ),
+  triageInterpretationCandidate: (
+    candidateId: string,
+    data: InterpretationTriageRequest,
+  ) =>
+    post<InterpretationCandidateDetail>(
+      `/interpretations/${encodeURIComponent(candidateId)}/triage`,
+      data,
+    ),
 
   // v2.0: Review Queue
   getReviewQueue: (params?: { status?: string; limit?: number }) => {
@@ -425,6 +527,168 @@ export const api = {
     post<StalenessReviewFiling>("/verification/file-staleness-reviews"),
   auditLinkSupport: (limit = 200) =>
     get<LinkSupportAudit>(`/verification/link-support?limit=${limit}`),
+
+  // Native manuscript workbench. Reads are canonical projections; outline
+  // edits prepare semantic proposals and never bypass explicit apply.
+  getManuscriptContext: (manuscriptId: string) =>
+    get<ManuscriptContext>(`/manuscripts/${encodeURIComponent(manuscriptId)}/context`),
+  getManuscriptSpine: (manuscriptId: string) =>
+    get<ManuscriptSpine>(`/manuscripts/${encodeURIComponent(manuscriptId)}/spine`),
+  getManuscriptOutline: (manuscriptId: string) =>
+    get<ManuscriptOutline>(`/manuscripts/${encodeURIComponent(manuscriptId)}/outline`),
+  prepareManuscriptOutlineProposal: (
+    manuscriptId: string,
+    data: OutlineProposalRequest,
+  ) => post<OutlineProposalResult>(
+    `/manuscripts/${encodeURIComponent(manuscriptId)}/outline/proposals`, data,
+  ),
+  createManuscriptCheckpoint: (
+    manuscriptId: string,
+    data: {
+      expected_revision: number
+      kind: string
+      unit_id?: string
+      supersedes_id?: string
+    },
+  ) => post<Record<string, unknown>>(
+    `/manuscripts/${encodeURIComponent(manuscriptId)}/checkpoints`, data,
+  ),
+  getManuscriptWritingCandidates: (manuscriptId: string) =>
+    get<ManuscriptWritingCandidates>(
+      `/manuscripts/${encodeURIComponent(manuscriptId)}/writing-candidates`,
+    ),
+  getManuscriptReadiness: (manuscriptId: string, targetPhase = "drafting") =>
+    get<ManuscriptReadiness>(
+      `/manuscripts/${encodeURIComponent(manuscriptId)}/readiness?target_phase=${encodeURIComponent(targetPhase)}`,
+    ),
+  getManuscriptImpact: (manuscriptId: string, sinceCursor = 0, limit = 100) =>
+    get<ManuscriptImpact>(
+      `/manuscripts/${encodeURIComponent(manuscriptId)}/impact?since_cursor=${sinceCursor}&limit=${limit}`,
+    ),
+  getManuscriptSourceOverview: (manuscriptId: string) =>
+    get<ManuscriptSourceOverview>(
+      `/manuscripts/${encodeURIComponent(manuscriptId)}/source`,
+    ),
+  readManuscriptSource: (manuscriptId: string, relativePath: string) =>
+    post<ManuscriptSourceFile>(
+      `/manuscripts/${encodeURIComponent(manuscriptId)}/source/read`,
+      { relative_path: relativePath },
+    ),
+  listManuscriptSourceProposals: (manuscriptId: string) =>
+    get<ManuscriptSourceProposal[]>(
+      `/manuscripts/${encodeURIComponent(manuscriptId)}/source/proposals`,
+    ),
+  getManuscriptSourceProposal: (proposalId: string) =>
+    get<ManuscriptSourceProposal>(
+      `/manuscript-source-proposals/${encodeURIComponent(proposalId)}`,
+    ),
+  createManuscriptSourceProposal: (
+    manuscriptId: string,
+    data: ManuscriptSourceProposalCreate,
+  ) => post<ManuscriptSourceProposal>(
+    `/manuscripts/${encodeURIComponent(manuscriptId)}/source/proposals`, data,
+  ),
+  applyManuscriptSourceProposal: (proposalId: string, expectedRevision: number, reason: string) =>
+    post<ManuscriptSourceProposal>(
+      `/manuscript-source-proposals/${encodeURIComponent(proposalId)}/apply`,
+      { expected_revision: expectedRevision, actor: "web_ui", reason },
+    ),
+  rejectManuscriptSourceProposal: (proposalId: string, expectedRevision: number, reason: string) =>
+    post<ManuscriptSourceProposal>(
+      `/manuscript-source-proposals/${encodeURIComponent(proposalId)}/reject`,
+      { expected_revision: expectedRevision, actor: "web_ui", reason },
+    ),
+
+  // Versioned, provisional workbench deliberation. These writes never mutate
+  // canonical manuscript claims or authoring files.
+  listPlanningBranches: (manuscriptId: string | null, includeArchived = true) => {
+    const search = new URLSearchParams()
+    if (manuscriptId) search.set("manuscript_id", manuscriptId)
+    search.set("include_archived", String(includeArchived))
+    return get<PlanningBranch[]>(`/planning/branches?${search.toString()}`)
+  },
+  resumePlanningBranch: (manuscriptId: string | null) => {
+    const query = manuscriptId ? `?manuscript_id=${encodeURIComponent(manuscriptId)}` : ""
+    return get<PlanningContext | null>(`/planning/resume${query}`)
+  },
+  createPlanningBranch: (data: PlanningBranchCreate) =>
+    post<PlanningContext>("/planning/branches", data),
+  transitionPlanningBranch: (branchId: string, data: PlanningBranchTransition) =>
+    post<PlanningContext>(
+      `/planning/branches/${encodeURIComponent(branchId)}/transition`,
+      data,
+    ),
+  comparePlanningBranches: (baseBranchId: string, otherBranchId: string) => {
+    const search = new URLSearchParams({
+      base_branch_id: baseBranchId,
+      other_branch_id: otherBranchId,
+    })
+    return get<PlanningBranchComparison>(`/planning/branches/compare?${search.toString()}`)
+  },
+  getPlanningArgumentWorkflow: (branchId: string) =>
+    get<PlanningArgumentWorkflow>(
+      `/planning/branches/${encodeURIComponent(branchId)}/argument-workflow`,
+    ),
+  getPlanningEvaluationWorkflow: (branchId: string) =>
+    get<PlanningEvaluationWorkflow>(
+      `/planning/branches/${encodeURIComponent(branchId)}/evaluation-workflow`,
+    ),
+  listPlanningEvaluationEvents: (branchId: string) =>
+    get<PlanningEvaluationEvent[]>(
+      `/planning/branches/${encodeURIComponent(branchId)}/evaluation-events`,
+    ),
+  listPlanningPromotions: (branchId: string) =>
+    get<PlanningPromotionEvent[]>(
+      `/planning/branches/${encodeURIComponent(branchId)}/promotions`,
+    ),
+  promotePlanningResearchQuestion: (
+    branchId: string,
+    data: PlanningResearchQuestionPromotion,
+  ) => post<Record<string, unknown>>(
+    `/planning/branches/${encodeURIComponent(branchId)}/promote-rq`, data,
+  ),
+  preparePlanningContribution: (
+    branchId: string,
+    data: PlanningContributionProposalPrepare,
+  ) => post<Record<string, unknown>>(
+    `/planning/branches/${encodeURIComponent(branchId)}/prepare-contribution`, data,
+  ),
+  ratifyPlanningContribution: (
+    branchId: string,
+    data: PlanningContributionRatification,
+  ) => post<Record<string, unknown>>(
+    `/planning/branches/${encodeURIComponent(branchId)}/ratify-contribution`, data,
+  ),
+  createPlanningEvaluationMission: (
+    branchId: string,
+    data: PlanningEvaluationMissionCreate,
+  ) => post<Record<string, unknown>>(
+    `/planning/branches/${encodeURIComponent(branchId)}/evaluation-missions`, data,
+  ),
+  preparePlanningEvaluationResult: (
+    branchId: string,
+    data: PlanningEvaluationResultProposalPrepare,
+  ) => post<Record<string, unknown>>(
+    `/planning/branches/${encodeURIComponent(branchId)}/evaluation-result-proposals`, data,
+  ),
+
+  // Human, host-agent, and local-model edits converge on this proposal ledger.
+  listSemanticPatchProposals: (status?: string) => {
+    const query = status ? `?status=${encodeURIComponent(status)}` : ""
+    return get<SemanticPatchProposal[]>(`/semantic-patches/proposals${query}`)
+  },
+  createSemanticPatchProposal: (data: SemanticPatchProposalCreate) =>
+    post<SemanticPatchProposal>("/semantic-patches/proposals", data),
+  applySemanticPatchProposal: (proposalId: string, data: SemanticPatchTransition) =>
+    post<SemanticPatchProposal>(
+      `/semantic-patches/proposals/${encodeURIComponent(proposalId)}/apply`, data,
+    ),
+  rejectSemanticPatchProposal: (proposalId: string, data: SemanticPatchTransition) =>
+    post<SemanticPatchProposal>(
+      `/semantic-patches/proposals/${encodeURIComponent(proposalId)}/reject`, data,
+    ),
+  generateLMStudioSemanticPatch: (data: LMStudioSemanticPatchRequest) =>
+    post<SemanticPatchProposal>("/semantic-patches/providers/lm-studio/proposals", data),
 }
 
 export { ApiError }

@@ -140,7 +140,14 @@ authorize drafting.
 
 ### 2. Assemble candidates
 
-Use multi-angle RKA retrieval. For each candidate identify:
+Use multi-angle RKA retrieval and the choice-first session in
+[`framing_elicitation.md`](framing_elicitation.md). The Writer proposes
+evidence-bounded alternatives with pros and cons; the author supplies narrative
+intent; the researcher supplies scientific scope judgment. Record provisional
+selections in `.planning/FRAMING_SESSION.yaml`. They do not modify the native
+manuscript aggregate and do not count as evidence or ratification.
+
+For each candidate identify:
 
 1. the prior limitation or open problem;
 2. the project's response;
@@ -151,9 +158,12 @@ Use multi-angle RKA retrieval. For each candidate identify:
 7. the result and non-result units that will carry the claim.
 
 `rka writer assist` may accelerate discovery but returns unratified candidates
-only.
+only. Present contribution inclusion as a multi-select choice, claim
+calibration as a single-select choice per contribution, and the final whole
+paper spine as a single-select choice. Offer revise/combine and defer/gather
+evidence paths where appropriate.
 
-### 3. Dry-run and apply
+### 3. Dry-run and propose
 
 Prepare a proposal file, then:
 
@@ -164,7 +174,16 @@ rka writer import-spine \
   --input proposal.yaml
 ```
 
-Dry-run is the default. Review the proposed counts and diff. Apply only with:
+Dry-run is the default. Review the proposed counts, evidence roles, and diff.
+When the semantic patch service is available, use the dry-run result to create
+an `argument_spine_replace` operation through
+`create_semantic_patch_proposal`. Human and AI candidates use that same
+envelope, but AI-authored candidates first persist an exact context manifest
+and retain their origin/provider boundary. Inspect `semantic_diff` and
+`validation_findings`. The Writer stops at `proposed`; the PI or local web UI
+applies or rejects the `spp_`. A stale target becomes a preserved conflict.
+
+The direct CLI apply form remains a local compatibility path:
 
 ```bash
 rka writer import-spine \
@@ -175,14 +194,18 @@ rka writer import-spine \
   --apply
 ```
 
-The update may create or modify claim identities, immutable wording versions,
+Use direct `--apply` only as an explicit human action when the proposal service
+is unavailable and the PI authorizes the compatibility path. The update may create or modify
+claim identities, immutable wording versions,
 evidence roles, units, and bindings. It never imports `ratified_by`, guesses a
 decision, or creates PI authority.
 
 ### 4. Ratify exact wording
 
-Present bounded alternatives during the existing Outline checkpoint. For each
-selected contribution:
+Present the surviving alternatives with concrete pros, cons, evidence coverage,
+missing evidence, scope boundaries, and outline consequences during the
+existing Outline checkpoint. Obtain one explicit final PI confirmation after
+the advisory framing session. For each selected contribution:
 
 1. record an active PI decision whose `chosen` text exactly matches the claim
    version;

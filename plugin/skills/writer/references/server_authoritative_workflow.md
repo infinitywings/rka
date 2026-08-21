@@ -14,6 +14,8 @@ RKA owns:
 - evidence, qualifier, and counterevidence bindings;
 - `mra_` bindings between one exact claim version and one active PI decision;
 - `mun_` claim-sized manuscript units and result interpretation boundaries;
+- the L2-L5 outline hierarchy, writing rationale, and evidence intentions
+  attached one-to-one to `mun_` identities;
 - `mck_` manuscript checkpoints;
 - `mva_` multidimensional verification attestations;
 - `mrf_` citation-key membership bound to exact same-project `lit_` records;
@@ -90,7 +92,7 @@ Semantic changes follow this order:
    blockers. Resolve stale clusters and counterevidence through Brain.
 2. Select in-scope research questions and assemble a bounded contribution
    contract, exact claim wording, prohibited wording, and claim-sized units.
-3. Dry-run a local proposal:
+3. Dry-run candidate spine material locally:
 
    ```bash
    rka writer import-spine \
@@ -100,7 +102,14 @@ Semantic changes follow this order:
    ```
 
 4. Review the diff, evidence roles, result coverage, and prohibited wording.
-5. Apply with an explicit revision precondition:
+5. On a server exposing semantic patches, create an
+   `argument_spine_replace` through `create_semantic_patch_proposal`. Review
+   its immutable diff and findings. An AI author first persists an exact
+   context manifest and records its origin/provider boundary, then stops at
+   `proposed`. The PI or local web UI separately applies or rejects the `spp_`;
+   stale bases become conflicts.
+6. The direct CLI form below is a local compatibility path only. It must be an
+   explicit human action with PI authorization and an expected manuscript revision:
 
    ```bash
    rka writer import-spine \
@@ -111,9 +120,9 @@ Semantic changes follow this order:
      --apply
    ```
 
-6. Record the PI decision separately, then bind the exact active claim version
+7. Record the PI decision separately, then bind the exact active claim version
    through `ratify_manuscript_claim`.
-7. Synchronize again before drafting.
+8. Synchronize again before drafting.
 
 An import may create or update claim identities, wording versions, evidence
 roles, units, and unit bindings. It never imports or synthesizes PI
@@ -122,6 +131,38 @@ blindly against a newer revision.
 
 The complete journal-to-prose admission policy is in
 [`evidence_to_spine_pipeline.md`](evidence_to_spine_pipeline.md).
+
+## Developing the progressive outline
+
+After the claim spine is present, use `manuscript_outline` to resume the
+canonical unit hierarchy. L2-L5 values express pure depth, not rhetorical
+type; unit `kind` and rationale express the writing role. Each major unit must expose its communicative
+job, intended reader takeaway, intended claim, and evidence plan, together
+with reverse claim/evidence navigation and any completeness blocker.
+
+Direct editing and AI suggestions share one proposal-first route, but not the
+same review authority:
+
+1. Read the current outline and manuscript revision.
+2. For AI-authored changes, persist `prepare_semantic_patch_context`. Prepare
+   `edit`, `expand`, `condense`, or `reorder` with that exact provenance
+   through `prepare_manuscript_outline_proposal`.
+3. Inspect the immutable semantic diff, validation findings, binding changes,
+   and downstream order impact.
+4. The Writer stops at `proposed`. The PI or local web UI applies or rejects
+   the `spp_` separately. A stale manuscript revision becomes a conflict and
+   must be rebased explicitly.
+5. Re-query `manuscript_outline`; never infer success from the proposal alone.
+
+Expansion retains its parent and cannot invent undisclosed claim/evidence
+bindings. Condensation unions named descendant bindings into the retained
+parent before removal. Reorder requires the exact active unit-key set, places
+parents before children, keeps subtrees contiguous, and changes no semantic
+content. Outline checkpoint dependencies include typed claim/unit evidence
+bindings. Creating and resolving the Outline checkpoint are
+separate PI-authority operations; neither proposal preparation nor apply
+ratifies the outline. Writer-owned Markdown or LaTeX files remain projections
+until source synchronization is introduced.
 
 ## Readiness and change impact
 

@@ -191,9 +191,7 @@ async def dispatch_record_literature(
                 "missing_field",
                 "action='enrich_doi' requires lit_id",
             )
-        return await _legacy("rka_enrich_doi")(
-            lit_id=lit_id, project_id=project_id
-        )
+        return await _legacy("rka_enrich_doi")(lit_id=lit_id, project_id=project_id)
 
     if action == "search_semantic_scholar" or search_source == "semantic_scholar":
         q = search_query
@@ -297,10 +295,7 @@ async def dispatch_mission(action: str, *, project_id: str, **kw: Any) -> str:
     """
     if action == "create":
         provenance = kw.get("provenance") or {}
-        motivated_by = (
-            kw.get("motivated_by_decision")
-            or provenance.get("motivated_by_decision")
-        )
+        motivated_by = kw.get("motivated_by_decision") or provenance.get("motivated_by_decision")
         if not motivated_by:
             return _err(
                 "missing_provenance",
@@ -631,9 +626,7 @@ async def dispatch_review(target: str, *, project_id: str, payload: dict[str, An
     if target == "bulk_update":
         if not p.get("updates"):
             return _err("missing_field", "review bulk_update requires payload.updates")
-        return await _legacy("rka_bulk_update")(
-            updates=p["updates"], project_id=project_id
-        )
+        return await _legacy("rka_bulk_update")(updates=p["updates"], project_id=project_id)
 
     if target == "batch_import":
         if not p.get("entries"):
@@ -683,9 +676,7 @@ async def dispatch_review(target: str, *, project_id: str, payload: dict[str, An
                 "missing_field",
                 "brain_notifications_clear requires payload.ids",
             )
-        return await _legacy("rka_clear_brain_notifications")(
-            ids=p["ids"], project_id=project_id
-        )
+        return await _legacy("rka_clear_brain_notifications")(ids=p["ids"], project_id=project_id)
 
     if target == "extract_claims":
         if not p.get("entry_id") or not p.get("claims"):
@@ -908,28 +899,38 @@ _QUERY_DISPATCH: dict[str, str] = {
     "checkpoints": "rka_get_checkpoints",
     "research_map": "rka_get_research_map",
     "review_queue": "rka_get_review_queue",
-
     # search / get-by-id
     "search": "rka_search",
     "entity": "rka_get",
-
     # journal / decisions / literature / missions / reports lists
     "journal": "rka_get_journal",
     "literature": "rka_get_literature",
     "report": "rka_get_report",
     "mission": "rka_get_mission",
-
     # decisions / graph
     "decision_tree": "rka_get_decision_tree",
     "graph": "rka_get_graph",
     "ego_graph": "rka_get_ego_graph",
     "graph_stats": "rka_graph_stats",
     "graph_mermaid": "rka_export_mermaid",
-
     # claims / clusters
     "clusters": "rka_list_clusters",
     "claims": "rka_get_claims",
-
+    "claim_scope": "rka_get_claim_scope",
+    "interpretation_candidates": "rka_get_interpretation_candidates",
+    "experiments": "rka_get_experiments",
+    "experiment_runs": "rka_get_experiment_runs",
+    "experiment_observations": "rka_get_experiment_observations",
+    "planning_branches": "rka_get_planning_branches",
+    "planning_resume": "rka_resume_planning",
+    "planning_compare": "rka_compare_planning_branches",
+    "planning_artifact_versions": "rka_get_planning_artifact_versions",
+    "planning_argument_workflow": "rka_get_planning_argument_workflow",
+    "planning_promotions": "rka_get_planning_promotions",
+    "planning_evaluation_workflow": "rka_get_planning_evaluation_workflow",
+    "planning_evaluation_events": "rka_get_planning_evaluation_events",
+    "semantic_patch_proposals": "rka_get_semantic_patch_proposals",
+    "semantic_patch_schema": "rka_get_semantic_patch_schema",
     # provenance / multi-hop
     "provenance": "rka_trace_provenance",
     "multi_hop": "rka_multi_hop_retrieval",
@@ -938,41 +939,35 @@ _QUERY_DISPATCH: dict[str, str] = {
     "mission_guard": "rka_mission_guard",
     "belief_as_of": "rka_belief_as_of",
     "evidence": "rka_assemble_evidence",
-
     # session-flavored project-scoped reads
     "summarize": "rka_summarize",
     "generate_summary": "rka_generate_summary",
     "calibration_metrics": "rka_get_calibration_metrics",
     "changelog": "rka_get_changelog",
-
     # hooks reads
     "hooks": "rka_list_hooks",
     "hook_executions": "rka_get_hook_executions",
     "brain_notifications": "rka_get_brain_notifications",
-
     # maintenance / freshness reads
     "integrity": "rka_check_integrity",
     "freshness": "rka_check_freshness",
     "contradictions": "rka_detect_contradictions",
-
     # workspace
     "workspace_tree": "rka_scan_workspace_tree",
     "workspace_scan": "rka_scan_workspace",
     "bootstrap_review": "rka_review_bootstrap",
-
     # manuscript
     "manuscript": "rka_get_manuscript",
     "manuscript_context": "rka_get_manuscript_context",
     "manuscript_reference_manifest": "rka_get_manuscript_reference_manifest",
     "manuscript_readiness": "rka_get_manuscript_readiness",
     "manuscript_spine": "rka_get_manuscript_spine",
+    "manuscript_outline": "rka_get_manuscript_outline",
     "manuscript_writing_candidates": "rka_get_manuscript_writing_candidates",
     "manuscript_impact": "rka_get_manuscript_impact",
     "reference_validation_status": "rka_get_reference_validation_status",
-
     # bounded heterogeneous resolver
     "resolve_entities": "rka_resolve_entities",
-
     # durable semantic change cursor
     "changes_since": "rka_changes_since",
 }
@@ -995,6 +990,9 @@ async def dispatch_query(
     since_cursor: int | None = None,
     manuscript_id: str | None = None,
     job_id: str | None = None,
+    include_archived: bool = True,
+    base_branch_id: str | None = None,
+    other_branch_id: str | None = None,
 ) -> str:
     """[ANY] Universal read dispatcher.
 
@@ -1072,21 +1070,23 @@ async def dispatch_query(
 
     if scope == "staleness_impact":
         if not id:
-            return _err("missing_field",
-                        "rka_query(scope='staleness_impact'): id (entity) is required")
-        return await legacy(entity_id=id, max_depth=f.get("max_depth", 3),
-                            project_id=project_id)
+            return _err(
+                "missing_field", "rka_query(scope='staleness_impact'): id (entity) is required"
+            )
+        return await legacy(entity_id=id, max_depth=f.get("max_depth", 3), project_id=project_id)
 
     if scope == "mission_guard":
         if not id:
-            return _err("missing_field",
-                        "rka_query(scope='mission_guard'): id (mission) is required")
+            return _err(
+                "missing_field", "rka_query(scope='mission_guard'): id (mission) is required"
+            )
         return await legacy(mission_id=id, project_id=project_id)
 
     if scope == "belief_as_of":
         if not query:
-            return _err("missing_field",
-                        "rka_query(scope='belief_as_of'): query (the ISO date) is required")
+            return _err(
+                "missing_field", "rka_query(scope='belief_as_of'): query (the ISO date) is required"
+            )
         return await legacy(date=query, project_id=project_id)
 
     if scope == "collect_report_context":
@@ -1141,7 +1141,8 @@ async def dispatch_query(
 
     if scope == "checkpoints":
         return await legacy(
-            status=f.get("status", "open"), project_id=project_id,
+            status=f.get("status", "open"),
+            project_id=project_id,
         )
 
     if scope == "review_queue":
@@ -1171,7 +1172,9 @@ async def dispatch_query(
         if not id:
             return _err("missing_field", "rka_query(scope='ego_graph'): id is required")
         return await legacy(
-            entity_id=id, depth=f.get("depth", 1), project_id=project_id,
+            entity_id=id,
+            depth=f.get("depth", 1),
+            project_id=project_id,
         )
 
     if scope == "graph_mermaid":
@@ -1200,6 +1203,113 @@ async def dispatch_query(
             limit=limit or f.get("limit", 20),
             project_id=project_id,
         )
+
+    if scope == "claim_scope":
+        if not id:
+            return _err(
+                "missing_field",
+                "rka_query(operation='claim_scope'): id is required",
+            )
+        return await legacy(claim_id=id, project_id=project_id)
+
+    if scope == "interpretation_candidates":
+        return await legacy(
+            candidate_id=id,
+            review_status=f.get("review_status"),
+            disposition=f.get("disposition"),
+            epistemic_kind=f.get("epistemic_kind"),
+            source_type=f.get("source_type"),
+            source_id=f.get("source_id"),
+            limit=limit or f.get("limit", 50),
+            project_id=project_id,
+        )
+
+    if scope == "experiments":
+        return await legacy(
+            experiment_id=id,
+            status=f.get("status"),
+            limit=limit or f.get("limit", 50),
+            project_id=project_id,
+        )
+
+    if scope == "experiment_runs":
+        return await legacy(
+            run_id=id,
+            experiment_id=f.get("experiment_id"),
+            status=f.get("status"),
+            limit=limit or f.get("limit", 50),
+            project_id=project_id,
+        )
+
+    if scope == "experiment_observations":
+        return await legacy(
+            observation_id=id,
+            run_id=f.get("run_id"),
+            direction=f.get("direction"),
+            kind=f.get("kind"),
+            claim_id=f.get("claim_id"),
+            limit=limit or f.get("limit", 50),
+            project_id=project_id,
+        )
+
+    if scope == "planning_branches":
+        return await legacy(
+            branch_id=id,
+            manuscript_id=manuscript_id,
+            include_archived=include_archived,
+            project_id=project_id,
+        )
+
+    if scope == "planning_resume":
+        return await legacy(manuscript_id=manuscript_id, project_id=project_id)
+
+    if scope == "planning_compare":
+        if not base_branch_id or not other_branch_id:
+            return _err(
+                "missing_field",
+                "planning_compare requires base_branch_id and other_branch_id",
+            )
+        return await legacy(
+            base_branch_id=base_branch_id,
+            other_branch_id=other_branch_id,
+            project_id=project_id,
+        )
+
+    if scope == "planning_artifact_versions":
+        if not id:
+            return _err("missing_field", "planning_artifact_versions requires id")
+        return await legacy(artifact_id=id, project_id=project_id)
+
+    if scope == "planning_argument_workflow":
+        if not id:
+            return _err("missing_field", "planning_argument_workflow requires id")
+        return await legacy(branch_id=id, project_id=project_id)
+
+    if scope == "planning_promotions":
+        if not id:
+            return _err("missing_field", "planning_promotions requires id")
+        return await legacy(branch_id=id, project_id=project_id)
+
+    if scope == "planning_evaluation_workflow":
+        if not id:
+            return _err("missing_field", "planning_evaluation_workflow requires id")
+        return await legacy(branch_id=id, project_id=project_id)
+
+    if scope == "planning_evaluation_events":
+        if not id:
+            return _err("missing_field", "planning_evaluation_events requires id")
+        return await legacy(branch_id=id, project_id=project_id)
+
+    if scope == "semantic_patch_proposals":
+        return await legacy(
+            proposal_id=id,
+            status=f.get("status"),
+            limit=limit or f.get("limit", 100),
+            project_id=project_id,
+        )
+
+    if scope == "semantic_patch_schema":
+        return await legacy(project_id=project_id)
 
     if scope == "provenance":
         if not id:
@@ -1351,6 +1461,7 @@ async def dispatch_query(
     if scope in (
         "manuscript_context",
         "manuscript_spine",
+        "manuscript_outline",
         "manuscript_writing_candidates",
     ):
         if not id:
@@ -1409,8 +1520,7 @@ async def dispatch_query(
         if not id:
             return _err(
                 "missing_field",
-                "rka_query(scope='manuscript_reference_manifest'): "
-                "id required",
+                "rka_query(scope='manuscript_reference_manifest'): id required",
             )
         return await legacy(
             manuscript_id=id,
@@ -1421,8 +1531,7 @@ async def dispatch_query(
         if not manuscript_id or not job_id:
             return _err(
                 "missing_field",
-                "rka_query(scope='reference_validation_status') requires "
-                "manuscript_id and job_id",
+                "rka_query(scope='reference_validation_status') requires manuscript_id and job_id",
             )
         return await legacy(
             manuscript_id=manuscript_id,
@@ -1523,18 +1632,24 @@ async def dispatch_record_note(
     if action == "ingest_document":
         return await _legacy("rka_ingest_document")(
             content=content,
-            source=source if source in (
-                "brain", "executor", "pi", "llm", "web_ui", "system",
-            ) else "brain",
+            source=source
+            if source
+            in (
+                "brain",
+                "executor",
+                "pi",
+                "llm",
+                "web_ui",
+                "system",
+            )
+            else "brain",
             default_type=default_type or "finding",
             phase=phase,
             tags=tags,
             related_literature=merged["related_literature"],
             related_decisions=merged["related_decisions"],
             related_mission=merged["related_mission"],
-            split_by_headings=(
-                True if split_by_headings is None else split_by_headings
-            ),
+            split_by_headings=(True if split_by_headings is None else split_by_headings),
             project_id=project_id,
         )
 
@@ -1626,7 +1741,9 @@ async def dispatch_record_decision(
         "parent_id": parent_id,
     }
     merged = _unpack_provenance(
-        provenance, explicit, _DECISION_PROVENANCE_KEYS,
+        provenance,
+        explicit,
+        _DECISION_PROVENANCE_KEYS,
     )
 
     if supersedes_decision_id:
@@ -1743,7 +1860,8 @@ async def dispatch_session(
                 "rka_session(action='create_project'): name is required",
             )
         return await _legacy("rka_create_project")(
-            name=name, description=description,
+            name=name,
+            description=description,
         )
 
     if action == "set_project":
@@ -1777,25 +1895,34 @@ async def dispatch_session(
                 ok = r.is_success
                 code = r.status_code
         except Exception as exc:
-            return json.dumps({
-                "status": "unhealthy",
-                "error": str(exc)[:200],
-            }, indent=2)
-        return json.dumps({
-            "status": "healthy" if ok else "degraded",
-            "rest_status_code": code,
-        }, indent=2)
+            return json.dumps(
+                {
+                    "status": "unhealthy",
+                    "error": str(exc)[:200],
+                },
+                indent=2,
+            )
+        return json.dumps(
+            {
+                "status": "healthy" if ok else "degraded",
+                "rest_status_code": code,
+            },
+            indent=2,
+        )
 
     if action == "help":
         if not name_lookup:
-            return json.dumps({
-                "verbs": list(VERBS),
-                "session_actions": list(_SESSION_ACTIONS),
-                "hint": (
-                    "Pass name_lookup=<tool_name> for per-legacy-tool "
-                    "help (e.g. name_lookup='rka_add_note')."
-                ),
-            }, indent=2)
+            return json.dumps(
+                {
+                    "verbs": list(VERBS),
+                    "session_actions": list(_SESSION_ACTIONS),
+                    "hint": (
+                        "Pass name_lookup=<tool_name> for per-legacy-tool "
+                        "help (e.g. name_lookup='rka_add_note')."
+                    ),
+                },
+                indent=2,
+            )
         return await _legacy("rka_help")(name=name_lookup)
 
     if action == "export":
@@ -1805,7 +1932,9 @@ async def dispatch_session(
                 "rka_session(action='export'): project_id is required",
             )
         return await _legacy("rka_export")(
-            format=format, scope=scope, project_id=project_id,
+            format=format,
+            scope=scope,
+            project_id=project_id,
         )
 
     if action == "generate_claude_md":
@@ -1815,11 +1944,13 @@ async def dispatch_session(
                 "rka_session(action='generate_claude_md'): project_id is required",
             )
         return await _legacy("rka_generate_claude_md")(
-            role=role, project_id=project_id,
+            role=role,
+            project_id=project_id,
         )
 
     return _err(
-        "invalid_action", f"rka_session: unhandled action {action!r}",
+        "invalid_action",
+        f"rka_session: unhandled action {action!r}",
     )
 
 
@@ -1840,7 +1971,7 @@ async def dispatch_session(
 # v2.7.0a3 — rka_execute dispatch (the unified write/lifecycle surface)
 # ---------------------------------------------------------------------------
 #
-# Routes all 58 write/lifecycle operations to the appropriate existing
+# Routes all 61 write/lifecycle operations to the appropriate existing
 # dispatcher above (or to a legacy @tool function for ops that aren't
 # already covered by one of the 8 v2.7.0a2 verbs). The goal: one
 # always-on tool for ALL writes, with an Annotated[Literal] operation
@@ -1874,52 +2005,114 @@ async def dispatch_session(
 # `missing_field` error matching the v2.6 contract.
 
 # Operations that are unscoped (no project_id required).
-_EXECUTE_UNSCOPED_OPS = frozenset({
-    "create_project",
-    "reset_session",
-})
+_EXECUTE_UNSCOPED_OPS = frozenset(
+    {
+        "create_project",
+        "reset_session",
+    }
+)
 
 # Canonical set of execute operations — single source of truth, mirrors
 # the ExecuteOpLit Literal in server.py. Drift between this set and the
 # Literal is checked by tests in tests/test_mcp.
 EXECUTE_OPERATIONS = (
     # record / ingest / import
-    "record_note", "record_decision", "record_literature",
-    "ingest_document", "import_bibtex", "batch_import",
+    "record_note",
+    "record_decision",
+    "record_literature",
+    "ingest_document",
+    "import_bibtex",
+    "batch_import",
     "register_manuscript",
     # canonical native manuscript aggregate
-    "create_manuscript", "update_manuscript", "upsert_argument_spine",
+    "create_manuscript",
+    "update_manuscript",
+    "upsert_argument_spine",
     "replace_manuscript_reference_manifest",
-    "ratify_manuscript_claim", "transition_manuscript_phase",
-    "create_manuscript_checkpoint", "resolve_manuscript_checkpoint",
+    "ratify_manuscript_claim",
+    "transition_manuscript_phase",
+    "create_manuscript_checkpoint",
+    "resolve_manuscript_checkpoint",
     "record_verification_attestation",
+    # interpretation staging
+    "create_interpretation_candidate",
+    "add_interpretation_hint",
+    "triage_interpretation_candidate",
+    "set_claim_scope",
+    # experiment evidence substrate
+    "create_experiment",
+    "append_experiment_plan",
+    "transition_experiment",
+    "create_experiment_run",
+    "transition_experiment_run",
+    "record_experiment_observation",
+    "add_evidence_locator",
+    "create_planning_branch",
+    "transition_planning_branch",
+    "append_planning_artifact_version",
+    "promote_planning_rq",
+    "prepare_planning_contribution",
+    "ratify_planning_contribution",
+    "create_planning_evaluation_mission",
+    "prepare_planning_evaluation_result",
+    "prepare_manuscript_outline_proposal",
+    "prepare_semantic_patch_context",
+    "create_semantic_patch_proposal",
+    "apply_semantic_patch_proposal",
+    "reject_semantic_patch_proposal",
+    "generate_lm_studio_semantic_patch",
     # update
-    "update_note", "update_decision", "update_literature",
-    "update_status", "bulk_update", "supersede_decision",
+    "update_note",
+    "update_decision",
+    "update_literature",
+    "update_status",
+    "bulk_update",
+    "supersede_decision",
     # decision lifecycle (PI ratification + calibration)
-    "record_pi_selection", "record_outcome",
+    "record_pi_selection",
+    "record_outcome",
     # literature lifecycle
-    "enrich_doi", "link_literature_to_zotero",
-    "process_paper", "validate_reference",
+    "enrich_doi",
+    "link_literature_to_zotero",
+    "process_paper",
+    "validate_reference",
     # mission lifecycle
-    "create_mission", "update_mission", "update_mission_status",
-    "submit_report", "advance_rq",
+    "create_mission",
+    "update_mission",
+    "update_mission_status",
+    "submit_report",
+    "advance_rq",
     # checkpoint / gate lifecycle
-    "submit_checkpoint", "resolve_checkpoint", "create_gate",
-    "evaluate_gate", "present_decision",
+    "submit_checkpoint",
+    "resolve_checkpoint",
+    "create_gate",
+    "evaluate_gate",
+    "present_decision",
     # claims / clusters
-    "extract_claims", "create_cluster", "assign_claims_to_cluster",
-    "split_cluster", "merge_clusters", "review_claims", "review_cluster",
+    "extract_claims",
+    "create_cluster",
+    "assign_claims_to_cluster",
+    "split_cluster",
+    "merge_clusters",
+    "review_claims",
+    "review_cluster",
     "resolve_contradiction",
     # hooks / notifications
-    "hook_add", "hook_enable", "hook_disable", "hook_delete",
+    "hook_add",
+    "hook_enable",
+    "hook_disable",
+    "hook_delete",
     "brain_notifications_clear",
     # workspace
-    "bootstrap_workspace", "scan_workspace",
+    "bootstrap_workspace",
+    "scan_workspace",
     # maintenance
-    "flag_stale", "eviction_sweep",
+    "flag_stale",
+    "eviction_sweep",
     # session / project
-    "create_project", "reset_session", "session_digest",
+    "create_project",
+    "reset_session",
+    "session_digest",
 )
 
 
@@ -1983,6 +2176,214 @@ async def dispatch_execute(
         )
 
     # --- canonical native manuscript aggregate ---
+    if op == "create_interpretation_candidate":
+        return await _legacy("rka_create_interpretation_candidate")(
+            source_type=kw.get("source_type"),
+            source_id=kw.get("source_id"),
+            locator_kind=kw.get("locator_kind"),
+            locator_start=kw.get("locator_start"),
+            locator_end=kw.get("locator_end"),
+            locator_value=kw.get("locator_value"),
+            statement=kw.get("statement"),
+            epistemic_kind=kw.get("epistemic_kind"),
+            scope_conditions=kw.get("scope_conditions"),
+            uncertainty=kw.get("uncertainty", "unknown"),
+            uncertainty_note=kw.get("uncertainty_note"),
+            falsifier=kw.get("falsifier"),
+            proposed_claim_type=kw.get("proposed_claim_type"),
+            created_by=kw.get("created_by"),
+            extraction_tool=kw.get("extraction_tool"),
+            extraction_model=kw.get("extraction_model"),
+            project_id=project_id,
+        )
+
+    if op == "add_interpretation_hint":
+        return await _legacy("rka_add_interpretation_hint")(
+            candidate_id=kw.get("id"),
+            related_candidate_id=kw.get("related_candidate_id"),
+            kind=kw.get("kind"),
+            rationale=kw.get("rationale"),
+            created_by=kw.get("created_by"),
+            expected_revision=kw.get("expected_revision"),
+            confidence=kw.get("confidence", 0.5),
+            project_id=project_id,
+        )
+
+    if op == "triage_interpretation_candidate":
+        triage_kwargs = {
+            "candidate_id": kw.get("id"),
+            "action": kw.get("action"),
+            "expected_revision": kw.get("expected_revision"),
+            "actor": kw.get("actor"),
+            "reason": kw.get("reason"),
+            "target_candidate_id": kw.get("target_candidate_id"),
+            "target_entity_id": kw.get("target_entity_id"),
+            "grounding_verified": kw.get("grounding_verified", False),
+            "claim_confidence": kw.get("claim_confidence", 0.5),
+            "project_id": project_id,
+        }
+        if kw.get("evidence_role") is not None:
+            triage_kwargs["evidence_role"] = kw["evidence_role"]
+        return await _legacy("rka_triage_interpretation_candidate")(**triage_kwargs)
+
+    if op == "create_experiment":
+        return await _legacy("rka_create_experiment")(
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "append_experiment_plan":
+        return await _legacy("rka_append_experiment_plan")(
+            experiment_id=kw.pop("id", None),
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "transition_experiment":
+        return await _legacy("rka_transition_experiment")(
+            experiment_id=kw.pop("id", None),
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "create_experiment_run":
+        return await _legacy("rka_create_experiment_run")(
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "transition_experiment_run":
+        return await _legacy("rka_transition_experiment_run")(
+            run_id=kw.pop("id", None),
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "record_experiment_observation":
+        return await _legacy("rka_record_experiment_observation")(
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "add_evidence_locator":
+        return await _legacy("rka_add_evidence_locator")(
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "set_claim_scope":
+        return await _legacy("rka_set_claim_scope")(
+            claim_id=kw.get("claim_id"),
+            expected_revision=kw.get("expected_revision"),
+            actor=kw.get("actor"),
+            reason=kw.get("reason"),
+            conditions=kw.get("conditions") or [],
+            uncertainty=kw.get("uncertainty", "unknown"),
+            uncertainty_note=kw.get("uncertainty_note"),
+            extension_policy=kw.get("extension_policy"),
+            allowed_extensions=kw.get("allowed_extensions") or [],
+            prohibited_extensions=kw.get("prohibited_extensions") or [],
+            falsifier_status=kw.get("falsifier_status", "unknown"),
+            falsifier=kw.get("falsifier"),
+            falsifier_rationale=kw.get("falsifier_rationale"),
+            disconfirming_claim_ids=kw.get("disconfirming_claim_ids") or [],
+            review_status=kw.get("review_status", "draft"),
+            project_id=project_id,
+        )
+
+    if op == "create_planning_branch":
+        return await _legacy("rka_create_planning_branch")(
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "transition_planning_branch":
+        return await _legacy("rka_transition_planning_branch")(
+            branch_id=kw.pop("id", None),
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "append_planning_artifact_version":
+        return await _legacy("rka_append_planning_artifact_version")(
+            branch_id=kw.pop("id", None),
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "promote_planning_rq":
+        return await _legacy("rka_promote_planning_research_question")(
+            branch_id=kw.pop("id", None),
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "prepare_planning_contribution":
+        return await _legacy("rka_prepare_planning_contribution")(
+            branch_id=kw.pop("id", None),
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "ratify_planning_contribution":
+        return await _legacy("rka_ratify_planning_contribution")(
+            branch_id=kw.pop("id", None),
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "create_planning_evaluation_mission":
+        return await _legacy("rka_create_planning_evaluation_mission")(
+            branch_id=kw.pop("id", None),
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "prepare_planning_evaluation_result":
+        return await _legacy("rka_prepare_planning_evaluation_result")(
+            branch_id=kw.pop("id", None),
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "prepare_manuscript_outline_proposal":
+        return await _legacy("rka_prepare_manuscript_outline_proposal")(
+            manuscript_id=kw.pop("id", None),
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "prepare_semantic_patch_context":
+        return await _legacy("rka_prepare_semantic_patch_context")(
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "create_semantic_patch_proposal":
+        return await _legacy("rka_create_semantic_patch_proposal")(
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op in {"apply_semantic_patch_proposal", "reject_semantic_patch_proposal"}:
+        tool_name = (
+            "rka_apply_semantic_patch_proposal"
+            if op == "apply_semantic_patch_proposal"
+            else "rka_reject_semantic_patch_proposal"
+        )
+        return await _legacy(tool_name)(
+            proposal_id=kw.pop("id", None),
+            payload=kw,
+            project_id=project_id,
+        )
+
+    if op == "generate_lm_studio_semantic_patch":
+        return await _legacy("rka_generate_lm_studio_semantic_patch")(
+            payload=kw,
+            project_id=project_id,
+        )
+
+    # --- canonical native manuscript aggregate ---
     if op == "create_manuscript":
         return await _legacy("rka_create_native_manuscript")(
             title=kw.get("title"),
@@ -2024,9 +2425,7 @@ async def dispatch_execute(
         ):
             if field_name not in provided_fields:
                 continue
-            updates[field_name] = phase if field_name == "phase" else kw.get(
-                field_name
-            )
+            updates[field_name] = phase if field_name == "phase" else kw.get(field_name)
         return await _legacy("rka_update_native_manuscript")(
             manuscript_id=kw.get("id"),
             expected_revision=kw.get("expected_revision"),
@@ -2109,9 +2508,7 @@ async def dispatch_execute(
             "completed_at",
         )
         attestation = {
-            field_name: kw[field_name]
-            for field_name in attestation_fields
-            if field_name in kw
+            field_name: kw[field_name] for field_name in attestation_fields if field_name in kw
         }
         return await _legacy("rka_record_manuscript_verification_attestation")(
             manuscript_id=kw.get("id"),
@@ -2156,8 +2553,7 @@ async def dispatch_execute(
         if not question or not chosen or not rationale:
             return _err(
                 "missing_field",
-                "rka_execute(operation='record_decision') requires "
-                "question + chosen + rationale",
+                "rka_execute(operation='record_decision') requires question + chosen + rationale",
             )
         decided_by = kw.get("decided_by") or "brain"
         return await dispatch_record_decision(
@@ -2211,8 +2607,12 @@ async def dispatch_execute(
 
     # --- record_literature + literature-action ops ---
     if op in (
-        "record_literature", "import_bibtex", "enrich_doi",
-        "link_literature_to_zotero", "process_paper", "validate_reference",
+        "record_literature",
+        "import_bibtex",
+        "enrich_doi",
+        "link_literature_to_zotero",
+        "process_paper",
+        "validate_reference",
     ):
         # Map our v2.7.0a3 op name to the action= sub-mode that
         # dispatch_record_literature understands.
@@ -2256,8 +2656,11 @@ async def dispatch_execute(
 
     # --- mission ops ---
     if op in (
-        "create_mission", "update_mission", "update_mission_status",
-        "submit_report", "advance_rq",
+        "create_mission",
+        "update_mission",
+        "update_mission_status",
+        "submit_report",
+        "advance_rq",
     ):
         action_map = {
             "create_mission": "create",
@@ -2301,8 +2704,12 @@ async def dispatch_execute(
 
     # --- checkpoint / gate / decision-ratification ops ---
     if op in (
-        "submit_checkpoint", "resolve_checkpoint", "create_gate",
-        "evaluate_gate", "present_decision", "record_pi_selection",
+        "submit_checkpoint",
+        "resolve_checkpoint",
+        "create_gate",
+        "evaluate_gate",
+        "present_decision",
+        "record_pi_selection",
         "record_outcome",
     ):
         action_map = {
@@ -2543,6 +2950,10 @@ async def dispatch_query_typed(args: "BaseModel") -> str:  # type: ignore[name-d
     kw_all.pop("operation", None)
     kw_all.pop("project_id", None)
 
+    typed_filters = dict(kw_all.get("filters") or {})
+    if op == "semantic_patch_proposals" and "status" in kw_all:
+        typed_filters["status"] = kw_all["status"]
+
     return _coerce_result_to_str(
         await dispatch_query(
             op,
@@ -2550,7 +2961,7 @@ async def dispatch_query_typed(args: "BaseModel") -> str:  # type: ignore[name-d
             id=kw_all.get("id"),
             query=kw_all.get("query"),
             limit=kw_all.get("limit"),
-            filters=kw_all.get("filters"),
+            filters=typed_filters or None,
             options=kw_all.get("options"),
             ids=kw_all.get("ids"),
             include_sources=kw_all.get("include_sources", False),
@@ -2560,6 +2971,9 @@ async def dispatch_query_typed(args: "BaseModel") -> str:  # type: ignore[name-d
             since_cursor=kw_all.get("since_cursor"),
             manuscript_id=kw_all.get("manuscript_id"),
             job_id=kw_all.get("job_id"),
+            include_archived=kw_all.get("include_archived", True),
+            base_branch_id=kw_all.get("base_branch_id"),
+            other_branch_id=kw_all.get("other_branch_id"),
         )
     )
 
@@ -2584,13 +2998,14 @@ async def dispatch_execute_typed(args: "BaseModel") -> str:  # type: ignore[name
     # ``model_dump`` returns a plain dict; ``exclude_none=True`` strips
     # None defaults so downstream ``kw.get(...)`` calls behave the same
     # as the legacy raw-kwarg surface.
-    if op == "update_manuscript":
+    if op in {"update_manuscript", "prepare_manuscript_outline_proposal"}:
         # Preserve explicit nulls for nullable metadata fields (abstract,
-        # venue, workspace_ref) while retaining omission semantics.  The
-        # service uses Pydantic's fields-set to distinguish "clear" from
-        # "leave unchanged", so the dispatch layer carries that set through.
+        # venue, workspace_ref) and outline-patch fields (parent, transition,
+        # quick-reader role, blocker) while retaining omission semantics.
         kw_all = args.model_dump(exclude_unset=True)
-        kw_all["_provided_fields"] = sorted(args.model_fields_set)
+        if op == "update_manuscript":
+            # The metadata service also needs the top-level provided-field set.
+            kw_all["_provided_fields"] = sorted(args.model_fields_set)
     else:
         kw_all = args.model_dump(exclude_none=True)
     kw_all.pop("operation", None)
@@ -2599,8 +3014,15 @@ async def dispatch_execute_typed(args: "BaseModel") -> str:  # type: ignore[name
     # Lift the v2.7.0a3 ``operation-common`` kwargs out of the dump and
     # pass them as explicit named arguments. dispatch_execute signs them
     # at the top of its signature.
-    common_keys = ("source", "confidence", "importance",
-                   "verbatim_input", "provenance", "tags", "phase")
+    common_keys = (
+        "source",
+        "confidence",
+        "importance",
+        "verbatim_input",
+        "provenance",
+        "tags",
+        "phase",
+    )
     common_kw = {k: kw_all.pop(k) for k in common_keys if k in kw_all}
 
     return _coerce_result_to_str(

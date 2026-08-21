@@ -47,6 +47,7 @@ from __future__ import annotations
 from typing import Annotated, Any, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from rka.models.claim import ClaimScopeCondition
 from rka.models.reference_validation import (
     MAX_REFERENCE_AUTHORS,
     MAX_REFERENCE_DOI_CHARS,
@@ -55,6 +56,23 @@ from rka.models.reference_validation import (
     ReferenceValidationInput,
 )
 from rka.models.manuscript_native import ManuscriptReferenceMemberInput
+from rka.models.planning import (
+    PlanningArtifactVersionAppend,
+    PlanningBranchCreate,
+    PlanningBranchTransition,
+    PlanningContributionProposalPrepare,
+    PlanningContributionRatification,
+    PlanningEvaluationMissionCreate,
+    PlanningEvaluationResultProposalPrepare,
+    PlanningResearchQuestionPromotion,
+)
+from rka.models.semantic_patch import (
+    ContextManifestCreate,
+    LMStudioProposalRequest,
+    SemanticPatchProposalCreate,
+    SemanticPatchProposalTransition,
+)
+from rka.models.outline import OutlineProposalRequest
 
 # NOTE: enum aliases from ``rka.mcp._enums`` are imported on a per-batch
 # basis. Batch A (query ops) doesn't directly type any enum field — query
@@ -78,15 +96,49 @@ from rka.mcp._enums import (  # noqa: E402  (intentional post-docstring batch im
 # deduplicates so this is no cost. The lock-tests audit per-model that each
 # Annotated[Literal[...]] uses the imported alias.
 from rka.mcp._enums import (  # noqa: E402, F811
+    ClaimFalsifierStatusLit,
+    ClaimScopeActorLit,
+    ClaimScopeExtensionPolicyLit,
+    ClaimScopeReviewStatusLit,
+    ClaimScopeUncertaintyLit,
     ClaimTypeLit,
     DecidedByLit,
     DecisionKindLit,
     GateTypeLit,
     ImportanceLit,
     IngestSourceLit,
+    EpistemicKindLit,
+    InterpretationActorLit,
+    InterpretationHintKindLit,
+    InterpretationLocatorLit,
+    InterpretationReviewActorLit,
+    InterpretationSourceLit,
+    InterpretationTriageActionLit,
+    InterpretationUncertaintyLit,
+    ClaimEvidenceRoleLit,
+    EvidenceLocatorKindLit,
+    EvidenceSourceKindLit,
+    ExperimentActorLit,
+    ExperimentObservationDirectionLit,
+    ExperimentObservationKindLit,
+    ExperimentRunActionLit,
+    ExperimentRunKindLit,
+    ExperimentStatusLit,
+    WorkingTreeStateLit,
+    PlanningActorLit,
+    PlanningBranchStateLit,
+    PlanningLifecycleLit,
+    PlanningOriginLit,
+    PlanningReadinessLit,
+    PlanningStageLit,
     LitStatusLit,
     NoteTypeLit,
     SourceLit,
+    SemanticPatchAIOriginLit,
+    SemanticPatchAIBoundaryLit,
+    SemanticPatchActorLit,
+    SemanticPatchReviewerLit,
+    SemanticPatchStatusLit,
 )
 
 # Batch C imports — Update/Lifecycle/Submit enums.
@@ -113,12 +165,17 @@ from rka.mcp._enums import (  # noqa: E402, F811
     ManuscriptClaimKindLit,
     ManuscriptClaimStateLit,
     ManuscriptClaimUnitRelationshipLit,
+    ManuscriptCitationRoleLit,
+    ManuscriptCitationVerificationStateLit,
     ManuscriptEvidenceRoleLit,
     ManuscriptInitialPhaseLit,
     ManuscriptInitialStateLit,
+    ManuscriptOutlineActionLit,
     ManuscriptReadinessPhaseLit,
+    ManuscriptRhetoricalMoveLit,
     ManuscriptStateLit,
     ManuscriptUnitKindLit,
+    ManuscriptUnitRoleLit,
     ManuscriptUnitStatusLit,
     ManuscriptVerificationDimensionVerdictLit,
     ManuscriptVerificationVerdictLit,
@@ -171,7 +228,7 @@ class PaginatedFiltersMixin(BaseModel):
 
 
 # =============================================================================
-# Batch A — QUERY operations (51 models)
+# Batch A — QUERY operations (56 models)
 # =============================================================================
 
 # ---------------------------------------------------------------------------
@@ -233,9 +290,7 @@ class QuerySearchArgs(ProjectScopedArgs):
         Optional[dict[str, Any]],
         Field(
             default=None,
-            description=(
-                "Optional filters (e.g. {'entity_types': ['decision', 'journal']})."
-            ),
+            description=("Optional filters (e.g. {'entity_types': ['decision', 'journal']})."),
         ),
     ] = None
 
@@ -296,8 +351,7 @@ class QueryMissionArgs(ProjectScopedArgs):
         Field(
             default=None,
             description=(
-                "Mission ID (mis_...). Omit to auto-locate the current "
-                "active or pending mission."
+                "Mission ID (mis_...). Omit to auto-locate the current active or pending mission."
             ),
         ),
     ] = None
@@ -444,6 +498,142 @@ class QueryClaimsArgs(ProjectScopedArgs, PaginatedFiltersMixin):
     operation: Literal["claims"] = "claims"
 
 
+class QueryClaimScopeArgs(ProjectScopedArgs):
+    """[ANY] Fetch immutable scope history and readiness for one claim."""
+
+    operation: Literal["claim_scope"] = "claim_scope"
+    id: Annotated[str, Field(description="Canonical clm_ claim id.")]
+
+
+class QueryInterpretationCandidatesArgs(ProjectScopedArgs, PaginatedFiltersMixin):
+    """[ANY] List staged interpretations or fetch one candidate detail.
+
+    ``id`` selects the detailed candidate with immutable review history.
+    Filter keys: ``review_status``, ``disposition``, ``epistemic_kind``,
+    ``source_type``, and ``source_id``.
+    """
+
+    operation: Literal["interpretation_candidates"] = "interpretation_candidates"
+    id: Annotated[
+        Optional[str],
+        Field(default=None, description="Optional icd_ id for detailed history."),
+    ] = None
+
+
+class QueryExperimentsArgs(ProjectScopedArgs, PaginatedFiltersMixin):
+    """[ANY] List experiments or fetch one experiment with plan and run history.
+
+    ``id`` selects a detailed experiment. Filter key: ``status``.
+    """
+
+    operation: Literal["experiments"] = "experiments"
+    id: Annotated[Optional[str], Field(default=None, description="Optional exp_ id.")] = None
+
+
+class QueryExperimentRunsArgs(ProjectScopedArgs, PaginatedFiltersMixin):
+    """[ANY] List experiment runs or fetch one run with events and observations.
+
+    ``id`` selects a detailed run. Filter keys: ``experiment_id`` and ``status``.
+    """
+
+    operation: Literal["experiment_runs"] = "experiment_runs"
+    id: Annotated[Optional[str], Field(default=None, description="Optional run_ id.")] = None
+
+
+class QueryExperimentObservationsArgs(ProjectScopedArgs, PaginatedFiltersMixin):
+    """[ANY] List immutable observations or fetch one with evidence lineage.
+
+    ``id`` selects a detailed observation. Filter keys: ``run_id``, ``direction``,
+    ``kind``, and ``claim_id``.
+    """
+
+    operation: Literal["experiment_observations"] = "experiment_observations"
+    id: Annotated[Optional[str], Field(default=None, description="Optional obs_ id.")] = None
+
+
+class QueryPlanningBranchesArgs(ProjectScopedArgs):
+    """[ANY] List planning branches or fetch one effective branch snapshot."""
+
+    operation: Literal["planning_branches"] = "planning_branches"
+    id: Annotated[Optional[str], Field(default=None, description="Optional mpb_ id.")] = None
+    manuscript_id: Annotated[
+        Optional[str],
+        Field(default=None, description="Optional canonical man_ context; omit for project-only."),
+    ] = None
+    include_archived: bool = True
+
+
+class QueryPlanningResumeArgs(ProjectScopedArgs):
+    """[ANY] Resume the exact selected planning branch for one context."""
+
+    operation: Literal["planning_resume"] = "planning_resume"
+    manuscript_id: Annotated[
+        Optional[str],
+        Field(default=None, description="Optional canonical man_ context; omit for project-only."),
+    ] = None
+
+
+class QueryPlanningCompareArgs(ProjectScopedArgs):
+    """[ANY] Compare two planning branches in the same context."""
+
+    operation: Literal["planning_compare"] = "planning_compare"
+    base_branch_id: Annotated[str, Field(min_length=1, description="Base mpb_ id.")]
+    other_branch_id: Annotated[str, Field(min_length=1, description="Comparison mpb_ id.")]
+
+
+class QueryPlanningArtifactVersionsArgs(ProjectScopedArgs):
+    """[ANY] Read every immutable version of one planning artifact."""
+
+    operation: Literal["planning_artifact_versions"] = "planning_artifact_versions"
+    id: Annotated[str, Field(min_length=1, description="Canonical pla_ id.")]
+
+
+class QueryPlanningArgumentWorkflowArgs(ProjectScopedArgs):
+    """[ANY] Read deterministic seed-to-contribution guidance for one branch."""
+
+    operation: Literal["planning_argument_workflow"] = "planning_argument_workflow"
+    id: Annotated[str, Field(min_length=1, description="Canonical mpb_ id.")]
+
+
+class QueryPlanningPromotionsArgs(ProjectScopedArgs):
+    """[ANY] Read append-only promotion lineage for one planning branch."""
+
+    operation: Literal["planning_promotions"] = "planning_promotions"
+    id: Annotated[str, Field(min_length=1, description="Canonical mpb_ id.")]
+
+
+class QueryPlanningEvaluationWorkflowArgs(ProjectScopedArgs):
+    """[ANY] Resolve exact claim-to-result readiness for one planning branch."""
+
+    operation: Literal["planning_evaluation_workflow"] = "planning_evaluation_workflow"
+    id: Annotated[str, Field(min_length=1, description="Canonical mpb_ id.")]
+
+
+class QueryPlanningEvaluationEventsArgs(ProjectScopedArgs):
+    """[ANY] Read immutable evaluation mission/result lineage for one branch."""
+
+    operation: Literal["planning_evaluation_events"] = "planning_evaluation_events"
+    id: Annotated[str, Field(min_length=1, description="Canonical mpb_ id.")]
+
+
+class QuerySemanticPatchProposalsArgs(ProjectScopedArgs):
+    """[ANY] List proposals or fetch one exact semantic diff and event history."""
+
+    operation: Literal["semantic_patch_proposals"] = "semantic_patch_proposals"
+    id: Annotated[Optional[str], Field(default=None, description="Optional spp_ id.")] = None
+    status: Annotated[
+        Optional[SemanticPatchStatusLit],
+        Field(default=None, description="Optional lifecycle filter."),
+    ] = None
+    limit: Annotated[int, Field(default=100, ge=1, le=500)] = 100
+
+
+class QuerySemanticPatchSchemaArgs(ProjectScopedArgs):
+    """[ANY] Get the exact host-agent generated-proposal JSON schema."""
+
+    operation: Literal["semantic_patch_schema"] = "semantic_patch_schema"
+
+
 class QueryManuscriptArgs(ProjectScopedArgs):
     """[ANY] Fetch a manuscript by canonical ``man_`` or legacy ``jrn_`` id."""
 
@@ -463,9 +653,7 @@ class QueryReferenceValidationStatusArgs(ProjectScopedArgs):
     manuscript scope to observe progress and retrieve the eventual result.
     """
 
-    operation: Literal["reference_validation_status"] = (
-        "reference_validation_status"
-    )
+    operation: Literal["reference_validation_status"] = "reference_validation_status"
 
     manuscript_id: Annotated[
         str,
@@ -517,8 +705,7 @@ class ResolveEntitiesArgs(ProjectScopedArgs):
         for entity_id in self.ids:
             if not entity_id or entity_id != entity_id.strip():
                 raise ValueError(
-                    "resolve_entities ids must be non-empty and contain no "
-                    "surrounding whitespace"
+                    "resolve_entities ids must be non-empty and contain no surrounding whitespace"
                 )
         return self
 
@@ -537,9 +724,7 @@ class QueryManuscriptContextArgs(ProjectScopedArgs):
 class QueryManuscriptReferenceManifestArgs(ProjectScopedArgs):
     """[ANY] Read active citation membership and validation currency."""
 
-    operation: Literal["manuscript_reference_manifest"] = (
-        "manuscript_reference_manifest"
-    )
+    operation: Literal["manuscript_reference_manifest"] = "manuscript_reference_manifest"
 
     id: Annotated[
         str,
@@ -576,12 +761,21 @@ class QueryManuscriptSpineArgs(ProjectScopedArgs):
     ]
 
 
+class QueryManuscriptOutlineArgs(ProjectScopedArgs):
+    """[ANY] Read L2-L5 outline rationale, bindings, and checkpoint state."""
+
+    operation: Literal["manuscript_outline"] = "manuscript_outline"
+
+    id: Annotated[
+        str,
+        Field(description="Canonical man_ id or compatibility jrn_ alias."),
+    ]
+
+
 class QueryManuscriptWritingCandidatesArgs(ProjectScopedArgs):
     """[ANY] Smooth claims through reviewed clusters and research questions."""
 
-    operation: Literal["manuscript_writing_candidates"] = (
-        "manuscript_writing_candidates"
-    )
+    operation: Literal["manuscript_writing_candidates"] = "manuscript_writing_candidates"
 
     id: Annotated[
         str,
@@ -719,8 +913,7 @@ class QueryMultiHopArgs(ProjectScopedArgs):
         Field(
             default=None,
             description=(
-                "Optional filters (e.g. {'seeds': [...], 'max_depth': 3, "
-                "'max_nodes': 50})."
+                "Optional filters (e.g. {'seeds': [...], 'max_depth': 3, 'max_nodes': 50})."
             ),
         ),
     ] = None
@@ -745,10 +938,12 @@ class QueryCollectReportContextArgs(ProjectScopedArgs):
 
     query: Annotated[
         str,
-        Field(description=(
-            "The report description — the PI's prose paragraph describing "
-            "what the report should cover."
-        )),
+        Field(
+            description=(
+                "The report description — the PI's prose paragraph describing "
+                "what the report should cover."
+            )
+        ),
     ]
     filters: Annotated[
         Optional[dict[str, Any]],
@@ -881,8 +1076,7 @@ class QueryEvidenceArgs(ProjectScopedArgs):
         Field(
             default=None,
             description=(
-                "Optional filters (e.g. {'format': "
-                "'progress_report'|'briefing'|'audit'})."
+                "Optional filters (e.g. {'format': 'progress_report'|'briefing'|'audit'})."
             ),
         ),
     ] = None
@@ -965,14 +1159,10 @@ class QueryChangelogArgs(ProjectScopedArgs):
     @model_validator(mode="after")
     def _require_since(self) -> "QueryChangelogArgs":
         if self.filters is None or "since" not in self.filters:
-            raise ValueError(
-                "changelog requires filters.since as an ISO8601 date string"
-            )
+            raise ValueError("changelog requires filters.since as an ISO8601 date string")
         since_val = self.filters["since"]
         if not isinstance(since_val, str) or not since_val.strip():
-            raise ValueError(
-                "changelog filters.since must be a non-empty ISO8601 string"
-            )
+            raise ValueError("changelog filters.since must be a non-empty ISO8601 string")
         return self
 
 
@@ -1016,14 +1206,10 @@ class QueryWorkspaceTreeArgs(ProjectScopedArgs):
     @model_validator(mode="after")
     def _require_folder_path(self) -> "QueryWorkspaceTreeArgs":
         if self.filters is None or "folder_path" not in self.filters:
-            raise ValueError(
-                "workspace_tree requires filters.folder_path as an absolute path"
-            )
+            raise ValueError("workspace_tree requires filters.folder_path as an absolute path")
         fp = self.filters["folder_path"]
         if not isinstance(fp, str) or not fp.strip():
-            raise ValueError(
-                "workspace_tree filters.folder_path must be a non-empty string"
-            )
+            raise ValueError("workspace_tree filters.folder_path must be a non-empty string")
         return self
 
 
@@ -1039,9 +1225,7 @@ class QueryWorkspaceScanArgs(ProjectScopedArgs):
     filters: Annotated[
         dict[str, Any],
         Field(
-            description=(
-                "Required filter dict; MUST contain 'folder_path' as a string."
-            ),
+            description=("Required filter dict; MUST contain 'folder_path' as a string."),
         ),
     ]
     ignore_patterns: Annotated[
@@ -1060,14 +1244,10 @@ class QueryWorkspaceScanArgs(ProjectScopedArgs):
     @model_validator(mode="after")
     def _require_folder_path(self) -> "QueryWorkspaceScanArgs":
         if self.filters is None or "folder_path" not in self.filters:
-            raise ValueError(
-                "workspace_scan requires filters.folder_path as an absolute path"
-            )
+            raise ValueError("workspace_scan requires filters.folder_path as an absolute path")
         fp = self.filters["folder_path"]
         if not isinstance(fp, str) or not fp.strip():
-            raise ValueError(
-                "workspace_scan filters.folder_path must be a non-empty string"
-            )
+            raise ValueError("workspace_scan filters.folder_path must be a non-empty string")
         return self
 
 
@@ -1117,6 +1297,21 @@ QueryArgsUnion = Annotated[
         QueryReviewQueueArgs,
         QueryClustersArgs,
         QueryClaimsArgs,
+        QueryClaimScopeArgs,
+        QueryInterpretationCandidatesArgs,
+        QueryExperimentsArgs,
+        QueryExperimentRunsArgs,
+        QueryExperimentObservationsArgs,
+        QueryPlanningBranchesArgs,
+        QueryPlanningResumeArgs,
+        QueryPlanningCompareArgs,
+        QueryPlanningArtifactVersionsArgs,
+        QueryPlanningArgumentWorkflowArgs,
+        QueryPlanningPromotionsArgs,
+        QueryPlanningEvaluationWorkflowArgs,
+        QueryPlanningEvaluationEventsArgs,
+        QuerySemanticPatchProposalsArgs,
+        QuerySemanticPatchSchemaArgs,
         QueryManuscriptArgs,
         QueryReferenceValidationStatusArgs,
         ResolveEntitiesArgs,
@@ -1124,6 +1319,7 @@ QueryArgsUnion = Annotated[
         QueryManuscriptReferenceManifestArgs,
         QueryManuscriptReadinessArgs,
         QueryManuscriptSpineArgs,
+        QueryManuscriptOutlineArgs,
         QueryManuscriptWritingCandidatesArgs,
         QueryChangesSinceArgs,
         QueryManuscriptImpactArgs,
@@ -1161,7 +1357,7 @@ QueryArgsUnion = Annotated[
 
 
 # =============================================================================
-# Batch B — RECORD/CREATE + native manuscript operations (22 models)
+# Batch B — RECORD/CREATE + native manuscript operations (26 models)
 # =============================================================================
 #
 # record_note, ingest_document, record_decision, record_literature,
@@ -1497,8 +1693,7 @@ class RecordDecisionArgs(ProjectScopedArgs):
         Field(
             default=None,
             description=(
-                "Decision lifecycle status; defaults to 'active' at the "
-                "REST layer when omitted."
+                "Decision lifecycle status; defaults to 'active' at the REST layer when omitted."
             ),
         ),
     ] = None
@@ -1544,8 +1739,7 @@ class RecordLiteratureArgs(ProjectScopedArgs):
         Field(
             default=None,
             description=(
-                "Paper title (PRIMARY for title-mode). Either title OR doi "
-                "must be provided."
+                "Paper title (PRIMARY for title-mode). Either title OR doi must be provided."
             ),
         ),
     ] = None
@@ -1670,9 +1864,7 @@ class BatchImportArgs(ProjectScopedArgs):
         allowed_types = {"note", "literature", "decision"}
         for idx, entry in enumerate(self.entries):
             if not isinstance(entry, dict):
-                raise ValueError(
-                    f"batch_import: entries[{idx}] is not a dict."
-                )
+                raise ValueError(f"batch_import: entries[{idx}] is not a dict.")
             entity_type = entry.get("entity_type")
             if entity_type not in allowed_types:
                 raise ValueError(
@@ -1682,8 +1874,7 @@ class BatchImportArgs(ProjectScopedArgs):
             data = entry.get("data")
             if not isinstance(data, dict):
                 raise ValueError(
-                    f"batch_import: entries[{idx}].data must be a dict "
-                    f"(got {type(data).__name__})."
+                    f"batch_import: entries[{idx}].data must be a dict (got {type(data).__name__})."
                 )
         return self
 
@@ -1739,6 +1930,58 @@ class _ManuscriptSpineEvidenceArgs(BaseModel):
         return self
 
 
+class _ManuscriptSpineEvidenceUseArgs(BaseModel):
+    """One unit-local use of an RKA evidence claim."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_claim_id: Annotated[str, Field(pattern=r"^clm_")]
+    supported_proposition: Annotated[Optional[str], Field(min_length=1)] = None
+    warrant: Annotated[Optional[str], Field(min_length=1)] = None
+
+
+class _ManuscriptSpineUnitEvidenceArgs(BaseModel):
+    """Evidence-use buckets; strings remain a compatibility input."""
+
+    model_config = ConfigDict(extra="forbid", use_enum_values=True)
+
+    support: list[Union[str, _ManuscriptSpineEvidenceUseArgs]] = Field(
+        default_factory=list
+    )
+    qualifier: list[Union[str, _ManuscriptSpineEvidenceUseArgs]] = Field(
+        default_factory=list
+    )
+    counterevidence: list[Union[str, _ManuscriptSpineEvidenceUseArgs]] = Field(
+        default_factory=list
+    )
+
+    @model_validator(mode="after")
+    def _require_unique_claim_ids(self) -> "_ManuscriptSpineUnitEvidenceArgs":
+        for role in ManuscriptEvidenceRoleLit.__args__:
+            values = getattr(self, role)
+            ids = [
+                value if isinstance(value, str) else value.evidence_claim_id
+                for value in values
+            ]
+            if len(ids) != len(set(ids)):
+                raise ValueError(f"duplicate evidence ID in {role}")
+            if any(not value.startswith("clm_") for value in ids):
+                raise ValueError(f"{role} evidence must contain only clm_ IDs")
+        return self
+
+
+class _ManuscriptSpineCitationUseArgs(BaseModel):
+    """One typed use of an existing manuscript reference member."""
+
+    model_config = ConfigDict(extra="forbid", use_enum_values=True)
+
+    citation_key: Annotated[str, Field(min_length=1)]
+    citation_role: ManuscriptCitationRoleLit
+    supported_proposition: Annotated[str, Field(min_length=1)]
+    verification_state: ManuscriptCitationVerificationStateLit = "unverified"
+    comparison_axis: Annotated[Optional[str], Field(min_length=1)] = None
+
+
 class _ManuscriptSpineUnitLinkArgs(BaseModel):
     """Typed claim-to-unit relationship in an argument-spine replacement."""
 
@@ -1762,19 +2005,18 @@ class _ManuscriptSpineClaimArgs(BaseModel):
     exact_wording: Annotated[str, Field(min_length=1)]
     allowed_wording: Annotated[str, Field(min_length=1)]
     prohibited_wording: Annotated[list[str], Field(min_length=1)]
-    evidence: _ManuscriptSpineEvidenceArgs = Field(
-        default_factory=_ManuscriptSpineEvidenceArgs
+    conditions: list[Annotated[str, Field(min_length=1)]] = Field(default_factory=list)
+    falsification_criteria: list[Annotated[str, Field(min_length=1)]] = Field(
+        default_factory=list
     )
+    evidence: _ManuscriptSpineEvidenceArgs = Field(default_factory=_ManuscriptSpineEvidenceArgs)
     unit_links: list[_ManuscriptSpineUnitLinkArgs] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _validate_wording_and_links(self) -> "_ManuscriptSpineClaimArgs":
         if any(not value.strip() for value in self.prohibited_wording):
             raise ValueError("prohibited_wording entries must be non-empty")
-        linked = [
-            (item.unit_key, item.relationship)
-            for item in self.unit_links
-        ]
+        linked = [(item.unit_key, item.relationship) for item in self.unit_links]
         if len(linked) != len(set(linked)):
             raise ValueError("duplicate claim-to-unit relationship")
         return self
@@ -1794,9 +2036,23 @@ class _ManuscriptSpineUnitArgs(BaseModel):
     prohibited_interpretation: Optional[str] = None
     sequence: Annotated[int, Field(ge=0)] = 0
     status: ManuscriptUnitStatusLit = "planned"
-    evidence: _ManuscriptSpineEvidenceArgs = Field(
-        default_factory=_ManuscriptSpineEvidenceArgs
+    outline_level: Annotated[int, Field(ge=2, le=5)] = 4
+    unit_role: ManuscriptUnitRoleLit = "unspecified"
+    rhetorical_move: ManuscriptRhetoricalMoveLit = "unspecified"
+    parent_unit_key: Optional[str] = None
+    communicative_job: Optional[str] = None
+    intended_takeaway: Optional[str] = None
+    transition_from_previous: Optional[str] = None
+    quick_reader_role: Optional[str] = None
+    evidence_plan: list[str] = Field(default_factory=list)
+    figure_intentions: list[str] = Field(default_factory=list)
+    table_intentions: list[str] = Field(default_factory=list)
+    citation_intentions: list[str] = Field(default_factory=list)
+    blocker: Optional[str] = None
+    evidence: _ManuscriptSpineUnitEvidenceArgs = Field(
+        default_factory=_ManuscriptSpineUnitEvidenceArgs
     )
+    citations: list[_ManuscriptSpineCitationUseArgs] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _require_result_boundaries(self) -> "_ManuscriptSpineUnitArgs":
@@ -1833,17 +2089,16 @@ class _ManuscriptArgumentSpineArgs(BaseModel):
             if len(keys) != len(set(keys)):
                 raise ValueError(f"duplicate {label} local_key")
         unit_keys = {unit.local_key for unit in self.units}
-        missing = sorted({
-            link.unit_key
-            for claim in self.claims
-            for link in claim.unit_links
-            if link.unit_key not in unit_keys
-        })
+        missing = sorted(
+            {
+                link.unit_key
+                for claim in self.claims
+                for link in claim.unit_links
+                if link.unit_key not in unit_keys
+            }
+        )
         if missing:
-            raise ValueError(
-                "claim unit_links reference unknown unit keys: "
-                + ", ".join(missing)
-            )
+            raise ValueError("claim unit_links reference unknown unit keys: " + ", ".join(missing))
         return self
 
 
@@ -1893,7 +2148,7 @@ class UpdateManuscriptArgs(ProjectScopedArgs):
 
 
 class UpsertArgumentSpineArgs(ProjectScopedArgs):
-    """[ANY] Atomically replace the authoritative argument-spine projection."""
+    """[DEPRECATED] Human REST/CLI compatibility only; MCP callers use proposals."""
 
     operation: Literal["upsert_argument_spine"] = "upsert_argument_spine"
 
@@ -1921,9 +2176,7 @@ class ReplaceManuscriptReferenceManifestArgs(ProjectScopedArgs):
         list[ManuscriptReferenceMemberInput],
         Field(
             max_length=2_000,
-            description=(
-                "Complete active citation set; omission retires a prior member."
-            ),
+            description=("Complete active citation set; omission retires a prior member."),
         ),
     ]
 
@@ -1975,9 +2228,7 @@ class RatifyManuscriptClaimArgs(ProjectScopedArgs):
 class TransitionManuscriptPhaseArgs(ProjectScopedArgs):
     """[ANY] Run readiness gates and transition the manuscript lifecycle."""
 
-    operation: Literal["transition_manuscript_phase"] = (
-        "transition_manuscript_phase"
-    )
+    operation: Literal["transition_manuscript_phase"] = "transition_manuscript_phase"
 
     id: Annotated[
         str,
@@ -1991,9 +2242,7 @@ class TransitionManuscriptPhaseArgs(ProjectScopedArgs):
 class CreateManuscriptCheckpointArgs(ProjectScopedArgs):
     """[PI] Create a pending native manuscript checkpoint."""
 
-    operation: Literal["create_manuscript_checkpoint"] = (
-        "create_manuscript_checkpoint"
-    )
+    operation: Literal["create_manuscript_checkpoint"] = "create_manuscript_checkpoint"
 
     id: Annotated[
         str,
@@ -2016,9 +2265,7 @@ class CreateManuscriptCheckpointArgs(ProjectScopedArgs):
 class ResolveManuscriptCheckpointArgs(ProjectScopedArgs):
     """[PI] Resolve a pending manuscript checkpoint through a PI decision."""
 
-    operation: Literal["resolve_manuscript_checkpoint"] = (
-        "resolve_manuscript_checkpoint"
-    )
+    operation: Literal["resolve_manuscript_checkpoint"] = "resolve_manuscript_checkpoint"
 
     checkpoint_id: Annotated[str, Field(min_length=1)]
     expected_revision: Annotated[int, Field(ge=1)]
@@ -2030,9 +2277,7 @@ class ResolveManuscriptCheckpointArgs(ProjectScopedArgs):
 class RecordVerificationAttestationArgs(ProjectScopedArgs):
     """[ANY] Append one immutable multidimensional claim verification."""
 
-    operation: Literal["record_verification_attestation"] = (
-        "record_verification_attestation"
-    )
+    operation: Literal["record_verification_attestation"] = "record_verification_attestation"
 
     id: Annotated[
         str,
@@ -2203,11 +2448,27 @@ class _ExtractClaimItem(BaseModel):
         ClaimTypeLit,
         Field(
             description=(
-                "Type of claim: hypothesis | evidence | method | "
-                "result | observation | assumption."
+                "Type of claim: hypothesis | evidence | method | result | observation | assumption."
             ),
         ),
     ]
+    epistemic_kind: Annotated[
+        Optional[EpistemicKindLit],
+        Field(
+            default=None,
+            description="Explicit interpretation kind; inferred from claim_type when omitted.",
+        ),
+    ] = None
+    source_offset_start: Annotated[Optional[int], Field(default=None, ge=0)] = None
+    source_offset_end: Annotated[Optional[int], Field(default=None, ge=0)] = None
+    scope_conditions: Annotated[Optional[list[str]], Field(default=None)] = None
+    uncertainty: Annotated[
+        InterpretationUncertaintyLit,
+        Field(default="unknown", description="Known uncertainty at extraction time."),
+    ] = "unknown"
+    uncertainty_note: Annotated[Optional[str], Field(default=None)] = None
+    falsifier: Annotated[Optional[str], Field(default=None)] = None
+    extraction_model: Annotated[Optional[str], Field(default=None)] = None
 
 
 class ExtractClaimsArgs(ProjectScopedArgs):
@@ -2230,6 +2491,442 @@ class ExtractClaimsArgs(ProjectScopedArgs):
             ),
         ),
     ]
+
+
+class CreateInterpretationCandidateArgs(ProjectScopedArgs):
+    """[BRAIN/EXECUTOR/PI] Stage one atomic source interpretation."""
+
+    operation: Literal["create_interpretation_candidate"] = "create_interpretation_candidate"
+    source_type: Annotated[InterpretationSourceLit, Field(description="Source entity type.")]
+    source_id: Annotated[str, Field(min_length=1, max_length=128)]
+    locator_kind: Annotated[InterpretationLocatorLit, Field(description="Exact locator shape.")]
+    statement: Annotated[str, Field(min_length=1, max_length=20_000)]
+    epistemic_kind: Annotated[
+        EpistemicKindLit, Field(description="Meaning of this staged statement.")
+    ]
+    created_by: Annotated[InterpretationActorLit, Field(description="Candidate author/extractor.")]
+    extraction_tool: Annotated[str, Field(min_length=1, max_length=256)]
+    locator_start: Annotated[Optional[int], Field(default=None, ge=0)] = None
+    locator_end: Annotated[Optional[int], Field(default=None, ge=0)] = None
+    locator_value: Annotated[Optional[str], Field(default=None, max_length=2048)] = None
+    scope_conditions: Annotated[Optional[list[str]], Field(default=None, max_length=100)] = None
+    uncertainty: Annotated[InterpretationUncertaintyLit, Field(default="unknown")] = "unknown"
+    uncertainty_note: Annotated[Optional[str], Field(default=None, max_length=4000)] = None
+    falsifier: Annotated[Optional[str], Field(default=None, max_length=10_000)] = None
+    proposed_claim_type: Annotated[Optional[ClaimTypeLit], Field(default=None)] = None
+    extraction_model: Annotated[Optional[str], Field(default=None, max_length=256)] = None
+
+    @model_validator(mode="after")
+    def _validate_locator(self) -> "CreateInterpretationCandidateArgs":
+        if self.locator_kind in {"text_offset", "page", "line_range"}:
+            if self.locator_start is None:
+                raise ValueError(f"{self.locator_kind} requires locator_start")
+            if self.locator_end is not None and self.locator_end < self.locator_start:
+                raise ValueError("locator_end must be >= locator_start")
+        elif not self.locator_value or not self.locator_value.strip():
+            raise ValueError(f"{self.locator_kind} requires locator_value")
+        return self
+
+
+class AddInterpretationHintArgs(ProjectScopedArgs):
+    """[BRAIN/PI] Attach a duplicate/conflict review hint."""
+
+    operation: Literal["add_interpretation_hint"] = "add_interpretation_hint"
+    id: Annotated[str, Field(description="Candidate receiving the hint.")]
+    related_candidate_id: Annotated[str, Field(description="Related candidate id.")]
+    kind: Annotated[InterpretationHintKindLit, Field(description="Duplicate or conflict.")]
+    rationale: Annotated[str, Field(min_length=1, max_length=10_000)]
+    created_by: Annotated[InterpretationActorLit, Field(description="Hint author.")]
+    expected_revision: Annotated[int, Field(ge=1)]
+    confidence: Annotated[float, Field(default=0.5, ge=0.0, le=1.0)] = 0.5
+
+
+class TriageInterpretationCandidateArgs(ProjectScopedArgs):
+    """[BRAIN/PI] Review, promote, reopen, or revoke one candidate."""
+
+    operation: Literal["triage_interpretation_candidate"] = "triage_interpretation_candidate"
+    id: Annotated[str, Field(description="Interpretation candidate id.")]
+    action: Annotated[InterpretationTriageActionLit, Field(description="Review action.")]
+    expected_revision: Annotated[int, Field(ge=1)]
+    actor: Annotated[InterpretationReviewActorLit, Field(description="Reviewing actor.")]
+    reason: Annotated[Optional[str], Field(default=None, max_length=10_000)] = None
+    target_candidate_id: Annotated[Optional[str], Field(default=None, max_length=128)] = None
+    target_entity_id: Annotated[Optional[str], Field(default=None, max_length=128)] = None
+    grounding_verified: Annotated[bool, Field(default=False)] = False
+    claim_confidence: Annotated[float, Field(default=0.5, ge=0.0, le=1.0)] = 0.5
+    evidence_role: Annotated[Optional[ClaimEvidenceRoleLit], Field(default=None)] = None
+
+    @model_validator(mode="after")
+    def _validate_triage(self) -> "TriageInterpretationCandidateArgs":
+        if self.action != "start_review" and not self.reason:
+            raise ValueError(f"{self.action} requires reason")
+        if self.action == "merge" and not self.target_candidate_id:
+            raise ValueError("merge requires target_candidate_id")
+        if self.action == "promote" and not self.grounding_verified:
+            raise ValueError("promote requires grounding_verified=true")
+        if self.action == "classify_evidence":
+            if not self.target_entity_id:
+                raise ValueError("classify_evidence requires target_entity_id")
+            if not self.evidence_role:
+                raise ValueError("classify_evidence requires evidence_role")
+        if self.action == "revoke_evidence" and not self.target_entity_id:
+            raise ValueError("revoke_evidence requires target_entity_id")
+        return self
+
+
+class _ExperimentPlanArgs(BaseModel):
+    """Shared exact plan and repository-snapshot fields."""
+
+    objective: Annotated[str, Field(min_length=1, max_length=20_000)]
+    hypothesis: Annotated[Optional[str], Field(default=None, max_length=20_000)] = None
+    protocol: Annotated[str, Field(min_length=1, max_length=100_000)]
+    conditions: Annotated[list[str], Field(default_factory=list, max_length=500)]
+    variables: Annotated[list[str], Field(default_factory=list, max_length=500)]
+    metrics: Annotated[list[str], Field(default_factory=list, max_length=500)]
+    baselines: Annotated[list[str], Field(default_factory=list, max_length=500)]
+    success_criteria: Annotated[list[str], Field(default_factory=list, max_length=500)]
+    failure_criteria: Annotated[list[str], Field(default_factory=list, max_length=500)]
+    repository_url: Annotated[Optional[str], Field(default=None, max_length=2048)] = None
+    commit_sha: Annotated[Optional[str], Field(default=None, max_length=64)] = None
+    working_tree_state: Annotated[Optional[WorkingTreeStateLit], Field(default=None)] = None
+
+
+class CreateExperimentArgs(ProjectScopedArgs, _ExperimentPlanArgs):
+    """[BRAIN/EXECUTOR/PI] Create an experiment with immutable plan version 1."""
+
+    operation: Literal["create_experiment"] = "create_experiment"
+    title: Annotated[str, Field(min_length=1, max_length=1000)]
+    created_by: Annotated[ExperimentActorLit, Field(description="Experiment author.")]
+    reason: Annotated[str, Field(min_length=1, max_length=10_000)]
+
+
+class AppendExperimentPlanArgs(ProjectScopedArgs, _ExperimentPlanArgs):
+    """[BRAIN/EXECUTOR/PI] Append a revision-guarded immutable plan version."""
+
+    operation: Literal["append_experiment_plan"] = "append_experiment_plan"
+    id: Annotated[str, Field(description="Canonical exp_ id.")]
+    expected_revision: Annotated[int, Field(ge=1)]
+    created_by: Annotated[ExperimentActorLit, Field(description="Plan author.")]
+    reason: Annotated[str, Field(min_length=1, max_length=10_000)]
+
+
+class TransitionExperimentArgs(ProjectScopedArgs):
+    """[BRAIN/EXECUTOR/PI] Transition an experiment lifecycle state."""
+
+    operation: Literal["transition_experiment"] = "transition_experiment"
+    id: Annotated[str, Field(description="Canonical exp_ id.")]
+    expected_revision: Annotated[int, Field(ge=1)]
+    target_status: Annotated[ExperimentStatusLit, Field(description="Target lifecycle state.")]
+    actor: Annotated[ExperimentActorLit, Field(description="Transition actor.")]
+    reason: Annotated[str, Field(min_length=1, max_length=10_000)]
+
+
+class CreateExperimentRunArgs(ProjectScopedArgs):
+    """[EXECUTOR] Queue a run bound to one immutable experiment plan version."""
+
+    operation: Literal["create_experiment_run"] = "create_experiment_run"
+    experiment_id: Annotated[str, Field(description="Canonical exp_ id.")]
+    plan_version: Annotated[int, Field(ge=1)]
+    label: Annotated[str, Field(min_length=1, max_length=1000)]
+    runner: Annotated[ExperimentRunKindLit, Field(description="Execution environment kind.")]
+    command: Annotated[Optional[str], Field(default=None, max_length=100_000)] = None
+    config: Annotated[dict[str, Any], Field(default_factory=dict)]
+    environment: Annotated[dict[str, Any], Field(default_factory=dict)]
+    repository_url: Annotated[Optional[str], Field(default=None, max_length=2048)] = None
+    commit_sha: Annotated[Optional[str], Field(default=None, max_length=64)] = None
+    working_tree_state: Annotated[Optional[WorkingTreeStateLit], Field(default=None)] = None
+    created_by: Annotated[ExperimentActorLit, Field(description="Run creator.")]
+    reason: Annotated[str, Field(min_length=1, max_length=10_000)]
+
+
+class TransitionExperimentRunArgs(ProjectScopedArgs):
+    """[EXECUTOR] Append a revision-guarded run lifecycle event."""
+
+    operation: Literal["transition_experiment_run"] = "transition_experiment_run"
+    id: Annotated[str, Field(description="Canonical run_ id.")]
+    expected_revision: Annotated[int, Field(ge=1)]
+    action: Annotated[ExperimentRunActionLit, Field(description="Lifecycle action.")]
+    actor: Annotated[ExperimentActorLit, Field(description="Transition actor.")]
+    reason: Annotated[str, Field(min_length=1, max_length=10_000)]
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    exit_code: Optional[int] = None
+    failure_summary: Annotated[Optional[str], Field(default=None, max_length=20_000)] = None
+
+
+class RecordExperimentObservationArgs(ProjectScopedArgs):
+    """[EXECUTOR/BRAIN/PI] Record one immutable observation from a run."""
+
+    operation: Literal["record_experiment_observation"] = "record_experiment_observation"
+    run_id: Annotated[str, Field(description="Canonical run_ id.")]
+    name: Annotated[str, Field(min_length=1, max_length=1000)]
+    kind: Annotated[ExperimentObservationKindLit, Field(description="Observation shape.")]
+    direction: Annotated[
+        ExperimentObservationDirectionLit,
+        Field(description="Observed direction; independent from run success."),
+    ]
+    summary: Annotated[str, Field(min_length=1, max_length=50_000)]
+    value_real: Optional[float] = None
+    value_text: Annotated[Optional[str], Field(default=None, max_length=100_000)] = None
+    unit: Annotated[Optional[str], Field(default=None, max_length=256)] = None
+    sample_size: Annotated[Optional[int], Field(default=None, ge=0)] = None
+    uncertainty_note: Annotated[Optional[str], Field(default=None, max_length=20_000)] = None
+    observed_at: Annotated[str, Field(min_length=1)]
+    recorded_by: Annotated[ExperimentActorLit, Field(description="Observation recorder.")]
+
+
+class AddEvidenceLocatorArgs(ProjectScopedArgs):
+    """[EXECUTOR/BRAIN/PI] Bind an observation to exact immutable evidence bytes."""
+
+    operation: Literal["add_evidence_locator"] = "add_evidence_locator"
+    observation_id: Annotated[str, Field(description="Canonical obs_ id.")]
+    source_kind: Annotated[EvidenceSourceKindLit, Field(description="Artifact or repository.")]
+    artifact_id: Optional[str] = None
+    repository_url: Optional[str] = None
+    commit_sha: Optional[str] = None
+    relative_path: Optional[str] = None
+    locator_kind: Annotated[EvidenceLocatorKindLit, Field(description="Exact sub-resource locator.")]
+    locator_start: Annotated[Optional[int], Field(default=None, ge=0)] = None
+    locator_end: Annotated[Optional[int], Field(default=None, ge=0)] = None
+    locator_value: Optional[str] = None
+    content_hash: Optional[str] = None
+    label: Optional[str] = None
+    created_by: Annotated[ExperimentActorLit, Field(description="Locator author.")]
+
+
+class CreatePlanningBranchArgs(ProjectScopedArgs, PlanningBranchCreate):
+    """[BRAIN/EXECUTOR/PI] Create a revision-pinned manuscript-planning branch."""
+
+    operation: Literal["create_planning_branch"] = "create_planning_branch"
+    created_by: Annotated[PlanningActorLit, Field(description="Branch author.")]
+
+
+class TransitionPlanningBranchArgs(ProjectScopedArgs, PlanningBranchTransition):
+    """[BRAIN/EXECUTOR/PI] Select, activate, archive, or supersede a branch."""
+
+    operation: Literal["transition_planning_branch"] = "transition_planning_branch"
+    id: Annotated[str, Field(min_length=1, description="Canonical mpb_ id.")]
+    target_state: Annotated[PlanningBranchStateLit, Field(description="Target branch state.")]
+    actor: Annotated[PlanningActorLit, Field(description="Transition actor.")]
+
+
+class AppendPlanningArtifactVersionArgs(
+    ProjectScopedArgs, PlanningArtifactVersionAppend
+):
+    """[BRAIN/EXECUTOR/PI] Append one immutable typed planning-artifact version."""
+
+    operation: Literal["append_planning_artifact_version"] = (
+        "append_planning_artifact_version"
+    )
+    id: Annotated[str, Field(min_length=1, description="Canonical mpb_ branch id.")]
+    stage_type: Annotated[PlanningStageLit, Field(description="Closed planning stage.")]
+    lifecycle: Annotated[PlanningLifecycleLit, Field(description="Artifact lifecycle.")] = (
+        "candidate"
+    )
+    origin: Annotated[PlanningOriginLit, Field(description="Version origin.")]
+    readiness_state: Annotated[
+        PlanningReadinessLit, Field(description="Mechanical readiness state.")
+    ] = "in_progress"
+    created_by: Annotated[PlanningActorLit, Field(description="Version author.")]
+
+
+class PromotePlanningResearchQuestionArgs(
+    ProjectScopedArgs, PlanningResearchQuestionPromotion
+):
+    """[PI] Promote one selected RQ candidate into a PI decision."""
+
+    operation: Literal["promote_planning_rq"] = "promote_planning_rq"
+    id: Annotated[str, Field(min_length=1, description="Canonical mpb_ branch id.")]
+
+
+class PreparePlanningContributionArgs(
+    ProjectScopedArgs, PlanningContributionProposalPrepare
+):
+    """[BRAIN/EXECUTOR/PI] Prepare, but never apply, a contribution proposal."""
+
+    operation: Literal["prepare_planning_contribution"] = (
+        "prepare_planning_contribution"
+    )
+    id: Annotated[str, Field(min_length=1, description="Canonical mpb_ branch id.")]
+
+
+class RatifyPlanningContributionArgs(
+    ProjectScopedArgs, PlanningContributionRatification
+):
+    """[PI] Ratify exact applied contribution wording against a PI decision."""
+
+    operation: Literal["ratify_planning_contribution"] = (
+        "ratify_planning_contribution"
+    )
+    id: Annotated[str, Field(min_length=1, description="Canonical mpb_ branch id.")]
+
+
+class CreatePlanningEvaluationMissionArgs(
+    ProjectScopedArgs, PlanningEvaluationMissionCreate
+):
+    """[BRAIN/EXECUTOR/PI] Create one mission from a missing evidence slot."""
+
+    operation: Literal["create_planning_evaluation_mission"] = (
+        "create_planning_evaluation_mission"
+    )
+    id: Annotated[str, Field(min_length=1, description="Canonical mpb_ branch id.")]
+
+
+class PreparePlanningEvaluationResultArgs(
+    ProjectScopedArgs, PlanningEvaluationResultProposalPrepare
+):
+    """[BRAIN/EXECUTOR/PI] Prepare one exact bounded result-unit proposal."""
+
+    operation: Literal["prepare_planning_evaluation_result"] = (
+        "prepare_planning_evaluation_result"
+    )
+    id: Annotated[str, Field(min_length=1, description="Canonical mpb_ branch id.")]
+
+
+class PrepareManuscriptOutlineProposalArgs(ProjectScopedArgs, OutlineProposalRequest):
+    """[BRAIN/EXECUTOR] Prepare an attributed outline proposal for human review."""
+
+    operation: Literal["prepare_manuscript_outline_proposal"] = (
+        "prepare_manuscript_outline_proposal"
+    )
+    origin: Annotated[
+        SemanticPatchAIOriginLit,
+        Field(description="AI provider path; typed MCP calls cannot claim human origin."),
+    ]
+    provider: Annotated[str, Field(min_length=1, description="AI provider name.")]
+    model: Annotated[str, Field(min_length=1, description="AI model identifier.")]
+    boundary: Annotated[
+        SemanticPatchAIBoundaryLit,
+        Field(description="Outbound data boundary recorded by the context manifest."),
+    ]
+    context_manifest_id: Annotated[
+        str,
+        Field(min_length=1, description="Matching pcm_ context disclosure manifest."),
+    ]
+    action: Annotated[
+        ManuscriptOutlineActionLit,
+        Field(description="Deterministic structural outline transformation."),
+    ]
+    id: Annotated[str, Field(min_length=1, description="Canonical man_ manuscript id.")]
+
+
+class PrepareSemanticPatchContextArgs(ProjectScopedArgs, ContextManifestCreate):
+    """[ANY] Persist the exact context disclosure before an AI call."""
+
+    operation: Literal["prepare_semantic_patch_context"] = "prepare_semantic_patch_context"
+    origin: Annotated[SemanticPatchAIOriginLit, Field(description="AI provider path.")]
+    boundary: Annotated[
+        SemanticPatchAIBoundaryLit, Field(description="Outbound data boundary.")
+    ]
+
+
+class CreateSemanticPatchProposalArgs(ProjectScopedArgs, SemanticPatchProposalCreate):
+    """[BRAIN/EXECUTOR] Persist an attributed AI proposal without applying it."""
+
+    operation: Literal["create_semantic_patch_proposal"] = "create_semantic_patch_proposal"
+    origin: Annotated[
+        SemanticPatchAIOriginLit,
+        Field(description="AI provider path; typed MCP calls cannot claim human origin."),
+    ]
+    created_by: Annotated[SemanticPatchActorLit, Field(description="Proposal author.")]
+    provider: Annotated[str, Field(min_length=1, description="AI provider name.")]
+    model: Annotated[str, Field(min_length=1, description="AI model identifier.")]
+    boundary: Annotated[
+        SemanticPatchAIBoundaryLit, Field(description="Outbound data boundary.")
+    ]
+    context_manifest_id: Annotated[
+        str,
+        Field(min_length=1, description="Matching pcm_ context disclosure manifest."),
+    ]
+
+
+class ApplySemanticPatchProposalArgs(ProjectScopedArgs, SemanticPatchProposalTransition):
+    """[PI/WEB_UI] Explicitly apply one reviewed, current proposal."""
+
+    operation: Literal["apply_semantic_patch_proposal"] = "apply_semantic_patch_proposal"
+    id: Annotated[str, Field(min_length=1, description="Canonical spp_ id.")]
+    actor: Annotated[SemanticPatchReviewerLit, Field(description="Applying reviewer.")]
+
+
+class RejectSemanticPatchProposalArgs(ProjectScopedArgs, SemanticPatchProposalTransition):
+    """[PI/WEB_UI] Reject a proposal without mutating its targets."""
+
+    operation: Literal["reject_semantic_patch_proposal"] = "reject_semantic_patch_proposal"
+    id: Annotated[str, Field(min_length=1, description="Canonical spp_ id.")]
+    actor: Annotated[SemanticPatchReviewerLit, Field(description="Rejecting reviewer.")]
+
+
+class GenerateLMStudioSemanticPatchArgs(ProjectScopedArgs, LMStudioProposalRequest):
+    """[ANY] Generate a local-machine proposal; never auto-apply it."""
+
+    operation: Literal["generate_lm_studio_semantic_patch"] = (
+        "generate_lm_studio_semantic_patch"
+    )
+    created_by: Annotated[SemanticPatchActorLit, Field(description="Proposal author.")]
+
+
+class SetClaimScopeArgs(ProjectScopedArgs):
+    """[BRAIN/PI] Append a revision-guarded canonical claim-scope contract."""
+
+    operation: Literal["set_claim_scope"] = "set_claim_scope"
+    claim_id: Annotated[str, Field(min_length=1, description="Canonical clm_ id.")]
+    expected_revision: Annotated[int, Field(ge=0)]
+    actor: Annotated[ClaimScopeActorLit, Field(description="Scope contract author.")]
+    reason: Annotated[str, Field(min_length=1, max_length=10_000)]
+    conditions: Annotated[
+        list[ClaimScopeCondition],
+        Field(default_factory=list, max_length=100),
+    ]
+    uncertainty: Annotated[
+        ClaimScopeUncertaintyLit,
+        Field(default="unknown"),
+    ] = "unknown"
+    uncertainty_note: Annotated[
+        Optional[str],
+        Field(default=None, max_length=4000),
+    ] = None
+    extension_policy: Annotated[
+        Optional[ClaimScopeExtensionPolicyLit],
+        Field(default=None),
+    ] = None
+    allowed_extensions: Annotated[
+        list[str],
+        Field(default_factory=list, max_length=100),
+    ]
+    prohibited_extensions: Annotated[
+        list[str],
+        Field(default_factory=list, max_length=100),
+    ]
+    falsifier_status: Annotated[
+        ClaimFalsifierStatusLit,
+        Field(default="unknown"),
+    ] = "unknown"
+    falsifier: Annotated[
+        Optional[str],
+        Field(default=None, max_length=10_000),
+    ] = None
+    falsifier_rationale: Annotated[
+        Optional[str],
+        Field(default=None, max_length=4000),
+    ] = None
+    disconfirming_claim_ids: Annotated[
+        list[str],
+        Field(default_factory=list, max_length=200),
+    ]
+    review_status: Annotated[
+        ClaimScopeReviewStatusLit,
+        Field(default="draft"),
+    ] = "draft"
+
+    @model_validator(mode="after")
+    def _validate_scope_contract(self) -> "SetClaimScopeArgs":
+        # Keep MCP and REST cross-field semantics identical.
+        from rka.models.claim import ClaimScopeWrite
+
+        ClaimScopeWrite.model_validate(
+            self.model_dump(exclude={"operation", "project_id", "claim_id"})
+        )
+        return self
 
 
 # --- checkpoint / gates ---------------------------------------------------
@@ -2353,7 +3050,7 @@ class HookAddArgs(ProjectScopedArgs):
 # Batch B partial union (record/create + native manuscript domain)
 # ---------------------------------------------------------------------------
 #
-# The full rka_execute union (58 ops) is assembled below
+# The full rka_execute union is assembled below
 # from per-batch contributions. This partial union exposes Batch B's
 # slice so unit tests can verify it in isolation.
 
@@ -2381,6 +3078,31 @@ BatchBExecuteUnion = Annotated[
         CreateGateArgs,
         HookAddArgs,
         ExtractClaimsArgs,
+        CreateInterpretationCandidateArgs,
+        AddInterpretationHintArgs,
+        TriageInterpretationCandidateArgs,
+        SetClaimScopeArgs,
+        CreateExperimentArgs,
+        AppendExperimentPlanArgs,
+        TransitionExperimentArgs,
+        CreateExperimentRunArgs,
+        TransitionExperimentRunArgs,
+        RecordExperimentObservationArgs,
+        AddEvidenceLocatorArgs,
+        CreatePlanningBranchArgs,
+        TransitionPlanningBranchArgs,
+        AppendPlanningArtifactVersionArgs,
+        PromotePlanningResearchQuestionArgs,
+        PreparePlanningContributionArgs,
+        RatifyPlanningContributionArgs,
+        CreatePlanningEvaluationMissionArgs,
+        PreparePlanningEvaluationResultArgs,
+        PrepareManuscriptOutlineProposalArgs,
+        PrepareSemanticPatchContextArgs,
+        CreateSemanticPatchProposalArgs,
+        ApplySemanticPatchProposalArgs,
+        RejectSemanticPatchProposalArgs,
+        GenerateLMStudioSemanticPatchArgs,
     ],
     Field(discriminator="operation"),
 ]
@@ -2532,9 +3254,7 @@ class ReviewClaimsArgs(ProjectScopedArgs):
         list[str],
         Field(
             min_length=1,
-            description=(
-                "Claim IDs to review (``clm_...``). Must be non-empty."
-            ),
+            description=("Claim IDs to review (``clm_...``). Must be non-empty."),
         ),
     ]
 
@@ -2558,8 +3278,7 @@ class ReviewClaimsArgs(ProjectScopedArgs):
             ge=0.0,
             le=1.0,
             description=(
-                "Override the claim's numeric confidence (0.0-1.0). "
-                "Used with action='adjust'."
+                "Override the claim's numeric confidence (0.0-1.0). Used with action='adjust'."
             ),
         ),
     ] = None
@@ -2582,9 +3301,7 @@ class ReviewClaimsArgs(ProjectScopedArgs):
             and self.confidence_override is None
             and self.evidence_status is None
         ):
-            raise ValueError(
-                "action='adjust' requires confidence_override or evidence_status"
-            )
+            raise ValueError("action='adjust' requires confidence_override or evidence_status")
         return self
 
 
@@ -2638,8 +3355,7 @@ class ReviewClusterArgs(ProjectScopedArgs):
         Field(
             default=None,
             description=(
-                "Contradiction descriptions to surface for "
-                "``resolve_contradiction`` follow-up."
+                "Contradiction descriptions to surface for ``resolve_contradiction`` follow-up."
             ),
         ),
     ] = None
@@ -2780,10 +3496,7 @@ class BrainNotificationsClearArgs(ProjectScopedArgs):
         list[str],
         Field(
             min_length=1,
-            description=(
-                "Notification IDs to clear (``bn_...``). Must be "
-                "non-empty."
-            ),
+            description=("Notification IDs to clear (``bn_...``). Must be non-empty."),
         ),
     ]
 
@@ -2835,8 +3548,7 @@ class BootstrapWorkspaceArgs(ProjectScopedArgs):
         Field(
             default=None,
             description=(
-                "Tags to apply to every generated entry (overrides the "
-                "default tagging policy)."
+                "Tags to apply to every generated entry (overrides the default tagging policy)."
             ),
         ),
     ] = None
@@ -2844,10 +3556,7 @@ class BootstrapWorkspaceArgs(ProjectScopedArgs):
         Optional[list[str]],
         Field(
             default=None,
-            description=(
-                "List of file paths or glob patterns to skip during the "
-                "walk."
-            ),
+            description=("List of file paths or glob patterns to skip during the walk."),
         ),
     ] = None
     use_llm: Annotated[
@@ -2866,8 +3575,7 @@ class BootstrapWorkspaceArgs(ProjectScopedArgs):
         Field(
             default=False,
             description=(
-                "When True, simulate the bootstrap and emit a preview "
-                "without writing any rows."
+                "When True, simulate the bootstrap and emit a preview without writing any rows."
             ),
         ),
     ] = False
@@ -2957,8 +3665,7 @@ class FlagStaleArgs(ProjectScopedArgs):
         str,
         Field(
             description=(
-                "Free-form reason for the staleness flag (e.g., "
-                "'Superseded by new benchmark')."
+                "Free-form reason for the staleness flag (e.g., 'Superseded by new benchmark')."
             ),
         ),
     ]
@@ -3199,7 +3906,10 @@ class UpdateDecisionArgs(ProjectScopedArgs):
 
     status: Annotated[
         Optional[DecisionStatusLit],
-        Field(default=None, description="New decision lifecycle status (active|abandoned|superseded|merged|revisit)."),
+        Field(
+            default=None,
+            description="New decision lifecycle status (active|abandoned|superseded|merged|revisit).",
+        ),
     ] = None
     chosen: Annotated[
         Optional[str],
@@ -3263,9 +3973,7 @@ class UpdateDecisionArgs(ProjectScopedArgs):
             self.abandonment_reason,
         )
         if all(f is None for f in mutable_fields):
-            raise ValueError(
-                "update_decision: at least one mutable field must be non-None."
-            )
+            raise ValueError("update_decision: at least one mutable field must be non-None.")
         return self
 
 
@@ -3376,9 +4084,7 @@ class UpdateLiteratureArgs(ProjectScopedArgs):
             self.tags,
         )
         if all(f is None for f in mutable_fields):
-            raise ValueError(
-                "update_literature: at least one mutable field must be non-None."
-            )
+            raise ValueError("update_literature: at least one mutable field must be non-None.")
         return self
 
 
@@ -3448,9 +4154,7 @@ class UpdateMissionArgs(ProjectScopedArgs):
             self.tags,
         )
         if all(f is None for f in mutable_fields):
-            raise ValueError(
-                "update_mission: at least one mutable field must be non-None."
-            )
+            raise ValueError("update_mission: at least one mutable field must be non-None.")
         return self
 
 
@@ -3502,7 +4206,9 @@ class UpdateMissionStatusArgs(ProjectScopedArgs):
     ]
     status: Annotated[
         MissionStatusLit,
-        Field(description="New lifecycle state (pending|active|complete|partial|blocked|cancelled)."),
+        Field(
+            description="New lifecycle state (pending|active|complete|partial|blocked|cancelled)."
+        ),
     ]
 
     tasks: Annotated[
@@ -3534,13 +4240,9 @@ class BulkUpdateArgs(ProjectScopedArgs):
     def _enforce_id_on_every_item(self) -> "BulkUpdateArgs":
         for idx, item in enumerate(self.updates):
             if not isinstance(item, dict):
-                raise ValueError(
-                    f"bulk_update: updates[{idx}] is not a dict."
-                )
+                raise ValueError(f"bulk_update: updates[{idx}] is not a dict.")
             if "id" not in item or not item["id"]:
-                raise ValueError(
-                    f"bulk_update: updates[{idx}] missing required 'id' key."
-                )
+                raise ValueError(f"bulk_update: updates[{idx}] missing required 'id' key.")
         return self
 
 
@@ -3657,9 +4359,7 @@ class PresentDecisionArgs(ProjectScopedArgs):
         # record_pi_selection.selected_option_id must be dereferenceable.
         for idx, opt in enumerate(self.options):
             if not isinstance(opt, dict):
-                raise ValueError(
-                    f"present_decision: options[{idx}] is not a dict."
-                )
+                raise ValueError(f"present_decision: options[{idx}] is not a dict.")
             if "id" not in opt or not opt["id"]:
                 raise ValueError(
                     f"present_decision: options[{idx}] missing required "
@@ -3815,9 +4515,7 @@ class ProcessPaperArgs(ProjectScopedArgs):
     def _enforce_text_on_every_annotation(self) -> "ProcessPaperArgs":
         for idx, ann in enumerate(self.annotations):
             if not isinstance(ann, dict):
-                raise ValueError(
-                    f"process_paper: annotations[{idx}] is not a dict."
-                )
+                raise ValueError(f"process_paper: annotations[{idx}] is not a dict.")
             if "text" not in ann or not ann["text"]:
                 raise ValueError(
                     f"process_paper: annotations[{idx}] missing required "
@@ -3843,9 +4541,8 @@ class ValidateReferenceArgs(ProjectScopedArgs):
             min_length=1,
             max_length=128,
             description=(
-                "Canonical man_ id or compatibility jrn_ alias whose "
-                "reference is being validated."
-            )
+                "Canonical man_ id or compatibility jrn_ alias whose reference is being validated."
+            ),
         ),
     ]
 
@@ -3873,8 +4570,7 @@ class ValidateReferenceArgs(ProjectScopedArgs):
             default=None,
             max_length=MAX_REFERENCE_AUTHORS,
             description=(
-                "Optional CSL-JSON author list. Supplying authors enables "
-                "Stage E disambiguation."
+                "Optional CSL-JSON author list. Supplying authors enables Stage E disambiguation."
             ),
         ),
     ] = None
@@ -3931,8 +4627,7 @@ class SubmitReportArgs(ProjectScopedArgs):
         Field(
             default=None,
             description=(
-                "Report narrative body (CANONICAL). One of summary or "
-                "content is required."
+                "Report narrative body (CANONICAL). One of summary or content is required."
             ),
         ),
     ] = None
@@ -3941,8 +4636,7 @@ class SubmitReportArgs(ProjectScopedArgs):
         Field(
             default=None,
             description=(
-                "Phase-X²' alias for `summary`. If both are supplied, "
-                "`summary` wins (canonical)."
+                "Phase-X²' alias for `summary`. If both are supplied, `summary` wins (canonical)."
             ),
         ),
     ] = None
@@ -4041,8 +4735,7 @@ class SubmitCheckpointArgs(ProjectScopedArgs):
         Field(
             default=None,
             description=(
-                "Checkpoint description (CANONICAL). One of description "
-                "or content is required."
+                "Checkpoint description (CANONICAL). One of description or content is required."
             ),
         ),
     ] = None
@@ -4246,7 +4939,7 @@ BatchCExecuteUnion = Annotated[
 
 
 # =============================================================================
-# Final ExecuteArgsUnion — composes B + C + D (58 models total)
+# Final ExecuteArgsUnion — composes B + C + D (77 models total)
 # =============================================================================
 #
 # Phase 3 assembly: the discriminated union for `rka_execute`. FastMCP
@@ -4279,6 +4972,31 @@ ExecuteArgsUnion = Annotated[
         CreateGateArgs,
         HookAddArgs,
         ExtractClaimsArgs,
+        CreateInterpretationCandidateArgs,
+        AddInterpretationHintArgs,
+        TriageInterpretationCandidateArgs,
+        SetClaimScopeArgs,
+        CreateExperimentArgs,
+        AppendExperimentPlanArgs,
+        TransitionExperimentArgs,
+        CreateExperimentRunArgs,
+        TransitionExperimentRunArgs,
+        RecordExperimentObservationArgs,
+        AddEvidenceLocatorArgs,
+        CreatePlanningBranchArgs,
+        TransitionPlanningBranchArgs,
+        AppendPlanningArtifactVersionArgs,
+        PromotePlanningResearchQuestionArgs,
+        PreparePlanningContributionArgs,
+        RatifyPlanningContributionArgs,
+        CreatePlanningEvaluationMissionArgs,
+        PreparePlanningEvaluationResultArgs,
+        PrepareManuscriptOutlineProposalArgs,
+        PrepareSemanticPatchContextArgs,
+        CreateSemanticPatchProposalArgs,
+        ApplySemanticPatchProposalArgs,
+        RejectSemanticPatchProposalArgs,
+        GenerateLMStudioSemanticPatchArgs,
         # ===== Batch C — UPDATE/LIFECYCLE/SUBMIT (22) =====
         UpdateNoteArgs,
         UpdateDecisionArgs,
@@ -4346,10 +5064,26 @@ __all__ = [
     "QueryReviewQueueArgs",
     "QueryClustersArgs",
     "QueryClaimsArgs",
+    "QueryClaimScopeArgs",
+    "QueryInterpretationCandidatesArgs",
+    "QueryExperimentsArgs",
+    "QueryExperimentRunsArgs",
+    "QueryExperimentObservationsArgs",
+    "QueryPlanningBranchesArgs",
+    "QueryPlanningResumeArgs",
+    "QueryPlanningCompareArgs",
+    "QueryPlanningArtifactVersionsArgs",
+    "QueryPlanningArgumentWorkflowArgs",
+    "QueryPlanningEvaluationWorkflowArgs",
+    "QueryPlanningEvaluationEventsArgs",
+    "QueryPlanningPromotionsArgs",
+    "QuerySemanticPatchProposalsArgs",
+    "QuerySemanticPatchSchemaArgs",
     "QueryManuscriptArgs",
     "QueryReferenceValidationStatusArgs",
     "ResolveEntitiesArgs",
     "QueryManuscriptContextArgs",
+    "QueryManuscriptOutlineArgs",
     "QueryManuscriptReferenceManifestArgs",
     "QueryManuscriptReadinessArgs",
     "QueryManuscriptSpineArgs",
@@ -4404,6 +5138,31 @@ __all__ = [
     "CreateGateArgs",
     "HookAddArgs",
     "ExtractClaimsArgs",
+    "CreateInterpretationCandidateArgs",
+    "AddInterpretationHintArgs",
+    "TriageInterpretationCandidateArgs",
+    "SetClaimScopeArgs",
+    "CreateExperimentArgs",
+    "AppendExperimentPlanArgs",
+    "TransitionExperimentArgs",
+    "CreateExperimentRunArgs",
+    "TransitionExperimentRunArgs",
+    "RecordExperimentObservationArgs",
+    "AddEvidenceLocatorArgs",
+    "CreatePlanningBranchArgs",
+    "TransitionPlanningBranchArgs",
+    "AppendPlanningArtifactVersionArgs",
+    "CreatePlanningEvaluationMissionArgs",
+    "PreparePlanningEvaluationResultArgs",
+    "PrepareManuscriptOutlineProposalArgs",
+    "PromotePlanningResearchQuestionArgs",
+    "PreparePlanningContributionArgs",
+    "RatifyPlanningContributionArgs",
+    "PrepareSemanticPatchContextArgs",
+    "CreateSemanticPatchProposalArgs",
+    "ApplySemanticPatchProposalArgs",
+    "RejectSemanticPatchProposalArgs",
+    "GenerateLMStudioSemanticPatchArgs",
     # Batch B partial union
     "BatchBExecuteUnion",
     # Batch D — Review / Maintenance / Hooks / Workspace write models

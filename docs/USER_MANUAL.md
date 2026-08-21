@@ -137,7 +137,9 @@ RKA stores research knowledge in seven entity types. Each has a type-prefixed UL
 | **Literature** | `lit_` | Papers, articles, books. Tracked through a reading pipeline. |
 | **Mission** | `mis_` | Task packages assigned to the Executor with objectives and acceptance criteria. |
 | **Checkpoint** | `chk_` | Escalation points where the Executor needs Brain/PI input. |
-| **Claim** | `clm_` | Atomic facts extracted from journal entries by the Brain. |
+| **Interpretation Candidate** | `icd_` | Reviewable, source-located interpretation that is not yet canonical knowledge. |
+| **Claim** | `clm_` | Atomic, source-grounded statement explicitly promoted from a reviewed candidate or intentionally recorded through the canonical claim API. |
+| **Claim Scope Version** | `csc_` | Immutable research-level applicability boundary for a canonical claim, including typed conditions, uncertainty, extension limits, and falsifier/disconfirmation information. |
 | **Evidence Cluster** | `ecl_` | Groups of related claims with a Brain-written synthesis. |
 
 ### 4.2 — Journal Entry Types
@@ -150,7 +152,13 @@ RKA stores research knowledge in seven entity types. Each has a type-prefixed UL
 
 ### 4.3 — Claim Types
 
-Claims are atomic facts extracted from journal entries. Each claim has a type that describes what kind of knowledge it represents:
+Candidate extraction does not create a claim. It creates an `icd_` record with
+an exact source locator, epistemic kind, scope conditions, uncertainty, and an
+optional falsifier. A Brain or PI review must explicitly promote it before it
+becomes a canonical `clm_` record. Rejection, deferral, merging, classification,
+and promotion revocation preserve append-only history.
+
+Each promoted claim has a type that describes what kind of knowledge it represents:
 
 | Claim Type | What It Means | Example |
 |------------|---------------|---------|
@@ -160,6 +168,32 @@ Claims are atomic facts extracted from journal entries. Each claim has a type th
 | `result` | An experiment outcome | "Throughput improved 3x after sharding" |
 | `observation` | Something noticed (not from controlled experiment) | "The LLM includes its prompt in the synthesis" |
 | `assumption` | Something taken as given without proof | "Network latency is negligible at this scale" |
+
+### 4.3.1 — Canonical Claim Scope
+
+Candidate scope (`icd_`) describes what a source-located interpretation appears
+to mean. Canonical scope (`csc_`) governs where a promoted `clm_` may be reused
+as research knowledge. Manuscript wording (`mcl_`) is a third, paper-specific
+boundary. They are intentionally separate.
+
+Open **Claim Scope Review** at `/claim-scopes` to inspect missing, stale,
+incomplete, unreviewed, and ready contracts. A reviewed contract requires at
+least one typed applicability condition, resolved uncertainty, an exact or
+bounded extension policy, prohibited extensions, and resolved falsifier
+applicability. Every edit appends an immutable revision using optimistic
+revision control. Editing claim wording later makes the older contract stale
+until it is reviewed again.
+
+MCP equivalents:
+
+```text
+rka_query(args={"operation": "claim_scope", "project_id": "prj_...", "id": "clm_..."})
+rka_execute(args={"operation": "set_claim_scope", "project_id": "prj_...", ...})
+```
+
+`scope_readiness=ready` does not mean that a claim is scientifically supported
+or uncontested. Check grounding, `evidence_status`, contradictions, and
+staleness independently.
 
 ### 4.4 — Confidence Levels
 
@@ -194,6 +228,8 @@ Entities are connected by typed links that form provenance chains:
 | `motivated` | decision → mission | This decision motivated creating this mission |
 | `produced` | mission → journal | This mission produced this journal entry |
 | `derived_from` | claim ← journal | This claim was extracted from this entry |
+| `derived_from` | candidate ← source | This candidate interprets the located journal, literature, or artifact record |
+| `derived_from` | claim ← candidate | This claim was explicitly promoted from this reviewed candidate |
 | `cites` | journal → literature | This entry cites this paper |
 | `references` | any → any | General reference link |
 | `supports` | claim → claim | This claim supports that claim |
@@ -420,7 +456,7 @@ Groups of related claims under each research question. Each cluster has a Brain-
 
 ### Level 3: Claims
 
-The atomic facts extracted from journal entries. Each claim has a type (hypothesis/evidence/method/result/observation/assumption) and links back to its source entry with character offsets.
+Atomic, canonical statements promoted after source-grounding review. Each claim has a type (hypothesis/evidence/method/result/observation/assumption) and links through its candidate to the exact source record; journal-backed claims also retain their direct source offsets.
 
 **Example:** *"12% packet loss above 400 connections" — an evidence claim extracted from jrn_01KK..., characters 54–139.*
 
@@ -539,9 +575,105 @@ The Brain processes up to 10 maintenance items per session, prioritized by impor
 
 # Part V — Reference
 
+### 15.3 — Reviewing manuscript edit proposals
+
+Workbench edits do not change planning or manuscript state immediately. A
+human edit, a host-agent suggestion, and an LM Studio suggestion all create an
+immutable `spp_` proposal containing target revision guards, a semantic diff,
+and validation findings. Review the preview, then explicitly apply or reject
+it. If any target changed after preview, apply records a `conflicted` event and
+preserves both the proposal and the newer canonical state.
+
+For a host-agent suggestion, first call `semantic_patch_schema`, then
+`prepare_semantic_patch_context` with the exact selected RKA entities, target,
+provider, model, constraints, and any omissions. Submit the generated candidate
+through `create_semantic_patch_proposal`. Local LM Studio uses
+`generate_lm_studio_semantic_patch`; its configured URL must be loopback or
+Docker's exact `host.docker.internal` gateway, and
+it produces the same unapplied proposal schema. Neither route stores a provider
+credential or silently falls back to another provider.
+
+Use `semantic_patch_proposals` to inspect proposals and their immutable event
+history. Only after reviewing the diff and warnings should the PI or workbench
+call `apply_semantic_patch_proposal` with the proposal revision. Use
+`reject_semantic_patch_proposal` when the candidate should remain in history
+without changing its target.
+
+### 15.4 — Developing the progressive manuscript outline
+
+The Outline stage is a resumable L2-L5 hierarchy of native manuscript units,
+not a free-form text box. `manuscript_outline` shows each unit's communicative
+job, intended takeaway, intended claims, typed evidence, evidence plan,
+parent/children, and any completeness blocker. The workbench provides the same
+projection with deterministic unit-to-claim/evidence navigation.
+
+Editing rationale, expanding a parent into children, condensing descendants,
+or reordering units calls `prepare_manuscript_outline_proposal`. Preparation
+does not mutate the manuscript. Inspect the semantic diff, validation findings,
+binding changes, and downstream order impact, then explicitly apply or reject
+the resulting proposal. Expansion retains its parent; condensation preserves
+the union of descendant bindings on the retained parent; reorder requires the
+complete active unit-key set.
+
+When every major unit has its writing rationale, intended claim, and evidence
+plan, create an Outline checkpoint. Only a separate PI decision can resolve
+that checkpoint. A proposal, AI recommendation, or edited local outline file
+never ratifies itself.
+
+### 15.5 — Synchronizing Markdown and LaTeX source
+
+The Outline stage can open local `.md`, `.markdown`, and `.tex` files beneath a
+native manuscript's `workspace_ref`. This is opt-in: the workspace must also be
+beneath one of the roots in `RKA_MANUSCRIPT_WORKSPACE_ROOTS`. RKA rejects
+hidden paths, traversal, symlinks, special files, oversized content, and files
+outside that explicit allowlist. Source content is available only to the local
+web interface and is not added to the MCP tool surface. The bundled Docker
+configuration publishes the dashboard/API only on `127.0.0.1`; do not expose
+the unauthenticated REST port to a LAN or public interface.
+
+Use stable unit-range comments to connect public prose to native manuscript
+units:
+
+```markdown
+<!-- rka:unit mun_... begin -->
+Public manuscript prose.
+<!-- rka:provenance claim=mcl_... evidence=clm_... citation=Smith2026 -->
+<!-- rka:unit mun_... end -->
+```
+
+LaTeX uses the equivalent `% rka:unit ... begin/end` and
+`% rka:provenance ...` comments. The diagnostics verify that IDs and citation
+keys are currently bound to that unit; the comment is an auditable link, not
+proof that the prose accurately represents the evidence.
+
+Editing remains prepare-then-apply. Preparing stores an immutable candidate
+without touching the file. Open **Review source diff** to compare the current
+and proposed text; only then is the apply action available. Apply rechecks the
+exact SHA-256 base, saves managed recovery metadata beside the active RKA
+database, and atomically replaces the file. If an external editor changed the
+file, the proposal becomes conflicted and neither version is overwritten. RKA
+never performs a Git operation for source synchronization.
+
+For an existing file, Apply also keeps the exact displaced inode at a hidden
+`.rka-source-*.recovery` name beside that file. This preserves writes made later
+through an editor descriptor opened before Apply. These source-adjacent files
+are intentionally not deleted automatically, including when the RKA project is
+deleted. Project-deletion preview and result list deterministic candidate paths
+under `retained_workspace_artifacts`; inspect them after all editors are closed,
+then remove only artifacts you have deliberately verified are no longer needed.
+Managed recovery beneath the RKA data directory is still removed by confirmed
+project deletion.
+
+The adjacent **Quick reader** view shows the ordered argument path and anchor
+health. **Reviewer risk (private)** shows prohibited wording, qualifiers,
+counterevidence, and citation-verification warnings. Private risk material is
+planning context and is never inserted into public source automatically.
+
+---
+
 ## Chapter 16: MCP Tools Quick Reference
 
-> **v2.7.0+ dispatch surface.** RKA broadcasts exactly 5 always-on tools: 3 dispatch tools (`rka_query`, `rka_execute`, `rka_describe`) plus 2 escape hatches (`rka_load_tools`, `rka_help`). The tables below list the **operation names** — the values you pass as `operation`: 51 read operations go through `rka_query(args={"operation": ...})` and 58 write/lifecycle operations through `rka_execute(args={"operation": ...})`. There are 109 typed operations total. The pre-v2.7 per-tool names (`rka_add_note`, `rka_get_status`, `rka_trace_provenance`, …) are `tier=deferred` legacy synonyms: they resolve to these operations (typically drop the `rka_`/`get_`/`add_` prefix, e.g. `rka_get_status` → `status`, `rka_add_note` → `record_note`, `rka_trace_provenance` → `provenance`), but on the default surface you call the operation through the dispatch tools rather than the legacy name. The discipline (`source="pi"` + `verbatim_input`, `related_journal=[...]` on decisions, `motivated_by_decision=...` on missions, `project_id` on every call) is unchanged. See `rka_describe(operation="<name>")` for per-operation signatures, or `rka_describe(operation="")` for the full 109-operation index. `rka_set_project` was removed in v2.6 (deprecated no-op) — pin `project_id` at conversation start and thread it on every operation. The LLM-backed `rka_ask` / `rka_generate_summary` features were removed in v2.4.0 and are no longer part of the surface.
+> **v2.7.0+ dispatch surface.** RKA broadcasts exactly 5 always-on tools: 3 dispatch tools (`rka_query`, `rka_execute`, `rka_describe`) plus 2 escape hatches (`rka_load_tools`, `rka_help`). The tables below list the **operation names** — the values you pass as `operation`: 67 read operations go through `rka_query(args={"operation": ...})` and 83 write/lifecycle operations through `rka_execute(args={"operation": ...})`. There are 150 typed operations total. The pre-v2.7 per-tool names (`rka_add_note`, `rka_get_status`, `rka_trace_provenance`, …) are `tier=deferred` legacy synonyms: they resolve to these operations (typically drop the `rka_`/`get_`/`add_` prefix, e.g. `rka_get_status` → `status`, `rka_add_note` → `record_note`, `rka_trace_provenance` → `provenance`), but on the default surface you call the operation through the dispatch tools rather than the legacy name. The discipline (`source="pi"` + `verbatim_input`, `related_journal=[...]` on decisions, `motivated_by_decision=...` on missions, `project_id` on every call) is unchanged. See `rka_describe(operation="<name>")` for per-operation signatures, or `rka_describe(operation="")` for the full 150-operation index. `rka_set_project` was removed in v2.6 (deprecated no-op) — pin `project_id` at conversation start and thread it on every operation. The LLM-backed `rka_ask` / `rka_generate_summary` features were removed in v2.4.0 and are no longer part of the surface.
 
 ### Knowledge Management (`rka_execute`)
 
@@ -588,6 +720,42 @@ The Brain processes up to 10 maintenance items per session, prioritized by impor
 | `decision_tree` | `rka_query` | Get the full decision tree |
 | `graph_stats` | `rka_query` | Knowledge graph statistics |
 
+### Experiments & Evidence
+
+| Operation | Dispatch tool | Purpose |
+|-----------|---------------|---------|
+| `experiments` | `rka_query` | Inspect versioned experiment plans and lifecycle state |
+| `experiment_runs` | `rka_query` | Inspect revision-guarded execution runs and event history |
+| `experiment_observations` | `rka_query` | Find positive, negative, neutral, inconclusive, or error observations |
+| `create_experiment` | `rka_execute` | Create an experiment with immutable plan version 1 |
+| `append_experiment_plan` | `rka_execute` | Append a new immutable plan version |
+| `transition_experiment` | `rka_execute` | Advance or abandon an experiment with an expected revision |
+| `create_experiment_run` | `rka_execute` | Bind a run to an exact plan version and repository snapshot |
+| `transition_experiment_run` | `rka_execute` | Record a guarded run lifecycle transition |
+| `record_experiment_observation` | `rka_execute` | Record an immutable result without inferring claim support |
+| `add_evidence_locator` | `rka_execute` | Attach an exact artifact or repository-content locator |
+
+Use Interpretation Review to classify an observation candidate as `support`,
+`qualifier`, `counterevidence`, or `context` for a claim. This reviewed relation
+does not automatically change the claim's evidence status.
+
+### Provisional Manuscript Planning
+
+| Operation | Dispatch tool | Purpose |
+|-----------|---------------|---------|
+| `planning_branches` | `rka_query` | List named alternatives in a project or manuscript context |
+| `planning_resume` | `rka_query` | Restore the exact selected branch and effective artifacts |
+| `planning_compare` | `rka_query` | Compare two branches through their frozen ancestry |
+| `planning_artifact_versions` | `rka_query` | Inspect the immutable history of one planning artifact |
+| `create_planning_branch` | `rka_execute` | Create a root alternative or fork the selected framing |
+| `transition_planning_branch` | `rka_execute` | Select, activate, archive, or supersede with an expected revision |
+| `append_planning_artifact_version` | `rka_execute` | Append a typed stage version with provenance and evidence bindings |
+
+Planning is provisional: it can cite RKA records and preserve AI-origin
+metadata, but it does not ratify a claim, update a canonical manuscript, or
+write authoring files. The first branch in a context becomes the deterministic
+resume head. Select another branch before archiving the current selection.
+
 ### Project & Session
 
 | Operation | Dispatch tool | Purpose |
@@ -615,6 +783,9 @@ The web dashboard at `http://localhost:9712` provides a visual interface for bro
 | **Timeline** | `/timeline` | Event stream with causal chain visualization |
 | **Knowledge Graph** | `/graph` | Entity relationship network (low-level debugging view) |
 | **Research Map** | `/research-map` | Three-level drill-down: RQs → clusters → claims |
+| **Interpretation Review** | `/interpretations` | Review source-located `icd_` candidates before canonical promotion |
+| **Claim Scope Review** | `/claim-scopes` | Append and audit canonical `csc_` applicability contracts; resolve Writer scope blockers |
+| **Manuscript Workbench** | `/workbench` | Navigate canonical manuscript evidence and create, fork, select, compare, archive, or resume provisional planning branches |
 | **Notebook** | `/notebook` | (historical) Q&A chat and summary generation — the LLM-backed Q&A/summary features were removed in v2.4.0 |
 | **Audit Log** | `/audit` | System audit trail with action/entity/actor filters |
 | **Context Inspector** | `/context` | Generate and inspect context packages |
@@ -675,9 +846,48 @@ The Settings page shows API health status, database statistics, embedding backen
 
 In v2.4 the context engine has no tunable settings. Ranking is deterministic SQL-time: `journal.importance` (CASE: critical=4 → archived=0) × `entity_links` centrality × `created_at` DESC, with a +0.5 lift for PI-sourced entries. The legacy `RKA_CONTEXT_HOT_DAYS`, `RKA_CONTEXT_WARM_DAYS`, and `RKA_CONTEXT_DEFAULT_MAX_TOKENS` env vars were removed (see `dec_01KQQPD6Y6B362T3K08368BDMP`). For multi-hop questions, use `rka_query(operation="multi_hop")` instead of `rka_query(operation="context")`.
 
-### 18.4 — LLM Settings (Removed in v2.4.0)
+### 18.4 — General LLM removed; optional LM Studio proposal adapter
 
-> **Historical.** Earlier versions exposed server-side LLM features (`rka_ask`, `rka_generate_summary`, and the web-UI Q&A page) configured through `RKA_LLM_*` environment variables. These features were **removed in v2.4.0** and `/api/capabilities` no longer returns an `llm` field. There is no LLM configuration to set: all intelligent enrichment (tagging, claim extraction, cluster synthesis, contradiction resolution) is now performed by the Brain during sessions. The removed `RKA_LLM_ENABLED` / `RKA_LLM_MODEL` / `RKA_LLM_API_BASE` / `RKA_LLM_API_KEY` variables have no effect on current builds.
+> **Historical.** Earlier versions exposed general server-side LLM features
+> (`rka_ask`, `rka_generate_summary`, and web-UI Q&A) through `RKA_LLM_*`.
+> Those features remain removed: enrichment is performed by the Brain.
+
+The manuscript workbench has one narrow optional adapter that asks a local LM
+Studio model for a schema-constrained, unapplied semantic proposal:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RKA_WORKBENCH_LM_STUDIO_BASE_URL` | Docker: `http://host.docker.internal:1234/v1`; non-Docker: `http://127.0.0.1:1234/v1` | Local-machine OpenAI-compatible endpoint |
+| `RKA_WORKBENCH_LM_STUDIO_MODEL` | empty | Exact served model ID; required to use the adapter |
+| `RKA_WORKBENCH_LM_STUDIO_TIMEOUT` | `120` | Request timeout in seconds (1–600) |
+| `RKA_MANUSCRIPT_WORKSPACE_ROOTS` | empty (source access disabled) | `os.pathsep`-separated allowlist of local manuscript workspace roots |
+| `RKA_MANUSCRIPT_SOURCE_MAX_BYTES` | `2097152` | Maximum UTF-8 bytes per synchronized source file (up to 20 MiB) |
+
+This adapter is not a background enrichment engine. It receives an explicit
+context manifest, records provider-call provenance, cannot use credentials or
+a non-local URL, never falls back to cloud, and never applies its own output.
+The manifest must disclose every target and referenced evidence entity. A
+target revision change during generation, an undisclosed target, or an
+undisclosed evidence binding causes the proposal to fail closed.
+
+For a Docker deployment, explicitly mount only the parent directories that
+contain manuscripts you want RKA to edit, then allowlist the corresponding
+container paths. For example, add this opt-in override rather than granting the
+container access to an entire home directory:
+
+```yaml
+services:
+  rka:
+    volumes:
+      - /absolute/host/path/to/papers:/manuscripts:rw
+    environment:
+      RKA_MANUSCRIPT_WORKSPACE_ROOTS: /manuscripts
+```
+
+Set each manuscript's `workspace_ref` to its container-visible directory, such
+as `/manuscripts/example-paper`. Multiple roots use the host platform's path
+separator (`:` on macOS/Linux). Recreate the RKA service after changing mounts
+or environment settings.
 
 ---
 
@@ -699,7 +909,10 @@ In v2.4 the context engine has no tunable settings. Ranking is deterministic SQL
 ### Frequently Asked Questions
 
 **Q: Do I need a local LLM (LM Studio, Ollama)?**
-No. RKA v2.0+ removed the local LLM requirement, and v2.4.0 removed the remaining server-side LLM features (`rka_ask`, `rka_generate_summary`, web-UI Q&A) entirely. All intelligent enrichment is now handled by the Brain (Claude) during sessions. The only local models are embeddings (FastEmbed, ~130MB, no GPU needed) for semantic search.
+No. General knowledge enrichment is handled by the Brain, and FastEmbed covers
+semantic search. LM Studio is optional only for the manuscript workbench's
+schema-constrained **Ask LM Studio** proposal action; it is never required for
+ordinary RKA operation.
 
 **Q: Do I need to tell the Brain to maintain the knowledge base?**
 No. The Brain's MCP instructions include a maintenance protocol that runs automatically at session start. It checks for provenance gaps, untagged entries, and orphaned clusters, then silently processes up to 10 items before greeting you. You only need to ask explicitly after large batch operations (e.g., importing 30 papers).

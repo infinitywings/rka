@@ -3,6 +3,78 @@
 All notable changes to RKA are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) + semver.
 
+## [Unreleased]
+
+### Added
+
+- **Typed academic-writing semantic core.** Manuscript units now separate pure
+  outline depth from structural role and rhetorical move. Unit-evidence uses
+  can state the supported proposition and authorial warrant; immutable claim
+  versions carry applicability conditions and falsification criteria; and
+  unit citation uses bind typed literature moves to the existing verified
+  reference authority without duplicating bibliography metadata.
+- **Proportionate academic readiness.** The outline projection reports
+  deterministic structure, claim allocation, evidence presence, evidence-use
+  explanation, claim-boundary, citation, and rhetorical-annotation dimensions.
+  Only missing structure or required claim/evidence bindings block; judgmental
+  writing-quality checks remain advisory. The workbench exposes role/move
+  controls and progressively disclosed evidence/citation rationale.
+- **Portable outline integrity and staleness provenance.** The reserved
+  staleness-resolution schema now round-trips without dropping deployed
+  agentic fields. Knowledge-pack import rekeys resolution and outline-intention
+  references, rejects malformed outline hierarchies, and records attributed
+  outline-profile insert, update, and delete events.
+- **Semantic spine write quieting.** Replaying an unchanged argument spine no
+  longer bumps the manuscript revision, invalidates checkpoints, appends an
+  audit row, or emits delete/reinsert churn. Partial edits update only the
+  affected semantic rows and bindings.
+- **Explicit outline rationale readiness.** Outline responses now expose
+  `rationale_complete`; `checkpoint_ready` remains a deprecated compatibility
+  alias while the workbench uses the accurately named field.
+
+- **Progressive L2-L5 manuscript outline.** Native manuscript units now carry
+  pure hierarchy depth, writing rationale, intended reader takeaways, evidence plans,
+  and figure/table/citation intentions. Direct and AI-assisted edit, expand,
+  condense, and reorder actions produce reviewable semantic proposals that
+  preserve claim/evidence bindings and report downstream order impact. The
+  REST, workbench, and typed MCP surfaces expose resumable outline state and a
+  separate explicit Outline checkpoint; the dispatch surface now contains 150
+  operations (67 reads + 83 writes). AI-authored outline proposals retain
+  provider/context provenance and remain pending for PI/web review; Outline
+  checkpoint fingerprints include typed claim/unit evidence bindings.
+
+- **Unified semantic patch proposals.** Human workbench edits, host-agent
+  suggestions, and local-machine LM Studio suggestions now produce the same
+  immutable proposal envelope, semantic preview, validation findings, and
+  explicit apply/reject lifecycle. Optimistic bases are captured and checked
+  transactionally; stale proposals preserve both the proposal and newer
+  canonical state as a conflict instead of retrying blindly.
+- **Auditable AI context boundaries.** Immutable context manifests record exact
+  selected entities, resolved source closure, target snapshots, constraints,
+  omissions, provider/model boundaries, and start/success/failure call events
+  without storing provider credentials. Proposal history is portable in
+  knowledge-pack schema v7 and participates in project deletion and change
+  cursors. AI proposals fail closed when they address an undisclosed aggregate,
+  use an undisclosed evidence entity, or outlive the target revision captured
+  before generation.
+- **Semantic proposal REST, MCP, and workbench surfaces.** The typed dispatch
+  surface now exposes 139 operations (62 reads + 77 writes). The manuscript
+  workbench previews diffs and warnings and requires a separate user action to
+  apply or reject each proposal.
+
+- **Versioned manuscript planning branches.** Project-only or manuscript-bound
+  deliberation can now evolve through typed planning stages without mutating
+  canonical evidence or manuscript records. Branch alternatives preserve
+  frozen ancestry, immutable artifact versions, actor/model provenance,
+  evidence bindings, deterministic comparison, and resumable selection state.
+- **Planning REST, MCP, and workbench surfaces.** The API and typed dispatch
+  surface exposed 132 operations (60 reads + 72 writes). The manuscript
+  workbench can create, fork, select, compare, archive, reactivate, and resume
+  provisional branches while keeping canonical projections visibly separate.
+- **Portable planning provenance.** Knowledge-pack schema v6 re-keys planning
+  lineage and polymorphic evidence bindings, validates typed stage payloads and
+  immutable heads, and rolls back atomically on integrity failure.
+
 ## [agentic — orchestrator 0.6.14] — 2026-07-23
 
 This agentic-branch release hardens the Opus 4.8 end-to-end lifecycle

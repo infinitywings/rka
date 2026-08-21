@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from pathlib import Path
 
 import pytest
@@ -18,12 +17,15 @@ from rka.infra.llm import LLMClient
 
 @pytest.mark.asyncio
 async def test_lifespan_does_not_block_on_llm_startup_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    # Probe sleeps 1.0s; lifespan must return well before the probe completes.
-    # Earlier threshold of 0.15s was flaky on slower/shared CI runners — a 0.5s
-    # threshold still catches a blocking regression (would be >=1.0s) while
-    # tolerating CI scheduling noise.
+    # Hold the probe behind an event so the assertion checks behavior instead
+    # of scheduler speed. If lifespan awaits the probe, __aenter__ times out;
+    # if it schedules the probe in the background, startup completes normally.
+    probe_started = asyncio.Event()
+    release_probe = asyncio.Event()
+
     async def fake_is_available(self: LLMClient) -> bool:
-        await asyncio.sleep(1.0)
+        probe_started.set()
+        await release_probe.wait()
         self._available = False
         return False
 
@@ -43,14 +45,16 @@ async def test_lifespan_does_not_block_on_llm_startup_probe(tmp_path: Path, monk
     app = create_app(config)
     lifespan = app.router.lifespan_context(app)
 
-    start = time.perf_counter()
-    await lifespan.__aenter__()
-    elapsed = time.perf_counter() - start
+    entered = False
 
     try:
-        assert elapsed < 0.5
+        await asyncio.wait_for(lifespan.__aenter__(), timeout=5.0)
+        entered = True
+        await asyncio.wait_for(probe_started.wait(), timeout=5.0)
     finally:
-        await lifespan.__aexit__(None, None, None)
+        release_probe.set()
+        if entered:
+            await lifespan.__aexit__(None, None, None)
 
 
 @pytest.mark.asyncio

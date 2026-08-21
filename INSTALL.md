@@ -23,7 +23,7 @@ You are running on a machine that already has Docker and a coding agent. Your jo
 | Surface | What you'll have |
 |---|---|
 | **RKA backend** | FastAPI + worker + SQLite + FTS5 + sqlite-vec running in Docker on `localhost:9712`. Web dashboard at the same URL. |
-| **Claude Code (Executor)** | Full plugin: 4 role skills (`rka:rka-brain`, `rka:rka-executor`, `rka:rka-pi`, `rka:rka-writer`), 6 slash commands (`/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`, `/rka-setup-claude-desktop`, `/rka-start-manuscript`), a SessionStart hook that pings the backend on every new session, and the v2.7.0+ dispatch surface — 3 always-on tools (`rka_query`, `rka_execute`, `rka_describe`) routing to 109 typed Pydantic operations, plus 2 escape hatches (`rka_load_tools` to register legacy aliases on demand, `rka_help` as a `rka_describe` alias). The 91 legacy per-tool aliases load on demand via `rka_load_tools`; `RKA_LEGACY_TOOLS=1` restores the v2.7.0a2 20-tool always-on surface for backwards compatibility. |
+| **Claude Code (Executor)** | Full plugin: 4 role skills (`rka:rka-brain`, `rka:rka-executor`, `rka:rka-pi`, `rka:rka-writer`), 6 slash commands (`/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`, `/rka-setup-claude-desktop`, `/rka-start-manuscript`), a SessionStart hook that pings the backend on every new session, and the v2.7.0+ dispatch surface — 3 always-on tools (`rka_query`, `rka_execute`, `rka_describe`) routing to 139 typed Pydantic operations, plus 2 escape hatches (`rka_load_tools` to register legacy aliases on demand, `rka_help` as a `rka_describe` alias). The legacy per-tool aliases load on demand via `rka_load_tools`; `RKA_LEGACY_TOOLS=1` restores the v2.7.0a2 compatibility surface. |
 | **Writer (manuscript drafting)** | The `rka:rka-writer` skill drafts venue-targeted manuscripts (CHI, EMNLP, NeurIPS, USENIX, IEEE-SP, OSDI, Nature seed venues). Bootstrap a per-manuscript workspace via `/rka-start-manuscript` (creates `.mcp.json`, `main.tex`, `refs.bib`, `.planning/` directory). Reference-validation MCP server (`rka-writer-tools`) wraps Crossref + OpenAlex + Semantic Scholar + arXiv + SerpAPI; install separately via `uv tool install '.[writer-tools]'` (see Step 4.5). |
 | **Claude Desktop (Brain)** | Typed RKA tool surface via the `mcpServers.rka` entry in `claude_desktop_config.json`. Wrapper-based config gives version checking; every scoped operation still requires an explicit project id. Skills and slash commands are Claude Code only (Claude Desktop's plugin format is separate). |
 | **ChatGPT (optional remote connector)** | RKA reachable from ChatGPT as a custom MCP connector over an OAuth-protected ngrok tunnel — an 8-tool surface (5 dispatch + 3 skill tools). Opt-in; set up in **Step 6** (§3). The web UI is never exposed. |
@@ -34,13 +34,13 @@ In Claude Desktop and Claude Code, you'll see **5 always-on `rka` tools** at ses
 
 | Tool | Role | Operations behind it |
 |---|---|---|
-| `rka_query` | Read dispatch (the "search/list/get" entry point) | 51 read operations |
-| `rka_execute` | Write dispatch (the "add/update/create/submit" entry point) | 58 write operations |
+| `rka_query` | Read dispatch (the "search/list/get" entry point) | 62 read operations |
+| `rka_execute` | Write dispatch (the "add/update/create/submit" entry point) | 77 write operations |
 | `rka_describe` | Schema lookup + examples for any operation | — |
 | `rka_load_tools` | Escape hatch: register legacy tool aliases for the rest of the session | — |
 | `rka_help` | Alias for `rka_describe` (mnemonic surface) | — |
 
-The 109 typed Pydantic operations under `rka_query` / `rka_execute` carry per-branch enum and required-field enforcement at the **FastMCP schema layer**, so the LLM cannot emit invalid values — the tool surface itself rejects pre-dispatch. The 91 legacy per-tool aliases (the pre-v2.7.0 layout) are `tier=deferred` and load on demand via `rka_load_tools`; separately, `RKA_LEGACY_TOOLS=1` restores the v2.7.0a2 20-tool always-on surface for backwards-compatibility use cases, notably the orchestrator daemon subprocess.
+The 139 typed Pydantic operations under `rka_query` / `rka_execute` carry per-branch enum and required-field enforcement at the **FastMCP schema layer**, so the LLM cannot emit invalid values — the tool surface itself rejects pre-dispatch. Legacy per-tool aliases are `tier=deferred` and load on demand via `rka_load_tools`; separately, `RKA_LEGACY_TOOLS=1` restores the v2.7.0a2 compatibility surface, notably for the orchestrator daemon subprocess.
 
 ---
 
@@ -103,6 +103,8 @@ Everyone runs **Step 1** (the backend). Then run only the steps their chosen sur
 
 **🟡 Precondition (clone location)**: ask the user where they want the repo cloned (default: `~/Code` on macOS/Linux, `%USERPROFILE%\Code` on Windows). `cd` into that parent, so the repo lands at `<parent>/rka`. **Record the absolute `<parent>/rka` path** — Step 2 needs it as the marketplace path. Don't clone into an unstated cwd; if the user has no preference, state the default you're using and proceed.
 
+> **⚠️ Windows: do not clone into a OneDrive-synced folder.** On most Windows installs `Desktop` and `Documents` are backed up by OneDrive. OneDrive's Files On-Demand will silently dehydrate untouched repo files into cloud placeholders, and Docker BuildKit then refuses to send them in the build context — a later `docker compose up -d --build` fails with `invalid file request <path>`. The clone works fine; the breakage appears weeks later on the first rebuild. `%USERPROFILE%\Code` (the default above) is outside OneDrive and is the safe choice. If the repo is already in a synced folder, see [§9 Windows: rebuilding and updating](#windows-rebuilding-and-updating-an-existing-install) for the recovery procedure.
+
 ```bash
 # Example: pick a parent dir and cd into it first
 mkdir -p ~/Code && cd ~/Code              # macOS/Linux
@@ -124,9 +126,38 @@ Open http://localhost:9712 in your browser to confirm the dashboard loads.
 
 **✅ Success signal**: `curl` returns JSON with `"status":"ok"` and a `"version"` field (any `2.x`) AND `http://localhost:9712` renders the dashboard HTML.
 
+> **⚠️ Windows: if this fails, try `http://127.0.0.1:9712` before assuming the backend is broken.** `localhost` resolves to IPv6 `::1` first, and Docker Desktop's WSL2 backend publishes the container on IPv4 only. WSL2's `localhostForwarding` proxy still *accepts* the `::1` connection and then resets it, so the browser shows `ERR_CONNECTION_RESET` and `curl` reports `Recv failure: Connection was reset` — both look like a dead server when the API is perfectly healthy. Because the TCP handshake succeeds, no automatic IPv4 fallback happens. If `127.0.0.1` works and `localhost` doesn't, the backend is fine; use `127.0.0.1` throughout and see [§9 Windows](#windows-specifically) for the permanent fix.
+
 **Recovery**: if curl returns non-zero or non-2xx, run `docker compose ps` to confirm both `rka-server` and `rka-worker` are up. If a container is restarting, run `docker compose logs --tail=20 rka` and surface the output. If the worker is `OOMKilled`, bump Docker Desktop's Resources → Memory ceiling to ≥6 GB (per the operational note in CLAUDE.md) and re-up.
 
 > **What this does**: starts two containers (`rka-server` for the API + web UI, `rka-worker` for background jobs). Data is persisted in a Docker volume named `rka-data`. To stop: `docker compose down`. To stop AND wipe data: `docker compose down -v` (don't do this unless you mean it).
+
+#### Optional: LM Studio suggestions in the manuscript workbench
+
+RKA does not require a local language model. If you want the workbench's **Ask
+LM Studio** action, start LM Studio's local API server, load a model that
+supports structured JSON output, and verify the served model ID:
+
+```bash
+curl http://127.0.0.1:1234/v1/models
+```
+
+Put that exact ID in a repo-local `.env` file (do not commit it), then recreate
+only the API container:
+
+```dotenv
+RKA_WORKBENCH_LM_STUDIO_MODEL=the-served-model-id
+```
+
+```bash
+docker compose up -d --force-recreate rka
+```
+
+Compose routes the container to
+`http://host.docker.internal:1234/v1`. A non-Docker RKA process defaults to
+`http://127.0.0.1:1234/v1`. The adapter accepts only those local-machine forms,
+uses no API key, never falls back to a cloud model, and stores the result as an
+unapplied semantic proposal.
 
 ### Step 2 — Add the local RKA marketplace in Claude Code
 
@@ -310,7 +341,7 @@ Ask in any new chat:
 
 > What RKA tools do you have access to?
 
-Brain should list **5 always-on tools (3 dispatch + 2 escape hatches)**: `rka_query`, `rka_execute`, `rka_describe`, plus `rka_load_tools` and `rka_help` as navigator escape hatches. This matches the §1.1 surface count exactly. Confirm by asking: *"Call `rka_describe` with an empty string"* — Brain should return the 109-operation index.
+Brain should list **5 always-on tools (3 dispatch + 2 escape hatches)**: `rka_query`, `rka_execute`, `rka_describe`, plus `rka_load_tools` and `rka_help` as navigator escape hatches. This matches the §1.1 surface count exactly. Confirm by asking: *"Call `rka_describe` with an empty string"* — Brain should return the 139-operation index.
 
 If you instead see a long list of legacy tool names (e.g., `list_projects`, `get_status`, `add_note`, etc. — surfaced as one MCP tool each), your Brain is running with `RKA_LEGACY_TOOLS=1` (orchestrator daemon mode). For the user-facing Claude Desktop session, unset this env var and restart.
 
@@ -699,7 +730,7 @@ Replace `<your-username>` with your actual macOS username (Windows: use `C:\\Use
 
 **v2.7.0 schema enforcement.** In v2.7.0 the args object is a discriminated Pydantic union — missing `project_id` on a scoped operation now surfaces as a `ValidationError` from FastMCP **before** the call reaches the service layer. Per-branch enum + required-field enforcement (defined in `orchestrator/rka_enums.py` mirror + the per-operation Pydantic models) means wrong values (e.g., `confidence='confirmed'`) are also rejected pre-dispatch with a structured error pointing at the offending field. See §1.1 for the user-facing tool surface this enforcement sits behind.
 
-After restart, Brain will see exactly 5 always-on tools (3 dispatch + 2 escape hatches): `rka_query`, `rka_execute`, `rka_describe`, plus `rka_load_tools` and `rka_help` (alias for `rka_describe`). This is normal — the 109 underlying operations are dispatched through them.
+After restart, Brain will see exactly 5 always-on tools (3 dispatch + 2 escape hatches): `rka_query`, `rka_execute`, `rka_describe`, plus `rka_load_tools` and `rka_help` (alias for `rka_describe`). This is normal — the 139 underlying operations are dispatched through them.
 
 Fully quit + reopen Claude Desktop.
 
@@ -732,6 +763,111 @@ Same JSON shape, in `.claude/mcp.json` (per-project) or `~/.claude/settings.json
 | `python3 --version` fails but `python --version` works | "Add Python to PATH" wasn't checked at install | Reinstall Python 3 from python.org with that checkbox enabled, OR adjust the wrapper invocation in `claude_desktop_config.json` to use `python` instead of `python3` |
 | Path with spaces breaks the wrapper | Unquoted path in JSON config | Escape backslashes (`\\\\`) and ensure the entire path is in JSON quotes |
 | Microsoft Store install of Claude Desktop doesn't see the config edits | Config path differs (stored in app sandbox) | This appears NOT to happen empirically — both Microsoft Store and standalone .exe write to the same `%APPDATA%\Claude\` path. If you observe otherwise, surface as a bug. |
+| Web dashboard shows `ERR_CONNECTION_RESET` at `localhost:9712`, but the container is healthy | `localhost` → IPv6 `::1`; WSL2's `localhostForwarding` proxy accepts the connection and resets it. Docker publishes IPv4-only, and the successful handshake suppresses IPv4 fallback | Use **`http://127.0.0.1:9712`**. Permanent fix: create `%USERPROFILE%\.wslconfig` with `[wsl2]` / `localhostForwarding=false`, then `wsl --shutdown` (stops **all** containers and WSL distros — do it when convenient) |
+| `rka_query`/`rka_execute` return `{"status":"unhealthy","error":""}` while `curl http://127.0.0.1:9712/api/health` returns `ok` | Same IPv6 fault. The MCP server defaults to `RKA_API_URL=http://localhost:9712`. The empty `error` string is the tell — the reset carries no message | Pin IPv4 with an explicit `env` block in **each** MCP config (see [§9 Windows: rebuilding and updating](#windows-rebuilding-and-updating-an-existing-install)). A user env var is **not** sufficient — see the next row |
+| Config or env-var change doesn't take effect after "Developer: Reload Window" | A window reload re-spawns MCP servers as children of the **already-running** VSCode process, which keeps its original environment block. `setx` writes the registry but not that block | Put per-machine settings in the MCP config's `env` block (re-read on reload), not in a user env var. Env vars need a **full application restart**, not a reload |
+| `uv tool install --force .` fails: `failed to remove file ... _pydantic_core.<abi>.pyd: Access is denied. (os error 5)` | Windows locks loaded `.pyd`/DLLs. Running `rka mcp` servers (Claude Desktop + every Claude Code window) hold the file open | Quit Claude Desktop and close Claude Code windows, or stop the server processes, then re-run. See [§9 Windows: rebuilding and updating](#windows-rebuilding-and-updating-an-existing-install) for a safe process filter |
+| `docker compose up -d --build` fails: `invalid file request <path>` / `failed to solve: invalid file request` | Repo is in a OneDrive-synced folder and Files On-Demand dehydrated some files into cloud placeholders (`ReparsePoint` attribute). BuildKit can't send them in the build context | Materialize the placeholders (procedure below), or move the clone outside OneDrive. `attrib +P` (pin) alone does **not** clear the reparse tag |
+
+<a id="windows-rebuilding-and-updating-an-existing-install"></a>
+
+### Windows: rebuilding and updating an existing install
+
+Upgrading a Windows install (`git pull` → reinstall binary → rebuild containers) hits several platform-specific failures that don't occur on macOS/Linux. Work through these in order; each was observed on a real v2.8.0 → v2.9.0 upgrade.
+
+#### 1. Materialize OneDrive placeholders before building
+
+If the repo lives under a OneDrive-synced folder (`Desktop`, `Documents`), files dehydrate over time and the build fails with `invalid file request <path>`. The files still *read* fine — only BuildKit's context transfer rejects them.
+
+Count them first (a fresh clone reports `0`):
+
+```powershell
+$repo = "C:\path\to\rka"
+Get-ChildItem $repo -Recurse -File -Force |
+  Where-Object { $_.FullName -notlike "*\.git\*" -and $_.FullName -notlike "*\node_modules\*" -and
+                 ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } |
+  Measure-Object | Select-Object -ExpandProperty Count
+```
+
+`attrib +P` (pin) sets the `Pinned` flag but leaves the reparse tag in place, so it does not fix the build. Rewriting each file in place does — it produces an ordinary local file with byte-identical content:
+
+```powershell
+Get-ChildItem $repo -Recurse -File -Force |
+  Where-Object { $_.FullName -notlike "*\.git\*" -and $_.FullName -notlike "*\node_modules\*" -and
+                 ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } |
+  ForEach-Object {
+    $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
+    Remove-Item -LiteralPath $_.FullName -Force
+    [System.IO.File]::WriteAllBytes($_.FullName, $bytes)
+  }
+```
+
+**Verify content is unchanged before building**: `git status --short` and `git diff --stat` must show no modifications to tracked files. If they do, stop — restore from `git checkout --` rather than building. Re-run the count query; expect `0`.
+
+The durable fix is to move the clone outside OneDrive (see the Step 1 warning in §3).
+
+#### 2. Stop the processes that lock the binary
+
+`uv tool install --force .` fails with `Access is denied (os error 5)` on `_pydantic_core.<abi>.pyd` while any `rka mcp` server is running — Windows locks loaded extension modules. Quitting Claude Desktop and closing Claude Code windows is enough. To stop them directly:
+
+```powershell
+Get-CimInstance Win32_Process |
+  Where-Object { ($_.Name -eq 'rka.exe' -or $_.CommandLine -like '*rka-mcp-bridge.py*') -and
+                 $_.ProcessId -ne $PID } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+```
+
+> **⚠️ Match narrowly — two traps here, both observed.**
+> 1. A broader filter such as `CommandLine -like '*rka*'` also matches `docker-buildx.exe`, whose command line contains the repo path. Killing it aborts an in-flight `docker compose build`.
+> 2. **The `-ne $PID` guard is not optional.** When you paste this into a console, the filter string becomes part of *your own shell's* command line, so the shell matches its own filter and terminates itself mid-loop, leaving some servers running.
+>
+> Match on process name and the bridge script only, and always exclude the current process. Run the `Where-Object` clause on its own first and eyeball the list before adding the `Stop-Process` pipe.
+
+If a previous attempt failed partway, `uv` may warn `Failed to uninstall package ... due to missing RECORD file` and `Installation may result in an incomplete environment`. Confirm the result is actually sound before moving on:
+
+```powershell
+rka --version                                   # expect the new version
+& "$env:APPDATA\uv\tools\rka\Scripts\python.exe" -c "import pydantic_core, rka; print('ok')"
+```
+
+If the import fails, run `uv tool uninstall rka` then `uv tool install .` for a clean environment.
+
+#### 3. Pin `RKA_API_URL` to IPv4 in every MCP config
+
+After the upgrade the MCP tools may report `{"status":"unhealthy","error":""}` even though the API is healthy on `127.0.0.1` — the IPv6 fault described in the table above. Add an explicit `env` block to **each** config that launches the bridge:
+
+```json
+"rka": {
+  "command": "python3",
+  "args": ["${CLAUDE_PLUGIN_ROOT}/bin/rka-mcp-bridge.py"],
+  "env": { "RKA_API_URL": "http://127.0.0.1:9712" }
+}
+```
+
+Apply it in `%APPDATA%\Claude\claude_desktop_config.json` (Claude Desktop) and in the `.mcp.json` that Claude Code actually reads. **Do not rely on a user env var** set with `setx`: a VSCode *window reload* re-spawns the MCP server from the already-running process's stale environment block, so the variable never arrives. The `env` block is re-read on every reload.
+
+Verify without restarting anything by driving the bridge directly — a healthy result is `{"status": "healthy", "rest_status_code": 200}`:
+
+```powershell
+$env:RKA_API_URL = "http://127.0.0.1:9712"
+rka mcp   # then issue an MCP initialize + tools/call for rka_query {"operation":"health"}
+```
+
+#### 4. Know which plugin copy Claude Code is reading
+
+When the marketplace source is a **local directory** (`/plugin marketplace add C:\path\to\rka`), `${CLAUDE_PLUGIN_ROOT}` resolves to the repo's own `plugin/` directory, so a `git pull` updates Claude Code immediately — but the copy under `%USERPROFILE%\.claude\plugins\cache\rka\rka\<version>\` can stay behind at the commit it was installed from. Confirm which one is live from the running process:
+
+```powershell
+Get-CimInstance Win32_Process |
+  Where-Object { $_.CommandLine -like '*rka-mcp-bridge.py*' } |
+  Select-Object ProcessId, CommandLine | Format-List
+```
+
+The path in the command line is the copy in use. If it points at the cache, refresh it from the repo (`robocopy <repo>\plugin <cache> /E /XF .mcp.json`) so skills and commands match the backend — and keep `/XF .mcp.json` so any machine-specific `env` block or absolute interpreter path survives.
+
+#### 5. `python3` works through a shell, not a bare spawn
+
+`plugin/.mcp.json` uses `command: "python3"`. On Windows that resolves only because the launcher goes through `cmd.exe`, which finds `python3.cmd` on `PATH`. A bare `subprocess` spawn of `python3` instead hits the Microsoft Store app-execution alias and fails with *"Python was not found; run without arguments to install from the Microsoft Store."* Keep `%USERPROFILE%\.local\bin` **ahead of** `%LOCALAPPDATA%\Microsoft\WindowsApps` on `PATH`, or set `command` to an absolute interpreter path. Check the resolution order with `where.exe python3`.
 
 ### macOS specifically
 

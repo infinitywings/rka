@@ -2,7 +2,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { Toaster } from "@/components/ui/sonner"
 import { AppLayout } from "@/components/layout/AppLayout"
-import { ProjectSelectionProvider } from "@/hooks/useProjectSelection"
+import { ProjectSelectionProvider } from "@/components/providers/ProjectSelectionProvider"
 import { ThemeProvider } from "@/hooks/useTheme"
 
 // Pages
@@ -19,6 +19,9 @@ import Settings from "@/pages/Settings"
 import ResearchMap from "@/pages/ResearchMap"
 import ResearchHealth from "@/pages/ResearchHealth"
 import ReportContext from "@/pages/ReportContext"
+import ManuscriptWorkbench from "@/pages/ManuscriptWorkbench"
+import InterpretationStaging from "@/pages/InterpretationStaging"
+import ClaimScopeReview from "@/pages/ClaimScopeReview"
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -46,8 +49,12 @@ export default function App() {
               <Route path="timeline" element={<Timeline />} />
               <Route path="graph" element={<KnowledgeGraph />} />
               <Route path="research-map" element={<ResearchMap />} />
+              <Route path="interpretations" element={<InterpretationStaging />} />
+              <Route path="claim-scopes" element={<ClaimScopeReview />} />
               <Route path="health" element={<ResearchHealth />} />
               <Route path="report-context" element={<ReportContext />} />
+              <Route path="workbench" element={<ManuscriptWorkbench />} />
+              <Route path="manuscripts/:manuscriptId/workbench" element={<ManuscriptWorkbench />} />
               <Route path="audit" element={<AuditLog />} />
               <Route path="context" element={<ContextInspector />} />
               <Route path="settings" element={<Settings />} />

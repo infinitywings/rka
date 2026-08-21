@@ -20,6 +20,9 @@ import {
   Sun,
   Moon,
   Monitor,
+  PanelsTopLeft,
+  ListChecks,
+  Scale,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useTheme } from "@/hooks/useTheme"
@@ -55,14 +58,23 @@ const navItems = [
   { to: "/timeline", icon: Clock, label: "Timeline" },
   { to: "/graph", icon: Share2, label: "Knowledge Graph" },
   { to: "/research-map", icon: Map, label: "Research Map" },
+  { to: "/interpretations", icon: ListChecks, label: "Interpretation Review" },
+  { to: "/claim-scopes", icon: Scale, label: "Claim Scope Review" },
   { to: "/health", icon: Activity, label: "Research Health" },
   { to: "/report-context", icon: FileSearch, label: "Report Context" },
+  { to: "/workbench", icon: PanelsTopLeft, label: "Manuscript Workbench" },
   { to: "/audit", icon: Shield, label: "Audit Log" },
   { to: "/context", icon: Telescope, label: "Context" },
   { to: "/settings", icon: Settings, label: "Settings" },
 ]
 
-export function Sidebar() {
+export function Sidebar({
+  className,
+  onNavigate,
+}: {
+  className?: string
+  onNavigate?: () => void
+}) {
   const { projectId, setProjectId } = useProjectSelection()
   const { data: project } = useProjectStatus()
   const { data: projects } = useProjects()
@@ -111,7 +123,7 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="flex h-screen w-56 flex-col border-r bg-sidebar">
+    <aside className={cn("flex h-screen w-56 flex-col border-r bg-sidebar", className)}>
       {/* Logo / Project Name */}
       <div className="border-b px-4 py-3">
         <div className="flex items-center gap-2">
@@ -151,7 +163,13 @@ export function Sidebar() {
               224px sidebar and pushing the shrink-0 New/Delete buttons
               off-screen (unclickable) once the Delete button appears on a
               non-default project. */}
-          <Select value={projectId} onValueChange={setProjectId}>
+          <Select
+            value={projectId}
+            onValueChange={(value) => {
+              setProjectId(value)
+              onNavigate?.()
+            }}
+          >
             <SelectTrigger className="h-9 min-w-0 flex-1 text-xs">
               <SelectValue placeholder="Select project" />
             </SelectTrigger>
@@ -193,6 +211,7 @@ export function Sidebar() {
             key={to}
             to={to}
             end={to === "/"}
+            onClick={onNavigate}
             className={({ isActive }) =>
               cn(
                 "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",

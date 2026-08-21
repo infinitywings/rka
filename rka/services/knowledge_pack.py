@@ -15,9 +15,12 @@ from typing import Any, BinaryIO
 from rka import __version__
 from rka.infra.ids import generate_id
 from rka.models.knowledge_pack import KnowledgePackImportResult
+from rka.models.planning import validate_planning_payload
+from rka.models.semantic_patch import SemanticPatchProposalCreate
 from rka.services.base import BaseService, _now
+from rka.services.outline_integrity import validate_unit_hierarchy
 
-PACK_SCHEMA_VERSION = 3
+PACK_SCHEMA_VERSION = 7
 PACK_FILE_SUFFIX = ".rka-pack.zip"
 _IMPORT_PROJECT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
@@ -29,8 +32,7 @@ _IMPORT_PROJECT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 # immutable attestation tables in ``core_data``.
 _PORTABILITY_EXCLUSIONS: dict[str, str] = {
     "change_events": (
-        "Target-local cursor ledger; import emits fresh events with target-local "
-        "watermarks."
+        "Target-local cursor ledger; import emits fresh events with target-local watermarks."
     ),
     "jobs": (
         "Worker queue state, retries, leases, and pending external work are "
@@ -44,6 +46,14 @@ _PORTABILITY_EXCLUSIONS: dict[str, str] = {
         "Diagnostics from source-installation reference-validation migration, "
         "not portable manuscript semantic state."
     ),
+    "manuscript_source_proposals": (
+        "Candidate source text, local workspace paths, and recovery state are "
+        "installation-local authoring data; export the manuscript files separately."
+    ),
+    "manuscript_source_events": (
+        "Source-file apply and recovery events refer to installation-local paths "
+        "and are omitted with their source proposals."
+    ),
 }
 
 
@@ -56,13 +66,38 @@ _PORTABILITY_EXCLUSIONS: dict[str, str] = {
 # matching against this set; the set is preserved for backward-
 # compatibility with any external caller importing the symbol, but
 # new code SHOULD prefer the severity field.
-_CRITICAL_INTEGRITY_CATEGORIES: frozenset[str] = frozenset({
-    "orphaned_entity_link_sources",
-    "orphaned_entity_link_targets",
-    "orphaned_claim_edge_sources",
-    "orphaned_claim_edge_targets",
-    "orphaned_claim_edge_clusters",
-})
+_CRITICAL_INTEGRITY_CATEGORIES: frozenset[str] = frozenset(
+    {
+        "orphaned_entity_link_sources",
+        "orphaned_entity_link_targets",
+        "orphaned_claim_edge_sources",
+        "orphaned_claim_edge_targets",
+        "orphaned_claim_edge_clusters",
+        "claim_scope_pointer_mismatch",
+        "claim_scope_revision_chain_invalid",
+        "claim_scope_disconfirming_refs_invalid",
+        "experiment_plan_head_mismatch",
+        "experiment_plan_chain_invalid",
+        "experiment_run_plan_invalid",
+        "experiment_run_event_head_mismatch",
+        "experiment_observation_parent_invalid",
+        "evidence_locator_source_invalid",
+        "experiment_candidate_source_invalid",
+        "claim_evidence_relation_invalid",
+        "planning_branch_lineage_invalid",
+        "planning_branch_event_head_mismatch",
+        "planning_artifact_head_mismatch",
+        "planning_artifact_chain_invalid",
+        "planning_evidence_binding_invalid",
+        "planning_payload_invalid",
+        "semantic_patch_manifest_hash_invalid",
+        "semantic_patch_proposal_context_invalid",
+        "semantic_patch_proposal_event_head_mismatch",
+        "semantic_patch_provider_event_chain_invalid",
+        "semantic_patch_payload_invalid",
+        "outline_hierarchy_invalid",
+    }
+)
 
 
 class KnowledgePackIntegrityError(RuntimeError):
@@ -77,9 +112,8 @@ class KnowledgePackIntegrityError(RuntimeError):
     def __init__(self, issues: list[dict]):
         self.issues = issues
         cats = sorted({issue["category"] for issue in issues})
-        super().__init__(
-            "Pack import rejected: critical integrity issues — " + ", ".join(cats)
-        )
+        super().__init__("Pack import rejected: critical integrity issues — " + ", ".join(cats))
+
 
 # Categorized table registry — all tables with project_id MUST be listed here.
 # Export validation will FAIL if any uncategorized table has data.
@@ -91,7 +125,19 @@ _TABLE_CATEGORIES: dict[str, list[str]] = {
         "missions",
         "journal",
         "checkpoints",
+        "interpretation_candidates",
+        "interpretation_candidate_hints",
+        "interpretation_review_events",
+        "experiments",
+        "experiment_plan_versions",
+        "experiment_runs",
+        "experiment_run_events",
+        "experiment_observations",
+        "evidence_locators",
         "claims",
+        "claim_scope_versions",
+        "interpretation_promotions",
+        "claim_evidence_relations",
         "evidence_clusters",
         "claim_edges",
         "entity_links",
@@ -99,13 +145,26 @@ _TABLE_CATEGORIES: dict[str, list[str]] = {
         # Native manuscript aggregate. Immutable histories and typed joins are
         # first-class knowledge and must round-trip without reconstruction.
         "manuscripts",
+        "manuscript_planning_branches",
+        "manuscript_planning_branch_events",
+        "manuscript_planning_artifacts",
+        "manuscript_planning_artifact_versions",
+        "manuscript_planning_evidence_bindings",
+        "manuscript_planning_promotion_events",
+        "manuscript_evaluation_events",
+        "semantic_patch_context_manifests",
+        "semantic_patch_proposals",
+        "semantic_patch_proposal_events",
+        "semantic_patch_provider_events",
         "manuscript_reference_members",
         "manuscript_claims",
         "manuscript_claim_versions",
         "manuscript_claim_ratifications",
         "manuscript_units",
+        "manuscript_unit_outline_profiles",
         "manuscript_claim_evidence",
         "manuscript_unit_evidence",
+        "manuscript_unit_citations",
         "manuscript_claim_units",
         "manuscript_checkpoints",
         "manuscript_claim_verification_attestations",
@@ -138,6 +197,8 @@ _TABLE_CATEGORIES: dict[str, list[str]] = {
         "jobs",
         "manuscript_migration_issues",
         "reference_validation_migration_issues",
+        "manuscript_source_proposals",
+        "manuscript_source_events",
         "project_deletion_authorizations",
         "kv_store",
         "embedding_metadata",
@@ -166,7 +227,18 @@ _INSERT_ORDER = (
     "reference_validation_attestations",
     "checkpoints",
     "evidence_clusters",
+    "experiments",
+    "experiment_plan_versions",
+    "experiment_runs",
+    "experiment_run_events",
+    "experiment_observations",
+    "interpretation_candidates",
+    "interpretation_candidate_hints",
+    "interpretation_review_events",
     "claims",
+    "claim_scope_versions",
+    "interpretation_promotions",
+    "claim_evidence_relations",
     "claim_edges",
     "entity_links",
     "tags",
@@ -176,12 +248,25 @@ _INSERT_ORDER = (
     # Native manuscript aggregate (FK-safe order). The legacy journal row is
     # already present before ``manuscripts.legacy_journal_id`` is restored.
     "manuscripts",
+    "manuscript_planning_branches",
+    "manuscript_planning_artifacts",
+    "manuscript_planning_artifact_versions",
+    "manuscript_planning_evidence_bindings",
+    "manuscript_planning_branch_events",
+    "semantic_patch_context_manifests",
+    "semantic_patch_proposals",
+    "manuscript_planning_promotion_events",
+    "manuscript_evaluation_events",
+    "semantic_patch_proposal_events",
+    "semantic_patch_provider_events",
     "manuscript_reference_members",
     "manuscript_claims",
     "manuscript_claim_versions",
     "manuscript_units",
+    "manuscript_unit_outline_profiles",
     "manuscript_claim_evidence",
     "manuscript_unit_evidence",
+    "manuscript_unit_citations",
     "manuscript_claim_units",
     "manuscript_claim_ratifications",
     "manuscript_checkpoints",
@@ -195,6 +280,7 @@ _INSERT_ORDER = (
     "keynodes",
     "graph_views",
     "artifacts",
+    "evidence_locators",
     "figures",
     "bootstrap_log",
     # bulk_logs (when included)
@@ -204,9 +290,7 @@ _INSERT_ORDER = (
     "qa_logs",
     "hook_executions",
 )
-_IMPORT_INSERT_TABLES = frozenset(
-    ("projects", "project_states", *_INSERT_ORDER)
-)
+_IMPORT_INSERT_TABLES = frozenset(("projects", "project_states", *_INSERT_ORDER))
 _IMPORT_TRANSIENT_COLUMNS: dict[str, frozenset[str]] = {
     # Bundled-file metadata is consumed by ``_restore_artifact_files`` and is
     # deliberately not a column in the destination artifacts table.
@@ -221,8 +305,16 @@ _SELF_REFERENTIAL_TABLES: dict[str, str | list[str]] = {
     "missions": ["depends_on", "parent_mission_id"],
     "decisions": ["parent_id", "superseded_by"],
     "journal": "supersedes",
+    "claim_scope_versions": "supersedes_scope_id",
+    "experiment_plan_versions": "supersedes_plan_id",
     "events": "caused_by_event",
     "manuscript_checkpoints": "supersedes_id",
+    "manuscript_planning_branches": "parent_branch_id",
+    "manuscript_planning_artifact_versions": [
+        "supersedes_version_id",
+        "derived_from_version_id",
+    ],
+    "semantic_patch_proposals": "supersedes_proposal_id",
     "topics": "parent_id",
 }
 _ID_ENTITY_TYPES = {
@@ -232,13 +324,37 @@ _ID_ENTITY_TYPES = {
     "journal": "journal",
     "checkpoints": "checkpoint",
     "claims": "claim",
+    "claim_scope_versions": "claim_scope",
+    "interpretation_candidates": "interpretation_candidate",
+    "interpretation_candidate_hints": "interpretation_hint",
+    "interpretation_review_events": "interpretation_review",
+    "interpretation_promotions": "interpretation_promotion",
+    "experiments": "experiment",
+    "experiment_plan_versions": "experiment_plan_version",
+    "experiment_runs": "experiment_run",
+    "experiment_run_events": "experiment_run_event",
+    "experiment_observations": "experiment_observation",
+    "evidence_locators": "evidence_locator",
+    "claim_evidence_relations": "claim_evidence_relation",
     "evidence_clusters": "cluster",
     "claim_edges": "claim_edge",
     "decision_options": "decision_option",
     "calibration_outcomes": "calibration_outcome",
     "reference_validation_attestations": "reference_validation",
     "manuscripts": "manuscript",
+    "manuscript_planning_branches": "manuscript_planning_branch",
+    "manuscript_planning_branch_events": "manuscript_planning_branch_event",
+    "manuscript_planning_artifacts": "manuscript_planning_artifact",
+    "manuscript_planning_artifact_versions": "manuscript_planning_artifact_version",
+    "manuscript_planning_evidence_bindings": "manuscript_planning_evidence_binding",
+    "manuscript_planning_promotion_events": "manuscript_planning_promotion_event",
+    "manuscript_evaluation_events": "manuscript_evaluation_event",
+    "semantic_patch_context_manifests": "semantic_patch_context_manifest",
+    "semantic_patch_proposals": "semantic_patch_proposal",
+    "semantic_patch_proposal_events": "semantic_patch_proposal_event",
+    "semantic_patch_provider_events": "semantic_patch_provider_event",
     "manuscript_reference_members": "manuscript_reference",
+    "manuscript_unit_citations": "manuscript_unit_citation",
     "manuscript_claims": "manuscript_claim",
     "manuscript_claim_ratifications": "manuscript_claim_ratification",
     "manuscript_units": "manuscript_unit",
@@ -263,11 +379,55 @@ _ID_ENTITY_TYPES = {
 _DIRECT_ID_COLUMNS = {
     "literature": ("id",),
     "missions": ("id", "depends_on", "parent_mission_id", "motivated_by_decision"),
-    "decisions": ("id", "parent_id", "superseded_by", "recommended_option_id", "pi_selected_option_id"),
+    "decisions": (
+        "id",
+        "parent_id",
+        "superseded_by",
+        "recommended_option_id",
+        "pi_selected_option_id",
+    ),
     "journal": ("id", "related_mission", "supersedes", "superseded_by"),
     "checkpoints": ("id", "mission_id", "linked_decision_id"),
-    "claims": ("id", "source_entry_id"),
-    "evidence_clusters": ("id", "research_question_id"),
+    "claims": ("id", "source_entry_id", "staleness_resolution_journal_id"),
+    "claim_scope_versions": (
+        "id",
+        "claim_id",
+        "source_candidate_id",
+        "supersedes_scope_id",
+    ),
+    "interpretation_candidates": ("id", "source_id", "disposition_target_id"),
+    "interpretation_candidate_hints": (
+        "id",
+        "candidate_id",
+        "related_candidate_id",
+    ),
+    "interpretation_review_events": (
+        "id",
+        "candidate_id",
+        "target_id",
+    ),
+    "interpretation_promotions": ("id", "candidate_id", "claim_id"),
+    "experiments": ("id",),
+    "experiment_plan_versions": (
+        "id",
+        "experiment_id",
+        "supersedes_plan_id",
+    ),
+    "experiment_runs": ("id", "experiment_id"),
+    "experiment_run_events": ("id", "run_id"),
+    "experiment_observations": ("id", "run_id"),
+    "evidence_locators": ("id", "observation_id", "artifact_id"),
+    "claim_evidence_relations": (
+        "id",
+        "claim_id",
+        "observation_id",
+        "candidate_id",
+    ),
+    "evidence_clusters": (
+        "id",
+        "research_question_id",
+        "staleness_resolution_journal_id",
+    ),
     "claim_edges": ("id", "source_claim_id", "target_claim_id", "cluster_id"),
     "decision_options": ("id", "decision_id", "dominated_by"),
     "calibration_outcomes": ("id", "decision_id"),
@@ -283,29 +443,105 @@ _DIRECT_ID_COLUMNS = {
         "validation_job_id",
     ),
     "manuscripts": ("id", "legacy_journal_id"),
+    "manuscript_planning_branches": (
+        "id",
+        "manuscript_id",
+        "context_key",
+        "parent_branch_id",
+    ),
+    "manuscript_planning_branch_events": ("id", "branch_id"),
+    "manuscript_planning_artifacts": ("id", "branch_id", "current_version_id"),
+    "manuscript_planning_artifact_versions": (
+        "id",
+        "artifact_id",
+        "branch_id",
+        "promotion_target_id",
+        "supersedes_version_id",
+        "derived_from_version_id",
+    ),
+    "manuscript_planning_evidence_bindings": (
+        "id",
+        "artifact_version_id",
+        "artifact_id",
+        "entity_id",
+    ),
+    "manuscript_planning_promotion_events": (
+        "id",
+        "branch_id",
+        "artifact_id",
+        "artifact_version_id",
+        "target_id",
+        "proposal_id",
+        "decision_id",
+    ),
+    "manuscript_evaluation_events": (
+        "id",
+        "branch_id",
+        "artifact_id",
+        "artifact_version_id",
+        "target_id",
+        "proposal_id",
+        "mission_id",
+    ),
+    "semantic_patch_context_manifests": ("id",),
+    "semantic_patch_proposals": (
+        "id",
+        "context_manifest_id",
+        "supersedes_proposal_id",
+    ),
+    "semantic_patch_proposal_events": ("id", "proposal_id"),
+    "semantic_patch_provider_events": ("id", "call_id", "context_manifest_id"),
     "manuscript_reference_members": (
-        "id", "manuscript_id", "literature_id",
+        "id",
+        "manuscript_id",
+        "literature_id",
     ),
     "manuscript_claims": ("id", "manuscript_id"),
     "manuscript_claim_versions": ("claim_id", "manuscript_id"),
     "manuscript_claim_ratifications": (
-        "id", "manuscript_id", "claim_id", "decision_id",
+        "id",
+        "manuscript_id",
+        "claim_id",
+        "decision_id",
     ),
     "manuscript_units": ("id", "manuscript_id", "artifact_ref"),
+    "manuscript_unit_outline_profiles": (
+        "unit_id",
+        "manuscript_id",
+        "parent_unit_id",
+    ),
     "manuscript_claim_evidence": (
-        "manuscript_id", "manuscript_claim_id", "evidence_claim_id",
+        "manuscript_id",
+        "manuscript_claim_id",
+        "evidence_claim_id",
     ),
     "manuscript_unit_evidence": (
-        "manuscript_id", "unit_id", "evidence_claim_id",
+        "manuscript_id",
+        "unit_id",
+        "evidence_claim_id",
+    ),
+    "manuscript_unit_citations": (
+        "id",
+        "manuscript_id",
+        "unit_id",
+        "reference_member_id",
     ),
     "manuscript_claim_units": (
-        "manuscript_id", "manuscript_claim_id", "unit_id",
+        "manuscript_id",
+        "manuscript_claim_id",
+        "unit_id",
     ),
     "manuscript_checkpoints": (
-        "id", "manuscript_id", "unit_id", "decision_id", "supersedes_id",
+        "id",
+        "manuscript_id",
+        "unit_id",
+        "decision_id",
+        "supersedes_id",
     ),
     "manuscript_claim_verification_attestations": (
-        "id", "manuscript_id", "claim_id",
+        "id",
+        "manuscript_id",
+        "claim_id",
     ),
     "hooks": ("id",),
     "hook_executions": ("id", "hook_id"),
@@ -336,6 +572,27 @@ _FK_COLUMNS: dict[str, set[str]] = {
     "journal": {"supersedes"},
     "checkpoints": {"mission_id", "linked_decision_id"},
     "claims": {"source_entry_id"},
+    "claim_scope_versions": {
+        "claim_id",
+        "source_candidate_id",
+        "supersedes_scope_id",
+    },
+    "interpretation_candidate_hints": {
+        "candidate_id",
+        "related_candidate_id",
+    },
+    "interpretation_review_events": {"candidate_id"},
+    "interpretation_promotions": {"candidate_id", "claim_id"},
+    "experiment_plan_versions": {"experiment_id", "supersedes_plan_id"},
+    "experiment_runs": {"experiment_id"},
+    "experiment_run_events": {"run_id"},
+    "experiment_observations": {"run_id"},
+    "evidence_locators": {"observation_id", "artifact_id"},
+    "claim_evidence_relations": {
+        "claim_id",
+        "observation_id",
+        "candidate_id",
+    },
     "evidence_clusters": {"research_question_id"},
     "claim_edges": {"source_claim_id", "target_claim_id", "cluster_id"},
     "events": {"caused_by_event"},
@@ -348,27 +605,79 @@ _FK_COLUMNS: dict[str, set[str]] = {
         "validation_job_id",
     },
     "manuscripts": {"legacy_journal_id"},
+    "manuscript_planning_branches": {"manuscript_id", "parent_branch_id"},
+    "manuscript_planning_branch_events": {"branch_id"},
+    "manuscript_planning_artifacts": {"branch_id"},
+    "manuscript_planning_artifact_versions": {
+        "artifact_id",
+        "branch_id",
+        "supersedes_version_id",
+        "derived_from_version_id",
+    },
+    "manuscript_planning_evidence_bindings": {
+        "artifact_version_id",
+        "artifact_id",
+    },
+    "manuscript_planning_promotion_events": {
+        "branch_id",
+        "artifact_id",
+        "artifact_version_id",
+        "proposal_id",
+        "decision_id",
+    },
+    "manuscript_evaluation_events": {
+        "branch_id",
+        "artifact_id",
+        "artifact_version_id",
+        "proposal_id",
+        "mission_id",
+    },
+    "semantic_patch_proposals": {"context_manifest_id", "supersedes_proposal_id"},
+    "semantic_patch_proposal_events": {"proposal_id"},
+    "semantic_patch_provider_events": {"context_manifest_id"},
     "manuscript_reference_members": {"manuscript_id", "literature_id"},
     "manuscript_claims": {"manuscript_id"},
     "manuscript_claim_versions": {"claim_id", "manuscript_id"},
     "manuscript_claim_ratifications": {
-        "manuscript_id", "claim_id", "decision_id",
+        "manuscript_id",
+        "claim_id",
+        "decision_id",
     },
     "manuscript_units": {"manuscript_id"},
+    "manuscript_unit_outline_profiles": {
+        "unit_id",
+        "manuscript_id",
+        "parent_unit_id",
+    },
     "manuscript_claim_evidence": {
-        "manuscript_id", "manuscript_claim_id", "evidence_claim_id",
+        "manuscript_id",
+        "manuscript_claim_id",
+        "evidence_claim_id",
     },
     "manuscript_unit_evidence": {
-        "manuscript_id", "unit_id", "evidence_claim_id",
+        "manuscript_id",
+        "unit_id",
+        "evidence_claim_id",
+    },
+    "manuscript_unit_citations": {
+        "manuscript_id",
+        "unit_id",
+        "reference_member_id",
     },
     "manuscript_claim_units": {
-        "manuscript_id", "manuscript_claim_id", "unit_id",
+        "manuscript_id",
+        "manuscript_claim_id",
+        "unit_id",
     },
     "manuscript_checkpoints": {
-        "manuscript_id", "unit_id", "decision_id", "supersedes_id",
+        "manuscript_id",
+        "unit_id",
+        "decision_id",
+        "supersedes_id",
     },
     "manuscript_claim_verification_attestations": {
-        "manuscript_id", "claim_id",
+        "manuscript_id",
+        "claim_id",
     },
     "topics": {"parent_id"},
     "entity_topics": {"topic_id"},
@@ -389,29 +698,144 @@ _PROSE_TEXT_COLUMNS: dict[str, tuple[str, ...]] = {
     "decisions": ("question", "rationale", "chosen", "abandonment_reason", "options"),
     "missions": ("objective", "context", "tasks", "acceptance_criteria"),
     "literature": ("abstract", "notes"),
-    "claims": ("content",),
-    "evidence_clusters": ("label", "synthesis"),
+    "claims": ("content", "staleness_resolution"),
+    "claim_scope_versions": (
+        "uncertainty_note",
+        "falsifier",
+        "falsifier_rationale",
+        "reason",
+    ),
+    "interpretation_candidates": (
+        "statement",
+        "uncertainty_note",
+        "falsifier",
+        "disposition_reason",
+    ),
+    "interpretation_candidate_hints": ("rationale",),
+    "interpretation_review_events": ("reason",),
+    "interpretation_promotions": ("promotion_reason", "revocation_reason"),
+    "experiment_plan_versions": (
+        "objective",
+        "hypothesis",
+        "protocol",
+        "reason",
+    ),
+    "experiment_runs": ("label", "command", "failure_summary"),
+    "experiment_run_events": ("reason",),
+    "experiment_observations": (
+        "name",
+        "summary",
+        "value_text",
+        "uncertainty_note",
+    ),
+    "evidence_locators": ("label", "locator_value"),
+    "claim_evidence_relations": ("review_reason", "revocation_reason"),
+    "evidence_clusters": ("label", "synthesis", "staleness_resolution"),
     "checkpoints": ("description",),
     "events": ("summary",),
     "manuscript_claim_versions": ("exact_wording", "allowed_wording"),
-    "manuscript_units": (
-        "allowed_interpretation", "prohibited_interpretation",
+    "manuscript_unit_evidence": ("supported_proposition", "warrant"),
+    "manuscript_unit_citations": (
+        "supported_proposition",
+        "comparison_axis",
     ),
+    "manuscript_units": (
+        "allowed_interpretation",
+        "prohibited_interpretation",
+    ),
+    "manuscript_unit_outline_profiles": (
+        "communicative_job",
+        "intended_takeaway",
+        "transition_from_previous",
+        "quick_reader_role",
+        "blocker",
+    ),
+    "manuscript_planning_branches": ("name", "purpose"),
+    "manuscript_planning_branch_events": ("reason",),
+    "manuscript_planning_artifact_versions": (
+        "summary",
+        "readiness_notes",
+        "reason",
+    ),
+    "manuscript_planning_evidence_bindings": ("locator_value", "note"),
+    "manuscript_planning_promotion_events": ("candidate_key", "reason"),
+    "manuscript_evaluation_events": (
+        "commitment_key",
+        "requirement_key",
+        "reason",
+    ),
+    "semantic_patch_proposals": ("intent", "reason"),
+    "semantic_patch_proposal_events": ("reason",),
 }
 
 _JSON_ID_COLUMNS = {
     "literature": ("related_decisions",),
     "decisions": ("related_missions", "related_literature", "related_journal"),
     "journal": ("related_decisions", "related_literature"),
+    "interpretation_candidates": ("scope_conditions",),
+    "claim_scope_versions": (
+        "conditions",
+        "allowed_extensions",
+        "prohibited_extensions",
+        "disconfirming_claim_ids",
+    ),
+    "experiment_plan_versions": (
+        "conditions",
+        "variables",
+        "metrics",
+        "baselines",
+        "success_criteria",
+        "failure_criteria",
+    ),
+    "experiment_runs": ("config", "environment"),
     "exploration_summaries": ("source_refs",),
     "qa_logs": ("answer_structured", "sources"),
     "events": ("details",),
     "audit_log": ("details",),
     "reference_validation_attestations": ("full_json_payload",),
-    "manuscript_claim_versions": ("prohibited_wording",),
-    "manuscript_claim_verification_attestations": (
-        "dependency_snapshot", "full_json_payload",
+    "manuscript_claim_versions": (
+        "prohibited_wording",
+        "conditions",
+        "falsification_criteria",
     ),
+    # Expanded checkpoint snapshots carry auditable nested identities. Import
+    # re-keys their components below and recomputes the digest. Older hash-only
+    # snapshots are opaque and therefore cannot be made portable retroactively.
+    "manuscript_checkpoints": ("dependency_snapshot",),
+    "manuscript_unit_outline_profiles": (
+        "evidence_plan",
+        "figure_intentions",
+        "table_intentions",
+        "citation_intentions",
+    ),
+    "manuscript_planning_branch_events": ("details",),
+    "manuscript_planning_artifact_versions": (
+        "payload",
+        "unresolved_items",
+        "readiness_missing",
+    ),
+    "manuscript_planning_promotion_events": ("details",),
+    "manuscript_evaluation_events": ("details",),
+    "manuscript_claim_verification_attestations": (
+        "dependency_snapshot",
+        "full_json_payload",
+    ),
+    "semantic_patch_context_manifests": (
+        "selected_context",
+        "resolved_context",
+        "target_bases",
+        "constraints",
+        "omissions",
+        "truncation_notes",
+    ),
+    "semantic_patch_proposals": (
+        "operations",
+        "target_bases",
+        "semantic_diff",
+        "validation_findings",
+    ),
+    "semantic_patch_proposal_events": ("details",),
+    "semantic_patch_provider_events": ("details",),
     "context_snapshots": ("entry_ids",),
     "keynodes": ("node_refs",),
     "graph_views": ("nodes", "edges"),
@@ -425,6 +849,18 @@ _ENTITY_LINK_ENDPOINT_TABLES: dict[str, str] = {
     "artifact": "artifacts",
     "checkpoint": "checkpoints",
     "claim": "claims",
+    "claim_scope": "claim_scope_versions",
+    "interpretation_candidate": "interpretation_candidates",
+    "interpretation_hint": "interpretation_candidate_hints",
+    "interpretation_promotion": "interpretation_promotions",
+    "interpretation_review": "interpretation_review_events",
+    "experiment": "experiments",
+    "experiment_plan_version": "experiment_plan_versions",
+    "experiment_run": "experiment_runs",
+    "experiment_run_event": "experiment_run_events",
+    "experiment_observation": "experiment_observations",
+    "evidence_locator": "evidence_locators",
+    "claim_evidence_relation": "claim_evidence_relations",
     "claim_edge": "claim_edges",
     "cluster": "evidence_clusters",
     "decision": "decisions",
@@ -435,13 +871,23 @@ _ENTITY_LINK_ENDPOINT_TABLES: dict[str, str] = {
     "link": "entity_links",
     "literature": "literature",
     "manuscript": "manuscripts",
+    "manuscript_planning_branch": "manuscript_planning_branches",
+    "manuscript_planning_branch_event": "manuscript_planning_branch_events",
+    "manuscript_planning_artifact": "manuscript_planning_artifacts",
+    "manuscript_planning_artifact_version": "manuscript_planning_artifact_versions",
+    "manuscript_planning_evidence_binding": "manuscript_planning_evidence_bindings",
+    "manuscript_planning_promotion_event": "manuscript_planning_promotion_events",
+    "manuscript_evaluation_event": "manuscript_evaluation_events",
+    "semantic_patch_context_manifest": "semantic_patch_context_manifests",
+    "semantic_patch_proposal": "semantic_patch_proposals",
+    "semantic_patch_proposal_event": "semantic_patch_proposal_events",
+    "semantic_patch_provider_event": "semantic_patch_provider_events",
     "manuscript_checkpoint": "manuscript_checkpoints",
     "manuscript_claim": "manuscript_claims",
     "manuscript_claim_ratification": "manuscript_claim_ratifications",
-    "manuscript_claim_verification": (
-        "manuscript_claim_verification_attestations"
-    ),
+    "manuscript_claim_verification": ("manuscript_claim_verification_attestations"),
     "manuscript_reference": "manuscript_reference_members",
+    "manuscript_unit_citation": "manuscript_unit_citations",
     "manuscript_unit": "manuscript_units",
     "mission": "missions",
     "reference_validation": "reference_validation_attestations",
@@ -450,11 +896,32 @@ _ENTITY_LINK_ENDPOINT_TABLES: dict[str, str] = {
     "topic": "topics",
 }
 
+_PLANNING_EVIDENCE_ENTITY_TABLES: dict[str, str] = {
+    "journal": "journal",
+    "literature": "literature",
+    "decision": "decisions",
+    "claim": "claims",
+    "claim_scope": "claim_scope_versions",
+    "cluster": "evidence_clusters",
+    "interpretation_candidate": "interpretation_candidates",
+    "experiment": "experiments",
+    "experiment_plan_version": "experiment_plan_versions",
+    "experiment_run": "experiment_runs",
+    "experiment_observation": "experiment_observations",
+    "evidence_locator": "evidence_locators",
+    "artifact": "artifacts",
+    "manuscript": "manuscripts",
+    "manuscript_claim": "manuscript_claims",
+    "manuscript_unit": "manuscript_units",
+}
+
 
 class KnowledgePackService(BaseService):
     """Export and import a full project-scoped knowledge pack."""
 
-    async def export_pack(self, project_id: str | None = None, include_logs: bool = False) -> tuple[str, str]:
+    async def export_pack(
+        self, project_id: str | None = None, include_logs: bool = False
+    ) -> tuple[str, str]:
         """Export one transactionally consistent project snapshot."""
         async with self.db.transaction(write=False):
             return await self._export_pack(project_id, include_logs)
@@ -495,7 +962,8 @@ class KnowledgePackService(BaseService):
             "pack_format_version": PACK_SCHEMA_VERSION,
             "exported_at": _now(),
             "rka_version": __version__,
-            "categories_exported": ["core_data", "derived_data"] + (["bulk_logs"] if include_logs else []),
+            "categories_exported": ["core_data", "derived_data"]
+            + (["bulk_logs"] if include_logs else []),
             "project": dict(project),
             "project_state": dict(project_state) if project_state else None,
             "portability": {
@@ -556,18 +1024,13 @@ class KnowledgePackService(BaseService):
             source_project = manifest["project"]
             source_state = manifest.get("project_state")
             source_tables: dict[str, list[dict[str, Any]]] = manifest.get("tables", {})
-            pack_format = (
-                manifest.get("pack_format_version")
-                or manifest.get("schema_version")
-            )
+            pack_format = manifest.get("pack_format_version") or manifest.get("schema_version")
 
             raw_target_project_id = (
                 project_id if project_id is not None else source_project.get("id")
             )
             raw_target_project_name = (
-                project_name
-                if project_name is not None
-                else source_project.get("name")
+                project_name if project_name is not None else source_project.get("name")
             )
             if not isinstance(raw_target_project_id, str):
                 raise ValueError("Imported project ID must be a string")
@@ -608,8 +1071,7 @@ class KnowledgePackService(BaseService):
             if tables.get("artifacts"):
                 if artifact_project_root.exists():
                     raise ValueError(
-                        "Artifact storage for imported project already exists: "
-                        f"{target_project_id}"
+                        f"Artifact storage for imported project already exists: {target_project_id}"
                     )
                 artifact_storage_root.mkdir(parents=True, exist_ok=True)
                 staging_project_root = Path(
@@ -652,9 +1114,7 @@ class KnowledgePackService(BaseService):
 
                     for table in _INSERT_ORDER:
                         rows = [dict(row) for row in tables.get(table, [])]
-                        rows = self._prepare_rows_for_insert(
-                            table, rows, target_project_id
-                        )
+                        rows = self._prepare_rows_for_insert(table, rows, target_project_id)
 
                         if table == "artifacts":
                             staging_artifact_root = (
@@ -672,6 +1132,16 @@ class KnowledgePackService(BaseService):
 
                         for row in rows:
                             await self._insert_row(table, row)
+                            if table == "claim_scope_versions":
+                                await self.db.execute(
+                                    """UPDATE claims SET scope_revision = ?
+                                       WHERE id = ? AND project_id = ?""",
+                                    [
+                                        row["revision"],
+                                        row["claim_id"],
+                                        target_project_id,
+                                    ],
+                                )
 
                         imported_counts[table] = len(rows)
 
@@ -681,20 +1151,14 @@ class KnowledgePackService(BaseService):
                     # This creates identity/metadata only: never claims,
                     # evidence links, ratifications, or checkpoints.
                     if pack_format in (1, 2):
-                        imported_counts["manuscripts"] += (
-                            await self._backfill_legacy_manuscripts(
-                                target_project_id
-                            )
+                        imported_counts["manuscripts"] += await self._backfill_legacy_manuscripts(
+                            target_project_id
                         )
 
                     # The integrity gate runs inside the managed transaction so
                     # critical issues roll back the complete imported graph.
                     integrity_issues = await self.check_integrity(target_project_id)
-                    critical = [
-                        i
-                        for i in integrity_issues
-                        if i.get("severity") == "critical"
-                    ]
+                    critical = [i for i in integrity_issues if i.get("severity") == "critical"]
                     if critical:
                         raise KnowledgePackIntegrityError(critical)
 
@@ -707,10 +1171,7 @@ class KnowledgePackService(BaseService):
                         staging_project_root.replace(artifact_project_root)
                         published_project_root = True
             except BaseException:
-                if (
-                    staging_project_root is not None
-                    and staging_project_root.exists()
-                ):
+                if staging_project_root is not None and staging_project_root.exists():
                     shutil.rmtree(staging_project_root, ignore_errors=True)
                 if published_project_root and artifact_project_root.exists():
                     shutil.rmtree(artifact_project_root, ignore_errors=True)
@@ -720,8 +1181,7 @@ class KnowledgePackService(BaseService):
         # non-critical findings so the import doesn't land with stale derived
         # counts (Brain-ratified addition during the upfront Backbrief).
         await self._sync_imported_indexes(tables, target_project_id)
-        if any(i.get("category") == "claim_count_mismatch"
-               for i in integrity_issues):
+        if any(i.get("category") == "claim_count_mismatch" for i in integrity_issues):
             await self._recompute_cluster_claim_counts(target_project_id)
 
         return KnowledgePackImportResult(
@@ -772,12 +1232,10 @@ class KnowledgePackService(BaseService):
                 [legacy_id],
             )
             manuscript_tags = [
-                tag for tag in tag_rows
-                if str(tag.get("tag") or "").casefold() == "manuscript"
+                tag for tag in tag_rows if str(tag.get("tag") or "").casefold() == "manuscript"
             ]
             scoped_manuscript_tags = [
-                tag for tag in manuscript_tags
-                if tag.get("project_id") == project_id
+                tag for tag in manuscript_tags if tag.get("project_id") == project_id
             ]
             venue_tags = [
                 str(tag.get("tag") or "")[6:].strip()
@@ -791,9 +1249,7 @@ class KnowledgePackService(BaseService):
                 if tag.get("project_id") == project_id
                 and str(tag.get("tag") or "")[:6].casefold() == "phase:"
             ]
-            normalized_input = str(row.get("verbatim_input") or "").replace(
-                "\r", ""
-            )
+            normalized_input = str(row.get("verbatim_input") or "").replace("\r", "")
             title, separator, remainder = normalized_input.partition("\n\n")
             title = title.strip()
             abstract = (remainder.strip() or None) if separator else None
@@ -805,9 +1261,7 @@ class KnowledgePackService(BaseService):
                         "tag_project_mismatch",
                         {
                             "manuscript_tag_count": len(manuscript_tags),
-                            "same_project_tag_count": len(
-                                scoped_manuscript_tags
-                            ),
+                            "same_project_tag_count": len(scoped_manuscript_tags),
                         },
                     )
                 )
@@ -825,33 +1279,17 @@ class KnowledgePackService(BaseService):
                 issues.append(
                     (
                         "missing_title",
-                        {
-                            "source": (
-                                "journal.verbatim_input:first_paragraph"
-                            )
-                        },
+                        {"source": ("journal.verbatim_input:first_paragraph")},
                     )
                 )
-            if len(venue_tags) == 0 or (
-                len(venue_tags) == 1 and not venue_tags[0]
-            ):
-                issues.append(
-                    ("missing_venue", {"venue_tag_count": len(venue_tags)})
-                )
+            if len(venue_tags) == 0 or (len(venue_tags) == 1 and not venue_tags[0]):
+                issues.append(("missing_venue", {"venue_tag_count": len(venue_tags)}))
             elif len(venue_tags) > 1:
-                issues.append(
-                    ("ambiguous_venue", {"venue_tag_count": len(venue_tags)})
-                )
-            if len(phase_tags) == 0 or (
-                len(phase_tags) == 1 and not phase_tags[0]
-            ):
-                issues.append(
-                    ("missing_phase", {"phase_tag_count": len(phase_tags)})
-                )
+                issues.append(("ambiguous_venue", {"venue_tag_count": len(venue_tags)}))
+            if len(phase_tags) == 0 or (len(phase_tags) == 1 and not phase_tags[0]):
+                issues.append(("missing_phase", {"phase_tag_count": len(phase_tags)}))
             elif len(phase_tags) > 1:
-                issues.append(
-                    ("ambiguous_phase", {"phase_tag_count": len(phase_tags)})
-                )
+                issues.append(("ambiguous_phase", {"phase_tag_count": len(phase_tags)}))
             elif phase_tags[0] not in {"draft", "drafting", "review", "final"}:
                 issues.append(
                     (
@@ -896,9 +1334,7 @@ class KnowledgePackService(BaseService):
                         "deterministic_id_conflict",
                         {
                             "candidate_id": candidate_id,
-                            "existing_legacy_journal_id": collision.get(
-                                "legacy_journal_id"
-                            ),
+                            "existing_legacy_journal_id": collision.get("legacy_journal_id"),
                             "existing_project_id": collision.get("project_id"),
                         },
                     )
@@ -1004,9 +1440,7 @@ class KnowledgePackService(BaseService):
                 )
             safe_name = self._safe_filename(path.name)
             pack_file = f"artifacts/{artifact['id']}/{safe_name}"
-            with path.open("rb") as src, archive.open(
-                pack_file, "w"
-            ) as dst:
+            with path.open("rb") as src, archive.open(pack_file, "w") as dst:
                 actual_hash = self._copy_and_hash(src, dst)
             self._assert_artifact_content_hash(
                 artifact,
@@ -1028,10 +1462,8 @@ class KnowledgePackService(BaseService):
             raise ValueError("Knowledge pack manifest is not valid JSON") from exc
 
         pack_format = manifest.get("pack_format_version") or manifest.get("schema_version")
-        if pack_format not in (1, 2, PACK_SCHEMA_VERSION):
-            raise ValueError(
-                f"Unsupported knowledge pack format version: {pack_format}"
-            )
+        if pack_format not in range(1, PACK_SCHEMA_VERSION + 1):
+            raise ValueError(f"Unsupported knowledge pack format version: {pack_format}")
         if not manifest.get("project"):
             raise ValueError("Knowledge pack manifest is missing project metadata")
         return manifest
@@ -1041,7 +1473,9 @@ class KnowledgePackService(BaseService):
         if existing_id:
             raise ValueError(f"Project '{project_id}' already exists")
 
-        existing_name = await self.db.fetchone("SELECT id FROM projects WHERE name = ?", [project_name])
+        existing_name = await self.db.fetchone(
+            "SELECT id FROM projects WHERE name = ?", [project_name]
+        )
         if existing_name:
             raise ValueError(
                 f"Project name '{project_name}' already exists. Choose a different import name."
@@ -1052,9 +1486,7 @@ class KnowledgePackService(BaseService):
         duplicate_dois = sorted(doi for doi, count in Counter(dois).items() if count > 1)
         if duplicate_dois:
             sample = ", ".join(duplicate_dois[:5])
-            raise ValueError(
-                f"Knowledge pack contains duplicate literature DOI(s): {sample}"
-            )
+            raise ValueError(f"Knowledge pack contains duplicate literature DOI(s): {sample}")
 
     @staticmethod
     def _validate_portable_child_links(
@@ -1074,10 +1506,7 @@ class KnowledgePackService(BaseService):
                 str(row["id"])
                 for row in tables.get(table, [])
                 if row.get("id")
-                and (
-                    "project_id" not in row
-                    or row.get("project_id") == project_id
-                )
+                and ("project_id" not in row or row.get("project_id") == project_id)
             }
         endpoint_ids["project"] = {project_id}
 
@@ -1087,13 +1516,11 @@ class KnowledgePackService(BaseService):
             entity_id = str(membership.get("entity_id") or "")
             if topic_id not in topic_ids:
                 raise ValueError(
-                    "Knowledge pack entity_topics contains a topic outside "
-                    f"project {project_id!r}"
+                    f"Knowledge pack entity_topics contains a topic outside project {project_id!r}"
                 )
             if entity_type not in endpoint_ids:
                 raise ValueError(
-                    "Knowledge pack entity_topics contains unsupported "
-                    f"entity type {entity_type!r}"
+                    f"Knowledge pack entity_topics contains unsupported entity type {entity_type!r}"
                 )
             if entity_id not in endpoint_ids[entity_type]:
                 raise ValueError(
@@ -1112,6 +1539,39 @@ class KnowledgePackService(BaseService):
                 raise ValueError(
                     "Knowledge pack qa_logs contains a session outside the "
                     f"project or absent from this pack: {log.get('session_id')!r}"
+                )
+
+        manuscript_units = {
+            str(row["id"]): str(row.get("manuscript_id") or "")
+            for row in tables.get("manuscript_units", [])
+            if row.get("id") and row.get("project_id") == project_id
+        }
+        for profile in tables.get("manuscript_unit_outline_profiles", []):
+            unit_id = str(profile.get("unit_id") or "")
+            manuscript_id = str(profile.get("manuscript_id") or "")
+            if unit_id not in manuscript_units:
+                raise ValueError(
+                    "Knowledge pack outline profile contains a unit outside the "
+                    f"project or absent from this pack: {unit_id!r}"
+                )
+            if manuscript_units[unit_id] != manuscript_id:
+                raise ValueError(
+                    "Knowledge pack outline profile manuscript does not match its unit: "
+                    f"{unit_id!r}"
+                )
+            parent_id = profile.get("parent_unit_id")
+            if parent_id is None:
+                continue
+            parent_id = str(parent_id)
+            if parent_id not in manuscript_units:
+                raise ValueError(
+                    "Knowledge pack outline profile contains a parent outside the "
+                    f"project or absent from this pack: {parent_id!r}"
+                )
+            if manuscript_units[parent_id] != manuscript_id:
+                raise ValueError(
+                    "Knowledge pack outline profile parent belongs to a different manuscript: "
+                    f"{parent_id!r}"
                 )
 
     def _remap_tables(
@@ -1143,6 +1603,10 @@ class KnowledgePackService(BaseService):
                 row_id = row.get("id")
                 if row_id:
                     id_map[str(row_id)] = generate_id(entity_type)
+        for row in tables.get("semantic_patch_provider_events", []):
+            call_id = row.get("call_id")
+            if call_id and str(call_id) not in id_map:
+                id_map[str(call_id)] = generate_id("semantic_patch_provider_call")
         return id_map
 
     def _remap_row(
@@ -1175,17 +1639,12 @@ class KnowledgePackService(BaseService):
 
         for column in _JSON_ID_COLUMNS.get(table, ()):
             if remapped.get(column):
-                if (
-                    table == "reference_validation_attestations"
-                    and column == "full_json_payload"
-                ):
-                    remapped[column] = (
-                        self._rewrite_reference_validation_payload(
-                            remapped[column],
-                            id_map=id_map,
-                            source_project_id=source_project_id,
-                            target_project_id=target_project_id,
-                        )
+                if table == "reference_validation_attestations" and column == "full_json_payload":
+                    remapped[column] = self._rewrite_reference_validation_payload(
+                        remapped[column],
+                        id_map=id_map,
+                        source_project_id=source_project_id,
+                        target_project_id=target_project_id,
                     )
                 else:
                     remapped[column] = self._rewrite_json_refs(
@@ -1209,6 +1668,49 @@ class KnowledgePackService(BaseService):
                     lambda m: id_map.get(m.group(0), m.group(0)), value
                 )
 
+        if table == "manuscript_checkpoints" and remapped.get("dependency_snapshot"):
+            try:
+                checkpoint_snapshot = json.loads(remapped["dependency_snapshot"])
+            except (TypeError, json.JSONDecodeError):
+                checkpoint_snapshot = None
+            if isinstance(checkpoint_snapshot, dict) and isinstance(
+                checkpoint_snapshot.get("components"), dict
+            ):
+                encoded_components = json.dumps(
+                    checkpoint_snapshot["components"],
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                ).encode()
+                checkpoint_snapshot["sha256"] = hashlib.sha256(
+                    encoded_components
+                ).hexdigest()
+                remapped["dependency_snapshot"] = json.dumps(checkpoint_snapshot)
+
+        if table == "semantic_patch_context_manifests":
+            manifest_payload = {
+                "schema_version": "rka.context-manifest/v1",
+                "project_id": target_project_id,
+                "origin": remapped["origin"],
+                "provider": remapped.get("provider"),
+                "model": remapped.get("model"),
+                "boundary": remapped["boundary"],
+                "selected_context": json.loads(remapped["selected_context"]),
+                "resolved_context": json.loads(remapped["resolved_context"]),
+                "target_bases": json.loads(remapped["target_bases"]),
+                "constraints": json.loads(remapped["constraints"]),
+                "omissions": json.loads(remapped["omissions"]),
+                "truncation_notes": json.loads(remapped["truncation_notes"]),
+            }
+            remapped["manifest_hash"] = hashlib.sha256(
+                json.dumps(
+                    manifest_payload,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ).encode("utf-8")
+            ).hexdigest()
+
         return remapped
 
     def _rewrite_direct_ref(
@@ -1229,7 +1731,14 @@ class KnowledgePackService(BaseService):
         if table == "exploration_summaries" and column == "scope_id":
             if scope_type == "project" and value == source_project_id:
                 return target_project_id
-            if scope_type in {"mission", "decision", "journal", "literature", "checkpoint", "summary"}:
+            if scope_type in {
+                "mission",
+                "decision",
+                "journal",
+                "literature",
+                "checkpoint",
+                "summary",
+            }:
                 return id_map.get(value, value)
             return value
 
@@ -1294,9 +1803,7 @@ class KnowledgePackService(BaseService):
             preserved_source_job_id = source_result.get("source_job_id")
             preserved_source_project_id = source_result.get("source_project_id")
 
-        rewritten = self._rewrite_nested_refs(
-            payload, id_map, source_project_id, target_project_id
-        )
+        rewritten = self._rewrite_nested_refs(payload, id_map, source_project_id, target_project_id)
         if isinstance(rewritten, dict):
             result = rewritten.get("result")
             if isinstance(result, dict) and "job_id" in result:
@@ -1321,7 +1828,17 @@ class KnowledgePackService(BaseService):
         if isinstance(value, str):
             if value == source_project_id:
                 return target_project_id
-            return id_map.get(value, value)
+            direct = id_map.get(value)
+            if direct is not None:
+                return direct
+            # JSON intention fields and provider payloads may contain IDs in
+            # explanatory strings rather than as whole scalar values. Rewrite
+            # only tokens present in this pack's id_map, preserving all other
+            # prose byte-for-byte.
+            return _EMBEDDED_ID_RE.sub(
+                lambda match: id_map.get(match.group(0), match.group(0)),
+                value,
+            )
         if isinstance(value, list):
             return [
                 self._rewrite_nested_refs(item, id_map, source_project_id, target_project_id)
@@ -1346,14 +1863,16 @@ class KnowledgePackService(BaseService):
         if source_state:
             phases = source_state.get("phases_config")
         if not phases:
-            phases = json.dumps([
-                "literature",
-                "planning",
-                "data_collection",
-                "implementation",
-                "evaluation",
-                "paper_writing",
-            ])
+            phases = json.dumps(
+                [
+                    "literature",
+                    "planning",
+                    "data_collection",
+                    "implementation",
+                    "evaluation",
+                    "paper_writing",
+                ]
+            )
         return {
             "project_id": target_project_id,
             "project_name": target_project_name,
@@ -1363,8 +1882,12 @@ class KnowledgePackService(BaseService):
             "summary": (source_state or {}).get("summary"),
             "blockers": (source_state or {}).get("blockers"),
             "metrics": (source_state or {}).get("metrics"),
-            "created_at": (source_state or {}).get("created_at") or source_project.get("created_at") or _now(),
-            "updated_at": (source_state or {}).get("updated_at") or source_project.get("updated_at") or _now(),
+            "created_at": (source_state or {}).get("created_at")
+            or source_project.get("created_at")
+            or _now(),
+            "updated_at": (source_state or {}).get("updated_at")
+            or source_project.get("updated_at")
+            or _now(),
         }
 
     def _prepare_rows_for_insert(
@@ -1378,12 +1901,18 @@ class KnowledgePackService(BaseService):
         dependency_keys = _SELF_REFERENTIAL_TABLES.get(table)
         if dependency_keys:
             keys = [dependency_keys] if isinstance(dependency_keys, str) else list(dependency_keys)
-            for key in keys:
-                prepared = self._sort_rows_by_dependency(prepared, key)
+            prepared = self._sort_rows_by_dependencies(prepared, keys)
 
         if table == "audit_log" or table == "bootstrap_log":
             for row in prepared:
                 row.pop("id", None)
+        if table == "claims":
+            # Scope rows are inserted after claims. Rebuild the monotonic head
+            # pointer as each immutable version is imported so migration 041's
+            # append triggers remain active during untrusted pack ingestion.
+            for row in prepared:
+                if "scope_revision" in row:
+                    row["scope_revision"] = 0
         return prepared
 
     def _rewrite_project_scope(
@@ -1404,6 +1933,13 @@ class KnowledgePackService(BaseService):
         rows: list[dict[str, Any]],
         dependency_key: str,
     ) -> list[dict[str, Any]]:
+        return self._sort_rows_by_dependencies(rows, [dependency_key])
+
+    def _sort_rows_by_dependencies(
+        self,
+        rows: list[dict[str, Any]],
+        dependency_keys: list[str],
+    ) -> list[dict[str, Any]]:
         remaining = {str(row["id"]): dict(row) for row in rows if row.get("id")}
         ordered: list[dict[str, Any]] = []
         placed: set[str] = set()
@@ -1411,15 +1947,20 @@ class KnowledgePackService(BaseService):
         while remaining:
             progressed = False
             for row_id, row in list(remaining.items()):
-                dependency = row.get(dependency_key)
-                if not dependency or dependency in placed or dependency not in remaining:
+                dependencies = {
+                    str(row[key])
+                    for key in dependency_keys
+                    if row.get(key) is not None and str(row[key]) in remaining
+                }
+                if dependencies.issubset(placed):
                     ordered.append(row)
                     placed.add(row_id)
                     del remaining[row_id]
                     progressed = True
             if not progressed:
                 raise ValueError(
-                    f"Cannot import pack because {dependency_key} contains a cycle or unresolved reference"
+                    "Cannot import pack because self-references in "
+                    f"{', '.join(dependency_keys)} contain a cycle or unresolved reference"
                 )
 
         return ordered
@@ -1438,9 +1979,7 @@ class KnowledgePackService(BaseService):
 
         resolved_artifact_root = artifact_root.resolve()
         resolved_persisted_root = (
-            persisted_root.resolve()
-            if persisted_root is not None
-            else resolved_artifact_root
+            persisted_root.resolve() if persisted_root is not None else resolved_artifact_root
         )
         prepared: list[dict[str, Any]] = []
         for row in rows:
@@ -1451,12 +1990,8 @@ class KnowledgePackService(BaseService):
                     f"Knowledge pack artifact '{artifact.get('id') or '<unknown>'}' "
                     "has no bundled file"
                 )
-            safe_filename = self._safe_filename(
-                artifact.get("filename") or "artifact.bin"
-            )
-            destination = (
-                resolved_artifact_root / artifact["id"] / safe_filename
-            ).resolve()
+            safe_filename = self._safe_filename(artifact.get("filename") or "artifact.bin")
+            destination = (resolved_artifact_root / artifact["id"] / safe_filename).resolve()
             if not destination.is_relative_to(resolved_artifact_root):
                 raise ValueError("Unsafe artifact destination in knowledge pack")
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -1471,12 +2006,8 @@ class KnowledgePackService(BaseService):
                 persisted_destination = (
                     resolved_persisted_root / artifact["id"] / safe_filename
                 ).resolve()
-                if not persisted_destination.is_relative_to(
-                    resolved_persisted_root
-                ):
-                    raise ValueError(
-                        "Unsafe persisted artifact destination in knowledge pack"
-                    )
+                if not persisted_destination.is_relative_to(resolved_persisted_root):
+                    raise ValueError("Unsafe persisted artifact destination in knowledge pack")
                 artifact["filepath"] = str(persisted_destination)
                 restored += 1
             except KeyError as exc:
@@ -1490,9 +2021,7 @@ class KnowledgePackService(BaseService):
     async def _table_columns(self, table: str) -> frozenset[str]:
         """Return the live column allowlist for a fixed import table."""
         if table not in _IMPORT_INSERT_TABLES:
-            raise ValueError(
-                f"Knowledge pack targets unsupported table {table!r}"
-            )
+            raise ValueError(f"Knowledge pack targets unsupported table {table!r}")
         cache: dict[str, frozenset[str]] = getattr(
             self,
             "_import_table_columns_cache",
@@ -1503,9 +2032,7 @@ class KnowledgePackService(BaseService):
         columns = await self.db.fetchall(f"PRAGMA table_info([{table}])")
         names = frozenset(str(column["name"]) for column in columns)
         if not names:
-            raise ValueError(
-                f"Knowledge pack target table {table!r} is unavailable"
-            )
+            raise ValueError(f"Knowledge pack target table {table!r} is unavailable")
         cache[table] = names
         self._import_table_columns_cache = cache
         return names
@@ -1518,8 +2045,7 @@ class KnowledgePackService(BaseService):
         unknown_tables = sorted(set(tables) - set(_INSERT_ORDER))
         if unknown_tables:
             raise ValueError(
-                "Knowledge pack contains unsupported table(s): "
-                + ", ".join(unknown_tables)
+                "Knowledge pack contains unsupported table(s): " + ", ".join(unknown_tables)
             )
 
         for table, rows in tables.items():
@@ -1527,9 +2053,7 @@ class KnowledgePackService(BaseService):
             transient = _IMPORT_TRANSIENT_COLUMNS.get(table, frozenset())
             for index, row in enumerate(rows):
                 if not isinstance(row, dict):
-                    raise ValueError(
-                        f"Knowledge pack {table}[{index}] must be an object"
-                    )
+                    raise ValueError(f"Knowledge pack {table}[{index}] must be an object")
                 unknown_columns = sorted(
                     str(column)
                     for column in row
@@ -1538,27 +2062,21 @@ class KnowledgePackService(BaseService):
                 if unknown_columns:
                     raise ValueError(
                         f"Knowledge pack {table}[{index}] contains unsupported "
-                        "column(s): "
-                        + ", ".join(unknown_columns)
+                        "column(s): " + ", ".join(unknown_columns)
                     )
 
     async def _insert_row(self, table: str, row: dict[str, Any]) -> None:
         """Insert one already-remapped row using schema-approved identifiers."""
         allowed = await self._table_columns(table)
         columns = list(row.keys())
-        unknown_columns = [
-            str(column) for column in columns if column not in allowed
-        ]
+        unknown_columns = [str(column) for column in columns if column not in allowed]
         if unknown_columns:
             raise ValueError(
                 f"Knowledge pack row for {table!r} contains unsupported "
-                "column(s): "
-                + ", ".join(sorted(unknown_columns))
+                "column(s): " + ", ".join(sorted(unknown_columns))
             )
         if not columns:
-            raise ValueError(
-                f"Knowledge pack row for {table!r} cannot be empty"
-            )
+            raise ValueError(f"Knowledge pack row for {table!r} cannot be empty")
         placeholders = ", ".join("?" for _ in columns)
         # Identifiers come only from PRAGMA table_info above. Bracket quoting
         # keeps approved names syntactically isolated from uploaded content.
@@ -1619,15 +2137,12 @@ class KnowledgePackService(BaseService):
         """Fail closed when bundled bytes disagree with artifact metadata."""
         expected_hash = artifact.get("content_hash")
         normalized_expected = (
-            expected_hash.removeprefix("sha256:").lower()
-            if isinstance(expected_hash, str)
-            else ""
+            expected_hash.removeprefix("sha256:").lower() if isinstance(expected_hash, str) else ""
         )
         if normalized_expected != actual_hash:
             artifact_id = artifact.get("id") or "<unknown>"
             raise ValueError(
-                f"Artifact '{artifact_id}' content hash mismatch during "
-                f"knowledge pack {operation}"
+                f"Artifact '{artifact_id}' content hash mismatch during knowledge pack {operation}"
             )
 
     async def _recompute_cluster_claim_counts(self, project_id: str) -> None:
@@ -1662,10 +2177,7 @@ class KnowledgePackService(BaseService):
     @staticmethod
     def _validate_import_project_id(project_id: str) -> None:
         """Require one bounded, filesystem-safe path component for imports."""
-        if (
-            project_id in {".", ".."}
-            or not _IMPORT_PROJECT_ID_RE.fullmatch(project_id)
-        ):
+        if project_id in {".", ".."} or not _IMPORT_PROJECT_ID_RE.fullmatch(project_id):
             raise ValueError(
                 "Imported project ID must use only letters, numbers, '.', "
                 "'_', or '-' and cannot contain path separators"
@@ -1682,9 +2194,7 @@ class KnowledgePackService(BaseService):
 
     async def _validate_registry(self, project_id: str) -> None:
         """Fail if any table with project_id data exists but isn't categorized."""
-        all_tables = await self.db.fetchall(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )
+        all_tables = await self.db.fetchall("SELECT name FROM sqlite_master WHERE type='table'")
         for row in all_tables:
             table_name = row["name"]
             if table_name.startswith(("vec_", "fts_", "sqlite_")):
@@ -1731,6 +2241,29 @@ class KnowledgePackService(BaseService):
         "orphaned_claim_edge_sources": "critical",
         "orphaned_claim_edge_targets": "critical",
         "orphaned_claim_edge_clusters": "critical",
+        "claim_scope_pointer_mismatch": "critical",
+        "claim_scope_revision_chain_invalid": "critical",
+        "claim_scope_disconfirming_refs_invalid": "critical",
+        "experiment_plan_head_mismatch": "critical",
+        "experiment_plan_chain_invalid": "critical",
+        "experiment_run_plan_invalid": "critical",
+        "experiment_run_event_head_mismatch": "critical",
+        "experiment_observation_parent_invalid": "critical",
+        "evidence_locator_source_invalid": "critical",
+        "experiment_candidate_source_invalid": "critical",
+        "claim_evidence_relation_invalid": "critical",
+        "planning_branch_lineage_invalid": "critical",
+        "planning_branch_event_head_mismatch": "critical",
+        "planning_artifact_head_mismatch": "critical",
+        "planning_artifact_chain_invalid": "critical",
+        "planning_evidence_binding_invalid": "critical",
+        "planning_payload_invalid": "critical",
+        "semantic_patch_manifest_hash_invalid": "critical",
+        "semantic_patch_proposal_context_invalid": "critical",
+        "semantic_patch_proposal_event_head_mismatch": "critical",
+        "semantic_patch_provider_event_chain_invalid": "critical",
+        "semantic_patch_payload_invalid": "critical",
+        "outline_hierarchy_invalid": "critical",
         "claim_count_mismatch": "warning",
     }
 
@@ -1741,6 +2274,66 @@ class KnowledgePackService(BaseService):
         non-blocking by default."""
         return cls._SEVERITY_BY_CATEGORY.get(category, "warning")
 
+    async def _outline_hierarchy_integrity_issues(self, project_id: str) -> list[dict]:
+        rows = await self.db.fetchall(
+            """SELECT u.manuscript_id, u.id AS unit_id, u.local_key,
+                      u.status, u.sequence, p.outline_level,
+                      p.parent_unit_id, parent.local_key AS parent_unit_key
+               FROM manuscript_units AS u
+               LEFT JOIN manuscript_unit_outline_profiles AS p
+                 ON p.unit_id = u.id
+                AND p.manuscript_id = u.manuscript_id
+                AND p.project_id = u.project_id
+               LEFT JOIN manuscript_units AS parent
+                 ON parent.id = p.parent_unit_id
+                AND parent.manuscript_id = p.manuscript_id
+                AND parent.project_id = p.project_id
+               WHERE u.project_id = ?
+               ORDER BY u.manuscript_id, u.sequence, u.local_key, u.id""",
+            [project_id],
+        )
+        by_manuscript: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            parent_key = row.get("parent_unit_key")
+            if row.get("parent_unit_id") and parent_key is None:
+                # Preserve the declared reference so a database created with
+                # foreign-key checks disabled still fails closed here.
+                parent_key = f"__missing_parent__:{row['parent_unit_id']}"
+            by_manuscript.setdefault(str(row["manuscript_id"]), []).append(
+                {
+                    "local_key": str(row["local_key"]),
+                    "status": str(row.get("status") or "planned"),
+                    "sequence": int(row.get("sequence") or 0),
+                    "outline_level": int(row.get("outline_level") or 4),
+                    "parent_unit_key": parent_key,
+                }
+            )
+
+        failures: list[dict[str, str]] = []
+        for manuscript_id, units in by_manuscript.items():
+            try:
+                validate_unit_hierarchy(units)
+            except ValueError as exc:
+                failures.append({"manuscript_id": manuscript_id, "reason": str(exc)})
+                if len(failures) >= 50:
+                    break
+        if not failures:
+            return []
+        category = "outline_hierarchy_invalid"
+        return [
+            {
+                "category": category,
+                "severity": self._severity_for(category),
+                "count": len(failures),
+                "ids": [item["manuscript_id"] for item in failures[:10]],
+                "description": "manuscript outlines that violate the canonical hierarchy",
+                "failures": failures[:10],
+                "fix_action": (
+                    "Repair parent/depth/order relationships through a reviewed spine edit"
+                ),
+            }
+        ]
+
     async def check_integrity(self, project_id: str | None = None) -> list[dict]:
         """Verify knowledge base integrity — check for orphaned edges, missing refs, count mismatches.
 
@@ -1750,6 +2343,7 @@ class KnowledgePackService(BaseService):
         """
         pid = project_id or self.project_id
         issues: list[dict] = []
+        issues.extend(await self._outline_hierarchy_integrity_issues(pid))
 
         source_exists = self._typed_entity_link_endpoint_sql(
             type_column="source_type", id_column="source_id"
@@ -1769,17 +2363,19 @@ class KnowledgePackService(BaseService):
         )
         if orphaned_source:
             cat = "orphaned_entity_link_sources"
-            issues.append({
-                "category": cat,
-                "severity": self._severity_for(cat),
-                "count": len(orphaned_source),
-                "ids": [r["id"] for r in orphaned_source[:10]],
-                "description": (
-                    "entity_links whose declared source type/id is missing "
-                    "from the edge project"
-                ),
-                "fix_action": "Delete orphaned edges or re-import missing entities",
-            })
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(orphaned_source),
+                    "ids": [r["id"] for r in orphaned_source[:10]],
+                    "description": (
+                        "entity_links whose declared source type/id is missing "
+                        "from the edge project"
+                    ),
+                    "fix_action": "Delete orphaned edges or re-import missing entities",
+                }
+            )
 
         # 2. Same invariant for target endpoints.
         orphaned_target = await self.db.fetchall(
@@ -1791,17 +2387,19 @@ class KnowledgePackService(BaseService):
         )
         if orphaned_target:
             cat = "orphaned_entity_link_targets"
-            issues.append({
-                "category": cat,
-                "severity": self._severity_for(cat),
-                "count": len(orphaned_target),
-                "ids": [r["id"] for r in orphaned_target[:10]],
-                "description": (
-                    "entity_links whose declared target type/id is missing "
-                    "from the edge project"
-                ),
-                "fix_action": "Delete orphaned edges or re-import missing entities",
-            })
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(orphaned_target),
+                    "ids": [r["id"] for r in orphaned_target[:10]],
+                    "description": (
+                        "entity_links whose declared target type/id is missing "
+                        "from the edge project"
+                    ),
+                    "fix_action": "Delete orphaned edges or re-import missing entities",
+                }
+            )
 
         # 3. claim_edges with orphaned source_claim_id
         orphaned_claims = await self.db.fetchall(
@@ -1817,14 +2415,16 @@ class KnowledgePackService(BaseService):
         )
         if orphaned_claims:
             cat = "orphaned_claim_edge_sources"
-            issues.append({
-                "category": cat,
-                "severity": self._severity_for(cat),
-                "count": len(orphaned_claims),
-                "ids": [r["id"] for r in orphaned_claims[:10]],
-                "description": "claim_edges referencing non-existent claims",
-                "fix_action": "Delete orphaned claim edges",
-            })
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(orphaned_claims),
+                    "ids": [r["id"] for r in orphaned_claims[:10]],
+                    "description": "claim_edges referencing non-existent claims",
+                    "fix_action": "Delete orphaned claim edges",
+                }
+            )
 
         # 4. Non-membership claim edges need a same-project target claim.
         orphaned_targets = await self.db.fetchall(
@@ -1850,17 +2450,19 @@ class KnowledgePackService(BaseService):
         )
         if orphaned_targets:
             cat = "orphaned_claim_edge_targets"
-            issues.append({
-                "category": cat,
-                "severity": self._severity_for(cat),
-                "count": len(orphaned_targets),
-                "ids": [r["id"] for r in orphaned_targets[:10]],
-                "description": (
-                    "non-membership claim_edges whose target claim is missing "
-                    "from the edge project"
-                ),
-                "fix_action": "Delete orphaned claim edges or restore target claims",
-            })
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(orphaned_targets),
+                    "ids": [r["id"] for r in orphaned_targets[:10]],
+                    "description": (
+                        "non-membership claim_edges whose target claim is missing "
+                        "from the edge project"
+                    ),
+                    "fix_action": "Delete orphaned claim edges or restore target claims",
+                }
+            )
 
         # 5. Any declared cluster must be same-project; membership requires one.
         orphaned_clusters = await self.db.fetchall(
@@ -1882,14 +2484,16 @@ class KnowledgePackService(BaseService):
         )
         if orphaned_clusters:
             cat = "orphaned_claim_edge_clusters"
-            issues.append({
-                "category": cat,
-                "severity": self._severity_for(cat),
-                "count": len(orphaned_clusters),
-                "ids": [r["id"] for r in orphaned_clusters[:10]],
-                "description": "claim_edges referencing non-existent clusters",
-                "fix_action": "Delete orphaned claim edges or re-create clusters",
-            })
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(orphaned_clusters),
+                    "ids": [r["id"] for r in orphaned_clusters[:10]],
+                    "description": "claim_edges referencing non-existent clusters",
+                    "fix_action": "Delete orphaned claim edges or re-create clusters",
+                }
+            )
 
         # 6. evidence_clusters.claim_count mismatch
         mismatched = await self.db.fetchall(
@@ -1909,21 +2513,834 @@ class KnowledgePackService(BaseService):
         )
         if mismatched:
             cat = "claim_count_mismatch"
-            issues.append({
-                "category": cat,
-                "severity": self._severity_for(cat),
-                "count": len(mismatched),
-                "ids": [r["id"] for r in mismatched[:10]],
-                "description": "evidence_clusters with claim_count != actual claim_edges count",
-                "fix_action": "Run migration 016 to recompute claim counts",
-            })
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(mismatched),
+                    "ids": [r["id"] for r in mismatched[:10]],
+                    "description": "evidence_clusters with claim_count != actual claim_edges count",
+                    "fix_action": "Run migration 016 to recompute claim counts",
+                }
+            )
+
+        # 7. Every claim head points to the latest immutable scope version, or
+        # remains zero when no contract exists. This also detects a missing
+        # imported history row without relying on a mutable ready flag.
+        bad_scope_pointers = await self.db.fetchall(
+            """SELECT c.id FROM claims AS c
+               WHERE c.project_id = ?
+                 AND c.scope_revision <> COALESCE((
+                     SELECT MAX(scope.revision)
+                     FROM claim_scope_versions AS scope
+                     WHERE scope.claim_id = c.id
+                       AND scope.project_id = c.project_id
+                 ), 0)
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_scope_pointers:
+            cat = "claim_scope_pointer_mismatch"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_scope_pointers),
+                    "ids": [row["id"] for row in bad_scope_pointers[:10]],
+                    "description": "claims whose scope head does not match immutable history",
+                    "fix_action": "Restore the missing history or reset the claim scope through reviewed repair",
+                }
+            )
+
+        # 8. Revisions must form one explicit predecessor chain per claim.
+        broken_scope_chains = await self.db.fetchall(
+            """SELECT scope.id FROM claim_scope_versions AS scope
+               WHERE scope.project_id = ?
+                 AND (
+                     (scope.revision = 1 AND scope.supersedes_scope_id IS NOT NULL)
+                     OR (
+                         scope.revision > 1
+                         AND NOT EXISTS (
+                             SELECT 1 FROM claim_scope_versions AS previous
+                             WHERE previous.claim_id = scope.claim_id
+                               AND previous.project_id = scope.project_id
+                               AND previous.revision = scope.revision - 1
+                               AND previous.id = scope.supersedes_scope_id
+                         )
+                     )
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if broken_scope_chains:
+            cat = "claim_scope_revision_chain_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(broken_scope_chains),
+                    "ids": [row["id"] for row in broken_scope_chains[:10]],
+                    "description": "claim scope versions with a missing or incorrect predecessor",
+                    "fix_action": "Restore the immutable predecessor chain",
+                }
+            )
+
+        # 9. JSON-carried disconfirming references remain same-project and
+        # cannot point back to the scoped claim itself.
+        bad_disconfirming_refs = await self.db.fetchall(
+            """SELECT DISTINCT scope.id
+               FROM claim_scope_versions AS scope,
+                    json_each(scope.disconfirming_claim_ids) AS reference
+               WHERE scope.project_id = ?
+                 AND (
+                     reference.type <> 'text'
+                     OR reference.value = scope.claim_id
+                     OR NOT EXISTS (
+                         SELECT 1 FROM claims AS target
+                         WHERE target.id = reference.value
+                           AND target.project_id = scope.project_id
+                     )
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_disconfirming_refs:
+            cat = "claim_scope_disconfirming_refs_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_disconfirming_refs),
+                    "ids": [row["id"] for row in bad_disconfirming_refs[:10]],
+                    "description": "claim scope versions with invalid disconfirming claim references",
+                    "fix_action": "Restore same-project canonical references or append a corrected scope version",
+                }
+            )
+
+        # 10. Stable experiment heads must point to the latest immutable plan.
+        bad_plan_heads = await self.db.fetchall(
+            """SELECT experiment.id
+               FROM experiments AS experiment
+               WHERE experiment.project_id = ?
+                 AND experiment.current_plan_version <> COALESCE((
+                     SELECT MAX(plan.version)
+                     FROM experiment_plan_versions AS plan
+                     WHERE plan.experiment_id = experiment.id
+                       AND plan.project_id = experiment.project_id
+                 ), 0)
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_plan_heads:
+            cat = "experiment_plan_head_mismatch"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_plan_heads),
+                    "ids": [row["id"] for row in bad_plan_heads[:10]],
+                    "description": "experiments whose current plan head does not match immutable history",
+                    "fix_action": "Restore the missing plan history or repair the experiment head",
+                }
+            )
+
+        # 11. Plan versions form one explicit predecessor chain.
+        bad_plan_chains = await self.db.fetchall(
+            """SELECT plan.id
+               FROM experiment_plan_versions AS plan
+               WHERE plan.project_id = ?
+                 AND (
+                     (plan.version = 1 AND plan.supersedes_plan_id IS NOT NULL)
+                     OR (
+                         plan.version > 1
+                         AND NOT EXISTS (
+                             SELECT 1 FROM experiment_plan_versions AS previous
+                             WHERE previous.experiment_id = plan.experiment_id
+                               AND previous.project_id = plan.project_id
+                               AND previous.version = plan.version - 1
+                               AND previous.id = plan.supersedes_plan_id
+                         )
+                     )
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_plan_chains:
+            cat = "experiment_plan_chain_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_plan_chains),
+                    "ids": [row["id"] for row in bad_plan_chains[:10]],
+                    "description": "experiment plan versions with a missing exact predecessor",
+                    "fix_action": "Restore the immutable predecessor chain",
+                }
+            )
+
+        # 12. Every run binds an exact same-project plan version.
+        bad_run_plans = await self.db.fetchall(
+            """SELECT run.id
+               FROM experiment_runs AS run
+               WHERE run.project_id = ?
+                 AND NOT EXISTS (
+                     SELECT 1 FROM experiment_plan_versions AS plan
+                     WHERE plan.experiment_id = run.experiment_id
+                       AND plan.project_id = run.project_id
+                       AND plan.version = run.plan_version
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_run_plans:
+            cat = "experiment_run_plan_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_run_plans),
+                    "ids": [row["id"] for row in bad_run_plans[:10]],
+                    "description": "experiment runs without their exact plan version",
+                    "fix_action": "Restore the plan version used by each run",
+                }
+            )
+
+        # 13. Run revision heads and append-only event histories agree.
+        bad_run_event_heads = await self.db.fetchall(
+            """SELECT run.id
+               FROM experiment_runs AS run
+               WHERE run.project_id = ?
+                 AND run.revision <> COALESCE((
+                     SELECT MAX(event.run_revision)
+                     FROM experiment_run_events AS event
+                     WHERE event.run_id = run.id
+                       AND event.project_id = run.project_id
+                 ), 0)
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_run_event_heads:
+            cat = "experiment_run_event_head_mismatch"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_run_event_heads),
+                    "ids": [row["id"] for row in bad_run_event_heads[:10]],
+                    "description": "experiment runs whose revision differs from event history",
+                    "fix_action": "Restore the immutable run transition history",
+                }
+            )
+
+        # 14. Observations retain a same-project run parent.
+        bad_observation_parents = await self.db.fetchall(
+            """SELECT observation.id
+               FROM experiment_observations AS observation
+               WHERE observation.project_id = ?
+                 AND NOT EXISTS (
+                     SELECT 1 FROM experiment_runs AS run
+                     WHERE run.id = observation.run_id
+                       AND run.project_id = observation.project_id
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_observation_parents:
+            cat = "experiment_observation_parent_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_observation_parents),
+                    "ids": [row["id"] for row in bad_observation_parents[:10]],
+                    "description": "experiment observations without a same-project run",
+                    "fix_action": "Restore the parent run",
+                }
+            )
+
+        # 15. Exact locators resolve their observation and pinned artifact/hash.
+        bad_locator_sources = await self.db.fetchall(
+            """SELECT locator.id
+               FROM evidence_locators AS locator
+               WHERE locator.project_id = ?
+                 AND (
+                     NOT EXISTS (
+                         SELECT 1 FROM experiment_observations AS observation
+                         WHERE observation.id = locator.observation_id
+                           AND observation.project_id = locator.project_id
+                     )
+                     OR (
+                         locator.source_kind = 'artifact'
+                         AND NOT EXISTS (
+                             SELECT 1 FROM artifacts AS artifact
+                             WHERE artifact.id = locator.artifact_id
+                               AND artifact.project_id = locator.project_id
+                               AND lower(artifact.content_hash) = lower(locator.content_hash)
+                         )
+                     )
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_locator_sources:
+            cat = "evidence_locator_source_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_locator_sources),
+                    "ids": [row["id"] for row in bad_locator_sources[:10]],
+                    "description": "evidence locators with missing or hash-mismatched sources",
+                    "fix_action": "Restore the exact observation/artifact source",
+                }
+            )
+
+        # 16. Observation-backed interpretation candidates resolve locally.
+        bad_experiment_candidates = await self.db.fetchall(
+            """SELECT candidate.id
+               FROM interpretation_candidates AS candidate
+               WHERE candidate.project_id = ?
+                 AND candidate.source_type = 'experiment_observation'
+                 AND NOT EXISTS (
+                     SELECT 1 FROM experiment_observations AS observation
+                     WHERE observation.id = candidate.source_id
+                       AND observation.project_id = candidate.project_id
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_experiment_candidates:
+            cat = "experiment_candidate_source_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_experiment_candidates),
+                    "ids": [row["id"] for row in bad_experiment_candidates[:10]],
+                    "description": "experiment interpretation candidates without observations",
+                    "fix_action": "Restore the observation source",
+                }
+            )
+
+        # 17. Reviewed claim relations keep claim, observation, and candidate aligned.
+        bad_evidence_relations = await self.db.fetchall(
+            """SELECT relation.id
+               FROM claim_evidence_relations AS relation
+               WHERE relation.project_id = ?
+                 AND (
+                     NOT EXISTS (
+                         SELECT 1 FROM claims AS claim
+                         WHERE claim.id = relation.claim_id
+                           AND claim.project_id = relation.project_id
+                     )
+                     OR NOT EXISTS (
+                         SELECT 1 FROM experiment_observations AS observation
+                         WHERE observation.id = relation.observation_id
+                           AND observation.project_id = relation.project_id
+                     )
+                     OR NOT EXISTS (
+                         SELECT 1 FROM interpretation_candidates AS candidate
+                         WHERE candidate.id = relation.candidate_id
+                           AND candidate.project_id = relation.project_id
+                           AND candidate.source_type = 'experiment_observation'
+                           AND candidate.source_id = relation.observation_id
+                           AND (
+                               (relation.status = 'active'
+                                AND candidate.review_status = 'resolved'
+                                AND candidate.disposition = 'classified_evidence'
+                                AND candidate.disposition_target_type = 'claim'
+                                AND candidate.disposition_target_id = relation.claim_id)
+                               OR (relation.status = 'revoked'
+                                   AND candidate.review_status = 'pending')
+                           )
+                     )
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_evidence_relations:
+            cat = "claim_evidence_relation_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_evidence_relations),
+                    "ids": [row["id"] for row in bad_evidence_relations[:10]],
+                    "description": "claim evidence relations whose reviewed lineage is inconsistent",
+                    "fix_action": "Restore the claim-relative interpretation history",
+                }
+            )
+
+        # 18. Planning branches preserve one context and pin reachable parent
+        # and manuscript revisions. A child must never silently drift when its
+        # parent or bound manuscript advances after the fork.
+        bad_planning_lineage = await self.db.fetchall(
+            """SELECT branch.id
+               FROM manuscript_planning_branches AS branch
+               LEFT JOIN manuscripts AS manuscript
+                 ON manuscript.id = branch.manuscript_id
+                AND manuscript.project_id = branch.project_id
+               LEFT JOIN manuscript_planning_branches AS parent
+                 ON parent.id = branch.parent_branch_id
+                AND parent.project_id = branch.project_id
+               WHERE branch.project_id = ?
+                 AND (
+                     (branch.manuscript_id IS NULL
+                      AND (branch.context_key <> 'project'
+                           OR branch.base_manuscript_revision IS NOT NULL))
+                     OR (branch.manuscript_id IS NOT NULL
+                         AND (manuscript.id IS NULL
+                              OR branch.context_key <> branch.manuscript_id
+                              OR branch.base_manuscript_revision IS NULL
+                              OR branch.base_manuscript_revision > manuscript.revision))
+                     OR (branch.parent_branch_id IS NULL
+                         AND branch.parent_branch_revision IS NOT NULL)
+                     OR (branch.parent_branch_id IS NOT NULL
+                         AND (parent.id IS NULL
+                              OR parent.context_key <> branch.context_key
+                              OR branch.parent_branch_revision IS NULL
+                              OR branch.parent_branch_revision > parent.revision
+                              OR branch.parent_branch_id = branch.id))
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_planning_lineage:
+            cat = "planning_branch_lineage_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_planning_lineage),
+                    "ids": [row["id"] for row in bad_planning_lineage[:10]],
+                    "description": "planning branches with invalid frozen ancestry or manuscript context",
+                    "fix_action": "Restore the branch parent/context and its pinned revision",
+                }
+            )
+
+        # 19. Every mutable branch revision has exactly one immutable event.
+        bad_planning_event_heads = await self.db.fetchall(
+            """SELECT branch.id
+               FROM manuscript_planning_branches AS branch
+               WHERE branch.project_id = ?
+                 AND (
+                     branch.revision <> COALESCE((
+                         SELECT MAX(event.branch_revision)
+                         FROM manuscript_planning_branch_events AS event
+                         WHERE event.branch_id = branch.id
+                           AND event.project_id = branch.project_id
+                     ), 0)
+                     OR branch.revision <> (
+                         SELECT COUNT(*)
+                         FROM manuscript_planning_branch_events AS event
+                         WHERE event.branch_id = branch.id
+                           AND event.project_id = branch.project_id
+                     )
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_planning_event_heads:
+            cat = "planning_branch_event_head_mismatch"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_planning_event_heads),
+                    "ids": [row["id"] for row in bad_planning_event_heads[:10]],
+                    "description": "planning branch heads disagree with immutable event history",
+                    "fix_action": "Restore the complete one-event-per-revision history",
+                }
+            )
+
+        # 20. Stable artifact heads point to the latest immutable version.
+        bad_planning_artifact_heads = await self.db.fetchall(
+            """SELECT artifact.id
+               FROM manuscript_planning_artifacts AS artifact
+               WHERE artifact.project_id = ?
+                 AND (
+                     artifact.current_version <> COALESCE((
+                         SELECT MAX(version.version)
+                         FROM manuscript_planning_artifact_versions AS version
+                         WHERE version.artifact_id = artifact.id
+                           AND version.project_id = artifact.project_id
+                     ), 0)
+                     OR (artifact.current_version = 0
+                         AND artifact.current_version_id IS NOT NULL)
+                     OR (artifact.current_version > 0
+                         AND NOT EXISTS (
+                             SELECT 1
+                             FROM manuscript_planning_artifact_versions AS version
+                             WHERE version.id = artifact.current_version_id
+                               AND version.artifact_id = artifact.id
+                               AND version.project_id = artifact.project_id
+                               AND version.version = artifact.current_version
+                         ))
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_planning_artifact_heads:
+            cat = "planning_artifact_head_mismatch"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_planning_artifact_heads),
+                    "ids": [row["id"] for row in bad_planning_artifact_heads[:10]],
+                    "description": "planning artifact heads disagree with immutable version history",
+                    "fix_action": "Restore the missing artifact version or exact head pointer",
+                }
+            )
+
+        # 21. Version predecessor, branch, and branch-event provenance agree.
+        bad_planning_chains = await self.db.fetchall(
+            """SELECT version.id
+               FROM manuscript_planning_artifact_versions AS version
+               JOIN manuscript_planning_artifacts AS artifact
+                 ON artifact.id = version.artifact_id
+                AND artifact.project_id = version.project_id
+               WHERE version.project_id = ?
+                 AND (
+                     version.branch_id <> artifact.branch_id
+                     OR (version.version = 1
+                         AND version.supersedes_version_id IS NOT NULL)
+                     OR (version.version > 1
+                         AND NOT EXISTS (
+                             SELECT 1
+                             FROM manuscript_planning_artifact_versions AS previous
+                             WHERE previous.id = version.supersedes_version_id
+                               AND previous.artifact_id = version.artifact_id
+                               AND previous.project_id = version.project_id
+                               AND previous.version = version.version - 1
+                         ))
+                     OR NOT EXISTS (
+                         SELECT 1
+                         FROM manuscript_planning_branch_events AS event
+                         WHERE event.branch_id = version.branch_id
+                           AND event.project_id = version.project_id
+                           AND event.branch_revision = version.branch_revision
+                           AND event.action = 'artifact_version_appended'
+                           AND json_extract(event.details, '$.artifact_id') = version.artifact_id
+                           AND json_extract(event.details, '$.artifact_version_id') = version.id
+                     )
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_planning_chains:
+            cat = "planning_artifact_chain_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_planning_chains),
+                    "ids": [row["id"] for row in bad_planning_chains[:10]],
+                    "description": "planning versions have inconsistent predecessor or branch-event lineage",
+                    "fix_action": "Restore the exact immutable version and event chain",
+                }
+            )
+
+        # 22. Evidence bindings resolve by declared type inside the project.
+        binding_clauses = []
+        for entity_type, table in _PLANNING_EVIDENCE_ENTITY_TABLES.items():
+            binding_clauses.append(
+                f"(binding.entity_type = '{entity_type}' "
+                f"AND EXISTS (SELECT 1 FROM [{table}] AS endpoint "
+                "WHERE endpoint.id = binding.entity_id "
+                "AND endpoint.project_id = binding.project_id))"
+            )
+        bad_planning_bindings = await self.db.fetchall(
+            f"""SELECT binding.id
+                FROM manuscript_planning_evidence_bindings AS binding
+                WHERE binding.project_id = ?
+                  AND NOT ({" OR ".join(binding_clauses)})
+                LIMIT 50""",
+            [pid],
+        )
+        if bad_planning_bindings:
+            cat = "planning_evidence_binding_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_planning_bindings),
+                    "ids": [row["id"] for row in bad_planning_bindings[:10]],
+                    "description": "planning evidence bindings do not resolve in their project",
+                    "fix_action": "Restore the typed evidence entity or remove the invalid imported binding",
+                }
+            )
+
+        # 23. JSON validity is insufficient: each stage has a closed payload
+        # contract. This Python check makes pack import reject structurally
+        # plausible but semantically invalid deliberation state.
+        planning_payload_rows = await self.db.fetchall(
+            """SELECT version.id, artifact.stage_type, version.payload
+               FROM manuscript_planning_artifact_versions AS version
+               JOIN manuscript_planning_artifacts AS artifact
+                 ON artifact.id = version.artifact_id
+                AND artifact.project_id = version.project_id
+               WHERE version.project_id = ?
+               ORDER BY version.id""",
+            [pid],
+        )
+        bad_planning_payload_ids: list[str] = []
+        for row in planning_payload_rows:
+            try:
+                validate_planning_payload(row["stage_type"], json.loads(row["payload"]))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                bad_planning_payload_ids.append(row["id"])
+        if bad_planning_payload_ids:
+            cat = "planning_payload_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_planning_payload_ids),
+                    "ids": bad_planning_payload_ids[:10],
+                    "description": "planning artifact payloads violate their closed stage schema",
+                    "fix_action": "Restore a payload that validates against the declared planning stage",
+                }
+            )
+
+        # 24. Context manifests remain exact after export/import re-keying.
+        manifest_rows = await self.db.fetchall(
+            """SELECT * FROM semantic_patch_context_manifests
+               WHERE project_id = ? ORDER BY id""",
+            [pid],
+        )
+        bad_manifest_hashes: list[str] = []
+        for row in manifest_rows:
+            try:
+                payload = {
+                    "schema_version": "rka.context-manifest/v1",
+                    "project_id": pid,
+                    "origin": row["origin"],
+                    "provider": row.get("provider"),
+                    "model": row.get("model"),
+                    "boundary": row["boundary"],
+                    "selected_context": json.loads(row["selected_context"]),
+                    "resolved_context": json.loads(row["resolved_context"]),
+                    "target_bases": json.loads(row["target_bases"]),
+                    "constraints": json.loads(row["constraints"]),
+                    "omissions": json.loads(row["omissions"]),
+                    "truncation_notes": json.loads(row["truncation_notes"]),
+                }
+                expected_hash = hashlib.sha256(
+                    json.dumps(
+                        payload,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        ensure_ascii=False,
+                    ).encode("utf-8")
+                ).hexdigest()
+            except (TypeError, ValueError, json.JSONDecodeError, KeyError):
+                expected_hash = ""
+            if row.get("manifest_hash") != expected_hash:
+                bad_manifest_hashes.append(str(row["id"]))
+        if bad_manifest_hashes:
+            cat = "semantic_patch_manifest_hash_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_manifest_hashes),
+                    "ids": bad_manifest_hashes[:10],
+                    "description": "semantic patch context manifest hashes do not match content",
+                    "fix_action": "Restore the exact immutable context manifest",
+                }
+            )
+
+        # 25. AI proposals bind to a matching provider/model disclosure.
+        bad_manifest_context = await self.db.fetchall(
+            """SELECT id FROM semantic_patch_context_manifests
+               WHERE project_id = ?
+                 AND (origin NOT IN ('host_agent', 'lm_studio')
+                      OR provider IS NULL OR length(trim(provider)) = 0
+                      OR model IS NULL OR length(trim(model)) = 0
+                      OR (origin = 'host_agent' AND boundary <> 'host_conversation')
+                      OR (origin = 'lm_studio' AND boundary <> 'local_loopback'))
+               LIMIT 50""",
+            [pid],
+        )
+        bad_proposal_context = await self.db.fetchall(
+            """SELECT proposal.id
+               FROM semantic_patch_proposals AS proposal
+               LEFT JOIN semantic_patch_context_manifests AS manifest
+                 ON manifest.id = proposal.context_manifest_id
+                AND manifest.project_id = proposal.project_id
+               WHERE proposal.project_id = ?
+                 AND (
+                     (proposal.origin = 'human' AND proposal.context_manifest_id IS NOT NULL)
+                     OR (proposal.origin <> 'human'
+                         AND (manifest.id IS NULL
+                              OR manifest.origin <> proposal.origin
+                              OR manifest.provider <> proposal.provider
+                              OR manifest.model <> proposal.model
+                              OR manifest.boundary <> proposal.boundary))
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        bad_context_ids = [row["id"] for row in bad_manifest_context]
+        bad_context_ids.extend(row["id"] for row in bad_proposal_context)
+        if bad_context_ids:
+            cat = "semantic_patch_proposal_context_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_context_ids),
+                    "ids": bad_context_ids[:10],
+                    "description": "AI proposals do not match their immutable provider manifest",
+                    "fix_action": "Restore the proposal and its exact provider context",
+                }
+            )
+
+        # 26. Proposal heads agree with a complete immutable event history.
+        bad_proposal_heads = await self.db.fetchall(
+            """SELECT proposal.id
+               FROM semantic_patch_proposals AS proposal
+               WHERE proposal.project_id = ?
+                 AND (
+                     proposal.revision <> COALESCE((
+                         SELECT MAX(event.proposal_revision)
+                         FROM semantic_patch_proposal_events AS event
+                         WHERE event.proposal_id = proposal.id
+                           AND event.project_id = proposal.project_id
+                     ), 0)
+                     OR proposal.revision <> (
+                         SELECT COUNT(*) FROM semantic_patch_proposal_events AS event
+                         WHERE event.proposal_id = proposal.id
+                           AND event.project_id = proposal.project_id
+                     )
+                     OR NOT EXISTS (
+                         SELECT 1 FROM semantic_patch_proposal_events AS event
+                         WHERE event.proposal_id = proposal.id
+                           AND event.project_id = proposal.project_id
+                           AND event.proposal_revision = proposal.revision
+                           AND event.action = proposal.status
+                     )
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        if bad_proposal_heads:
+            cat = "semantic_patch_proposal_event_head_mismatch"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_proposal_heads),
+                    "ids": [row["id"] for row in bad_proposal_heads[:10]],
+                    "description": "semantic proposal heads disagree with immutable events",
+                    "fix_action": "Restore the complete one-event-per-revision history",
+                }
+            )
+
+        # 27. Provider calls start once, terminate at most once, keep one
+        # boundary, and successfully close every persisted AI proposal.
+        bad_provider_calls = await self.db.fetchall(
+            """SELECT event.call_id
+               FROM semantic_patch_provider_events AS event
+               WHERE event.project_id = ?
+               GROUP BY event.call_id
+               HAVING SUM(event.event = 'started') <> 1
+                   OR SUM(event.event IN ('succeeded', 'failed')) > 1
+                   OR COUNT(DISTINCT event.context_manifest_id) <> 1
+                   OR COUNT(DISTINCT event.provider) <> 1
+                   OR COUNT(DISTINCT event.model) <> 1
+                   OR COUNT(DISTINCT event.boundary) <> 1
+               LIMIT 50""",
+            [pid],
+        )
+        bad_provider_boundaries = await self.db.fetchall(
+            """SELECT event.id
+               FROM semantic_patch_provider_events AS event
+               LEFT JOIN semantic_patch_context_manifests AS manifest
+                 ON manifest.id = event.context_manifest_id
+                AND manifest.project_id = event.project_id
+               WHERE event.project_id = ?
+                 AND (manifest.id IS NULL
+                      OR event.provider <> manifest.provider
+                      OR event.model <> manifest.model
+                      OR event.boundary <> manifest.boundary)
+               LIMIT 50""",
+            [pid],
+        )
+        bad_provider_proposals = await self.db.fetchall(
+            """SELECT proposal.id
+               FROM semantic_patch_proposals AS proposal
+               WHERE proposal.project_id = ? AND proposal.origin <> 'human'
+                 AND NOT EXISTS (
+                     SELECT 1 FROM semantic_patch_provider_events AS event
+                     WHERE event.project_id = proposal.project_id
+                       AND event.context_manifest_id = proposal.context_manifest_id
+                       AND event.event = 'succeeded'
+                       AND json_extract(event.details, '$.proposal_id') = proposal.id
+                 )
+               LIMIT 50""",
+            [pid],
+        )
+        bad_provider_ids = [row["call_id"] for row in bad_provider_calls]
+        bad_provider_ids.extend(row["id"] for row in bad_provider_boundaries)
+        bad_provider_ids.extend(row["id"] for row in bad_provider_proposals)
+        if bad_provider_ids:
+            cat = "semantic_patch_provider_event_chain_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_provider_ids),
+                    "ids": bad_provider_ids[:10],
+                    "description": "semantic provider-call history is incomplete or ambiguous",
+                    "fix_action": "Restore the exact provider start and terminal event chain",
+                }
+            )
+
+        # 28. JSON-valid operation arrays must also satisfy the closed semantic
+        # proposal model and its per-origin invariants.
+        proposal_rows = await self.db.fetchall(
+            """SELECT * FROM semantic_patch_proposals
+               WHERE project_id = ? ORDER BY id""",
+            [pid],
+        )
+        bad_proposal_payloads: list[str] = []
+        for row in proposal_rows:
+            try:
+                SemanticPatchProposalCreate.model_validate(
+                    {
+                        "origin": row["origin"],
+                        "intent": row["intent"],
+                        "reason": row["reason"],
+                        "created_by": row["created_by"],
+                        "operations": json.loads(row["operations"]),
+                        "provider": row.get("provider"),
+                        "model": row.get("model"),
+                        "boundary": row["boundary"],
+                        "context_manifest_id": row.get("context_manifest_id"),
+                        "supersedes_proposal_id": row.get("supersedes_proposal_id"),
+                    }
+                )
+            except (TypeError, ValueError, json.JSONDecodeError, KeyError):
+                bad_proposal_payloads.append(str(row["id"]))
+        if bad_proposal_payloads:
+            cat = "semantic_patch_payload_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_proposal_payloads),
+                    "ids": bad_proposal_payloads[:10],
+                    "description": "semantic proposal operations violate their closed schema",
+                    "fix_action": "Restore a proposal that validates against semantic patch v1",
+                }
+            )
 
         return issues
 
     @staticmethod
-    def _typed_entity_link_endpoint_sql(
-        *, type_column: str, id_column: str
-    ) -> str:
+    def _typed_entity_link_endpoint_sql(*, type_column: str, id_column: str) -> str:
         """Return a trusted SQL predicate for a typed, project-local endpoint."""
         clauses = []
         for entity_type, table in _ENTITY_LINK_ENDPOINT_TABLES.items():

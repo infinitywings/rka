@@ -3,12 +3,30 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import sqlite3
 from pathlib import Path
 
 import pytest
 
+from rka.config import RKAConfig
+from rka.infra.ids import generate_id
+from rka.models.manuscript_native import ManuscriptCreate
+from rka.models.manuscript_source import (
+    ManuscriptSourceProposalCreate,
+    ManuscriptSourceProposalTransition,
+)
 from rka.models.project import ProjectCreate
+from rka.models.claim import ClaimCreate, ClaimScopeCondition, ClaimScopeWrite
+from rka.models.interpretation import InterpretationCandidateCreate
+from rka.models.experiment import ExperimentCreate, ExperimentRunCreate
+from rka.models.planning import PlanningArtifactVersionAppend, PlanningBranchCreate
+from rka.services.claims import ClaimService
+from rka.services.experiments import ExperimentService
+from rka.services.interpretation import InterpretationService
+from rka.services.manuscript_native import NativeManuscriptService
+from rka.services.manuscript_source import ManuscriptSourceService
+from rka.services.planning import ManuscriptPlanningService
 from rka.services.project import ProjectService
 
 
@@ -79,6 +97,115 @@ async def test_delete_project_failure_rolls_back_prior_table_deletes(
         "SELECT id FROM review_queue WHERE id = 'rvw_atomic_delete'"
     ) is not None
     assert (pack_dir / "must-survive.txt").read_text(encoding="utf-8") == "rollback"
+
+
+@pytest.mark.asyncio
+async def test_delete_project_removes_experiment_substrate_in_dependency_order(db) -> None:
+    projects = ProjectService(db)
+    project_id = "proj_delete_experiment"
+    await projects.create_project(
+        ProjectCreate(id=project_id, name="Delete Experiment Substrate"),
+        actor="system",
+    )
+    experiments = ExperimentService(db, project_id=project_id)
+    experiment = await experiments.create_experiment(
+        ExperimentCreate(
+            title="Deletion experiment",
+            objective="Verify dependency-ordered project deletion.",
+            protocol="Create one queued run.",
+            created_by="brain",
+            reason="Exercise guarded experiment tables.",
+        )
+    )
+    run = await experiments.create_run(
+        ExperimentRunCreate(
+            experiment_id=experiment.id,
+            plan_version=1,
+            label="queued deletion run",
+            runner="local",
+            created_by="executor",
+            reason="Create dependent run rows.",
+        )
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="project-authorized deletion"):
+        await db.execute("DELETE FROM experiment_runs WHERE id = ?", [run.id])
+
+    result = await projects.delete_project(project_id, confirm=True)
+
+    assert result["confirmed"] is True
+    for table in (
+        "experiment_run_events",
+        "experiment_runs",
+        "experiment_plan_versions",
+        "experiments",
+    ):
+        assert await db.fetchall(
+            f"SELECT * FROM {table} WHERE project_id = ?", [project_id]
+        ) == []
+    assert await db.fetchall("PRAGMA foreign_key_check") == []
+
+
+@pytest.mark.asyncio
+async def test_delete_project_removes_planning_histories_in_dependency_order(db) -> None:
+    projects = ProjectService(db)
+    project_id = "proj_delete_planning"
+    await projects.create_project(
+        ProjectCreate(id=project_id, name="Delete Planning Histories"),
+        actor="system",
+    )
+    planning = ManuscriptPlanningService(db, project_id=project_id)
+    branch = await planning.create_branch(
+        PlanningBranchCreate(
+            name="primary",
+            purpose="Exercise guarded planning tables.",
+            created_by="pi",
+            reason="Create a deletable planning aggregate.",
+        )
+    )
+    branch = await planning.append_artifact_version(
+        branch["branch"]["id"],
+        PlanningArtifactVersionAppend(
+            expected_branch_revision=1,
+            local_key="seed",
+            stage_type="seed",
+            summary="Planning deletion seed.",
+            payload={"insight": "Deletion must remove the complete aggregate."},
+            origin="user",
+            created_by="pi",
+            reason="Create dependent immutable rows.",
+        ),
+    )
+    version_id = branch["effective_artifacts"][0]["version"]["id"]
+    await planning.create_branch(
+        PlanningBranchCreate(
+            name="child",
+            purpose="Exercise dependency-ordered branch deletion.",
+            parent_branch_id=branch["branch"]["id"],
+            created_by="pi",
+            reason="Create a child planning branch.",
+        )
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+        await db.execute(
+            "DELETE FROM manuscript_planning_artifact_versions WHERE id = ?",
+            [version_id],
+        )
+
+    result = await projects.delete_project(project_id, confirm=True)
+
+    assert result["confirmed"] is True
+    for table in (
+        "manuscript_planning_evidence_bindings",
+        "manuscript_planning_artifact_versions",
+        "manuscript_planning_artifacts",
+        "manuscript_planning_branch_events",
+        "manuscript_planning_branches",
+    ):
+        assert await db.fetchall(
+            f"SELECT * FROM {table} WHERE project_id = ?", [project_id]
+        ) == []
+    assert await db.fetchall("PRAGMA foreign_key_check") == []
 
 
 @pytest.mark.asyncio
@@ -199,6 +326,119 @@ async def test_confirmed_project_delete_is_only_immutable_history_exception(
 
 
 @pytest.mark.asyncio
+async def test_confirmed_project_delete_removes_interpretation_history(db) -> None:
+    svc = ProjectService(db)
+    project_id = "proj_delete_interpretations"
+    await svc.create_project(
+        ProjectCreate(id=project_id, name="Delete Interpretation History"),
+        actor="system",
+    )
+    await db.execute(
+        """INSERT INTO journal
+           (id, project_id, type, content, source, confidence)
+           VALUES ('jrn_delete_interpretations', ?, 'note', ?, 'executor', 'tested')""",
+        [project_id, "The isolated run measured 42 ms."],
+    )
+    await db.commit()
+    candidate = await InterpretationService(db, project_id=project_id).create(
+        InterpretationCandidateCreate(
+            source_type="journal",
+            source_id="jrn_delete_interpretations",
+            locator_kind="record",
+            locator_value="full_record",
+            statement="The isolated run measured 42 ms.",
+            epistemic_kind="observation",
+            created_by="executor",
+            extraction_tool="pytest",
+            proposed_claim_type="result",
+        )
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="project-authorized deletion"):
+        await db.execute(
+            "DELETE FROM interpretation_candidates WHERE id = ?",
+            [candidate.id],
+        )
+
+    result = await svc.delete_project(project_id, confirm=True)
+
+    assert result["confirmed"] is True
+    assert await db.fetchall(
+        "SELECT * FROM interpretation_candidates WHERE project_id = ?",
+        [project_id],
+    ) == []
+    assert await db.fetchall(
+        "SELECT * FROM interpretation_review_events WHERE project_id = ?",
+        [project_id],
+    ) == []
+    assert await db.fetchall("PRAGMA foreign_key_check") == []
+
+
+@pytest.mark.asyncio
+async def test_confirmed_project_delete_removes_claim_scope_history(db) -> None:
+    svc = ProjectService(db)
+    project_id = "proj_delete_claim_scope"
+    await svc.create_project(
+        ProjectCreate(id=project_id, name="Delete Claim Scope History"),
+        actor="system",
+    )
+    await db.execute(
+        """INSERT INTO journal
+           (id, project_id, type, content, source, confidence)
+           VALUES ('jrn_delete_claim_scope', ?, 'note', ?, 'executor', 'tested')""",
+        [project_id, "The isolated run measured 42 ms."],
+    )
+    await db.commit()
+    claims = ClaimService(db, project_id=project_id)
+    claim = await claims.create(
+        ClaimCreate(
+            source_entry_id="jrn_delete_claim_scope",
+            claim_type="result",
+            content="The isolated run measured 42 ms.",
+            verified=True,
+        ),
+        actor="executor",
+    )
+    await claims.append_scope(
+        claim.id,
+        ClaimScopeWrite(
+            expected_revision=0,
+            actor="brain",
+            reason="Reviewed exact evaluation boundary.",
+            conditions=[
+                ClaimScopeCondition(
+                    kind="environment",
+                    key="run_mode",
+                    operator="equals",
+                    value="isolated",
+                )
+            ],
+            uncertainty="low",
+            extension_policy="exact_only",
+            prohibited_extensions=["concurrent workloads"],
+            falsifier_status="applicable",
+            falsifier="The same isolated run does not reproduce 42 ms.",
+            review_status="reviewed",
+        ),
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="project-authorized deletion"):
+        await db.execute(
+            "DELETE FROM claim_scope_versions WHERE claim_id = ?",
+            [claim.id],
+        )
+
+    result = await svc.delete_project(project_id, confirm=True)
+
+    assert result["confirmed"] is True
+    assert await db.fetchall(
+        "SELECT * FROM claim_scope_versions WHERE project_id = ?",
+        [project_id],
+    ) == []
+    assert await db.fetchall("PRAGMA foreign_key_check") == []
+
+
+@pytest.mark.asyncio
 async def test_delete_project_removes_only_service_owned_knowledge_pack_dir(
     db,
     tmp_path: Path,
@@ -243,6 +483,224 @@ async def test_delete_project_removes_only_service_owned_knowledge_pack_dir(
     assert not project_pack_dir.exists()
     assert (sibling_dir / "keep.bin").read_bytes() == b"keep"
     assert external_artifact.read_text(encoding="utf-8") == "user-owned"
+
+
+@pytest.mark.asyncio
+async def test_delete_project_removes_source_proposals_and_owned_recovery(db) -> None:
+    svc = ProjectService(db)
+    project_id = "proj_delete_source_recovery"
+    await svc.create_project(
+        ProjectCreate(id=project_id, name="Delete Source Recovery"),
+        actor="system",
+    )
+    manuscript_id = generate_id("manuscript")
+    proposal_id = generate_id("manuscript_source_proposal")
+    await db.execute(
+        """INSERT INTO manuscripts
+           (id, project_id, title, phase, state)
+           VALUES (?, ?, 'Source cleanup', 'planning', 'active')""",
+        [manuscript_id, project_id],
+    )
+    await db.execute(
+        """INSERT INTO manuscript_source_proposals
+           (id, project_id, manuscript_id, origin, relative_path, source_format,
+            base_content_hash, proposed_content, proposed_content_hash,
+            created_by, reason, boundary)
+           VALUES (?, ?, ?, 'human', 'main.md', 'markdown', ?, 'after', ?,
+                   'web_ui', 'Cleanup fixture.', 'none')""",
+        [proposal_id, project_id, manuscript_id, "a" * 64, "b" * 64],
+    )
+    await db.execute(
+        """INSERT INTO manuscript_source_events
+           (id, proposal_id, project_id, proposal_revision, action, actor, reason)
+           VALUES (?, ?, ?, 1, 'proposed', 'web_ui', 'Cleanup fixture.')""",
+        [generate_id("manuscript_source_event"), proposal_id, project_id],
+    )
+    await db.commit()
+    recovery = (
+        Path(db.db_path).resolve().parent
+        / "manuscript-source-recovery"
+        / project_id
+        / manuscript_id
+        / proposal_id
+    )
+    recovery.mkdir(parents=True)
+    (recovery / "manifest.json").write_text("{}")
+
+    preview = await svc.delete_project(project_id, confirm=False)
+    assert preview["entity_counts"]["manuscript_source_proposals"] == 1
+    assert preview["entity_counts"]["manuscript_source_events"] == 1
+    assert recovery.exists()
+
+    result = await svc.delete_project(project_id, confirm=True)
+    assert result["manuscript_source_recovery_cleanup"]["status"] == "deleted"
+    assert not recovery.parents[1].exists()
+    assert await db.fetchone(
+        "SELECT id FROM manuscript_source_proposals WHERE id = ?", [proposal_id]
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_delete_project_reports_retained_source_adjacent_artifact(
+    db,
+    tmp_path: Path,
+) -> None:
+    projects = ProjectService(db)
+    project_id = "proj_delete_retained_source"
+    await projects.create_project(
+        ProjectCreate(id=project_id, name="Delete Retained Source"),
+        actor="system",
+    )
+    workspace = tmp_path / "retained-source-workspace"
+    workspace.mkdir()
+    manuscript = await NativeManuscriptService(db, project_id=project_id).create(
+        ManuscriptCreate(title="Retained source", workspace_ref=str(workspace)),
+        actor="pi",
+    )
+    config = RKAConfig(
+        project_dir=tmp_path,
+        db_path=Path(db.db_path),
+        data_dir=tmp_path / "data",
+        llm_enabled=False,
+        embeddings_enabled=False,
+        manuscript_workspace_roots=str(tmp_path),
+    )
+    sources = ManuscriptSourceService(db, config=config, project_id=project_id)
+    before = "# Retained source base\n"
+    after = "# Retained source proposal\n"
+    source = workspace / "main.md"
+    source.write_text(before)
+    proposal = await sources.create_proposal(
+        manuscript.id,
+        ManuscriptSourceProposalCreate(
+            origin="human",
+            relative_path="main.md",
+            expected_content_hash=hashlib.sha256(before.encode()).hexdigest(),
+            content=after,
+            created_by="web_ui",
+            reason="Create a source-adjacent retained inode.",
+        ),
+    )
+    applied = await sources.apply_proposal(
+        proposal["id"],
+        ManuscriptSourceProposalTransition(
+            expected_revision=1,
+            actor="web_ui",
+            reason="Apply before project deletion.",
+        ),
+    )
+    retained = workspace / sources._source_swap_name(proposal["id"])
+    assert applied["status"] == "applied"
+    assert retained.read_text() == before
+
+    preview = await projects.delete_project(project_id, confirm=False)
+    report = preview["retained_workspace_artifacts"]
+    assert report["status"] == "manual_review_required"
+    assert report["auto_deleted"] is False
+    assert report["items"] == [
+        {
+            "proposal_id": proposal["id"],
+            "manuscript_id": manuscript.id,
+            "proposal_status": "applied",
+            "workspace_ref": str(workspace),
+            "source_relative_path": "main.md",
+            "retained_relative_path": retained.name,
+        }
+    ]
+
+    result = await projects.delete_project(project_id, confirm=True)
+    assert result["retained_workspace_artifacts"] == report
+    assert "intentionally retained" in result["message"]
+    assert retained.read_text() == before
+    managed = Path(db.db_path).resolve().parent / "manuscript-source-recovery" / project_id
+    assert not managed.exists()
+
+
+@pytest.mark.asyncio
+async def test_delete_project_removes_service_created_source_supersession_chain(
+    db,
+    tmp_path: Path,
+) -> None:
+    projects = ProjectService(db)
+    project_id = "proj_delete_source_chain"
+    await projects.create_project(
+        ProjectCreate(id=project_id, name="Delete Source Chain"),
+        actor="system",
+    )
+    workspace = tmp_path / "source-chain-workspace"
+    workspace.mkdir()
+    manuscript = await NativeManuscriptService(db, project_id=project_id).create(
+        ManuscriptCreate(title="Source chain", workspace_ref=str(workspace)),
+        actor="pi",
+    )
+    config = RKAConfig(
+        project_dir=tmp_path,
+        db_path=Path(db.db_path),
+        data_dir=tmp_path / "data",
+        llm_enabled=False,
+        embeddings_enabled=False,
+        manuscript_workspace_roots=str(tmp_path),
+    )
+    sources = ManuscriptSourceService(db, config=config, project_id=project_id)
+    before = "# Source chain\n"
+    source = workspace / "main.md"
+    source.write_text(before)
+    expected_hash = hashlib.sha256(before.encode()).hexdigest()
+
+    previous_id = None
+    proposal_ids = []
+    for index in range(3):
+        proposal = await sources.create_proposal(
+            manuscript.id,
+            ManuscriptSourceProposalCreate(
+                origin="human",
+                relative_path="main.md",
+                expected_content_hash=expected_hash,
+                content=f"# Source chain proposal {index}\n",
+                created_by="web_ui",
+                reason=f"Create supersession history {index}.",
+                supersedes_proposal_id=previous_id,
+            ),
+        )
+        previous_id = proposal["id"]
+        proposal_ids.append(proposal["id"])
+
+    preview = await projects.delete_project(project_id, confirm=False)
+    assert preview["entity_counts"]["manuscript_source_proposals"] == 3
+    assert preview["entity_counts"]["manuscript_source_events"] == 5
+
+    result = await projects.delete_project(project_id, confirm=True)
+    assert result["confirmed"] is True
+    for proposal_id in proposal_ids:
+        assert await db.fetchone(
+            "SELECT id FROM manuscript_source_proposals WHERE id = ?", [proposal_id]
+        ) is None
+
+
+@pytest.mark.asyncio
+async def test_delete_project_rejects_symlinked_source_recovery_dir(
+    db,
+    tmp_path: Path,
+) -> None:
+    svc = ProjectService(db)
+    project_id = "proj_symlink_source_recovery"
+    await svc.create_project(
+        ProjectCreate(id=project_id, name="Symlink Source Recovery"),
+        actor="system",
+    )
+    external = tmp_path / "external-recovery"
+    external.mkdir()
+    marker = external / "keep.bin"
+    marker.write_bytes(b"keep")
+    recovery_root = Path(db.db_path).resolve().parent / "manuscript-source-recovery"
+    recovery_root.mkdir()
+    (recovery_root / project_id).symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="must not be a symbolic link"):
+        await svc.delete_project(project_id, confirm=True)
+
+    assert marker.read_bytes() == b"keep"
+    assert await db.fetchone("SELECT id FROM projects WHERE id = ?", [project_id])
 
 
 @pytest.mark.asyncio

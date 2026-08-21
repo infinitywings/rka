@@ -21,6 +21,7 @@ Writer session
         +-- .planning/CONTRIBUTION_CONTRACT.md   generated
         +-- .planning/ARGUMENT_SPINE.md          generated
         +-- .planning/RESULTS_TRACE.md            generated
+        +-- .planning/FRAMING_SESSION.yaml        advisory interaction state
         +-- .planning/ACTIVE_WORKFLOW.md          local session state
         +-- sections/, figures/, tables/, charts/
         +-- refs.bib, main.tex, styles/
@@ -107,12 +108,15 @@ schema-valid `entity_links` vocabulary. Writer never invents edge types.
 The writing path is hierarchical:
 
 ```text
-journal -> grounded claim -> reviewed evidence cluster
+journal -> staged interpretation candidate -> explicitly promoted grounded claim
+-> reviewed evidence cluster
 -> active research question -> unratified candidate -> native claim and unit
 ```
 
 Each boundary reduces noise without destroying history. Journals are never
-promoted directly. Source claims must pass grounding, scientific-support,
+promoted directly. Candidate extraction is not claim creation; the reviewer
+must inspect its exact locator, uncertainty, scope, and conflict/duplicate
+hints before explicit promotion. Source claims must then pass grounding, scientific-support,
 currency, project, source, and contradiction checks. Duplicate support stays
 linked but does not create extra candidate claims. A cluster must be current,
 Brain-reviewed, sufficiently confident, and bound to an active research
@@ -149,8 +153,26 @@ The argument-spine upsert deliberately never creates a ratification.
 
 A `mun_` is the smallest meaningful writing unit, not necessarily a section.
 It carries a stable local key, kind, source location, optional artifact, order,
-and drafting status. Claim-unit relationships are `advances`, `tests`,
-`bounds`, or `mentions`.
+and drafting status. Its one-to-one outline profile supplies an L2-L5 level,
+parent, communicative job, intended reader takeaway, transition,
+quick-reader role, evidence plan, and figure/table/citation intentions.
+The level is pure hierarchy depth: L2 is shallowest and L5 deepest. It is not
+a rhetorical type; unit `kind` and the rationale fields express whether a unit
+acts as a section, paragraph, result, transition, or other argument beat.
+Claim-unit relationships are `advances`, `tests`, `bounds`, or `mentions`.
+
+`manuscript_outline` is the resumable projection for navigating this hierarchy
+and its reverse claim/evidence bindings. Structural changes are never applied
+in place: `prepare_manuscript_outline_proposal` deterministically prepares an
+`argument_spine_replace` semantic proposal for edit, expand, condense, or
+reorder. AI-authored proposals require an exact context manifest and retain
+their origin/provider boundary. AI/MCP transports stop at `proposed`; the PI
+or local web UI separately applies or rejects the proposal.
+Expansion retains the parent and can only narrow inherited bindings;
+condensation preserves their union on the retained parent; reorder changes
+only sequence, keeps parents before children and subtrees contiguous, and
+reports affected predecessors. This keeps direct editing and
+AI assistance on one auditable mutation path.
 
 Every active empirical claim requires an active result unit. Every result unit
 requires:
