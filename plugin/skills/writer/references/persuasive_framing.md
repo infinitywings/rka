@@ -136,6 +136,11 @@ switching, give each paragraph one communicative job, and lead with its
 takeaway. If a scan fails, revise or escalate to the PI. Never make a scan pass
 by deleting a material limitation or unsupported result.
 
+Run these scans on the public prose with provenance comments hidden. A reader
+should encounter a research argument, not the shape or vocabulary of the RKA
+record. Use `discourse_synthesis.md` to repair a section whose claims are
+grounded but whose logic still reads as a list.
+
 Accessibility does not mean removing technical precision. Use a plain-language
 sentence first, then add the formal or implementation detail.
 

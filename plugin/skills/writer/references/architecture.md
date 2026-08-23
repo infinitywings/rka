@@ -22,6 +22,8 @@ Writer session
         +-- .planning/ARGUMENT_SPINE.md          generated
         +-- .planning/RESULTS_TRACE.md            generated
         +-- .planning/FRAMING_SESSION.yaml        advisory interaction state
+        +-- .planning/STYLE_PROFILE.yaml          PI-approved style calibration
+        +-- .planning/DISCOURSE_<section>.yaml    private section discourse plan
         +-- .planning/ACTIVE_WORKFLOW.md          local session state
         +-- sections/, figures/, tables/, charts/
         +-- refs.bib, main.tex, styles/
@@ -41,7 +43,7 @@ the canonical `man_` id returned or resolved by `rka writer init`.
 | exact PI ratifications (`mra_`) | deterministic Markdown/YAML rendering |
 | manuscript units (`mun_`) and result boundaries | figures, tables, and chart source files |
 | checkpoints (`mck_`) and verification attestations (`mva_`) | compilation and layout audit |
-| readiness, change cursors, and impact | disposable local session notes |
+| readiness, change cursors, and impact | disposable style/discourse/session notes |
 
 Local files cannot create semantic truth. A local proposal changes the
 aggregate only through an explicit, revision-guarded command. A generated

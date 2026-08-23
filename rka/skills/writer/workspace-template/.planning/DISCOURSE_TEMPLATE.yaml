@@ -1,0 +1,52 @@
+schema_version: rka.writer-discourse-plan/v1
+status: not_started
+section_id: null
+takeaway: null
+
+style_profile:
+  required: false
+  path: .planning/STYLE_PROFILE.yaml
+  status: not_required
+
+# Copy this file to .planning/DISCOURSE_<section-id>.yaml. Populate the exact
+# active native-unit set assigned to the section.
+required_unit_keys: []
+mandatory_disclosure_ids: []
+
+propositions: []
+# - id: p1
+#   statement: null
+#   role: context | gap | insight | challenge | response | evidence | prior_work
+#   evidence_ids: []
+#   qualifier_ids: []
+#   citation_keys: []
+#   next_inference: null
+
+paragraphs: []
+# - id: para1
+#   job: null
+#   proposition_ids: []
+#   unit_keys: []
+#   opening: null
+#   bridge: null
+#   takeaway: null
+
+# Keys must exactly equal mandatory_disclosure_ids. Values are public locations
+# such as paragraph:para2, figure:fig3, table:tab2, caption:fig3, or claim:mcl_...
+mandatory_disclosure_map: {}
+
+coherence_review:
+  status: pending
+  reviewer: null
+  answers:
+    single_takeaway: false
+    paragraph_sequence: false
+    one_job_per_paragraph: false
+    challenge_response: false
+    idea_before_mechanism: false
+    evidence_advances_argument: false
+    opening_promise_delivered: false
+    prose_self_contained: false
+
+# Private authoring state only. RKA remains authoritative for claims, evidence,
+# units, status, and readiness.

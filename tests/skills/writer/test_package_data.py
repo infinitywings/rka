@@ -35,10 +35,12 @@ def test_package_data_includes_hidden_writer_planning_templates() -> None:
 
     expected = {
         "skills/writer/workspace-template/.planning/ACTIVE_WORKFLOW.md",
+        "skills/writer/workspace-template/.planning/DISCOURSE_TEMPLATE.yaml",
         "skills/writer/workspace-template/.planning/FRAMING_SESSION.yaml",
         "skills/writer/workspace-template/.planning/OUTLINE.md",
         "skills/writer/workspace-template/.planning/PRECIS.md",
         "skills/writer/workspace-template/.planning/REVIEW_STATE.md",
         "skills/writer/workspace-template/.planning/RKA_CLAIM_SPINE.yaml",
+        "skills/writer/workspace-template/.planning/STYLE_PROFILE.yaml",
     }
     assert expected <= packaged

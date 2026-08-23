@@ -6,6 +6,13 @@ Load-bearing per `dec_01KS12H9KT1T03DHX2Q6FKTXHH` (PATCH 2 disposition; no third
 
 Pure lexical blacklists over-flag legitimate academic prose (Matsui 2025). The Writer's enforcement layer therefore combines a tiered lexical list with structural detectors and a per-project override mechanism. The lexical layer catches the obvious LLM tells; the structural layer catches the rhythmic and bridging patterns that survive lexical sanitization; the override layer respects venue-specific or PI-specific legitimate usage.
 
+This linter is a negative filter, not a prose generator or coherence judge. A
+high score shows only that the checked patterns are rare. It does not show that
+the section has a coherent argument, fluent paragraph transitions, appropriate
+information order, or the author's preferred academic voice. Build and revise
+the positive style target through `discourse_synthesis.md` before running this
+filter.
+
 Empirical floor for the rules: across six published studies covering 732 LLM-generated citations, cross-study average is 51 percent fabrication (Walters and Wilder 2023, Wagner and Ertl-Wagner 2023, Mugaanyi 2024, Spennemann 2025). Linter discipline is one half of the defense; the other half is the reference validation pipeline (`reference_pipeline.md`). Both must be active.
 
 ## Tier 1: CRITICAL (compile-blocking on any hit)
@@ -123,7 +130,7 @@ score = 1 - (critical_hits * 3 + high_hits + 0.3 * medium_hits) / total_sentence
 
 Threshold: sections with `score < 0.85` trigger auto-revise via the Revision Loop (Class R2). The auto-revise loop caps at three iterations before escalating to a PI Style checkpoint with three resolution options (continue revising, accept the section as is via PI override, or restructure the section).
 
-The score is one signal among several. PI editorial judgment overrides the score via `ai_tic_config.yaml`. The score is **not** the sole gate. Treating it as such is anti-pattern 10 in `SKILL.md`.
+The score is one signal among several. PI editorial judgment overrides the score via `ai_tic_config.yaml`. The score is **not** the sole gate. Treating it as such is anti-pattern 10 in `SKILL.md`. Never use the score to certify logic, coherence, fluency, or author-style fit.
 
 ## Per-project override mechanism
 
@@ -158,11 +165,13 @@ The linter loads the project's `ai_tic_config.yaml` if present, applies override
 
 The linter `scripts/ai_tic_lint.py` implements all Tier 1 + Tier 2 + Tier 3 lexical patterns, the four structural detectors (sentence-length variance, transition-word ratio, parallel-triplet density, bridge-repetition delegation to `bridge_repetition_check.py`), absolute bans, the style score formula, and the per-project override mechanism. Output is `ai_tic_report.json` with per-rule hit counts and per-hit line numbers, plus the computed style score.
 
-Phase 2 additions (not in scope for Phase 1):
+Future additions (not implemented):
 
 - LLM-assisted rewrite suggestions for flagged passages.
 - Cross-manuscript trend tracking (is the project drifting toward AI-tic patterns over revisions).
-- Author-style fingerprinting baseline (calibrate the linter against the PI's pre-2023 publications).
+- Deterministic author-style diagnostics. Sample-driven qualitative calibration
+  is already available through `discourse_synthesis.md`; any future metric
+  must remain advisory and must not reduce author voice to a single score.
 
 ## References
 

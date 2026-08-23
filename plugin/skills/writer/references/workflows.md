@@ -343,35 +343,78 @@ Procedure (OpenScholar evidence-grounded per `jrn_01KS0AVZRDA0KPXK61MN9PV5DE`):
 2. Subagent reads: section sketch, ratified outline, the relevant claim-spine
    units, freshly resolved positive evidence, qualifiers, counterevidence,
    publication-boundary classifications, references in scope, and the claim's
-   prohibited wording. Generated views are explanatory; resolution is against
-   RKA.
-3. Subagent first extracts evidence facts, conditions, and boundaries into its
-   private working notes. It then drafts claim-centered, strength-first prose
-   around the section's communicative job. Quote a source only when its exact
-   wording matters; do not build the prose by patching quotations together.
-   Place hidden provenance comments before each evidence-citation prose unit.
-4. Apply the publication boundary from
+   prohibited wording. It also reads
+   [`discourse_synthesis.md`](discourse_synthesis.md) and
+   `.planning/STYLE_PROFILE.yaml`. If samples are registered, a missing or
+   unapproved profile is a BLOCK. Generated views are explanatory; resolution
+   is against RKA.
+3. Subagent builds one private evidence packet for the section. It extracts
+   facts, conditions, and boundaries, groups duplicate or closely related
+   records into evidence bundles, and removes out-of-scope material. It does
+   not preserve retrieval order, journal chronology, or entity boundaries as
+   a prose sequence.
+4. Subagent distills the packet into a small set of reader-facing propositions,
+   arranges the section-level logic ladder, and groups the propositions into
+   paragraph cards. Each paragraph card records one communicative job, its
+   opening, development, takeaway, bridge, proposition IDs, and native-unit
+   keys. Prior-work propositions retain their citation keys. Copy
+   `.planning/DISCOURSE_TEMPLATE.yaml` to
+   `.planning/DISCOURSE_<section-id>.yaml` and record the exact required-unit
+   set. Several RKA records or native units may serve one paragraph; one
+   complex unit may span paragraphs.
+5. Subagent drafts plain academic prose from the discourse plan with RKA IDs,
+   provenance comments and private risk labels hidden. It explains the idea before
+   exhaustive machinery and pairs each challenge with the design response
+   that addresses it. Quote a source only when its exact wording matters; do
+   not build prose by patching quotations or evidence snippets together.
+6. Apply the publication boundary from
    [`persuasive_framing.md`](persuasive_framing.md): M1 and M2 issues receive
    visible public treatment; M3 details go to the method, appendix, artifact,
    or reproducibility material; M4 and S items remain in the private risk
    record unless venue policy requires them. Never omit an issue whose absence
    would materially mislead a reasonable reader. Map every M1/M2 item to its
-   public paragraph, figure, table, caption, or claim. If a mapping is missing,
-   escalate and do not advance the affected unit to `drafted`.
-5. Run the four quick-reader checks in `persuasive_framing.md`. If a scan
+   public paragraph, figure, table, caption, or claim in
+   `mandatory_disclosure_map`; include required active counterevidence. If a
+   mapping is missing, escalate and do not advance the affected unit to
+   `drafted`; when several units are affected, block all of them.
+7. Run the discourse-synthesis coherence review with a different fresh-context
+   reviewer before provenance attachment. Verify the section takeaway,
+   proposition order, paragraph jobs, known-to-new flow, causal bridges,
+   challenge-response pairing, and delivery of the opening promise. Persist
+   the answers and reviewer identity in the section discourse artifact. Revise
+   the plan and prose when any answer fails.
+8. Subagent attaches hidden provenance comments and citations post-hoc to the
+   coherent draft, then validates them. It keeps citation keys bound to
+   propositions that attribute prior work and narrows unsupported wording
+   instead of splitting the prose into one-source fragments.
+9. Run the four quick-reader checks in `persuasive_framing.md`. If a scan
    fails, revise the framing or escalate the unresolved evidence/wording
    decision; never delete a material limitation merely to make the scan pass.
-6. Subagent checks that no new contribution appeared in prose and that each
+10. Subagent checks that no new contribution appeared in prose and that each
    empirical statement has role-appropriate terminal support. A decision or
    evidence cluster alone is not support.
-7. Subagent self-audits before commit: runs `scripts/ai_tic_lint.py` on the
-   section; iterates until style score reaches 0.85 or three iterations elapse.
-8. If three iterations fail, ESCALATE via the Revision Loop Class R2.
-9. Otherwise commit the section to `sections/<section-id>.tex`, update the
-   corresponding native unit status through a revision-guarded spine update,
-   synchronize, and surface it to the PI for the Draft section checkpoint.
+11. Only after coherence and provenance checks pass, subagent runs
+   `scripts/ai_tic_lint.py` on the section and resolves genuine surface-style
+   findings. The score cannot establish logic or fluency. Iterate until the
+   score reaches 0.85 or three iterations elapse.
+12. After the last prose change, run a fixed-point pass: repeat the fresh-
+    context coherence review, provenance and citation validation, exact M1/M2
+    and counterevidence coverage, and
+    `scripts/validate_discourse_artifacts.py`. Any prose change from narrowing,
+    citation repair, quick-reader revision, or surface lint restarts this pass.
+    Invoke it with both `--style-profile .planning/STYLE_PROFILE.yaml` and
+    `--discourse-plan .planning/DISCOURSE_<section-id>.yaml` so registered
+    samples cannot be bypassed. Stop only when one pass makes no prose change.
+13. If three validation/revision passes fail, ESCALATE via the Revision Loop
+    Class R2.
+14. Otherwise commit the section to `sections/<section-id>.tex`. Advance only
+    native units in the artifact's `required_unit_keys` whose mapped paragraph
+    cards are all committed and current. Apply the revision-guarded spine
+    update, synchronize, re-run readiness, and read back the affected units.
 
-PI ratifies via the Draft section checkpoint (one of the six PI checkpoints). Three options: accept, revise (with PI comments), escalate.
+PI ratifies via the Draft section checkpoint (one of the six PI checkpoints).
+Surface the section takeaway, paragraph jobs, mapped unit keys, and coherence
+review with three options: accept, revise (with PI comments), escalate.
 
 ### 6. Local renderer plus layout auditor
 
