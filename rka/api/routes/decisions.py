@@ -35,9 +35,11 @@ from rka.services.decisions import DecisionService
 from rka.services.decision_options import DecisionOptionsService
 from rka.services.calibration import CalibrationService
 from rka.infra.database import Database
+from rka.services.academic import AcademicImportService
 from rka.api.deps import (
     get_db,
     require_project,
+    get_scoped_academic_service,
     get_scoped_decision_service,
     get_scoped_decision_options_service,
     get_scoped_calibration_service,
@@ -159,6 +161,23 @@ async def link_supersession_route(
 # swallows "orphan-supersedes" as a decision id (404 "Decision
 # orphan-supersedes not found"). `/decisions/tree` sits above it for the
 # same reason.
+@router.get("/decisions/mermaid")
+async def export_decisions_mermaid(
+    phase: str | None = None,
+    active_only: bool = False,
+    svc: AcademicImportService = Depends(get_scoped_academic_service),
+):
+    """Export the decision tree as a Mermaid flowchart diagram.
+
+    The handler belongs to the academic-import service but the route must be
+    declared here: `academic.py`'s router is included after this one, so
+    `/decisions/mermaid` declared there is matched by `/decisions/{dec_id}`
+    first and answered with "Decision mermaid not found".
+    """
+    mermaid = await svc.export_decisions_mermaid(phase=phase, active_only=active_only)
+    return {"mermaid": mermaid}
+
+
 @router.get("/decisions/{dec_id}", response_model=Decision)
 async def get_decision(dec_id: str, svc: DecisionService = Depends(get_scoped_decision_service)):
     dec = await svc.get(dec_id)
