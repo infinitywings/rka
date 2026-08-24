@@ -2405,9 +2405,41 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
                     "project_id": "prj_01ABC...",
                     "decision_id": "dec_01XYZ...",
                     "confirmation_brief": "Choose embedding model for v2.",
+                    # No "id": the server assigns option ids and returns
+                    # them as presented_option_ids. Every other field here is
+                    # required — DecisionOptionCreate forbids extras and
+                    # accepts exactly three pros and three cons.
                     "options": [
-                        {"id": "A", "label": "nomic-embed-v1.5"},
-                        {"id": "B", "label": "bge-m3"},
+                        {
+                            "label": "nomic-embed-v1.5",
+                            "summary": "Swap the embedding backend to nomic-embed-v1.5.",
+                            "justification": "Best recall/latency trade-off measured on our corpus.",
+                            "explanation": "768-dim, runs locally, no per-call cost.",
+                            "pros": ["Highest recall", "Local inference", "No API cost"],
+                            "cons": ["Reindex required", "768-dim storage", "Newer, less battle-tested"],
+                            "confidence_verbal": "high",
+                            "confidence_numeric": 0.8,
+                            "confidence_evidence_strength": "strong",
+                            "confidence_known_unknowns": ["Behaviour on non-English entries"],
+                            "effort_time": "M",
+                            "effort_reversibility": "reversible",
+                            "presentation_order_seed": 1,
+                        },
+                        {
+                            "label": "bge-m3",
+                            "summary": "Swap the embedding backend to bge-m3.",
+                            "justification": "Stronger multilingual coverage.",
+                            "explanation": "1024-dim, multilingual, larger index.",
+                            "pros": ["Multilingual", "Mature", "Long-context"],
+                            "cons": ["Larger index", "Slower", "Higher memory"],
+                            "confidence_verbal": "moderate",
+                            "confidence_numeric": 0.6,
+                            "confidence_evidence_strength": "moderate",
+                            "confidence_known_unknowns": ["Latency at our corpus size"],
+                            "effort_time": "L",
+                            "effort_reversibility": "reversible",
+                            "presentation_order_seed": 2,
+                        },
                     ],
                 },
             },

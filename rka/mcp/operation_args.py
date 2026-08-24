@@ -4325,11 +4325,23 @@ class SupersedeDecisionArgs(ProjectScopedArgs):
 class PresentDecisionArgs(ProjectScopedArgs):
     """Present a decision to the PI for ratification.
 
-    Phase-X²' polish: ``options`` MUST be non-empty (TWO-TAP autonomy
-    contract is semantically void if there are no choices to ratify).
-    Each option dict MUST carry an ``id`` key so downstream
-    ``record_pi_selection.selected_option_id`` references are
-    dereferenceable.
+    ``options`` MUST be non-empty — the TWO-TAP autonomy contract is
+    semantically void with no choices to ratify.
+
+    Option ids are assigned by the server, not supplied by the caller. This
+    model used to require an ``id`` on every option so that
+    ``record_pi_selection.selected_option_id`` would be dereferenceable, but
+    the REST payload it feeds (``DecisionOptionCreate``) declares
+    ``extra="forbid"`` and has no ``id`` field, so an option carrying one was
+    rejected with HTTP 422. Requiring it here and forbidding it there made the
+    operation impossible to call: without ``id`` this model refused, with
+    ``id`` the API did.
+
+    The ids to use in ``record_pi_selection`` come back in this operation's
+    own response, as ``presented_option_ids``.
+
+    Each option must otherwise match ``DecisionOptionCreate`` in full — see
+    the field description below.
     """
 
     operation: Literal["present_decision"] = "present_decision"
@@ -4347,8 +4359,16 @@ class PresentDecisionArgs(ProjectScopedArgs):
         Field(
             min_length=1,
             description=(
-                "Non-empty list of option dicts (each MUST include an 'id' "
-                "key; typical shape {id, label, ...})."
+                "Non-empty list of DecisionOptionCreate-shaped dicts. Required "
+                "per option: label, summary, justification, explanation, pros "
+                "(exactly 3), cons (exactly 3), confidence_verbal "
+                "(low|moderate|high), confidence_numeric (0.0-1.0), "
+                "confidence_evidence_strength (weak|moderate|strong), "
+                "confidence_known_unknowns (1-2 items), effort_time "
+                "(S|M|L|XL), effort_reversibility "
+                "(reversible|costly|irreversible), presentation_order_seed. "
+                "Do NOT pass 'id' — the server assigns option ids and returns "
+                "them as presented_option_ids."
             ),
         ),
     ]
@@ -4361,17 +4381,23 @@ class PresentDecisionArgs(ProjectScopedArgs):
     ] = None
 
     @model_validator(mode="after")
-    def _enforce_id_on_every_option(self) -> "PresentDecisionArgs":
-        # Mirrors BulkUpdateArgs._enforce_id_on_every_item — downstream
-        # record_pi_selection.selected_option_id must be dereferenceable.
+    def _reject_caller_supplied_option_id(self) -> "PresentDecisionArgs":
+        """Catch a caller-supplied ``id`` here rather than as a REST 422.
+
+        ``DecisionOptionCreate`` forbids extra keys, so an option carrying an
+        ``id`` fails at the API boundary with ``extra_forbidden`` — an error
+        that reads like a schema mismatch rather than "you do not assign these".
+        Rejecting it at the typed surface says which it is.
+        """
         for idx, opt in enumerate(self.options):
             if not isinstance(opt, dict):
                 raise ValueError(f"present_decision: options[{idx}] is not a dict.")
-            if "id" not in opt or not opt["id"]:
+            if "id" in opt:
                 raise ValueError(
-                    f"present_decision: options[{idx}] missing required "
-                    "'id' key (TWO-TAP record_pi_selection references "
-                    "options by id)."
+                    f"present_decision: options[{idx}] must not carry an 'id' — "
+                    "the server assigns option ids and returns them as "
+                    "presented_option_ids, which is what record_pi_selection "
+                    "takes as selected_option_id."
                 )
         return self
 
