@@ -1,0 +1,73 @@
+{
+  "n_pivots": 3,
+  "entry": {
+    "verdicts": {
+      "neither": 3
+    },
+    "current_first_rate": 0.0,
+    "any_status_signal": false,
+    "blind_stale_exposure": 0.0
+  },
+  "graph": {
+    "reaches_current_rate": 0.0,
+    "stale_marked_rate": 0.3333
+  },
+  "per_pivot": [
+    {
+      "old_id": "dec_01KMX18FDAMN7T5YVZ7V8HV6QN",
+      "new_id": "dec_01M071K2AEVW69957WK5B3FB42",
+      "query": "What is RKA role in the research workflow?",
+      "entry": {
+        "old_rank": null,
+        "new_rank": null,
+        "n": 20,
+        "status_signal": false,
+        "verdict": "neither"
+      },
+      "graph": {
+        "seed": "lit_01KMX18FDAMN7T5YVZ7V8HV6PK",
+        "reaches_current": false,
+        "stale_marked": true
+      }
+    },
+    {
+      "old_id": "dec_01KS5TPYCW9DE7PS2Q2M3YDZQ1",
+      "new_id": "dec_01M071K4JPYD119QHARFB1CBZ8",
+      "query": "How to close the 10 honest retrieval gaps surfaced by Phase-3.4's \u03b3 structural-only walker \u2014 given that the gaps are now TRUE (not contamination-inflated) and span 10/16 scenarios, not just the 4 Phase-3.3 residuals?",
+      "entry": {
+        "old_rank": null,
+        "new_rank": null,
+        "n": 20,
+        "status_signal": false,
+        "verdict": "neither"
+      },
+      "graph": {
+        "seed": "jrn_01KS5TGWB2HWBYFW8X4J8BR4XK",
+        "reaches_current": false,
+        "stale_marked": false
+      }
+    },
+    {
+      "old_id": "dec_01KSARC7RDJEV8BNK2QD79J5H7",
+      "new_id": "dec_01M071K7758H64HK3Y4XZJ1DWP",
+      "query": "How to close the Writer plugin-bundle integration gap so the skill is reachable through `/plugin install rka@rka` and a `/rka-start-manuscript` bootstrap flow?",
+      "entry": {
+        "old_rank": null,
+        "new_rank": null,
+        "n": 20,
+        "status_signal": false,
+        "verdict": "neither"
+      },
+      "graph": {
+        "seed": "dec_01KP3TV9H2D0CR9GGRZEJHRYSX",
+        "reaches_current": false,
+        "stale_marked": false
+      }
+    }
+  ],
+  "meta": {
+    "project": "prj_01KKQM9JFG67GT5FGWTAHD9YE4",
+    "rka_url": "http://localhost:9712",
+    "db": "rka-snapshot-2026-08-23.db"
+  }
+}

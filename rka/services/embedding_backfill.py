@@ -171,13 +171,27 @@ _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
         source_table="claims",
         vec_table="vec_claims",
         compose_text=lambda r: (r.get("content") or "").strip(),
+        # Pending is decided by the absence of an embedding_metadata row, the
+        # same test every other entity type uses -- NOT by the
+        # `claims.embedding_pending` flag. That flag drifts: in a real store
+        # all 976 claims carried embedding_pending = 0 while 341 of them had
+        # no vector, so a flag-gated backfill skipped every claim that needed
+        # one. The flag is still cleared after a successful embed so external
+        # readers of it stay consistent.
         pending_cursor_sql=(
-            "SELECT id, content, project_id FROM claims "
-            "WHERE embedding_pending = 1 AND id > ? "
-            "ORDER BY id LIMIT ?"
+            "SELECT c.id, c.content, c.project_id FROM claims c "
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM embedding_metadata m "
+            "  WHERE m.entity_type = 'claim' AND m.entity_id = c.id"
+            ") AND c.id > ? "
+            "ORDER BY c.id LIMIT ?"
         ),
         pending_count_sql=(
-            "SELECT COUNT(*) AS n FROM claims WHERE embedding_pending = 1"
+            "SELECT COUNT(*) AS n FROM claims c "
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM embedding_metadata m "
+            "  WHERE m.entity_type = 'claim' AND m.entity_id = c.id"
+            ")"
         ),
         post_embed_sql="UPDATE claims SET embedding_pending = 0 WHERE id = ?",
     ),

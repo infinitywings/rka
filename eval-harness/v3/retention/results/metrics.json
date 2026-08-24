@@ -1,0 +1,103 @@
+{
+  "meta": {
+    "corpus": "scenarios.CAREER.jsonl",
+    "corpus_sha256": "8df3938b1d8125f374cf8f06e7ea7e42d4669d3020cfb3aac4399de10b08a184",
+    "arms": [
+      "full_context",
+      "rag",
+      "rka"
+    ],
+    "model": "openai/qwen3.8-27b-mlx"
+  },
+  "curve": {
+    "bucket_edges": [
+      2000,
+      10000,
+      50000,
+      150000
+    ],
+    "by_arm": {
+      "full_context": {
+        "by_distance": {
+          "<=10000": {
+            "n": 2,
+            "pass_rate": 0.5
+          },
+          "<=2000": {
+            "n": 2,
+            "pass_rate": 1.0
+          },
+          "<=50000": {
+            "n": 2,
+            "pass_rate": 1.0
+          }
+        },
+        "by_kind": {
+          "directive": {
+            "n": 4,
+            "pass_rate": 0.75
+          },
+          "evidence": {
+            "n": 2,
+            "pass_rate": 1.0
+          }
+        },
+        "overall_pass_rate": 0.8333
+      },
+      "rag": {
+        "by_distance": {
+          "<=10000": {
+            "n": 2,
+            "pass_rate": 0.5
+          },
+          "<=2000": {
+            "n": 2,
+            "pass_rate": 1.0
+          },
+          "<=50000": {
+            "n": 2,
+            "pass_rate": 0.5
+          }
+        },
+        "by_kind": {
+          "directive": {
+            "n": 4,
+            "pass_rate": 0.5
+          },
+          "evidence": {
+            "n": 2,
+            "pass_rate": 1.0
+          }
+        },
+        "overall_pass_rate": 0.6667
+      },
+      "rka": {
+        "by_distance": {
+          "<=10000": {
+            "n": 2,
+            "pass_rate": 0.5
+          },
+          "<=2000": {
+            "n": 2,
+            "pass_rate": 0.0
+          },
+          "<=50000": {
+            "n": 2,
+            "pass_rate": 0.0
+          }
+        },
+        "by_kind": {
+          "directive": {
+            "n": 4,
+            "pass_rate": 0.25
+          },
+          "evidence": {
+            "n": 2,
+            "pass_rate": 0.0
+          }
+        },
+        "overall_pass_rate": 0.1667
+      }
+    }
+  }
+}

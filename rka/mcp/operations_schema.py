@@ -5441,6 +5441,49 @@ def list_operations_grouped() -> dict[str, list[dict[str, Any]]]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Maturity — which operations belong in an agent's default choice space
+# ---------------------------------------------------------------------------
+# Measured 2026-08-23 against a five-month-old production store holding 5178
+# entities: these subsystems had ZERO rows. They are not broken and may be
+# deliberately ahead of use, but listing them alongside the core operations
+# means ~41% of what an agent reads while choosing is unreachable in practice.
+# Derived from category (plus a few named operations) rather than stamped on
+# all 150 entries, so the rule stays auditable and one edit re-classifies a
+# subsystem once it starts carrying data.
+PREVIEW_CATEGORIES: frozenset[str] = frozenset({
+    "manuscript",           # 3 manuscripts, 0 units / 0 claims / 0 bindings
+    "manuscript_planning",  # 0 branches
+    "experiments",          # 0 experiments
+    "semantic_patches",     # 0 proposals
+    "hooks",                # 0 hooks
+})
+
+# Preview operations inside an otherwise-stable category.
+PREVIEW_OPERATIONS: frozenset[str] = frozenset({
+    # interpretation-candidate pipeline: 0 candidates in production
+    "interpretation_candidates",
+    "create_interpretation_candidate",
+    "triage_interpretation_candidate",
+    "add_interpretation_hint",
+    # claim-scope contracts: 0 scope versions in production
+    "claim_scope",
+    "set_claim_scope",
+    # v2.4.0 removed the LLM path; this is a stub until it is re-wired
+    "generate_summary",
+})
+
+
+def operation_maturity(op_name: str) -> str:
+    """``'stable'`` or ``'preview'`` for one operation."""
+    entry = OPERATIONS_SCHEMA.get(op_name)
+    if entry is None:
+        return "unknown"
+    if op_name in PREVIEW_OPERATIONS or entry.get("category") in PREVIEW_CATEGORIES:
+        return "preview"
+    return "stable"
+
+
 def suggest_operations(query: str, *, top_n: int = 5) -> list[str]:
     """Return up to ``top_n`` best fuzzy matches for an unknown operation."""
     if not query:
@@ -5453,7 +5496,7 @@ def suggest_operations(query: str, *, top_n: int = 5) -> list[str]:
     )
 
 
-def list_operations_compact() -> dict[str, list[str]]:
+def list_operations_compact(*, include_preview: bool = False) -> dict[str, list[str]]:
     """v2.7.0 NO-COMPROMISE compromise-#3 mitigation.
 
     Returns a flat ``{tool: [op_name, ...]}`` map for the
@@ -5469,6 +5512,8 @@ def list_operations_compact() -> dict[str, list[str]]:
     """
     out: dict[str, list[str]] = {"rka_query": [], "rka_execute": []}
     for op_name, entry in OPERATIONS_SCHEMA.items():
+        if not include_preview and operation_maturity(op_name) == "preview":
+            continue
         tool = entry["tool"]
         out.setdefault(tool, []).append(op_name)
     for ops_list in out.values():
@@ -5476,7 +5521,9 @@ def list_operations_compact() -> dict[str, list[str]]:
     return out
 
 
-async def dispatch_describe(operation: str | None) -> str:
+async def dispatch_describe(
+    operation: str | None, *, include_preview: bool = False
+) -> str:
     """Render the rka_describe response as a JSON string.
 
     Behavior:
@@ -5494,19 +5541,28 @@ async def dispatch_describe(operation: str | None) -> str:
         # into a single comma-separated string per tool. Full per-op
         # schema is reachable via the FastMCP-rendered inputSchema or
         # via `rka_describe('<op_name>')`.
-        compact = list_operations_compact()
-        return json.dumps(
-            {
-                "rka_query": ", ".join(compact.get("rka_query", [])),
-                "rka_execute": ", ".join(compact.get("rka_execute", [])),
-                "total": len(OPERATIONS_SCHEMA),
-                "hint": (
-                    "rka_describe('<op>') for schema; rka_query/_execute "
-                    "inputSchema already carries per-branch enums."
-                ),
-            },
-            indent=2,
-        )
+        compact = list_operations_compact(include_preview=include_preview)
+        listed = sum(len(v) for v in compact.values())
+        payload: dict[str, Any] = {
+            "rka_query": ", ".join(compact.get("rka_query", [])),
+            "rka_execute": ", ".join(compact.get("rka_execute", [])),
+            "listed": listed,
+            "total": len(OPERATIONS_SCHEMA),
+            "hint": (
+                "rka_describe('<op>') for schema; rka_query/_execute "
+                "inputSchema already carries per-branch enums."
+            ),
+        }
+        if not include_preview:
+            hidden = len(OPERATIONS_SCHEMA) - listed
+            payload["preview_hidden"] = hidden
+            payload["preview_hint"] = (
+                f"{hidden} preview operations are omitted — subsystems with no "
+                "production data yet (manuscript, planning, experiments, "
+                "semantic-patches, hooks, interpretation staging, claim scope). "
+                "Pass include_preview=True to see them."
+            )
+        return json.dumps(payload, indent=2)
 
     op = operation.strip()
     entry = OPERATIONS_SCHEMA.get(op)
@@ -5524,12 +5580,15 @@ async def dispatch_describe(operation: str | None) -> str:
             indent=2,
         )
 
-    return json.dumps(entry, indent=2)
+    return json.dumps({**entry, "maturity": operation_maturity(op)}, indent=2)
 
 
 __all__ = [
     "OPERATIONS_SCHEMA",
+    "PREVIEW_CATEGORIES",
+    "PREVIEW_OPERATIONS",
     "dispatch_describe",
+    "operation_maturity",
     "get_operation_schema",
     "list_operations_grouped",
     "list_operations_compact",

@@ -81,18 +81,26 @@ def _422(error: str, detail: str, hint: str = "") -> JSONResponse:
     )
 
 
-def _backend_signature(config: EmbeddingConfig) -> tuple[str, str, int]:
+def _backend_signature(config: EmbeddingConfig) -> tuple[str, str, int, str]:
     """Identity tuple used to decide whether backfill needs to fire on PUT.
 
-    Two configs that produce the same `(backend, model_or_name, dim)`
-    tuple are interchangeable from the vec_claims table's perspective —
-    only the api_key may have changed, no re-embed needed.
+    Includes `base_url` because repointing a dead backend at a reachable host
+    is exactly the recovery action, and it is the one that most needs
+    reconciliation: entities created while the old host was unreachable were
+    never embedded and nothing else fills them in. Leaving base_url out of the
+    signature meant that action returned 200 with no job and the gap persisted
+    silently (observed 2026-08-23: 1023 entities, three months, six projects).
+
+    Same dim ⇒ `reshape_all_vec_tables_if_needed` is a no-op, so a base_url
+    change costs a backfill of the genuinely-missing rows and nothing else —
+    existing vectors are never discarded.
     """
     backend = config.backend
     sub = config.config or {}
     model = sub.get("model") or sub.get("model_name") or ""
     dim = int(sub.get("dim") or 0)
-    return (backend, model, dim)
+    base_url = str(sub.get("base_url") or sub.get("host") or "")
+    return (backend, model, dim, base_url)
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +153,13 @@ async def put_embedding_config(
         return _422("embedding_config_invalid", exc.detail, exc.hint)
 
     if not needs_backfill:
-        # api_key (or only-provenance) change — no re-embed.
+        # api_key (or only-provenance) change — no re-embed, but the search
+        # path holds a provider client built at startup, so it must still be
+        # swapped or every subsequent query keeps using the old credentials
+        # while GET and /test both report the new ones.
+        request.app.state.embeddings = EmbeddingService.from_config(
+            saved.model_dump(), db=request.app.state.db
+        )
         return JSONResponse(status_code=200, content=_redact(saved))
 
     # Step 4: kick off backfill in the background and return 202 + job ref.
@@ -200,6 +214,45 @@ async def test_embedding_config(request: Request, body: EmbeddingConfig) -> Any:
     }
 
 
+@router.post("/api/config/embedding/backfill")
+async def start_embedding_backfill(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    entity_types: str | None = Query(
+        default=None,
+        description="comma-separated subset, e.g. 'claim,journal'; omit for all",
+    ),
+) -> Any:
+    """Reconcile missing embeddings without touching the configuration.
+
+    Until this existed the only way to fill a gap was to edit the embedding
+    config, which conflates two different intents and — because
+    `_backend_signature` ignored base_url — did not even work for the case
+    that matters. Backfill only ever adds vectors for entities that have
+    none; it never re-embeds or discards existing ones.
+    """
+    db = request.app.state.db
+    embeddings = getattr(request.app.state, "embeddings", None)
+    if embeddings is None:
+        return _422(
+            "embedding_unavailable",
+            "no embedding backend is configured",
+            "set one in Settings → Embeddings first",
+        )
+    types = tuple(t.strip() for t in entity_types.split(",")) if entity_types else None
+    status_obj = register_job()
+    svc = BackfillService(db=db, embeddings=embeddings)
+    background_tasks.add_task(_run_backfill_safely, svc, status_obj, types)
+    return JSONResponse(
+        status_code=202,
+        content={
+            "job_id": status_obj.job_id,
+            "status_url": f"/api/config/embedding/backfill/status?job_id={status_obj.job_id}",
+            "entity_types": list(types) if types else "all",
+        },
+    )
+
+
 @router.get("/api/config/embedding/backfill/status")
 async def get_backfill_status(job_id: str | None = Query(default=None)) -> Any:
     """Polling endpoint for the Settings UI progress bar.
@@ -224,11 +277,15 @@ async def get_backfill_status(job_id: str | None = Query(default=None)) -> Any:
 # ---------------------------------------------------------------------------
 
 
-async def _run_backfill_safely(svc: BackfillService, status: JobStatus) -> None:
+async def _run_backfill_safely(
+    svc: BackfillService,
+    status: JobStatus,
+    entity_types: tuple[str, ...] | None = None,
+) -> None:
     """Wraps BackfillService.run_backfill so unhandled exceptions land in
     the status snapshot rather than the background-task logger."""
     try:
-        await svc.run_backfill(status)
+        await svc.run_backfill(status, entity_types=entity_types)
     except Exception as exc:  # noqa: BLE001
         status.state = "failed"
         status.error = str(exc)

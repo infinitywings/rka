@@ -1,0 +1,279 @@
+{
+  "n_pivots": 15,
+  "entry": {
+    "verdicts": {
+      "current_first": 11,
+      "neither": 2,
+      "stale_only": 2
+    },
+    "current_first_rate": 0.7333,
+    "any_status_signal": true,
+    "blind_stale_exposure": 0.0
+  },
+  "graph": {
+    "reaches_current_rate": 0.6667,
+    "stale_marked_rate": 0.6667
+  },
+  "per_pivot": [
+    {
+      "old_id": "dec_01KWFSJFJS8NHTSVV24EK7H9Q2",
+      "new_id": "dec_01KX6CZ30ZJWC11EST90ZWWE7Z",
+      "query": "What should be the headline metric for the evaluation-validity contribution?",
+      "entry": {
+        "old_rank": 6,
+        "new_rank": null,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "stale_only"
+      },
+      "graph": {
+        "seed": "lit_01KX6D6B3S1Q4E8QT0K9VB312A",
+        "reaches_current": false,
+        "stale_marked": false
+      }
+    },
+    {
+      "old_id": "dec_01KWFSJT051BQG1B4KGMQPDCYH",
+      "new_id": "dec_01KX6CZT2FZYAJDPC71J62YVVA",
+      "query": "How should the attacker capability ladder be used in the research plan?",
+      "entry": {
+        "old_rank": 14,
+        "new_rank": 8,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "current_first"
+      },
+      "graph": {
+        "seed": "dec_01KWFSQ02HGAJ6ZP05R6C36NS8",
+        "reaches_current": true,
+        "stale_marked": true
+      }
+    },
+    {
+      "old_id": "dec_01KWFSPDGZF3VG6JAZV72E4FCE",
+      "new_id": "dec_01KX6CZZC3JGB44RW95VD0JS2J",
+      "query": "How should the two existing papers be positioned in the CAREER narrative?",
+      "entry": {
+        "old_rank": null,
+        "new_rank": 5,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "current_first"
+      },
+      "graph": {
+        "seed": "jrn_01KXH8TDT97ES2QGCP3C22QAG3",
+        "reaches_current": false,
+        "stale_marked": false
+      }
+    },
+    {
+      "old_id": "dec_01KWFSPQ98HYECHFXMRGD1HCYH",
+      "new_id": "dec_01KX6CZ7F0JAXE8GN6HN2NCKTG",
+      "query": "When does static evaluation overestimate CPS defense robustness, and how much of the resulting Evaluation Validity Gap is attributable to adaptivity versus physical grounding?",
+      "entry": {
+        "old_rank": null,
+        "new_rank": null,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "neither"
+      },
+      "graph": {
+        "seed": "lit_01KWFSEFY88WT6JYY6J9G11JW9",
+        "reaches_current": false,
+        "stale_marked": false
+      }
+    },
+    {
+      "old_id": "dec_01KWFSQ02HGAJ6ZP05R6C36NS8",
+      "new_id": "dec_01KX6CZCJ1KBZ5EM0YCVRH1TFN",
+      "query": "Which attacker capabilities (observability, memory, physical-domain knowledge, timing precision, multi-step planning, stealth constraints) actually drive the EVG in OT settings?",
+      "entry": {
+        "old_rank": null,
+        "new_rank": null,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "neither"
+      },
+      "graph": {
+        "seed": "dec_01KWFSJT051BQG1B4KGMQPDCYH",
+        "reaches_current": true,
+        "stale_marked": true
+      }
+    },
+    {
+      "old_id": "dec_01KWFSQ6WWAGZM84P5AJB24R3J",
+      "new_id": "dec_01KX6D03XPBF8ZB7R3HB6AZ2C4",
+      "query": "For a given attacker tier, why does a CPS defense fail -- weak residual evidence, train-test drift, dimensional dilution, Stage-2 thresholding, or limited physical effect?",
+      "entry": {
+        "old_rank": 17,
+        "new_rank": 2,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "current_first"
+      },
+      "graph": {
+        "seed": "jrn_01KXPDT8TKAVD28YY8DR992RF6",
+        "reaches_current": false,
+        "stale_marked": false
+      }
+    },
+    {
+      "old_id": "dec_01KX6CZCJ1KBZ5EM0YCVRH1TFN",
+      "new_id": "dec_01KY0ZY5G015QV1427GPXBHMMT",
+      "query": "RQ2: Under identical ex ante caps and a fixed evaluator scaffold, what marginal value do realized-feedback adaptation, validated semantic grounding, and a qualified dynamical consequence model contribute, and when do they interact?",
+      "entry": {
+        "old_rank": null,
+        "new_rank": 1,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "current_first"
+      },
+      "graph": {
+        "seed": "dec_01KY0ZY5G015QV1427GPXBHMMT",
+        "reaches_current": true,
+        "stale_marked": true
+      }
+    },
+    {
+      "old_id": "dec_01KX6CZGGY4YT364YARK2GX5HH",
+      "new_id": "dec_01KXE418E6SBXZS5RQHCCWNBP2",
+      "query": "RQ3: Which observational, interventional, uncertainty, and planner-aware criteria predict whether a consequence model is decision-sufficient within a declared adversarial-planning envelope?",
+      "entry": {
+        "old_rank": null,
+        "new_rank": 1,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "current_first"
+      },
+      "graph": {
+        "seed": "dec_01KXE418E6SBXZS5RQHCCWNBP2",
+        "reaches_current": true,
+        "stale_marked": true
+      }
+    },
+    {
+      "old_id": "dec_01KX6CZNZ2B8G8Y7MDKJZJBGPG",
+      "new_id": "dec_01KX6MDNAPMMGSDQ8100W0PABV",
+      "query": "RQ4: Which capability-conditioned findings replicate across selected defenses, operating regimes, and two contrasting executable physical domains, and where does heterogeneity remain?",
+      "entry": {
+        "old_rank": 16,
+        "new_rank": 2,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "current_first"
+      },
+      "graph": {
+        "seed": "dec_01KX6D08BBPGTWZSC991B3WSP2",
+        "reaches_current": true,
+        "stale_marked": true
+      }
+    },
+    {
+      "old_id": "dec_01KX6D08BBPGTWZSC991B3WSP2",
+      "new_id": "dec_01KX6MDENP3PZ988T6HVYTQKJP",
+      "query": "What domain and platform scope is credible for the five-year CAREER?",
+      "entry": {
+        "old_rank": 18,
+        "new_rank": 5,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "current_first"
+      },
+      "graph": {
+        "seed": "jrn_01KX6MBMXZYD7D78W796PMP98N",
+        "reaches_current": true,
+        "stale_marked": true
+      }
+    },
+    {
+      "old_id": "dec_01KX6MDNAPMMGSDQ8100W0PABV",
+      "new_id": "dec_01KY0ZYJRE64R36782DHVY6ZFR",
+      "query": "RQ4: Does the prespecified capability effect reproduce in one deliberately dissimilar second domain, and what moderates it?",
+      "entry": {
+        "old_rank": 14,
+        "new_rank": 2,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "current_first"
+      },
+      "graph": {
+        "seed": "dec_01KX6CZNZ2B8G8Y7MDKJZJBGPG",
+        "reaches_current": true,
+        "stale_marked": true
+      }
+    },
+    {
+      "old_id": "dec_01KXE2K248NG9K382JHDV73PRC",
+      "new_id": "dec_01KY0ZY1DQRTB99XN3FTDVM74G",
+      "query": "How should query-efficient, detector-aware closed-loop attack-dynamics learning be integrated into the CAREER design?",
+      "entry": {
+        "old_rank": 16,
+        "new_rank": null,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "stale_only"
+      },
+      "graph": {
+        "seed": "jrn_01KXE2JPEWJ0X25TAM9WEZC388",
+        "reaches_current": true,
+        "stale_marked": true
+      }
+    },
+    {
+      "old_id": "dec_01KXEGXR89RVM6PX885PP1QP9Z",
+      "new_id": "dec_01KXH3TDBVBWV69290GPWKQBSP",
+      "query": "How should the Version 3 CAREER blueprint be refactored into durable working documents for proposal development?",
+      "entry": {
+        "old_rank": null,
+        "new_rank": 8,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "current_first"
+      },
+      "graph": {
+        "seed": "jrn_01KXEJ8R6AHGJS4FF6VMX5GN22",
+        "reaches_current": true,
+        "stale_marked": true
+      }
+    },
+    {
+      "old_id": "dec_01KXH5QWQDKY8352PWAASF0S01",
+      "new_id": "dec_01KXH7EBJYRWWVGPB93VA77BTF",
+      "query": "How should the first LaTeX Project Description draft be constructed and scoped?",
+      "entry": {
+        "old_rank": 12,
+        "new_rank": 5,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "current_first"
+      },
+      "graph": {
+        "seed": "jrn_01KXH5Y3T4WE2MJF60JVFNB93J",
+        "reaches_current": true,
+        "stale_marked": true
+      }
+    },
+    {
+      "old_id": "dec_01KXPE3RN8A11D7KPF7GBQ3A9C",
+      "new_id": "dec_01KY0ZYSQTZEA499DM75SJYQYK",
+      "query": "How should the detector manuscript's compactness idea and intervention-based diagnosis be integrated into the CAREER proposal?",
+      "entry": {
+        "old_rank": null,
+        "new_rank": 8,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "current_first"
+      },
+      "graph": {
+        "seed": "mis_01KXE2KVYD2AB9Z2Y4B3N03F2Z",
+        "reaches_current": false,
+        "stale_marked": false
+      }
+    }
+  ],
+  "meta": {
+    "project": "prj_01KWFRG2TZGHV1A8G4MXVDFPJ5",
+    "rka_url": "http://127.0.0.1:9714",
+    "db": "rka-snapshot-2026-08-23.db"
+  }
+}

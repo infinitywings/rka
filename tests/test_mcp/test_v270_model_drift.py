@@ -401,3 +401,70 @@ def test_all_models_re_exported_via_public___all__() -> None:
         f"Drift: {len(missing)} typed-arg model(s) not re-exported via "
         f"operation_args.__all__: {missing[:5]}..."
     )
+
+
+# ---------------------------------------------------------------------------
+# Maturity — keeping the browse index to what is actually in use
+# ---------------------------------------------------------------------------
+
+
+def test_preview_operations_are_hidden_from_the_browse_index():
+    """`rka_describe('')` must not spend the agent's attention on dead surface.
+
+    Measured 2026-08-23 against a five-month-old production store of 5178
+    entities: manuscript units, planning branches, experiments, semantic-patch
+    proposals, hooks, interpretation candidates and claim-scope versions all
+    had ZERO rows. Listing ~40% unreachable operations beside the core ones is
+    exactly the "too many interfaces confuse the agent" failure.
+    """
+    import asyncio
+    import json
+
+    from rka.mcp.operations_schema import OPERATIONS_SCHEMA, dispatch_describe
+
+    default = json.loads(asyncio.run(dispatch_describe("")))
+    full = json.loads(asyncio.run(dispatch_describe("", include_preview=True)))
+
+    assert default["listed"] < default["total"]
+    assert default["preview_hidden"] == default["total"] - default["listed"]
+    assert full["listed"] == len(OPERATIONS_SCHEMA)
+    # the hidden set must be discoverable, not silently dropped
+    assert "include_preview" in default["preview_hint"]
+
+
+def test_core_research_loop_stays_stable():
+    """The operations a real session uses must never fall into preview."""
+    from rka.mcp.operations_schema import operation_maturity
+
+    for op in (
+        "status", "context", "search", "entity", "journal", "literature",
+        "record_note", "record_decision", "record_literature",
+        "create_mission", "submit_report", "submit_checkpoint",
+        "research_map", "clusters", "claims", "decision_tree",
+        "ego_graph", "multi_hop", "provenance", "collect_report_context",
+        "belief_as_of", "staleness_impact", "changes_since", "contradictions",
+    ):
+        assert operation_maturity(op) == "stable", op
+
+
+def test_zero_usage_subsystems_are_preview():
+    from rka.mcp.operations_schema import operation_maturity
+
+    for op in (
+        "create_experiment", "experiment_runs", "record_experiment_observation",
+        "create_planning_branch", "planning_branches",
+        "create_semantic_patch_proposal", "semantic_patch_proposals",
+        "hook_add", "hooks",
+        "create_interpretation_candidate", "interpretation_candidates",
+        "set_claim_scope", "claim_scope",
+        "create_manuscript", "manuscript_context",
+    ):
+        assert operation_maturity(op) == "preview", op
+
+
+def test_every_operation_is_classified():
+    """No operation may sit outside the stable/preview split."""
+    from rka.mcp.operations_schema import OPERATIONS_SCHEMA, operation_maturity
+
+    for op in OPERATIONS_SCHEMA:
+        assert operation_maturity(op) in {"stable", "preview"}, op

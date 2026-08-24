@@ -1,0 +1,109 @@
+{
+  "scenario_id": "how-should-the-first-latex-project-description-d-sf0s01",
+  "union": {
+    "trace_recall": 1.0,
+    "expanded_recall": 1.0,
+    "per_relation": {
+      "directive": {
+        "expected": 1,
+        "found": 1
+      },
+      "mission": {
+        "expected": 1,
+        "found": 1
+      },
+      "parent_decision": {
+        "expected": 1,
+        "found": 1
+      },
+      "superseded_alternative": {
+        "expected": 1,
+        "found": 1
+      }
+    },
+    "precision": 0.4444,
+    "returned_count": 9
+  },
+  "per_surface": {
+    "ego": {
+      "trace_recall": 1.0,
+      "expanded_recall": 1.0,
+      "per_relation": {
+        "directive": {
+          "expected": 1,
+          "found": 1
+        },
+        "mission": {
+          "expected": 1,
+          "found": 1
+        },
+        "parent_decision": {
+          "expected": 1,
+          "found": 1
+        },
+        "superseded_alternative": {
+          "expected": 1,
+          "found": 1
+        }
+      },
+      "precision": 0.4444,
+      "returned_count": 9
+    },
+    "multi_hop": {
+      "trace_recall": 1.0,
+      "expanded_recall": 1.0,
+      "per_relation": {
+        "directive": {
+          "expected": 1,
+          "found": 1
+        },
+        "mission": {
+          "expected": 1,
+          "found": 1
+        },
+        "parent_decision": {
+          "expected": 1,
+          "found": 1
+        },
+        "superseded_alternative": {
+          "expected": 1,
+          "found": 1
+        }
+      },
+      "precision": 0.4444,
+      "returned_count": 9
+    }
+  },
+  "pivot": {
+    "applicable": true,
+    "superseding_found": true,
+    "superseded_found": true,
+    "stale_surfacing": false
+  },
+  "divergences": [],
+  "raw": {
+    "search_ids": null,
+    "ego_ids": [
+      "jrn_01KXH5QEMA25M3R45GRA5D6JSQ",
+      "jrn_01KXH5Y3T4WE2MJF60JVFNB93J",
+      "mis_01KXH5TMPZF5394NKR6NQF7KQW",
+      "jrn_01KXH7DE20166KNCMCKTBF1ARA",
+      "jrn_01KXH8TDT97ES2QGCP3C22QAG3",
+      "jrn_01KXH9QVGZAP8BX1F6RW5QVJAT",
+      "dec_01KXH3TDBVBWV69290GPWKQBSP",
+      "dec_01KXH5QWQDKY8352PWAASF0S01",
+      "dec_01KXH7EBJYRWWVGPB93VA77BTF"
+    ],
+    "multi_hop_ids": [
+      "dec_01KXH5QWQDKY8352PWAASF0S01",
+      "jrn_01KXH5QEMA25M3R45GRA5D6JSQ",
+      "mis_01KXH5TMPZF5394NKR6NQF7KQW",
+      "dec_01KXH7EBJYRWWVGPB93VA77BTF",
+      "jrn_01KXH5Y3T4WE2MJF60JVFNB93J",
+      "jrn_01KXH7DE20166KNCMCKTBF1ARA",
+      "jrn_01KXH9QVGZAP8BX1F6RW5QVJAT",
+      "dec_01KXH3TDBVBWV69290GPWKQBSP",
+      "jrn_01KXH8TDT97ES2QGCP3C22QAG3"
+    ]
+  }
+}

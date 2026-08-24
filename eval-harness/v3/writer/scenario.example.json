@@ -1,0 +1,16 @@
+{
+  "scenario_id": "example-evaluation-section",
+  "section_brief": "Draft the Evaluation section arguing the retrieval improvement, using only recorded evidence.",
+  "baseline_arm": "B",
+  "expected_evidence": [
+    {"entity_id": "clm_01EXAMPLENDCGRESULT000000", "importance": "critical", "note": "the +9% NDCG@10 result claim"},
+    {"entity_id": "ecl_01EXAMPLERETRIEVALCLUSTER", "importance": "critical", "note": "retrieval-quality evidence cluster"},
+    {"entity_id": "lit_01EXAMPLEBASELINEPAPER00", "importance": "useful", "note": "baseline comparison paper"},
+    {"entity_id": "jrn_01EXAMPLEPIDIRECTIVE0000", "importance": "critical", "note": "PI directive: always report the null AND-fix finding alongside"}
+  ],
+  "arms": {
+    "A": {"draft": "drafts/A.tex", "verifier_report": "reports/A.json", "setup": "Writer skill + live RKA"},
+    "B": {"draft": "drafts/B.tex", "verifier_report": "reports/B.json", "setup": "same model, flat source dump, no graph"},
+    "C": {"draft": "drafts/C.tex", "verifier_report": "reports/C.json", "setup": "same model, brief only"}
+  }
+}

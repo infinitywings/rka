@@ -1,0 +1,220 @@
+{
+  "scenario_id": "how-should-the-pi-s-existing-papers-and-pilot-ma-d0js2j",
+  "union": {
+    "trace_recall": 1.0,
+    "expanded_recall": 1.0,
+    "per_relation": {
+      "evidence": {
+        "expected": 6,
+        "found": 6
+      },
+      "literature": {
+        "expected": 3,
+        "found": 3
+      },
+      "mission": {
+        "expected": 1,
+        "found": 1
+      },
+      "superseded_alternative": {
+        "expected": 1,
+        "found": 1
+      }
+    },
+    "precision": 0.193,
+    "returned_count": 57
+  },
+  "per_surface": {
+    "ego": {
+      "trace_recall": 1.0,
+      "expanded_recall": 1.0,
+      "per_relation": {
+        "evidence": {
+          "expected": 6,
+          "found": 6
+        },
+        "literature": {
+          "expected": 3,
+          "found": 3
+        },
+        "mission": {
+          "expected": 1,
+          "found": 1
+        },
+        "superseded_alternative": {
+          "expected": 1,
+          "found": 1
+        }
+      },
+      "precision": 0.193,
+      "returned_count": 57
+    },
+    "multi_hop": {
+      "trace_recall": 1.0,
+      "expanded_recall": 0.9090909090909091,
+      "per_relation": {
+        "evidence": {
+          "expected": 6,
+          "found": 6
+        },
+        "literature": {
+          "expected": 3,
+          "found": 3
+        },
+        "mission": {
+          "expected": 1,
+          "found": 0
+        },
+        "superseded_alternative": {
+          "expected": 1,
+          "found": 1
+        }
+      },
+      "precision": 0.2,
+      "returned_count": 50
+    }
+  },
+  "pivot": {
+    "applicable": true,
+    "superseding_found": true,
+    "superseded_found": true,
+    "stale_surfacing": false
+  },
+  "divergences": [],
+  "anchor_reciprocal_rank": 0.0,
+  "raw": {
+    "search_ids": [
+      "jrn_01KXE4445AWE1PAF3PBKVYE4X1",
+      "jrn_01KY0ZVRJQ70JJ6CGKKQJQ8J7T",
+      "dec_01KWFSPDGZF3VG6JAZV72E4FCE",
+      "dec_01KY5F8P4BX6XN137A2PWCEPAQ",
+      "jrn_01KXPD9PRMGCHHGYVK0CMQ86HS",
+      "jrn_01KY0BGBTXESW0WCF5SWAZVGVV",
+      "lit_01KXE3V3QW00QB37JZVPYNZ1PS",
+      "mis_01KXH5TMPZF5394NKR6NQF7KQW",
+      "jrn_01KXH5Y3T4WE2MJF60JVFNB93J",
+      "dec_01KY0ZYSQTZEA499DM75SJYQYK",
+      "ecl_01KX6MT6F7FBZ9QB9Z6656B5GM",
+      "lit_01KWFSE708S5FRJW4H2TJ3KNTN",
+      "lit_01KXE3VFRFF8TK1Y0HYPHXN5XM",
+      "jrn_01KXPDT8TKAVD28YY8DR992RF6",
+      "clm_01KXH4MFHM0QJVZE210487QAER",
+      "dec_01KY0BH8FZEASF32YYPFDY6YTZ",
+      "dec_01KXZT8M564A06M7QSERSY1ABV",
+      "jrn_01KWFSQMJTKBE1NWGRPWW0M9BM",
+      "dec_01KXH5QWQDKY8352PWAASF0S01",
+      "lit_01KWFSDKRDHNDJ2PYEK22VY2WM"
+    ],
+    "ego_ids": [
+      "dec_01KWFSJ616MWMS0PX5FA6SW7YD",
+      "dec_01KWFSJFJS8NHTSVV24EK7H9Q2",
+      "dec_01KWFSJT051BQG1B4KGMQPDCYH",
+      "dec_01KWFSK8S3G8E7K1WHKEH1P5GH",
+      "dec_01KWFSPDGZF3VG6JAZV72E4FCE",
+      "dec_01KWFSPQ98HYECHFXMRGD1HCYH",
+      "dec_01KWFSQ02HGAJ6ZP05R6C36NS8",
+      "dec_01KWFSQ6WWAGZM84P5AJB24R3J",
+      "dec_01KX6CZ30ZJWC11EST90ZWWE7Z",
+      "dec_01KX6CZ7F0JAXE8GN6HN2NCKTG",
+      "dec_01KX6CZCJ1KBZ5EM0YCVRH1TFN",
+      "dec_01KX6CZGGY4YT364YARK2GX5HH",
+      "dec_01KX6CZNZ2B8G8Y7MDKJZJBGPG",
+      "dec_01KX6CZT2FZYAJDPC71J62YVVA",
+      "dec_01KX6CZZC3JGB44RW95VD0JS2J",
+      "dec_01KX6D03XPBF8ZB7R3HB6AZ2C4",
+      "dec_01KX6D08BBPGTWZSC991B3WSP2",
+      "dec_01KX6D0CQV1FSF4GGAGYQR8RZN",
+      "dec_01KX6MDENP3PZ988T6HVYTQKJP",
+      "dec_01KX6MDNAPMMGSDQ8100W0PABV",
+      "clm_01KX6DN53W0N4EW400W6PCZKV5",
+      "clm_01KX6DNYDAYRMTA9BPQSMCVFJB",
+      "clm_01KX6DNYDPP6X664PS34PQG9JZ",
+      "clm_01KX6DNYDZP908YS13PG06YVV8",
+      "clm_01KX6DNYE903KR71VTR8R4P446",
+      "clm_01KX6DNYEEP0PFSHD4M51W26JH",
+      "clm_01KX6DNYEK014APNNFWVSMFMER",
+      "clm_01KX6DNYEVDP0P5CEGWPHYJM27",
+      "clm_01KX6DP596E1A59SC7Y263K8Z6",
+      "clm_01KX6DPFQ2STAK4NNMFE3PK38Q",
+      "clm_01KX6DPYJ1MX298Y7BPSA0M5KX",
+      "clm_01KX6MK6TY9NKGRMEXR8FYKTNN",
+      "clm_01KX6MK6V72WXA0VNF0VP4GB7T",
+      "clm_01KX6MK6VEM72R5JSCR7JZ7QNN",
+      "clm_01KX6MK6VN6N7CSPK8RZR7KCBR",
+      "clm_01KX6MK6VTW4P0AP73RN2N57FD",
+      "clm_01KX6MK6VZPQQHKC7FWW64H763",
+      "clm_01KX6MK6W3C8WFENBXJ4MWQ1C3",
+      "clm_01KX6MK6W7G2GPS20A2NJMFK94",
+      "clm_01KX6NBA8STFFC0DJ8C8P1NJVY",
+      "lit_01KWFSDDNPB4HJA7BWF6FKE46Q",
+      "lit_01KWFSDT2C3CF55EVNR5FD72P1",
+      "lit_01KWFSE194ZPC7R0JM3E9820NB",
+      "lit_01KWFSE708S5FRJW4H2TJ3KNTN",
+      "lit_01KWFSF772VENWRXNYWZHHQFB5",
+      "jrn_01KWFS3V7RAP0069ABZRHQCXC9",
+      "jrn_01KWFS9E7ZH1E25BKD5WXNFCKH",
+      "jrn_01KWFS9MHS4SC277JP4WSF8MS4",
+      "jrn_01KWFSA3S7AXHQWKZC2AVJY633",
+      "jrn_01KWFSAA1BXM88PMWHZR4B5S74",
+      "jrn_01KX66371CJC7EYFGBRVMCKWNE",
+      "jrn_01KX6CWQ16HS4ZW6M6ZMKEMWQ7",
+      "jrn_01KX6CWV55JR03CFWY41FRQH48",
+      "jrn_01KX6CXKNDD8K48XCNTCXQTRKH",
+      "jrn_01KX6MBMXZYD7D78W796PMP98N",
+      "jrn_01KX6N1ZAXCAYMFJ5YQFD67A6W",
+      "mis_01KX6KP1TCM1RDNTSAKC413P78"
+    ],
+    "multi_hop_ids": [
+      "dec_01KX6CZZC3JGB44RW95VD0JS2J",
+      "jrn_01KX6CXKNDD8K48XCNTCXQTRKH",
+      "jrn_01KX6CWQ16HS4ZW6M6ZMKEMWQ7",
+      "jrn_01KX6MBMXZYD7D78W796PMP98N",
+      "dec_01KWFSJ616MWMS0PX5FA6SW7YD",
+      "dec_01KWFSK8S3G8E7K1WHKEH1P5GH",
+      "dec_01KX6CZ30ZJWC11EST90ZWWE7Z",
+      "dec_01KX6CZ7F0JAXE8GN6HN2NCKTG",
+      "dec_01KX6CZCJ1KBZ5EM0YCVRH1TFN",
+      "dec_01KX6CZGGY4YT364YARK2GX5HH",
+      "dec_01KX6CZNZ2B8G8Y7MDKJZJBGPG",
+      "dec_01KX6CZT2FZYAJDPC71J62YVVA",
+      "dec_01KX6D03XPBF8ZB7R3HB6AZ2C4",
+      "dec_01KX6D08BBPGTWZSC991B3WSP2",
+      "dec_01KX6D0CQV1FSF4GGAGYQR8RZN",
+      "clm_01KX6DN53W0N4EW400W6PCZKV5",
+      "clm_01KX6DNYDAYRMTA9BPQSMCVFJB",
+      "clm_01KX6DNYDPP6X664PS34PQG9JZ",
+      "clm_01KX6DNYDZP908YS13PG06YVV8",
+      "clm_01KX6DNYE903KR71VTR8R4P446",
+      "clm_01KX6DNYEEP0PFSHD4M51W26JH",
+      "clm_01KX6DNYEK014APNNFWVSMFMER",
+      "clm_01KX6DNYEVDP0P5CEGWPHYJM27",
+      "dec_01KX6MDENP3PZ988T6HVYTQKJP",
+      "dec_01KX6MDNAPMMGSDQ8100W0PABV",
+      "clm_01KX6MK6TY9NKGRMEXR8FYKTNN",
+      "clm_01KX6MK6V72WXA0VNF0VP4GB7T",
+      "clm_01KX6MK6VEM72R5JSCR7JZ7QNN",
+      "clm_01KX6MK6VN6N7CSPK8RZR7KCBR",
+      "clm_01KX6MK6VTW4P0AP73RN2N57FD",
+      "clm_01KX6MK6VZPQQHKC7FWW64H763",
+      "clm_01KX6MK6W3C8WFENBXJ4MWQ1C3",
+      "clm_01KX6MK6W7G2GPS20A2NJMFK94",
+      "lit_01KWFSDT2C3CF55EVNR5FD72P1",
+      "lit_01KWFSE194ZPC7R0JM3E9820NB",
+      "lit_01KWFSDDNPB4HJA7BWF6FKE46Q",
+      "dec_01KWFSPDGZF3VG6JAZV72E4FCE",
+      "jrn_01KX66371CJC7EYFGBRVMCKWNE",
+      "jrn_01KWFSAA1BXM88PMWHZR4B5S74",
+      "jrn_01KWFS9MHS4SC277JP4WSF8MS4",
+      "jrn_01KX6N1ZAXCAYMFJ5YQFD67A6W",
+      "dec_01KWFSQ02HGAJ6ZP05R6C36NS8",
+      "dec_01KWFSQ6WWAGZM84P5AJB24R3J",
+      "dec_01KWFSJFJS8NHTSVV24EK7H9Q2",
+      "dec_01KWFSJT051BQG1B4KGMQPDCYH",
+      "dec_01KWFSPQ98HYECHFXMRGD1HCYH",
+      "lit_01KWFSF772VENWRXNYWZHHQFB5",
+      "lit_01KWFSE708S5FRJW4H2TJ3KNTN",
+      "clm_01KX6DP596E1A59SC7Y263K8Z6",
+      "clm_01KX6DPFQ2STAK4NNMFE3PK38Q"
+    ]
+  }
+}

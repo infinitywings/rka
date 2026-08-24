@@ -1,0 +1,95 @@
+{
+  "scenario_id": "how-to-close-the-10-honest-retrieval-gaps-surfac-3ydzq1",
+  "union": {
+    "trace_recall": 1.0,
+    "expanded_recall": 1.0,
+    "per_relation": {
+      "evidence": {
+        "expected": 1,
+        "found": 1
+      },
+      "mission": {
+        "expected": 1,
+        "found": 1
+      },
+      "superseded_alternative": {
+        "expected": 1,
+        "found": 1
+      }
+    },
+    "precision": 0.375,
+    "returned_count": 8
+  },
+  "per_surface": {
+    "ego": {
+      "trace_recall": 1.0,
+      "expanded_recall": 1.0,
+      "per_relation": {
+        "evidence": {
+          "expected": 1,
+          "found": 1
+        },
+        "mission": {
+          "expected": 1,
+          "found": 1
+        },
+        "superseded_alternative": {
+          "expected": 1,
+          "found": 1
+        }
+      },
+      "precision": 0.375,
+      "returned_count": 8
+    },
+    "multi_hop": {
+      "trace_recall": 1.0,
+      "expanded_recall": 1.0,
+      "per_relation": {
+        "evidence": {
+          "expected": 1,
+          "found": 1
+        },
+        "mission": {
+          "expected": 1,
+          "found": 1
+        },
+        "superseded_alternative": {
+          "expected": 1,
+          "found": 1
+        }
+      },
+      "precision": 0.375,
+      "returned_count": 8
+    }
+  },
+  "pivot": {
+    "applicable": true,
+    "superseding_found": true,
+    "superseded_found": true,
+    "stale_surfacing": false
+  },
+  "divergences": [],
+  "raw": {
+    "search_ids": null,
+    "ego_ids": [
+      "jrn_01KS5TN8PV275AE4WFY24M27P9",
+      "chk_01KS5S8BJBYW0PQ309CPCJ5PMC",
+      "jrn_01M071EVF8R4630NKDB97CQ55Q",
+      "jrn_01M071EY1DX590FEAKSGTEZDXR",
+      "jrn_01M071Y78VNDQNPQBZB4AHZZ0A",
+      "mis_01KS5TTYSME88BQR5EC7BCXAGE",
+      "dec_01KS5TPYCW9DE7PS2Q2M3YDZQ1",
+      "dec_01M071K4JPYD119QHARFB1CBZ8"
+    ],
+    "multi_hop_ids": [
+      "dec_01KS5TPYCW9DE7PS2Q2M3YDZQ1",
+      "jrn_01KS5TN8PV275AE4WFY24M27P9",
+      "chk_01KS5S8BJBYW0PQ309CPCJ5PMC",
+      "mis_01KS5TTYSME88BQR5EC7BCXAGE",
+      "jrn_01M071Y78VNDQNPQBZB4AHZZ0A",
+      "dec_01M071K4JPYD119QHARFB1CBZ8",
+      "jrn_01M071EVF8R4630NKDB97CQ55Q",
+      "jrn_01M071EY1DX590FEAKSGTEZDXR"
+    ]
+  }
+}

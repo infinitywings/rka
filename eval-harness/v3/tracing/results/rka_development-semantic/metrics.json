@@ -1,0 +1,51 @@
+{
+  "meta": {
+    "corpus": "scenarios.rka_development.jsonl",
+    "corpus_sha256": "8fe1315add534480b6bc63ad3516c56af038c2c9eed8dc18c89c36dae117a4f4",
+    "rka_url": "http://localhost:9712",
+    "project_filter": "prj_01KKQM9JFG67GT5FGWTAHD9YE4"
+  },
+  "aggregate": {
+    "n_scenarios": 12,
+    "trace_recall_mean": 1.0,
+    "expanded_recall_mean": 1.0,
+    "precision_mean": 0.2126,
+    "anchor_mrr": 0.1444,
+    "per_relation": {
+      "directive": {
+        "expected": 9,
+        "found": 9,
+        "recall": 1.0
+      },
+      "evidence": {
+        "expected": 39,
+        "found": 39,
+        "recall": 1.0
+      },
+      "literature": {
+        "expected": 13,
+        "found": 13,
+        "recall": 1.0
+      },
+      "mission": {
+        "expected": 10,
+        "found": 10,
+        "recall": 1.0
+      },
+      "parent_decision": {
+        "expected": 5,
+        "found": 5,
+        "recall": 1.0
+      },
+      "superseded_alternative": {
+        "expected": 6,
+        "found": 6,
+        "recall": 1.0
+      }
+    },
+    "pivot_scenarios": 6,
+    "pivot_correct": 6,
+    "stale_surfacing": 0,
+    "scenarios_with_divergences": []
+  }
+}

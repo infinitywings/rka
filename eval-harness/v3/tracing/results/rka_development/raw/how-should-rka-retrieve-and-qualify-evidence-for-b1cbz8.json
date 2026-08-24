@@ -1,0 +1,113 @@
+{
+  "scenario_id": "how-should-rka-retrieve-and-qualify-evidence-for-b1cbz8",
+  "union": {
+    "trace_recall": 1.0,
+    "expanded_recall": 1.0,
+    "per_relation": {
+      "evidence": {
+        "expected": 3,
+        "found": 3
+      },
+      "superseded_alternative": {
+        "expected": 1,
+        "found": 1
+      }
+    },
+    "precision": 0.3636,
+    "returned_count": 11
+  },
+  "per_surface": {
+    "ego": {
+      "trace_recall": 1.0,
+      "expanded_recall": 1.0,
+      "per_relation": {
+        "evidence": {
+          "expected": 3,
+          "found": 3
+        },
+        "superseded_alternative": {
+          "expected": 1,
+          "found": 1
+        }
+      },
+      "precision": 0.3636,
+      "returned_count": 11
+    },
+    "multi_hop": {
+      "trace_recall": 1.0,
+      "expanded_recall": 1.0,
+      "per_relation": {
+        "evidence": {
+          "expected": 3,
+          "found": 3
+        },
+        "superseded_alternative": {
+          "expected": 1,
+          "found": 1
+        }
+      },
+      "precision": 0.3636,
+      "returned_count": 11
+    }
+  },
+  "pivot": {
+    "applicable": true,
+    "superseding_found": true,
+    "superseded_found": true,
+    "stale_surfacing": false
+  },
+  "divergences": [],
+  "anchor_reciprocal_rank": 0.09090909090909091,
+  "raw": {
+    "search_ids": [
+      "mis_01KP45P89CYM17HJTCDQ13B58P",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6Q6",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6RE",
+      "jrn_01KQQQAH5JBRDPYT62N5BH6TP6",
+      "dec_01KQQPE47H56E40A8KBDDT4BZT",
+      "mis_01KPP8VM09BH7YW5DPJHTS1WT6",
+      "clm_01KP4PVD396AVA8CV8Y5GMF1JD",
+      "mis_01KRKG9K1SSDZNDH90K2Z7ZM92",
+      "dec_01KRKE6ERDPQTFQS6ZGY9A3CK0",
+      "clm_01KP4R2MPAPG6THDYPYQ40JRWB",
+      "dec_01M071K4JPYD119QHARFB1CBZ8",
+      "ecl_01KP4PKMN8XS0WXHXHN7GN4TG3",
+      "dec_01KQQRZDYAT2QRZQ5FZ4K71P6W",
+      "mis_01KPS15F72FHJ5474ZFZS5JVG9",
+      "ecl_01KP4PM090PTWGR81GXJAYH7MK",
+      "mis_01KPS2JFMMP1JQ1V962DC3BXE7",
+      "jrn_01KPNJJHA0S31QGDQFJKC4NMTA",
+      "jrn_01KPNH2RP5Y9PRKMBSHT4DME8",
+      "dec_01M071K7758H64HK3Y4XZJ1DWP",
+      "lit_01KRBRS80AZSZWAJ6AKBXG8AA1",
+      "jrn_01KMX18FDAMN7T5YVZ7V8HV6TA",
+      "dec_01KP45K75X1CBEY5HQVPH5WTBZ"
+    ],
+    "ego_ids": [
+      "jrn_01KS5TN8PV275AE4WFY24M27P9",
+      "chk_01KS5S8BJBYW0PQ309CPCJ5PMC",
+      "jrn_01M071EVF8R4630NKDB97CQ55Q",
+      "jrn_01M071EY1DX590FEAKSGTEZDXR",
+      "dec_01KS5TPYCW9DE7PS2Q2M3YDZQ1",
+      "dec_01M071K2AEVW69957WK5B3FB42",
+      "dec_01M071K4JPYD119QHARFB1CBZ8",
+      "dec_01M071K7758H64HK3Y4XZJ1DWP",
+      "dec_01M071KCT1DKQHXGMPP906A0TH",
+      "clm_01M071QC9BF6YYQ5HFBEVT6CZG",
+      "mis_01KS5TTYSME88BQR5EC7BCXAGE"
+    ],
+    "multi_hop_ids": [
+      "dec_01M071K4JPYD119QHARFB1CBZ8",
+      "jrn_01M071EVF8R4630NKDB97CQ55Q",
+      "jrn_01M071EY1DX590FEAKSGTEZDXR",
+      "dec_01M071K2AEVW69957WK5B3FB42",
+      "dec_01M071K7758H64HK3Y4XZJ1DWP",
+      "dec_01M071KCT1DKQHXGMPP906A0TH",
+      "clm_01M071QC9BF6YYQ5HFBEVT6CZG",
+      "dec_01KS5TPYCW9DE7PS2Q2M3YDZQ1",
+      "jrn_01KS5TN8PV275AE4WFY24M27P9",
+      "chk_01KS5S8BJBYW0PQ309CPCJ5PMC",
+      "mis_01KS5TTYSME88BQR5EC7BCXAGE"
+    ]
+  }
+}

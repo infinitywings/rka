@@ -1,0 +1,223 @@
+{
+  "scenario_id": "what-is-the-comprehensive-architecture-for-rka-v-8hv6rc",
+  "union": {
+    "trace_recall": 1.0,
+    "expanded_recall": 1.0,
+    "per_relation": {
+      "directive": {
+        "expected": 1,
+        "found": 1
+      },
+      "evidence": {
+        "expected": 5,
+        "found": 5
+      },
+      "literature": {
+        "expected": 3,
+        "found": 3
+      },
+      "parent_decision": {
+        "expected": 1,
+        "found": 1
+      }
+    },
+    "precision": 0.1818,
+    "returned_count": 55
+  },
+  "per_surface": {
+    "ego": {
+      "trace_recall": 1.0,
+      "expanded_recall": 1.0,
+      "per_relation": {
+        "directive": {
+          "expected": 1,
+          "found": 1
+        },
+        "evidence": {
+          "expected": 5,
+          "found": 5
+        },
+        "literature": {
+          "expected": 3,
+          "found": 3
+        },
+        "parent_decision": {
+          "expected": 1,
+          "found": 1
+        }
+      },
+      "precision": 0.1818,
+      "returned_count": 55
+    },
+    "multi_hop": {
+      "trace_recall": 1.0,
+      "expanded_recall": 1.0,
+      "per_relation": {
+        "directive": {
+          "expected": 1,
+          "found": 1
+        },
+        "evidence": {
+          "expected": 5,
+          "found": 5
+        },
+        "literature": {
+          "expected": 3,
+          "found": 3
+        },
+        "parent_decision": {
+          "expected": 1,
+          "found": 1
+        }
+      },
+      "precision": 0.2,
+      "returned_count": 50
+    }
+  },
+  "pivot": {
+    "applicable": false
+  },
+  "divergences": [],
+  "anchor_reciprocal_rank": 0.05263157894736842,
+  "raw": {
+    "search_ids": [
+      "mis_01KRKG9K1SSDZNDH90K2Z7ZM92",
+      "dec_01KRKE6ERDPQTFQS6ZGY9A3CK0",
+      "jrn_01KMX18FDBEE9T8JNHHAP649T1",
+      "jrn_01KMX18FDBEE9T8JNHHAP649T8",
+      "mis_01KRVE4J71T6M6XWPDVPXMFJ49",
+      "dec_01KRVE1ZT6M8VN4PQM7W2HE8X6",
+      "mis_01KRZ1QRMM7HGPYVAQPMXQVK3P",
+      "mis_01KRVM7BDCX0ATBERR6DAFTXZV",
+      "mis_01KRVF159FEHMYD55Q6EQ7BD18",
+      "dec_01KRVM4HSC0ASR1SBPPGG8CR1F",
+      "mis_01KPPXXWMYDQ71J0PKMR4DFNWJ",
+      "jrn_01KMX18FDBEE9T8JNHHAP649T0",
+      "mis_01KRXRF6VRFAAV1T8XKZ3RHJXJ",
+      "dec_01KRXRBM8RPYN66R2MJ2JNRYXS",
+      "clm_01KP4RE4GCE9PVG0P48X8X9WKV",
+      "clm_01KP4RSZXG1XNV7MVEBVMNRFCX",
+      "mis_01KRSTZVCTFGF91QZXTYK7ZGDD",
+      "chk_01KRSTFD7203NWAR8MYD91KSFV",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6RC",
+      "dec_01KKVQN6NTAACAWY5AFBSSD96T",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6RJ",
+      "jrn_01KMX18FDBEE9T8JNHHAP649SW",
+      "mis_01KPRB8JW9QXX7B7H4KNYJ3GMV",
+      "lit_01KRBRWNC0VXA26JXKC8S3BB67",
+      "mis_01KRXNAJDM2DQ3K1VH6CXAPK8R",
+      "dec_01KRXN3S891R7EGW0DWJ9CTQ0M",
+      "clm_01KP4RE4FZ15MCFSGZN3TGH7JS",
+      "jrn_01KRSY07J5HJFNP2RQSVGWAEZQ"
+    ],
+    "ego_ids": [
+      "jrn_01KMX18FDBEE9T8JNHHAP649S5",
+      "jrn_01KMX18FDBEE9T8JNHHAP649SB",
+      "jrn_01KMX18FDBEE9T8JNHHAP649SE",
+      "jrn_01KMX18FDBEE9T8JNHHAP649SF",
+      "jrn_01KMX18FDBEE9T8JNHHAP649SM",
+      "jrn_01KMX18FDBEE9T8JNHHAP649ST",
+      "jrn_01KMX18FDBEE9T8JNHHAP649SV",
+      "jrn_01KMX18FDBEE9T8JNHHAP649SW",
+      "jrn_01KMX18FDBEE9T8JNHHAP649SX",
+      "jrn_01KMX18FDBEE9T8JNHHAP649SY",
+      "jrn_01KMX18FDBEE9T8JNHHAP649SZ",
+      "jrn_01KMX18FDBEE9T8JNHHAP649T0",
+      "jrn_01KMX18FDBEE9T8JNHHAP649T1",
+      "jrn_01KMX18FDBEE9T8JNHHAP649T2",
+      "jrn_01KMX18FDBEE9T8JNHHAP649T3",
+      "jrn_01KMX18FDBEE9T8JNHHAP649T4",
+      "jrn_01KMX18FDBEE9T8JNHHAP649T5",
+      "jrn_01KMX18FDBEE9T8JNHHAP649T6",
+      "jrn_01KMX18FDBEE9T8JNHHAP649T7",
+      "jrn_01KMX18FDBEE9T8JNHHAP649T8",
+      "jrn_01KMX18FDBEE9T8JNHHAP649T9",
+      "jrn_01KMX18FDBEE9T8JNHHAP649TA",
+      "clm_01KP4PWDT9KK57B6J8R36AHKFV",
+      "clm_01KP4PWDTQWADCE8G44PXW7HN9",
+      "clm_01KP4PWDV3AY1AR98VVS0Y5KJH",
+      "clm_01KP4Q0FVVJ315ZW70Q5T7W613",
+      "clm_01KP4Q0FW8PD0H8PE0JVKDBV01",
+      "clm_01KP4Q4G5PBXKCPA796GN8AQRA",
+      "clm_01KP4Q4G63PKC0SW9FWC6B4QD2",
+      "clm_01KP4QHFEDFT414D1ZWEWZEBGY",
+      "clm_01KP4QHFEWVZEG7NRPZCJ5VY5H",
+      "clm_01KP4RE4FZ15MCFSGZN3TGH7JS",
+      "clm_01KP4RE4GCE9PVG0P48X8X9WKV",
+      "clm_01KP4RR7M23PM5YQEV46WQRSKD",
+      "clm_01KP4RR7MG25KWAY2KWXDK13MD",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PK",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PX",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PY",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PZ",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6Q3",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6Q4",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6Q5",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6QB",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6QC",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6QD",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6QE",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6QF",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6QN",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6R2",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6R4",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6RB",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6RC",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6RD",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6RE",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6RJ"
+    ],
+    "multi_hop_ids": [
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6RC",
+      "jrn_01KMX18FDBEE9T8JNHHAP649ST",
+      "jrn_01KMX18FDBEE9T8JNHHAP649SV",
+      "jrn_01KMX18FDBEE9T8JNHHAP649S5",
+      "jrn_01KMX18FDBEE9T8JNHHAP649SE",
+      "jrn_01KMX18FDBEE9T8JNHHAP649SF",
+      "jrn_01KMX18FDBEE9T8JNHHAP649SB",
+      "jrn_01KMX18FDBEE9T8JNHHAP649SM",
+      "jrn_01KMX18FDBEE9T8JNHHAP649SW",
+      "jrn_01KMX18FDBEE9T8JNHHAP649SX",
+      "jrn_01KMX18FDBEE9T8JNHHAP649SY",
+      "jrn_01KMX18FDBEE9T8JNHHAP649SZ",
+      "jrn_01KMX18FDBEE9T8JNHHAP649T0",
+      "jrn_01KMX18FDBEE9T8JNHHAP649T1",
+      "jrn_01KMX18FDBEE9T8JNHHAP649T2",
+      "jrn_01KMX18FDBEE9T8JNHHAP649T3",
+      "jrn_01KMX18FDBEE9T8JNHHAP649T4",
+      "jrn_01KMX18FDBEE9T8JNHHAP649T5",
+      "jrn_01KMX18FDBEE9T8JNHHAP649T6",
+      "jrn_01KMX18FDBEE9T8JNHHAP649T7",
+      "jrn_01KMX18FDBEE9T8JNHHAP649T8",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6RB",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6RJ",
+      "clm_01KP4Q4G5PBXKCPA796GN8AQRA",
+      "clm_01KP4Q4G63PKC0SW9FWC6B4QD2",
+      "clm_01KP4QHFEDFT414D1ZWEWZEBGY",
+      "clm_01KP4QHFEWVZEG7NRPZCJ5VY5H",
+      "clm_01KP4RE4FZ15MCFSGZN3TGH7JS",
+      "clm_01KP4RE4GCE9PVG0P48X8X9WKV",
+      "clm_01KP4RR7M23PM5YQEV46WQRSKD",
+      "clm_01KP4RR7MG25KWAY2KWXDK13MD",
+      "jrn_01KMX18FDBEE9T8JNHHAP649T9",
+      "jrn_01KMX18FDBEE9T8JNHHAP649TA",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6R4",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6R2",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6QN",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PX",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PY",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PZ",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6Q3",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6Q4",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6Q5",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PK",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6QB",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6QE",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6QF",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6QC",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6QD",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6RD",
+      "clm_01KP4PWDT9KK57B6J8R36AHKFV"
+    ]
+  }
+}

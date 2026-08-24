@@ -1,0 +1,194 @@
+{
+  "scenario_id": "what-research-platform-scope-is-credible-for-one-ytqkjp",
+  "union": {
+    "trace_recall": 1.0,
+    "expanded_recall": 1.0,
+    "per_relation": {
+      "directive": {
+        "expected": 1,
+        "found": 1
+      },
+      "evidence": {
+        "expected": 5,
+        "found": 5
+      },
+      "mission": {
+        "expected": 1,
+        "found": 1
+      },
+      "superseded_alternative": {
+        "expected": 1,
+        "found": 1
+      }
+    },
+    "precision": 0.1905,
+    "returned_count": 42
+  },
+  "per_surface": {
+    "ego": {
+      "trace_recall": 1.0,
+      "expanded_recall": 1.0,
+      "per_relation": {
+        "directive": {
+          "expected": 1,
+          "found": 1
+        },
+        "evidence": {
+          "expected": 5,
+          "found": 5
+        },
+        "mission": {
+          "expected": 1,
+          "found": 1
+        },
+        "superseded_alternative": {
+          "expected": 1,
+          "found": 1
+        }
+      },
+      "precision": 0.1905,
+      "returned_count": 42
+    },
+    "multi_hop": {
+      "trace_recall": 1.0,
+      "expanded_recall": 1.0,
+      "per_relation": {
+        "directive": {
+          "expected": 1,
+          "found": 1
+        },
+        "evidence": {
+          "expected": 5,
+          "found": 5
+        },
+        "mission": {
+          "expected": 1,
+          "found": 1
+        },
+        "superseded_alternative": {
+          "expected": 1,
+          "found": 1
+        }
+      },
+      "precision": 0.1905,
+      "returned_count": 42
+    }
+  },
+  "pivot": {
+    "applicable": true,
+    "superseding_found": true,
+    "superseded_found": true,
+    "stale_surfacing": false
+  },
+  "divergences": [],
+  "anchor_reciprocal_rank": 1.0,
+  "raw": {
+    "search_ids": [
+      "dec_01KX6MDENP3PZ988T6HVYTQKJP",
+      "dec_01KXE3YKCWEP991PDQBDXD9CGH",
+      "mis_01KX6KP1TCM1RDNTSAKC413P78",
+      "mis_01KXE2KVYD2AB9Z2Y4B3N03F2Z",
+      "clm_01KX6MK6V72WXA0VNF0VP4GB7T",
+      "lit_01KXE3VD1YQXTPZDY69YXYTY9Y",
+      "clm_01KXH4MJ6E715YQ3M48BD6768P",
+      "ecl_01KX6MT6F7FBZ9QB9Z6656B5GM",
+      "dec_01KWFSPQ98HYECHFXMRGD1HCYH",
+      "clm_01KX6NBQMP810VV061HA4FE92P",
+      "ecl_01KX6DVX7B8NSDR4070CRFN027",
+      "dec_01KX6D08BBPGTWZSC991B3WSP2",
+      "jrn_01KX6MBMXZYD7D78W796PMP98N",
+      "jrn_01KXE3XBBQ21M8EEJNJVN3A3HC",
+      "jrn_01KXPDT8TKAVD28YY8DR992RF6",
+      "jrn_01KXPF1AYN8CXEYEWPJRX519JV",
+      "jrn_01KY0BGBTXESW0WCF5SWAZVGVV"
+    ],
+    "ego_ids": [
+      "dec_01KX6CZ30ZJWC11EST90ZWWE7Z",
+      "dec_01KX6CZCJ1KBZ5EM0YCVRH1TFN",
+      "dec_01KX6CZGGY4YT364YARK2GX5HH",
+      "dec_01KX6CZNZ2B8G8Y7MDKJZJBGPG",
+      "dec_01KX6CZT2FZYAJDPC71J62YVVA",
+      "dec_01KX6CZZC3JGB44RW95VD0JS2J",
+      "dec_01KX6D08BBPGTWZSC991B3WSP2",
+      "dec_01KX6D0CQV1FSF4GGAGYQR8RZN",
+      "dec_01KX6MDENP3PZ988T6HVYTQKJP",
+      "dec_01KX6MDNAPMMGSDQ8100W0PABV",
+      "dec_01KXE2K248NG9K382JHDV73PRC",
+      "dec_01KXE3YKCWEP991PDQBDXD9CGH",
+      "dec_01KXE418E6SBXZS5RQHCCWNBP2",
+      "clm_01KX6MK6TY9NKGRMEXR8FYKTNN",
+      "clm_01KX6MK6V72WXA0VNF0VP4GB7T",
+      "clm_01KX6MK6VEM72R5JSCR7JZ7QNN",
+      "clm_01KX6MK6VN6N7CSPK8RZR7KCBR",
+      "clm_01KX6MK6VTW4P0AP73RN2N57FD",
+      "clm_01KX6MK6VZPQQHKC7FWW64H763",
+      "clm_01KX6MK6W3C8WFENBXJ4MWQ1C3",
+      "clm_01KX6MK6W7G2GPS20A2NJMFK94",
+      "clm_01KX6NBA8STFFC0DJ8C8P1NJVY",
+      "clm_01KXE4DKFG9GXPSQ8KDX8YKY62",
+      "clm_01KXE4DKFRD5NXA4JFPHCP6VWT",
+      "jrn_01KWFS5ZVT5BF6M7JC26B5H9DF",
+      "jrn_01KWFS9TPF8QWVCQWP70VSXE32",
+      "jrn_01KWFSA3S7AXHQWKZC2AVJY633",
+      "jrn_01KWFSQMJTKBE1NWGRPWW0M9BM",
+      "jrn_01KX65BR8JV4QPVAMSMB63ASTG",
+      "jrn_01KX66371CJC7EYFGBRVMCKWNE",
+      "jrn_01KX6CWQ16HS4ZW6M6ZMKEMWQ7",
+      "jrn_01KX6CXKNDD8K48XCNTCXQTRKH",
+      "jrn_01KX6KKE764QKBDQGYK2S99MA4",
+      "jrn_01KX6KQ7RQVRTD7S8RQ4ZY0S0A",
+      "jrn_01KX6MBMXZYD7D78W796PMP98N",
+      "jrn_01KX6N1ZAXCAYMFJ5YQFD67A6W",
+      "jrn_01KXE26XGVZDPF24RG5P1JX5PP",
+      "jrn_01KXE2JPEWJ0X25TAM9WEZC388",
+      "jrn_01KXE2MD9BV6PBED454C6G3KJ7",
+      "mis_01KX6KP1TCM1RDNTSAKC413P78",
+      "mis_01KXE2KVYD2AB9Z2Y4B3N03F2Z",
+      "lit_01KWFSE708S5FRJW4H2TJ3KNTN"
+    ],
+    "multi_hop_ids": [
+      "dec_01KX6MDENP3PZ988T6HVYTQKJP",
+      "jrn_01KX6KKE764QKBDQGYK2S99MA4",
+      "jrn_01KX6MBMXZYD7D78W796PMP98N",
+      "dec_01KX6D08BBPGTWZSC991B3WSP2",
+      "dec_01KX6CZ30ZJWC11EST90ZWWE7Z",
+      "dec_01KX6CZCJ1KBZ5EM0YCVRH1TFN",
+      "dec_01KX6CZT2FZYAJDPC71J62YVVA",
+      "dec_01KX6D0CQV1FSF4GGAGYQR8RZN",
+      "dec_01KX6CZZC3JGB44RW95VD0JS2J",
+      "dec_01KX6MDNAPMMGSDQ8100W0PABV",
+      "clm_01KX6MK6TY9NKGRMEXR8FYKTNN",
+      "clm_01KX6MK6V72WXA0VNF0VP4GB7T",
+      "clm_01KX6MK6VEM72R5JSCR7JZ7QNN",
+      "clm_01KX6MK6VN6N7CSPK8RZR7KCBR",
+      "clm_01KX6MK6VTW4P0AP73RN2N57FD",
+      "clm_01KX6MK6VZPQQHKC7FWW64H763",
+      "clm_01KX6MK6W3C8WFENBXJ4MWQ1C3",
+      "clm_01KX6MK6W7G2GPS20A2NJMFK94",
+      "jrn_01KX6N1ZAXCAYMFJ5YQFD67A6W",
+      "jrn_01KXE26XGVZDPF24RG5P1JX5PP",
+      "jrn_01KXE2JPEWJ0X25TAM9WEZC388",
+      "jrn_01KXE2MD9BV6PBED454C6G3KJ7",
+      "dec_01KX6CZNZ2B8G8Y7MDKJZJBGPG",
+      "mis_01KX6KP1TCM1RDNTSAKC413P78",
+      "clm_01KX6NBA8STFFC0DJ8C8P1NJVY",
+      "dec_01KXE2K248NG9K382JHDV73PRC",
+      "dec_01KXE3YKCWEP991PDQBDXD9CGH",
+      "dec_01KXE418E6SBXZS5RQHCCWNBP2",
+      "clm_01KXE4DKFG9GXPSQ8KDX8YKY62",
+      "clm_01KXE4DKFRD5NXA4JFPHCP6VWT",
+      "jrn_01KX6KQ7RQVRTD7S8RQ4ZY0S0A",
+      "dec_01KX6CZGGY4YT364YARK2GX5HH",
+      "mis_01KXE2KVYD2AB9Z2Y4B3N03F2Z",
+      "jrn_01KX6CXKNDD8K48XCNTCXQTRKH",
+      "jrn_01KX6CWQ16HS4ZW6M6ZMKEMWQ7",
+      "lit_01KWFSE708S5FRJW4H2TJ3KNTN",
+      "jrn_01KX66371CJC7EYFGBRVMCKWNE",
+      "jrn_01KWFSQMJTKBE1NWGRPWW0M9BM",
+      "jrn_01KWFSA3S7AXHQWKZC2AVJY633",
+      "jrn_01KWFS9TPF8QWVCQWP70VSXE32",
+      "jrn_01KWFS5ZVT5BF6M7JC26B5H9DF",
+      "jrn_01KX65BR8JV4QPVAMSMB63ASTG"
+    ]
+  }
+}

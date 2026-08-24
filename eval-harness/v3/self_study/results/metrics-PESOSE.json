@@ -1,0 +1,127 @@
+{
+  "meta": {
+    "tool_version": "v3.self_study.1",
+    "generated_at": "2026-08-23T20:08:37Z",
+    "db_file": "rka-snapshot-2026-08-23.db",
+    "db_sha256": "85fd69bd81833961a472f7947b4c6be3b7397be11c2a13193531a31e1bf1e2e4",
+    "project_filter": "prj_01M0BWM7MBPH9W9Z8KDD25651H"
+  },
+  "provenance_coverage": {
+    "available": true,
+    "n_claims": 81,
+    "covered": 67,
+    "coverage_pct": 82.7,
+    "coverage_strict": 67,
+    "coverage_strict_pct": 82.7,
+    "stale_claims": 0,
+    "verified_claims": 0,
+    "by_claim_type": {
+      "assumption": {
+        "claims": 9,
+        "covered": 7
+      },
+      "evidence": {
+        "claims": 55,
+        "covered": 46
+      },
+      "hypothesis": {
+        "claims": 3,
+        "covered": 3
+      },
+      "method": {
+        "claims": 5,
+        "covered": 3
+      },
+      "observation": {
+        "claims": 3,
+        "covered": 3
+      },
+      "result": {
+        "claims": 6,
+        "covered": 5
+      }
+    },
+    "covered_via": {
+      "pi_decision_link": 30,
+      "researcher_journal_link": 32,
+      "researcher_source_entry": 5
+    }
+  },
+  "research_debt_trajectory": {
+    "available": true,
+    "months": {
+      "2026-08": {
+        "created": 81,
+        "covered_now": 67,
+        "uncovered_now": 14,
+        "stale": 0,
+        "cumulative_uncovered": 14
+      }
+    },
+    "time_to_coverage_days": {
+      "count": 67,
+      "mean": 2.01,
+      "median": 0.0,
+      "p25": 0.0,
+      "p75": 4.5,
+      "min": 0.0,
+      "max": 4.5
+    },
+    "note": "covered_now reflects the snapshot's current link state, not the claim's state at creation; time_to_coverage approximates arrival via covering-link created_at."
+  },
+  "mission_cycle": {
+    "available": true,
+    "n_missions": 2,
+    "status": {
+      "active": 1,
+      "pending": 1
+    },
+    "duration_hours": {
+      "count": 0
+    },
+    "checkpoints_per_mission": {
+      "count": 2,
+      "mean": 1.5,
+      "median": 1.5,
+      "p25": 1.0,
+      "p75": 2.0,
+      "min": 1.0,
+      "max": 2.0
+    },
+    "open_checkpoints": 0,
+    "checkpoint_resolution_hours": {
+      "count": 3,
+      "mean": 0.01,
+      "median": 0.01,
+      "p25": 0.0,
+      "p75": 0.02,
+      "min": 0.0,
+      "max": 0.02
+    },
+    "missions_with_report": 0,
+    "completion_to_first_journal_hours": {
+      "count": 0
+    }
+  },
+  "pipeline_flow": {
+    "available": true,
+    "interpretation_candidates": {
+      "by_review_status": {},
+      "by_disposition": {}
+    },
+    "claim_scope": {
+      "claims": 81,
+      "with_scope_revision": 0,
+      "with_reviewed_scope": 0,
+      "scope_coverage_pct": 0.0
+    },
+    "semantic_patch_proposals": {
+      "by_status": {}
+    },
+    "manuscript_claims": {
+      "claims": 0,
+      "with_evidence_binding": 0,
+      "with_ratification": 0
+    }
+  }
+}

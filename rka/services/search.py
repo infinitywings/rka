@@ -19,6 +19,17 @@ def _tokens_remain(query: str) -> bool:
     return bool(re.findall(r"[a-zA-Z0-9]{3,}", query))
 
 
+# entity_type -> (source table, currency columns to lift onto the hit)
+# Only tables that actually carry a lifecycle signal appear here.
+_CURRENCY_COLUMNS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "decision": ("decisions", ("status", "superseded_by")),
+    "journal": ("journal", ("status", "superseded_by")),
+    "claim": ("claims", ("stale",)),
+    "mission": ("missions", ("status",)),
+    "literature": ("literature", ("status",)),
+}
+
+
 @dataclass
 class SearchHit:
     """A single search result."""
@@ -30,6 +41,13 @@ class SearchHit:
     score: float = 0.0
     fts_rank: int | None = None
     vec_rank: int | None = None
+    # Currency signals. Without these a superseded decision is indistinguishable
+    # from a current one in a search result, which is how a session ends up
+    # acting on knowledge that has already been overturned. Every other read
+    # surface (ego_graph, multi_hop, operation="entity") already carries them.
+    status: str | None = None
+    superseded_by: str | None = None
+    stale: bool | None = None
 
 
 class SearchService:
@@ -240,10 +258,55 @@ class SearchService:
                 # Pure-anchor query ("PI directives this week"): fall back to
                 # a metadata-only listing of matching journal entries.
                 hits = await self._metadata_only_journal(constraints, limit * 4)
-            return await self._apply_constraints(hits, constraints, limit)
-        return await self._search_unconstrained(
+            constrained = await self._apply_constraints(hits, constraints, limit)
+            return await self._attach_currency(constrained)
+        plain = await self._search_unconstrained(
             query, types, limit, keyword_weight, semantic_weight
         )
+        return await self._attach_currency(plain)
+
+    async def _attach_currency(self, hits: list[SearchHit]) -> list[SearchHit]:
+        """Fill status / superseded_by / stale on every hit that has one.
+
+        Applied at the single public exit so it covers all four retrieval
+        paths (FTS, vector, tag, LIKE fallback) rather than each of their
+        twelve construction sites. One batched lookup per entity type
+        present in the result set.
+        """
+        by_type: dict[str, list[str]] = {}
+        for hit in hits:
+            if hit.entity_type in _CURRENCY_COLUMNS:
+                by_type.setdefault(hit.entity_type, []).append(hit.entity_id)
+        if not by_type:
+            return hits
+
+        lifted: dict[tuple[str, str], dict] = {}
+        for etype, ids in by_type.items():
+            table, columns = _CURRENCY_COLUMNS[etype]
+            placeholders = ",".join("?" for _ in ids)
+            try:
+                rows = await self.db.fetchall(
+                    f"SELECT id, {', '.join(columns)} FROM {table}"
+                    f" WHERE id IN ({placeholders}) AND project_id = ?",
+                    list(ids) + [self.project_id],
+                )
+            except Exception:  # pragma: no cover — pre-migration snapshot
+                logger.debug("currency lookup skipped for %s", etype, exc_info=True)
+                continue
+            for row in rows:
+                lifted[(etype, row["id"])] = {c: row[c] for c in columns}
+
+        for hit in hits:
+            values = lifted.get((hit.entity_type, hit.entity_id))
+            if not values:
+                continue
+            if values.get("status") is not None:
+                hit.status = values["status"]
+            if values.get("superseded_by"):
+                hit.superseded_by = values["superseded_by"]
+            if values.get("stale") is not None:
+                hit.stale = bool(values["stale"])
+        return hits
 
     async def _metadata_only_journal(self, constraints: dict, limit: int) -> list[SearchHit]:
         conds = ["project_id = ?"]

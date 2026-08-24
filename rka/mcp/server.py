@@ -264,14 +264,14 @@ Detailed operating guidance is available via MCP prompts:
 Use these prompts to load role-specific guidance at session start.
 
 ## Tool Surface (v2.7.0+) — Typed Dispatch Architecture
-RKA ships 5 always-on tools: 3 dispatch tools that route to 139 typed
+RKA ships 5 always-on tools: 3 dispatch tools that route to 150 typed
 operations, plus 2 escape hatches into the legacy surface.
 
 - **Dispatch (always-on):**
-- `rka_query(args={"operation": ..., "project_id": ..., ...})` — 62 read
+- `rka_query(args={"operation": ..., "project_id": ..., ...})` — 67 read
     operations (status, context, journal, decisions, missions, literature,
     research map, etc.). Returns structured data.
-- `rka_execute(args={"operation": ..., "project_id": ..., ...})` — 77
+- `rka_execute(args={"operation": ..., "project_id": ..., ...})` — 83
     write/lifecycle operations (record_note, record_decision, create_mission,
     submit_report, submit_checkpoint, etc.). Returns the created/updated entity.
   - `rka_describe(operation="" | "<op_name>")` — schema lookup. With no
@@ -283,7 +283,7 @@ operations, plus 2 escape hatches into the legacy surface.
     the live tool surface. Useful only for back-compat with old transcripts.
   - `rka_help(name=...)` — deprecated alias for `rka_describe`.
 
-The 139 operations are typed Pydantic models with per-branch enum constraints
+The 150 operations are typed Pydantic models with per-branch enum constraints
 and required-field enforcement at the FastMCP schema layer — illegal values
 (e.g. `confidence="confirmed"`) are rejected at the inputSchema boundary
 before the call goes out.
@@ -8646,7 +8646,7 @@ from rka.mcp.operations_schema import (
 
 
 @tool(tier=_TIER_ALWAYS_ON, category="dispatch", always_load=True)
-async def rka_describe(operation: str = "") -> str:
+async def rka_describe(operation: str = "", include_preview: bool = False) -> str:
     """[ANY] LOOKUP the parameter shape and examples for any rka operation.
 
     Call BEFORE invoking rka_query or rka_execute on an unfamiliar
@@ -8662,15 +8662,22 @@ async def rka_describe(operation: str = "") -> str:
                                 fields, enum value sets, 1-2 examples,
                                 related_operations, role_tag, notes).
       - operation=''         -> operations index grouped by tool
-                                (rka_query / rka_execute) and category;
-                                use this when you want to BROWSE.
+                                (rka_query / rka_execute); use this when you
+                                want to BROWSE. Preview operations are omitted
+                                by default — subsystems that carry no
+                                production data yet — and the response reports
+                                how many were hidden. Pass
+                                include_preview=True to see the whole surface.
       - unknown operation    -> {error: 'unknown_operation', did_you_mean: [...]}.
 
     Args:
         operation: Canonical operation name (the value you would put in
             rka_query(args={"operation": ...}) or
             rka_execute(args={"operation": ...})).
-            Pass '' to list every known operation.
+            Pass '' to browse the index.
+        include_preview: include operations whose subsystem has no production
+            data yet. Default False keeps the browse index to what is actually
+            in use.
 
     Returns:
         JSON. For a known operation: {operation, tool, category,
@@ -8679,7 +8686,7 @@ async def rka_describe(operation: str = "") -> str:
         name: {error, operation, did_you_mean, hint}. For empty: the
         operations index.
     """
-    return await _dispatch_describe(operation)
+    return await _dispatch_describe(operation, include_preview=include_preview)
 
 
 # ============================================================
@@ -8849,7 +8856,7 @@ async def rka_execute(args: _ExecuteArgsUnion) -> str:
 
     v2.7.0 NO-COMPROMISE typed-arg surface. The ``args`` parameter is a
     Pydantic discriminated union (keyed by ``operation``) covering all
-    77 write/lifecycle operations. FastMCP renders the union as JSON
+    83 write/lifecycle operations. FastMCP renders the union as JSON
     Schema ``oneOf`` with per-branch ``required`` arrays + per-branch
     ``enum`` constraints on every Literal-typed field. The LLM CANNOT
     emit ``confidence='confirmed'``, ``decided_by='SUPERVISOR'``,
@@ -8994,7 +9001,7 @@ support; the Skill is authoritative.
 Always begin a session by loading context:
 
 0. **Tool surface (v2.7.0+ typed dispatch).** RKA ships 3 always-on dispatch
-   tools — `rka_query` (62 read ops), `rka_execute` (77 write/lifecycle ops),
+   tools — `rka_query` (67 read ops), `rka_execute` (83 write/lifecycle ops),
    and `rka_describe` (schema lookup) — plus 2 escape hatches (`rka_load_tools`
    for legacy compat and `rka_help` as a deprecated alias of `rka_describe`).
    No activation step is required: every operation is reachable from
@@ -9142,7 +9149,7 @@ Skill is authoritative.
 ## Session Start Protocol
 
 0. **Tool surface (v2.7.0+ typed dispatch).** RKA ships 3 always-on dispatch
-   tools — `rka_query` (62 read ops), `rka_execute` (77 write/lifecycle ops),
+   tools — `rka_query` (67 read ops), `rka_execute` (83 write/lifecycle ops),
    and `rka_describe` (schema lookup) — plus 2 escape hatches (`rka_load_tools`
    for legacy compat and `rka_help` as a deprecated alias of `rka_describe`).
    No activation step is required: every operation is reachable from

@@ -1,0 +1,145 @@
+{
+  "scenario_id": "how-to-scope-and-stage-phase-2-of-the-rka-writer-qdhmgx",
+  "union": {
+    "trace_recall": 1.0,
+    "expanded_recall": 1.0,
+    "per_relation": {
+      "evidence": {
+        "expected": 1,
+        "found": 1
+      },
+      "mission": {
+        "expected": 1,
+        "found": 1
+      },
+      "parent_decision": {
+        "expected": 1,
+        "found": 1
+      }
+    },
+    "precision": 0.0909,
+    "returned_count": 33
+  },
+  "per_surface": {
+    "ego": {
+      "trace_recall": 1.0,
+      "expanded_recall": 1.0,
+      "per_relation": {
+        "evidence": {
+          "expected": 1,
+          "found": 1
+        },
+        "mission": {
+          "expected": 1,
+          "found": 1
+        },
+        "parent_decision": {
+          "expected": 1,
+          "found": 1
+        }
+      },
+      "precision": 0.0909,
+      "returned_count": 33
+    },
+    "multi_hop": {
+      "trace_recall": 1.0,
+      "expanded_recall": 1.0,
+      "per_relation": {
+        "evidence": {
+          "expected": 1,
+          "found": 1
+        },
+        "mission": {
+          "expected": 1,
+          "found": 1
+        },
+        "parent_decision": {
+          "expected": 1,
+          "found": 1
+        }
+      },
+      "precision": 0.0909,
+      "returned_count": 33
+    }
+  },
+  "pivot": {
+    "applicable": false
+  },
+  "divergences": [
+    "search: transport error ReadTimeout('')"
+  ],
+  "anchor_reciprocal_rank": 0.0,
+  "raw": {
+    "search_ids": [],
+    "ego_ids": [
+      "dec_01KS0AWYDV752AWQRF40CQBRFZ",
+      "dec_01KS0AXXASJ5GXV7M0SS39Y066",
+      "dec_01KS0BKJ5ZJKJ4R19GYAK3QN9D",
+      "dec_01KS12H9KT1T03DHX2Q6FKTXHH",
+      "dec_01KS2S22VV5P5SWWXNBXQDHMGX",
+      "dec_01KS2WPKMRVSJ2R0PP74722PEH",
+      "mis_01KS2S871YPQ3D5RVY5K3PSQY6",
+      "mis_01KS2WW6MRN6AXP11EMCSCDFAR",
+      "jrn_01KS0B8EDZ4FYFF11Q8CQ97ZDT",
+      "jrn_01KS2SK48P78ERN55MC3GRSQ4E",
+      "jrn_01KS2T0C2EFRDSYHDJ8J9HBWYW",
+      "jrn_01KS2W8WVV9PAKB6S564KM9K73",
+      "jrn_01KS2W8X691PVMS6JNCH95RQRC",
+      "jrn_01KS2W8X74TBN5Y89ATQQC7FWM",
+      "jrn_01KS2W8X8263GCKDSHBVQ67EAS",
+      "jrn_01KS2W8X95749N3KMS1XJ98DRF",
+      "jrn_01KS2W8XAD9XJ7XA3P5JS5PWE2",
+      "jrn_01KS2W8XBKWKH2N7WKWT7DXRCW",
+      "jrn_01KS2W8XCR9PG69FND1G7SGNX5",
+      "jrn_01KS2W8XE84A6WDJ7FKEMDSWB4",
+      "jrn_01KS2W8XFD6TACFPXJKA8P1KG3",
+      "jrn_01KS2W8XH9F2RHBQNQ3FRF1NTX",
+      "jrn_01KS2W8XJXPBSAMTRXQRFGHNGZ",
+      "jrn_01KS2W8XM14T5AN6WCSAXAZJ77",
+      "jrn_01KS2W8XMZDZDHZ6XZMZ591QYX",
+      "jrn_01KS2W8XP21XHXFAPWY5RSANZV",
+      "jrn_01KS2W8XQ6QTGY59C0EPQCKDME",
+      "mis_01KS0QEW21N2NG4EJTKJ3JTWTE",
+      "jrn_01KS2W8XRG1GCV297X4MXDQ9FD",
+      "jrn_01KS2W8XTKJSPAG6D7568Z27BW",
+      "jrn_01KS2W8XVRD0XBQ61SBDK7GVE7",
+      "jrn_01KS2X4MB80ERTPQ8M55NPZT5V",
+      "mis_01KS2WW6MRN6AXP11"
+    ],
+    "multi_hop_ids": [
+      "dec_01KS2S22VV5P5SWWXNBXQDHMGX",
+      "jrn_01KS0B8EDZ4FYFF11Q8CQ97ZDT",
+      "mis_01KS2S871YPQ3D5RVY5K3PSQY6",
+      "dec_01KS0BKJ5ZJKJ4R19GYAK3QN9D",
+      "dec_01KS2WPKMRVSJ2R0PP74722PEH",
+      "jrn_01KS2SK48P78ERN55MC3GRSQ4E",
+      "jrn_01KS2T0C2EFRDSYHDJ8J9HBWYW",
+      "jrn_01KS2X4MB80ERTPQ8M55NPZT5V",
+      "mis_01KS2WW6MRN6AXP11",
+      "dec_01KS0AWYDV752AWQRF40CQBRFZ",
+      "dec_01KS0AXXASJ5GXV7M0SS39Y066",
+      "jrn_01KS2W8WVV9PAKB6S564KM9K73",
+      "jrn_01KS2W8X691PVMS6JNCH95RQRC",
+      "jrn_01KS2W8X74TBN5Y89ATQQC7FWM",
+      "jrn_01KS2W8X8263GCKDSHBVQ67EAS",
+      "jrn_01KS2W8X95749N3KMS1XJ98DRF",
+      "jrn_01KS2W8XAD9XJ7XA3P5JS5PWE2",
+      "jrn_01KS2W8XBKWKH2N7WKWT7DXRCW",
+      "jrn_01KS2W8XCR9PG69FND1G7SGNX5",
+      "jrn_01KS2W8XE84A6WDJ7FKEMDSWB4",
+      "jrn_01KS2W8XFD6TACFPXJKA8P1KG3",
+      "jrn_01KS2W8XH9F2RHBQNQ3FRF1NTX",
+      "jrn_01KS2W8XJXPBSAMTRXQRFGHNGZ",
+      "jrn_01KS2W8XM14T5AN6WCSAXAZJ77",
+      "jrn_01KS2W8XMZDZDHZ6XZMZ591QYX",
+      "jrn_01KS2W8XP21XHXFAPWY5RSANZV",
+      "jrn_01KS2W8XQ6QTGY59C0EPQCKDME",
+      "mis_01KS0QEW21N2NG4EJTKJ3JTWTE",
+      "jrn_01KS2W8XRG1GCV297X4MXDQ9FD",
+      "jrn_01KS2W8XTKJSPAG6D7568Z27BW",
+      "jrn_01KS2W8XVRD0XBQ61SBDK7GVE7",
+      "dec_01KS12H9KT1T03DHX2Q6FKTXHH",
+      "mis_01KS2WW6MRN6AXP11EMCSCDFAR"
+    ]
+  }
+}

@@ -1,0 +1,227 @@
+{
+  "scenario_id": "how-should-the-architectural-improvement-work-be-hrafh0",
+  "union": {
+    "trace_recall": 1.0,
+    "expanded_recall": 1.0,
+    "per_relation": {
+      "directive": {
+        "expected": 1,
+        "found": 1
+      },
+      "evidence": {
+        "expected": 1,
+        "found": 1
+      },
+      "mission": {
+        "expected": 2,
+        "found": 2
+      },
+      "parent_decision": {
+        "expected": 1,
+        "found": 1
+      }
+    },
+    "precision": 0.0862,
+    "returned_count": 58
+  },
+  "per_surface": {
+    "ego": {
+      "trace_recall": 1.0,
+      "expanded_recall": 1.0,
+      "per_relation": {
+        "directive": {
+          "expected": 1,
+          "found": 1
+        },
+        "evidence": {
+          "expected": 1,
+          "found": 1
+        },
+        "mission": {
+          "expected": 2,
+          "found": 2
+        },
+        "parent_decision": {
+          "expected": 1,
+          "found": 1
+        }
+      },
+      "precision": 0.0862,
+      "returned_count": 58
+    },
+    "multi_hop": {
+      "trace_recall": 0.6666666666666666,
+      "expanded_recall": 0.8,
+      "per_relation": {
+        "directive": {
+          "expected": 1,
+          "found": 1
+        },
+        "evidence": {
+          "expected": 1,
+          "found": 1
+        },
+        "mission": {
+          "expected": 2,
+          "found": 2
+        },
+        "parent_decision": {
+          "expected": 1,
+          "found": 0
+        }
+      },
+      "precision": 0.0784,
+      "returned_count": 51
+    }
+  },
+  "pivot": {
+    "applicable": false
+  },
+  "divergences": [],
+  "anchor_reciprocal_rank": 0.0,
+  "raw": {
+    "search_ids": [
+      "mis_01KMX18FDAMN7T5YVZ7V8HV6QM",
+      "mis_01KS5CRMZ0AGN0M5B694Q3M8B1",
+      "dec_01KS5CN0CF8N60T88E2HC8K1SD",
+      "jrn_01KRPDZ4KZ8MHMZ0RRBTH80KCE",
+      "mis_01KRYT62XQK5NK3BY7G9BGRAPS",
+      "dec_01KRYT1GCP5N9CJZ2YE2N3BTBH",
+      "dec_01KSARC7RDJEV8BNK2QD79J5H7",
+      "jrn_01KQMYJ31F1XZ3X4ETN54NN3K2",
+      "lit_01KRBRMWK9F7V9AD9Y0E70B7V8",
+      "mis_01KPRC01GAVF7ZBR9DYF5EEDPJ",
+      "mis_01KPRB8JW9QXX7B7H4KNYJ3GMV",
+      "chk_01KPRBN42A975T9BXPZ1EGRZXB",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6R2",
+      "lit_01KRBRWNCSY3DTJBF5DK3H54N2",
+      "jrn_01KRJ433PFXG5C6DB7DTQE0WJ7",
+      "lit_01KRBRQ29K5X3PD78WR956QD4Q",
+      "jrn_01KQJKV70SAQRC3TZ38M4EBP1X",
+      "jrn_01KQMZTZ6EF91EKCK7FKTNHRHN",
+      "dec_01KRVHZ4P3F1GXE75RRAQX3BTP",
+      "chk_01KRVH890GKYCY9A28TM02STQ1",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PX",
+      "mis_01KRKJ9G20EM5XMA147JTKQCFF",
+      "dec_01KRKE6ERDPQTFQS6ZGY9A3CK0",
+      "ecl_01KP4PRE5JFME3FH07RVRH5DMB",
+      "dec_01KRVNJCG5TCCXAG04K6VBQ97T",
+      "mis_01KRVM7BDCX0ATBERR6DAFTXZV",
+      "mis_01KRVF159FEHMYD55Q6EQ7BD18",
+      "jrn_01KS5DMQJ07MHKPZT3NFVKMA8T"
+    ],
+    "ego_ids": [
+      "jrn_01KQQPC14WGX6CBE807HWANS5K",
+      "jrn_01KQQPCW47C65G4WBTMGXC4HV5",
+      "jrn_01KQQQAH2B6Y734VV7P1PG6ZQK",
+      "mis_01KQQPHC2649SXJG30JMCR0WFK",
+      "jrn_01KQQQAH2V7ZG4DSRZ6R17WPRP",
+      "jrn_01KQQQAH3YKYQJW9E1WECSAGCR",
+      "jrn_01KQQQAH44WJ48T1GSH0A9WRFY",
+      "jrn_01KQQQAH4ABJZMS95CK2FBPW8V",
+      "jrn_01KQQQAH4ENZHKS1K448RJTXPZ",
+      "jrn_01KQQQAH4KDWTM1XSQVFY56ZEZ",
+      "jrn_01KQQQAH4Q7PZ23B060FMS9DDP",
+      "dec_01KQQPDHCKHS4YMD6QP7J7K2GW",
+      "jrn_01KQQQAH4WXVCK9CQ38D4THNM1",
+      "jrn_01KQQQAH4ZN2WHR13NQWAZES6W",
+      "jrn_01KQQQAH59TJ2CM3SF958575B5",
+      "jrn_01KQQQAH5CZVEEYNAENQT686EA",
+      "jrn_01KQQQAH5FWGKMJE8TW1Y187CC",
+      "jrn_01KQQQAH5JBRDPYT62N5BH6TP6",
+      "dec_01KQQPE47H56E40A8KBDDT4BZT",
+      "jrn_01KQQQAH5NEPEQG52T7J7SPHAW",
+      "jrn_01KQQQAH5Q5N80JKYM884P91QW",
+      "jrn_01KQQQAH5T1S4KV0XGQ6VGFHXW",
+      "jrn_01KQQQAH5XDTCETF8K2KNZH508",
+      "jrn_01KQQQAH63JJMN84S6F00NGW75",
+      "dec_01KQQPER3XSSBAC",
+      "jrn_01KQQQAH66E4BBTCRETQQ1GJCA",
+      "jrn_01KQQQAH6A5PMA7E54X5K5B4FN",
+      "jrn_01KQQQAH6DXR94XXJD9AZYDEYM",
+      "jrn_01KQQQAH6GWC217BA1T0R7P286",
+      "jrn_01KQQQAH6KTY61HFW165WNXX4Z",
+      "dec_01KQQPF3V7J1WSP0YMNCMZQS0T",
+      "jrn_01KQQQAH6NP67B12EDKSSK9XZS",
+      "jrn_01KQQQAH6RQWF6G071QSZQZ3NM",
+      "jrn_01KQQQAH6V1VZA2AVCXCYCTKMQ",
+      "jrn_01KQQQAH71PM08HZW5HSN14VXA",
+      "jrn_01KQQQAH75YFDG57F56SFE749M",
+      "jrn_01KQQQAH77PQ4AJAY3V686YJ0N",
+      "jrn_01KQQQAH7A1KEX9NYXGR7NDVTT",
+      "jrn_01KQQQAH7DA594E7HJAJTBCM9J",
+      "jrn_01KQQQAH7GHWDVB6M9J89M1BJ2",
+      "jrn_01KQQQAH7KZ5XB67Y18M5TXGAP",
+      "jrn_01KQQQAH7PQ3BCXCN8ZXQNY3NV",
+      "jrn_01KQQQAH7S47XTERVCCW8R7EBJ",
+      "jrn_01KQQQAH7ZQQ53XZT6Y5XKA6H2",
+      "jrn_01KQQQAH82DQCJ3JX7H78FRPK7",
+      "jrn_01KQQSQJNW6E6R8EDG3QTYMPJ5",
+      "mis_01KQQS3DYQ2EVJV288PNHX0CMY",
+      "jrn_01KQQV27JXVRCBHT4JTP29X1T8",
+      "dec_01KP4P4QSSNZCTEHVT6QR7ZRYD",
+      "dec_01KP4P53MSKY3GKEXZKG9JMFKX",
+      "dec_01KQQPD6Y6B362T3K08368BDMP",
+      "dec_01KQQPER3XSSBACGZANFJCVQ66",
+      "dec_01KQQPFHFF4HYE08NBBWHRAFH0",
+      "dec_01KQQRZ0CJHB68P2F6233AHEJ5",
+      "dec_01KQQRZDYAT2QRZQ5FZ4K71P6W",
+      "dec_01KQQRZRY9NN0PYQNXPW07D732",
+      "dec_01KQQS09DSMPAHAAY6SSTZ3HTS",
+      "dec_01KQQV13MRMK28M67V28V9ARXJ"
+    ],
+    "multi_hop_ids": [
+      "dec_01KQQPFHFF4HYE08NBBWHRAFH0",
+      "jrn_01KQQPCW47C65G4WBTMGXC4HV5",
+      "jrn_01KQQPC14WGX6CBE807HWANS5K",
+      "mis_01KQQPHC2649SXJG30JMCR0WFK",
+      "mis_01KQQS3DYQ2EVJV288PNHX0CMY",
+      "dec_01KQQPD6Y6B362T3K08368BDMP",
+      "dec_01KQQPDHCKHS4YMD6QP7J7K2GW",
+      "dec_01KQQPE47H56E40A8KBDDT4BZT",
+      "dec_01KQQPER3XSSBACGZANFJCVQ66",
+      "dec_01KQQPF3V7J1WSP0YMNCMZQS0T",
+      "dec_01KQQRZ0CJHB68P2F6233AHEJ5",
+      "dec_01KQQRZDYAT2QRZQ5FZ4K71P6W",
+      "dec_01KQQRZRY9NN0PYQNXPW07D732",
+      "dec_01KQQS09DSMPAHAAY6SSTZ3HTS",
+      "dec_01KQQV13MRMK28M67V28V9ARXJ",
+      "jrn_01KQQQAH2B6Y734VV7P1PG6ZQK",
+      "jrn_01KQQQAH2V7ZG4DSRZ6R17WPRP",
+      "jrn_01KQQQAH3YKYQJW9E1WECSAGCR",
+      "jrn_01KQQQAH44WJ48T1GSH0A9WRFY",
+      "jrn_01KQQQAH4ABJZMS95CK2FBPW8V",
+      "jrn_01KQQQAH4ENZHKS1K448RJTXPZ",
+      "jrn_01KQQQAH4KDWTM1XSQVFY56ZEZ",
+      "jrn_01KQQQAH4Q7PZ23B060FMS9DDP",
+      "jrn_01KQQQAH4WXVCK9CQ38D4THNM1",
+      "jrn_01KQQQAH4ZN2WHR13NQWAZES6W",
+      "jrn_01KQQQAH59TJ2CM3SF958575B5",
+      "jrn_01KQQQAH5CZVEEYNAENQT686EA",
+      "jrn_01KQQQAH5FWGKMJE8TW1Y187CC",
+      "jrn_01KQQQAH5JBRDPYT62N5BH6TP6",
+      "jrn_01KQQQAH5NEPEQG52T7J7SPHAW",
+      "jrn_01KQQQAH5Q5N80JKYM884P91QW",
+      "jrn_01KQQQAH5T1S4KV0XGQ6VGFHXW",
+      "jrn_01KQQQAH5XDTCETF8K2KNZH508",
+      "jrn_01KQQQAH63JJMN84S6F00NGW75",
+      "dec_01KQQPER3XSSBAC",
+      "jrn_01KQQQAH66E4BBTCRETQQ1GJCA",
+      "jrn_01KQQQAH6A5PMA7E54X5K5B4FN",
+      "jrn_01KQQQAH6DXR94XXJD9AZYDEYM",
+      "jrn_01KQQQAH6GWC217BA1T0R7P286",
+      "jrn_01KQQQAH6KTY61HFW165WNXX4Z",
+      "jrn_01KQQQAH6NP67B12EDKSSK9XZS",
+      "jrn_01KQQQAH6RQWF6G071QSZQZ3NM",
+      "jrn_01KQQQAH6V1VZA2AVCXCYCTKMQ",
+      "jrn_01KQQQAH71PM08HZW5HSN14VXA",
+      "jrn_01KQQQAH75YFDG57F56SFE749M",
+      "jrn_01KQQQAH77PQ4AJAY3V686YJ0N",
+      "jrn_01KQQQAH7A1KEX9NYXGR7NDVTT",
+      "jrn_01KQQQAH7DA594E7HJAJTBCM9J",
+      "jrn_01KQQQAH7GHWDVB6M9J89M1BJ2",
+      "jrn_01KQQQAH7KZ5XB67Y18M5TXGAP",
+      "jrn_01KQQQAH7PQ3BCXCN8ZXQNY3NV"
+    ]
+  }
+}

@@ -1,0 +1,192 @@
+{
+  "scenario_id": "what-is-rka-role-in-the-research-workflow-8hv6qn",
+  "union": {
+    "trace_recall": 1.0,
+    "expanded_recall": 1.0,
+    "per_relation": {
+      "directive": {
+        "expected": 2,
+        "found": 2
+      },
+      "evidence": {
+        "expected": 1,
+        "found": 1
+      },
+      "superseded_alternative": {
+        "expected": 1,
+        "found": 1
+      }
+    },
+    "precision": 0.0635,
+    "returned_count": 63
+  },
+  "per_surface": {
+    "ego": {
+      "trace_recall": 1.0,
+      "expanded_recall": 1.0,
+      "per_relation": {
+        "directive": {
+          "expected": 2,
+          "found": 2
+        },
+        "evidence": {
+          "expected": 1,
+          "found": 1
+        },
+        "superseded_alternative": {
+          "expected": 1,
+          "found": 1
+        }
+      },
+      "precision": 0.0635,
+      "returned_count": 63
+    },
+    "multi_hop": {
+      "trace_recall": 0.75,
+      "expanded_recall": 0.75,
+      "per_relation": {
+        "directive": {
+          "expected": 2,
+          "found": 2
+        },
+        "evidence": {
+          "expected": 1,
+          "found": 1
+        },
+        "superseded_alternative": {
+          "expected": 1,
+          "found": 0
+        }
+      },
+      "precision": 0.06,
+      "returned_count": 50
+    }
+  },
+  "pivot": {
+    "applicable": true,
+    "superseding_found": true,
+    "superseded_found": true,
+    "stale_surfacing": false
+  },
+  "divergences": [],
+  "raw": {
+    "search_ids": null,
+    "ego_ids": [
+      "jrn_01KMX18FDAMN7T5YVZ7V8HV6RP",
+      "jrn_01KMX18FDAMN7T5YVZ7V8HV6RQ",
+      "jrn_01KMX18FDAMN7T5YVZ7V8HV6RZ",
+      "jrn_01KMX18FDBEE9T8JNHHAP649RJ",
+      "jrn_01KMX18FDBEE9T8JNHHAP649S3",
+      "jrn_01KMX18FDBEE9T8JNHHAP649S6",
+      "jrn_01KMX18FDBEE9T8JNHHAP649SB",
+      "jrn_01M071EQR0RET0A8VR5MWK74BS",
+      "jrn_01M071EY1DX590FEAKSGTEZDXR",
+      "jrn_01M071F0QE06DESYF7FH0MZJG9",
+      "jrn_01M071P1CPJGDFH3YN7HMHMBT9",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PK",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PM",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PN",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PP",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PQ",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PR",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PS",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PT",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PV",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PW",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PX",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PY",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PZ",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6Q0",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6Q1",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6Q2",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6Q3",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6Q4",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6Q5",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6Q6",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6Q7",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6Q8",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6Q9",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6QA",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6QN",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6QP",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6QQ",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6QR",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6QS",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6QT",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6QV",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6QW",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6QX",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6QY",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6QZ",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6R0",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6R1",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6R2",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6R4",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6R5",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6R6",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6R8",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6RA",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6RB",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6RC",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6RK",
+      "dec_01M071K2AEVW69957WK5B3FB42",
+      "mis_01KMX18FDAMN7T5YVZ7V8HV6QG",
+      "mis_01KMX18FDAMN7T5YVZ7V8HV6QJ",
+      "clm_01KP4REQXKC1EGPYRNHRY3K5WD",
+      "clm_01KP4RR7M23PM5YQEV46WQRSKD",
+      "clm_01KP4RR7MG25KWAY2KWXDK13MD"
+    ],
+    "multi_hop_ids": [
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6QN",
+      "jrn_01KMX18FDAMN7T5YVZ7V8HV6RP",
+      "jrn_01KMX18FDAMN7T5YVZ7V8HV6RQ",
+      "jrn_01KMX18FDAMN7T5YVZ7V8HV6RZ",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6QP",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6QQ",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6RK",
+      "jrn_01KMX18FDBEE9T8JNHHAP649RJ",
+      "jrn_01KMX18FDBEE9T8JNHHAP649S3",
+      "jrn_01KMX18FDBEE9T8JNHHAP649S6",
+      "jrn_01KMX18FDBEE9T8JNHHAP649SB",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6QR",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6R6",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6RB",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6RC",
+      "clm_01KP4REQXKC1EGPYRNHRY3K5WD",
+      "clm_01KP4RR7M23PM5YQEV46WQRSKD",
+      "clm_01KP4RR7MG25KWAY2KWXDK13MD",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6R4",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6R2",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6R1",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6R0",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6QZ",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6QY",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6QX",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6QW",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6QV",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6QT",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6QS",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PV",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PW",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PK",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PM",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PP",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PQ",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PR",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PS",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PT",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6R8",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PX",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6Q1",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6Q4",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6Q5",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6RA",
+      "dec_01KMX18FDAMN7T5YVZ7V8HV6R5",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PY",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6PZ",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6Q0",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6Q2",
+      "lit_01KMX18FDAMN7T5YVZ7V8HV6Q3"
+    ]
+  }
+}

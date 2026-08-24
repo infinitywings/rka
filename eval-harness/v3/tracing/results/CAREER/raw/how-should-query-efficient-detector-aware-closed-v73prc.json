@@ -1,0 +1,194 @@
+{
+  "scenario_id": "how-should-query-efficient-detector-aware-closed-v73prc",
+  "union": {
+    "trace_recall": 1.0,
+    "expanded_recall": 1.0,
+    "per_relation": {
+      "directive": {
+        "expected": 2,
+        "found": 2
+      },
+      "literature": {
+        "expected": 3,
+        "found": 3
+      },
+      "mission": {
+        "expected": 1,
+        "found": 1
+      },
+      "superseded_alternative": {
+        "expected": 1,
+        "found": 1
+      }
+    },
+    "precision": 0.1321,
+    "returned_count": 53
+  },
+  "per_surface": {
+    "ego": {
+      "trace_recall": 1.0,
+      "expanded_recall": 1.0,
+      "per_relation": {
+        "directive": {
+          "expected": 2,
+          "found": 2
+        },
+        "literature": {
+          "expected": 3,
+          "found": 3
+        },
+        "mission": {
+          "expected": 1,
+          "found": 1
+        },
+        "superseded_alternative": {
+          "expected": 1,
+          "found": 1
+        }
+      },
+      "precision": 0.1321,
+      "returned_count": 53
+    },
+    "multi_hop": {
+      "trace_recall": 0.6666666666666666,
+      "expanded_recall": 0.8571428571428571,
+      "per_relation": {
+        "directive": {
+          "expected": 2,
+          "found": 2
+        },
+        "literature": {
+          "expected": 3,
+          "found": 3
+        },
+        "mission": {
+          "expected": 1,
+          "found": 1
+        },
+        "superseded_alternative": {
+          "expected": 1,
+          "found": 0
+        }
+      },
+      "precision": 0.12,
+      "returned_count": 50
+    }
+  },
+  "pivot": {
+    "applicable": true,
+    "superseding_found": true,
+    "superseded_found": true,
+    "stale_surfacing": false
+  },
+  "divergences": [],
+  "raw": {
+    "search_ids": null,
+    "ego_ids": [
+      "jrn_01KXE26XGVZDPF24RG5P1JX5PP",
+      "jrn_01KXE2JPEWJ0X25TAM9WEZC388",
+      "jrn_01KXE2MD9BV6PBED454C6G3KJ7",
+      "jrn_01KXE3XBBQ21M8EEJNJVN3A3HC",
+      "jrn_01KXE4445AWE1PAF3PBKVYE4X1",
+      "jrn_01KXE4P3AX9DEW3EK9VDZH3TPF",
+      "jrn_01KXPD9PRMGCHHGYVK0CMQ86HS",
+      "jrn_01KXPDT8TKAVD28YY8DR992RF6",
+      "jrn_01KXPE393DETX73ZA29YKN719H",
+      "jrn_01KXPF1AYN8CXEYEWPJRX519JV",
+      "jrn_01KY0ZVMG7T4JGHCB47A0K72V8",
+      "lit_01KXE3TRY6CW4KDSFWV9CE1QHM",
+      "lit_01KXE3TVMGYC58SEZ21DV5TVEV",
+      "lit_01KXE3TY28AW4PJ82WGN3P8VH8",
+      "lit_01KXE3V0ZEE8NZ393ZR629WT9H",
+      "lit_01KXE3V3QW00QB37JZVPYNZ1PS",
+      "lit_01KXE3V6AMH0Z7PC573T8FN2SH",
+      "lit_01KXE3VANH6DFRFY9KJ8Z56Z06",
+      "lit_01KXE3VD1YQXTPZDY69YXYTY9Y",
+      "lit_01KXE3VFRFF8TK1Y0HYPHXN5XM",
+      "lit_01KXE3VJGZK0NN08SS4CEJB3ND",
+      "lit_01KXE3VMRYKKWYMKVZTZJQBQX5",
+      "lit_01KXE3VQVC7XCS4Q8FAEEFQAA7",
+      "lit_01KXE3VTEQRGZWD4NS52NWM0Q5",
+      "lit_01KXE3VYDP5V8K63K0X9WZ47QZ",
+      "dec_01KX6CZCJ1KBZ5EM0YCVRH1TFN",
+      "dec_01KX6CZGGY4YT364YARK2GX5HH",
+      "dec_01KX6D0CQV1FSF4GGAGYQR8RZN",
+      "dec_01KX6MDENP3PZ988T6HVYTQKJP",
+      "dec_01KXE2K248NG9K382JHDV73PRC",
+      "dec_01KXE3YKCWEP991PDQBDXD9CGH",
+      "dec_01KXE418E6SBXZS5RQHCCWNBP2",
+      "dec_01KXH3TDBVBWV69290GPWKQBSP",
+      "dec_01KXPE3RN8A11D7KPF7GBQ3A9C",
+      "dec_01KY0ZY1DQRTB99XN3FTDVM74G",
+      "clm_01KXE4AE5XB3BTKRQBWM5ND316",
+      "clm_01KXE4B5ASN3WDSYWG919WVYFY",
+      "clm_01KXE4B5B14ND41PE2NTST46YA",
+      "clm_01KXE4B5B7WBMFJA6RT74XV3E4",
+      "clm_01KXE4B5BEMW0E2PWS5R4JKSBF",
+      "clm_01KXE4B5BKREKCDN3W9E81J97Q",
+      "clm_01KXE4B5BR5VV7PC9Q2364YBF2",
+      "clm_01KXE4B5BXMY5S6ZVF2CNQRD97",
+      "clm_01KXE4B5C227Y7NSZWVSQSG63P",
+      "clm_01KXE4B5C82XXYXWG2KYM1XJ53",
+      "clm_01KXE4DKFG9GXPSQ8KDX8YKY62",
+      "clm_01KXE4DKFRD5NXA4JFPHCP6VWT",
+      "clm_01KXE4QTM7WMQFBMEGR5MBJR0V",
+      "clm_01KXZTT2286W9KRNZ52B4DRDZ7",
+      "clm_01KXZTT22V7212HYD450W0HX45",
+      "clm_01KXZTT5YYJB62M2437H8YZ83B",
+      "clm_01KXZTT5Z8X962Z20BT0YZ6Z4N",
+      "mis_01KXE2KVYD2AB9Z2Y4B3N03F2Z"
+    ],
+    "multi_hop_ids": [
+      "dec_01KXE2K248NG9K382JHDV73PRC",
+      "jrn_01KXE26XGVZDPF24RG5P1JX5PP",
+      "jrn_01KXE2JPEWJ0X25TAM9WEZC388",
+      "mis_01KXE2KVYD2AB9Z2Y4B3N03F2Z",
+      "jrn_01KXE3XBBQ21M8EEJNJVN3A3HC",
+      "dec_01KXE3YKCWEP991PDQBDXD9CGH",
+      "dec_01KXE418E6SBXZS5RQHCCWNBP2",
+      "clm_01KXE4AE5XB3BTKRQBWM5ND316",
+      "clm_01KXE4B5ASN3WDSYWG919WVYFY",
+      "clm_01KXE4B5B14ND41PE2NTST46YA",
+      "clm_01KXE4B5B7WBMFJA6RT74XV3E4",
+      "clm_01KXE4B5BEMW0E2PWS5R4JKSBF",
+      "clm_01KXE4B5BKREKCDN3W9E81J97Q",
+      "clm_01KXE4B5BR5VV7PC9Q2364YBF2",
+      "clm_01KXE4B5BXMY5S6ZVF2CNQRD97",
+      "clm_01KXE4B5C227Y7NSZWVSQSG63P",
+      "clm_01KXE4B5C82XXYXWG2KYM1XJ53",
+      "jrn_01KXE2MD9BV6PBED454C6G3KJ7",
+      "jrn_01KXE4445AWE1PAF3PBKVYE4X1",
+      "lit_01KXE3TRY6CW4KDSFWV9CE1QHM",
+      "lit_01KXE3V0ZEE8NZ393ZR629WT9H",
+      "lit_01KXE3V6AMH0Z7PC573T8FN2SH",
+      "lit_01KXE3VANH6DFRFY9KJ8Z56Z06",
+      "lit_01KXE3VMRYKKWYMKVZTZJQBQX5",
+      "lit_01KXE3VQVC7XCS4Q8FAEEFQAA7",
+      "jrn_01KXE4P3AX9DEW3EK9VDZH3TPF",
+      "jrn_01KXPD9PRMGCHHGYVK0CMQ86HS",
+      "jrn_01KXPDT8TKAVD28YY8DR992RF6",
+      "jrn_01KXPE393DETX73ZA29YKN719H",
+      "jrn_01KXPF1AYN8CXEYEWPJRX519JV",
+      "dec_01KX6CZCJ1KBZ5EM0YCVRH1TFN",
+      "dec_01KX6CZGGY4YT364YARK2GX5HH",
+      "dec_01KX6MDENP3PZ988T6HVYTQKJP",
+      "dec_01KX6D0CQV1FSF4GGAGYQR8RZN",
+      "clm_01KXE4DKFG9GXPSQ8KDX8YKY62",
+      "clm_01KXE4DKFRD5NXA4JFPHCP6VWT",
+      "clm_01KXE4QTM7WMQFBMEGR5MBJR0V",
+      "dec_01KXPE3RN8A11D7KPF7GBQ3A9C",
+      "clm_01KXZTT2286W9KRNZ52B4DRDZ7",
+      "clm_01KXZTT22V7212HYD450W0HX45",
+      "clm_01KXZTT5YYJB62M2437H8YZ83B",
+      "clm_01KXZTT5Z8X962Z20BT0YZ6Z4N",
+      "lit_01KXE3TVMGYC58SEZ21DV5TVEV",
+      "lit_01KXE3TY28AW4PJ82WGN3P8VH8",
+      "lit_01KXE3V3QW00QB37JZVPYNZ1PS",
+      "lit_01KXE3VD1YQXTPZDY69YXYTY9Y",
+      "lit_01KXE3VFRFF8TK1Y0HYPHXN5XM",
+      "lit_01KXE3VJGZK0NN08SS4CEJB3ND",
+      "lit_01KXE3VTEQRGZWD4NS52NWM0Q5",
+      "lit_01KXE3VYDP5V8K63K0X9WZ47QZ"
+    ]
+  }
+}

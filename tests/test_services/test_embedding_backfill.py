@@ -748,3 +748,61 @@ async def test_row_write_failure_rolls_back_vector_metadata_and_pending_flag(
         [claim_id],
     )
     assert pending["embedding_pending"] == 1
+
+
+# ---------------------------------------------------------------------------
+# embedding_pending flag drift (regression)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_claims_pending_is_decided_by_metadata_not_the_flag(db):
+    """A claim with no vector must be backfilled even if its flag says otherwise.
+
+    Regression: claims were selected with ``WHERE embedding_pending = 1``
+    while every other entity type used the absence of an
+    ``embedding_metadata`` row. The flag drifts — in a real store all 976
+    claims carried ``embedding_pending = 0`` while 341 of them had no vector,
+    so a flag-gated backfill reported "0 pending" and silently skipped every
+    claim that actually needed one.
+    """
+    clear_registry()
+    await _setup_vec_claims_at_dim(db, dim=4)
+    await _insert_journal(db, jid="jrn_drift")
+
+    # The drifted state: flag says "done", no embedding_metadata row exists.
+    await db.execute(
+        "INSERT INTO claims (id, source_entry_id, claim_type, content, embedding_pending)"
+        " VALUES ('clm_drift', 'jrn_drift', 'observation', 'drifted claim', 0)"
+    )
+    await db.commit()
+
+    status = register_job()
+    svc = BackfillService(db=db, embeddings=FakeEmbedder(dim=4), batch_size=8)
+    result = await svc.run_backfill(status, entity_types=("claim",))
+
+    assert result.total == 1, "the drifted claim must be counted as pending"
+    assert result.processed == 1
+    assert result.state == "complete"
+
+    row = await db.fetchone(
+        "SELECT COUNT(*) AS n FROM embedding_metadata"
+        " WHERE entity_type = 'claim' AND entity_id = 'clm_drift'"
+    )
+    assert row["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_already_embedded_claim_is_not_reprocessed(db):
+    """The metadata test must not re-embed work that is already done."""
+    clear_registry()
+    await _setup_vec_claims_at_dim(db, dim=4)
+    await _insert_journal(db, jid="jrn_done")
+    ids = await _insert_pending_claims(db, jid="jrn_done", count=2, prefix="clm_done_")
+
+    svc = BackfillService(db=db, embeddings=FakeEmbedder(dim=4), batch_size=8)
+    first = await svc.run_backfill(register_job(), entity_types=("claim",))
+    assert first.processed == len(ids)
+
+    second = await svc.run_backfill(register_job(), entity_types=("claim",))
+    assert second.total == 0, "a second run must find nothing pending"

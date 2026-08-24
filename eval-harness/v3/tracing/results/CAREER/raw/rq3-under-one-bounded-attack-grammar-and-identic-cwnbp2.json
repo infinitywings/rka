@@ -1,0 +1,218 @@
+{
+  "scenario_id": "rq3-under-one-bounded-attack-grammar-and-identic-cwnbp2",
+  "union": {
+    "trace_recall": 1.0,
+    "expanded_recall": 1.0,
+    "per_relation": {
+      "directive": {
+        "expected": 1,
+        "found": 1
+      },
+      "evidence": {
+        "expected": 6,
+        "found": 6
+      },
+      "literature": {
+        "expected": 3,
+        "found": 3
+      },
+      "mission": {
+        "expected": 1,
+        "found": 1
+      },
+      "superseded_alternative": {
+        "expected": 1,
+        "found": 1
+      }
+    },
+    "precision": 0.1935,
+    "returned_count": 62
+  },
+  "per_surface": {
+    "ego": {
+      "trace_recall": 1.0,
+      "expanded_recall": 1.0,
+      "per_relation": {
+        "directive": {
+          "expected": 1,
+          "found": 1
+        },
+        "evidence": {
+          "expected": 6,
+          "found": 6
+        },
+        "literature": {
+          "expected": 3,
+          "found": 3
+        },
+        "mission": {
+          "expected": 1,
+          "found": 1
+        },
+        "superseded_alternative": {
+          "expected": 1,
+          "found": 1
+        }
+      },
+      "precision": 0.1935,
+      "returned_count": 62
+    },
+    "multi_hop": {
+      "trace_recall": 1.0,
+      "expanded_recall": 0.9166666666666666,
+      "per_relation": {
+        "directive": {
+          "expected": 1,
+          "found": 1
+        },
+        "evidence": {
+          "expected": 6,
+          "found": 6
+        },
+        "literature": {
+          "expected": 3,
+          "found": 3
+        },
+        "mission": {
+          "expected": 1,
+          "found": 0
+        },
+        "superseded_alternative": {
+          "expected": 1,
+          "found": 1
+        }
+      },
+      "precision": 0.22,
+      "returned_count": 50
+    }
+  },
+  "pivot": {
+    "applicable": true,
+    "superseding_found": true,
+    "superseded_found": true,
+    "stale_surfacing": false
+  },
+  "divergences": [
+    "search: transport error ReadTimeout('')"
+  ],
+  "anchor_reciprocal_rank": 0.0,
+  "raw": {
+    "search_ids": [],
+    "ego_ids": [
+      "lit_01KWFSDDNPB4HJA7BWF6FKE46Q",
+      "lit_01KXE3TRY6CW4KDSFWV9CE1QHM",
+      "lit_01KXE3TVMGYC58SEZ21DV5TVEV",
+      "lit_01KXE3TY28AW4PJ82WGN3P8VH8",
+      "lit_01KXE3V0ZEE8NZ393ZR629WT9H",
+      "lit_01KXE3V3QW00QB37JZVPYNZ1PS",
+      "lit_01KXE3V6AMH0Z7PC573T8FN2SH",
+      "lit_01KXE3VANH6DFRFY9KJ8Z56Z06",
+      "lit_01KXE3VD1YQXTPZDY69YXYTY9Y",
+      "lit_01KXE3VFRFF8TK1Y0HYPHXN5XM",
+      "lit_01KXE3VJGZK0NN08SS4CEJB3ND",
+      "lit_01KXE3VMRYKKWYMKVZTZJQBQX5",
+      "lit_01KXE3VQVC7XCS4Q8FAEEFQAA7",
+      "lit_01KXE3VTEQRGZWD4NS52NWM0Q5",
+      "lit_01KXE3VYDP5V8K63K0X9WZ47QZ",
+      "jrn_01KWFS691M6CW035DDNM74QWV1",
+      "jrn_01KWFS6JBQQHZZTH9GKQFWE86X",
+      "jrn_01KWFSQMJTKBE1NWGRPWW0M9BM",
+      "jrn_01KX6CWQ16HS4ZW6M6ZMKEMWQ7",
+      "jrn_01KX6CXKNDD8K48XCNTCXQTRKH",
+      "jrn_01KXE26XGVZDPF24RG5P1JX5PP",
+      "jrn_01KXE2JPEWJ0X25TAM9WEZC388",
+      "jrn_01KXE2MD9BV6PBED454C6G3KJ7",
+      "jrn_01KXE3XBBQ21M8EEJNJVN3A3HC",
+      "jrn_01KXE4P3AX9DEW3EK9VDZH3TPF",
+      "jrn_01KXPD9PRMGCHHGYVK0CMQ86HS",
+      "jrn_01KXPDT8TKAVD28YY8DR992RF6",
+      "jrn_01KXPE393DETX73ZA29YKN719H",
+      "jrn_01KY0BGBTXESW0WCF5SWAZVGVV",
+      "dec_01KX6CZ7F0JAXE8GN6HN2NCKTG",
+      "dec_01KX6CZCJ1KBZ5EM0YCVRH1TFN",
+      "dec_01KX6CZGGY4YT364YARK2GX5HH",
+      "dec_01KX6D0CQV1FSF4GGAGYQR8RZN",
+      "dec_01KX6MDENP3PZ988T6HVYTQKJP",
+      "dec_01KX6MDNAPMMGSDQ8100W0PABV",
+      "dec_01KXE2K248NG9K382JHDV73PRC",
+      "dec_01KXE3YKCWEP991PDQBDXD9CGH",
+      "dec_01KXE418E6SBXZS5RQHCCWNBP2",
+      "dec_01KXH3TDBVBWV69290GPWKQBSP",
+      "dec_01KXPE3RN8A11D7KPF7GBQ3A9C",
+      "dec_01KY0BH8FZEASF32YYPFDY6YTZ",
+      "clm_01KX6DNYDZP908YS13PG06YVV8",
+      "clm_01KX6DNYEK014APNNFWVSMFMER",
+      "clm_01KX6DQFTVZB6C3BFAANGR5TG3",
+      "clm_01KX6DS20ZNJXNTNPHGHEKMJGS",
+      "clm_01KX6MK6VEM72R5JSCR7JZ7QNN",
+      "clm_01KXE4AE5XB3BTKRQBWM5ND316",
+      "clm_01KXE4B5ASN3WDSYWG919WVYFY",
+      "clm_01KXE4B5B14ND41PE2NTST46YA",
+      "clm_01KXE4B5B7WBMFJA6RT74XV3E4",
+      "clm_01KXE4B5BEMW0E2PWS5R4JKSBF",
+      "clm_01KXE4B5BKREKCDN3W9E81J97Q",
+      "clm_01KXE4B5BR5VV7PC9Q2364YBF2",
+      "clm_01KXE4B5BXMY5S6ZVF2CNQRD97",
+      "clm_01KXE4B5C227Y7NSZWVSQSG63P",
+      "clm_01KXE4B5C82XXYXWG2KYM1XJ53",
+      "clm_01KXE4QTM7WMQFBMEGR5MBJR0V",
+      "clm_01KXH4MJ6MHDWKH0Y7JCJ2CMMH",
+      "clm_01KXZTT5YYJB62M2437H8YZ83B",
+      "clm_01KXZTT5Z8X962Z20BT0YZ6Z4N",
+      "ecl_01KX6DVX7B8NSDR4070CRFN027",
+      "mis_01KXE2KVYD2AB9Z2Y4B3N03F2Z"
+    ],
+    "multi_hop_ids": [
+      "dec_01KXE418E6SBXZS5RQHCCWNBP2",
+      "jrn_01KXE2JPEWJ0X25TAM9WEZC388",
+      "jrn_01KXE3XBBQ21M8EEJNJVN3A3HC",
+      "dec_01KX6CZGGY4YT364YARK2GX5HH",
+      "ecl_01KX6DVX7B8NSDR4070CRFN027",
+      "dec_01KXE2K248NG9K382JHDV73PRC",
+      "dec_01KXE3YKCWEP991PDQBDXD9CGH",
+      "clm_01KXE4AE5XB3BTKRQBWM5ND316",
+      "clm_01KXE4B5ASN3WDSYWG919WVYFY",
+      "clm_01KXE4B5B14ND41PE2NTST46YA",
+      "clm_01KXE4B5B7WBMFJA6RT74XV3E4",
+      "clm_01KXE4B5BEMW0E2PWS5R4JKSBF",
+      "clm_01KXE4B5BKREKCDN3W9E81J97Q",
+      "clm_01KXE4B5BR5VV7PC9Q2364YBF2",
+      "clm_01KXE4B5BXMY5S6ZVF2CNQRD97",
+      "clm_01KXE4B5C227Y7NSZWVSQSG63P",
+      "clm_01KXE4B5C82XXYXWG2KYM1XJ53",
+      "clm_01KX6DNYDZP908YS13PG06YVV8",
+      "clm_01KX6DNYEK014APNNFWVSMFMER",
+      "clm_01KX6DS20ZNJXNTNPHGHEKMJGS",
+      "clm_01KX6DQFTVZB6C3BFAANGR5TG3",
+      "clm_01KX6MK6VEM72R5JSCR7JZ7QNN",
+      "clm_01KXH4MJ6MHDWKH0Y7JCJ2CMMH",
+      "lit_01KXE3TRY6CW4KDSFWV9CE1QHM",
+      "lit_01KXE3V0ZEE8NZ393ZR629WT9H",
+      "lit_01KXE3V3QW00QB37JZVPYNZ1PS",
+      "lit_01KXE3V6AMH0Z7PC573T8FN2SH",
+      "lit_01KXE3VANH6DFRFY9KJ8Z56Z06",
+      "lit_01KXE3VQVC7XCS4Q8FAEEFQAA7",
+      "jrn_01KXE4P3AX9DEW3EK9VDZH3TPF",
+      "jrn_01KXPD9PRMGCHHGYVK0CMQ86HS",
+      "jrn_01KXPDT8TKAVD28YY8DR992RF6",
+      "jrn_01KXPE393DETX73ZA29YKN719H",
+      "jrn_01KY0BGBTXESW0WCF5SWAZVGVV",
+      "jrn_01KXE26XGVZDPF24RG5P1JX5PP",
+      "dec_01KX6CZCJ1KBZ5EM0YCVRH1TFN",
+      "dec_01KX6MDENP3PZ988T6HVYTQKJP",
+      "dec_01KX6D0CQV1FSF4GGAGYQR8RZN",
+      "jrn_01KXE2MD9BV6PBED454C6G3KJ7",
+      "lit_01KXE3TVMGYC58SEZ21DV5TVEV",
+      "lit_01KXE3TY28AW4PJ82WGN3P8VH8",
+      "lit_01KXE3VD1YQXTPZDY69YXYTY9Y",
+      "lit_01KXE3VFRFF8TK1Y0HYPHXN5XM",
+      "lit_01KXE3VJGZK0NN08SS4CEJB3ND",
+      "lit_01KXE3VMRYKKWYMKVZTZJQBQX5",
+      "lit_01KXE3VTEQRGZWD4NS52NWM0Q5",
+      "lit_01KXE3VYDP5V8K63K0X9WZ47QZ",
+      "clm_01KXE4QTM7WMQFBMEGR5MBJR0V",
+      "dec_01KXPE3RN8A11D7KPF7GBQ3A9C",
+      "clm_01KXZTT5YYJB62M2437H8YZ83B"
+    ]
+  }
+}

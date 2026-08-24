@@ -1,0 +1,171 @@
+{
+  "scenario_id": "how-to-scope-and-stage-phase-2-of-the-rka-writer-qdhmgx",
+  "union": {
+    "trace_recall": 1.0,
+    "expanded_recall": 1.0,
+    "per_relation": {
+      "evidence": {
+        "expected": 1,
+        "found": 1
+      },
+      "mission": {
+        "expected": 1,
+        "found": 1
+      },
+      "parent_decision": {
+        "expected": 1,
+        "found": 1
+      }
+    },
+    "precision": 0.0909,
+    "returned_count": 33
+  },
+  "per_surface": {
+    "ego": {
+      "trace_recall": 1.0,
+      "expanded_recall": 1.0,
+      "per_relation": {
+        "evidence": {
+          "expected": 1,
+          "found": 1
+        },
+        "mission": {
+          "expected": 1,
+          "found": 1
+        },
+        "parent_decision": {
+          "expected": 1,
+          "found": 1
+        }
+      },
+      "precision": 0.0909,
+      "returned_count": 33
+    },
+    "multi_hop": {
+      "trace_recall": 1.0,
+      "expanded_recall": 1.0,
+      "per_relation": {
+        "evidence": {
+          "expected": 1,
+          "found": 1
+        },
+        "mission": {
+          "expected": 1,
+          "found": 1
+        },
+        "parent_decision": {
+          "expected": 1,
+          "found": 1
+        }
+      },
+      "precision": 0.0909,
+      "returned_count": 33
+    }
+  },
+  "pivot": {
+    "applicable": false
+  },
+  "divergences": [],
+  "anchor_reciprocal_rank": 0.0,
+  "raw": {
+    "search_ids": [
+      "mis_01KPR9N66F0MTE28JX7AKXJBVD",
+      "jrn_01KPR86P45CQACJS8K73S6HVBF",
+      "mis_01KPRB8JW9QXX7B7H4KNYJ3GMV",
+      "lit_01KPP8KS8F4HN85EZ8YSYGC32Q",
+      "lit_01M0D8BJF1ZBFQSCMBXAF5HB64",
+      "mis_01KPP47G0M905W065Y6VJ3S5WT",
+      "jrn_01KPNGJK0MSQM6595AABS11RX2",
+      "jrn_01KPNH2RP5Y9PRKMBSHT4DME8B",
+      "jrn_01KPNM2MRBT7V3YTMJAC9G8SEX",
+      "mis_01KPPXXWMYDQ71J0PKMR4DFNWJ",
+      "mis_01KPR6QTTRKE1TPDK6F2NA58Q4",
+      "mis_01KPPB69QXV1WYETJJDDWAK83B",
+      "dec_01KRZ1J0W1C3C0N5FDR5Q7PB8S",
+      "lit_01KPE2PX5BYA5SCQC89X0ZVF92",
+      "jrn_01KRYZ7B93FD3YZVKNPSPSATVT",
+      "mis_01KPP8VM09BH7YW5DPJHTS1WT6",
+      "dec_01KR206A5A2ZMKEX5B15Q5D9BB",
+      "mis_01KRVJ240VXH7NQ0PMSHXHK888",
+      "dec_01KRVHZ4P3F1GXE75RRAQX3BTP",
+      "dec_01KRYZGF8N1SNJX5TSP0GM77Z7",
+      "mis_01KRYBZ0W4Z9F1GXKP96ERKGKK",
+      "dec_01KRYBR8APM187YJXQG2Q455EM",
+      "dec_01KS2WPKMRVSJ2R0PP74722PEH",
+      "dec_01KS0BKJ5ZJKJ4R19GYAK3QN9D",
+      "jrn_01KPEPKTBY2F8DKASNPBQ2ZRZD",
+      "dec_01KS0AWYDV752AWQRF40CQBRFZ",
+      "mis_01KS2WW6MRN6AXP11EMCSCDFAR"
+    ],
+    "ego_ids": [
+      "dec_01KS0AWYDV752AWQRF40CQBRFZ",
+      "dec_01KS0AXXASJ5GXV7M0SS39Y066",
+      "dec_01KS0BKJ5ZJKJ4R19GYAK3QN9D",
+      "dec_01KS12H9KT1T03DHX2Q6FKTXHH",
+      "dec_01KS2S22VV5P5SWWXNBXQDHMGX",
+      "dec_01KS2WPKMRVSJ2R0PP74722PEH",
+      "jrn_01KS0B8EDZ4FYFF11Q8CQ97ZDT",
+      "jrn_01KS2SK48P78ERN55MC3GRSQ4E",
+      "mis_01KS2S871YPQ3D5RVY5K3PSQY6",
+      "jrn_01KS2T0C2EFRDSYHDJ8J9HBWYW",
+      "jrn_01KS2W8WVV9PAKB6S564KM9K73",
+      "jrn_01KS2W8X691PVMS6JNCH95RQRC",
+      "jrn_01KS2W8X74TBN5Y89ATQQC7FWM",
+      "jrn_01KS2W8X8263GCKDSHBVQ67EAS",
+      "jrn_01KS2W8X95749N3KMS1XJ98DRF",
+      "jrn_01KS2W8XAD9XJ7XA3P5JS5PWE2",
+      "jrn_01KS2W8XBKWKH2N7WKWT7DXRCW",
+      "jrn_01KS2W8XCR9PG69FND1G7SGNX5",
+      "jrn_01KS2W8XE84A6WDJ7FKEMDSWB4",
+      "jrn_01KS2W8XFD6TACFPXJKA8P1KG3",
+      "jrn_01KS2W8XH9F2RHBQNQ3FRF1NTX",
+      "jrn_01KS2W8XJXPBSAMTRXQRFGHNGZ",
+      "jrn_01KS2W8XM14T5AN6WCSAXAZJ77",
+      "jrn_01KS2W8XMZDZDHZ6XZMZ591QYX",
+      "jrn_01KS2W8XP21XHXFAPWY5RSANZV",
+      "jrn_01KS2W8XQ6QTGY59C0EPQCKDME",
+      "mis_01KS0QEW21N2NG4EJTKJ3JTWTE",
+      "jrn_01KS2W8XRG1GCV297X4MXDQ9FD",
+      "jrn_01KS2W8XTKJSPAG6D7568Z27BW",
+      "jrn_01KS2W8XVRD0XBQ61SBDK7GVE7",
+      "jrn_01KS2X4MB80ERTPQ8M55NPZT5V",
+      "mis_01KS2WW6MRN6AXP11",
+      "mis_01KS2WW6MRN6AXP11EMCSCDFAR"
+    ],
+    "multi_hop_ids": [
+      "dec_01KS2S22VV5P5SWWXNBXQDHMGX",
+      "jrn_01KS0B8EDZ4FYFF11Q8CQ97ZDT",
+      "mis_01KS2S871YPQ3D5RVY5K3PSQY6",
+      "dec_01KS0BKJ5ZJKJ4R19GYAK3QN9D",
+      "dec_01KS2WPKMRVSJ2R0PP74722PEH",
+      "jrn_01KS2SK48P78ERN55MC3GRSQ4E",
+      "jrn_01KS2T0C2EFRDSYHDJ8J9HBWYW",
+      "jrn_01KS2X4MB80ERTPQ8M55NPZT5V",
+      "mis_01KS2WW6MRN6AXP11",
+      "dec_01KS0AWYDV752AWQRF40CQBRFZ",
+      "dec_01KS0AXXASJ5GXV7M0SS39Y066",
+      "jrn_01KS2W8WVV9PAKB6S564KM9K73",
+      "jrn_01KS2W8X691PVMS6JNCH95RQRC",
+      "jrn_01KS2W8X74TBN5Y89ATQQC7FWM",
+      "jrn_01KS2W8X8263GCKDSHBVQ67EAS",
+      "jrn_01KS2W8X95749N3KMS1XJ98DRF",
+      "jrn_01KS2W8XAD9XJ7XA3P5JS5PWE2",
+      "jrn_01KS2W8XBKWKH2N7WKWT7DXRCW",
+      "jrn_01KS2W8XCR9PG69FND1G7SGNX5",
+      "jrn_01KS2W8XE84A6WDJ7FKEMDSWB4",
+      "jrn_01KS2W8XFD6TACFPXJKA8P1KG3",
+      "jrn_01KS2W8XH9F2RHBQNQ3FRF1NTX",
+      "jrn_01KS2W8XJXPBSAMTRXQRFGHNGZ",
+      "jrn_01KS2W8XM14T5AN6WCSAXAZJ77",
+      "jrn_01KS2W8XMZDZDHZ6XZMZ591QYX",
+      "jrn_01KS2W8XP21XHXFAPWY5RSANZV",
+      "jrn_01KS2W8XQ6QTGY59C0EPQCKDME",
+      "mis_01KS0QEW21N2NG4EJTKJ3JTWTE",
+      "jrn_01KS2W8XRG1GCV297X4MXDQ9FD",
+      "jrn_01KS2W8XTKJSPAG6D7568Z27BW",
+      "jrn_01KS2W8XVRD0XBQ61SBDK7GVE7",
+      "dec_01KS12H9KT1T03DHX2Q6FKTXHH",
+      "mis_01KS2WW6MRN6AXP11EMCSCDFAR"
+    ]
+  }
+}

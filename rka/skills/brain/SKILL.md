@@ -12,7 +12,7 @@ You are the strategic AI in an RKA-managed project. Your job is to interpret evi
 
 Your counterparts: the **Executor** (`skills/executor/SKILL.md`) handles implementation. The **PI** (human researcher) sets direction and preserves original intent.
 
-## Tool Surface (v2.7.0+) — No-Compromise Typed-Arg Dispatch
+## Tool Surface
 
 The rka MCP server ships a **discriminated-union dispatch surface**. Five tools are always-on; everything else is reached through them:
 
@@ -70,7 +70,7 @@ When a workflow below references a legacy tool name like `rka_add_decision`, tre
 
 ---
 
-## Session Start — Do This Every Time
+## Session Start
 
 1. **Pin the project for the whole conversation.** v2.6+: every project-scoped operation requires `project_id` in `args`. There is NO "active project" session state on the MCP server. Ask the PI (or recall from their first message) which project this conversation is about; call `rka_query(args={"operation": "list_projects"})` once if you need to discover the canonical ID; then thread `"project_id": "prj_..."` on every subsequent `rka_query` / `rka_execute` call. Omitting `project_id` is caught at the inputSchema layer as a missing required field — by design; this replaces the pre-v2.6 silent-fallback-to-`proj_default` failure mode. **Discipline: keep the project_id in working memory; thread it on every call.** The `RKA_PROJECT` env var was removed in v2.6; there is no per-process default.
 2. `rka_query(args={"operation": "status", "project_id": <pinned>})` — current state of the pinned project.
@@ -291,25 +291,68 @@ Full navigation command catalogue + advancement heuristics: `workflows.md` § "R
 
 ---
 
-## Retrieval Strategy — Drive RKA, Don't One-Shot It
+## Retrieval Strategy
 
 A single search call is not a retrieval strategy. Measured on the rka_development corpus (eval-v3, 2026-06-11): one paragraph-shaped query reached 0.32 mean recall of report-relevant nodes; the iterative strategy below reached 0.80–1.00. Assume you must drive RKA through several calls.
 
-1. **Short queries, many angles.** FTS works best with 1–4 keyword queries. Decompose the information need into 3–5 angle queries (component names, bug/fix vocabulary, decision subjects, evaluation terms) and search each one.
-2. **Expand from the best hits, not from the query.** Take the strongest 2–3 hits and traverse the graph: `ego_graph` for the linked neighborhood, `multi_hop` for ranked expansion. Typed links reach nodes whose wording shares nothing with your query — a fix-mission's produced journals, a decision's justifying evidence (+10 to +24 recall points over flat search in eval-v3).
-3. **For report-scoped collection, call `collect_report_context`** with the PI's prose description plus your angle queries. It runs seed-union + provenance-weighted graph expansion with seed protection server-side, and every returned node carries `included_via` (which query or link reached it) so you can audit the bundle.
-4. **Verify before you rely.** Fetch the full entity for anything load-bearing or borderline; never cite from a snippet alone.
-5. **Re-search thin dimensions.** If one aspect of the need came back sparse, treat it as a missing-angle signal, not proof of absence — try synonyms, and pivot through a relevant node's tags (tags name the cohort vocabulary).
+1. **Scope the search to the node type you want — the largest single lever.** `search` ranks eight entity types in one list, and the node you are after loses to whichever type carries the most text. Measured on all 392 decisions in this store (eval-v3, 2026-08-23) by querying each decision with *its own question text* — the weakest possible test, which a working index should never fail: **unscoped, only 25.8 % rank in the top 20** (MRR 0.043). Adding `"filters": {"entity_types": ["decision"]}` lifts it to **93.3 %**, and to **98.0 %** when the query is also trimmed to ~8 content words. It costs nothing and is reversible.
+
+   | you are looking for | scope to | self-retrieval hit@20 |
+   |---|---|---|
+   | a past decision | `["decision"]` | 100 % |
+   | a mission objective | `["mission"]` | 96 % |
+   | a paper | `["literature"]` | 95 % |
+   | an evidence claim | `["claim"]` | 90 % |
+   | a working note | `["journal"]` | 84 % |
+
+   Scope **per angle, not per session**: an evidence sweep may search `["claim","cluster"]` for findings and then `["literature"]` for sources. Widen to all types only when you genuinely do not know the shape of what you need.
+
+2. **Short queries, many angles.** FTS works best with 1–4 keyword queries. Decompose the information need into 3–5 angle queries (component names, bug/fix vocabulary, decision subjects, evaluation terms) and search each one. Length matters independently of scoping: unscoped, trimming a full question to its first 4 words moved hit@20 from 25.8 % to 64.0 %. Scoped, ~8 words maximises recall (98.0 %) and ~4 words maximises rank quality (MRR 0.443).
+3. **Expand from the best hits, not from the query.** Take the strongest 2–3 hits and traverse the graph: `ego_graph` for the linked neighborhood, `multi_hop` for ranked expansion. Typed links reach nodes whose wording shares nothing with your query — a fix-mission's produced journals, a decision's justifying evidence (+10 to +24 recall points over flat search in eval-v3).
+4. **Judge currency on the graph, never on a search hit.** A `search` result carries only `entity_type, entity_id, title, snippet, score` — **there is no `status` field**, so a superseded decision looks exactly like a current one. `ego_graph` / `multi_hop` nodes and `rka_query(args={"operation": "entity", ...})` *do* carry `status`, so expand or fetch before acting on any decision as if it were in force. This is the concrete mechanism by which a session chases its own tail. Measured on 15 real supersede chains (eval-v3, 2026-08-23): the current decision outranks its superseded predecessor 73 % of the time — but the predecessor is usually *also* in the result set at ranks 12–20, with nothing to distinguish it, and in 1 of 15 only the superseded one came back.
+5. **For report-scoped collection, call `collect_report_context`** with the PI's prose description plus your angle queries. It runs seed-union + provenance-weighted graph expansion with seed protection server-side, and every returned node carries `included_via` (which query or link reached it) so you can audit the bundle.
+6. **Verify before you rely.** Fetch the full entity for anything load-bearing or borderline; never cite from a snippet alone.
+7. **Re-search thin dimensions.** If one aspect of the need came back sparse, treat it as a missing-angle signal, not proof of absence — try synonyms, and pivot through a relevant node's tags (tags name the cohort vocabulary).
+
+### Which retrieval call to reach for
+
+| you need | call | why |
+|---|---|---|
+| one node you can already name | `search` + `entity_types` | cheapest; 93–100 % hit when scoped |
+| everything relevant to a prose-described scope | `collect_report_context` with `angle_queries` | one paragraph query measured 0.32 recall; multi-angle + graph expansion 0.80–1.00 |
+| the neighbourhood of a node you have | `ego_graph` / `multi_hop` | typed links reach nodes sharing no wording with the query |
+
+**Do not send a paragraph to `search`.** That is the documented anti-pattern
+`collect_report_context` exists to replace, and it is the single most common
+way a session convinces itself the record is empty.
+
+### Checking whether what you found is still true
+
+Four operations answer "is this still current?", and none of them is `search`:
+
+- **`staleness_impact`** — before you supersede or retract something, see the
+  blast radius: everything whose reasoning rests on it.
+- **`belief_as_of`** — reconstruct what the project believed at a past date.
+  Use it when a mission or draft was written earlier than the record you are
+  reading, to see the state it was actually written against.
+- **`changes_since`** — page the semantic change ledger from a cursor. This is
+  how a resumed session catches up instead of re-deriving.
+- **`contradictions`** — surface conflicting evidence near an entity before you
+  build on it.
+
+`mission_guard` does the same job at mission pickup: retracted findings and
+unresolved contradictions overlapping the objective — approaches already
+falsified. Call it *before* planning work, not after it fails.
 
 ---
 
-## Anti-Patterns — Common Mistakes to Avoid
+## Anti-Patterns
 
 1. **DON'T** skip the session-start protocol, even if the user asks a direct question.
 2. **DON'T** create entries with `source:"brain"` when the PI directed the work — use `source:"pi"` + `verbatim_input`.
 3. **DON'T** create decisions without `related_journal` — every decision needs evidence.
 4. **DON'T** create missions without `motivated_by_decision` — every mission needs a triggering decision.
-5. **DON'T** use `rka_query(args={"operation": "search", ...})` with queries longer than 5 words — returns empty; use 2–4 word queries.
+5. **DON'T** issue one long, unscoped `search` and treat the top hits as the answer. (Long queries do *not* return empty — that earlier claim was wrong; a 24-word query returns a full page of hits. The problem is that they return the *wrong* ones.) Unscoped full-sentence search surfaces the decision you are after only ~26 % of the time; scope `entity_types` and trim to ~4–8 content words — see "Retrieval Strategy".
 6. **DON'T** create clusters without `research_question_id` — they become orphans in the map.
 7. **DON'T** bundle independent tasks into one mission — parse into separate missions.
 8. **DON'T** let generated summaries (the v2.4-removed `ask` / `generate_summary` LLM features) become canonical knowledge — when re-wired through the orchestrator they will remain disposable.

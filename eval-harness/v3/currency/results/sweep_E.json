@@ -1,0 +1,147 @@
+{
+  "limit": 20,
+  "result_type_composition": {
+    "decision": 1956
+  },
+  "by_project": {
+    "CAREER": {
+      "not_embedded": {
+        "n": 14,
+        "hit": 14,
+        "hit_rate": 1.0,
+        "mrr": 0.1504,
+        "median_rank": 9
+      }
+    },
+    "CPSEval": {
+      "embedded": {
+        "n": 1,
+        "hit": 1,
+        "hit_rate": 1.0,
+        "mrr": 0.2,
+        "median_rank": 5
+      }
+    },
+    "Default Project": {
+      "embedded": {
+        "n": 4,
+        "hit": 4,
+        "hit_rate": 1.0,
+        "mrr": 0.5208,
+        "median_rank": 3
+      }
+    },
+    "Invarllm": {
+      "not_embedded": {
+        "n": 1,
+        "hit": 1,
+        "hit_rate": 1.0,
+        "mrr": 0.0588,
+        "median_rank": 17
+      },
+      "embedded": {
+        "n": 12,
+        "hit": 11,
+        "hit_rate": 0.9167,
+        "mrr": 0.252,
+        "median_rank": 9
+      }
+    },
+    "NIST_curriculum": {
+      "not_embedded": {
+        "n": 8,
+        "hit": 8,
+        "hit_rate": 1.0,
+        "mrr": 0.2224,
+        "median_rank": 9
+      }
+    },
+    "delaysteer": {
+      "not_embedded": {
+        "n": 9,
+        "hit": 9,
+        "hit_rate": 1.0,
+        "mrr": 0.1326,
+        "median_rank": 8
+      }
+    },
+    "detectability": {
+      "not_embedded": {
+        "n": 2,
+        "hit": 2,
+        "hit_rate": 1.0,
+        "mrr": 0.0788,
+        "median_rank": 15
+      },
+      "embedded": {
+        "n": 8,
+        "hit": 6,
+        "hit_rate": 0.75,
+        "mrr": 0.1402,
+        "median_rank": 14
+      }
+    },
+    "new_cybersecurity_course.": {
+      "not_embedded": {
+        "n": 1,
+        "hit": 1,
+        "hit_rate": 1.0,
+        "mrr": 0.1429,
+        "median_rank": 7
+      },
+      "embedded": {
+        "n": 3,
+        "hit": 3,
+        "hit_rate": 1.0,
+        "mrr": 0.0914,
+        "median_rank": 11
+      }
+    },
+    "rka-education": {
+      "not_embedded": {
+        "n": 5,
+        "hit": 5,
+        "hit_rate": 1.0,
+        "mrr": 0.3733,
+        "median_rank": 4
+      },
+      "embedded": {
+        "n": 6,
+        "hit": 4,
+        "hit_rate": 0.6667,
+        "mrr": 0.0641,
+        "median_rank": 14
+      }
+    },
+    "rka_development": {
+      "not_embedded": {
+        "n": 1,
+        "hit": 0,
+        "hit_rate": 0.0,
+        "mrr": 0.0,
+        "median_rank": null
+      },
+      "embedded": {
+        "n": 45,
+        "hit": 25,
+        "hit_rate": 0.5556,
+        "mrr": 0.2627,
+        "median_rank": 2
+      }
+    }
+  },
+  "overall": {
+    "n": 120,
+    "hit": 94,
+    "hit_rate": 0.7833,
+    "mrr": 0.2185,
+    "embedded": {
+      "n": 79,
+      "hit": 54
+    },
+    "not_embedded": {
+      "n": 41,
+      "hit": 40
+    }
+  }
+}

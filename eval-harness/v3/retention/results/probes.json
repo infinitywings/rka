@@ -1,0 +1,382 @@
+[
+  {
+    "scenario_id": "career-directive-and-evidence-retention",
+    "probe_id": "budget-near",
+    "arm": "full_context",
+    "kind": "evidence",
+    "distance_tokens": 1280,
+    "passed": true,
+    "checks": {
+      "must_include": {
+        "passed": true,
+        "missing": []
+      },
+      "expected_citations": {
+        "passed": true,
+        "absent": []
+      }
+    },
+    "divergences": [],
+    "response_excerpt": "\n\n$711,271 \u2014 source entity id: `clm_01KXNVS3AQKVBSC4E9KGA9GQHT`"
+  },
+  {
+    "scenario_id": "career-directive-and-evidence-retention",
+    "probe_id": "budget-near",
+    "arm": "rag",
+    "kind": "evidence",
+    "distance_tokens": 1280,
+    "passed": true,
+    "checks": {
+      "must_include": {
+        "passed": true,
+        "missing": []
+      },
+      "expected_citations": {
+        "passed": true,
+        "absent": []
+      }
+    },
+    "divergences": [],
+    "response_excerpt": "\n\nThe final active CAREER budget total is **$711,271**. Source entity id: `clm_01KXNVS3AQKVBSC4E9KGA9GQHT`."
+  },
+  {
+    "scenario_id": "career-directive-and-evidence-retention",
+    "probe_id": "budget-near",
+    "arm": "rka",
+    "kind": "evidence",
+    "distance_tokens": 1280,
+    "passed": false,
+    "checks": {
+      "must_include": {
+        "passed": false,
+        "missing": [
+          "711,271"
+        ]
+      },
+      "expected_citations": {
+        "passed": false,
+        "absent": [
+          "clm_01KXNVS3AQKVBSC4E9KGA9GQHT"
+        ]
+      }
+    },
+    "divergences": [],
+    "response_excerpt": "\n\nThe provided context does **not** record the exact final active CAREER budget total. The closest relevant source is `jrn_01KXNWQRSGPYN1484J8KNBZNJC`, which references the final budget attachments but does not show a dollar total."
+  },
+  {
+    "scenario_id": "career-directive-and-evidence-retention",
+    "probe_id": "prelim-mid",
+    "arm": "full_context",
+    "kind": "directive",
+    "distance_tokens": 9669,
+    "passed": true,
+    "checks": {
+      "must_include": {
+        "passed": true,
+        "missing": []
+      },
+      "must_not_include": {
+        "passed": true,
+        "leaked": []
+      }
+    },
+    "divergences": [],
+    "response_excerpt": "\n\nBuilding on the PI\u2019s preliminary, under-review (unpublished) work, \u201cWhat the Detector Can See\u201d (jrn_01KXE4445AWE1PAF3PBKVYE4X1), which characterizes the observability limits of OT anomaly detectors, this project will develop adaptive red-team evaluations that expose attacks hidden from conventional monitoring."
+  },
+  {
+    "scenario_id": "career-directive-and-evidence-retention",
+    "probe_id": "prelim-mid",
+    "arm": "rag",
+    "kind": "directive",
+    "distance_tokens": 9669,
+    "passed": true,
+    "checks": {
+      "must_include": {
+        "passed": true,
+        "missing": []
+      },
+      "must_not_include": {
+        "passed": true,
+        "leaked": []
+      }
+    },
+    "divergences": [],
+    "response_excerpt": "\n\nOur PI preliminary work, \u201cWhat the Detector Can See\u201d (under review and unpublished; dir-prelim), demonstrates that detector visibility is constrained by residual structure, informing our evaluation design for adaptive OT red teaming."
+  },
+  {
+    "scenario_id": "career-directive-and-evidence-retention",
+    "probe_id": "prelim-mid",
+    "arm": "rka",
+    "kind": "directive",
+    "distance_tokens": 9669,
+    "passed": true,
+    "checks": {
+      "must_include": {
+        "passed": true,
+        "missing": []
+      },
+      "must_not_include": {
+        "passed": true,
+        "leaked": []
+      }
+    },
+    "divergences": [],
+    "response_excerpt": "\n\nBuilding on the PI\u2019s preliminary, under-review and unpublished manuscript \u201cWhat the Detector Can See\u201d (lit_01KWFSE194ZPC7R0JM3E9820NB; jrn_01KXE4445AWE1PAF3PBKVYE4X1), this project will evaluate CPS anomaly detectors by separating residual representations from alarm rules to expose detector-specific blind spots."
+  },
+  {
+    "scenario_id": "career-directive-and-evidence-retention",
+    "probe_id": "budget-far",
+    "arm": "full_context",
+    "kind": "evidence",
+    "distance_tokens": 35555,
+    "passed": true,
+    "checks": {
+      "must_include": {
+        "passed": true,
+        "missing": []
+      },
+      "expected_citations": {
+        "passed": true,
+        "absent": []
+      }
+    },
+    "divergences": [],
+    "response_excerpt": "\n\nThe final active CAREER budget total is **$711,271**.  \nSource: `clm_01KXNVS3AQKVBSC4E9KGA9GQHT`"
+  },
+  {
+    "scenario_id": "career-directive-and-evidence-retention",
+    "probe_id": "budget-far",
+    "arm": "rag",
+    "kind": "evidence",
+    "distance_tokens": 35555,
+    "passed": true,
+    "checks": {
+      "must_include": {
+        "passed": true,
+        "missing": []
+      },
+      "expected_citations": {
+        "passed": true,
+        "absent": []
+      }
+    },
+    "divergences": [],
+    "response_excerpt": "\n\n$711,271 \u2014 source entity id: `clm_01KXNVS3AQKVBSC4E9KGA9GQHT`."
+  },
+  {
+    "scenario_id": "career-directive-and-evidence-retention",
+    "probe_id": "budget-far",
+    "arm": "rka",
+    "kind": "evidence",
+    "distance_tokens": 35555,
+    "passed": false,
+    "checks": {
+      "must_include": {
+        "passed": false,
+        "missing": [
+          "711,271"
+        ]
+      },
+      "expected_citations": {
+        "passed": false,
+        "absent": [
+          "clm_01KXNVS3AQKVBSC4E9KGA9GQHT"
+        ]
+      }
+    },
+    "divergences": [],
+    "response_excerpt": "\n\nThe provided context does **not** state the final active CAREER budget total as an exact figure.\n\nThe closest records are:\n- **jrn_01KXNWQRSGPYN1484J8KNBZNJC**: references the final budget attachments, but does not show a total.\n- **clm_01KXNXDACGCTXKWJ9W8EPXPNJX**: records a **$2.76** discrepancy between precision formulas and rounded budget-justification totals, but that is a difference\u2014not th"
+  },
+  {
+    "scenario_id": "career-pivot-currency",
+    "probe_id": "metric-near",
+    "arm": "full_context",
+    "kind": "directive",
+    "distance_tokens": 1422,
+    "passed": true,
+    "checks": {
+      "must_include": {
+        "passed": true,
+        "missing": []
+      },
+      "must_not_include": {
+        "passed": true,
+        "leaked": []
+      }
+    },
+    "divergences": [],
+    "response_excerpt": "\n\nThe decision in force now is: **use a capability-conditioned robustness profile / evaluation-validity envelope** as the primary measurement object for adaptive CPS defense evaluation.\n\nSpecifically:\n- Keep **physical impact**, **detector-bounded detectability**, and **resource cost** separate.\n- Estimate **searched-procedure additive gaps** as the primary measurement.\n- Use ratios only as **safe"
+  },
+  {
+    "scenario_id": "career-pivot-currency",
+    "probe_id": "metric-near",
+    "arm": "rag",
+    "kind": "directive",
+    "distance_tokens": 1422,
+    "passed": true,
+    "checks": {
+      "must_include": {
+        "passed": true,
+        "missing": []
+      },
+      "must_not_include": {
+        "passed": true,
+        "leaked": []
+      }
+    },
+    "divergences": [],
+    "response_excerpt": "\n\nIn force now: the primary measurement object is a **capability-conditioned robustness profile / evaluation-validity envelope**.\n\nPer the active directive `dec_01KX6CZ30ZJWC11EST90ZWWE7Z`:\n\n- Keep **physical impact**, **detector-bounded detectability**, and **resource cost** separate.\n- Estimate **searched-procedure additive gaps** as the primary metric.\n- Use ratios only as **safeguarded seconda"
+  },
+  {
+    "scenario_id": "career-pivot-currency",
+    "probe_id": "metric-near",
+    "arm": "rka",
+    "kind": "directive",
+    "distance_tokens": 1422,
+    "passed": false,
+    "checks": {
+      "must_include": {
+        "passed": false,
+        "missing": [
+          "capability-conditioned"
+        ]
+      },
+      "must_not_include": {
+        "passed": true,
+        "leaked": []
+      }
+    },
+    "divergences": [],
+    "response_excerpt": "\n\ndec_01KWFSQ6WWAGZM84P5AJB24R3J"
+  },
+  {
+    "scenario_id": "career-pivot-currency",
+    "probe_id": "papers-mid",
+    "arm": "full_context",
+    "kind": "directive",
+    "distance_tokens": 9811,
+    "passed": false,
+    "checks": {
+      "must_include": {
+        "passed": true,
+        "missing": []
+      },
+      "must_not_include": {
+        "passed": false,
+        "leaked": [
+          "proof-of-concept"
+        ]
+      }
+    },
+    "divergences": [],
+    "response_excerpt": "\n\nPer the currently active decision, **LLM-GridEval should not be positioned as a primary contribution or as the adaptive-attacker/EVG proof-of-concept half of the CAREER narrative**. That older framing is superseded.\n\nThe in-force directive, **dec_01KX6CZZC3JGB44RW95VD0JS2J** [status: active], says LLM-GridEval should be used as:\n\n> **workflow-feasibility and configuration-associated descriptive "
+  },
+  {
+    "scenario_id": "career-pivot-currency",
+    "probe_id": "papers-mid",
+    "arm": "rag",
+    "kind": "directive",
+    "distance_tokens": 9811,
+    "passed": false,
+    "checks": {
+      "must_include": {
+        "passed": true,
+        "missing": []
+      },
+      "must_not_include": {
+        "passed": false,
+        "leaked": [
+          "proof-of-concept"
+        ]
+      }
+    },
+    "divergences": [],
+    "response_excerpt": "\n\nPer the active decision **dec_01KX6CZZC3JGB44RW95VD0JS2J**, **LLM-GridEval** should be positioned in the proposal as:\n\n> **workflow-feasibility and configuration-associated descriptive evidence only.**\n\nThat means it should be presented as preliminary support that the evaluation workflow is feasible and that its observed effects are tied to specific configurations, **not** as the central adaptiv"
+  },
+  {
+    "scenario_id": "career-pivot-currency",
+    "probe_id": "papers-mid",
+    "arm": "rka",
+    "kind": "directive",
+    "distance_tokens": 9811,
+    "passed": false,
+    "checks": {
+      "must_include": {
+        "passed": false,
+        "missing": [
+          "workflow-feasibility"
+        ]
+      },
+      "must_not_include": {
+        "passed": true,
+        "leaked": []
+      }
+    },
+    "divergences": [],
+    "response_excerpt": "\n\nPer the in-force decision to keep technical detail out of the page-limited reviewer narrative and preserve it in durable working documents (dec_01KXEGXR89RVM6PX885PP1QP9Z), LLM-GridEval should be positioned as a **bounded, high-signal supporting artifact**, not as the proposal\u2019s core CAREER contribution.\n\nSpecifically:\n\n- **Empirical anchor for the OT thesis / Evaluation Validity Gap**: LLM-Grid"
+  },
+  {
+    "scenario_id": "career-pivot-currency",
+    "probe_id": "metric-far",
+    "arm": "full_context",
+    "kind": "directive",
+    "distance_tokens": 35697,
+    "passed": true,
+    "checks": {
+      "must_include": {
+        "passed": true,
+        "missing": []
+      },
+      "must_not_include": {
+        "passed": true,
+        "leaked": []
+      }
+    },
+    "divergences": [],
+    "response_excerpt": "\n\nThe decision currently in force is: **use a capability-conditioned robustness profile / evaluation-validity envelope** as the primary measurement object for adaptive CPS defense evaluation.\n\nFull active decision: **Keep physical impact, detector-bounded detectability, and resource cost separate; estimate searched-procedure additive gaps as primary; use ratios only as safeguarded secondary summar"
+  },
+  {
+    "scenario_id": "career-pivot-currency",
+    "probe_id": "metric-far",
+    "arm": "rag",
+    "kind": "directive",
+    "distance_tokens": 35697,
+    "passed": false,
+    "checks": {
+      "must_include": {
+        "passed": false,
+        "missing": [
+          "capability-conditioned"
+        ]
+      },
+      "must_not_include": {
+        "passed": true,
+        "leaked": []
+      }
+    },
+    "divergences": [],
+    "response_excerpt": "\n\nUse a capability completeness, and device-role clarity in the input documentation (dec_01KX6CZ30ZJWC11EST90ZWWE7Z)."
+  },
+  {
+    "scenario_id": "career-pivot-currency",
+    "probe_id": "metric-far",
+    "arm": "rka",
+    "kind": "directive",
+    "distance_tokens": 35697,
+    "passed": false,
+    "checks": {
+      "must_include": {
+        "passed": false,
+        "missing": [
+          "capability-conditioned"
+        ]
+      },
+      "must_not_include": {
+        "passed": true,
+        "leaked": []
+      }
+    },
+    "divergences": [],
+    "response_excerpt": "\n\nThe in-force decision is **dec_01KWFSQ6WWAGZM84P5AJB24R3J**: the primary measurement object is **failure attribution for a CPS defense under a given attacker tier**\u2014i.e., *why* the defense fails, such as weak residual evidence or train-test drift\u2014not merely a leaderboard/attack-success number."
+  }
+]

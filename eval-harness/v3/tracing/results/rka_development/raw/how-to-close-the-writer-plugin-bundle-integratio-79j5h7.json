@@ -1,0 +1,115 @@
+{
+  "scenario_id": "how-to-close-the-writer-plugin-bundle-integratio-79j5h7",
+  "union": {
+    "trace_recall": 1.0,
+    "expanded_recall": 1.0,
+    "per_relation": {
+      "evidence": {
+        "expected": 1,
+        "found": 1
+      },
+      "mission": {
+        "expected": 1,
+        "found": 1
+      },
+      "superseded_alternative": {
+        "expected": 1,
+        "found": 1
+      }
+    },
+    "precision": 0.1667,
+    "returned_count": 18
+  },
+  "per_surface": {
+    "ego": {
+      "trace_recall": 1.0,
+      "expanded_recall": 1.0,
+      "per_relation": {
+        "evidence": {
+          "expected": 1,
+          "found": 1
+        },
+        "mission": {
+          "expected": 1,
+          "found": 1
+        },
+        "superseded_alternative": {
+          "expected": 1,
+          "found": 1
+        }
+      },
+      "precision": 0.1667,
+      "returned_count": 18
+    },
+    "multi_hop": {
+      "trace_recall": 1.0,
+      "expanded_recall": 1.0,
+      "per_relation": {
+        "evidence": {
+          "expected": 1,
+          "found": 1
+        },
+        "mission": {
+          "expected": 1,
+          "found": 1
+        },
+        "superseded_alternative": {
+          "expected": 1,
+          "found": 1
+        }
+      },
+      "precision": 0.1667,
+      "returned_count": 18
+    }
+  },
+  "pivot": {
+    "applicable": true,
+    "superseding_found": true,
+    "superseded_found": true,
+    "stale_surfacing": false
+  },
+  "divergences": [],
+  "raw": {
+    "search_ids": null,
+    "ego_ids": [
+      "jrn_01KSARARTMH2CHT3SG0FZ8C93D",
+      "jrn_01KSARXXXF29HQTWZ72QM7JRRD",
+      "mis_01KSARG7HJR0QMB9004ESZPM2K",
+      "jrn_01M071EQR0RET0A8VR5MWK74BS",
+      "jrn_01M071EY1DX590FEAKSGTEZDXR",
+      "jrn_01M071F0QE06DESYF7FH0MZJG9",
+      "jrn_01M071P1CPJGDFH3YN7HMHMBT9",
+      "jrn_01M08CAXZ6Z3Y8E4J7QH9M1FWB",
+      "jrn_01M08F6SE6ZV7SMT852DRPMRFV",
+      "jrn_01M08MCZRKYZ9DM0G2MSG924H0",
+      "jrn_01M0D8CGCG1Q47GCWGJ7MD8N3T",
+      "lit_01M0D8B9ZVAXAWQMWQYZ43BKVZ",
+      "lit_01M0D8BCMWBVZBY3WD44JS6NSP",
+      "lit_01M0D8BFF1JVJ2BW8Q3EAFA97G",
+      "lit_01M0D8BJF1ZBFQSCMBXAF5HB64",
+      "lit_01M0D8BNCMXFKC7W3W6YHPXVF7",
+      "dec_01KSARC7RDJEV8BNK2QD79J5H7",
+      "dec_01M071K7758H64HK3Y4XZJ1DWP"
+    ],
+    "multi_hop_ids": [
+      "dec_01KSARC7RDJEV8BNK2QD79J5H7",
+      "jrn_01KSARARTMH2CHT3SG0FZ8C93D",
+      "mis_01KSARG7HJR0QMB9004ESZPM2K",
+      "jrn_01KSARXXXF29HQTWZ72QM7JRRD",
+      "dec_01M071K7758H64HK3Y4XZJ1DWP",
+      "jrn_01M071EQR0RET0A8VR5MWK74BS",
+      "jrn_01M071EY1DX590FEAKSGTEZDXR",
+      "jrn_01M071F0QE06DESYF7FH0MZJG9",
+      "jrn_01M0D8CGCG1Q47GCWGJ7MD8N3T",
+      "jrn_01M071P1CPJGDFH3YN7HMHMBT9",
+      "lit_01M0D8BCMWBVZBY3WD44JS6NSP",
+      "lit_01M0D8B9ZVAXAWQMWQYZ43BKVZ",
+      "lit_01M0D8BFF1JVJ2BW8Q3EAFA97G",
+      "lit_01M0D8BJF1ZBFQSCMBXAF5HB64",
+      "lit_01M0D8BNCMXFKC7W3W6YHPXVF7",
+      "jrn_01M08MCZRKYZ9DM0G2MSG924H0",
+      "jrn_01M08CAXZ6Z3Y8E4J7QH9M1FWB",
+      "jrn_01M08F6SE6ZV7SMT852DRPMRFV"
+    ]
+  }
+}
