@@ -27,7 +27,12 @@ async def api_client(tmp_path: Path):
     await lifespan.__aenter__()
     try:
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            # Scoped endpoints no longer fall back to a default project.
+            headers={"X-RKA-Project": "proj_default"},
+        ) as client:
             yield client
     finally:
         await lifespan.__aexit__(None, None, None)
