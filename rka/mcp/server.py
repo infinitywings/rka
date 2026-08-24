@@ -1894,13 +1894,38 @@ async def rka_update_mission(
         return f"Updated mission {id} fields={','.join(changed)}"
 
 
+def _report_lines(value: str | list[str] | None) -> list[str] | None:
+    """Normalise a report's list-or-lines field to a list of non-empty strings.
+
+    Both shapes arrive and both are legitimate. This tool's own contract is
+    newline-separated text, but the typed `submit_report` operation declares
+    `list[str]` — matching `MissionReportCreate`, which is also `list[str]` —
+    and the dispatcher passes that list straight through.
+
+    Accepting only a string left `findings`, `anomalies` and `questions`
+    unreachable from the typed surface: a list died here on `.strip()` with
+    `'list' object has no attribute 'strip'`, a string was refused by the
+    typed model before the call was ever emitted, and omitting them was the
+    only thing that worked. Reports were filed with their findings silently
+    dropped.
+
+    Module-level rather than nested, so it can be tested without reaching
+    into a closure.
+    """
+    if value is None:
+        return None
+    items = value if isinstance(value, list) else str(value).splitlines()
+    cleaned = [str(item).strip() for item in items if str(item).strip()]
+    return cleaned or None
+
+
 @tool(category="mission")
 async def rka_submit_report(
     mission_id: str,
     summary: str | None = None,
-    findings: str = "",
-    anomalies: str = "",
-    questions: str = "",
+    findings: str | list[str] = "",
+    anomalies: str | list[str] = "",
+    questions: str | list[str] = "",
     codebase_state: str = "",
     recommended_next: str = "",
     *,
@@ -1924,9 +1949,9 @@ async def rka_submit_report(
         mission_id: Mission ID
         summary: Full report text — methodology, results, what was
             done (PRIMARY FIELD).
-        findings: Key findings, one per line (optional)
-        anomalies: Unexpected observations or issues, one per line (optional)
-        questions: Open questions for the PI, one per line (optional)
+        findings: Key findings — a list, or newline-separated text (optional)
+        anomalies: Unexpected observations — a list, or newline-separated text (optional)
+        questions: Open questions for the PI — a list, or newline-separated text (optional)
         codebase_state: Description of codebase state after mission (optional)
         recommended_next: Suggested next steps as a single string (optional)
         content: v2.6.1 additive alias for `summary` — accepted so
@@ -1951,11 +1976,6 @@ async def rka_submit_report(
             "required"
         )
 
-    def _split(text: str) -> list[str] | None:
-        if not text or not text.strip():
-            return None
-        return [line.strip() for line in text.strip().splitlines() if line.strip()]
-
     body: dict = {
         # v2.6.1 — persist `summary` as a first-class field. Keep
         # tasks_completed=[summary] as back-compat for one release
@@ -1963,9 +1983,9 @@ async def rka_submit_report(
         # value where they expect it.
         "summary": summary,
         "tasks_completed": [summary],
-        "findings": _split(findings),
-        "anomalies": _split(anomalies),
-        "questions": _split(questions),
+        "findings": _report_lines(findings),
+        "anomalies": _report_lines(anomalies),
+        "questions": _report_lines(questions),
         "codebase_state": codebase_state.strip() or None,
         "recommended_next": recommended_next.strip() or None,
     }
@@ -8513,9 +8533,9 @@ async def rka_mission(
     status: MissionStatusLiteral | None = None,
     summary: str | None = None,
     content: str | None = None,
-    findings: str = "",
-    anomalies: str = "",
-    questions: str = "",
+    findings: str | list[str] = "",
+    anomalies: str | list[str] = "",
+    questions: str | list[str] = "",
     codebase_state: str = "",
     recommended_next: str = "",
     conclusion: str | None = None,
