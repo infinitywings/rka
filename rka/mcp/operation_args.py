@@ -1440,7 +1440,9 @@ class RecordNoteArgs(ProjectScopedArgs):
     ] = "executor"
     type: Annotated[
         NoteTypeLit,
-        Field(default="note", description="Journal entry type."),
+        Field(default="note", description=(
+            "Journal entry type. Only `note`, `log` and `directive` are stored: the other nine are legacy aliases, normalized on write (`methodology`→`log`, `pi_instruction`→`directive`, and the rest→`note`). Reading an entry back returns the canonical type, not the alias you sent."
+        )),
     ] = "note"
     confidence: Annotated[
         ConfidenceLit,
@@ -1552,7 +1554,13 @@ class IngestDocumentArgs(ProjectScopedArgs):
         NoteTypeLit,
         Field(
             default="finding",
-            description="Default note type for emitted entries.",
+            description=(
+                "Default type for emitted entries. Note that the default is a "
+                "legacy alias: `finding` is stored as `note`. Only `note`, "
+                "`log` and `directive` are stored; the other nine normalize on "
+                "write (`methodology`→`log`, `pi_instruction`→`directive`, the "
+                "rest→`note`)."
+            ),
         ),
     ] = "finding"
     split_by_headings: Annotated[
@@ -3813,7 +3821,12 @@ class UpdateNoteArgs(ProjectScopedArgs):
     ] = None
     type: Annotated[
         Optional[NoteTypeLit],
-        Field(default=None, description="New journal type (v2 canonical or legacy-accepted)."),
+        Field(default=None, description=(
+            "New journal type. Only `note`, `log` and `directive` are stored; "
+            "the other nine are legacy aliases normalized on write "
+            "(`methodology`→`log`, `pi_instruction`→`directive`, the rest→"
+            "`note`), so a read-back returns the canonical type."
+        )),
     ] = None
     confidence: Annotated[
         Optional[ConfidenceLit],
