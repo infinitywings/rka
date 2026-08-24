@@ -41,3 +41,8 @@ storage/
 
 # Local writing scratch (not synced)
 writing/
+
+# Eval-v3: real corpora and raw per-probe records quote a live research
+# store verbatim. The method and the aggregate numbers are public; the
+# content is not.
+eval-harness/v3/local/

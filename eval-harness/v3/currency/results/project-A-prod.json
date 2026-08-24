@@ -1,0 +1,71 @@
+{
+  "n_pivots": 3,
+  "entry": {
+    "verdicts": {
+      "current_first": 2,
+      "neither": 1
+    },
+    "current_first_rate": 0.6667,
+    "any_status_signal": true,
+    "blind_stale_exposure": 0.0
+  },
+  "graph": {
+    "reaches_current_rate": 0.0,
+    "stale_marked_rate": 0.3333
+  },
+  "per_pivot": [
+    {
+      "old_id": "dec_000043REDACTED",
+      "new_id": "dec_000044REDACTED",
+      "entry": {
+        "old_rank": null,
+        "new_rank": 2,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "current_first"
+      },
+      "graph": {
+        "seed": "lit_000045REDACTED",
+        "reaches_current": false,
+        "stale_marked": true
+      }
+    },
+    {
+      "old_id": "dec_000046REDACTED",
+      "new_id": "dec_000047REDACTED",
+      "entry": {
+        "old_rank": null,
+        "new_rank": null,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "neither"
+      },
+      "graph": {
+        "seed": "jrn_000048REDACTED",
+        "reaches_current": false,
+        "stale_marked": false
+      }
+    },
+    {
+      "old_id": "dec_000049REDACTED",
+      "new_id": "dec_000050REDACTED",
+      "entry": {
+        "old_rank": null,
+        "new_rank": 4,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "current_first"
+      },
+      "graph": {
+        "seed": "mis_000051REDACTED",
+        "reaches_current": false,
+        "stale_marked": false
+      }
+    }
+  ],
+  "meta": {
+    "project": "project-A",
+    "rka_url": "http://localhost:9712",
+    "db": "rka-snapshot-2026-08-23.db"
+  }
+}
