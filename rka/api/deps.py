@@ -420,12 +420,22 @@ def get_scoped_artifact_service(
 
 
 def get_knowledge_pack_service(
-    project_id: str = Depends(get_project_id),
     db: Database = Depends(get_db),
     llm: LLMClient | None = Depends(get_llm),
     embeddings: EmbeddingService | None = Depends(get_embeddings),
 ) -> KnowledgePackService:
-    return KnowledgePackService(db, llm=llm, embeddings=embeddings, project_id=project_id)
+    """Pack service for the one operation that has no request project: import.
+
+    Importing a pack *creates* the project — its target comes from the upload
+    or the form, never from the request scope. This factory used to resolve a
+    request project anyway and hand it over unused, which was harmless while
+    an unsupplied scope silently became `proj_default`. Once that default was
+    removed, importing a pack started failing with "Project scope is required"
+    — an error about a value the operation does not read.
+
+    Use `get_scoped_knowledge_pack_service` for export, which is scoped.
+    """
+    return KnowledgePackService(db, llm=llm, embeddings=embeddings)
 
 
 def get_scoped_knowledge_pack_service(
