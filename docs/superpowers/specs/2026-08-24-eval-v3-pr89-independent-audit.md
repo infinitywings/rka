@@ -154,6 +154,6 @@ its result is recorded in the addendum when available.
 - Worktree cross-check (audit environment, Python 3.11, `main@3fb0cd7` +
   the 12 new production tests): 10 fail / 2 preservation locks pass — the
   basis of §1.
-- A from-scratch full-suite re-run of `acfa44a` in the audit environment
-  (Python 3.11) was in progress at audit filing time; if it surfaces any
-  divergence from CI, a follow-up commit to this document will record it.
+- From-scratch full-suite re-run of `acfa44a` in the audit environment
+  (Python 3.11, fresh dependency install): **3 285 passed, 0 failed**
+  in 9 m 38 s — matching CI exactly. No divergence.
