@@ -124,10 +124,21 @@ def clear_registry() -> None:
 class _EntityBackfillConfig:
     """Parameterises the backfill cursor + write path for one entity type.
 
-    `pending_cursor_sql` MUST take two `?` placeholders for `last_id`
-    and `LIMIT`; `pending_count_sql` takes no placeholders. The cursor
-    must `SELECT id, project_id, ...content_columns...` so the loop
-    can compose text + write metadata under the right project.
+    Placeholder order is `(model_name, dimensions, last_id, LIMIT)` for
+    `pending_cursor_sql` and `(model_name, dimensions)` for
+    `pending_count_sql`. The cursor must `SELECT id, project_id,
+    ...content_columns...` so the loop can compose text + write metadata
+    under the right project.
+
+    The anti-join matches the *current* model and dim, not merely the
+    presence of a metadata row. Presence alone meant that swapping the
+    model at an unchanged dimension re-embedded nothing: `reshape` no-ops
+    when the dim is equal, so every metadata row survived and the cursor
+    found no pending work — leaving vectors from the retired model in the
+    index while queries were encoded by the new one, which is silent and
+    makes the similarity scores meaningless. `EmbeddingService.needs_reembed`
+    already gates on the full identity tuple; the cursor is what disagreed
+    with it.
     """
 
     entity_type: str
@@ -183,6 +194,7 @@ _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM embedding_metadata m "
             "  WHERE m.entity_type = 'claim' AND m.entity_id = c.id"
+            "    AND m.model_name = ? AND m.dimensions = ?"
             ") AND c.id > ? "
             "ORDER BY c.id LIMIT ?"
         ),
@@ -191,6 +203,7 @@ _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM embedding_metadata m "
             "  WHERE m.entity_type = 'claim' AND m.entity_id = c.id"
+            "    AND m.model_name = ? AND m.dimensions = ?"
             ")"
         ),
         post_embed_sql="UPDATE claims SET embedding_pending = 0 WHERE id = ?",
@@ -205,6 +218,7 @@ _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM embedding_metadata m "
             "  WHERE m.entity_type = 'journal' AND m.entity_id = j.id"
+            "    AND m.model_name = ? AND m.dimensions = ?"
             ") AND j.id > ? "
             "ORDER BY j.id LIMIT ?"
         ),
@@ -213,6 +227,7 @@ _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM embedding_metadata m "
             "  WHERE m.entity_type = 'journal' AND m.entity_id = j.id"
+            "    AND m.model_name = ? AND m.dimensions = ?"
             ")"
         ),
     ),
@@ -226,6 +241,7 @@ _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM embedding_metadata m "
             "  WHERE m.entity_type = 'decision' AND m.entity_id = d.id"
+            "    AND m.model_name = ? AND m.dimensions = ?"
             ") AND d.id > ? "
             "ORDER BY d.id LIMIT ?"
         ),
@@ -234,6 +250,7 @@ _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM embedding_metadata m "
             "  WHERE m.entity_type = 'decision' AND m.entity_id = d.id"
+            "    AND m.model_name = ? AND m.dimensions = ?"
             ")"
         ),
     ),
@@ -247,6 +264,7 @@ _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM embedding_metadata m "
             "  WHERE m.entity_type = 'literature' AND m.entity_id = l.id"
+            "    AND m.model_name = ? AND m.dimensions = ?"
             ") AND l.id > ? "
             "ORDER BY l.id LIMIT ?"
         ),
@@ -255,6 +273,7 @@ _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM embedding_metadata m "
             "  WHERE m.entity_type = 'literature' AND m.entity_id = l.id"
+            "    AND m.model_name = ? AND m.dimensions = ?"
             ")"
         ),
     ),
@@ -269,6 +288,7 @@ _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM embedding_metadata m "
             "  WHERE m.entity_type = 'mission' AND m.entity_id = mi.id"
+            "    AND m.model_name = ? AND m.dimensions = ?"
             ") AND mi.id > ? "
             "ORDER BY mi.id LIMIT ?"
         ),
@@ -277,6 +297,7 @@ _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM embedding_metadata m "
             "  WHERE m.entity_type = 'mission' AND m.entity_id = mi.id"
+            "    AND m.model_name = ? AND m.dimensions = ?"
             ")"
         ),
     ),
@@ -291,6 +312,7 @@ _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM embedding_metadata m "
             "  WHERE m.entity_type = 'artifact' AND m.entity_id = a.id"
+            "    AND m.model_name = ? AND m.dimensions = ?"
             ") AND a.id > ? "
             "ORDER BY a.id LIMIT ?"
         ),
@@ -299,6 +321,7 @@ _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM embedding_metadata m "
             "  WHERE m.entity_type = 'artifact' AND m.entity_id = a.id"
+            "    AND m.model_name = ? AND m.dimensions = ?"
             ")"
         ),
     ),
@@ -376,10 +399,18 @@ class BackfillService:
                     )
 
         # Step 1: snapshot per-type pending counts; total is the sum.
+        # Counted against the current model + dim, matching what the cursor
+        # will actually select — a count taken on metadata presence alone
+        # would report zero work for a model swap that has a full re-embed
+        # ahead of it.
+        count_model: str = getattr(self._embeddings, "model_name", "unknown")
+        count_dim: int = int(getattr(self._embeddings, "dim", 0) or 0)
         per_type_totals: dict[str, int] = {}
         for et in types:
             cfg = _ENTITY_BACKFILL_CONFIGS[et]
-            row = await self._db.fetchone(cfg.pending_count_sql)
+            row = await self._db.fetchone(
+                cfg.pending_count_sql, [count_model, count_dim]
+            )
             per_type_totals[et] = int((row or {}).get("n") or 0)
         status.total = sum(per_type_totals.values())
         await _emit_progress(progress_callback, status)
@@ -437,7 +468,8 @@ class BackfillService:
         last_id = ""
         while True:
             rows = await self._db.fetchall(
-                cfg.pending_cursor_sql, [last_id, self._batch_size]
+                cfg.pending_cursor_sql,
+                [model_name, embed_dim, last_id, self._batch_size],
             )
             if not rows:
                 break
@@ -503,8 +535,20 @@ class BackfillService:
                     if vec_available:
                         vec_blob = struct.pack(f"{len(vec)}f", *vec)
                         async with self._db.transaction():
+                            # sqlite-vec's vec0 tables do not honour the
+                            # REPLACE conflict clause — re-embedding an entity
+                            # that already has a vector raises "UNIQUE
+                            # constraint failed on <table> primary key".
+                            # Until now nothing re-embedded in place: the only
+                            # path here was a dimension change, and reshape
+                            # DROPs the table first, so no row ever pre-existed.
+                            # A same-dim model swap does re-embed in place.
                             await self._db.execute(
-                                f"INSERT OR REPLACE INTO {cfg.vec_table} "
+                                f"DELETE FROM {cfg.vec_table} WHERE id = ?",
+                                [entity_id],
+                            )
+                            await self._db.execute(
+                                f"INSERT INTO {cfg.vec_table} "
                                 "(id, embedding) VALUES (?, ?)",
                                 [entity_id, vec_blob],
                             )
