@@ -143,6 +143,10 @@ async def link_supersession_route(
         "old_decision_id": body.old_decision_id,
         "new_decision_id": body.new_decision_id,
         "rolled_back": report.rolled_back,
+        # Surfaced so a refused pair says why. Without it a caller sees only
+        # `applied: false` plus a FAILED step and has to guess which
+        # pre-flight check rejected the pair.
+        "failure_reason": report.failure_reason,
         "steps": [
             {"step": s.name, "state": s.state, "detail": s.detail}
             for s in report.steps

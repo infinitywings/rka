@@ -147,6 +147,8 @@ async def _validate_pair(
     `(ok, error_message, old_row, new_row)`.
 
     Refuses to repair when:
+        - old and new are the same decision (a decision cannot supersede
+          itself; see below)
         - old or new decision does not exist in the given project
         - old.status != 'superseded' (not actually an orphan)
         - old.superseded_by is already set (the supersede link is
@@ -154,6 +156,21 @@ async def _validate_pair(
         - old.superseded_by points at a DIFFERENT new decision (real
           supersede; refuse to overwrite)
     """
+    # A self-link is the one bad pair that every other check would wave
+    # through: both rows exist, the status is right, and superseded_by is
+    # empty. Applying it sets superseded_by to the row's own id and writes a
+    # `supersedes` self-loop, which makes the decision permanently its own
+    # replacement — it reads as stale forever, and that is precisely the
+    # currency signal this repair exists to restore.
+    if old_id == new_id:
+        return (
+            False,
+            f"old and new decision are the same ({old_id}) — "
+            f"a decision cannot supersede itself",
+            None,
+            None,
+        )
+
     old_row = await db.fetchone(
         "SELECT id, status, superseded_by, scope_version, phase, project_id "
         "FROM decisions WHERE id = ? AND project_id = ?",
