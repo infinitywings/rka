@@ -27,21 +27,39 @@ from rka.config import RKAConfig
 
 
 def _routes(app) -> list[tuple[str, set[str]]]:
-    """Every (path, methods) pair in registration order."""
+    """Every (path, methods) pair in registration order.
+
+    Two shapes to handle. Up to FastAPI 0.135 `include_router` flattens its
+    routes into the parent. From 0.141 it inserts an `_IncludedRouter` that
+    keeps the sub-router intact and carries the prefix on an include context,
+    so a walker that only follows `.routes` sees five top-level routes and
+    nothing else — which is why `test_the_route_table_is_readable` exists.
+    """
     found: list[tuple[str, set[str]]] = []
 
-    def walk(node, prefix: str = "") -> None:
-        for route in getattr(node, "routes", []) or []:
+    def children(route):
+        """(sub-routes, prefix) for a route that contains other routes."""
+        included = getattr(route, "original_router", None)
+        if included is not None:
+            context = getattr(route, "include_context", None)
+            return getattr(included, "routes", None), getattr(context, "prefix", "") or ""
+        nested = getattr(route, "routes", None)
+        if nested:
+            return nested, getattr(route, "path", "") or ""
+        return None, ""
+
+    def walk(routes, prefix: str = "") -> None:
+        for route in routes or []:
+            sub, sub_prefix = children(route)
+            if sub:
+                walk(sub, prefix + sub_prefix)
+                continue
             path = getattr(route, "path", "") or ""
             methods = getattr(route, "methods", None)
-            children = getattr(route, "routes", None)
-            if children:
-                walk(route, prefix + path)
-                continue
             if path and methods:
                 found.append((prefix + path, set(methods)))
 
-    walk(app.router)
+    walk(getattr(app.router, "routes", []))
     return found
 
 
