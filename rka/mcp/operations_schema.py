@@ -3487,7 +3487,10 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
                     "project_id": "prj_01ABC...",
                     "mission_id": "mis_01XYZ...",
                     "summary": "Embedding-model swap landed; latency budget met.",
-                    "findings": "p99 dropped 30%.",
+                    # A list: the typed model declares list[str], matching
+                    # MissionReportCreate. A bare string is refused before
+                    # the call is emitted.
+                    "findings": ["p99 dropped 30%.", "cold-start regressed 2x."],
                     "recommended_next": "Run scale test.",
                 },
             },
