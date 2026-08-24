@@ -34,10 +34,37 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Plugin compatibility range. Bump when shipping a plugin version that
-# requires a newer RKA backend. Matched as `version.startswith(prefix)`,
-# so "2.3" prefix accepts "2.3.0", "2.3.1", "2.3.2-rc1", "2.3", etc.
-COMPATIBLE_VERSION_PREFIXES = ("2.7", "2.8")
+# Oldest RKA backend this plugin can drive. The check is a *minimum*, not an
+# allowlist of releases: a backend newer than the plugin is the normal state of
+# affairs (the backend ships far more often than the plugin), and rejecting it
+# strands a working install.
+#
+# An allowlist of accepted prefixes used to live here. It had to be widened by
+# hand on every minor release, which is exactly the kind of edit that gets
+# forgotten — and was: the tuple still read ("2.7", "2.8") after the backend
+# reached 2.9.0, so a correctly-reported 2.9.0 was refused by its own plugin.
+MINIMUM_BACKEND_VERSION = (2, 7)
+
+
+def parse_version(version: str) -> tuple[int, ...] | None:
+    """Parse a leading numeric version into a comparable tuple.
+
+    Trailing prerelease markers are ignored: ``2.9.0-rc1`` compares as
+    ``(2, 9, 0)``. Returns None when nothing numeric can be read, which the
+    caller treats as "cannot verify" rather than "incompatible" — refusing to
+    start over an unparseable string would be a worse failure than running.
+    """
+    parts: list[int] = []
+    for chunk in version.strip().split("."):
+        digits = ""
+        for ch in chunk:
+            if not ch.isdigit():
+                break
+            digits += ch
+        if not digits:
+            break
+        parts.append(int(digits))
+    return tuple(parts) or None
 
 
 def integration_path() -> Path:
@@ -178,16 +205,19 @@ def main() -> None:
     # Version check (only if integration.json supplied a version; PATH-fallback
     # mode skips the check since we have no version metadata to verify against).
     if version is not None:
-        # Use startswith with a trailing dot for "2.3.x", but also accept
-        # bare "2.3" as a valid prerelease/dev marker.
-        compatible = any(
-            version == prefix or version.startswith(prefix + ".")
-            for prefix in COMPATIBLE_VERSION_PREFIXES
-        )
-        if not compatible:
-            expected = ", ".join(f"{prefix}.x" for prefix in COMPATIBLE_VERSION_PREFIXES)
-            err(f"ERROR: RKA version '{version}' is incompatible with this plugin (requires {expected}).")
-            err("Upgrade RKA or install a matching plugin version.")
+        parsed = parse_version(version)
+        minimum = ".".join(str(n) for n in MINIMUM_BACKEND_VERSION)
+        if parsed is None:
+            # Unreadable version string: warn, but do not block. The binary
+            # itself will fail loudly if it really is incompatible.
+            err(f"NOTICE: could not parse RKA version '{version}'; skipping the compatibility check.")
+        elif parsed < MINIMUM_BACKEND_VERSION:
+            err(f"ERROR: RKA version '{version}' is older than this plugin supports (requires {minimum} or newer).")
+            err("Upgrade RKA, or install a plugin version matching your backend.")
+            err(
+                "If RKA is in fact newer than this and you are seeing a stale number, "
+                f"integration.json is reporting it: {integration_path()}"
+            )
             sys.exit(1)
 
     env = os.environ.copy()
