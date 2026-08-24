@@ -2280,6 +2280,31 @@ async def rka_evaluate_gate(
 # Retrieval & Search
 # ============================================================
 
+def _currency_marker(hit: dict) -> str:
+    """Render a search hit's currency as text, or empty when it is current.
+
+    `/api/search` returns `status`, `superseded_by` and `stale` per hit, but
+    this tool renders hits as lines of text and used to emit only type, id,
+    title and snippet. The fields arrived and were dropped, which left the
+    exact failure they were added to prevent: a superseded decision printed
+    identically to the one that replaced it, and a reader ranking on relevance
+    alone could not tell which was in force.
+
+    The marker goes on the header line rather than the snippet, because a
+    snippet is truncated and a reader skimming ids should not have to
+    read prose to notice that a result is dead.
+    """
+    superseded_by = hit.get("superseded_by")
+    if superseded_by:
+        return f"  ⚠ SUPERSEDED → {superseded_by}"
+    status = (hit.get("status") or "").strip().lower()
+    if status in {"superseded", "retracted", "abandoned"}:
+        return f"  ⚠ {status.upper()}"
+    if hit.get("stale"):
+        return "  ⚠ STALE"
+    return ""
+
+
 @tool(tier="always_on", category="core")
 async def rka_search(
     query: str,
@@ -2336,7 +2361,10 @@ async def rka_search(
             return f"No results for '{query}'{degraded_line}{backlog_line}"
         lines = []
         for res in results:
-            lines.append(f"[{res['entity_type']}] {res['entity_id']}: {res['title']}")
+            lines.append(
+                f"[{res['entity_type']}] {res['entity_id']}: {res['title']}"
+                f"{_currency_marker(res)}"
+            )
             if res.get("snippet"):
                 lines.append(f"  {res['snippet'][:500]}")
         return "\n".join(lines) + degraded_line + backlog_line

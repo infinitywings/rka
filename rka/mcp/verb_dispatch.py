@@ -1161,6 +1161,15 @@ async def dispatch_query(
             project_id=project_id,
         )
 
+    # Takes nothing but the project. It was registered in the scope->tool map
+    # and listed in the operations index without a branch here, so it resolved
+    # to a tool name and then fell through to `invalid_scope` — advertised and
+    # uncallable. That left an asymmetry worth naming: link_supersession could
+    # repair an orphaned supersede chain, but nothing could enumerate which
+    # chains needed repairing.
+    if scope == "orphan_supersedes":
+        return await legacy(project_id=project_id)
+
     if scope == "graph":
         return await legacy(
             include_types=f.get("include_types"),
