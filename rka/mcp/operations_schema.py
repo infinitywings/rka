@@ -2267,6 +2267,75 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ],
         "notes": None,
     },
+    "orphan_supersedes": {
+        "operation": "orphan_supersedes",
+        "tool": "rka_query",
+        "category": "decision",
+        "summary": "List decisions marked superseded with no replacement pointer.",
+        "signature": 'rka_query(args={"operation": "orphan_supersedes", "project_id": "prj_..."})',
+        "required_fields": ["project_id"],
+        "optional_fields": [],
+        "enums": {},
+        "examples": [
+            {
+                "description": "Find chains a reader cannot follow forward",
+                "call": {"operation": "orphan_supersedes", "project_id": "prj_01ABC"},
+            }
+        ],
+        "related_operations": ["link_supersession", "decision_tree", "staleness_impact"],
+        "role_tag": "ANY",
+        "notes": (
+            "A decision reading 'superseded' with an empty superseded_by says it is "
+            "dead but not what replaced it. The record carries no automatic pointer — "
+            "a human must name the replacement, then link_supersession reconnects it."
+        ),
+    },
+    "link_supersession": {
+        "operation": "link_supersession",
+        "tool": "rka_execute",
+        "category": "decision",
+        "summary": "Reconnect two existing decisions as superseded -> replacement.",
+        "signature": (
+            'rka_execute(args={"operation": "link_supersession", "project_id": "prj_...", '
+            '"old_decision_id": "dec_...", "new_decision_id": "dec_...", "apply": false})'
+        ),
+        "required_fields": ["project_id", "old_decision_id", "new_decision_id"],
+        "optional_fields": ["apply", "actor"],
+        "enums": {"actor": ["pi", "brain", "executor", "system"]},
+        "examples": [
+            {
+                "description": "Preview the repair first (apply defaults to false)",
+                "call": {
+                    "operation": "link_supersession",
+                    "project_id": "prj_01ABC",
+                    "old_decision_id": "dec_01OLD",
+                    "new_decision_id": "dec_01NEW",
+                },
+            },
+            {
+                "description": "Perform it once the pairing is confirmed",
+                "call": {
+                    "operation": "link_supersession",
+                    "project_id": "prj_01ABC",
+                    "old_decision_id": "dec_01OLD",
+                    "new_decision_id": "dec_01NEW",
+                    "apply": True,
+                },
+            },
+        ],
+        "related_operations": ["supersede_decision", "orphan_supersedes", "decision_tree"],
+        "role_tag": "BRAIN",
+        "notes": (
+            "NOT the same as supersede_decision, which CREATES the replacement. Use this "
+            "only when both rows already exist and only the chain between them is missing. "
+            "Replays the full sequence without creating anything: scope-version bump, the "
+            "superseded_by pointer, the 'supersedes' entity_link, the staleness cascade "
+            "over claims and clusters sourced from the old decision's journal entries, a "
+            "re-distill review row, and the decision_superseded event. Idempotent. "
+            "apply defaults to False because a wrong pointer is worse than a missing one — "
+            "it sends a reader confidently to an unrelated decision."
+        ),
+    },
     "supersede_decision": {
         "operation": "supersede_decision",
         "tool": "rka_execute",

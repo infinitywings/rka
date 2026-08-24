@@ -6262,6 +6262,78 @@ async def rka_check_integrity(*, project_id: str) -> str:
 # ============================================================
 
 
+@tool(category="decision")
+async def rka_orphan_supersedes(*, project_id: str) -> str:
+    """List decisions marked superseded that have no pointer to a replacement.
+
+    A decision reading `superseded` with an empty `superseded_by` tells a
+    reader it is dead but not what replaced it — the shape that sends a
+    session hunting for a successor it cannot reach. Pair with
+    `rka_link_supersession` to reconnect one.
+    """
+    async with _client(project_id) as c:
+        r = await c.get("/api/decisions/orphan-supersedes")
+        _raise_with_detail(r)
+        rows = r.json()
+    if not rows:
+        return "No orphaned supersede chains in this project."
+    lines = [f"{len(rows)} orphaned supersede chain(s):"]
+    for row in rows:
+        lines.append(f"  {row['id']}  [{(row.get('updated_at') or '')[:10]}]")
+        lines.append(f"     {(row.get('question') or '')[:110]}")
+        if row.get("chosen"):
+            lines.append(f"     chose: {row['chosen'][:100]}")
+    lines.append(
+        "\nEach needs a human to name its replacement — the record carries no "
+        "automatic pointer. Then call rka_link_supersession."
+    )
+    return "\n".join(lines)
+
+
+@tool(category="decision")
+async def rka_link_supersession(
+    old_decision_id: str,
+    new_decision_id: str,
+    apply: bool = False,
+    actor: str = "pi",
+    *,
+    project_id: str,
+) -> str:
+    """Reconnect two EXISTING decisions as superseded -> replacement.
+
+    Distinct from `rka_supersede_decision`, which *creates* the replacement.
+    Use this when both rows already exist and only the chain between them is
+    missing. Replays the full supersede sequence without creating anything:
+    scope-version bump, the superseded_by pointer, the `supersedes`
+    entity_link, the staleness cascade over claims and clusters sourced from
+    the old decision's journal entries, a re-distill review row, and the
+    decision_superseded event. Idempotent — satisfied steps report ALREADY.
+
+    Args:
+        old_decision_id: the superseded decision missing its pointer
+        new_decision_id: the existing decision that replaced it
+        apply: False (default) previews the steps; True performs them. A
+            wrong pointer is worse than a missing one, so preview first.
+        actor: recorded on the backfilled rows (pi | brain | executor | system)
+    """
+    async with _client(project_id) as c:
+        r = await c.post("/api/decisions/link-supersession", json={
+            "old_decision_id": old_decision_id,
+            "new_decision_id": new_decision_id,
+            "apply": apply, "actor": actor,
+        })
+        _raise_with_detail(r)
+        data = r.json()
+    head = "APPLIED" if data.get("applied") else ("DRY RUN — nothing written" if data.get("dry_run") else "NO-OP")
+    lines = [f"{head}: {old_decision_id} -> {new_decision_id}"]
+    for step in data.get("steps", []):
+        mark = {"DONE": "+", "ALREADY": "=", "WOULD": ".", "SKIPPED": "-"}.get(step["state"], "?")
+        lines.append(f"  [{mark}] {step['step']}: {step['state']}  {step.get('detail') or ''}".rstrip())
+    if data.get("dry_run"):
+        lines.append("\nRe-call with apply=True to perform these steps.")
+    return "\n".join(lines)
+
+
 @tool(category="maintenance")
 async def rka_flag_stale(
     entity_id: str,
