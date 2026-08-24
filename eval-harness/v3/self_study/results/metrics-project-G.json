@@ -1,0 +1,127 @@
+{
+  "meta": {
+    "tool_version": "v3.self_study.1",
+    "generated_at": "2026-08-23T20:08:36Z",
+    "db_file": "rka-snapshot-2026-08-23.db",
+    "db_sha256": "85fd69bd81833961a472f7947b4c6be3b7397be11c2a13193531a31e1bf1e2e4",
+    "project_filter": "project-G"
+  },
+  "provenance_coverage": {
+    "available": true,
+    "n_claims": 118,
+    "covered": 118,
+    "coverage_pct": 100.0,
+    "coverage_strict": 118,
+    "coverage_strict_pct": 100.0,
+    "stale_claims": 0,
+    "verified_claims": 2,
+    "by_claim_type": {
+      "assumption": {
+        "claims": 6,
+        "covered": 6
+      },
+      "evidence": {
+        "claims": 5,
+        "covered": 5
+      },
+      "hypothesis": {
+        "claims": 9,
+        "covered": 9
+      },
+      "method": {
+        "claims": 44,
+        "covered": 44
+      },
+      "observation": {
+        "claims": 33,
+        "covered": 33
+      },
+      "result": {
+        "claims": 21,
+        "covered": 21
+      }
+    },
+    "covered_via": {
+      "pi_decision_link": 10,
+      "researcher_journal_link": 54,
+      "researcher_source_entry": 34,
+      "source_entry_cites_literature": 20
+    }
+  },
+  "research_debt_trajectory": {
+    "available": true,
+    "months": {
+      "2026-04": {
+        "created": 31,
+        "covered_now": 31,
+        "uncovered_now": 0,
+        "stale": 0,
+        "cumulative_uncovered": 0
+      },
+      "2026-06": {
+        "created": 30,
+        "covered_now": 30,
+        "uncovered_now": 0,
+        "stale": 0,
+        "cumulative_uncovered": 0
+      },
+      "2026-08": {
+        "created": 57,
+        "covered_now": 57,
+        "uncovered_now": 0,
+        "stale": 0,
+        "cumulative_uncovered": 0
+      }
+    },
+    "time_to_coverage_days": {
+      "count": 118,
+      "mean": 15.83,
+      "median": 0.0,
+      "p25": 0.0,
+      "p75": 61.97,
+      "min": 0.0,
+      "max": 62.51
+    },
+    "note": "covered_now reflects the snapshot's current link state, not the claim's state at creation; time_to_coverage approximates arrival via covering-link created_at."
+  },
+  "mission_cycle": {
+    "available": true,
+    "n_missions": 0,
+    "status": {},
+    "duration_hours": {
+      "count": 0
+    },
+    "checkpoints_per_mission": {
+      "count": 0
+    },
+    "open_checkpoints": 0,
+    "checkpoint_resolution_hours": {
+      "count": 0
+    },
+    "missions_with_report": 0,
+    "completion_to_first_journal_hours": {
+      "count": 0
+    }
+  },
+  "pipeline_flow": {
+    "available": true,
+    "interpretation_candidates": {
+      "by_review_status": {},
+      "by_disposition": {}
+    },
+    "claim_scope": {
+      "claims": 118,
+      "with_scope_revision": 0,
+      "with_reviewed_scope": 0,
+      "scope_coverage_pct": 0.0
+    },
+    "semantic_patch_proposals": {
+      "by_status": {}
+    },
+    "manuscript_claims": {
+      "claims": 0,
+      "with_evidence_binding": 0,
+      "with_ratification": 0
+    }
+  }
+}

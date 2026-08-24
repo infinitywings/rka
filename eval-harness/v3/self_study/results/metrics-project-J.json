@@ -1,0 +1,65 @@
+{
+  "meta": {
+    "tool_version": "v3.self_study.1",
+    "generated_at": "2026-08-23T20:08:36Z",
+    "db_file": "rka-snapshot-2026-08-23.db",
+    "db_sha256": "85fd69bd81833961a472f7947b4c6be3b7397be11c2a13193531a31e1bf1e2e4",
+    "project_filter": "project-J"
+  },
+  "provenance_coverage": {
+    "available": true,
+    "n_claims": 0
+  },
+  "research_debt_trajectory": {
+    "available": true,
+    "months": {}
+  },
+  "mission_cycle": {
+    "available": true,
+    "n_missions": 1,
+    "status": {
+      "pending": 1
+    },
+    "duration_hours": {
+      "count": 0
+    },
+    "checkpoints_per_mission": {
+      "count": 1,
+      "mean": 0.0,
+      "median": 0.0,
+      "p25": 0.0,
+      "p75": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "open_checkpoints": 0,
+    "checkpoint_resolution_hours": {
+      "count": 0
+    },
+    "missions_with_report": 0,
+    "completion_to_first_journal_hours": {
+      "count": 0
+    }
+  },
+  "pipeline_flow": {
+    "available": true,
+    "interpretation_candidates": {
+      "by_review_status": {},
+      "by_disposition": {}
+    },
+    "claim_scope": {
+      "claims": 0,
+      "with_scope_revision": 0,
+      "with_reviewed_scope": 0,
+      "scope_coverage_pct": null
+    },
+    "semantic_patch_proposals": {
+      "by_status": {}
+    },
+    "manuscript_claims": {
+      "claims": 0,
+      "with_evidence_binding": 0,
+      "with_ratification": 0
+    }
+  }
+}

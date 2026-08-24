@@ -1,0 +1,70 @@
+{
+  "n_pivots": 3,
+  "entry": {
+    "verdicts": {
+      "neither": 3
+    },
+    "current_first_rate": 0.0,
+    "any_status_signal": false,
+    "blind_stale_exposure": 0.0
+  },
+  "graph": {
+    "reaches_current_rate": 0.0,
+    "stale_marked_rate": 0.3333
+  },
+  "per_pivot": [
+    {
+      "old_id": "dec_000043REDACTED",
+      "new_id": "dec_000044REDACTED",
+      "entry": {
+        "old_rank": null,
+        "new_rank": null,
+        "n": 20,
+        "status_signal": false,
+        "verdict": "neither"
+      },
+      "graph": {
+        "seed": "lit_000045REDACTED",
+        "reaches_current": false,
+        "stale_marked": true
+      }
+    },
+    {
+      "old_id": "dec_000046REDACTED",
+      "new_id": "dec_000047REDACTED",
+      "entry": {
+        "old_rank": null,
+        "new_rank": null,
+        "n": 20,
+        "status_signal": false,
+        "verdict": "neither"
+      },
+      "graph": {
+        "seed": "jrn_000048REDACTED",
+        "reaches_current": false,
+        "stale_marked": false
+      }
+    },
+    {
+      "old_id": "dec_000049REDACTED",
+      "new_id": "dec_000050REDACTED",
+      "entry": {
+        "old_rank": null,
+        "new_rank": null,
+        "n": 20,
+        "status_signal": false,
+        "verdict": "neither"
+      },
+      "graph": {
+        "seed": "dec_000052REDACTED",
+        "reaches_current": false,
+        "stale_marked": false
+      }
+    }
+  ],
+  "meta": {
+    "project": "project-A",
+    "rka_url": "http://localhost:9712",
+    "db": "rka-snapshot-2026-08-23.db"
+  }
+}

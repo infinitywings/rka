@@ -1,0 +1,264 @@
+{
+  "n_pivots": 15,
+  "entry": {
+    "verdicts": {
+      "current_first": 11,
+      "neither": 2,
+      "stale_only": 2
+    },
+    "current_first_rate": 0.7333,
+    "any_status_signal": true,
+    "blind_stale_exposure": 0.0
+  },
+  "graph": {
+    "reaches_current_rate": 0.6667,
+    "stale_marked_rate": 0.6667
+  },
+  "per_pivot": [
+    {
+      "old_id": "dec_000008REDACTED",
+      "new_id": "dec_000007REDACTED",
+      "entry": {
+        "old_rank": 6,
+        "new_rank": null,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "stale_only"
+      },
+      "graph": {
+        "seed": "lit_000009REDACTED",
+        "reaches_current": false,
+        "stale_marked": false
+      }
+    },
+    {
+      "old_id": "dec_000010REDACTED",
+      "new_id": "dec_000011REDACTED",
+      "entry": {
+        "old_rank": 14,
+        "new_rank": 8,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "current_first"
+      },
+      "graph": {
+        "seed": "dec_000012REDACTED",
+        "reaches_current": true,
+        "stale_marked": true
+      }
+    },
+    {
+      "old_id": "dec_000013REDACTED",
+      "new_id": "dec_000014REDACTED",
+      "entry": {
+        "old_rank": null,
+        "new_rank": 5,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "current_first"
+      },
+      "graph": {
+        "seed": "jrn_000015REDACTED",
+        "reaches_current": false,
+        "stale_marked": false
+      }
+    },
+    {
+      "old_id": "dec_000016REDACTED",
+      "new_id": "dec_000017REDACTED",
+      "entry": {
+        "old_rank": null,
+        "new_rank": null,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "neither"
+      },
+      "graph": {
+        "seed": "lit_000018REDACTED",
+        "reaches_current": false,
+        "stale_marked": false
+      }
+    },
+    {
+      "old_id": "dec_000012REDACTED",
+      "new_id": "dec_000019REDACTED",
+      "entry": {
+        "old_rank": null,
+        "new_rank": null,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "neither"
+      },
+      "graph": {
+        "seed": "dec_000010REDACTED",
+        "reaches_current": true,
+        "stale_marked": true
+      }
+    },
+    {
+      "old_id": "dec_000006REDACTED",
+      "new_id": "dec_000020REDACTED",
+      "entry": {
+        "old_rank": 17,
+        "new_rank": 2,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "current_first"
+      },
+      "graph": {
+        "seed": "jrn_000021REDACTED",
+        "reaches_current": false,
+        "stale_marked": false
+      }
+    },
+    {
+      "old_id": "dec_000019REDACTED",
+      "new_id": "dec_000022REDACTED",
+      "entry": {
+        "old_rank": null,
+        "new_rank": 1,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "current_first"
+      },
+      "graph": {
+        "seed": "dec_000022REDACTED",
+        "reaches_current": true,
+        "stale_marked": true
+      }
+    },
+    {
+      "old_id": "dec_000023REDACTED",
+      "new_id": "dec_000024REDACTED",
+      "entry": {
+        "old_rank": null,
+        "new_rank": 1,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "current_first"
+      },
+      "graph": {
+        "seed": "dec_000024REDACTED",
+        "reaches_current": true,
+        "stale_marked": true
+      }
+    },
+    {
+      "old_id": "dec_000025REDACTED",
+      "new_id": "dec_000026REDACTED",
+      "entry": {
+        "old_rank": 16,
+        "new_rank": 2,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "current_first"
+      },
+      "graph": {
+        "seed": "dec_000027REDACTED",
+        "reaches_current": true,
+        "stale_marked": true
+      }
+    },
+    {
+      "old_id": "dec_000027REDACTED",
+      "new_id": "dec_000028REDACTED",
+      "entry": {
+        "old_rank": 18,
+        "new_rank": 5,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "current_first"
+      },
+      "graph": {
+        "seed": "jrn_000029REDACTED",
+        "reaches_current": true,
+        "stale_marked": true
+      }
+    },
+    {
+      "old_id": "dec_000026REDACTED",
+      "new_id": "dec_000030REDACTED",
+      "entry": {
+        "old_rank": 14,
+        "new_rank": 2,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "current_first"
+      },
+      "graph": {
+        "seed": "dec_000025REDACTED",
+        "reaches_current": true,
+        "stale_marked": true
+      }
+    },
+    {
+      "old_id": "dec_000031REDACTED",
+      "new_id": "dec_000032REDACTED",
+      "entry": {
+        "old_rank": 16,
+        "new_rank": null,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "stale_only"
+      },
+      "graph": {
+        "seed": "jrn_000033REDACTED",
+        "reaches_current": true,
+        "stale_marked": true
+      }
+    },
+    {
+      "old_id": "dec_000034REDACTED",
+      "new_id": "dec_000035REDACTED",
+      "entry": {
+        "old_rank": null,
+        "new_rank": 8,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "current_first"
+      },
+      "graph": {
+        "seed": "jrn_000036REDACTED",
+        "reaches_current": true,
+        "stale_marked": true
+      }
+    },
+    {
+      "old_id": "dec_000037REDACTED",
+      "new_id": "dec_000038REDACTED",
+      "entry": {
+        "old_rank": 12,
+        "new_rank": 5,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "current_first"
+      },
+      "graph": {
+        "seed": "jrn_000039REDACTED",
+        "reaches_current": true,
+        "stale_marked": true
+      }
+    },
+    {
+      "old_id": "dec_000040REDACTED",
+      "new_id": "dec_000041REDACTED",
+      "entry": {
+        "old_rank": null,
+        "new_rank": 8,
+        "n": 20,
+        "status_signal": true,
+        "verdict": "current_first"
+      },
+      "graph": {
+        "seed": "mis_000042REDACTED",
+        "reaches_current": false,
+        "stale_marked": false
+      }
+    }
+  ],
+  "meta": {
+    "project": "project-F",
+    "rka_url": "http://localhost:9712",
+    "db": "rka-snapshot-2026-08-23.db"
+  }
+}

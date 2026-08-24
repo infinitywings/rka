@@ -1,0 +1,152 @@
+{
+  "limit": 20,
+  "result_type_composition": {
+    "journal": 703,
+    "decision": 590,
+    "mission": 431,
+    "claim": 349,
+    "literature": 223,
+    "cluster": 65
+  },
+  "by_project": {
+    "project-F": {
+      "not_embedded": {
+        "n": 14,
+        "hit": 8,
+        "hit_rate": 0.5714,
+        "mrr": 0.0413,
+        "median_rank": 16
+      }
+    },
+    "project-G": {
+      "embedded": {
+        "n": 1,
+        "hit": 1,
+        "hit_rate": 1.0,
+        "mrr": 0.0556,
+        "median_rank": 18
+      }
+    },
+    "project-K": {
+      "embedded": {
+        "n": 4,
+        "hit": 4,
+        "hit_rate": 1.0,
+        "mrr": 0.2583,
+        "median_rank": 5
+      }
+    },
+    "project-B": {
+      "not_embedded": {
+        "n": 1,
+        "hit": 0,
+        "hit_rate": 0.0,
+        "mrr": 0.0,
+        "median_rank": null
+      },
+      "embedded": {
+        "n": 12,
+        "hit": 2,
+        "hit_rate": 0.1667,
+        "mrr": 0.0125,
+        "median_rank": 20
+      }
+    },
+    "project-J": {
+      "not_embedded": {
+        "n": 8,
+        "hit": 3,
+        "hit_rate": 0.375,
+        "mrr": 0.0319,
+        "median_rank": 16
+      }
+    },
+    "project-E": {
+      "not_embedded": {
+        "n": 9,
+        "hit": 4,
+        "hit_rate": 0.4444,
+        "mrr": 0.0358,
+        "median_rank": 17
+      }
+    },
+    "project-D": {
+      "not_embedded": {
+        "n": 2,
+        "hit": 0,
+        "hit_rate": 0.0,
+        "mrr": 0.0,
+        "median_rank": null
+      },
+      "embedded": {
+        "n": 8,
+        "hit": 0,
+        "hit_rate": 0.0,
+        "mrr": 0.0,
+        "median_rank": null
+      }
+    },
+    "project-I.": {
+      "not_embedded": {
+        "n": 1,
+        "hit": 0,
+        "hit_rate": 0.0,
+        "mrr": 0.0,
+        "median_rank": null
+      },
+      "embedded": {
+        "n": 3,
+        "hit": 0,
+        "hit_rate": 0.0,
+        "mrr": 0.0,
+        "median_rank": null
+      }
+    },
+    "project-C": {
+      "not_embedded": {
+        "n": 5,
+        "hit": 1,
+        "hit_rate": 0.2,
+        "mrr": 0.04,
+        "median_rank": 5
+      },
+      "embedded": {
+        "n": 6,
+        "hit": 1,
+        "hit_rate": 0.1667,
+        "mrr": 0.0278,
+        "median_rank": 6
+      }
+    },
+    "project-A": {
+      "not_embedded": {
+        "n": 1,
+        "hit": 0,
+        "hit_rate": 0.0,
+        "mrr": 0.0,
+        "median_rank": null
+      },
+      "embedded": {
+        "n": 45,
+        "hit": 12,
+        "hit_rate": 0.2667,
+        "mrr": 0.1696,
+        "median_rank": 1
+      }
+    }
+  },
+  "overall": {
+    "n": 120,
+    "hit": 36,
+    "hit_rate": 0.3,
+    "mrr": 0.0866,
+    "embedded": {
+      "n": 79,
+      "hit": 20
+    },
+    "not_embedded": {
+      "n": 41,
+      "hit": 16
+    }
+  }
+}
