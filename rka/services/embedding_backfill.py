@@ -88,8 +88,15 @@ class JobStatus:
 _REGISTRY: dict[str, JobStatus] = {}
 
 
-def register_job() -> JobStatus:
-    job_id = f"bf_{uuid.uuid4().hex[:12]}"
+def register_job(prefix: str = "bf") -> JobStatus:
+    """Register a job and return its live status handle.
+
+    `prefix` names the kind of work in the job id. It defaults to `bf` so
+    existing backfill callers are unchanged; knowledge-pack import passes
+    `imp`. The registry is shared because the status shape and the polling
+    contract are the same — only the work differs.
+    """
+    job_id = f"{prefix}_{uuid.uuid4().hex[:12]}"
     status = JobStatus(
         job_id=job_id,
         state="pending",
@@ -97,7 +104,7 @@ def register_job() -> JobStatus:
         _started_perf=time.monotonic(),
     )
     _REGISTRY[job_id] = status
-    logger.info("registered backfill job %s", job_id)
+    logger.info("registered %s job %s", prefix, job_id)
     return status
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import shutil
 import tempfile
@@ -18,6 +19,8 @@ from rka.models.knowledge_pack import KnowledgePackImportResult
 from rka.models.planning import validate_planning_payload
 from rka.models.semantic_patch import SemanticPatchProposalCreate
 from rka.services.base import BaseService, _now
+
+logger = logging.getLogger(__name__)
 from rka.services.outline_integrity import validate_unit_hierarchy
 
 PACK_SCHEMA_VERSION = 7
@@ -1018,6 +1021,7 @@ class KnowledgePackService(BaseService):
         fileobj: BinaryIO,
         project_id: str | None = None,
         project_name: str | None = None,
+        defer_indexing: bool = False,
     ) -> KnowledgePackImportResult:
         with zipfile.ZipFile(fileobj) as archive:
             manifest = self._load_manifest(archive)
@@ -1177,12 +1181,21 @@ class KnowledgePackService(BaseService):
                     shutil.rmtree(artifact_project_root, ignore_errors=True)
                 raise
 
-        # Success path. Sync indexes for the (now committed) rows + repair
-        # non-critical findings so the import doesn't land with stale derived
-        # counts (Brain-ratified addition during the upfront Backbrief).
-        await self._sync_imported_indexes(tables, target_project_id)
+        # Success path. Repair non-critical findings so the import doesn't land
+        # with stale derived counts (Brain-ratified addition during the upfront
+        # Backbrief).
+        #
+        # Index building is separated from row insertion because the two have
+        # wildly different costs: the rows land in seconds, while indexing
+        # embeds every entity one at a time and takes tens of minutes on a
+        # real pack. Run inline it exceeds any sane HTTP timeout, and the
+        # caller sees a failed request for an import that in fact succeeded
+        # and is still working. `defer_indexing` lets the route return as
+        # soon as the rows are durable and drive the rest as a job.
         if any(i.get("category") == "claim_count_mismatch" for i in integrity_issues):
             await self._recompute_cluster_claim_counts(target_project_id)
+        if not defer_indexing:
+            await self._sync_imported_indexes(tables, target_project_id)
 
         return KnowledgePackImportResult(
             project_id=target_project_id,
@@ -2085,6 +2098,68 @@ class KnowledgePackService(BaseService):
             f"INSERT INTO [{table}] ({column_sql}) VALUES ({placeholders})",
             [row[column] for column in columns],
         )
+
+    # entity_type -> (source table, columns _sync_indexes reads)
+    _INDEXABLE: dict[str, tuple[str, list[str]]] = {
+        "journal": ("journal", ["id", "content", "summary"]),
+        "decision": ("decisions", ["id", "question", "rationale"]),
+        "literature": ("literature", ["id", "title", "abstract", "notes"]),
+        "mission": ("missions", ["id", "objective", "context"]),
+        "claim": ("claims", ["id", "content"]),
+        "cluster": ("evidence_clusters", ["id", "label", "synthesis"]),
+    }
+
+    async def count_indexable(self, project_id: str) -> int:
+        """How many entities `index_project` will visit."""
+        total = 0
+        for _etype, (table, _cols) in self._INDEXABLE.items():
+            row = await self.db.fetchone(
+                f"SELECT COUNT(*) AS n FROM {table} WHERE project_id = ?", [project_id]
+            )
+            total += int((row or {}).get("n") or 0)
+        return total
+
+    async def index_project(
+        self,
+        project_id: str,
+        *,
+        status: Any | None = None,
+    ) -> int:
+        """Build FTS + vector indexes for every entity in one project.
+
+        Reads the rows back from the database rather than taking the parsed
+        manifest, so it can run after `import_pack` has returned and its
+        manifest is gone — and so a re-run repairs a partial pass instead of
+        needing the original upload.
+
+        `status`, when given, is a `JobStatus` whose `processed` counter is
+        advanced per entity. Indexing a real pack takes tens of minutes; a job
+        that reports nothing until it finishes is indistinguishable from one
+        that has hung, and while it runs the project is partly searchable with
+        no signal that more is coming.
+
+        Per-entity failures are logged and skipped rather than aborting: one
+        unembeddable row should not strand the remaining thousands.
+        """
+        indexer = BaseService(self.db, embeddings=self.embeddings, project_id=project_id)
+        done = 0
+        for etype, (table, cols) in self._INDEXABLE.items():
+            rows = await self.db.fetchall(
+                f"SELECT {', '.join(cols)} FROM {table} WHERE project_id = ? ORDER BY id",
+                [project_id],
+            )
+            for row in rows:
+                try:
+                    await indexer._sync_indexes(etype, row["id"], dict(row))
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "index_project: %s %s failed (skipped): %s",
+                        etype, row.get("id"), exc,
+                    )
+                done += 1
+                if status is not None:
+                    status.processed = done
+        return done
 
     async def _sync_imported_indexes(
         self,
