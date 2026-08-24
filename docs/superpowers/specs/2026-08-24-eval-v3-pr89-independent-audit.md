@@ -147,6 +147,36 @@ its result is recorded in the addendum when available.
 - Decide when to re-run retention in a genuine fade regime (150k+ distances
   or session-boundary probes).
 
+## Audit addendum — delta `acfa44a..5d73b64` (supersession repair surface)
+
+Two commits landed after the audit above; the delta was reviewed
+separately and the verdict is unchanged (**APPROVE**).
+
+- `c76e9f2` exposes the existing `rka admin repair-supersedes` capability
+  beyond the CLI, as thin adapters at all four layers
+  (`GET /api/decisions/orphan-supersedes`,
+  `POST /api/decisions/link-supersession`,
+  `rka_query(operation="orphan_supersedes")`,
+  `rka_execute(operation="link_supersession")`). Design points verified:
+  `apply` defaults to a dry-run preview (a wrong pointer being worse than a
+  missing one), the repair replays the full supersede sequence
+  (scope-version bump, entity_link, staleness cascade, review row, event)
+  idempotently, and no new logic was added outside the already-tested
+  service (12 service-layer tests). This directly discharges part of the
+  "4 orphaned decisions" outstanding item: the repair path now exists for
+  agents and the web UI; the remaining orphan pairs still need the PI to
+  name the successors.
+- `5d73b64` fixes a real reachability bug the first commit shipped:
+  FastAPI registration order let `/decisions/{dec_id}` shadow the new
+  literal path (404 "Decision orphan-supersedes not found"). The fix moves
+  the literal routes above the parameterised one with an explanatory note,
+  and adds three API-level tests — including a shadowing test verified by
+  reverting the route order — closing the "adapter tested only at the
+  service layer" gap the bug exposed.
+- Independent verification at `5d73b64`: CI full suite green (run #196);
+  this audit re-ran `test_decisions_supersede_routes.py`,
+  `test_admin_repair.py`, and the v2.7.0 drift tests locally — 951 passed.
+
 ## Audit addendum — suite runs
 
 - CI (`pytest` run #194, ubuntu, Python 3.13) on `acfa44a`: **success,
