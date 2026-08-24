@@ -1,4 +1,9 @@
-"""Academic import routes — BibTeX, DOI enrichment, Mermaid export, batch import."""
+"""Academic import routes — BibTeX, DOI enrichment, batch import.
+
+The Mermaid decision export lives in `decisions.py`: it is a `/decisions/`
+path, and this router is included after that one, so a literal registered
+here is shadowed by `/decisions/{dec_id}`.
+"""
 
 from __future__ import annotations
 
@@ -67,17 +72,6 @@ async def enrich_from_doi(
 
 
 # ---- Mermaid Decision Tree Export ----
-
-@router.get("/decisions/mermaid")
-async def export_mermaid(
-    phase: str | None = None,
-    active_only: bool = False,
-    svc: AcademicImportService = Depends(get_scoped_academic_service),
-):
-    """Export the decision tree as a Mermaid flowchart diagram."""
-    mermaid = await svc.export_decisions_mermaid(phase=phase, active_only=active_only)
-    return {"mermaid": mermaid}
-
 
 # ---- Document Ingestion ----
 
