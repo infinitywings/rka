@@ -2267,6 +2267,75 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ],
         "notes": None,
     },
+    "orphan_supersedes": {
+        "operation": "orphan_supersedes",
+        "tool": "rka_query",
+        "category": "decision",
+        "summary": "List decisions marked superseded with no replacement pointer.",
+        "signature": 'rka_query(args={"operation": "orphan_supersedes", "project_id": "prj_..."})',
+        "required_fields": ["project_id"],
+        "optional_fields": [],
+        "enums": {},
+        "examples": [
+            {
+                "description": "Find chains a reader cannot follow forward",
+                "call": {"operation": "orphan_supersedes", "project_id": "prj_01ABC"},
+            }
+        ],
+        "related_operations": ["link_supersession", "decision_tree", "staleness_impact"],
+        "role_tag": "ANY",
+        "notes": (
+            "A decision reading 'superseded' with an empty superseded_by says it is "
+            "dead but not what replaced it. The record carries no automatic pointer — "
+            "a human must name the replacement, then link_supersession reconnects it."
+        ),
+    },
+    "link_supersession": {
+        "operation": "link_supersession",
+        "tool": "rka_execute",
+        "category": "decision",
+        "summary": "Reconnect two existing decisions as superseded -> replacement.",
+        "signature": (
+            'rka_execute(args={"operation": "link_supersession", "project_id": "prj_...", '
+            '"old_decision_id": "dec_...", "new_decision_id": "dec_...", "apply": false})'
+        ),
+        "required_fields": ["project_id", "old_decision_id", "new_decision_id"],
+        "optional_fields": ["apply", "actor"],
+        "enums": {"actor": ["pi", "brain", "executor", "system"]},
+        "examples": [
+            {
+                "description": "Preview the repair first (apply defaults to false)",
+                "call": {
+                    "operation": "link_supersession",
+                    "project_id": "prj_01ABC",
+                    "old_decision_id": "dec_01OLD",
+                    "new_decision_id": "dec_01NEW",
+                },
+            },
+            {
+                "description": "Perform it once the pairing is confirmed",
+                "call": {
+                    "operation": "link_supersession",
+                    "project_id": "prj_01ABC",
+                    "old_decision_id": "dec_01OLD",
+                    "new_decision_id": "dec_01NEW",
+                    "apply": True,
+                },
+            },
+        ],
+        "related_operations": ["supersede_decision", "orphan_supersedes", "decision_tree"],
+        "role_tag": "BRAIN",
+        "notes": (
+            "NOT the same as supersede_decision, which CREATES the replacement. Use this "
+            "only when both rows already exist and only the chain between them is missing. "
+            "Replays the full sequence without creating anything: scope-version bump, the "
+            "superseded_by pointer, the 'supersedes' entity_link, the staleness cascade "
+            "over claims and clusters sourced from the old decision's journal entries, a "
+            "re-distill review row, and the decision_superseded event. Idempotent. "
+            "apply defaults to False because a wrong pointer is worse than a missing one — "
+            "it sends a reader confidently to an unrelated decision."
+        ),
+    },
     "supersede_decision": {
         "operation": "supersede_decision",
         "tool": "rka_execute",
@@ -5441,6 +5510,49 @@ def list_operations_grouped() -> dict[str, list[dict[str, Any]]]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Maturity — which operations belong in an agent's default choice space
+# ---------------------------------------------------------------------------
+# Measured 2026-08-23 against a five-month-old production store holding 5178
+# entities: these subsystems had ZERO rows. They are not broken and may be
+# deliberately ahead of use, but listing them alongside the core operations
+# means ~41% of what an agent reads while choosing is unreachable in practice.
+# Derived from category (plus a few named operations) rather than stamped on
+# all 150 entries, so the rule stays auditable and one edit re-classifies a
+# subsystem once it starts carrying data.
+PREVIEW_CATEGORIES: frozenset[str] = frozenset({
+    "manuscript",           # 3 manuscripts, 0 units / 0 claims / 0 bindings
+    "manuscript_planning",  # 0 branches
+    "experiments",          # 0 experiments
+    "semantic_patches",     # 0 proposals
+    "hooks",                # 0 hooks
+})
+
+# Preview operations inside an otherwise-stable category.
+PREVIEW_OPERATIONS: frozenset[str] = frozenset({
+    # interpretation-candidate pipeline: 0 candidates in production
+    "interpretation_candidates",
+    "create_interpretation_candidate",
+    "triage_interpretation_candidate",
+    "add_interpretation_hint",
+    # claim-scope contracts: 0 scope versions in production
+    "claim_scope",
+    "set_claim_scope",
+    # v2.4.0 removed the LLM path; this is a stub until it is re-wired
+    "generate_summary",
+})
+
+
+def operation_maturity(op_name: str) -> str:
+    """``'stable'`` or ``'preview'`` for one operation."""
+    entry = OPERATIONS_SCHEMA.get(op_name)
+    if entry is None:
+        return "unknown"
+    if op_name in PREVIEW_OPERATIONS or entry.get("category") in PREVIEW_CATEGORIES:
+        return "preview"
+    return "stable"
+
+
 def suggest_operations(query: str, *, top_n: int = 5) -> list[str]:
     """Return up to ``top_n`` best fuzzy matches for an unknown operation."""
     if not query:
@@ -5453,7 +5565,7 @@ def suggest_operations(query: str, *, top_n: int = 5) -> list[str]:
     )
 
 
-def list_operations_compact() -> dict[str, list[str]]:
+def list_operations_compact(*, include_preview: bool = False) -> dict[str, list[str]]:
     """v2.7.0 NO-COMPROMISE compromise-#3 mitigation.
 
     Returns a flat ``{tool: [op_name, ...]}`` map for the
@@ -5469,6 +5581,8 @@ def list_operations_compact() -> dict[str, list[str]]:
     """
     out: dict[str, list[str]] = {"rka_query": [], "rka_execute": []}
     for op_name, entry in OPERATIONS_SCHEMA.items():
+        if not include_preview and operation_maturity(op_name) == "preview":
+            continue
         tool = entry["tool"]
         out.setdefault(tool, []).append(op_name)
     for ops_list in out.values():
@@ -5476,7 +5590,9 @@ def list_operations_compact() -> dict[str, list[str]]:
     return out
 
 
-async def dispatch_describe(operation: str | None) -> str:
+async def dispatch_describe(
+    operation: str | None, *, include_preview: bool = False
+) -> str:
     """Render the rka_describe response as a JSON string.
 
     Behavior:
@@ -5494,19 +5610,28 @@ async def dispatch_describe(operation: str | None) -> str:
         # into a single comma-separated string per tool. Full per-op
         # schema is reachable via the FastMCP-rendered inputSchema or
         # via `rka_describe('<op_name>')`.
-        compact = list_operations_compact()
-        return json.dumps(
-            {
-                "rka_query": ", ".join(compact.get("rka_query", [])),
-                "rka_execute": ", ".join(compact.get("rka_execute", [])),
-                "total": len(OPERATIONS_SCHEMA),
-                "hint": (
-                    "rka_describe('<op>') for schema; rka_query/_execute "
-                    "inputSchema already carries per-branch enums."
-                ),
-            },
-            indent=2,
-        )
+        compact = list_operations_compact(include_preview=include_preview)
+        listed = sum(len(v) for v in compact.values())
+        payload: dict[str, Any] = {
+            "rka_query": ", ".join(compact.get("rka_query", [])),
+            "rka_execute": ", ".join(compact.get("rka_execute", [])),
+            "listed": listed,
+            "total": len(OPERATIONS_SCHEMA),
+            "hint": (
+                "rka_describe('<op>') for schema; rka_query/_execute "
+                "inputSchema already carries per-branch enums."
+            ),
+        }
+        if not include_preview:
+            hidden = len(OPERATIONS_SCHEMA) - listed
+            payload["preview_hidden"] = hidden
+            payload["preview_hint"] = (
+                f"{hidden} preview operations are omitted — subsystems with no "
+                "production data yet (manuscript, planning, experiments, "
+                "semantic-patches, hooks, interpretation staging, claim scope). "
+                "Pass include_preview=True to see them."
+            )
+        return json.dumps(payload, indent=2)
 
     op = operation.strip()
     entry = OPERATIONS_SCHEMA.get(op)
@@ -5524,12 +5649,15 @@ async def dispatch_describe(operation: str | None) -> str:
             indent=2,
         )
 
-    return json.dumps(entry, indent=2)
+    return json.dumps({**entry, "maturity": operation_maturity(op)}, indent=2)
 
 
 __all__ = [
     "OPERATIONS_SCHEMA",
+    "PREVIEW_CATEGORIES",
+    "PREVIEW_OPERATIONS",
     "dispatch_describe",
+    "operation_maturity",
     "get_operation_schema",
     "list_operations_grouped",
     "list_operations_compact",

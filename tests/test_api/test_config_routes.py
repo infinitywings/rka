@@ -262,3 +262,88 @@ async def test_422_responses_carry_error_detail_hint_keys(api_client):
     body = r.json()
     assert set(body.keys()) >= {"error", "detail", "hint"}
     assert body["error"] == "embedding_config_invalid"
+
+
+# --------------------------------------------------------------------------
+# base_url is part of the reconciliation identity (regression)
+# --------------------------------------------------------------------------
+
+
+def test_backend_signature_distinguishes_base_url():
+    """Repointing a dead backend must count as a change that needs backfill.
+
+    Regression: the signature was `(backend, model, dim)`, so moving
+    base_url from an unreachable host to a working one returned 200 with no
+    job and left every entity created during the outage unembedded --
+    observed in a real store as 1023 entities across six projects and three
+    months. Same dim means `reshape_all_vec_tables_if_needed` is a no-op, so
+    treating this as "changed" costs a backfill of the missing rows and
+    never discards an existing vector.
+    """
+    from rka.api.routes.config import _backend_signature
+
+    dead = EmbeddingConfig(
+        backend="openai_compat",
+        config={"base_url": "http://192.168.0.1:1234", "model": "m", "dim": 2560},
+    )
+    live = EmbeddingConfig(
+        backend="openai_compat",
+        config={"base_url": "http://host.docker.internal:1234", "model": "m", "dim": 2560},
+    )
+    assert _backend_signature(dead) != _backend_signature(live)
+
+
+def test_backend_signature_ignores_api_key():
+    """An api_key rotation still must NOT trigger a re-embed."""
+    from rka.api.routes.config import _backend_signature
+
+    a = EmbeddingConfig(
+        backend="openai_compat",
+        config={"base_url": "http://x", "model": "m", "dim": 4, "api_key": "old"},
+    )
+    b = EmbeddingConfig(
+        backend="openai_compat",
+        config={"base_url": "http://x", "model": "m", "dim": 4, "api_key": "new"},
+    )
+    assert _backend_signature(a) == _backend_signature(b)
+
+
+# --------------------------------------------------------------------------
+# explicit backfill trigger
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_backfill_trigger_422_without_a_backend(api_client):
+    """Reconciliation needs a backend; say so instead of silently doing nothing."""
+    client, _ = api_client
+    r = await client.post("/api/config/embedding/backfill")
+    assert r.status_code == 422
+    assert r.json()["error"] == "embedding_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_backfill_trigger_returns_job_when_backend_present(api_client):
+    """A trigger exists at all -- previously the only way in was a config edit."""
+    client, _ = api_client
+
+    class _Stub:
+        dim = 4
+        model_name = "stub"
+
+        async def embed_batch(self, texts, **kw):
+            return [[0.0] * 4 for _ in texts]
+
+    transport = client._transport
+    transport.app.state.embeddings = _Stub()
+
+    r = await client.post("/api/config/embedding/backfill?entity_types=claim")
+    assert r.status_code == 202
+    body = r.json()
+    assert body["job_id"]
+    assert body["entity_types"] == ["claim"]
+
+    status = await client.get(
+        f"/api/config/embedding/backfill/status?job_id={body['job_id']}"
+    )
+    assert status.status_code == 200

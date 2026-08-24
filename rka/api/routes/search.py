@@ -25,6 +25,10 @@ class SearchResult(BaseModel):
     title: str
     snippet: str
     score: float = 0.0
+    # Currency signals — absent means the source table carries none.
+    status: str | None = None
+    superseded_by: str | None = None
+    stale: bool | None = None
 
 
 @router.post("/search", response_model=list[SearchResult])
@@ -48,6 +52,9 @@ async def search(
             title=h.title,
             snippet=h.snippet,
             score=h.score,
+            status=h.status,
+            superseded_by=h.superseded_by,
+            stale=h.stale,
         )
         for h in hits
     ]

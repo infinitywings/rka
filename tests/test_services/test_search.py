@@ -159,3 +159,62 @@ class TestRRFMerge:
         svc = SearchService.__new__(SearchService)
         merged = svc._rrf_merge([], [], 0.3, 0.7)
         assert merged == []
+
+
+# ------------------------------------------------- currency signals on hits
+
+
+@pytest_asyncio.fixture
+async def superseded_svc(db: Database) -> SearchService:
+    """A superseded decision and its replacement, both FTS-indexed."""
+    svc = SearchService(db=db, embeddings=None)
+    for did, q in (
+        ("dec_old", "What is the headline evaluation metric"),
+        ("dec_new", "What is the headline evaluation metric"),
+    ):
+        await db.execute(
+            "INSERT INTO fts_decisions (id, question, rationale) VALUES (?, ?, ?)",
+            [did, q, "rationale text"],
+        )
+    # successor first: decisions.superseded_by is a self-referencing FK
+    await db.execute(
+        "INSERT INTO decisions (id, question, chosen, rationale, decided_by, phase,"
+        " status, project_id)"
+        " VALUES (?, ?, ?, ?, 'pi', 'p1', 'active', 'proj_default')",
+        ["dec_new", "What is the headline evaluation metric", "new choice", "r"],
+    )
+    await db.execute(
+        "INSERT INTO decisions (id, question, chosen, rationale, decided_by, phase,"
+        " status, superseded_by, project_id)"
+        " VALUES (?, ?, ?, ?, 'pi', 'p1', 'superseded', 'dec_new', 'proj_default')",
+        ["dec_old", "What is the headline evaluation metric", "old choice", "r"],
+    )
+    return svc
+
+
+async def test_search_hits_expose_supersession(superseded_svc: SearchService) -> None:
+    """A superseded decision must be distinguishable from a current one.
+
+    Regression: search returned only entity_type/entity_id/title/snippet/score,
+    so an agent could not tell an overturned decision from one still in force
+    and would act on stale knowledge. Every other read surface (ego_graph,
+    multi_hop, operation="entity") already carried status.
+    """
+    hits = {h.entity_id: h for h in await superseded_svc.search("headline evaluation metric")}
+    assert {"dec_old", "dec_new"} <= set(hits)
+
+    assert hits["dec_old"].status == "superseded"
+    assert hits["dec_old"].superseded_by == "dec_new"
+    assert hits["dec_new"].status == "active"
+    assert hits["dec_new"].superseded_by is None
+
+
+async def test_currency_absent_for_types_without_lifecycle(
+    search_svc: SearchService,
+) -> None:
+    """Types whose table carries no lifecycle column stay None, not crash."""
+    hits = await search_svc.search("timing")
+    assert hits, "fixture should produce hits"
+    for hit in hits:
+        assert hit.status is None or isinstance(hit.status, str)
+        assert hit.stale is None or isinstance(hit.stale, bool)

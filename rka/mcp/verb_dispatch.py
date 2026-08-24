@@ -909,6 +909,7 @@ _QUERY_DISPATCH: dict[str, str] = {
     "mission": "rka_get_mission",
     # decisions / graph
     "decision_tree": "rka_get_decision_tree",
+    "orphan_supersedes": "rka_orphan_supersedes",
     "graph": "rka_get_graph",
     "ego_graph": "rka_get_ego_graph",
     "graph_stats": "rka_graph_stats",
@@ -2068,6 +2069,7 @@ EXECUTE_OPERATIONS = (
     "update_status",
     "bulk_update",
     "supersede_decision",
+    "link_supersession",
     # decision lifecycle (PI ratification + calibration)
     "record_pi_selection",
     "record_outcome",
@@ -2805,6 +2807,26 @@ async def dispatch_execute(
             _REVIEW_OP_MAP[op],
             project_id=project_id,  # type: ignore[arg-type]
             payload=payload,
+        )
+
+    # --- link_supersession (direct legacy call; repairs an existing pair
+    # rather than creating a replacement, so it is not a dispatch_review
+    # target) ---
+    if op == "link_supersession":
+        old_id = kw.get("old_decision_id")
+        new_id = kw.get("new_decision_id")
+        if not old_id or not new_id:
+            return _err(
+                "missing_field",
+                "rka_execute(operation='link_supersession') requires "
+                "old_decision_id + new_decision_id",
+            )
+        return await _legacy("rka_link_supersession")(
+            old_decision_id=old_id,
+            new_decision_id=new_id,
+            apply=bool(kw.get("apply", False)),
+            actor=kw.get("actor", "pi"),
+            project_id=project_id,  # type: ignore[arg-type]
         )
 
     # --- scan_workspace (direct legacy call; not part of dispatch_review's

@@ -417,6 +417,12 @@ class QueryDecisionTreeArgs(ProjectScopedArgs):
     ] = None
 
 
+class OrphanSupersedesArgs(ProjectScopedArgs):
+    """[ANY] List decisions marked superseded with no pointer to a replacement."""
+
+    operation: Literal["orphan_supersedes"] = "orphan_supersedes"
+
+
 class QueryCalibrationMetricsArgs(ProjectScopedArgs):
     """[BRAIN] Aggregate calibration outcomes for decisions you've made.
 
@@ -1288,6 +1294,7 @@ QueryArgsUnion = Annotated[
         QueryCheckpointsArgs,
         # Decision / calibration / hooks / notifications
         QueryDecisionTreeArgs,
+        OrphanSupersedesArgs,
         QueryCalibrationMetricsArgs,
         QueryHooksArgs,
         QueryHookExecutionsArgs,
@@ -4676,6 +4683,49 @@ class SubmitReportArgs(ProjectScopedArgs):
         return self
 
 
+class LinkSupersessionArgs(ProjectScopedArgs):
+    """[BRAIN/PI] Reconnect an existing decision pair as superseded -> replacement.
+
+    Distinct from ``supersede_decision``, which CREATES the replacement. Use
+    this when both rows already exist and only the chain between them is
+    missing — a decision reading ``superseded`` with no ``superseded_by``
+    tells a reader it is dead but not what replaced it, which is precisely
+    what sends a session hunting for a successor it cannot reach.
+
+    Replays the full supersede sequence without creating anything: scope
+    version bump, the superseded_by pointer, the ``supersedes`` entity_link,
+    the staleness cascade over claims and clusters sourced from the old
+    decision's journal entries, a re-distill review row, and the
+    decision_superseded event. Idempotent.
+
+    ``apply`` defaults to False: a wrong pointer is worse than a missing one,
+    because it sends a reader confidently to an unrelated decision. Preview
+    first, then re-call with apply=True.
+    """
+
+    operation: Literal["link_supersession"] = "link_supersession"
+
+    old_decision_id: Annotated[
+        str,
+        Field(description="The superseded decision (dec_*) that is missing its pointer."),
+    ]
+    new_decision_id: Annotated[
+        str,
+        Field(description="The existing decision (dec_*) that replaced it."),
+    ]
+    apply: Annotated[
+        bool,
+        Field(
+            default=False,
+            description="False (default) previews the steps; True performs them.",
+        ),
+    ] = False
+    actor: Annotated[
+        Literal["pi", "brain", "executor", "system"],
+        Field(default="pi", description="Actor recorded on the backfilled rows."),
+    ] = "pi"
+
+
 class AdvanceRqArgs(ProjectScopedArgs):
     """Advance a research question through its lifecycle."""
 
@@ -5006,6 +5056,7 @@ ExecuteArgsUnion = Annotated[
         UpdateMissionStatusArgs,
         BulkUpdateArgs,
         SupersedeDecisionArgs,
+        LinkSupersessionArgs,
         PresentDecisionArgs,
         RecordPiSelectionArgs,
         RecordOutcomeArgs,
@@ -5200,6 +5251,8 @@ __all__ = [
     "ValidateReferenceArgs",
     "SubmitReportArgs",
     "AdvanceRqArgs",
+    "OrphanSupersedesArgs",
+    "LinkSupersessionArgs",
     "SubmitCheckpointArgs",
     "ResolveCheckpointArgs",
     "EvaluateGateArgs",

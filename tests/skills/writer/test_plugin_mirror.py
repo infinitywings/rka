@@ -10,14 +10,28 @@ CANONICAL_DIR = REPO_ROOT / "rka" / "skills" / "writer"
 PLUGIN_DIR = REPO_ROOT / "plugin" / "skills" / "writer"
 
 
+def _is_artifact(relative_path: Path) -> bool:
+    """Packaging junk that legitimately exists in only one tree.
+
+    ``._``-prefixed entries are macOS AppleDouble companions: on external,
+    network and sync volumes the filesystem cannot hold extended attributes,
+    so every write leaves a sibling — including ``.___pycache__`` for a
+    ``__pycache__`` directory. They are not skill content, and without this
+    guard the test fails for everyone working on such a volume (see the
+    macOS section of CLAUDE.md). ``tests/test_skills_packaging.py`` already
+    skips them; this keeps the two mirror checks consistent.
+    """
+    return any(
+        part == "__pycache__" or part.startswith("._") for part in relative_path.parts
+    ) or relative_path.suffix == ".pyc"
+
+
 def _files_under(root: Path) -> dict[Path, bytes]:
-    """Return stable relative paths and bytes, excluding Python caches."""
+    """Return stable relative paths and bytes, excluding packaging artifacts."""
     return {
         path.relative_to(root): path.read_bytes()
         for path in root.rglob("*")
-        if path.is_file()
-        and "__pycache__" not in path.parts
-        and path.suffix != ".pyc"
+        if path.is_file() and not _is_artifact(path.relative_to(root))
     }
 
 
