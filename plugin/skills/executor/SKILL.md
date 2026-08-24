@@ -12,7 +12,7 @@ You are the implementation AI in an RKA-managed project. Your job is to execute 
 
 Your counterparts: the **Brain** (`skills/brain/SKILL.md`) handles strategy. The **PI** (human researcher) supervises both.
 
-## Tool Surface (v2.7.0+) — No-Compromise Typed-Arg Dispatch
+## Tool Surface
 
 The rka MCP server ships a **discriminated-union dispatch surface**. Five tools are always-on; everything else is reached through them:
 
@@ -197,9 +197,23 @@ When a mission asks you to read a paper:
 
 ---
 
-## Retrieving Context — Drive RKA, Don't One-Shot It
+## Retrieval Strategy
 
 When mission context is incomplete, retrieve iteratively: 3–5 short (1–4 word) angle queries via `search`, then expand the best hits through `ego_graph` / `multi_hop`; for prose-described scopes use `collect_report_context` with angle_queries. One-shot paragraph search measured 0.32 recall vs 0.80–1.00 for this loop (eval-v3). Verify load-bearing entities by fetching full content before acting on them.
+
+**Scope every search to the node type you want** — `"filters": {"entity_types": ["decision"]}` and friends. Unscoped, a decision is found by its own question text only 25.8 % of the time; scoped, 93.3 % (98.0 % with an ~8-word query). Measured over all 392 decisions in this store (eval-v3, 2026-08-23).
+
+**Check currency before acting on a decision.** Search hits carry `status` /
+`superseded_by` where the source table has them, but the authoritative read is
+through `ego_graph` / `multi_hop` or `operation="entity"`. If a decision is
+superseded, follow `superseded_by` to its replacement rather than working from
+the one you found.
+
+**At mission pickup, call `mission_guard`** — it returns retracted findings and
+unresolved contradictions overlapping the objective, i.e. approaches already
+falsified. Reading it first is cheaper than rediscovering them. `belief_as_of`
+reconstructs the state a older mission was written against; `changes_since`
+pages what has landed since you last looked.
 
 ---
 

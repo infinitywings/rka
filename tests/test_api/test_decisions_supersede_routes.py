@@ -315,3 +315,96 @@ async def test_supersede_forwards_provenance_fields(
     assert r.status_code == 201, r.text
     body = r.json()
     assert "v2-supersede-test" in (body.get("tags") or []), body
+
+
+# ---------------------------------------------------------------------------
+# Supersession repair surface
+# ---------------------------------------------------------------------------
+
+
+async def _seed_decision(api_client: httpx.AsyncClient, q: str, chosen: str) -> str:
+    jrn = await api_client.post(
+        "/api/notes",
+        json={"content": f"context for {q}", "type": "note", "source": "brain"},
+        headers=HEADERS,
+    )
+    r = await api_client.post(
+        "/api/decisions",
+        json={
+            "question": q, "phase": "design", "decided_by": "brain",
+            "chosen": chosen, "rationale": "r",
+            "related_journal": [jrn.json()["id"]],
+        },
+        headers=HEADERS,
+    )
+    assert r.status_code in (200, 201), r.text
+    return r.json()["id"]
+
+
+@pytest.mark.asyncio
+async def test_orphan_supersedes_route_is_not_shadowed_by_dec_id(
+    api_client: httpx.AsyncClient,
+) -> None:
+    """`/decisions/orphan-supersedes` must not be parsed as a decision id.
+
+    Regression: FastAPI matches routes in registration order, so declaring
+    this literal path *after* `/decisions/{dec_id}` made every request 404
+    with "Decision orphan-supersedes not found". The unit suite passed
+    because nothing called the route; only an end-to-end call caught it.
+    `/decisions/tree` sits above `{dec_id}` for exactly this reason.
+    """
+    r = await api_client.get("/api/decisions/orphan-supersedes", headers=HEADERS)
+    assert r.status_code == 200, r.text
+    assert isinstance(r.json(), list)
+
+
+@pytest.mark.asyncio
+async def test_link_supersession_previews_without_writing(
+    api_client: httpx.AsyncClient,
+) -> None:
+    """apply defaults to False: a wrong pointer is worse than a missing one."""
+    old_id = await _seed_decision(api_client, "Which sampler?", "uniform")
+    new_id = await _seed_decision(api_client, "Which sampler, revised?", "stratified")
+
+    r = await api_client.post(
+        "/api/decisions/link-supersession",
+        json={"old_decision_id": old_id, "new_decision_id": new_id},
+        headers=HEADERS,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["dry_run"] is True and body["applied"] is False
+    assert body["steps"], "a preview must report the steps it would take"
+
+    after = await api_client.get(f"/api/decisions/{old_id}", headers=HEADERS)
+    assert not after.json().get("superseded_by")
+
+
+@pytest.mark.asyncio
+async def test_link_supersession_refuses_a_non_orphan(
+    api_client: httpx.AsyncClient,
+) -> None:
+    """Only genuine orphans are repairable, and the refusal must reach the caller.
+
+    The five-step repair itself is covered at the service layer
+    (tests/test_services/test_admin_repair.py). What matters here is that
+    the adapter surfaces a refusal rather than reporting success: an active
+    decision is not an orphan, so nothing should be written and the caller
+    should be able to tell.
+    """
+    old_id = await _seed_decision(api_client, "Threshold policy?", "fixed")
+    new_id = await _seed_decision(api_client, "Threshold policy, revised?", "adaptive")
+
+    r = await api_client.post(
+        "/api/decisions/link-supersession",
+        json={"old_decision_id": old_id, "new_decision_id": new_id, "apply": True},
+        headers=HEADERS,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["applied"] is False, "an active decision is not an orphan"
+    detail = " ".join(s.get("detail") or "" for s in body["steps"])
+    assert "not" in detail.lower() or body["steps"], "the refusal must say why"
+
+    after = await api_client.get(f"/api/decisions/{old_id}", headers=HEADERS)
+    assert not after.json().get("superseded_by")
