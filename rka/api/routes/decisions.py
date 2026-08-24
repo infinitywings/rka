@@ -75,6 +75,86 @@ async def get_decision_tree(
     return await svc.get_tree(phase=phase, active_only=active_only)
 
 
+# ============================================================
+# Orphaned supersede chains (repair surface)
+# ============================================================
+# A decision marked `superseded` with no `superseded_by` tells a reader that
+# it is dead but not what replaced it — the exact shape that sends a session
+# hunting for a successor it cannot reach. `rka admin repair-supersedes`
+# could already fix this, but only from a shell: an agent session or the web
+# UI had no path to it. These are thin adapters over the same service.
+
+
+class SupersessionLink(BaseModel):
+    """One (superseded, replacement) pair to reconnect."""
+
+    old_decision_id: str
+    new_decision_id: str
+    # Mutation is opt-in, mirroring `rka admin repair-supersedes --apply`.
+    # A wrong pointer is worse than a missing one: it sends a reader
+    # confidently to an unrelated decision. Default to a preview.
+    apply: bool = False
+    actor: str = "pi"
+
+
+@router.get("/decisions/orphan-supersedes")
+async def list_orphan_supersedes_route(
+    project_id: str = Depends(require_project),
+    db: Database = Depends(get_db),
+) -> list[dict]:
+    """Decisions marked superseded with no pointer to their replacement."""
+    from rka.services.admin_repair import list_orphan_supersedes
+
+    return await list_orphan_supersedes(db, project_id)
+
+
+@router.post("/decisions/link-supersession")
+async def link_supersession_route(
+    body: SupersessionLink,
+    project_id: str = Depends(require_project),
+    db: Database = Depends(get_db),
+) -> dict:
+    """Reconnect an existing decision pair as (superseded -> replacement).
+
+    Distinct from `POST /decisions/{id}/supersede`, which *creates* the
+    replacement. Here both rows already exist and only the chain between
+    them is missing, so this replays the full supersede sequence without
+    creating anything: scope_version bump, superseded_by, the `supersedes`
+    entity_link, the staleness cascade over claims and clusters sourced
+    from the old decision's journal entries, a re_distill_review row, and
+    the decision_superseded event. Idempotent — already-satisfied steps
+    report ALREADY.
+    """
+    from rka.services.admin_repair import repair_orphan_supersedes
+
+    reports = await repair_orphan_supersedes(
+        db,
+        project_id,
+        {body.old_decision_id: body.new_decision_id},
+        dry_run=not body.apply,
+        actor=body.actor,
+    )
+    if not reports:
+        raise HTTPException(422, "no pair supplied")
+    report = reports[0]
+    return {
+        "applied": bool(body.apply) and report.applied,
+        "dry_run": not body.apply,
+        "old_decision_id": body.old_decision_id,
+        "new_decision_id": body.new_decision_id,
+        "rolled_back": report.rolled_back,
+        "steps": [
+            {"step": s.name, "state": s.state, "detail": s.detail}
+            for s in report.steps
+        ],
+    }
+
+
+# NOTE: these literal paths MUST stay above `/decisions/{dec_id}` — FastAPI
+# matches in registration order, so a parameterised route declared first
+# swallows "orphan-supersedes" as a decision id (404 "Decision
+# orphan-supersedes not found"). `/decisions/tree` sits above it for the
+# same reason.
 @router.get("/decisions/{dec_id}", response_model=Decision)
 async def get_decision(dec_id: str, svc: DecisionService = Depends(get_scoped_decision_service)):
     dec = await svc.get(dec_id)
@@ -319,78 +399,3 @@ async def calibration_metrics(
 ):
     """Compute Brier + ECE over eligible decisions in the project."""
     return await cal_svc.compute_metrics()
-
-
-# ============================================================
-# Orphaned supersede chains (repair surface)
-# ============================================================
-# A decision marked `superseded` with no `superseded_by` tells a reader that
-# it is dead but not what replaced it — the exact shape that sends a session
-# hunting for a successor it cannot reach. `rka admin repair-supersedes`
-# could already fix this, but only from a shell: an agent session or the web
-# UI had no path to it. These are thin adapters over the same service.
-
-
-class SupersessionLink(BaseModel):
-    """One (superseded, replacement) pair to reconnect."""
-
-    old_decision_id: str
-    new_decision_id: str
-    # Mutation is opt-in, mirroring `rka admin repair-supersedes --apply`.
-    # A wrong pointer is worse than a missing one: it sends a reader
-    # confidently to an unrelated decision. Default to a preview.
-    apply: bool = False
-    actor: str = "pi"
-
-
-@router.get("/decisions/orphan-supersedes")
-async def list_orphan_supersedes_route(
-    project_id: str = Depends(require_project),
-    db: Database = Depends(get_db),
-) -> list[dict]:
-    """Decisions marked superseded with no pointer to their replacement."""
-    from rka.services.admin_repair import list_orphan_supersedes
-
-    return await list_orphan_supersedes(db, project_id)
-
-
-@router.post("/decisions/link-supersession")
-async def link_supersession_route(
-    body: SupersessionLink,
-    project_id: str = Depends(require_project),
-    db: Database = Depends(get_db),
-) -> dict:
-    """Reconnect an existing decision pair as (superseded -> replacement).
-
-    Distinct from `POST /decisions/{id}/supersede`, which *creates* the
-    replacement. Here both rows already exist and only the chain between
-    them is missing, so this replays the full supersede sequence without
-    creating anything: scope_version bump, superseded_by, the `supersedes`
-    entity_link, the staleness cascade over claims and clusters sourced
-    from the old decision's journal entries, a re_distill_review row, and
-    the decision_superseded event. Idempotent — already-satisfied steps
-    report ALREADY.
-    """
-    from rka.services.admin_repair import repair_orphan_supersedes
-
-    reports = await repair_orphan_supersedes(
-        db,
-        project_id,
-        {body.old_decision_id: body.new_decision_id},
-        dry_run=not body.apply,
-        actor=body.actor,
-    )
-    if not reports:
-        raise HTTPException(422, "no pair supplied")
-    report = reports[0]
-    return {
-        "applied": bool(body.apply) and report.applied,
-        "dry_run": not body.apply,
-        "old_decision_id": body.old_decision_id,
-        "new_decision_id": body.new_decision_id,
-        "rolled_back": report.rolled_back,
-        "steps": [
-            {"step": s.name, "state": s.state, "detail": s.detail}
-            for s in report.steps
-        ],
-    }
