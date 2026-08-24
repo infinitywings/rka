@@ -104,3 +104,45 @@ class TestUnscopedEndpointsAreUnaffected:
     async def test_create_project(self, client: httpx.AsyncClient):
         response = await client.post("/api/projects", json={"name": "scope test"})
         assert response.status_code == 200, response.text
+
+    @pytest.mark.asyncio
+    async def test_importing_a_pack_does_not_require_a_project(self, client):
+        """Import *creates* the project; its target comes from the upload.
+
+        This regressed when the default scope was removed: the pack service
+        factory resolved a request project and handed it over unused, so
+        importing failed with "Project scope is required" — an error about a
+        value the operation never reads. Asserted on the failure mode rather
+        than on success, because a valid pack is not needed to prove the
+        request got past scoping.
+        """
+        import io
+        import json
+        import zipfile
+
+        # A structurally valid pack: the point is to get past scoping, so the
+        # upload must not fail earlier on being unreadable. Bad bytes raise
+        # BadZipFile before the request reaches any of this, which would make
+        # the test fail in both the fixed and the broken state.
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr(
+                "manifest.json",
+                json.dumps(
+                    {
+                        "project": {"id": "prj_01IMPORTPROBE000000000000", "name": "import probe"},
+                        "tables": {},
+                    }
+                ),
+            )
+
+        response = await client.post(
+            "/api/projects/import",
+            files={"file": ("p.rka-pack.zip", buffer.getvalue(), "application/zip")},
+            data={"project_name": "import probe"},
+        )
+
+        assert "Project scope is required" not in response.text, (
+            "importing a pack must not demand a request project — its target "
+            f"comes from the upload (got {response.status_code}: {response.text[:200]})"
+        )
