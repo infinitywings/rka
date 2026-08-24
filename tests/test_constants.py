@@ -4,8 +4,9 @@ v2.6+: `DEFAULT_PROJECT_ID` is hardcoded to `SENTINEL_PROJECT_ID`. The
 pre-v2.6 `RKA_PROJECT` env-var override was removed because it
 reintroduced the silent-default failure mode that v2.6 explicitly
 eliminates at the MCP layer (every MCP tool now requires `project_id`
-as a kwarg). Non-MCP REST callers that don't pass `X-RKA-Project` or
-`?project_id=…` still resolve to `proj_default`.
+as a kwarg). Since the explicit-scope change, non-MCP REST callers that
+pass neither `X-RKA-Project` nor `?project_id=…` are refused with 422 on
+scoped endpoints — they no longer resolve to `proj_default`.
 
 Filed under the v2.6 `feat/project-id-required` PR. Historical
 context for the env-var-aware behavior lives in this file's git
@@ -74,14 +75,20 @@ class TestDefaultProjectIdIsHardcodedSentinel:
 
 
 class TestApiDepsImportsCanonicalConstant:
-    """api/deps.py and services/base.py must import DEFAULT_PROJECT_ID from
-    the canonical source (rka.constants), not redeclare it locally."""
+    """services/base.py must import DEFAULT_PROJECT_ID from the canonical
+    source (rka.constants), not redeclare it locally.
 
-    def test_api_deps_imports_default_project_id_from_constants(self):
+    api/deps.py no longer imports it at all: request scoping is explicit or
+    it is an error, so there is nothing there for a default to apply to.
+    """
+
+    def test_api_deps_does_not_default_the_request_scope(self):
         from rka.api import deps
-        from rka import constants
 
-        assert deps.DEFAULT_PROJECT_ID == constants.DEFAULT_PROJECT_ID
+        assert not hasattr(deps, "DEFAULT_PROJECT_ID"), (
+            "api/deps.py must not carry a default project — a silent default "
+            "is what filed scoped writes under the wrong project"
+        )
 
     def test_services_base_imports_default_project_id_from_constants(self):
         from rka.services import base
@@ -89,13 +96,32 @@ class TestApiDepsImportsCanonicalConstant:
 
         assert base.DEFAULT_PROJECT_ID == constants.DEFAULT_PROJECT_ID
 
-    def test_get_project_id_falls_back_to_default(self):
-        """When neither header nor query param is provided, get_project_id
-        returns DEFAULT_PROJECT_ID (= 'proj_default')."""
-        from rka.api.deps import get_project_id, DEFAULT_PROJECT_ID
+    def test_get_project_id_refuses_when_scope_is_absent(self):
+        """Neither header nor query param: refuse, do not guess.
 
-        result = get_project_id(x_rka_project=None, project_id=None)
-        assert result == DEFAULT_PROJECT_ID
+        This used to return `proj_default`. Thirty entities reached that
+        project that way — journal entries, claims and decisions whose typed
+        links all point into other projects.
+        """
+        import pytest
+        from fastapi import HTTPException
+        from rka.api.deps import get_project_id
+
+        with pytest.raises(HTTPException) as exc:
+            get_project_id(x_rka_project=None, project_id=None)
+        assert exc.value.status_code == 422
+        assert "X-RKA-Project" in exc.value.detail
+
+    def test_get_project_id_refuses_a_blank_scope(self):
+        """An empty header is absence, not a project named ''."""
+        import pytest
+        from fastapi import HTTPException
+        from rka.api.deps import get_project_id
+
+        for blank in ("", "   "):
+            with pytest.raises(HTTPException) as exc:
+                get_project_id(x_rka_project=blank, project_id=None)
+            assert exc.value.status_code == 422
 
     def test_get_project_id_prefers_header(self):
         from rka.api.deps import get_project_id

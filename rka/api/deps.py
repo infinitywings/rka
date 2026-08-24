@@ -7,7 +7,6 @@ import logging
 from fastapi import Depends, Header, HTTPException, Query, Request
 
 from rka.config import RKAConfig
-from rka.constants import DEFAULT_PROJECT_ID
 from rka.infra.database import Database
 from rka.infra.llm import LLMClient
 from rka.infra.embeddings import EmbeddingService
@@ -77,8 +76,35 @@ def get_project_id(
     x_rka_project: str | None = Header(default=None, alias="X-RKA-Project"),
     project_id: str | None = Query(default=None),
 ) -> str:
-    """Resolve project id from header/query with legacy-compatible default."""
-    return (x_rka_project or project_id or DEFAULT_PROJECT_ID).strip()
+    """Resolve the project id for a scoped operation. Explicit or nothing.
+
+    This used to fall back to ``DEFAULT_PROJECT_ID`` when neither the header
+    nor the query parameter was supplied. That default was silent, and silence
+    is the problem: a scoped write with no project did not fail, it landed in
+    the default project. Thirty entities in this database got there that way —
+    journal entries, claims and decisions whose typed links all point into
+    other projects, written between March and May 2026.
+
+    Nothing legitimate relies on the fallback. The web client always sends the
+    header, and every project-scoped MCP operation carries ``project_id`` as a
+    required field. What relied on it was callers that forgot — which is
+    exactly the case that must fail loudly.
+
+    Unscoped endpoints (``list_projects``, ``create_project``, ``health``,
+    pack import) do not depend on this function and are unaffected.
+    """
+    resolved = (x_rka_project or project_id or "").strip()
+    if not resolved:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Project scope is required: pass the X-RKA-Project header or a "
+                "project_id query parameter. This endpoint no longer falls back "
+                "to a default project, because doing so silently filed data "
+                "under the wrong project."
+            ),
+        )
+    return resolved
 
 
 def get_transport_actor(

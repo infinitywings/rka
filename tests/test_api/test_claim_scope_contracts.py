@@ -27,6 +27,8 @@ async def api_client(tmp_path: Path):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
             base_url="http://testserver",
+            # Scoped endpoints no longer fall back to a default project.
+            headers={"X-RKA-Project": "proj_default"},
         ) as client:
             yield client
     finally:
