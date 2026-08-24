@@ -732,8 +732,11 @@ function ClaimCard({ claim }: { claim: Claim }) {
               {claim.verified && <CheckCircle className="h-4 w-4 text-green-500" />}
               {claim.stale && <Badge variant="destructive">stale</Badge>}
               <Link to="/claim-scopes">
+                {/* Derived server-side and absent from older payloads. A badge
+                    is not worth taking the page down for, so treat a missing
+                    value as "unknown" rather than reading through it. */}
                 <Badge variant={claim.scope_readiness === "ready" ? "default" : "secondary"}>
-                  scope {claim.scope_readiness.replaceAll("_", " ")}
+                  scope {(claim.scope_readiness ?? "unknown").replaceAll("_", " ")}
                 </Badge>
               </Link>
               <span className="text-xs text-muted-foreground">

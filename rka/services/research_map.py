@@ -91,34 +91,55 @@ class ResearchMapService(BaseService):
         return result
 
     async def get_claims_for_cluster(self, cluster_id: str) -> list[dict]:
-        """Get individual claims in a cluster with provenance."""
+        """Get individual claims in a cluster with provenance.
+
+        `scope_readiness` is derived, not stored: it comes from joining the
+        claim's current scope contract and assessing it. This hand-built
+        projection omitted it while the research-map UI rendered it as a
+        required string, so opening any cluster threw on `undefined`.
+
+        The scope projection, join and assessment are reused from
+        ClaimsService rather than reimplemented, so readiness here means the
+        same thing it means everywhere else — and keeps meaning it when the
+        assessment rules change.
+        """
+        from rka.services.claims import ClaimService
+
         claims = await self.db.fetchall(
-            """SELECT c.*, j.content as source_content, j.type as source_type,
-                      j.source as source_actor
+            f"""SELECT c.*, j.content as source_content, j.type as source_type,
+                      j.source as source_actor,
+                      {ClaimService._SCOPE_PROJECTION}
                FROM claims c
                JOIN claim_edges ce ON ce.source_claim_id = c.id AND ce.relation = 'member_of'
                LEFT JOIN journal j ON j.id = c.source_entry_id
+               {ClaimService._SCOPE_JOIN}
                WHERE ce.cluster_id = ? AND c.project_id = ?
                ORDER BY c.confidence DESC""",
             [cluster_id, self.project_id],
         )
-        return [
-            {
-                "id": c["id"],
-                "claim_type": c["claim_type"],
-                "content": c["content"],
-                "confidence": c.get("confidence", 0.5),
-                "verified": bool(c.get("verified", 0)),
-                "evidence_status": c.get("evidence_status", "unassessed"),
-                "stale": bool(c.get("stale", 0)),
-                "source_entry_id": c["source_entry_id"],
-                "source_offset_start": c.get("source_offset_start"),
-                "source_offset_end": c.get("source_offset_end"),
-                "source_type": c.get("source_type"),
-                "source_actor": c.get("source_actor"),
-            }
-            for c in claims
-        ]
+
+        rows: list[dict] = []
+        for c in claims:
+            scope = ClaimService._scope_projection_to_model(c)
+            readiness, _findings = ClaimService._assess_scope(c, scope)
+            rows.append(
+                {
+                    "id": c["id"],
+                    "claim_type": c["claim_type"],
+                    "content": c["content"],
+                    "confidence": c.get("confidence", 0.5),
+                    "verified": bool(c.get("verified", 0)),
+                    "evidence_status": c.get("evidence_status", "unassessed"),
+                    "scope_readiness": readiness,
+                    "stale": bool(c.get("stale", 0)),
+                    "source_entry_id": c["source_entry_id"],
+                    "source_offset_start": c.get("source_offset_start"),
+                    "source_offset_end": c.get("source_offset_end"),
+                    "source_type": c.get("source_type"),
+                    "source_actor": c.get("source_actor"),
+                }
+            )
+        return rows
 
     async def get_cluster_detail(self, cluster_id: str) -> dict | None:
         """Get a cluster with claims, contradiction edges, and pending review items."""
