@@ -14,6 +14,19 @@ from rka.config import RKAConfig
 logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
+# Establishing a TCP connection either succeeds in well under a second or the
+# host is not going to answer. Passing a bare number as `timeout` replaces
+# openai's whole httpx.Timeout — connect included — so a request budget meant
+# for generation silently became the connect budget too, and an unreachable
+# host burned it in full on every attempt.
+_CONNECT_TIMEOUT_S = 5.0
+
+# The openai SDK client defaults to max_retries=2, i.e. three sends per call,
+# nested inside litellm. Retrying a connection that was refused cannot succeed
+# for a different reason the second time, so the budget only multiplies the
+# stall. litellm maps `num_retries` onto that client-level setting.
+_HEALTH_PROBE_TIMEOUT_S = 60
+
 
 # ---------- Instructor response models ----------
 
@@ -353,7 +366,10 @@ class LLMClient:
                 model=self.model,
                 messages=[{"role": "user", "content": "ping"}],
                 max_tokens=1,
-                timeout=60,
+                timeout=httpx.Timeout(
+                    _HEALTH_PROBE_TIMEOUT_S, connect=_CONNECT_TIMEOUT_S
+                ),
+                num_retries=0,
             )
             if self.config.llm_api_base:
                 kwargs["api_base"] = self.config.llm_api_base
@@ -392,7 +408,13 @@ class LLMClient:
                 messages=messages,
                 temperature=temperature,
                 max_retries=max_retries,
-                timeout=self.config.llm_request_timeout,
+                timeout=httpx.Timeout(
+                    self.config.llm_request_timeout, connect=_CONNECT_TIMEOUT_S
+                ),
+                # instructor consumes `max_retries` above as its own
+                # response-validation counter and never forwards it; this is
+                # the one that reaches the HTTP client.
+                num_retries=0,
                 think=self.config.llm_think,
             )
             if self.config.llm_api_base:

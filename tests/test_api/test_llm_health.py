@@ -110,16 +110,21 @@ async def test_is_available_falls_back_to_minimal_completion(monkeypatch: pytest
 
     assert await client.is_available() is True
     assert client.available is True
-    assert completion_calls == [
-        {
-            "model": "openai/qwen3.5-35b-a3b",
-            "messages": [{"role": "user", "content": "ping"}],
-            "max_tokens": 1,
-            "timeout": 60,
-            "api_base": "http://example.test/v1",
-            "api_key": "lm-studio",
-        }
-    ]
+    assert len(completion_calls) == 1
+    call = completion_calls[0]
+    timeout = call.pop("timeout")
+    assert call == {
+        "model": "openai/qwen3.5-35b-a3b",
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 1,
+        "num_retries": 0,
+        "api_base": "http://example.test/v1",
+        "api_key": "lm-studio",
+    }
+    # A bare number would replace openai's whole Timeout, connect included,
+    # and let an unreachable host hold the probe open for the full budget.
+    assert timeout.connect == 5.0
+    assert timeout.read == 60
 
 
 @pytest.mark.asyncio
@@ -157,4 +162,7 @@ async def test_extract_uses_configured_timeout(monkeypatch: pytest.MonkeyPatch):
     )
 
     assert result.answer == "ok"
-    assert captured["timeout"] == 37
+    assert captured["timeout"].read == 37
+    assert captured["timeout"].connect == 5.0
+    # instructor eats `max_retries`; `num_retries` is what reaches the client.
+    assert captured["num_retries"] == 0
