@@ -1348,7 +1348,6 @@ async def dispatch_query(
         return await legacy(
             topic=query or f.get("topic"),
             phase=f.get("phase"),
-            depth=o.get("depth", "summary"),
             project_id=project_id,
         )
 

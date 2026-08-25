@@ -36,7 +36,6 @@ async def get_context(
     return await engine.get_context(
         topic=data.topic,
         phase=data.phase,
-        depth=data.depth,
         project_id=project_id,
         anchor_aware_present=data.anchor_aware_present,
         anchor_aware_ids=data.anchor_aware_ids,

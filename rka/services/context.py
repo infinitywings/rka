@@ -94,6 +94,12 @@ _DEFAULT_PI_SOURCE_LIFT_NORMALIZED = 0.125
 # (<0.005 recall variance) — the recency-amplification mechanism is real
 # but its magnitude is too small to bridge the structural floor gaps.
 # cfg11 winner pins N=1 (the simplest shape; reproduces the pre-Phase-3.1
+# Per-entry render cap. Previously read from the LLM client
+# (`_evidence_block_limit`), which tied a purely local rendering decision
+# to whether a language model happened to be configured. 400 was the
+# fallback that applied whenever it was not.
+_EVIDENCE_BLOCK_LIMIT = 400
+
 # 1/(1+days) shape exactly). Operator override via RKA_CTX_RECENCY_SHAPE_N
 # preserved for Phase-3.2 candidate-set experimentation.
 _DEFAULT_RECENCY_SHAPE_N = 1.0
@@ -254,7 +260,6 @@ class ContextEngine:
         self,
         topic: str | None = None,
         phase: str | None = None,
-        depth: Literal["summary", "detailed"] = "summary",
         project_id: str = "proj_default",
         anchor_aware_present: bool = False,
         anchor_aware_ids: list[str] | None = None,
@@ -267,8 +272,6 @@ class ContextEngine:
             phase: Optional phase filter for the overview path. If both `topic`
                 and `phase` are None, falls through to the recent-with-importance
                 overview.
-            depth: 'summary' returns the ranked list as-is. 'detailed' adds an
-                LLM-generated narrative if an LLM is configured.
             project_id: Project scope. Defaults to 'proj_default'; callers
                 normally inject from the API request.
             anchor_aware_present: v2.5.4 (D4) signal that anchor-aware
@@ -354,17 +357,6 @@ class ContextEngine:
         rendered = [self._render_entry(entry) for entry in candidates]
         package.entries = rendered
         package.sources = [e["id"] for e in candidates]
-
-        # Optional narrative for callers that ask for `detailed`.
-        if depth == "detailed" and self.llm and candidates:
-            try:
-                narrative = await self.llm.produce_narrative(
-                    {"topic": topic, "phase": current_phase, "entries": rendered}
-                )
-                if narrative:
-                    package.narrative = narrative
-            except Exception as exc:
-                logger.debug("Narrative generation failed: %s", exc)
 
         if topic:
             package.note = (
@@ -645,7 +637,7 @@ class ContextEngine:
         a context-engine token budget.
         """
         if max_len is None:
-            max_len = self.llm._evidence_block_limit if self.llm else 400
+            max_len = _EVIDENCE_BLOCK_LIMIT
         etype = entry.get("entity_type", "unknown")
         eid = entry.get("id", "?")
 

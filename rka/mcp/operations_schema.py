@@ -450,7 +450,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "required_fields": ["project_id"],
         "optional_fields": ["query", "filters", "options"],
-        "enums": {"depth": ["summary", "detailed"]},
+        "enums": {},
         "examples": [
             {
                 "description": "Pull current project context.",
@@ -462,7 +462,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
                     "operation": "context",
                     "project_id": "prj_01ABC...",
                     "query": "RAG benchmark methodology",
-                    "options": {"depth": "detailed"},
                 },
             },
         ],

@@ -3064,7 +3064,6 @@ async def rka_export(format: str = "markdown", scope: str = "state", *, project_
 async def rka_get_context(
     topic: str | None = None,
     phase: str | None = None,
-    depth: str = "summary",
     *,
     project_id: str,
 ) -> str:
@@ -3079,11 +3078,10 @@ async def rka_get_context(
         topic: Search topic for semantic context retrieval. Omit for an
             importance-ranked overview of recent project state.
         phase: Filter to a specific research phase.
-        depth: "summary" (default) returns the ranked list as-is.
             "detailed" adds an LLM-generated narrative if an LLM is configured.
     """
     async with _client(project_id) as c:
-        body = {"topic": topic, "phase": phase, "depth": depth}
+        body = {"topic": topic, "phase": phase}
         r = await c.post("/api/context", json={k: v for k, v in body.items() if v is not None})
         _raise_with_detail(r)
         pkg = r.json()
