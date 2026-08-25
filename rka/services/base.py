@@ -258,7 +258,15 @@ class BaseService:
                 project_id=self.project_id,
             )
         except Exception as exc:
-            logger.debug("Embedding sync failed for %s/%s: %s", entity_type, entity_id, exc)
+            # Was `debug`, i.e. off by default, so a permanently stale vector
+            # produced no signal anywhere. Matches the wording _sync_fts has
+            # always used for the same class of failure.
+            logger.warning(
+                "Embedding sync failed for %s/%s: %s — vector index NOT updated "
+                "for this entity; it remains searchable by its previous text. "
+                "Run an embedding backfill to repair.",
+                entity_type, entity_id, exc,
+            )
 
     async def _sync_indexes(self, entity_type: str, entity_id: str, data: dict) -> None:
         """Sync both FTS5 and embedding indexes for an entity."""
