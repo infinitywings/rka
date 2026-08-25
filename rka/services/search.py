@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 def _tokens_remain(query: str) -> bool:
     """True when a constraint-stripped query still carries content tokens."""
-    return bool(re.findall(r"[a-zA-Z0-9]{3,}", query))
+    return bool(re.findall(r"[^\W_]{3,}", query, re.UNICODE))
 
 
 # entity_type -> (source table, currency columns to lift onto the hit)
@@ -414,7 +414,7 @@ class SearchService:
         """
         import os
         import re
-        words = re.findall(r"[a-zA-Z0-9]+", query)
+        words = re.findall(r"[^\W_]+", query, re.UNICODE)
         if not words:
             return query
         content_words = [w for w in words if w.lower() not in cls._QUERY_STOPWORDS]
@@ -437,13 +437,26 @@ class SearchService:
                 continue
 
             try:
+                # The JOIN is what makes `limit` mean this project's top N.
+                # Ranking globally and filtering afterwards spent the whole
+                # budget on whichever projects happen to hold most of the
+                # corpus: two of them hold 68% of the journal rows here, and
+                # a small project searching its own material could get zero
+                # candidates back — indistinguishable from having nothing on
+                # the topic.
+                #
+                # It also drops rows whose source entity is gone, so the
+                # orphan FTS rows left behind by project deletion stop
+                # competing for slots without a separate reaper.
                 rows = await self.db.fetchall(
                     f"""SELECT f.id, f.rank
                         FROM {info['table']} f
+                        JOIN {info['source']} s ON s.id = f.id
                         WHERE {info['table']} MATCH ?
+                          AND s.project_id = ?
                         ORDER BY f.rank
                         LIMIT ?""",
-                    [fts_query, limit],
+                    [fts_query, self.project_id, limit],
                 )
             except Exception:
                 # FTS5 table might be empty or query invalid
@@ -552,7 +565,7 @@ class SearchService:
 
         tokens = {
             t.lower()
-            for t in re.findall(r"[a-zA-Z0-9]+", query)
+            for t in re.findall(r"[^\W_]+", query, re.UNICODE)
             if len(t) > 2 and t.lower() not in self._QUERY_STOPWORDS
         }
         if not tokens:
