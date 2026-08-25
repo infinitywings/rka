@@ -2123,13 +2123,14 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "summary": "Update a journal entry (content, type, confidence, links).",
         "signature": (
             "rka_execute(operation='update_note', *, project_id, id, "
-            "content=None, type=None, confidence=None, importance=None, "
-            "tags=None, phase=None, related_decisions=None, "
+            "content=None, summary=None, type=None, confidence=None, "
+            "importance=None, tags=None, phase=None, related_decisions=None, "
             "related_literature=None, related_mission=None)"
         ),
         "required_fields": ["project_id", "id"],
         "optional_fields": [
             "content",
+            "summary",
             "type",
             "confidence",
             "importance",

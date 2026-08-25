@@ -118,7 +118,7 @@ class WorkspaceIngestRequest(BaseModel):
         description="Tags to add to all ingested entries.",
     )
     phase: str | None = None
-    source: Literal["brain", "executor", "pi", "web_ui", "llm"] = "pi"
+    source: Literal["brain", "executor", "pi", "web_ui", "llm"] = "executor"
     dry_run: bool = False
 
 
@@ -202,6 +202,6 @@ class IngestFileRequest(BaseModel):
     content_type: str  # "text" | "bibtex" | "code" | "pdf_metadata"
     metadata: dict = Field(default_factory=dict)
     tags: list[str] = Field(default_factory=list)
-    source: str = "pi"
+    source: str = "executor"
     phase: str | None = None
     proposed_type: str = "finding"

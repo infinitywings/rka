@@ -2129,6 +2129,29 @@ EXECUTE_OPERATIONS = (
 )
 
 
+# Operations that MODIFY an existing row, where `source`, `confidence` and
+# `importance` must never be supplied by dispatch_execute's own signature
+# defaults. Threading them in rewrote fields the caller never mentioned: a PI
+# directive became an executor note and a `verified` finding reverted to
+# `hypothesis`, while `verbatim_input` survived the demotion so the row went
+# on to assert the Executor had written the PI's exact words.
+# The signature defaults for the three fields above, kept beside the set that
+# governs them so the two cannot drift apart.
+_IDENTITY_FIELD_DEFAULTS = {
+    "source": "executor",
+    "confidence": "hypothesis",
+    "importance": "normal",
+}
+
+_IDENTITY_SENSITIVE_UPDATES = frozenset({
+    "update_note",
+    "update_decision",
+    "update_literature",
+    "update_status",
+    "bulk_update",
+})
+
+
 async def dispatch_execute(
     operation: str,
     *,
@@ -2802,9 +2825,19 @@ async def dispatch_execute(
     }
     if op in _REVIEW_OP_MAP:
         payload = dict(kw)
-        # Always thread the operation-common kwargs into the payload
-        # when they're not already present — preserves the existing
-        # dispatch_review payload semantics.
+        # Thread the operation-common kwargs into the payload when they are
+        # not already present.
+        #
+        # On an update, three of them must not be threaded in unless the
+        # caller actually asked for them. They are lifted into named
+        # arguments by dispatch_execute_typed, so by the time they arrive
+        # here an omitted field and one the caller passed look identical —
+        # the only thing left to compare against is the default itself.
+        #
+        # A value that differs from the default was passed. A value equal to
+        # it either was omitted, or was passed and is a no-op write on an
+        # update; skipping both is correct, because writing "hypothesis" over
+        # a stored `verified` is exactly the damage.
         for k, v in (
             ("source", source),
             ("confidence", confidence),
@@ -2813,6 +2846,12 @@ async def dispatch_execute(
             ("phase", phase),
             ("tags", tags),
         ):
+            if (
+                op in _IDENTITY_SENSITIVE_UPDATES
+                and k in _IDENTITY_FIELD_DEFAULTS
+                and v == _IDENTITY_FIELD_DEFAULTS[k]
+            ):
+                continue
             payload.setdefault(k, v)
         return await dispatch_review(
             _REVIEW_OP_MAP[op],
