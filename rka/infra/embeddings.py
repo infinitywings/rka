@@ -176,8 +176,25 @@ class EmbeddingService:
             import struct
 
             vec_blob = struct.pack(f"{len(embedding)}f", *embedding)
+            # sqlite-vec vec0 tables do not honour the REPLACE conflict
+            # clause: re-embedding an entity that already has a vector raises
+            # "UNIQUE constraint failed on <table> primary key". The caller
+            # swallowed that, so an edited entity kept the vector for its
+            # withdrawn text — semantically retrievable by wording that is no
+            # longer there, and unretrievable by the wording that is. FTS
+            # updated correctly, so the entry looked repaired. It never
+            # self-healed: every later edit raised and was swallowed again.
+            #
+            # DELETE-then-INSERT is the form already proven in
+            # embedding_backfill.py. Both statements share the commit below,
+            # so a failed INSERT cannot leave the entity with no vector at all
+            # — which would be worse than a stale one.
             await self.db.execute(
-                f"INSERT OR REPLACE INTO {table} (id, embedding) VALUES (?, ?)",
+                f"DELETE FROM {table} WHERE id = ?",
+                [entity_id],
+            )
+            await self.db.execute(
+                f"INSERT INTO {table} (id, embedding) VALUES (?, ?)",
                 [entity_id, vec_blob],
             )
             await self.db.execute(
