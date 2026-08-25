@@ -41,6 +41,18 @@ class TestNothingAdvertisesDepth:
         blob = json.dumps(QueryContextArgs.model_json_schema())
         assert "depth" not in blob
 
+    def test_the_legacy_tool_docstring_does_not_promise_a_narrative(self):
+        """#107 deleted the `depth:` parameter doc but left its second line,
+        which then read as though `phase` accepted "detailed"."""
+        from rka.mcp import server
+
+        doc = inspect.getdoc(server.rka_get_context) or ""
+        for phrase in ("detailed", "narrative"):
+            assert phrase not in doc.lower(), (
+                f"rka_get_context's docstring still promises {phrase!r}; the "
+                "context engine has produced no narrative since 443a50d"
+            )
+
     def test_the_preserved_legacy_body_does_not_build_depth(self):
         from rka.mcp import server
 
