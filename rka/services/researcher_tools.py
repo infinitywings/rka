@@ -6,10 +6,47 @@ import json
 
 from rka.infra.ids import generate_id
 from rka.services.base import BaseService, _now, _precise_now
+from rka.services.jobs import JobQueue
+
+# entity_type -> the embed job the rest of the service layer enqueues for it.
+_EMBED_JOB = {
+    "journal": "note_embed",
+    "claim": "claim_embed",
+}
 
 
 class ResearcherToolsService(BaseService):
     """Lightweight tools that compose existing data — no new tables, no LLM, no background jobs."""
+
+    async def _index_new_row(
+        self, entity_type: str, entity_id: str, fts_data: dict,
+    ) -> None:
+        """Index a row this service inserted with raw SQL.
+
+        Every write here bypasses the service that owns the entity, so it
+        also bypassed the indexing those services do. The rows existed and
+        were reachable by id, and were invisible to both keyword and semantic
+        search — including all 15 recorded RQ conclusions, which is the
+        answer to a research question and the thing most worth finding later.
+
+        `_sync_fts` becomes a savepoint when the caller already owns the
+        connection, so this is safe inside the aggregate mutations in
+        `_merge_clusters` and `split_cluster`.
+        """
+        await self._sync_fts(entity_type, entity_id, fts_data)
+        job = _EMBED_JOB.get(entity_type)
+        if job and self.embeddings:
+            await JobQueue(self.db).enqueue(
+                job,
+                project_id=self.project_id,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                # Same shape the owning services use — notes.py builds
+                # "{project}:journal:{id}:{op}", claims.py "{project}:claim:…"
+                # — so a row written here dedupes against one written there.
+                dedupe_key=f"{self.project_id}:{entity_type}:{entity_id}:embed",
+                priority=125,
+            )
 
     # ------------------------------------------------------------------
     # 1. Changelog
@@ -305,6 +342,10 @@ class ResearcherToolsService(BaseService):
                    VALUES (?, ?, ?, 'emerging', 0, 'llm', ?, ?, ?)""",
                 [cluster_id, rq_id, spec["label"], self.project_id, _now(), _now()],
             )
+            await self._index_new_row(
+                "cluster", cluster_id,
+                {"label": spec["label"], "synthesis": ""},
+            )
 
             claim_ids = spec.get("claim_ids", [])
             for claim_id in claim_ids:
@@ -452,6 +493,10 @@ class ResearcherToolsService(BaseService):
             [target_id, research_question_id, target_label, target_synthesis,
              "brain" if target_synthesis else "llm", self.project_id, _now(), _now()],
         )
+        await self._index_new_row(
+            "cluster", target_id,
+            {"label": target_label, "synthesis": target_synthesis or ""},
+        )
 
         total_moved = 0
         for sid in normalized_source_ids:
@@ -555,6 +600,9 @@ class ResearcherToolsService(BaseService):
                        ?, ?, ?, ?)""",
             [journal_id, journal_content, related_lit, self.project_id, now, now],
         )
+        await self._index_new_row(
+            "journal", journal_id, {"content": journal_content, "summary": ""},
+        )
 
         # Create entity link: journal -> literature
         link_id = generate_id("link")
@@ -578,6 +626,9 @@ class ResearcherToolsService(BaseService):
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 [claim_id, journal_id, ann["claim_type"], ann["passage"],
                  ann.get("confidence", 0.5), self.project_id, now, now],
+            )
+            await self._index_new_row(
+                "claim", claim_id, {"content": ann["passage"]},
             )
 
             # derived_from link
@@ -744,6 +795,10 @@ class ResearcherToolsService(BaseService):
                            ?, ?, ?, ?)""",
                 [journal_id, f"RQ Conclusion ({status}): {conclusion}",
                  related_dec, self.project_id, now, now],
+            )
+            await self._index_new_row(
+                "journal", journal_id,
+                {"content": f"RQ Conclusion ({status}): {conclusion}", "summary": ""},
             )
             # Link journal -> decision
             link_id = generate_id("link")
