@@ -74,9 +74,15 @@ class NoteService(BaseService):
 
             # If superseding another entry, update the back-reference.
             if data.supersedes:
+                # `status` is what list() filters on for hide_superseded
+                # (see the `status != 'superseded'` condition below); setting
+                # only `confidence` meant the flag never hid anything. 26
+                # superseded entries were live, 0 of them filterable.
+                # `decisions.py` has always set status here.
                 await self.db.execute(
                     "UPDATE journal SET superseded_by = ?, confidence = 'superseded', "
-                    "updated_at = ? WHERE id = ? AND project_id = ?",
+                    "status = 'superseded', updated_at = ? "
+                    "WHERE id = ? AND project_id = ?",
                     [entry_id, _now(), data.supersedes, self.project_id],
                 )
 
@@ -121,10 +127,14 @@ class NoteService(BaseService):
                 )
 
             # Sync cheap deterministic FTS now; enrichment is queued.
+            # `summary` is the condensed restatement — the text most likely
+            # to be searched for. Passing "" here left it unsearchable until
+            # someone edited the entry or ran a reindex; update() has always
+            # passed the real row.
             await self._sync_fts(
                 "journal",
                 entry_id,
-                {"content": data.content, "summary": ""},
+                {"content": data.content, "summary": data.summary or ""},
             )
             await self._enqueue_enrichment_jobs(
                 entry_id,

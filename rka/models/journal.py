@@ -67,7 +67,20 @@ class JournalEntryCreate(BaseModel):
     content: str
     type: AnyJournalType = "note"
     summary: str | None = None
-    source: Literal["brain", "executor", "pi", "web_ui", "llm"] = "pi"
+    # Defaults to `executor`, matching RecordNoteArgs on the MCP surface.
+    # It defaulted to `pi` here, so any REST caller that omitted the field
+    # silently claimed PI authorship — the strongest provenance signal in the
+    # system, asserted by omission. 46 live entries claim source='pi' with no
+    # verbatim record, 22 of them in real research projects, and none of them
+    # came from a caller that meant to say it.
+    #
+    # The `source='pi' requires verbatim_input` rule is NOT enforced here.
+    # verbatim_input guards restatement — an agent putting the PI's meaning
+    # in its own words — and RecordNoteArgs enforces it on the surface where
+    # that happens. This model also serves workspace ingest, where `content`
+    # IS the PI's document and there is nothing to restate. The layer cannot
+    # tell the two apart, so it declines to guess.
+    source: Literal["brain", "executor", "pi", "web_ui", "llm"] = "executor"
     phase: str | None = None
     verbatim_input: str | None = None
     related_decisions: list[str] | None = None

@@ -3814,6 +3814,17 @@ class UpdateNoteArgs(ProjectScopedArgs):
         Optional[str],
         Field(default=None, description="New content body."),
     ] = None
+    summary: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description=(
+                "New short summary. RecordNoteArgs could write this and "
+                "UpdateNoteArgs could not correct it, so a summary written "
+                "through the agent surface was uneditable there."
+            ),
+        ),
+    ] = None
     type: Annotated[
         Optional[NoteTypeLit],
         Field(default=None, description=(
