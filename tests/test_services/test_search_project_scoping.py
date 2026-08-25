@@ -122,6 +122,22 @@ class TestAccentedWordsSurviveTokenization:
         """
         assert re.findall(r"[a-zA-Z0-9]+", "résumé") == ["r", "sum"]
 
+    def test_underscores_still_split(self):
+        r"""`\w` would have kept them, and that is a real behaviour change.
+
+        `snake_case-mixed` splitting into three terms is deliberate and was
+        evaluated empirically (eval-harness/tests/test_feature_flag.py, and
+        the mission Q7 it cites). The first version of this fix used `\w+`,
+        which admits the underscore; CI caught it. `[^\W_]+` keeps accented
+        letters whole without keeping the underscore.
+        """
+        assert re.findall(r"[^\W_]+", "snake_case-mixed", re.UNICODE) == [
+            "snake", "case", "mixed",
+        ]
+
+    def test_the_sanitizer_agrees(self):
+        assert SearchService._sanitize_fts_query("snake_case") == '"snake" OR "case"'
+
     def test_no_ascii_only_tokenizer_remains(self):
         src = inspect.getsource(search_module)
         assert "[a-zA-Z0-9]" not in src, (

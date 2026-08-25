@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 def _tokens_remain(query: str) -> bool:
     """True when a constraint-stripped query still carries content tokens."""
-    return bool(re.findall(r"\w{3,}", query, re.UNICODE))
+    return bool(re.findall(r"[^\W_]{3,}", query, re.UNICODE))
 
 
 # entity_type -> (source table, currency columns to lift onto the hit)
@@ -414,7 +414,7 @@ class SearchService:
         """
         import os
         import re
-        words = re.findall(r"\w+", query, re.UNICODE)
+        words = re.findall(r"[^\W_]+", query, re.UNICODE)
         if not words:
             return query
         content_words = [w for w in words if w.lower() not in cls._QUERY_STOPWORDS]
@@ -565,7 +565,7 @@ class SearchService:
 
         tokens = {
             t.lower()
-            for t in re.findall(r"\w+", query, re.UNICODE)
+            for t in re.findall(r"[^\W_]+", query, re.UNICODE)
             if len(t) > 2 and t.lower() not in self._QUERY_STOPWORDS
         }
         if not tokens:
