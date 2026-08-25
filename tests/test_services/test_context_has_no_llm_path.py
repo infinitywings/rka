@@ -49,6 +49,44 @@ class TestNoLanguageModelInTheContextPath:
         decision changed depending on whether a model was configured."""
         assert context_module._EVIDENCE_BLOCK_LIMIT == 400
 
+    def test_render_size_does_not_track_the_configured_context_window(self):
+        """The property that actually broke.
+
+        `max_len` was `self.llm._evidence_block_limit`, which bands on the
+        model's declared context window: 500 at 4k, 4000 at 128k+. So the
+        same entry rendered ten times larger on an instance whose settings
+        named a large model — including when that model answered nothing,
+        because the client object is truthy regardless of reachability.
+        On this repository's own project that inflated the response from
+        29,933 to 170,995 chars, past the MCP tool-result limit.
+        """
+
+        class _Client:
+            """Stands in for LLMClient, whose limits band on `ctx`."""
+
+            def __init__(self, ctx):
+                self.ctx = ctx
+
+            @property
+            def _evidence_block_limit(self):
+                return 4000 if self.ctx >= 128_000 else 500
+
+        entry = {
+            "entity_type": "journal",
+            "id": "jrn_x",
+            "type": "note",
+            "content": "x" * 9000,
+        }
+        renders = {
+            ContextEngine(db=None, search=None, llm=llm)._render_entry(entry)
+            for llm in (None, _Client(4_000), _Client(262_144))
+        }
+        assert len(renders) == 1, (
+            "context output changed with the configured context window; a local "
+            "render must not be sized by a remote model's advertised capacity"
+        )
+        assert len(renders.pop()) < 1000
+
     def test_narrative_generation_is_gone(self):
         assert "produce_narrative" not in inspect.getsource(context_module)
 
