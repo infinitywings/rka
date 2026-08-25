@@ -261,13 +261,8 @@ class QueryContextArgs(ProjectScopedArgs):
         Optional[dict[str, Any]],
         Field(default=None, description="Optional filters (e.g. {'phase': str})."),
     ] = None
-    options: Annotated[
-        Optional[dict[str, Any]],
-        Field(
-            default=None,
-            description="Optional options (e.g. {'depth': 'summary'|'detailed'}).",
-        ),
-    ] = None
+    # No `options`: it carried only `depth`, and once that was removed
+    # nothing in dispatch_query read it. See test_context_surface_is_honest.
 
 
 class QuerySearchArgs(ProjectScopedArgs):

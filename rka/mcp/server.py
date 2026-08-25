@@ -3078,7 +3078,6 @@ async def rka_get_context(
         topic: Search topic for semantic context retrieval. Omit for an
             importance-ranked overview of recent project state.
         phase: Filter to a specific research phase.
-            "detailed" adds an LLM-generated narrative if an LLM is configured.
     """
     async with _client(project_id) as c:
         body = {"topic": topic, "phase": phase}
@@ -7663,7 +7662,7 @@ async def _rka_query_legacy_impl(
     if s == "status":
         return await _query_get(project_id, "/api/status")
     if s == "context":
-        body = {"topic": query, "phase": f.get("phase"), "depth": f.get("depth", "summary")}
+        body = {"topic": query, "phase": f.get("phase")}
         return await _query_post(project_id, "/api/context", body)
     if s == "search":
         if not query:

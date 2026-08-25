@@ -446,10 +446,10 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "summary": "Load current project state + recent knowledge for a topic.",
         "signature": (
             "rka_query(operation='context', *, project_id, query=None, "
-            "filters={'phase': str}, options={'depth': 'summary'|'detailed'})"
+            "filters={'phase': str})"
         ),
         "required_fields": ["project_id"],
-        "optional_fields": ["query", "filters", "options"],
+        "optional_fields": ["query", "filters"],
         "enums": {},
         "examples": [
             {
@@ -457,7 +457,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
                 "call": {"operation": "context", "project_id": "prj_01ABC..."},
             },
             {
-                "description": "Topic-scoped detailed context.",
+                "description": "Topic-scoped context.",
                 "call": {
                     "operation": "context",
                     "project_id": "prj_01ABC...",

@@ -982,7 +982,6 @@ async def dispatch_query(
     query: str | None = None,
     limit: int | None = None,
     filters: dict[str, Any] | None = None,
-    options: dict[str, Any] | None = None,
     ids: list[str] | None = None,
     include_sources: bool = False,
     include_edges: bool = False,
@@ -1009,8 +1008,6 @@ async def dispatch_query(
         query: Query string for search-shaped scopes (search, multi_hop).
         limit: Result limit (folded into filters when applicable).
         filters: Per-scope filter dict.
-        options: Per-scope option dict (e.g. {'depth': 'detailed'} for
-            'context').
         ids: Entity IDs for the bounded ``resolve_entities`` operation.
         include_sources: Include terminal claim-source closure when resolving.
         include_edges: Include same-project typed edges when resolving.
@@ -1030,7 +1027,6 @@ async def dispatch_query(
     tool_name = _QUERY_DISPATCH[scope]
     legacy = _legacy(tool_name)
     f = filters or {}
-    o = options or {}
 
     # --- Scopes with NO kwargs other than project_id ---
     if scope in (
@@ -2992,7 +2988,6 @@ async def dispatch_query_typed(args: "BaseModel") -> str:  # type: ignore[name-d
             query=kw_all.get("query"),
             limit=kw_all.get("limit"),
             filters=typed_filters or None,
-            options=kw_all.get("options"),
             ids=kw_all.get("ids"),
             include_sources=kw_all.get("include_sources", False),
             include_edges=kw_all.get("include_edges", False),
