@@ -1900,10 +1900,17 @@ async def dispatch_session(
                 ok = r.is_success
                 code = r.status_code
         except Exception as exc:
+            # `str(httpx.ReadTimeout())` is the empty string, so the operation
+            # whose entire job is reporting reachability answered
+            # {"status": "unhealthy", "error": ""} — unhealthy for no stated
+            # reason. This catch is inside the verb, so the timeout guard on
+            # rka_query never sees it.
+            detail = str(exc)[:200] or f"{type(exc).__name__} (no message)"
             return json.dumps(
                 {
                     "status": "unhealthy",
-                    "error": str(exc)[:200],
+                    "error": detail,
+                    "kind": type(exc).__name__,
                 },
                 indent=2,
             )

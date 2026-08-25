@@ -239,7 +239,17 @@ class ArtifactService(BaseService):
 
     async def _extract_from_pdf(self, artifact_id: str, filepath: str) -> list[dict]:
         """Extract figures from a PDF using pymupdf + LLM."""
+        from rka.infra.llm import LLMUnavailableError
+
         figures = []
+        # `_extract_from_image` raises here; this path used to skip every page
+        # instead, and the caller then persisted extraction_status='complete'.
+        # That is durable state a status filter reads back as done, so an
+        # artifact nobody looked at was recorded as fully extracted.
+        if not self.llm:
+            raise LLMUnavailableError(
+                "ArtifactService figure extraction requires a configured LLM."
+            )
         try:
             import pymupdf
         except ImportError:

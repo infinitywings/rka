@@ -14,7 +14,7 @@ from rka.api.deps import (
     require_project,
 )
 from rka.infra.database import Database
-from rka.infra.llm import LLMClient
+from rka.infra.llm import LLMClient, LLMUnavailableError
 from rka.models.context import ContextPackage, ContextRequest
 from rka.models.journal import JournalEntryCreate
 from rka.services.context import ContextEngine
@@ -65,7 +65,11 @@ async def summarize(
 ):
     """On-demand topic summarization, stored as journal entry."""
     if llm is None:
-        raise HTTPException(status_code=503, detail="LLM not available for summarization")
+        # Not a bare HTTPException: the app-level LLMUnavailableError handler
+        # adds `error` and `hint`, and every other LLM-gated route already
+        # raises this. A raw 503 here made the same condition look different
+        # depending on which endpoint the caller happened to hit.
+        raise LLMUnavailableError("LLM not available for summarization")
 
     entries = []
     if data.entity_ids:

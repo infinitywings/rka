@@ -7470,6 +7470,39 @@ from rka.mcp.verb_dispatch import (  # noqa: E402, F811
 )
 
 
+def _timeout_error(exc: httpx.TimeoutException) -> str:
+    """Render an httpx timeout as something a caller can act on.
+
+    `str(httpx.ReadTimeout())` is the empty string, so a timed-out dispatch
+    surfaced as a tool error with no message at all — indistinguishable from
+    a crash, and silent about which endpoint or ceiling was involved. Nothing
+    in this module caught httpx exceptions: `_raise_with_detail` only ever
+    sees a response, and a timeout is raised before one exists.
+
+    A client-side timeout does not stop the server, which keeps working on
+    the request after the caller has given up. Say so, rather than implying
+    the operation was cancelled.
+    """
+    # `exc.request` is a property that raises RuntimeError when unset, so
+    # `getattr(exc, "request", None)` does not fall back — it propagates, and
+    # the renderer crashes on exactly the case it exists to describe.
+    try:
+        req = exc.request
+        where = f"{req.method} {req.url.path}"
+    except RuntimeError:
+        where = "the API"
+    return json.dumps({
+        "error": "api_timeout",
+        "kind": type(exc).__name__,
+        "message": (
+            f"No response from {where} within the client timeout. The server "
+            "may still be working on it — this call gave up, it did not cancel "
+            "the request."
+        ),
+        "api_url": API_URL,
+    }, indent=2)
+
+
 @tool(tier=_TIER_ALWAYS_ON, category="dispatch", always_load=True)
 async def rka_query(args: _QueryArgsUnion) -> str:
     """[ANY] READ from the project knowledge base. ALL reads flow through this verb.
@@ -7506,7 +7539,10 @@ async def rka_query(args: _QueryArgsUnion) -> str:
     of v2.7.0 compromise #3) or ``rka_describe('<op_name>')`` for
     full per-operation schema + examples.
     """
-    return await _dispatch_query_typed(args)
+    try:
+        return await _dispatch_query_typed(args)
+    except httpx.TimeoutException as exc:
+        return _timeout_error(exc)
 
 
 # Legacy untyped rka_query body preserved as a fallback callable for the
@@ -9024,7 +9060,10 @@ async def rka_execute(args: _ExecuteArgsUnion) -> str:
     of v2.7.0 compromise #3) or ``rka_describe('<op_name>')`` for
     full per-operation schema + examples.
     """
-    return await _dispatch_execute_typed(args)
+    try:
+        return await _dispatch_execute_typed(args)
+    except httpx.TimeoutException as exc:
+        return _timeout_error(exc)
 
 
 # Legacy untyped rka_execute body preserved as a fallback callable for

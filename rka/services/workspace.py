@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -50,6 +51,25 @@ if TYPE_CHECKING:
     from rka.services.notes import NoteService
 
 logger = logging.getLogger(__name__)
+
+# Consecutive LLM failures before a scan stops asking. One is not evidence of
+# a broken backend — `LLMClient.extract` reports a schema-invalid response and
+# a refused connection as the same exception — but three in a row is.
+_LLM_FAILURE_THRESHOLD = 3
+
+
+@dataclass
+class _LlmScanHealth:
+    """Per-scan LLM failure streak.
+
+    Deliberately not stored on the service: two scans can share an instance,
+    and one scan's dead backend must not disable another's.
+    """
+
+    consecutive_failures: int = 0
+
+    def record_success(self) -> None:
+        self.consecutive_failures = 0
 
 # Backward-compat aliases for any code referencing the old private names
 _EXTENSION_CATEGORY = EXTENSION_CATEGORY
@@ -111,6 +131,7 @@ class WorkspaceService:
 
         scan_id = generate_id("scan")
         capabilities = self._detect_capabilities(use_llm)
+        llm_health = _LlmScanHealth()
         ignores = _DEFAULT_IGNORES | set(ignore_patterns or [])
         max_bytes = int(max_file_size_mb * 1024 * 1024)
 
@@ -144,7 +165,7 @@ class WorkspaceService:
 
             try:
                 scanned = await self._classify_file(
-                    path, root, include_preview, capabilities,
+                    path, root, include_preview, capabilities, warnings, llm_health,
                 )
                 files.append(scanned)
             except Exception as exc:
@@ -359,7 +380,11 @@ class WorkspaceService:
                 if result:
                     narrative = result.narrative
             except Exception as exc:
-                logger.debug("Review narrative generation failed: %s", exc)
+                logger.warning("Review narrative generation failed: %s", exc)
+                narrative = (
+                    "Narrative unavailable: the configured language model did "
+                    f"not answer ({exc})."
+                )
 
         return BootstrapReview(
             scan_id=scan_id,
@@ -383,6 +408,8 @@ class WorkspaceService:
         root: Path,
         include_preview: bool,
         capabilities: ScanCapabilities,
+        warnings: list[str],
+        llm_health: "_LlmScanHealth",
     ) -> ScannedFile:
         """Classify a single file."""
         ext = path.suffix.lower()
@@ -422,8 +449,12 @@ class WorkspaceService:
                             proposed_tags = [t.lower() for t in classification.tags]
                             title_suggestion = classification.title_suggestion
                             llm_classified = True
+                        llm_health.record_success()
                     except Exception as exc:
-                        logger.debug("LLM classification failed for %s: %s", path.name, exc)
+                        self._record_llm_failure(
+                            llm_health, capabilities, warnings,
+                            "classifying", path.name, exc,
+                        )
 
         elif category == FileCategory.code:
             content = self._safe_read_text(path)
@@ -448,8 +479,12 @@ class WorkspaceService:
                         if meta:
                             title_suggestion = meta.title
                             llm_classified = True
+                        llm_health.record_success()
                     except Exception as exc:
-                        logger.debug("LLM PDF metadata failed for %s: %s", path.name, exc)
+                        self._record_llm_failure(
+                            llm_health, capabilities, warnings,
+                            "reading PDF metadata from", path.name, exc,
+                        )
 
         elif category == FileCategory.data:
             proposed_type = "observation"
@@ -815,8 +850,66 @@ class WorkspaceService:
         return extract_docx_text(path)
 
     def _detect_capabilities(self, use_llm: bool = True) -> ScanCapabilities:
-        """Check which optional features are available."""
+        """Check which optional features are wired.
+
+        `llm_available` is object-wiring, not reachability — a configured but
+        unanswering backend passes it. `_record_llm_failure` corrects it once
+        failures look systemic, so the rest of the walk does not repeat a call
+        that cannot succeed.
+        """
         return detect_capabilities(has_llm=use_llm and self.llm is not None)
+
+    @staticmethod
+    def _record_llm_failure(
+        state: "_LlmScanHealth",
+        capabilities: ScanCapabilities,
+        warnings: list[str],
+        doing: str,
+        filename: str,
+        exc: Exception,
+    ) -> None:
+        """Record one LLM failure, and give up only once it looks systemic.
+
+        Every file used to retry independently and swallow the result at
+        `logger.debug`, which is off by default. Against a backend that does
+        not answer, each attempt costs the full connect budget, the walk is
+        serial, and `max_files` defaults to 5000 — so one request could run
+        for a very long time and still return HTTP 200 with an empty
+        `warnings` list.
+
+        Giving up on the *first* failure overcorrects, because
+        `LLMClient.extract` raises `LLMUnavailableError` for everything: a
+        refused connection and a healthy model returning one tag where the
+        schema wants two arrive here as the same type with the same message.
+        Latching on that would let a single awkward file downgrade the rest
+        of a scan against a backend that is working fine.
+
+        So: count consecutive failures, reset on any success, and stop only
+        after `_LLM_FAILURE_THRESHOLD` in a row. A dead backend still costs a
+        handful of files instead of five thousand; an isolated bad response
+        costs that one file and nothing else. Either way it is logged at
+        warning and named in the manifest.
+        """
+        state.consecutive_failures += 1
+        logger.warning("LLM failed while %s %s: %s", doing, filename, exc)
+
+        if state.consecutive_failures < _LLM_FAILURE_THRESHOLD:
+            warnings.append(f"LLM failed while {doing} {filename}: {exc}")
+            return
+        if not capabilities.llm_available:
+            return
+
+        capabilities.llm_available = False
+        warnings.append(
+            f"LLM enhancement disabled for the rest of this scan after "
+            f"{state.consecutive_failures} consecutive failures, most recently "
+            f"while {doing} {filename} ({exc}). Remaining files were classified "
+            f"without it."
+        )
+        logger.warning(
+            "LLM enhancement disabled for this scan after %d consecutive failures",
+            state.consecutive_failures,
+        )
 
     # ================================================================
     # Public: Host-side scan
