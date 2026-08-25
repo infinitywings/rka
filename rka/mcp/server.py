@@ -7663,7 +7663,7 @@ async def _rka_query_legacy_impl(
     if s == "status":
         return await _query_get(project_id, "/api/status")
     if s == "context":
-        body = {"topic": query, "phase": f.get("phase"), "depth": f.get("depth", "summary")}
+        body = {"topic": query, "phase": f.get("phase")}
         return await _query_post(project_id, "/api/context", body)
     if s == "search":
         if not query:
