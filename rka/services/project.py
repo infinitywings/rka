@@ -216,6 +216,28 @@ class ProjectService(BaseService):
 
     # All project-scoped tables that must be cascade-deleted.
     # Order: dependents first (reverse of insert order).
+    # source table -> the index tables keyed by its ids.
+    #
+    # Neither `vec_*` nor `fts_*` carries a project_id, so they cannot be
+    # deleted by the project-scoped loop below and were simply left behind:
+    # 808 orphaned vector rows and 2913 orphaned FTS rows on this instance,
+    # from projects deleted months ago. They kept competing for slots in
+    # every live search — 26% of the vec_claims KNN window on average, 92%
+    # at worst — and the only reason they never appeared in results is that
+    # hydration filtered them out after they had already taken the slot.
+    #
+    # Deleted through a subquery against the source table, which means this
+    # must run BEFORE the source rows go.
+    _INDEX_TABLES: tuple[tuple[str, tuple[str, ...]], ...] = (
+        ("journal", ("vec_journal", "fts_journal")),
+        ("decisions", ("vec_decisions", "fts_decisions")),
+        ("literature", ("vec_literature", "fts_literature")),
+        ("missions", ("vec_missions", "fts_missions")),
+        ("claims", ("vec_claims", "fts_claims")),
+        ("evidence_clusters", ("fts_clusters",)),
+        ("artifacts", ("vec_artifacts",)),
+    )
+
     _DELETE_TABLES = (
         # Native manuscript and immutable validation histories.
         "manuscript_source_events",
@@ -673,6 +695,24 @@ class ProjectService(BaseService):
                WHERE project_id = ?""",
             [project_id],
         )
+
+        # Index rows first: they are keyed by the source ids and have no
+        # project_id of their own, so once the source rows are gone there is
+        # nothing left to identify them by.
+        for source, index_tables in self._INDEX_TABLES:
+            for index_table in index_tables:
+                try:
+                    await self.db.execute(
+                        f"DELETE FROM {index_table} WHERE id IN "
+                        f"(SELECT id FROM {source} WHERE project_id = ?)",
+                        [project_id],
+                    )
+                except sqlite3.OperationalError as exc:
+                    # sqlite-vec may be unavailable, and pre-migration
+                    # databases do not have every index table.
+                    if "no such table" not in str(exc).lower() and \
+                       "no such module" not in str(exc).lower():
+                        raise
 
         # Cascade delete in reverse dependency order
         for table in self._DELETE_TABLES:

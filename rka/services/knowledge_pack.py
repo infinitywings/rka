@@ -3412,6 +3412,127 @@ class KnowledgePackService(BaseService):
                 }
             )
 
+        issues.extend(await self._index_integrity_issues(pid))
+
+        return issues
+
+    # Index tables carry no project_id, so these checks are deliberately
+    # database-wide rather than project-scoped: an orphan's project is gone,
+    # which is precisely why it is an orphan.
+    _INDEX_SOURCES: tuple[tuple[str, tuple[str, ...]], ...] = (
+        ("journal", ("vec_journal", "fts_journal")),
+        ("decisions", ("vec_decisions", "fts_decisions")),
+        ("literature", ("vec_literature", "fts_literature")),
+        ("missions", ("vec_missions", "fts_missions")),
+        ("claims", ("vec_claims", "fts_claims")),
+        ("evidence_clusters", ("fts_clusters",)),
+        ("artifacts", ("vec_artifacts",)),
+    )
+
+    async def _index_integrity_issues(self, project_id: str) -> list[dict]:
+        """Index rows with no entity, and entities with no project.
+
+        Neither condition was detectable before: `check_integrity` reported
+        zero issues on an instance carrying 808 orphaned vector rows, 2913
+        orphaned FTS rows, and 35 journal entries whose project had been
+        deleted — rows that exist in the database and cannot be reached by
+        any product surface.
+
+        Reported, not repaired. `rka admin reindex` rebuilds FTS, an
+        embedding backfill rebuilds vectors, and re-homing stranded entities
+        is a judgement call about someone's research content, not a sweep.
+        """
+        issues: list[dict] = []
+
+        orphan_vec, orphan_fts = [], []
+        unreadable: list[str] = []
+        for source, index_tables in self._INDEX_SOURCES:
+            for index_table in index_tables:
+                # `vec_*` is a virtual table and needs the sqlite-vec module
+                # loaded to read. Its `_rowids` shadow is a plain table with
+                # the same ids, so the check works whether or not the
+                # extension is present — an integrity check that cannot look
+                # must not report "no problem".
+                target = (
+                    f"{index_table}_rowids"
+                    if index_table.startswith("vec_")
+                    else index_table
+                )
+                try:
+                    rows = await self.db.fetchall(
+                        f"""SELECT id FROM {target}
+                            WHERE id NOT IN (SELECT id FROM {source})
+                            LIMIT 50""",
+                    )
+                except Exception:
+                    # A pre-migration database without this index table.
+                    unreadable.append(target)
+                    continue
+                bucket = orphan_vec if index_table.startswith("vec_") else orphan_fts
+                bucket.extend(r["id"] for r in rows)
+
+        for cat, found, what, fix in (
+            ("orphaned_vector_rows", orphan_vec, "vectors", "an embedding backfill"),
+            ("orphaned_fts_rows", orphan_fts, "FTS rows", "`rka admin reindex`"),
+        ):
+            if found:
+                issues.append({
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(found),
+                    "ids": found[:10],
+                    "description": (
+                        f"{what} whose entity no longer exists; they consume "
+                        "candidate slots in every search before the project "
+                        "filter runs"
+                    ),
+                    "fix_action": f"Delete them, then repopulate with {fix}",
+                })
+
+        if unreadable:
+            cat = "index_check_incomplete"
+            issues.append({
+                "category": cat,
+                "severity": self._severity_for(cat),
+                "count": len(unreadable),
+                "ids": unreadable[:10],
+                "description": (
+                    "index tables this check could not read, so their "
+                    "contents are unverified rather than known-good"
+                ),
+                "fix_action": "Apply pending migrations, then re-run",
+            })
+
+        stranded: list[str] = []
+        for source, _ in self._INDEX_SOURCES:
+            try:
+                rows = await self.db.fetchall(
+                    f"""SELECT id FROM {source}
+                        WHERE project_id IS NOT NULL
+                          AND project_id NOT IN (SELECT id FROM projects)
+                        LIMIT 50""",
+                )
+            except Exception:
+                continue
+            stranded.extend(r["id"] for r in rows)
+
+        if stranded:
+            cat = "stranded_entities"
+            issues.append({
+                "category": cat,
+                "severity": self._severity_for(cat),
+                "count": len(stranded),
+                "ids": stranded[:10],
+                "description": (
+                    "entities whose project row is gone; they exist in the "
+                    "database and no API path can read them"
+                ),
+                "fix_action": (
+                    "Re-home them to a live project, or recreate the projects "
+                    "row. Do not purge — this is real content"
+                ),
+            })
+
         return issues
 
     @staticmethod
