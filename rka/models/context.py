@@ -26,7 +26,6 @@ class ContextRequest(BaseModel):
 
     topic: str | None = None
     phase: str | None = None
-    depth: Literal["summary", "detailed"] = "summary"
     anchor_aware_present: bool = False
     anchor_aware_ids: list[str] | None = None
 
