@@ -1,9 +1,22 @@
 # RKA Roadmap
 
-This roadmap turns the detailed [epistemic pipeline and manuscript workbench
+This roadmap now prioritizes a reliable, independently usable RKA research-
+knowledge core. Writer/Workbench and Agentic orchestration continue as related
+products, but will move to separately released repositories under the same
+RKA Ecosystem project.
+
+The repository and authority decision is recorded in
+[ADR 0012](docs/adr/0012-rka-ecosystem-repository-boundaries.md). The active
+execution source is the
+[RKA Ecosystem Repository Separation Plan](docs/superpowers/plans/2026-08-25-rka-ecosystem-repository-separation.md).
+The proposed repository-local milestones, cross-repository Project fields,
+issue slate, and disposition of the previous M6 backlog are recorded in the
+[RKA Ecosystem GitHub Slate](docs/superpowers/plans/2026-08-25-rka-ecosystem-github-slate.md).
+
+The earlier detailed [epistemic pipeline and manuscript workbench
 plan](docs/superpowers/plans/2026-08-14-rka-epistemic-pipeline-and-manuscript-workbench.md)
-into implementation milestones. It combines the ARA-inspired research-artifact
-substrate with a researcher-facing manuscript drafting workbench.
+remains the design and implementation history for the future `rka-writer`
+repository. It is no longer the immediate Core implementation priority.
 
 The M0 authority, stage, proposal, and provider decisions are recorded in
 [ADR 0001](docs/adr/0001-manuscript-workbench-authority-stage-and-ai-boundary.md).
@@ -32,11 +45,37 @@ proportionate-readiness boundary is recorded in
 The conflict-safe Markdown/LaTeX source, stable-anchor, recovery, and
 public/private drafting boundary is recorded in
 [ADR 0011](docs/adr/0011-conflict-safe-manuscript-source-synchronization.md).
+The ecosystem repository, authority, integration, migration, packaging, and
+release boundaries are recorded in
+[ADR 0012](docs/adr/0012-rka-ecosystem-repository-boundaries.md).
 
 The roadmap is ordered by dependency, not by invented delivery dates. Every
 milestone must satisfy its exit gate before dependent work is treated as ready.
 
-## Now
+## Current strategic priority
+
+RKA Core reliability comes first. No new Writer/Workbench or autonomous
+orchestration capability should be added to Core while the boundaries and
+public contracts are being stabilized.
+
+| Order | Ecosystem milestone | Outcome | Exit gate summary |
+|---|---|---|---|
+| **E0** | **Boundary freeze and inventory** | Fix authority, repository, API, plugin, and migration ownership before moving code. | Every table, route, MCP operation, skill, and major directory has one owner or explicit legacy disposition. |
+| **E1** | **Core reliability baseline** | Harden journal, provenance, project isolation, retrieval, claim edges, migrations, export/import, and recovery. | Core-only install/tests pass; no cross-project leakage; real backup upgrade and integrity pass. |
+| **E2** | **Stable external contract** | Freeze supported REST/MCP behavior and provide capability/version discovery plus legacy Writer export. | Public-contract-only clients complete core workflows and legacy Writer export round-trips. |
+| **E3** | **Agentic repository extraction** | Create `infinitywings/rka-agentic` from preserved history. | Agentic runs only through public Core contracts and tests independently. |
+| **E4** | **Writer repository extraction** | Create `infinitywings/rka-writer`, migrate Writer state, and move Workbench ownership. | Writer runs independently, imports legacy state, and detects stale Core references. |
+| **E5** | **RKA Core 3.0** | Remove active Writer/Agentic code from Core while preserving compatibility export and migration history. | Core and both downstream compatibility suites pass without destructive database changes. |
+| **E6** | **Ecosystem integration** | Maintain independent releases under one GitHub Project and compatibility matrix. | Core-only and supported combined deployments have reproducible smoke tests. |
+
+The detailed deliverables, rollback paths, and decision checkpoints for E0-E6
+are in the active execution plan linked above.
+
+## Previous Workbench program status
+
+The following section preserves the completed and audited Workbench program
+history. Its behavioral designs remain inputs to `rka-writer`; they do not
+override the current Core-first E0-E6 sequence.
 
 **M0 through M4 are complete on `main`. M5 / PR 9 (issue #60), the progressive
 outline and manuscript-unit editor, merged in PR
@@ -151,7 +190,7 @@ application, exact-text PI ratification, and restart/resume. The validation
 record is
 [`2026-08-15-workbench-m4-pr7-exit-evidence.md`](docs/superpowers/specs/2026-08-15-workbench-m4-pr7-exit-evidence.md).
 
-## Dependency map
+## Previous Workbench dependency map
 
 ```mermaid
 flowchart LR
@@ -168,7 +207,7 @@ flowchart LR
 M1 and M2 may proceed in parallel after M0. M2 must label missing experiment
 semantics rather than pretending that M1 is already complete.
 
-## Milestones
+## Previous Workbench milestones
 
 | Order | Milestone | Outcome | Planned work items | Exit gate |
 |---|---|---|---|---|
@@ -180,7 +219,7 @@ semantics rather than pretending that M1 is already complete.
 | **M5** | **Outline and drafting** | Turn the ratified spine into an expandable, evidence-linked manuscript. | PR 9 progressive outline and unit editor; PR 9.1 integrity hardening; PR 9.2 typed semantic core; PR 10 narrow Markdown source synchronization. | The researcher can expand and condense hierarchical units, draft in Markdown/LaTeX, navigate provenance, and apply conflict-safe writes without automatic Git operations. |
 | **M6** | **Intake, artifact views, and hardening** | Complete source intake, deterministic ARA-inspired views, grounded foresight, and production-quality reliability. | PR 11 Source Inbox; PR 12A artifact profile and deterministic viewer; PR 12B grounded research foresight; PR 13 end-to-end reliability and usability. | Imported sources are safe and traceable; projections are deterministic rather than authoritative; foresight is advisory; real-project, security, accessibility, migration, and concurrency suites pass. |
 
-## Tracking convention
+## Previous Workbench tracking convention
 
 - One GitHub milestone corresponds to each roadmap milestone above.
 - One GitHub issue corresponds to each planned PR-sized work item.
@@ -193,7 +232,7 @@ semantics rather than pretending that M1 is already complete.
   satisfied. A rendered UI, an LLM response, or green unit tests alone do not
   establish workflow correctness.
 
-## Cross-cutting constraints
+## Previous Workbench cross-cutting constraints
 
 - RKA remains the semantic authority; workbench and ARA-style views are
   projections over native RKA objects.
@@ -209,7 +248,7 @@ semantics rather than pretending that M1 is already complete.
 - Readiness is categorical (`Ready`, `Needs review`, `Blocked`, or
   `Exploratory`), never a paper score or acceptance prediction.
 
-## First useful release
+## Previous Workbench first useful release
 
 The first useful release spans M0–M5. It is reached when a researcher can start
 with an insight, develop and ratify a traceable paper spine, connect it to
