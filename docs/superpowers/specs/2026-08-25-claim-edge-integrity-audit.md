@@ -1,14 +1,15 @@
 # Claim-edge integrity independent audit and remediation record
 
-- Status: remediated candidate; ready for final review before commit
+- Status: remediated, post-push reviewed, and ready for pull-request review
 - Date: 2026-08-25
 - Baseline: `origin/main` at `57fa8f0`
 - Candidate branch: `fix/claim-edge-integrity`
-- Candidate commit before follow-up: `eb9faa3`
+- Candidate commits: `eb9faa3` (initial fix) and `a16bd40` (audit remediation)
 - Worktree:
   `/Volumes/FuSpace/Projects/rka/.claude/worktrees/rka-performance-eval-2d20e9`
-- Safety: no live database, service rebuild, merge, commit, push, or remote
-  change occurred during this audit and remediation
+- Safety: validation used only temporary databases; no live database mutation,
+  service rebuild, or merge occurred. The candidate commits were pushed to the
+  isolated branch only after regression testing and explicit PI authorization.
 
 ## 1. Audit verdict before remediation
 
@@ -103,7 +104,7 @@ expanded into this bounded correctness change.
 
 ## 6. Recommendation
 
-The initial `changes requested` verdict is resolved. The candidate is suitable
-for final human/code review and then a commit on `fix/claim-edge-integrity`.
-It should not be merged or pushed until that final review and the normal PR
-authorization occur.
+The initial `changes requested` verdict is resolved. Remote candidate
+`a16bd40` on `fix/claim-edge-integrity` passed the post-push code review and the
+complete 2,804-test Core gate. It is ready for normal pull-request review; it
+should be merged only through the repository's ordinary PR authorization.
