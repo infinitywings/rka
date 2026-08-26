@@ -194,12 +194,23 @@ See [Architecture](docs/ARCHITECTURE.md) for the runtime model, data layers, pro
 
 ## Roadmap
 
-The next product milestones concentrate on reducing the cognitive load between doing research and communicating it:
+The immediate priority is to harden RKA as an independently usable research-
+knowledge core. Optional products will then move to separate repositories under
+one RKA Ecosystem project:
 
-1. **Knowledge smoothing and readiness** — improve the path from noisy journal entries to reviewed claims, clusters, research questions, and scoped publication arguments.
-2. **Manuscript drafting workbench** — provide an interactive surface for discussing, navigating, editing, and auditing the paper spine and evolving draft.
-3. **ARA interoperability** — define a semantic crosswalk and deterministic materialization path from RKA projects to standards-conforming agent-native artifacts.
-4. **Dual-output evaluation** — test whether one longitudinal workflow can reduce authoring effort while improving paper traceability and ARA completeness.
+1. **Core reliability** — harden journal correctness, provenance, project
+   isolation, retrieval, claim edges, migrations, export/import, and recovery.
+2. **Stable integration contract** — freeze the supported REST/MCP surface and
+   provide version, capability, and compatibility discovery.
+3. **RKA Agentic extraction** — move Brain/Executor orchestration and runtime
+   state to `infinitywings/rka-agentic`.
+4. **RKA Writer extraction** — move the Writer skill, manuscript semantics,
+   academic-writing tools, and Workbench to `infinitywings/rka-writer`.
+5. **Core 3.0 and ecosystem validation** — slim the Core distribution only
+   after legacy-state migration and downstream compatibility tests pass.
+
+The Workbench, ARA interoperability, and dual-output evaluation remain planned
+Writer/ecosystem work; they are not the immediate Core implementation target.
 
 The dependency-ordered plan lives in the repository [Roadmap](ROADMAP.md), with
 active work tracked through [GitHub milestones](https://github.com/infinitywings/rka/milestones).

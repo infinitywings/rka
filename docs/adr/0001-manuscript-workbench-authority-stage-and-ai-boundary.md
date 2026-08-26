@@ -1,7 +1,8 @@
 # ADR 0001: Manuscript Workbench Authority, Stage, and AI Boundary
 
-- Status: accepted for M0 prototype; M1 schema details remain provisional
-  pending researcher review of the completed walkthrough
+- Status: accepted as the historical M0 Workbench decision; manuscript
+  authority and repository placement are superseded by ADR 0012, while the
+  evidence/AI/proposal safety principles remain in force
 - Date: 2026-08-14
 - Scope: roadmap issues #50 and #51
 - Related plan:

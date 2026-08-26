@@ -1,9 +1,9 @@
 # RKA Epistemic Pipeline and Manuscript Drafting Workbench
 
-Status: roadmap design source; M0 through M3 and M4 PR 7 are complete on
-`main`. M4 PR 8, the evaluation contract and results trace, has passed its
-feature-branch release gate under ADR 0008 and awaits review and merge in
-draft PR [#79](https://github.com/infinitywings/rka/pull/79).
+Status: preserved Writer/Workbench design and implementation history. Repository
+ownership and active sequencing are superseded by ADR 0012 and the
+2026-08-25 RKA Ecosystem Repository Separation Plan. Completed behavioral
+contracts remain inputs to the future `rka-writer` repository.
 
 Date: 2026-08-14
 
