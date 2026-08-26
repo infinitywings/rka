@@ -177,12 +177,12 @@ Acceptance:
 
 Labels: `roadmap`, `area: core`, `area: substrate`, `priority: next`.
 
-#### E1.2 Enforce project partitioning for vector retrieval
+#### E1.2 Enforce logical project isolation for vector retrieval
 
 Acceptance:
 
 - no vector search result crosses `project_id`;
-- fresh and upgraded databases carry the partition key;
+- fresh and upgraded databases carry filterable `project_id` metadata;
 - migration and re-embedding cost is measured on a disposable copy;
 - live re-embedding requires separate approval and a verified backup;
 - FTS, vector, graph, and hybrid retrieval isolation tests pass.

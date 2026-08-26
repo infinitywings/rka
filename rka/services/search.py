@@ -530,17 +530,17 @@ class SearchService:
                 continue
 
             try:
-                partition_sql = "project_id = ?"
+                filter_sql = "project_id = ?"
                 params: list[Any] = [vec_blob, self.project_id]
                 if table == "vec_artifacts":
-                    partition_sql += " AND entity_type = ?"
+                    filter_sql += " AND entity_type = ?"
                     params.append(etype)
                 params.append(limit)
                 rows = await self.db.fetchall(
                     f"""SELECT id, distance
                         FROM {table}
                         WHERE embedding MATCH ?
-                          AND {partition_sql}
+                          AND {filter_sql}
                           AND k = ?
                         ORDER BY distance
                         """,

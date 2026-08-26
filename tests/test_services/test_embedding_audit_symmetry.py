@@ -167,8 +167,9 @@ async def test_audit_symmetry_openai_compat_round_trip_through_vec_claims(db):
     assert len(vec) == 4
 
     await db.execute(
-        "INSERT OR REPLACE INTO vec_claims (id, embedding) VALUES (?, ?)",
-        ["clm_symm_openai", _pack(vec)],
+        "INSERT OR REPLACE INTO vec_claims "
+        "(id, project_id, embedding) VALUES (?, ?, ?)",
+        ["clm_symm_openai", "proj_default", _pack(vec)],
     )
     await db.commit()
     row = await db.fetchone(
@@ -193,8 +194,9 @@ async def test_audit_symmetry_ollama_round_trip_through_vec_claims(db):
     assert len(vec) == 5
 
     await db.execute(
-        "INSERT OR REPLACE INTO vec_claims (id, embedding) VALUES (?, ?)",
-        ["clm_symm_ollama", _pack(vec)],
+        "INSERT OR REPLACE INTO vec_claims "
+        "(id, project_id, embedding) VALUES (?, ?, ?)",
+        ["clm_symm_ollama", "proj_default", _pack(vec)],
     )
     await db.commit()
     row = await db.fetchone(
@@ -232,8 +234,9 @@ async def test_audit_symmetry_fastembed_round_trip_through_vec_claims(db):
     assert len(vec) == 4
 
     await db.execute(
-        "INSERT OR REPLACE INTO vec_claims (id, embedding) VALUES (?, ?)",
-        ["clm_symm_fastembed", _pack(vec)],
+        "INSERT OR REPLACE INTO vec_claims "
+        "(id, project_id, embedding) VALUES (?, ?, ?)",
+        ["clm_symm_fastembed", "proj_default", _pack(vec)],
     )
     await db.commit()
     row = await db.fetchone(

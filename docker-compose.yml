@@ -47,6 +47,9 @@ services:
       # checks and the worker can reach it.
       - "127.0.0.1:9712:9712"
     volumes:
+      # Keep server and worker on the same Docker named volume. Phase-2
+      # sqlite-vec startup uses a sidecar flock in /data; Docker Desktop host
+      # bind mounts do not reliably propagate that lock across containers.
       - rka-data:/data
     environment:
       RKA_EMBEDDINGS_ENABLED: "true"
@@ -107,6 +110,7 @@ services:
     healthcheck:
       disable: true
     volumes:
+      # Must match the server's lock-capable named volume (see above).
       - rka-data:/data
     environment:
       RKA_EMBEDDINGS_ENABLED: "true"

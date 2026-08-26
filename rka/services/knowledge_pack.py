@@ -3440,8 +3440,8 @@ class KnowledgePackService(BaseService):
         return issues
 
     # Index checks are database-wide: an orphan's project is gone, which is
-    # precisely why it is an orphan. Vector tables now carry project/type
-    # partitions, while FTS tables still rely on source-id reconciliation.
+    # precisely why it is an orphan. Vector tables now carry filterable
+    # project/type metadata, while FTS tables still rely on source-id reconciliation.
     _INDEX_SOURCES: tuple[tuple[str, tuple[str, ...]], ...] = (
         ("journal", ("vec_journal", "fts_journal")),
         ("decisions", ("vec_decisions", "fts_decisions")),
@@ -3515,8 +3515,8 @@ class KnowledgePackService(BaseService):
                 bucket.extend(r["id"] for r in rows)
 
         if getattr(self.db, "vec_available", False):
-            # The E1.2 structural migration preserves source-less vectors in
-            # an explicit sentinel partition rather than deleting evidence.
+            # The E1.2 structural migration preserves source-less vectors with
+            # explicit sentinel metadata rather than deleting evidence.
             # Surface those rows even when their shared-table entity_type is
             # also unknown, so preservation does not make them invisible.
             for index_table in (

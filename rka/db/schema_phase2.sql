@@ -35,28 +35,30 @@ CREATE VIRTUAL TABLE IF NOT EXISTS fts_missions USING fts5(
 -- ============ sqlite-vec Vector Tables ============
 -- These require the sqlite-vec extension to be loaded.
 -- Each table stores 768-dimensional float32 vectors (nomic-embed-text-v1.5).
+-- project_id is ordinary filterable metadata by design. Sparse project ids
+-- must not become partition keys because each partition allocates a vec chunk.
 
 CREATE VIRTUAL TABLE IF NOT EXISTS vec_journal USING vec0(
     id TEXT PRIMARY KEY,
-    project_id TEXT partition key,
+    project_id TEXT,
     embedding float[768]
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS vec_decisions USING vec0(
     id TEXT PRIMARY KEY,
-    project_id TEXT partition key,
+    project_id TEXT,
     embedding float[768]
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS vec_literature USING vec0(
     id TEXT PRIMARY KEY,
-    project_id TEXT partition key,
+    project_id TEXT,
     embedding float[768]
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS vec_missions USING vec0(
     id TEXT PRIMARY KEY,
-    project_id TEXT partition key,
+    project_id TEXT,
     embedding float[768]
 );
 

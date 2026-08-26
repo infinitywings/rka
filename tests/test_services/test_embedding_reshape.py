@@ -129,8 +129,9 @@ async def test_reshape_idempotent_when_dim_matches(db):
 
     vec = struct.pack("768f", *([0.1] * 768))
     await db.execute(
-        "INSERT OR REPLACE INTO vec_claims (id, embedding) VALUES (?, ?)",
-        ["clm_marker", vec],
+        "INSERT OR REPLACE INTO vec_claims "
+        "(id, project_id, embedding) VALUES (?, ?, ?)",
+        ["clm_marker", "proj_default", vec],
     )
     await db.commit()
 
@@ -151,8 +152,9 @@ async def test_reshape_drops_existing_rows_on_dim_change(db):
 
     vec = struct.pack("768f", *([0.1] * 768))
     await db.execute(
-        "INSERT OR REPLACE INTO vec_claims (id, embedding) VALUES (?, ?)",
-        ["clm_to_be_dropped", vec],
+        "INSERT OR REPLACE INTO vec_claims "
+        "(id, project_id, embedding) VALUES (?, ?, ?)",
+        ["clm_to_be_dropped", "proj_default", vec],
     )
     await db.commit()
 

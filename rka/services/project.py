@@ -218,8 +218,8 @@ class ProjectService(BaseService):
     # Order: dependents first (reverse of insert order).
     # source table -> the index tables keyed by its ids.
     #
-    # Neither `vec_*` nor `fts_*` carries a project_id, so they cannot be
-    # deleted by the project-scoped loop below and were simply left behind:
+    # Legacy `vec_*` and all `fts_*` tables lacked a project_id, so they could
+    # not be deleted by the project-scoped loop below and were simply left behind:
     # 808 orphaned vector rows and 2913 orphaned FTS rows on this instance,
     # from projects deleted months ago. They kept competing for slots in
     # every live search — 26% of the vec_claims KNN window on average, 92%

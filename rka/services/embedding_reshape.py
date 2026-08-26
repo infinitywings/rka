@@ -61,7 +61,7 @@ _TABLE_TO_ENTITIES: dict[str, tuple[tuple[str, str], ...]] = {
 _VEC_TABLE_NAMES: tuple[str, ...] = tuple(_TABLE_TO_ENTITIES.keys())
 _ORPHAN_PROJECT_ID = "__orphan__"
 _ORPHAN_ENTITY_TYPE = "__orphan__"
-_PARTITION_UPGRADE_NAME = "053_vec_project_partitions_v1"
+_PROJECT_FILTER_UPGRADE_NAME = "053_vec_project_filters_v1"
 
 
 # ---------------------------------------------------------------------------
@@ -102,44 +102,124 @@ async def _vec_table_sql(db: Any, table_name: str) -> str:
     return str((row or {}).get("sql") or "")
 
 
-def _has_partition(sql: str, column: str) -> bool:
+def _has_text_column(sql: str, column: str) -> bool:
     normalized = " ".join(sql.lower().split())
-    return f"{column.lower()} text partition key" in normalized
+    return bool(
+        re.search(
+            rf"(?:\(|,\s*){re.escape(column.lower())}\s+text(?:\s+partition\s+key)?\s*(?:,|\))",
+            normalized,
+        )
+    )
+
+
+def _has_metadata_filter(sql: str, column: str) -> bool:
+    """Return True for ordinary sqlite-vec metadata, not a partition key.
+
+    Project ids are sparse in RKA. sqlite-vec partition keys allocate at least
+    one full vector chunk per distinct value, which expanded an 18-project,
+    2560-d production copy from 187 MB to 912 MB. Ordinary metadata columns
+    still participate in the vec0 KNN WHERE clause before ``k`` without
+    over-sharding the index.
+    """
+    normalized = " ".join(sql.lower().split())
+    return bool(
+        re.search(
+            rf"(?:\(|,\s*){re.escape(column.lower())}\s+text\s*(?:,|\))",
+            normalized,
+        )
+    )
+
+
+def _metadata_filters_ready(sql: str, table_name: str) -> bool:
+    return bool(
+        sql
+        and _has_metadata_filter(sql, "project_id")
+        and (
+            table_name != "vec_artifacts"
+            or _has_metadata_filter(sql, "entity_type")
+        )
+    )
 
 
 def _create_vec_sql(table_name: str, dim: int) -> str:
-    columns = ["id TEXT PRIMARY KEY", "project_id TEXT partition key"]
+    columns = ["id TEXT PRIMARY KEY", "project_id TEXT"]
     if table_name == "vec_artifacts":
-        columns.append("entity_type TEXT partition key")
+        columns.append("entity_type TEXT")
     columns.append(f"embedding float[{dim}]")
     return f"CREATE VIRTUAL TABLE {table_name} USING vec0({', '.join(columns)})"
 
 
 async def ensure_vec_table_partitions(db: Any) -> dict[str, bool]:
-    """Upgrade legacy vec tables to project-partitioned schemas in place.
+    """Upgrade legacy vec tables to project-filtered schemas in place.
+
+    The public name is retained for compatibility with the E1.2 implementation
+    that first introduced this runtime upgrade.
 
     Existing vector BLOBs are staged in an ordinary temporary table, enriched
     from their source entity, and copied back inside one managed transaction.
-    Orphan vectors are retained under an explicit sentinel partition so this
-    structural migration never silently discards research data. The function
-    is idempotent and does not re-embed content.
+    ``project_id`` and the shared artifact/figure ``entity_type`` are ordinary
+    filterable vec0 metadata columns. They constrain KNN results before ``k``
+    without the severe sparse-project chunk amplification caused by sqlite-vec
+    partition keys. Orphan vectors are retained under explicit sentinel values
+    so this structural migration never silently discards research data. The
+    function is idempotent and does not re-embed content.
+
+    Cross-process startup callers must invoke this through
+    ``Database.initialize_phase2_schema()``. Its sidecar lock is acquired
+    before sqlite-vec loads; the SQLite transaction below provides atomic
+    rollback but cannot by itself protect an already-loaded peer connection
+    from virtual-table schema invalidation.
     """
     results = {table_name: False for table_name in _VEC_TABLE_NAMES}
     if not getattr(db, "vec_available", False):
         return results
 
-    for table_name in _VEC_TABLE_NAMES:
-        sql = await _vec_table_sql(db, table_name)
-        dim = await current_vec_table_dim(db, table_name)
-        if not sql or dim is None:
-            continue
-        has_project = _has_partition(sql, "project_id")
-        has_entity_type = _has_partition(sql, "entity_type")
-        if has_project and (table_name != "vec_artifacts" or has_entity_type):
-            continue
+    marker_table = await db.fetchone(
+        "SELECT 1 AS present FROM sqlite_master "
+        "WHERE type = 'table' AND name = 'runtime_schema_upgrades'"
+    )
+    marker = None
+    if marker_table:
+        marker = await db.fetchone(
+            "SELECT 1 AS present FROM runtime_schema_upgrades WHERE name = ?",
+            [_PROJECT_FILTER_UPGRADE_NAME],
+        )
+    if marker:
+        return results
 
-        stage = f"_stage_{table_name}_partition_upgrade"
-        async with db.transaction():
+    # sqlite-vec virtual-table DDL from two startup processes must not
+    # interleave across tables. Hold one cross-process writer lock for the
+    # complete six-table upgrade and completion marker. A per-table lock lets
+    # the processes alternate DROP/CREATE operations and can corrupt SQLite's
+    # virtual-table shadow schema. Do not even inspect a vec table before this
+    # lock: a waiting sqlite-vec connection can retain the old virtual-table
+    # schema while the lock owner rebuilds it. The durable completion marker is
+    # therefore the only unlocked fast path.
+    async with db.transaction(migration_lock=True):
+        # Another startup process may have completed the full upgrade while
+        # this connection waited. Re-read the durable marker under the lock
+        # before touching any sqlite-vec schema.
+        locked_marker_table = await db.fetchone(
+            "SELECT 1 AS present FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'runtime_schema_upgrades'"
+        )
+        if locked_marker_table:
+            locked_marker = await db.fetchone(
+                "SELECT 1 AS present FROM runtime_schema_upgrades WHERE name = ?",
+                [_PROJECT_FILTER_UPGRADE_NAME],
+            )
+            if locked_marker:
+                return results
+
+        for table_name in _VEC_TABLE_NAMES:
+            sql = await _vec_table_sql(db, table_name)
+            dim = await current_vec_table_dim(db, table_name)
+            if not sql or dim is None or _metadata_filters_ready(sql, table_name):
+                continue
+
+            stage = f"_stage_{table_name}_partition_upgrade"
+            has_project_column = _has_text_column(sql, "project_id")
+            has_entity_type_column = _has_text_column(sql, "entity_type")
             await db.execute(f"DROP TABLE IF EXISTS temp.{stage}")
             if table_name == "vec_artifacts":
                 await db.execute(
@@ -147,8 +227,12 @@ async def ensure_vec_table_partitions(db: Any) -> dict[str, bool]:
                     "id TEXT PRIMARY KEY, project_id TEXT NOT NULL, "
                     "entity_type TEXT NOT NULL, embedding BLOB NOT NULL)"
                 )
-                existing_project = ", v.project_id" if has_project else ""
-                existing_type = ", v.entity_type" if has_entity_type else ""
+                existing_project = (
+                    ", v.project_id" if has_project_column else ""
+                )
+                existing_type = (
+                    ", v.entity_type" if has_entity_type_column else ""
+                )
                 await db.execute(
                     f"""INSERT INTO {stage}
                         (id, project_id, entity_type, embedding)
@@ -171,7 +255,9 @@ async def ensure_vec_table_partitions(db: Any) -> dict[str, bool]:
                     "id TEXT PRIMARY KEY, project_id TEXT NOT NULL, "
                     "embedding BLOB NOT NULL)"
                 )
-                existing_project = ", v.project_id" if has_project else ""
+                existing_project = (
+                    ", v.project_id" if has_project_column else ""
+                )
                 await db.execute(
                     f"""INSERT INTO {stage} (id, project_id, embedding)
                         SELECT v.id,
@@ -196,33 +282,38 @@ async def ensure_vec_table_partitions(db: Any) -> dict[str, bool]:
                         SELECT id, project_id, embedding FROM {stage}"""
                 )
             await db.execute(f"DROP TABLE {stage}")
-        results[table_name] = True
-        logger.info("upgraded %s to project-partitioned vector schema", table_name)
+            results[table_name] = True
 
-    schemas = {
-        table_name: await _vec_table_sql(db, table_name)
-        for table_name in _VEC_TABLE_NAMES
-    }
-    partitions_ready = all(
-        sql
-        and _has_partition(sql, "project_id")
-        and (table_name != "vec_artifacts" or _has_partition(sql, "entity_type"))
-        for table_name, sql in schemas.items()
-    )
-    marker_table = await db.fetchone(
-        "SELECT 1 AS present FROM sqlite_master "
-        "WHERE type = 'table' AND name = 'runtime_schema_upgrades'"
-    )
-    if marker_table and partitions_ready:
-        await db.execute(
-            """INSERT OR IGNORE INTO runtime_schema_upgrades
-               (name, details) VALUES (?, ?)""",
-            [
-                _PARTITION_UPGRADE_NAME,
-                "project_id partitions on all vec tables; entity_type on vec_artifacts",
-            ],
+        locked_schemas = {
+            table_name: await _vec_table_sql(db, table_name)
+            for table_name in _VEC_TABLE_NAMES
+        }
+        locked_filters_ready = all(
+            _metadata_filters_ready(sql, table_name)
+            for table_name, sql in locked_schemas.items()
         )
-        await db.commit()
+        locked_marker_table = await db.fetchone(
+            "SELECT 1 AS present FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'runtime_schema_upgrades'"
+        )
+        if locked_marker_table and locked_filters_ready:
+            await db.execute(
+                """INSERT OR IGNORE INTO runtime_schema_upgrades
+                   (name, details) VALUES (?, ?)""",
+                [
+                    _PROJECT_FILTER_UPGRADE_NAME,
+                    (
+                        "project_id KNN metadata filters on all vec tables; "
+                        "entity_type filter on vec_artifacts"
+                    ),
+                ],
+            )
+
+    for table_name, upgraded in results.items():
+        if upgraded:
+            logger.info(
+                "upgraded %s to project-filtered vector schema", table_name
+            )
 
     return results
 

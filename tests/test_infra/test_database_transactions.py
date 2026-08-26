@@ -338,7 +338,7 @@ async def test_migration_waits_for_runtime_upgrade_marker(
         encoding="utf-8",
     )
     (migrations / "002_partition_dependent.sql").write_text(
-        "-- requires-runtime-upgrade: 053_vec_project_partitions_v1\n"
+        "-- requires-runtime-upgrade: 053_vec_project_filters_v1\n"
         "CREATE TABLE partition_dependent (id INTEGER PRIMARY KEY);\n",
         encoding="utf-8",
     )
@@ -357,7 +357,7 @@ async def test_migration_waits_for_runtime_upgrade_marker(
 
         await database.execute(
             "INSERT INTO runtime_schema_upgrades (name) VALUES (?)",
-            ["053_vec_project_partitions_v1"],
+            ["053_vec_project_filters_v1"],
         )
         await database.commit()
 

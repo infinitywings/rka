@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import logging
 import os
 import re
@@ -31,6 +32,7 @@ class Database:
         self._transaction_owner: asyncio.Task[object] | None = None
         self._transaction_depth = 0
         self._savepoint_counter = 0
+        self._phase2_memory_lock = asyncio.Lock()
 
     async def connect(self) -> None:
         """Open database connection and apply PRAGMAs."""
@@ -248,6 +250,71 @@ class Database:
                 await asyncio.sleep(min(delay, remaining))
                 delay = min(delay * 2, 0.5)
 
+    @asynccontextmanager
+    async def _phase2_schema_lock(self) -> AsyncIterator[None]:
+        """Serialize sqlite-vec initialization before loading the extension.
+
+        A SQLite write transaction is too late for this boundary: a second
+        process that has already loaded sqlite-vec can retain an obsolete
+        virtual-table schema while the first process rebuilds vec0 shadow
+        tables, which can corrupt the database or crash the waiting process in
+        native code. The sidecar flock is shared by server/worker containers
+        and covers extension loading, vec table creation, runtime upgrades,
+        and vec-dependent migrations as one startup unit.
+        """
+        configured_lock_path = os.environ.get("RKA_PHASE2_LOCK_PATH")
+        loop = asyncio.get_running_loop()
+        timeout_seconds = self._migration_lock_timeout_ms() / 1000
+        deadline = loop.time() + timeout_seconds
+        if self.db_path == ":memory:" and not configured_lock_path:
+            try:
+                await asyncio.wait_for(
+                    self._phase2_memory_lock.acquire(), timeout=timeout_seconds
+                )
+            except TimeoutError as exc:
+                raise TimeoutError(
+                    "Timed out waiting for in-memory sqlite-vec Phase 2 "
+                    "startup lock"
+                ) from exc
+            try:
+                yield
+            finally:
+                self._phase2_memory_lock.release()
+            return
+
+        if configured_lock_path:
+            lock_path = Path(configured_lock_path).expanduser().resolve()
+        else:
+            resolved = Path(self.db_path).expanduser().resolve()
+            lock_path = resolved.with_name(f"{resolved.name}.phase2.lock")
+
+        flags = os.O_CREAT | os.O_RDWR
+        flags |= getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        lock_fd = os.open(lock_path, flags, 0o600)
+        acquired = False
+        try:
+            while True:
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                    break
+                except BlockingIOError:
+                    remaining = deadline - loop.time()
+                    if remaining <= 0:
+                        raise TimeoutError(
+                            "Timed out waiting for sqlite-vec Phase 2 "
+                            f"startup lock: {lock_path}"
+                        )
+                    await asyncio.sleep(min(0.05, remaining))
+            yield
+        finally:
+            try:
+                if acquired:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            finally:
+                os.close(lock_fd)
+
     @staticmethod
     def _migrations_directory() -> Path:
         """Return the migration directory (overridable by isolated tests)."""
@@ -323,12 +390,17 @@ class Database:
 
     async def initialize_phase2_schema(self) -> None:
         """Load sqlite-vec extension and create Phase 2 tables (FTS5 + vec)."""
+        async with self._phase2_schema_lock():
+            await self._initialize_phase2_schema_locked()
+
+    async def _initialize_phase2_schema_locked(self) -> None:
+        """Run Phase 2 initialization while holding the process-wide lock."""
         # Try to load sqlite-vec extension
         await self._load_sqlite_vec()
         if self._vec_loaded:
             # Existing databases already have every vec table at this point.
             # Enforce the runtime structural upgrade before newer SQL
-            # migrations can depend on the partition columns.
+            # migrations can depend on the project metadata filters.
             from rka.services.embedding_reshape import ensure_vec_table_partitions
 
             await ensure_vec_table_partitions(self)
@@ -525,7 +597,12 @@ class Database:
             await conn.commit()
 
     @asynccontextmanager
-    async def transaction(self, *, write: bool = True) -> AsyncIterator[Database]:
+    async def transaction(
+        self,
+        *,
+        write: bool = True,
+        migration_lock: bool = False,
+    ) -> AsyncIterator[Database]:
         """Run statements atomically, using savepoints for same-task nesting.
 
         The outermost context owns the connection until it commits or rolls
@@ -536,7 +613,9 @@ class Database:
         write lock before reading so optimistic revision checks cannot later
         fail with ``SQLITE_BUSY_SNAPSHOT`` after a competing process commits.
         Read-only snapshot callers should pass ``write=False`` to avoid
-        unnecessarily serializing writers.
+        unnecessarily serializing writers. Startup-time structural upgrades
+        should pass ``migration_lock=True`` to use the longer bounded retry
+        budget shared with SQL migrations.
 
         Managed transactions are task-affine.  Do not spawn a child task that
         uses this ``Database`` and await it from inside the transaction; the
@@ -546,6 +625,8 @@ class Database:
         task = asyncio.current_task()
         if task is None:
             raise RuntimeError("Managed transactions require a running asyncio task")
+        if migration_lock and not write:
+            raise ValueError("migration_lock requires a write transaction")
 
         if self._transaction_owner is task:
             async with self._nested_transaction():
@@ -563,7 +644,10 @@ class Database:
             self._transaction_owner = task
             self._transaction_depth = 1
             try:
-                await conn.execute("BEGIN IMMEDIATE" if write else "BEGIN")
+                if migration_lock:
+                    await self._begin_migration_transaction(conn)
+                else:
+                    await conn.execute("BEGIN IMMEDIATE" if write else "BEGIN")
                 try:
                     yield self
                 except BaseException:
