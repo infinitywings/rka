@@ -47,7 +47,7 @@ from v3.tracing.metrics import (  # noqa: E402
 # evidence-locator, artifact, and scope entities in addition to the original
 # journal/decision set.  The ULID-shaped suffix keeps ordinary prose from
 # becoming an entity hit while allowing future 2-3 letter Core prefixes.
-ENTITY_ID_PATTERN = re.compile(r"\b[a-z]{2,3}_[0-9A-Z]{10,26}\b")
+ENTITY_ID_PATTERN = re.compile(r"\b[a-z]{2,3}_[0-9A-Z]{26}\b")
 SLUG_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 

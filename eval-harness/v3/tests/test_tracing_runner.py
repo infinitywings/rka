@@ -25,10 +25,10 @@ from v3.tracing.runner import (  # noqa: E402
     load_corpus,
 )
 
-ANCHOR = "dec_000059REDACTED"
-DIRECTIVE = "jrn_000060REDACTED"
-EVIDENCE = "clm_000061REDACTED"
-PAPER = "lit_000062REDACTED"
+ANCHOR = "dec_00000000000000000000000011"
+DIRECTIVE = "jrn_00000000000000000000000012"
+EVIDENCE = "clm_00000000000000000000000013"
+PAPER = "lit_00000000000000000000000014"
 
 SCENARIO = {
     "scenario_id": "scaffold-pivot",
@@ -61,7 +61,10 @@ def _transport(multi_hop_status: int = 200) -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
         if path == "/api/search":
-            return httpx.Response(200, json=[{"id": "dec_000063REDACTED"}, {"id": ANCHOR}])
+            return httpx.Response(
+                200,
+                json=[{"id": "dec_00000000000000000000000015"}, {"id": ANCHOR}],
+            )
         if path.startswith("/api/graph/ego/"):
             return httpx.Response(
                 200,
@@ -105,6 +108,15 @@ def test_extract_entity_ids_includes_experiment_chain_prefixes() -> None:
         "evr_00000000000000000000000007",
     ]
     assert extract_entity_ids({"story": ids}) == ids
+
+
+def test_extract_entity_ids_ignores_truncated_ulids() -> None:
+    payload = {
+        "preview": "mis_01KPRB8JW9QXX7B",
+        "full": "mis_01KPRB8JW9QXX7B7H4KNYJ3GMV",
+    }
+
+    assert extract_entity_ids(payload) == ["mis_01KPRB8JW9QXX7B7H4KNYJ3GMV"]
 
 
 def test_extract_graph_edges_nested_and_deduped() -> None:
