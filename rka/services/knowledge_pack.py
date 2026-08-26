@@ -1926,6 +1926,26 @@ class KnowledgePackService(BaseService):
             for row in prepared:
                 if "scope_revision" in row:
                     row["scope_revision"] = 0
+        if table == "claim_edges":
+            # Packs exported before migration 052 may contain repeated
+            # cluster memberships. Preserve the first edge, matching the
+            # migration's repair rule, so old packs remain importable under
+            # the new unique membership invariant.
+            seen_memberships: set[tuple[str, str, str, str]] = set()
+            unique_rows: list[dict[str, Any]] = []
+            for row in prepared:
+                if row.get("relation") == "member_of":
+                    membership = (
+                        str(row.get("project_id") or ""),
+                        str(row.get("source_claim_id") or ""),
+                        str(row.get("cluster_id") or ""),
+                        "member_of",
+                    )
+                    if membership in seen_memberships:
+                        continue
+                    seen_memberships.add(membership)
+                unique_rows.append(row)
+            prepared = unique_rows
         return prepared
 
     def _rewrite_project_scope(
@@ -2229,7 +2249,7 @@ class KnowledgePackService(BaseService):
         await self.db.execute(
             """UPDATE evidence_clusters
                SET claim_count = (
-                   SELECT COUNT(*) FROM claim_edges
+                   SELECT COUNT(DISTINCT source_claim_id) FROM claim_edges
                    WHERE claim_edges.cluster_id = evidence_clusters.id
                      AND claim_edges.relation = 'member_of'
                      AND claim_edges.project_id = evidence_clusters.project_id
@@ -2573,16 +2593,18 @@ class KnowledgePackService(BaseService):
         # 6. evidence_clusters.claim_count mismatch
         mismatched = await self.db.fetchall(
             """SELECT ec.id, ec.claim_count,
-                      (SELECT COUNT(*) FROM claim_edges ce
+                      (SELECT COUNT(DISTINCT ce.source_claim_id) FROM claim_edges ce
                        WHERE ce.cluster_id = ec.id
                          AND ce.project_id = ec.project_id
                          AND ce.relation = 'member_of') as actual
                FROM evidence_clusters ec
                WHERE ec.project_id = ?
-               AND ec.claim_count != (SELECT COUNT(*) FROM claim_edges ce
-                                      WHERE ce.cluster_id = ec.id
-                                        AND ce.project_id = ec.project_id
-                                        AND ce.relation = 'member_of')
+               AND ec.claim_count IS NOT (
+                   SELECT COUNT(DISTINCT ce.source_claim_id) FROM claim_edges ce
+                   WHERE ce.cluster_id = ec.id
+                     AND ce.project_id = ec.project_id
+                     AND ce.relation = 'member_of'
+               )
                LIMIT 50""",
             [pid],
         )
@@ -2595,7 +2617,7 @@ class KnowledgePackService(BaseService):
                     "count": len(mismatched),
                     "ids": [r["id"] for r in mismatched[:10]],
                     "description": "evidence_clusters with claim_count != actual claim_edges count",
-                    "fix_action": "Run migration 016 to recompute claim counts",
+                    "fix_action": "Recompute cluster claim counts from unique memberships",
                 }
             )
 

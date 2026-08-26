@@ -459,6 +459,7 @@ class ClaimService(BaseService):
 
     async def create_edge(self, data: ClaimEdgeCreate) -> ClaimEdge:
         edge_id = generate_id("claim_edge")
+        stored_confidence = data.confidence
         async with self.db.transaction():
             if data.relation == "member_of":
                 if data.cluster_id is None or data.target_claim_id is not None:
@@ -488,33 +489,78 @@ class ClaimService(BaseService):
                     raise ValueError("target claim is not available in this project")
             if data.cluster_id is not None:
                 cluster = await self.db.fetchone(
-                    """SELECT 1 FROM evidence_clusters
+                    """SELECT claim_count FROM evidence_clusters
                        WHERE id = ? AND project_id = ?""",
                     [data.cluster_id, self.project_id],
                 )
                 if cluster is None:
                     raise ValueError("cluster is not available in this project")
-            await self.db.execute(
-                """INSERT INTO claim_edges
-                   (id, source_claim_id, target_claim_id, cluster_id, relation,
-                    confidence, project_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                [
-                    edge_id,
-                    data.source_claim_id,
-                    data.target_claim_id,
-                    data.cluster_id,
-                    data.relation,
-                    data.confidence,
-                    self.project_id,
-                ],
-            )
-
             if data.relation == "member_of" and data.cluster_id:
+                existing = await self.db.fetchone(
+                    """SELECT id, confidence FROM claim_edges
+                       WHERE project_id = ? AND source_claim_id = ?
+                         AND cluster_id = ? AND relation = 'member_of'""",
+                    [self.project_id, data.source_claim_id, data.cluster_id],
+                )
+                if existing:
+                    edge_id = existing["id"]
+                    stored_confidence = existing["confidence"]
+                else:
+                    await self.db.execute(
+                        """INSERT INTO claim_edges
+                           (id, source_claim_id, target_claim_id, cluster_id,
+                            relation, confidence, project_id)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        [
+                            edge_id,
+                            data.source_claim_id,
+                            data.target_claim_id,
+                            data.cluster_id,
+                            data.relation,
+                            data.confidence,
+                            self.project_id,
+                        ],
+                    )
+                count_row = await self.db.fetchone(
+                    """SELECT COUNT(DISTINCT source_claim_id) AS claim_count
+                       FROM claim_edges
+                       WHERE cluster_id = ? AND relation = 'member_of'
+                         AND project_id = ?""",
+                    [data.cluster_id, self.project_id],
+                )
+                actual_count = count_row["claim_count"] if count_row else 0
+                # A retry that finds the same membership must be a true no-op:
+                # updating the parent cluster would otherwise append a false
+                # semantic change to the immutable change-events ledger.  A
+                # stale cached count is still repaired on either a create or a
+                # retry, including the nullable legacy state.
+                if cluster["claim_count"] != actual_count:
+                    await self.db.execute(
+                        """UPDATE evidence_clusters
+                           SET claim_count = ?, updated_at = ?
+                           WHERE id = ? AND project_id = ?""",
+                        [
+                            actual_count,
+                            _now(),
+                            data.cluster_id,
+                            self.project_id,
+                        ],
+                    )
+            else:
                 await self.db.execute(
-                    "UPDATE evidence_clusters SET claim_count = claim_count + 1, "
-                    "updated_at = ? WHERE id = ? AND project_id = ?",
-                    [_now(), data.cluster_id, self.project_id],
+                    """INSERT INTO claim_edges
+                       (id, source_claim_id, target_claim_id, cluster_id, relation,
+                        confidence, project_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    [
+                        edge_id,
+                        data.source_claim_id,
+                        data.target_claim_id,
+                        data.cluster_id,
+                        data.relation,
+                        data.confidence,
+                        self.project_id,
+                    ],
                 )
             if data.relation == "contradicts":
                 affected_claims = [
@@ -547,7 +593,7 @@ class ClaimService(BaseService):
             target_claim_id=data.target_claim_id,
             cluster_id=data.cluster_id,
             relation=data.relation,
-            confidence=data.confidence,
+            confidence=stored_confidence,
             project_id=self.project_id,
         )
 
