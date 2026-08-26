@@ -912,6 +912,13 @@ class TestCollectReportContext:
         # Seeds survive even when the cap is smaller than the seed count.
         assert "jrn_001" in ids
 
+    async def test_fallback_query_preserves_single_digit_counts(self, graph_svc, search_svc):
+        result = await graph_svc.collect_report_context(
+            "Why map 9 journal types to 3 record types?",
+            search_service=search_svc,
+        )
+        assert result["queries"] == ["why map 9 journal types 3 record types"]
+
     async def test_requires_search_service(self, graph_svc):
         with pytest.raises(ValueError):
             await graph_svc.collect_report_context("anything", search_service=None)
