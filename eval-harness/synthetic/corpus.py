@@ -58,6 +58,7 @@ async def generate(post: Transport, put: Transport) -> dict[str, Any]:
         "contradictions": [],    # {a, b, question}
         "retractions": [],       # entity_id
         "chains": [],            # {name, path: [ids], link_types: [...]}
+        "stories": [],           # complete causal stories for retrieval evaluation
         "tag_cohorts": {},       # tag -> [ids]
         "counts": {},
     }
@@ -253,7 +254,8 @@ async def generate(post: Transport, put: Transport) -> dict[str, Any]:
     # Wire the literature->decision provenance link (the PQC paper informed
     # the revised decision) so the lit->dec->mis->jrn chain is traversable.
     await put(f"/api/decisions/{dec['dec_sig_v2']}",
-              {"related_literature": [lit["lit_kyber"]]})
+              {"related_literature": [lit["lit_kyber"]],
+               "related_journal": [jrn["pqc_finding"]]})
     gt["supersede_chains"].append({
         "old": dec["dec_sig_v1"], "new": dec["dec_sig_v2"], "kind": "decision",
         "stale_fact": "Ed25519", "current_fact": "Dilithium2",
@@ -290,10 +292,61 @@ async def generate(post: Transport, put: Transport) -> dict[str, Any]:
     # PHASE 3 — experiments: missions, reports, checkpoints, claims, clusters
     # =====================================================================
     await mission(
+        "mis_signature_bench",
+        "Validate Dilithium2 verification latency on the target Cortex-M0+ "
+        "instead of relying only on the published feasibility estimate.",
+        phase="experiments",
+        motivated_by=dec["dec_sig_v2"],
+        tags=["experiment", "signatures", "pqc"],
+    )
+    await note(
+        "sig_verify_result",
+        "Target-board signature benchmark: 1,000 Dilithium2 verifications on the "
+        "32 MHz Cortex-M0+ took 61 ms median and 64 ms at the 95th percentile, "
+        "with no verification failures. This confirms the once-per-update budget.",
+        typ="note",
+        source="executor",
+        phase="experiments",
+        importance="high",
+        confidence="verified",
+        related_mission=mis["mis_signature_bench"],
+        tags=["experiment", "signatures", "pqc", "result"],
+    )
+    await report(
+        "mis_signature_bench",
+        "Dilithium2 verification validated on the target board.",
+        ["61 ms median", "64 ms p95", "0 failures across 1,000 verifications"],
+    )
+    await note(
+        "sig_distractor",
+        "Unrelated pilot result: a Cortex-M4 host board verified Dilithium2 in "
+        "18 ms. That number is not evidence for the 32 MHz Cortex-M0+ target.",
+        typ="log",
+        source="executor",
+        phase="experiments",
+        confidence="tested",
+        tags=["signatures", "pqc", "distractor"],
+    )
+
+    await decision(
+        "dec_fragment_eval",
+        "Which fragment-integrity configurations should the injection experiment compare?",
+        [
+            ("Unauthenticated baseline", "measure the vulnerable reference behavior"),
+            ("Per-fragment MIC", "authenticate each fragment before reassembly"),
+        ],
+        "Compare baseline and per-fragment MIC",
+        "The threat model identifies malicious fragment injection, so the experiment "
+        "must quantify the baseline and then test the proposed per-fragment MIC control.",
+        phase="experiments",
+        related_journal=[jrn["threat_enum"]],
+        tags=["fragment-injection", "experiment-design"],
+    )
+    await mission(
         "mis_fragments",
         "Empirically measure fragment-injection success rate against the "
         "reference FUOTA stack under varying RF conditions.", phase="experiments",
-        motivated_by=dec["dec_sig_v2"], tags=["experiment", "fragment-injection"])
+        motivated_by=dec["dec_fragment_eval"], tags=["experiment", "fragment-injection"])
     chk = await checkpoint(
         "mis_fragments", "decision",
         "Should the fragment-injection test use a real SX1276 radio or GNU Radio "
@@ -421,10 +474,150 @@ async def generate(post: Transport, put: Transport) -> dict[str, Any]:
     # =====================================================================
     gt["chains"].append({
         "name": "lit->dec->mis->jrn->result",
-        "path": [lit["lit_kyber"], dec["dec_sig_v2"], mis["mis_fragments"], jrn["frag_result"]],
+        "path": [lit["lit_kyber"], dec["dec_sig_v2"],
+                 mis["mis_signature_bench"], jrn["sig_verify_result"]],
         "link_types": ["cites/informed_by", "motivated", "produced"],
-        "question": "Trace from the PQC feasibility paper to the experiment it motivated "
-                    "and that experiment's result."})
+        "question": "Trace from the PQC feasibility paper to the signature benchmark "
+                    "it motivated and that benchmark's result."})
+
+    # Gold story: unlike a single retrieval needle, this requires enough
+    # provenance to explain why the signature direction changed and what
+    # empirical work followed.  Query variants deliberately avoid entity IDs
+    # and do not expose the expected facts to the runner.
+    gt["stories"].append(
+        {
+            "scenario_id": "signature-pivot-story",
+            "project_id": gt["project_id"],
+            "anchor_decision": dec["dec_sig_v2"],
+            "query_variants": [
+                {
+                    "variant_id": "exact",
+                    "style": "exact",
+                    "query": "FUOTA Dilithium2 signature decision verification benchmark",
+                    "angle_queries": [
+                        "signature decision",
+                        "PQC feasibility",
+                        "target board verification benchmark",
+                    ],
+                },
+                {
+                    "variant_id": "paraphrase",
+                    "style": "paraphrase",
+                    "query": (
+                        "Why did the firmware signature choice change, and what work "
+                        "and result followed?"
+                    ),
+                    "angle_queries": [
+                        "signature change",
+                        "signature verification experiment",
+                        "target board result",
+                    ],
+                },
+                {
+                    "variant_id": "colloquial",
+                    "style": "colloquial",
+                    "query": "What happened with the signature direction?",
+                    "angle_queries": ["signature direction", "PQC", "followed work"],
+                },
+                {
+                    "variant_id": "underspecified",
+                    "style": "underspecified",
+                    "query": "Why did we change that FUOTA signature choice?",
+                },
+            ],
+            "story": {
+                "roles": {
+                    "literature_basis": {
+                        "any_of": [lit["lit_kyber"]],
+                        "required": True,
+                    },
+                    "rationale_journal": {
+                        "any_of": [jrn["pqc_finding"]],
+                        "required": True,
+                    },
+                    "superseded_decision": {
+                        "any_of": [dec["dec_sig_v1"]],
+                        "required": True,
+                    },
+                    "current_decision": {
+                        "any_of": [dec["dec_sig_v2"]],
+                        "required": True,
+                    },
+                    "execution_mission": {
+                        "any_of": [mis["mis_signature_bench"]],
+                        "required": True,
+                    },
+                    "result_journal": {
+                        "any_of": [jrn["sig_verify_result"]],
+                        "required": True,
+                    },
+                },
+                "required_edges": [
+                    {
+                        "source": lit["lit_kyber"],
+                        "target": dec["dec_sig_v2"],
+                        "link_type": "informed_by",
+                    },
+                    {
+                        "source": dec["dec_sig_v2"],
+                        "target": jrn["pqc_finding"],
+                        "link_type": "justified_by",
+                    },
+                    {
+                        "source": dec["dec_sig_v2"],
+                        "target": mis["mis_signature_bench"],
+                        "link_type": "motivated",
+                    },
+                    {
+                        "source": mis["mis_signature_bench"],
+                        "target": jrn["sig_verify_result"],
+                        "link_type": "produced",
+                    },
+                    {
+                        "source": dec["dec_sig_v2"],
+                        "target": dec["dec_sig_v1"],
+                        "link_type": "supersedes",
+                    },
+                ],
+                "causal_edges": [
+                    [dec["dec_sig_v1"], jrn["pqc_finding"]],
+                    [lit["lit_kyber"], jrn["pqc_finding"]],
+                    [jrn["pqc_finding"], dec["dec_sig_v2"]],
+                    [dec["dec_sig_v2"], mis["mis_signature_bench"]],
+                    [mis["mis_signature_bench"], jrn["sig_verify_result"]],
+                ],
+                "required_facts": [
+                    {
+                        "fact_id": "current-scheme",
+                        "any_of_entities": [dec["dec_sig_v2"]],
+                        "contains": ["Dilithium2", "60 ms"],
+                    },
+                    {
+                        "fact_id": "target-verification-result",
+                        "any_of_entities": [jrn["sig_verify_result"]],
+                        "contains": ["61 ms", "64 ms", "1,000"],
+                    },
+                ],
+                "current_entities": [dec["dec_sig_v2"]],
+                "historical_entities": [dec["dec_sig_v1"]],
+                "currentness": {
+                    "must_be_current": [dec["dec_sig_v2"]],
+                    "must_be_not_current": [dec["dec_sig_v1"]],
+                },
+                "min_precision": 0.25,
+                "distractors": [jrn["sig_distractor"]],
+                "optional_entities": [jrn["threat_enum"]],
+                "forbidden_entities": [],
+                "foreign_must_exclude": [],
+                "current_conclusion": {
+                    "verdict": "adopted",
+                    "checks": [
+                        {"must_include": ["Dilithium2", "60 ms", "61 ms", "64 ms"]},
+                    ],
+                },
+            },
+        }
+    )
 
     # =====================================================================
     # EDGE CASES / stress
