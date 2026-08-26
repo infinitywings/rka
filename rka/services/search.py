@@ -259,11 +259,34 @@ class SearchService:
                 # a metadata-only listing of matching journal entries.
                 hits = await self._metadata_only_journal(constraints, limit * 4)
             constrained = await self._apply_constraints(hits, constraints, limit)
-            return await self._attach_currency(constrained)
+            return self._current_first(await self._attach_currency(constrained))
         plain = await self._search_unconstrained(
             query, types, limit, keyword_weight, semantic_weight
         )
-        return await self._attach_currency(plain)
+        return self._current_first(await self._attach_currency(plain))
+
+    @staticmethod
+    def _current_first(hits: list[SearchHit]) -> list[SearchHit]:
+        """Rank a retired entity below a live one, never above.
+
+        The currency signals above were attached for reading, not ranking, so
+        a superseded decision could outrank the decision that replaced it —
+        which is the failure their own comment describes, arrived at by a
+        different route. `hide_superseded` already takes this position for
+        journal listings; this is the same position for search.
+
+        A stable partition: relative order inside each group is whatever the
+        fusion produced, so this decides only the current-vs-retired tie and
+        leaves every other ranking alone.
+        """
+        def retired(h: SearchHit) -> bool:
+            return bool(
+                h.status == "superseded"
+                or h.superseded_by
+                or h.stale
+            )
+
+        return sorted(hits, key=retired)
 
     async def _attach_currency(self, hits: list[SearchHit]) -> list[SearchHit]:
         """Fill status / superseded_by / stale on every hit that has one.
@@ -486,7 +509,7 @@ class SearchService:
                 ))
 
         # Sort by FTS rank (lower is better)
-        results.sort(key=lambda h: h.fts_rank or 999)
+        results.sort(key=lambda h: 999 if h.fts_rank is None else h.fts_rank)
         return results
 
     async def _vector_search(
@@ -543,7 +566,7 @@ class SearchService:
                 ))
 
         # Sort by distance (lower distance = more similar)
-        results.sort(key=lambda h: h.vec_rank or 999)
+        results.sort(key=lambda h: 999 if h.vec_rank is None else h.vec_rank)
         return results
 
     async def _tag_search(
