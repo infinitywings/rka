@@ -160,6 +160,74 @@ class TestRRFMerge:
         merged = svc._rrf_merge([], [], 0.3, 0.7)
         assert merged == []
 
+    def test_best_fts_hit_survives_semantic_eviction(self):
+        from rka.services.search import SearchHit
+
+        svc = SearchService.__new__(SearchService)
+        needle = SearchHit("decision", "needle", "needle", "needle", fts_rank=0)
+        vector_only = [
+            SearchHit("journal", f"noise-{index}", "noise", "noise", vec_rank=index)
+            for index in range(60)
+        ]
+        ranked = svc._rrf_merge([needle], vector_only, 0.3, 0.7)
+
+        assert "needle" not in [hit.entity_id for hit in ranked[:30]]
+        final = svc._truncate_with_lexical_floor(
+            ranked,
+            [needle],
+            30,
+            keyword_weight=0.3,
+        )
+
+        assert [hit.entity_id for hit in final[:-1]] == [
+            hit.entity_id for hit in ranked[:29]
+        ]
+        assert final[-1].entity_id == "needle"
+        assert len(final) == 30
+
+    def test_lexical_floor_preserves_an_existing_hit(self):
+        from rka.services.search import SearchHit
+
+        svc = SearchService.__new__(SearchService)
+        needle = SearchHit("decision", "needle", "needle", "needle", fts_rank=0)
+        vector = [needle] + [
+            SearchHit("journal", f"noise-{index}", "noise", "noise", vec_rank=index + 1)
+            for index in range(5)
+        ]
+        ranked = svc._rrf_merge([needle], vector, 0.3, 0.7)
+        expected = ranked[:3]
+
+        final = svc._truncate_with_lexical_floor(
+            ranked,
+            [needle],
+            3,
+            keyword_weight=0.3,
+        )
+
+        assert final == expected
+        assert sum(hit.entity_id == "needle" for hit in final) == 1
+
+    def test_zero_keyword_weight_disables_lexical_floor(self):
+        from rka.services.search import SearchHit
+
+        svc = SearchService.__new__(SearchService)
+        needle = SearchHit("decision", "needle", "needle", "needle", fts_rank=0)
+        vector_only = [
+            SearchHit("journal", f"noise-{index}", "noise", "noise", vec_rank=index)
+            for index in range(60)
+        ]
+        ranked = svc._rrf_merge([needle], vector_only, 0.0, 0.7)
+
+        final = svc._truncate_with_lexical_floor(
+            ranked,
+            [needle],
+            30,
+            keyword_weight=0.0,
+        )
+
+        assert final == ranked[:30]
+        assert "needle" not in [hit.entity_id for hit in final]
+
 
 # ------------------------------------------------- currency signals on hits
 

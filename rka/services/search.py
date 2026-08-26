@@ -400,7 +400,13 @@ class SearchService:
             fts_results, vec_results, keyword_weight, semantic_weight,
             tag_results=tag_results,
         )
-        return self._merge_ranked_hits(fused, supplemental)[:limit]
+        ranked = self._merge_ranked_hits(fused, supplemental)
+        return self._truncate_with_lexical_floor(
+            ranked,
+            fts_results,
+            limit,
+            keyword_weight=keyword_weight,
+        )
 
     # Request-framing vocabulary stripped from natural-language queries
     # before FTS matching. Deliberately small — only words that carry no
@@ -837,6 +843,31 @@ class SearchService:
             seen.add(key)
             merged.append(hit)
         return merged
+
+    @staticmethod
+    def _truncate_with_lexical_floor(
+        ranked: list[SearchHit],
+        fts_results: list[SearchHit],
+        limit: int,
+        *,
+        keyword_weight: float,
+    ) -> list[SearchHit]:
+        """Keep the best lexical hit from being evicted by hybrid fusion.
+
+        A semantic-heavy RRF window can exclude even the first FTS match when
+        enough vector-only candidates exist. Reserve only the final slot for
+        that one lexical anchor; otherwise preserve the fused order exactly.
+        Explicit keyword-free searches retain pure semantic behavior.
+        """
+        window = ranked[: max(limit, 0)]
+        if limit <= 0 or keyword_weight <= 0 or not fts_results:
+            return window
+
+        best_fts = fts_results[0]
+        best_key = (best_fts.entity_type, best_fts.entity_id)
+        if any((hit.entity_type, hit.entity_id) == best_key for hit in window):
+            return window
+        return [*window[:-1], best_fts]
 
     @staticmethod
     def _extract_title_snippet(etype: str, row: dict) -> tuple[str, str]:
