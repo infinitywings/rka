@@ -236,6 +236,7 @@ class ProjectService(BaseService):
         ("claims", ("vec_claims", "fts_claims")),
         ("evidence_clusters", ("fts_clusters",)),
         ("artifacts", ("vec_artifacts",)),
+        ("figures", ("vec_artifacts",)),
     )
 
     _DELETE_TABLES = (

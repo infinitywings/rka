@@ -137,6 +137,17 @@ class Database:
                     )
                     continue
 
+                required_upgrades = self._migration_required_runtime_upgrades(sql)
+                if required_upgrades and not await self._runtime_upgrades_exist_on_connection(
+                    conn, required_upgrades
+                ):
+                    logger.info(
+                        "Skipping migration %s (waiting for runtime upgrades: %s)",
+                        sql_file.name,
+                        ", ".join(required_upgrades),
+                    )
+                    continue
+
                 # Skip vec0 virtual tables if sqlite-vec is not loaded.
                 if "USING vec0(" in sql and not self._vec_loaded:
                     logger.info(
@@ -257,6 +268,26 @@ class Database:
         return True
 
     @staticmethod
+    async def _runtime_upgrades_exist_on_connection(
+        conn: aiosqlite.Connection, upgrade_names: list[str]
+    ) -> bool:
+        """Check data-preserving runtime migration prerequisites."""
+        cursor = await conn.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'runtime_schema_upgrades'"
+        )
+        if await cursor.fetchone() is None:
+            return False
+        for upgrade_name in upgrade_names:
+            cursor = await conn.execute(
+                "SELECT 1 FROM runtime_schema_upgrades WHERE name = ?",
+                [upgrade_name],
+            )
+            if await cursor.fetchone() is None:
+                return False
+        return True
+
+    @staticmethod
     def _migration_statements(sql: str) -> list[str]:
         """Split a migration script without breaking trigger bodies.
 
@@ -294,6 +325,13 @@ class Database:
         """Load sqlite-vec extension and create Phase 2 tables (FTS5 + vec)."""
         # Try to load sqlite-vec extension
         await self._load_sqlite_vec()
+        if self._vec_loaded:
+            # Existing databases already have every vec table at this point.
+            # Enforce the runtime structural upgrade before newer SQL
+            # migrations can depend on the partition columns.
+            from rka.services.embedding_reshape import ensure_vec_table_partitions
+
+            await ensure_vec_table_partitions(self)
         # Re-run migrations now that vec may be available. This lets skipped
         # vec-specific migrations apply on a later startup once the extension loads.
         await self.run_migrations()
@@ -325,6 +363,10 @@ class Database:
 
         await self._conn.executescript(schema_sql)
         await self._conn.commit()
+        if self._vec_loaded:
+            # Fresh databases gain the remaining Phase 2 vec tables above;
+            # this second idempotent pass covers them and records completion.
+            await ensure_vec_table_partitions(self)
         # Re-run migrations after Phase 2 schema exists so migrations that depend
         # on embedding_metadata or other Phase 2 tables can apply on fresh DBs.
         await self.run_migrations()
@@ -604,6 +646,22 @@ class Database:
                 if table.strip()
             )
         return tables
+
+    @staticmethod
+    def _migration_required_runtime_upgrades(sql: str) -> list[str]:
+        """Parse ``-- requires-runtime-upgrade: name`` prerequisites."""
+        upgrades: list[str] = []
+        for raw_line in sql.splitlines():
+            line = raw_line.strip()
+            if not line.startswith("-- requires-runtime-upgrade:"):
+                continue
+            _, _, raw_upgrades = line.partition(":")
+            upgrades.extend(
+                upgrade.strip()
+                for upgrade in raw_upgrades.split(",")
+                if upgrade.strip()
+            )
+        return upgrades
 
     @property
     def conn(self) -> aiosqlite.Connection:

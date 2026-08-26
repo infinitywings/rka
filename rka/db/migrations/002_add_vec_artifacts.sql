@@ -2,5 +2,7 @@
 -- Dimension 768 to match nomic-embed-text-v1.5
 CREATE VIRTUAL TABLE IF NOT EXISTS vec_artifacts USING vec0(
   id TEXT PRIMARY KEY,
+  project_id TEXT partition key,
+  entity_type TEXT partition key,
   embedding float[768]
 );

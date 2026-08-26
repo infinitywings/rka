@@ -38,21 +38,25 @@ CREATE VIRTUAL TABLE IF NOT EXISTS fts_missions USING fts5(
 
 CREATE VIRTUAL TABLE IF NOT EXISTS vec_journal USING vec0(
     id TEXT PRIMARY KEY,
+    project_id TEXT partition key,
     embedding float[768]
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS vec_decisions USING vec0(
     id TEXT PRIMARY KEY,
+    project_id TEXT partition key,
     embedding float[768]
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS vec_literature USING vec0(
     id TEXT PRIMARY KEY,
+    project_id TEXT partition key,
     embedding float[768]
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS vec_missions USING vec0(
     id TEXT PRIMARY KEY,
+    project_id TEXT partition key,
     embedding float[768]
 );
 

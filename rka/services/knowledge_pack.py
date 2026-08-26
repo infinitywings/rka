@@ -19,9 +19,9 @@ from rka.models.knowledge_pack import KnowledgePackImportResult
 from rka.models.planning import validate_planning_payload
 from rka.models.semantic_patch import SemanticPatchProposalCreate
 from rka.services.base import BaseService, _now
+from rka.services.outline_integrity import validate_unit_hierarchy
 
 logger = logging.getLogger(__name__)
-from rka.services.outline_integrity import validate_unit_hierarchy
 
 PACK_SCHEMA_VERSION = 7
 PACK_FILE_SUFFIX = ".rka-pack.zip"
@@ -196,6 +196,7 @@ _TABLE_CATEGORIES: dict[str, list[str]] = {
         "project_states",
         "project_state",
         "schema_migrations",
+        "runtime_schema_upgrades",
         "change_events",
         "jobs",
         "manuscript_migration_issues",
@@ -3438,9 +3439,9 @@ class KnowledgePackService(BaseService):
 
         return issues
 
-    # Index tables carry no project_id, so these checks are deliberately
-    # database-wide rather than project-scoped: an orphan's project is gone,
-    # which is precisely why it is an orphan.
+    # Index checks are database-wide: an orphan's project is gone, which is
+    # precisely why it is an orphan. Vector tables now carry project/type
+    # partitions, while FTS tables still rely on source-id reconciliation.
     _INDEX_SOURCES: tuple[tuple[str, tuple[str, ...]], ...] = (
         ("journal", ("vec_journal", "fts_journal")),
         ("decisions", ("vec_decisions", "fts_decisions")),
@@ -3449,6 +3450,7 @@ class KnowledgePackService(BaseService):
         ("claims", ("vec_claims", "fts_claims")),
         ("evidence_clusters", ("fts_clusters",)),
         ("artifacts", ("vec_artifacts",)),
+        ("figures", ("vec_artifacts",)),
     )
 
     async def _index_integrity_issues(self, project_id: str) -> list[dict]:
@@ -3470,6 +3472,25 @@ class KnowledgePackService(BaseService):
         unreadable: list[str] = []
         for source, index_tables in self._INDEX_SOURCES:
             for index_table in index_tables:
+                if index_table == "vec_artifacts":
+                    if not getattr(self.db, "vec_available", False):
+                        unreadable.append(index_table)
+                        continue
+                    entity_type = "figure" if source == "figures" else "artifact"
+                    try:
+                        rows = await self.db.fetchall(
+                            f"""SELECT id FROM vec_artifacts
+                                WHERE entity_type = ?
+                                  AND id NOT IN (SELECT id FROM {source})
+                                LIMIT 50""",
+                            [entity_type],
+                        )
+                    except Exception:
+                        unreadable.append(index_table)
+                        continue
+                    orphan_vec.extend(r["id"] for r in rows)
+                    continue
+
                 # `vec_*` is a virtual table and needs the sqlite-vec module
                 # loaded to read. Its `_rowids` shadow is a plain table with
                 # the same ids, so the check works whether or not the
@@ -3493,20 +3514,51 @@ class KnowledgePackService(BaseService):
                 bucket = orphan_vec if index_table.startswith("vec_") else orphan_fts
                 bucket.extend(r["id"] for r in rows)
 
+        if getattr(self.db, "vec_available", False):
+            # The E1.2 structural migration preserves source-less vectors in
+            # an explicit sentinel partition rather than deleting evidence.
+            # Surface those rows even when their shared-table entity_type is
+            # also unknown, so preservation does not make them invisible.
+            for index_table in (
+                "vec_journal",
+                "vec_decisions",
+                "vec_literature",
+                "vec_missions",
+                "vec_claims",
+                "vec_artifacts",
+            ):
+                type_clause = (
+                    " OR entity_type NOT IN ('artifact', 'figure')"
+                    if index_table == "vec_artifacts"
+                    else ""
+                )
+                try:
+                    rows = await self.db.fetchall(
+                        f"""SELECT id FROM {index_table}
+                            WHERE project_id = ?{type_clause}
+                            LIMIT 50""",
+                        ["__orphan__"],
+                    )
+                except Exception:
+                    if index_table not in unreadable:
+                        unreadable.append(index_table)
+                    continue
+                orphan_vec.extend(r["id"] for r in rows)
+
         for cat, found, what, fix in (
             ("orphaned_vector_rows", orphan_vec, "vectors", "an embedding backfill"),
             ("orphaned_fts_rows", orphan_fts, "FTS rows", "`rka admin reindex`"),
         ):
             if found:
+                found = list(dict.fromkeys(found))
                 issues.append({
                     "category": cat,
                     "severity": self._severity_for(cat),
                     "count": len(found),
                     "ids": found[:10],
                     "description": (
-                        f"{what} whose entity no longer exists; they consume "
-                        "candidate slots in every search before the project "
-                        "filter runs"
+                        f"{what} whose entity no longer exists; they occupy "
+                        "index storage and indicate incomplete cleanup"
                     ),
                     "fix_action": f"Delete them, then repopulate with {fix}",
                 })

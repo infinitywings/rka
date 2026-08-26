@@ -6,6 +6,7 @@ import logging
 import re
 import struct
 from dataclasses import dataclass
+from typing import Any
 
 from rka.infra.database import Database
 from rka.infra.embeddings import EmbeddingService
@@ -529,13 +530,21 @@ class SearchService:
                 continue
 
             try:
+                partition_sql = "project_id = ?"
+                params: list[Any] = [vec_blob, self.project_id]
+                if table == "vec_artifacts":
+                    partition_sql += " AND entity_type = ?"
+                    params.append(etype)
+                params.append(limit)
                 rows = await self.db.fetchall(
                     f"""SELECT id, distance
                         FROM {table}
                         WHERE embedding MATCH ?
+                          AND {partition_sql}
+                          AND k = ?
                         ORDER BY distance
-                        LIMIT ?""",
-                    [vec_blob, limit],
+                        """,
+                    params,
                 )
             except Exception:
                 continue
