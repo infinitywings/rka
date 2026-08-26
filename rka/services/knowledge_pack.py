@@ -2599,10 +2599,12 @@ class KnowledgePackService(BaseService):
                          AND ce.relation = 'member_of') as actual
                FROM evidence_clusters ec
                WHERE ec.project_id = ?
-               AND ec.claim_count != (SELECT COUNT(DISTINCT ce.source_claim_id) FROM claim_edges ce
-                                      WHERE ce.cluster_id = ec.id
-                                        AND ce.project_id = ec.project_id
-                                        AND ce.relation = 'member_of')
+               AND ec.claim_count IS NOT (
+                   SELECT COUNT(DISTINCT ce.source_claim_id) FROM claim_edges ce
+                   WHERE ce.cluster_id = ec.id
+                     AND ce.project_id = ec.project_id
+                     AND ce.relation = 'member_of'
+               )
                LIMIT 50""",
             [pid],
         )
@@ -2615,7 +2617,7 @@ class KnowledgePackService(BaseService):
                     "count": len(mismatched),
                     "ids": [r["id"] for r in mismatched[:10]],
                     "description": "evidence_clusters with claim_count != actual claim_edges count",
-                    "fix_action": "Run migration 016 to recompute claim counts",
+                    "fix_action": "Recompute cluster claim counts from unique memberships",
                 }
             )
 

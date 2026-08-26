@@ -18,6 +18,24 @@ _EMBED_JOB = {
 class ResearcherToolsService(BaseService):
     """Lightweight tools that compose existing data — no new tables, no LLM, no background jobs."""
 
+    async def _validate_research_question(self, research_question_id: str) -> None:
+        """Require a same-project decision whose semantic kind is RQ."""
+        rq = await self.db.fetchone(
+            """SELECT kind FROM decisions
+               WHERE id = ? AND project_id = ?""",
+            [research_question_id, self.project_id],
+        )
+        if rq is None:
+            raise ValueError(
+                "research question is not available in this project: "
+                f"{research_question_id}"
+            )
+        if rq["kind"] != "research_question":
+            raise ValueError(
+                f"Decision {research_question_id} is not a research_question "
+                f"(kind={rq['kind']})"
+            )
+
     async def _index_new_row(
         self, entity_type: str, entity_id: str, fts_data: dict,
     ) -> None:
@@ -325,16 +343,7 @@ class ResearcherToolsService(BaseService):
             cluster_id = generate_id("cluster")
             rq_id = spec.get("research_question_id") or source.get("research_question_id")
             if rq_id is not None:
-                rq = await self.db.fetchone(
-                    """SELECT 1 FROM decisions
-                       WHERE id = ? AND project_id = ?""",
-                    [rq_id, self.project_id],
-                )
-                if rq is None:
-                    raise ValueError(
-                        "split cluster research question is not available "
-                        "in this project"
-                    )
+                await self._validate_research_question(rq_id)
             await self.db.execute(
                 """INSERT INTO evidence_clusters
                    (id, research_question_id, label, confidence, claim_count,
@@ -473,25 +482,22 @@ class ResearcherToolsService(BaseService):
                 "every source cluster must be available in this project"
             )
 
-        # Resolve research_question_id from first source if not provided
+        # Resolve a shared parent automatically. If the sources span multiple
+        # RQs, require the caller to make the semantic reassignment explicit.
         if not research_question_id:
-            source_by_id = {row["id"]: row for row in source_rows}
-            for source_id in normalized_source_ids:
-                candidate = source_by_id[source_id].get("research_question_id")
-                if candidate:
-                    research_question_id = candidate
-                    break
-        if research_question_id is not None:
-            rq = await self.db.fetchone(
-                """SELECT 1 FROM decisions
-                   WHERE id = ? AND project_id = ?""",
-                [research_question_id, self.project_id],
-            )
-            if rq is None:
+            source_rq_ids = {
+                row["research_question_id"]
+                for row in source_rows
+                if row.get("research_question_id")
+            }
+            if len(source_rq_ids) > 1:
                 raise ValueError(
-                    "merge cluster research question is not available "
-                    "in this project"
+                    "source clusters span multiple research questions; "
+                    "provide research_question_id explicitly"
                 )
+            research_question_id = next(iter(source_rq_ids), None)
+        if research_question_id is not None:
+            await self._validate_research_question(research_question_id)
 
         target_id = generate_id("cluster")
         await self.db.execute(

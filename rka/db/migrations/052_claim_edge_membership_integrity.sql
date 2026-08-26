@@ -26,7 +26,7 @@ SET claim_count = (
           AND claim_edges.project_id = evidence_clusters.project_id
     ),
     updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-WHERE claim_count != (
+WHERE claim_count IS NOT (
     SELECT COUNT(DISTINCT claim_edges.source_claim_id)
     FROM claim_edges
     WHERE claim_edges.cluster_id = evidence_clusters.id

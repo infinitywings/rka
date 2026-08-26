@@ -26,7 +26,7 @@ def test_migration_052_deduplicates_membership_and_repairs_counts(
             """
             CREATE TABLE evidence_clusters (
                 id TEXT PRIMARY KEY,
-                claim_count INTEGER NOT NULL DEFAULT 0,
+                claim_count INTEGER DEFAULT 0,
                 updated_at TEXT,
                 project_id TEXT NOT NULL
             );
@@ -42,6 +42,8 @@ def test_migration_052_deduplicates_membership_and_repairs_counts(
             );
             INSERT INTO evidence_clusters
             VALUES ('ecl_one', 9, NULL, 'prj_one');
+            INSERT INTO evidence_clusters
+            VALUES ('ecl_null_count', NULL, NULL, 'prj_one');
             INSERT INTO claim_edges VALUES
               ('ced_oldest', 'clm_one', NULL, 'ecl_one', 'member_of',
                1.0, 'prj_one', '2026-01-01T00:00:00Z'),
@@ -59,6 +61,10 @@ def test_migration_052_deduplicates_membership_and_repairs_counts(
         assert connection.execute(
             "SELECT claim_count FROM evidence_clusters WHERE id = 'ecl_one'"
         ).fetchone() == (1,)
+        assert connection.execute(
+            """SELECT claim_count FROM evidence_clusters
+               WHERE id = 'ecl_null_count'"""
+        ).fetchone() == (0,)
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute(
                 """INSERT INTO claim_edges

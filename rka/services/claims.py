@@ -489,7 +489,7 @@ class ClaimService(BaseService):
                     raise ValueError("target claim is not available in this project")
             if data.cluster_id is not None:
                 cluster = await self.db.fetchone(
-                    """SELECT 1 FROM evidence_clusters
+                    """SELECT claim_count FROM evidence_clusters
                        WHERE id = ? AND project_id = ?""",
                     [data.cluster_id, self.project_id],
                 )
@@ -521,25 +521,31 @@ class ClaimService(BaseService):
                             self.project_id,
                         ],
                     )
-                await self.db.execute(
-                    """UPDATE evidence_clusters
-                       SET claim_count = (
-                               SELECT COUNT(DISTINCT source_claim_id)
-                               FROM claim_edges
-                               WHERE cluster_id = ?
-                                 AND relation = 'member_of'
-                                 AND project_id = ?
-                           ),
-                           updated_at = ?
-                       WHERE id = ? AND project_id = ?""",
-                    [
-                        data.cluster_id,
-                        self.project_id,
-                        _now(),
-                        data.cluster_id,
-                        self.project_id,
-                    ],
+                count_row = await self.db.fetchone(
+                    """SELECT COUNT(DISTINCT source_claim_id) AS claim_count
+                       FROM claim_edges
+                       WHERE cluster_id = ? AND relation = 'member_of'
+                         AND project_id = ?""",
+                    [data.cluster_id, self.project_id],
                 )
+                actual_count = count_row["claim_count"] if count_row else 0
+                # A retry that finds the same membership must be a true no-op:
+                # updating the parent cluster would otherwise append a false
+                # semantic change to the immutable change-events ledger.  A
+                # stale cached count is still repaired on either a create or a
+                # retry, including the nullable legacy state.
+                if cluster["claim_count"] != actual_count:
+                    await self.db.execute(
+                        """UPDATE evidence_clusters
+                           SET claim_count = ?, updated_at = ?
+                           WHERE id = ? AND project_id = ?""",
+                        [
+                            actual_count,
+                            _now(),
+                            data.cluster_id,
+                            self.project_id,
+                        ],
+                    )
             else:
                 await self.db.execute(
                     """INSERT INTO claim_edges

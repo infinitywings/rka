@@ -75,6 +75,26 @@ async def test_prepare_claim_edges_deduplicates_legacy_memberships(db) -> None:
 
 
 @pytest.mark.asyncio
+async def test_check_integrity_reports_null_cluster_claim_count(db) -> None:
+    await db.execute(
+        """INSERT INTO evidence_clusters
+           (id, label, claim_count, project_id)
+           VALUES ('ecl_null_count', 'nullable legacy count', NULL,
+                   'proj_default')"""
+    )
+    await db.commit()
+
+    issues = await KnowledgePackService(db).check_integrity("proj_default")
+
+    mismatch = next(
+        issue for issue in issues
+        if issue["category"] == "claim_count_mismatch"
+    )
+    assert mismatch["ids"] == ["ecl_null_count"]
+    assert mismatch["severity"] == "warning"
+
+
+@pytest.mark.asyncio
 async def test_knowledge_pack_round_trip_imports_into_same_db_with_remapped_ids_and_artifacts(tmp_path: Path):
     db = await _make_db(tmp_path / "round-trip.db")
     artifact_path = tmp_path / "reference.txt"
@@ -636,6 +656,92 @@ def _write_synthetic_pack(
     }
     with zipfile.ZipFile(pack_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("manifest.json", json.dumps(manifest, indent=2, sort_keys=True))
+
+
+@pytest.mark.asyncio
+async def test_import_deduplicates_legacy_memberships_and_repairs_count(
+    tmp_path: Path,
+) -> None:
+    pack_path = tmp_path / "legacy-memberships.rka-pack.zip"
+    source_project_id = "proj_legacy_memberships_src"
+    _write_synthetic_pack(
+        pack_path,
+        source_project_id=source_project_id,
+        source_project_name="Legacy Membership Source",
+        tables={
+            "journal": [
+                {
+                    "id": "jrn_legacy_membership",
+                    "type": "finding",
+                    "content": "Legacy source evidence.",
+                    "source": "executor",
+                    "project_id": source_project_id,
+                }
+            ],
+            "claims": [
+                {
+                    "id": "clm_legacy_membership",
+                    "source_entry_id": "jrn_legacy_membership",
+                    "claim_type": "evidence",
+                    "content": "One claim was assigned twice.",
+                    "project_id": source_project_id,
+                }
+            ],
+            "evidence_clusters": [
+                {
+                    "id": "ecl_legacy_membership",
+                    "label": "Legacy membership cluster",
+                    "claim_count": 2,
+                    "project_id": source_project_id,
+                }
+            ],
+            "claim_edges": [
+                {
+                    "id": "ced_legacy_first",
+                    "source_claim_id": "clm_legacy_membership",
+                    "cluster_id": "ecl_legacy_membership",
+                    "relation": "member_of",
+                    "confidence": 0.25,
+                    "project_id": source_project_id,
+                },
+                {
+                    "id": "ced_legacy_duplicate",
+                    "source_claim_id": "clm_legacy_membership",
+                    "cluster_id": "ecl_legacy_membership",
+                    "relation": "member_of",
+                    "confidence": 0.75,
+                    "project_id": source_project_id,
+                },
+            ],
+        },
+    )
+    db = await _make_db(tmp_path / "legacy-memberships.db")
+    try:
+        with pack_path.open("rb") as pack_file:
+            result = await KnowledgePackService(db).import_pack(
+                pack_file,
+                project_id="proj_legacy_memberships_dst",
+                project_name="Legacy Membership Destination",
+                defer_indexing=True,
+            )
+
+        assert result.imported_counts["claim_edges"] == 1
+        assert any(
+            issue["category"] == "claim_count_mismatch"
+            for issue in result.integrity_issues
+        )
+        assert await db.fetchone(
+            """SELECT COUNT(*) AS edges, MIN(confidence) AS confidence
+               FROM claim_edges
+               WHERE project_id = 'proj_legacy_memberships_dst'
+                 AND relation = 'member_of'"""
+        ) == {"edges": 1, "confidence": 0.25}
+        assert await db.fetchone(
+            """SELECT claim_count FROM evidence_clusters
+               WHERE project_id = 'proj_legacy_memberships_dst'"""
+        ) == {"claim_count": 1}
+    finally:
+        await db.close()
 
 
 @pytest.mark.asyncio
