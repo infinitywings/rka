@@ -50,6 +50,11 @@ pipeline independently:
 4. `/api/entities/resolve` over the candidate union, including induced edges,
    full stored facts, and currentness.
 
+Only the formal result records (`entity_id`/`id` on search results and `id`
+on graph nodes) count as candidates. IDs merely mentioned in snippets, labels,
+edge endpoints, or inclusion metadata do not. Resolver-added source closure is
+reported separately and may not satisfy roles, edges, facts, or currentness.
+
 The runner also performs one separately reported oracle diagnostic using the
 gold anchor. Oracle results never contribute to headline story metrics.
 
@@ -119,6 +124,9 @@ research direction exists and what followed:
   answers; they are separate because stored provenance-edge direction is not
   always causal direction (`decision --justified_by--> journal`).
 - `required_facts` are checked against full resolved records, never snippets.
+- `must_be_current` entities must be retrieved and resolved as current.
+  `must_be_not_current` is a rejection contract: absence passes; if such an
+  entity is retrieved, the resolver must attest that it is not current.
 - `min_precision` (default `0.2`) prevents a project dump from passing merely
   because all required roles are somewhere in the returned bundle.
 - `distractors` reduce precision but are not automatically a hard failure;

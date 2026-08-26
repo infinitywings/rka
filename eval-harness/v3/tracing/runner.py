@@ -52,7 +52,12 @@ SLUG_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
 def extract_entity_ids(payload: Any) -> list[str]:
-    """Order-preserving unique entity ids found anywhere in a JSON payload."""
+    """Order-preserving entity IDs mentioned anywhere in an artifact.
+
+    This broad extractor is useful for saved cold-session traces, but it must
+    not score REST retrieval surfaces: snippets and labels can mention IDs
+    that the surface did not actually return as records.
+    """
     found: list[str] = []
     seen: set[str] = set()
 
@@ -71,6 +76,52 @@ def extract_entity_ids(payload: Any) -> list[str]:
 
     walk(payload)
     return found
+
+
+def _direct_record_ids(records: Any) -> list[str]:
+    """Return valid direct ``entity_id``/``id`` fields without mining text."""
+    if not isinstance(records, list):
+        return []
+    found: list[str] = []
+    seen: set[str] = set()
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        entity_id = record.get("entity_id") or record.get("id")
+        if (
+            isinstance(entity_id, str)
+            and ENTITY_ID_PATTERN.fullmatch(entity_id)
+            and entity_id not in seen
+        ):
+            seen.add(entity_id)
+            found.append(entity_id)
+    return found
+
+
+def extract_search_entity_ids(payload: Any) -> list[str]:
+    """Extract only records formally returned by a search endpoint."""
+    if isinstance(payload, list):
+        return _direct_record_ids(payload)
+    if isinstance(payload, dict) and "results" in payload:
+        return _direct_record_ids(payload["results"])
+    return []
+
+
+def extract_graph_node_ids(payload: Any) -> list[str]:
+    """Extract graph nodes, with a flat-result fallback for legacy routes."""
+    if isinstance(payload, dict):
+        if "nodes" in payload:
+            return _direct_record_ids(payload["nodes"])
+        if "results" in payload:
+            return _direct_record_ids(payload["results"])
+    if isinstance(payload, list):
+        return _direct_record_ids(payload)
+    return []
+
+
+def _ignore_entity_ids(_payload: Any) -> list[str]:
+    """Explicit extractor for payloads used only for their structured body."""
+    return []
 
 
 def extract_graph_edges(payload: Any) -> list[dict[str, str]]:
@@ -138,11 +189,30 @@ class TraceRunner:
             params["project_id"] = self._project_id
         return params
 
-    async def _get_ids(self, label: str, coro, divergences: list[str]) -> list[str]:
-        surface = await self._get_surface(label, coro, divergences)
+    async def _get_ids(
+        self,
+        label: str,
+        coro,
+        divergences: list[str],
+        *,
+        id_extractor,
+    ) -> list[str]:
+        surface = await self._get_surface(
+            label,
+            coro,
+            divergences,
+            id_extractor=id_extractor,
+        )
         return surface["ids"]
 
-    async def _get_surface(self, label: str, coro, divergences: list[str]) -> dict[str, Any]:
+    async def _get_surface(
+        self,
+        label: str,
+        coro,
+        divergences: list[str],
+        *,
+        id_extractor,
+    ) -> dict[str, Any]:
         try:
             response = await coro
         except httpx.HTTPError as exc:
@@ -157,7 +227,7 @@ class TraceRunner:
             divergences.append(f"{label}: non-JSON body")
             return {"ids": [], "edges": [], "payload": None}
         return {
-            "ids": extract_entity_ids(payload),
+            "ids": id_extractor(payload),
             "edges": extract_graph_edges(payload),
             "payload": payload,
         }
@@ -176,12 +246,14 @@ class TraceRunner:
                     params=self._params(),
                 ),
                 divergences,
+                id_extractor=extract_search_entity_ids,
             )
 
         ego_ids = await self._get_ids(
             "ego",
             self._client.get(f"/api/graph/ego/{anchor}", params=self._params({"depth": 2})),
             divergences,
+            id_extractor=extract_graph_node_ids,
         )
         multi_hop_ids = await self._get_ids(
             "multi_hop",
@@ -195,6 +267,7 @@ class TraceRunner:
                 params=self._params(),
             ),
             divergences,
+            id_extractor=extract_graph_node_ids,
         )
 
         result = score_scenario(
@@ -227,6 +300,7 @@ class TraceRunner:
                 params=self._params(),
             ),
             divergences,
+            id_extractor=_ignore_entity_ids,
         )
         return surface["payload"]
 
@@ -247,6 +321,7 @@ class TraceRunner:
                 params=self._params(),
             ),
             divergences,
+            id_extractor=extract_search_entity_ids,
         )
         multi_hop = await self._get_surface(
             "query_multi_hop",
@@ -260,6 +335,7 @@ class TraceRunner:
                 params=self._params(),
             ),
             divergences,
+            id_extractor=extract_graph_node_ids,
         )
         report_context = await self._get_surface(
             "report_context",
@@ -274,6 +350,7 @@ class TraceRunner:
                 params=self._params(),
             ),
             divergences,
+            id_extractor=extract_graph_node_ids,
         )
 
         surfaces = {
@@ -308,6 +385,10 @@ class TraceRunner:
             "query_multi_hop_ids": multi_hop["ids"],
             "report_context_ids": report_context["ids"],
             "resolved_ids": resolved_entity_ids(entity_packet, expected_project_id),
+            "resolved_candidate_ids": sorted(
+                set(resolved_entity_ids(entity_packet, expected_project_id)) & union_ids
+            ),
+            "resolver_closure_ids": result["resolver_closure_ids"],
         }
         return result
 
@@ -319,6 +400,7 @@ class TraceRunner:
             "oracle_ego",
             self._client.get(f"/api/graph/ego/{anchor}", params=self._params({"depth": 3})),
             divergences,
+            id_extractor=extract_graph_node_ids,
         )
         multi_hop = await self._get_surface(
             "oracle_multi_hop",
@@ -328,11 +410,13 @@ class TraceRunner:
                 params=self._params(),
             ),
             divergences,
+            id_extractor=extract_graph_node_ids,
         )
         ids = set(ego["ids"]) | set(multi_hop["ids"])
         packet = await self._resolve_story_entities(ids, divergences)
         edges = ego["edges"] + multi_hop["edges"]
-        confirmed_ids = set(resolved_entity_ids(packet, scenario["project_id"]))
+        resolved_ids = set(resolved_entity_ids(packet, scenario["project_id"]))
+        confirmed_ids = resolved_ids & ids
         if packet:
             edges.extend(extract_graph_edges(packet))
         confirmed_edges = [
@@ -350,6 +434,7 @@ class TraceRunner:
                 expected_project_id=scenario["project_id"],
             ),
             "raw_candidate_ids": sorted(ids),
+            "resolver_closure_ids": sorted(resolved_ids - ids),
             "divergences": divergences,
         }
 

@@ -21,7 +21,9 @@ if str(_EVAL_HARNESS_DIR) not in sys.path:
 from v3.tracing.runner import (  # noqa: E402
     TraceRunner,
     extract_entity_ids,
+    extract_graph_node_ids,
     extract_graph_edges,
+    extract_search_entity_ids,
     load_corpus,
 )
 
@@ -29,6 +31,7 @@ ANCHOR = "dec_00000000000000000000000011"
 DIRECTIVE = "jrn_00000000000000000000000012"
 EVIDENCE = "clm_00000000000000000000000013"
 PAPER = "lit_00000000000000000000000014"
+SOURCE = "lit_00000000000000000000000016"
 
 SCENARIO = {
     "scenario_id": "scaffold-pivot",
@@ -117,6 +120,28 @@ def test_extract_entity_ids_ignores_truncated_ulids() -> None:
     }
 
     assert extract_entity_ids(payload) == ["mis_01KPRB8JW9QXX7B7H4KNYJ3GMV"]
+
+
+def test_search_extractor_does_not_count_ids_mentioned_in_snippets() -> None:
+    payload = [
+        {
+            "entity_id": ANCHOR,
+            "snippet": f"This record discusses {DIRECTIVE}",
+        }
+    ]
+
+    assert extract_search_entity_ids(payload) == [ANCHOR]
+
+
+def test_graph_extractor_does_not_count_ids_mentioned_in_labels() -> None:
+    payload = {
+        "nodes": [{"id": ANCHOR, "label": f"See {EVIDENCE}"}],
+        "seeds": [DIRECTIVE],
+        "edges": [{"source": EVIDENCE, "target": PAPER}],
+        "included_via": {"from": SOURCE},
+    }
+
+    assert extract_graph_node_ids(payload) == [ANCHOR]
 
 
 def test_extract_graph_edges_nested_and_deduped() -> None:
@@ -235,6 +260,14 @@ def _story_transport(resolve_mode: str = "complete") -> httpx.MockTransport:
                 entities[EVIDENCE]["project_id"] = "prj_00000000000000000000000099"
             if resolve_mode == "missing-entity-project" and EVIDENCE in entities:
                 entities[EVIDENCE].pop("project_id")
+            if resolve_mode == "closure":
+                entities[SOURCE] = {
+                    "found": True,
+                    "outcome": "resolved",
+                    "project_id": "prj_00000000000000000000000000",
+                    "currentness": {"is_current": True},
+                    "record": {"content": "resolver-added source"},
+                }
             packet_project = (
                 "prj_00000000000000000000000099"
                 if resolve_mode == "wrong-project"
@@ -325,6 +358,38 @@ async def test_story_headline_uses_only_resolver_confirmed_ids() -> None:
     assert result["headline"]["missing_roles"] == ["mission"]
     assert result["headline"]["hard_failures"]["resolution_incomplete"] == [EVIDENCE]
     assert result["headline"]["story_success"] is False
+
+
+async def test_story_headline_excludes_resolver_source_closure() -> None:
+    runner = TraceRunner(
+        "http://rka.test",
+        project_id="prj_00000000000000000000000000",
+        transport=_story_transport(resolve_mode="closure"),
+    )
+    try:
+        result = await runner.run_story_variant(STORY_SCENARIO, STORY_SCENARIO["query_variants"][0])
+    finally:
+        await runner.close()
+
+    assert result["headline"]["returned_count"] == 3
+    assert result["resolver_closure_ids"] == [SOURCE]
+    assert set(result["raw"]["resolved_candidate_ids"]) == {ANCHOR, EVIDENCE, DIRECTIVE}
+    assert result["raw"]["resolver_closure_ids"] == [SOURCE]
+
+
+async def test_story_oracle_excludes_resolver_source_closure() -> None:
+    runner = TraceRunner(
+        "http://rka.test",
+        project_id="prj_00000000000000000000000000",
+        transport=_story_transport(resolve_mode="closure"),
+    )
+    try:
+        result = await runner._run_story_oracle(STORY_SCENARIO)
+    finally:
+        await runner.close()
+
+    assert SOURCE not in result["raw_candidate_ids"]
+    assert result["resolver_closure_ids"] == [SOURCE]
 
 
 async def test_story_headline_fails_closed_when_resolver_is_absent() -> None:

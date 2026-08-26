@@ -6,7 +6,6 @@ so the math is lockable by unit tests independently of the runner.
 
 from __future__ import annotations
 
-import json
 from collections import defaultdict
 from statistics import mean
 from typing import Any
@@ -49,6 +48,31 @@ def _edge_matches(expected: dict[str, Any], returned: dict[str, Any]) -> bool:
     forward = returned.get("source") == source and returned.get("target") == target
     reverse = returned.get("source") == target and returned.get("target") == source
     return forward or (direction == "either" and reverse)
+
+
+def _searchable_record_text(value: Any) -> str:
+    """Flatten resolved record values without JSON escape artifacts.
+
+    Fact probes target stored prose.  Serializing the whole resolver record as
+    JSON inserts escape characters around quoted terms (for example
+    ``18 are \"insight\"``), which can make a literal phrase from the record
+    fail to match itself.  Walking values preserves the original text while
+    still making scalar metadata available to a probe.
+    """
+    parts: list[str] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for item in node.values():
+                walk(item)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+        elif node is not None:
+            parts.append(str(node))
+
+    walk(value)
+    return "\n".join(parts).casefold()
 
 
 def story_scores(
@@ -136,13 +160,12 @@ def story_scores(
         matched_entities = []
         for entity_id in candidates:
             resolution = entities.get(entity_id, {})
-            text = json.dumps(
-                resolution,
-                ensure_ascii=False,
-                sort_keys=True,
-                default=str,
-            ).casefold()
-            if entity_id in confirmed_ids and all(needle in text for needle in needles):
+            text = _searchable_record_text(resolution)
+            if (
+                entity_id in returned_ids
+                and entity_id in confirmed_ids
+                and all(needle in text for needle in needles)
+            ):
                 matched_entities.append(entity_id)
         fact_results.append(
             {
@@ -160,17 +183,25 @@ def story_scores(
     ):
         for entity_id in ids:
             resolution = entities.get(entity_id, {})
+            was_returned = entity_id in returned_ids
             actual = (
                 resolution.get("currentness", {}).get("is_current")
                 if entity_id in confirmed_ids
                 else None
             )
+            # A historical entity need not be retrieved merely to prove that
+            # it was not presented as current.  If it is retrieved, however,
+            # resolution must explicitly attest that it is not current.
+            correct = was_returned and actual is expected_current
+            if not expected_current and not was_returned:
+                correct = True
             currentness_results.append(
                 {
                     "entity_id": entity_id,
                     "expected_current": expected_current,
                     "actual_current": actual,
-                    "correct": actual is expected_current,
+                    "returned": was_returned,
+                    "correct": correct,
                 }
             )
 
@@ -287,13 +318,20 @@ def score_story_variant(
         and resolution.get("outcome") == "resolved"
         and resolution.get("project_id") == expected_project_id
     }
-    confirmed_edges = [
-        edge
-        for edge in union_edges
-        if edge.get("source") in confirmed_ids and edge.get("target") in confirmed_ids
-    ]
-    headline_ids = confirmed_ids if expected_project_id else union_ids
-    headline_edges = confirmed_edges if expected_project_id else union_edges
+    # ``include_sources`` may add resolver closure records that were not
+    # returned by any retrieval surface.  They are useful provenance context,
+    # but must not become headline hits or satisfy facts/currentness by proxy.
+    headline_ids = (confirmed_ids & union_ids) if expected_project_id else union_ids
+    resolver_closure_ids = confirmed_ids - union_ids
+    headline_edges = (
+        [
+            edge
+            for edge in union_edges
+            if edge.get("source") in headline_ids and edge.get("target") in headline_ids
+        ]
+        if expected_project_id
+        else union_edges
+    )
     raw_candidate = story_scores(scenario["story"], union_ids, union_edges)
     anchor = scenario["anchor_decision"]
     return {
@@ -317,6 +355,7 @@ def score_story_variant(
             "missing_roles": raw_candidate["missing_roles"],
             "returned_count": raw_candidate["returned_count"],
         },
+        "resolver_closure_ids": sorted(resolver_closure_ids),
         "per_surface": per_surface,
         "divergences": divergences,
     }

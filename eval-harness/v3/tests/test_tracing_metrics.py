@@ -202,6 +202,121 @@ def test_story_scores_complete_causal_story() -> None:
     assert not any(score["hard_failures"].values())
 
 
+def test_story_fact_matching_preserves_quoted_record_text() -> None:
+    story = {
+        "roles": {"rationale": {"any_of": ["jrn_why"], "required": True}},
+        "required_facts": [
+            {
+                "fact_id": "observed-overlap",
+                "any_of_entities": ["jrn_why"],
+                "contains": ['18 are "insight"', '11 are "observation"'],
+            }
+        ],
+    }
+    packet = {
+        "project_id": "prj_story",
+        "entities": {
+            "jrn_why": {
+                "found": True,
+                "outcome": "resolved",
+                "project_id": "prj_story",
+                "record": {
+                    "content": '18 are "insight" and 11 are "observation".'
+                },
+            }
+        },
+    }
+
+    score = story_scores(
+        story,
+        {"jrn_why"},
+        entity_packet=packet,
+        expected_project_id="prj_story",
+    )
+
+    assert score["fact_coverage"] == 1.0
+
+
+def test_absent_historical_entity_does_not_become_required_for_currentness() -> None:
+    story = {
+        "roles": {"current": {"any_of": ["dec_new"], "required": True}},
+        "currentness": {
+            "must_be_current": ["dec_new"],
+            "must_be_not_current": ["dec_old"],
+        },
+    }
+    packet = {
+        "project_id": "prj_story",
+        "entities": {
+            "dec_new": {
+                "found": True,
+                "outcome": "resolved",
+                "project_id": "prj_story",
+                "currentness": {"is_current": True},
+            }
+        },
+    }
+
+    score = story_scores(
+        story,
+        {"dec_new"},
+        entity_packet=packet,
+        expected_project_id="prj_story",
+    )
+
+    assert score["currentness_accuracy"] == 1.0
+    old = next(item for item in score["currentness"] if item["entity_id"] == "dec_old")
+    assert old == {
+        "entity_id": "dec_old",
+        "expected_current": False,
+        "actual_current": None,
+        "returned": False,
+        "correct": True,
+    }
+
+
+def test_resolver_closure_cannot_satisfy_fact_or_currentness() -> None:
+    story = {
+        "roles": {"current": {"any_of": ["dec_new"], "required": True}},
+        "required_facts": [
+            {
+                "fact_id": "closure-fact",
+                "any_of_entities": ["lit_source"],
+                "contains": ["resolver-added"],
+            }
+        ],
+        "currentness": {"must_be_current": ["lit_source"]},
+    }
+    packet = {
+        "project_id": "prj_story",
+        "entities": {
+            "dec_new": {
+                "found": True,
+                "outcome": "resolved",
+                "project_id": "prj_story",
+                "currentness": {"is_current": True},
+            },
+            "lit_source": {
+                "found": True,
+                "outcome": "resolved",
+                "project_id": "prj_story",
+                "currentness": {"is_current": True},
+                "record": {"content": "resolver-added context"},
+            },
+        },
+    }
+
+    score = story_scores(
+        story,
+        {"dec_new"},
+        entity_packet=packet,
+        expected_project_id="prj_story",
+    )
+
+    assert score["fact_coverage"] == 0.0
+    assert score["currentness_accuracy"] == 0.0
+
+
 def test_story_scores_rejects_fragment_and_stale_only_answers() -> None:
     fragmented = story_scores(
         STORY,
@@ -263,6 +378,61 @@ def test_story_variant_and_aggregate_group_query_styles() -> None:
     assert rollup["story_success_rate"] == 0.5
     assert rollup["by_style"]["exact"]["story_success_rate"] == 1.0
     assert rollup["by_style"]["underspecified"]["story_success_rate"] == 0.0
+
+
+def test_story_variant_excludes_closure_role_and_edge() -> None:
+    scenario = {
+        "scenario_id": "closure-story",
+        "project_id": "prj_story",
+        "anchor_decision": "dec_new",
+        "story": {
+            "roles": {
+                "decision": {"any_of": ["dec_new"], "required": True},
+                "source": {"any_of": ["lit_source"], "required": True},
+            },
+            "required_edges": [
+                {
+                    "source": "lit_source",
+                    "target": "dec_new",
+                    "link_type": "informed_by",
+                }
+            ],
+        },
+    }
+    packet = {
+        "project_id": "prj_story",
+        "entities": {
+            entity_id: {
+                "found": True,
+                "outcome": "resolved",
+                "project_id": "prj_story",
+            }
+            for entity_id in ("dec_new", "lit_source")
+        },
+    }
+
+    result = score_story_variant(
+        scenario,
+        {"variant_id": "exact", "style": "exact", "query": "decision"},
+        {"search": ["dec_new"]},
+        {
+            "search": [],
+            "resolve": [
+                {
+                    "source": "lit_source",
+                    "target": "dec_new",
+                    "link_type": "informed_by",
+                }
+            ],
+        },
+        ["dec_new"],
+        packet,
+        [],
+    )
+
+    assert result["headline"]["missing_roles"] == ["source"]
+    assert result["headline"]["required_edge_coverage"] == 0.0
+    assert result["resolver_closure_ids"] == ["lit_source"]
 
 
 def _good_story_response(**overrides) -> dict:
