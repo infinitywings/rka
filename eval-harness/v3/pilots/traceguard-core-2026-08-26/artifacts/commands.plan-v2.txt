@@ -1,0 +1,8 @@
+python3 -m unittest -v test_traceguard_smoke.py test_traceguard_plan_v2.py
+python3 traceguard_plan_v2.py --output-dir artifacts
+python3 traceguard_plan_v2.py --output-dir /tmp/traceguard-plan-v2-rerun-20260827
+cmp -s artifacts/corpus.plan-v2.jsonl /tmp/traceguard-plan-v2-rerun-20260827/corpus.plan-v2.jsonl
+cmp -s artifacts/predictions.event_only.plan-v2.jsonl /tmp/traceguard-plan-v2-rerun-20260827/predictions.event_only.plan-v2.jsonl
+cmp -s artifacts/predictions.sequence_aware.plan-v2.jsonl /tmp/traceguard-plan-v2-rerun-20260827/predictions.sequence_aware.plan-v2.jsonl
+cmp -s artifacts/metrics.plan-v2.json /tmp/traceguard-plan-v2-rerun-20260827/metrics.plan-v2.json
+shasum -a 256 artifacts/corpus.plan-v2.jsonl artifacts/predictions.event_only.plan-v2.jsonl artifacts/predictions.sequence_aware.plan-v2.jsonl artifacts/metrics.plan-v2.json

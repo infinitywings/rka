@@ -1,0 +1,30 @@
+{
+  "class_counts": {
+    "ordinary_benign": 128,
+    "benign_sensitive_workflow": 64,
+    "immediate_injection_like": 32,
+    "delayed_injection_like": 32
+  },
+  "detector_source": "traceguard_smoke.py",
+  "experiment_id": "exp_01M1028QK2VP6NC1XNC6WJBE0Y",
+  "metric_roles": {
+    "benign_false_positive_rate": "co_primary",
+    "delayed_attack_recall": "co_primary",
+    "overall_accuracy": "secondary"
+  },
+  "plan_id": "epv_01M1045SZSDF3875XSYDFA8ZT3",
+  "plan_version": 2,
+  "safety": {
+    "credentials": false,
+    "hidden_external_state": false,
+    "learned_or_hosted_models": false,
+    "network_access": false,
+    "operational_payloads": false,
+    "personal_data": false,
+    "real_services": false,
+    "synthetic_symbolic_only": true,
+    "victims": false
+  },
+  "seed": 20260827,
+  "supersedes_plan_id": "epv_01M1028QK2VP6NC1XNC6WJBE0Z"
+}
