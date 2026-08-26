@@ -459,6 +459,7 @@ class ClaimService(BaseService):
 
     async def create_edge(self, data: ClaimEdgeCreate) -> ClaimEdge:
         edge_id = generate_id("claim_edge")
+        stored_confidence = data.confidence
         async with self.db.transaction():
             if data.relation == "member_of":
                 if data.cluster_id is None or data.target_claim_id is not None:
@@ -494,27 +495,66 @@ class ClaimService(BaseService):
                 )
                 if cluster is None:
                     raise ValueError("cluster is not available in this project")
-            await self.db.execute(
-                """INSERT INTO claim_edges
-                   (id, source_claim_id, target_claim_id, cluster_id, relation,
-                    confidence, project_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                [
-                    edge_id,
-                    data.source_claim_id,
-                    data.target_claim_id,
-                    data.cluster_id,
-                    data.relation,
-                    data.confidence,
-                    self.project_id,
-                ],
-            )
-
             if data.relation == "member_of" and data.cluster_id:
+                existing = await self.db.fetchone(
+                    """SELECT id, confidence FROM claim_edges
+                       WHERE project_id = ? AND source_claim_id = ?
+                         AND cluster_id = ? AND relation = 'member_of'""",
+                    [self.project_id, data.source_claim_id, data.cluster_id],
+                )
+                if existing:
+                    edge_id = existing["id"]
+                    stored_confidence = existing["confidence"]
+                else:
+                    await self.db.execute(
+                        """INSERT INTO claim_edges
+                           (id, source_claim_id, target_claim_id, cluster_id,
+                            relation, confidence, project_id)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        [
+                            edge_id,
+                            data.source_claim_id,
+                            data.target_claim_id,
+                            data.cluster_id,
+                            data.relation,
+                            data.confidence,
+                            self.project_id,
+                        ],
+                    )
                 await self.db.execute(
-                    "UPDATE evidence_clusters SET claim_count = claim_count + 1, "
-                    "updated_at = ? WHERE id = ? AND project_id = ?",
-                    [_now(), data.cluster_id, self.project_id],
+                    """UPDATE evidence_clusters
+                       SET claim_count = (
+                               SELECT COUNT(DISTINCT source_claim_id)
+                               FROM claim_edges
+                               WHERE cluster_id = ?
+                                 AND relation = 'member_of'
+                                 AND project_id = ?
+                           ),
+                           updated_at = ?
+                       WHERE id = ? AND project_id = ?""",
+                    [
+                        data.cluster_id,
+                        self.project_id,
+                        _now(),
+                        data.cluster_id,
+                        self.project_id,
+                    ],
+                )
+            else:
+                await self.db.execute(
+                    """INSERT INTO claim_edges
+                       (id, source_claim_id, target_claim_id, cluster_id, relation,
+                        confidence, project_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    [
+                        edge_id,
+                        data.source_claim_id,
+                        data.target_claim_id,
+                        data.cluster_id,
+                        data.relation,
+                        data.confidence,
+                        self.project_id,
+                    ],
                 )
             if data.relation == "contradicts":
                 affected_claims = [
@@ -547,7 +587,7 @@ class ClaimService(BaseService):
             target_claim_id=data.target_claim_id,
             cluster_id=data.cluster_id,
             relation=data.relation,
-            confidence=data.confidence,
+            confidence=stored_confidence,
             project_id=self.project_id,
         )
 

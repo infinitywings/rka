@@ -4,10 +4,20 @@ from __future__ import annotations
 
 import pytest
 
+from rka.models.claim import ClaimEdgeCreate
+from rka.services.claims import ClaimService
 from rka.services.researcher_tools import ResearcherToolsService
 
 
 async def _seed_cluster_graph(db) -> None:
+    await db.execute(
+        """INSERT INTO decisions
+           (id, phase, question, chosen, rationale, decided_by, kind, project_id)
+           VALUES ('dec_cluster_atomic_rq', 'core_hardening',
+                   'Atomic RQ?', 'Investigate.',
+                   'Test research question.', 'pi', 'research_question',
+                   'proj_default')"""
+    )
     await db.execute(
         """INSERT INTO journal
            (id, type, content, source, confidence, importance, project_id)
@@ -24,8 +34,8 @@ async def _seed_cluster_graph(db) -> None:
         )
         await db.execute(
             """INSERT INTO evidence_clusters
-               (id, label, claim_count, project_id)
-               VALUES (?, ?, 1, 'proj_default')""",
+               (id, research_question_id, label, claim_count, project_id)
+               VALUES (?, 'dec_cluster_atomic_rq', ?, 1, 'proj_default')""",
             [f"ecl_cluster_atomic_{suffix}", f"atomic cluster {suffix}"],
         )
         await db.execute(
@@ -147,6 +157,10 @@ async def test_split_cluster_failure_rolls_back_new_cluster_and_membership(
              AND project_id = 'proj_default'"""
     )
     assert membership == {"cluster_id": "ecl_cluster_atomic_one"}
+    assert await db.fetchall(
+        """SELECT source_id FROM entity_links
+           WHERE project_id = 'proj_default' AND link_type = 'answers'"""
+    ) == []
 
 
 @pytest.mark.asyncio
@@ -195,3 +209,108 @@ async def test_merge_cluster_failure_rolls_back_target_and_source_edges(
             "cluster_id": "ecl_cluster_atomic_two",
         },
     ]
+    assert await db.fetchall(
+        """SELECT source_id FROM entity_links
+           WHERE project_id = 'proj_default' AND link_type = 'answers'"""
+    ) == []
+
+
+@pytest.mark.asyncio
+async def test_member_of_edge_creation_is_idempotent_and_count_is_distinct(db) -> None:
+    await _seed_cluster_graph(db)
+    service = ClaimService(db, project_id="proj_default")
+    membership = ClaimEdgeCreate(
+        source_claim_id="clm_cluster_atomic_one",
+        cluster_id="ecl_cluster_atomic_one",
+        relation="member_of",
+        confidence=1.0,
+    )
+
+    first = await service.create_edge(membership)
+    second = await service.create_edge(membership)
+
+    assert first.id == second.id
+    assert await db.fetchone(
+        """SELECT COUNT(DISTINCT source_claim_id) AS distinct_claims,
+                  COUNT(*) AS edges
+           FROM claim_edges
+           WHERE project_id = 'proj_default'
+             AND cluster_id = 'ecl_cluster_atomic_one'
+             AND relation = 'member_of'"""
+    ) == {"distinct_claims": 1, "edges": 1}
+    assert await db.fetchone(
+        """SELECT claim_count FROM evidence_clusters
+           WHERE id = 'ecl_cluster_atomic_one'
+             AND project_id = 'proj_default'"""
+    ) == {"claim_count": 1}
+
+
+@pytest.mark.asyncio
+async def test_merge_clusters_counts_unique_union_and_links_target_to_rq(db) -> None:
+    await _seed_cluster_graph(db)
+    await db.execute(
+        """INSERT INTO claim_edges
+           (id, source_claim_id, cluster_id, relation, confidence, project_id)
+           VALUES ('ced_cluster_overlap', 'clm_cluster_atomic_one',
+                   'ecl_cluster_atomic_two', 'member_of', 1.0,
+                   'proj_default')"""
+    )
+    await db.execute(
+        """UPDATE evidence_clusters SET claim_count = 2
+           WHERE id = 'ecl_cluster_atomic_two'"""
+    )
+    await db.commit()
+    service = ResearcherToolsService(db, project_id="proj_default")
+
+    result = await service.merge_clusters(
+        ["ecl_cluster_atomic_one", "ecl_cluster_atomic_two"],
+        "merged target",
+    )
+
+    assert result["total_claims_moved"] == 2
+    assert await db.fetchone(
+        """SELECT claim_count, research_question_id
+           FROM evidence_clusters WHERE id = ?""",
+        [result["target_id"]],
+    ) == {
+        "claim_count": 2,
+        "research_question_id": "dec_cluster_atomic_rq",
+    }
+    assert await db.fetchone(
+        """SELECT COUNT(*) AS edges,
+                  COUNT(DISTINCT source_claim_id) AS distinct_claims
+           FROM claim_edges
+           WHERE project_id = 'proj_default' AND cluster_id = ?
+             AND relation = 'member_of'""",
+        [result["target_id"]],
+    ) == {"edges": 2, "distinct_claims": 2}
+    assert await db.fetchone(
+        """SELECT target_id FROM entity_links
+           WHERE project_id = 'proj_default'
+             AND source_type = 'cluster' AND source_id = ?
+             AND link_type = 'answers' AND target_type = 'decision'""",
+        [result["target_id"]],
+    ) == {"target_id": "dec_cluster_atomic_rq"}
+
+
+@pytest.mark.asyncio
+async def test_split_cluster_links_each_new_cluster_to_its_rq(db) -> None:
+    await _seed_cluster_graph(db)
+    service = ResearcherToolsService(db, project_id="proj_default")
+
+    result = await service.split_cluster(
+        "ecl_cluster_atomic_one",
+        [{
+            "label": "new split",
+            "claim_ids": ["clm_cluster_atomic_one"],
+        }],
+    )
+    new_cluster_id = result["new_clusters"][0]["id"]
+
+    assert await db.fetchone(
+        """SELECT target_id FROM entity_links
+           WHERE project_id = 'proj_default'
+             AND source_type = 'cluster' AND source_id = ?
+             AND link_type = 'answers' AND target_type = 'decision'""",
+        [new_cluster_id],
+    ) == {"target_id": "dec_cluster_atomic_rq"}

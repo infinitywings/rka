@@ -284,7 +284,7 @@ class ClusterService(BaseService):
 
             # Recompute the count defensively after all edge writes.
             count_row = await self.db.fetchone(
-                """SELECT COUNT(*) AS cnt FROM claim_edges
+                """SELECT COUNT(DISTINCT source_claim_id) AS cnt FROM claim_edges
                    WHERE cluster_id = ? AND relation = 'member_of'
                      AND project_id = ?""",
                 [cluster_id, self.project_id],

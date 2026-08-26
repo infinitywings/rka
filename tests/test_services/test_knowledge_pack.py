@@ -38,6 +38,43 @@ async def _make_db(path: Path) -> Database:
 
 
 @pytest.mark.asyncio
+async def test_prepare_claim_edges_deduplicates_legacy_memberships(db) -> None:
+    service = KnowledgePackService(db)
+    rows = [
+        {
+            "id": "ced_first",
+            "project_id": "prj_source",
+            "source_claim_id": "clm_one",
+            "cluster_id": "ecl_one",
+            "relation": "member_of",
+        },
+        {
+            "id": "ced_duplicate",
+            "project_id": "prj_source",
+            "source_claim_id": "clm_one",
+            "cluster_id": "ecl_one",
+            "relation": "member_of",
+        },
+        {
+            "id": "ced_supports",
+            "project_id": "prj_source",
+            "source_claim_id": "clm_one",
+            "target_claim_id": "clm_two",
+            "relation": "supports",
+        },
+    ]
+
+    prepared = service._prepare_rows_for_insert(
+        "claim_edges",
+        rows,
+        "prj_target",
+    )
+
+    assert [row["id"] for row in prepared] == ["ced_first", "ced_supports"]
+    assert {row["project_id"] for row in prepared} == {"prj_target"}
+
+
+@pytest.mark.asyncio
 async def test_knowledge_pack_round_trip_imports_into_same_db_with_remapped_ids_and_artifacts(tmp_path: Path):
     db = await _make_db(tmp_path / "round-trip.db")
     artifact_path = tmp_path / "reference.txt"
