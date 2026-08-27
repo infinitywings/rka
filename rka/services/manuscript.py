@@ -3,14 +3,11 @@
 Canonical manuscript identity and argument-spine state live in the native
 ``man_`` aggregate.  This adapter preserves the historical ``jrn_`` manifest
 surface for one compatibility window.  Slow reference validation is owned by
-``ReferenceValidationRunner`` and is asynchronous by default at the API/MCP
-boundary.
+Reference-validation initiation and execution are not part of Core 3.0.
 """
 
 from __future__ import annotations
 
-import subprocess
-from pathlib import Path
 from typing import Any
 
 from rka.infra.database import Database
@@ -19,17 +16,6 @@ from rka.models.manuscript_native import ManuscriptCreate
 from rka.services.base import BaseService
 from rka.services.manuscript_native import NativeManuscriptService
 from rka.services.notes import NoteService
-from rka.services.reference_validation import ReferenceValidationRunner
-
-# Kept as a module-level compatibility seam for direct-call tests and local
-# deployments that override the Writer script path.  The runner executes it.
-_VALIDATE_REFERENCES_SCRIPT = (
-    Path(__file__).resolve().parent.parent
-    / "skills"
-    / "writer"
-    / "scripts"
-    / "validate_references.py"
-)
 
 
 class ManuscriptService(BaseService):
@@ -122,29 +108,3 @@ class ManuscriptService(BaseService):
             "created_at": entry.created_at,
             "updated_at": entry.updated_at,
         }
-
-    async def validate_reference(
-        self,
-        reference: dict[str, Any],
-        *,
-        manuscript_id: str,
-        literature_id: str | None = None,
-    ) -> dict[str, Any]:
-        """Compatibility-only synchronous adapter around the worker runner.
-
-        New REST/MCP callers receive a durable pending job instead.  This
-        adapter remains for direct Python clients during the compatibility
-        window and deliberately delegates every slow operation to the runner.
-        """
-        return await ReferenceValidationRunner(
-            self.db,
-            project_id=self.project_id,
-            script_path=_VALIDATE_REFERENCES_SCRIPT,
-            run_command=subprocess.run,
-        ).validate(
-            reference,
-            manuscript_id=manuscript_id,
-            requested_manuscript_id=manuscript_id,
-            literature_id=literature_id,
-            preserve_requested_id=True,
-        )

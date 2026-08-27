@@ -331,9 +331,12 @@ rka_get_research_map()
 
 `rka_get_changelog(since="2026-04-10")` returns created and modified entities across journal, decisions, literature, claims, clusters, and missions with counts and short labels. Use it with the Research Map as a cheap structural baseline. It is not a complete lifecycle account: a topic question still requires scoped retrieval, supersession traversal, and terminal conclusion/caveat checks.
 
-## Evidence Assembly — Producing Research Outputs
+## Evidence Assembly — Exporting Research Context
 
-When the PI asks for a draft section, literature review, or progress update, use `rka_assemble_evidence` to get a structured starting point. Then edit and refine the output — never send raw assembly to the PI.
+When a downstream client needs scoped research context, use
+`rka_assemble_evidence` to produce a provenance-linked structured bundle. Core
+does not turn that bundle into publication prose; authoring belongs to a
+separately invoked writing client.
 
 ```python
 rka_assemble_evidence(research_question_id="dec_01...", format="lit_review")
@@ -341,7 +344,8 @@ rka_assemble_evidence(research_question_id="dec_01...", format="progress_report"
 rka_assemble_evidence(research_question_id="dec_01...", format="proposal_section")
 ```
 
-Output is a markdown string composed from cluster syntheses, key claims, decisions, and cited literature. No LLM involved — it's structured concatenation you refine.
+Output is a markdown string composed from cluster syntheses, key claims,
+decisions, and cited literature. No LLM is involved.
 
 ## Cluster Reorganization — Split and Merge
 

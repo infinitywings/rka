@@ -1,2 +1,0 @@
-# charts/ : chart .py scripts (matplotlib + seaborn) and their rendered .pdf outputs.
-# See scripts/chart_render.py for venue presets; PI authors per-manuscript chart logic.

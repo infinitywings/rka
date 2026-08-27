@@ -11,9 +11,14 @@ This is the official Claude Code plugin for [RKA](https://github.com/infinitywin
 | Surface | What | When |
 |---|---|---|
 | **MCP server** | Typed `rka_query` / `rka_execute` dispatch plus schema/help operations | Available in every Claude Code session after install |
-| **4 skills** | Brain, Executor, PI, and Writer | Loaded on demand for role-specific guidance |
-| **6 slash commands** | Status, search, pending, explicit project pinning, manuscript initialization, and Desktop setup | Quick shortcuts; setup is one-time |
+| **3 skills** | Brain, Executor, and PI | Loaded on demand for role-specific guidance |
+| **5 slash commands** | Status, search, pending, explicit project pinning, and Desktop setup | Quick shortcuts; setup is one-time |
 | **SessionStart hook** | Cross-platform Python; reports backend reachability and reminds callers that project ids are explicit | Fires automatically on every new session |
+
+Academic writing is deliberately outside this plugin. Install the separate
+`rka-writer` plugin only in sessions where manuscript assistance is wanted;
+it consumes RKA through the public MCP contract and is never auto-activated by
+RKA Core.
 
 ---
 
@@ -71,7 +76,7 @@ For natural-language equivalents, the `rka:rka-pi` skill teaches Claude Code to 
 
 | Plugin version | Compatible RKA versions | Wrapper compatibility glob |
 |---|---|---|
-| 1.0.0 (this branch) | 2.7.* or 2.8.* | `2.7.*`, `2.8.*` |
+| 2.0.0 (this branch) | 3.0.0 or newer | minimum `3.0.0` |
 
 If RKA's backend version is outside the wrapper's compatibility glob, the wrapper exits with a clear error message. Either upgrade the backend or downgrade the plugin to a matching version.
 

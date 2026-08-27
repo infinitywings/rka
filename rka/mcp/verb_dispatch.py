@@ -90,7 +90,7 @@ def _err(error_code: str, message: str, **extra: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
-# rka_record_literature dispatch — 5 modes
+# rka_record_literature dispatch
 # ---------------------------------------------------------------------------
 
 
@@ -121,8 +121,6 @@ async def dispatch_record_literature(
     limit: int,
     import_top_n: int | None = None,
     year: int | None = None,
-    author: list[dict[str, str]] | None = None,
-    literature_id: str | None = None,
 ) -> str:
     """Route to one of the literature sub-modes by kwarg presence + action.
 
@@ -133,8 +131,7 @@ async def dispatch_record_literature(
       4. action='search_semantic_scholar' OR search_source='semantic_scholar'
       5. action='search_arxiv' OR search_source='arxiv'
       6. action='process_paper' (lit_id + annotations)
-      7. action='validate_reference' (manuscript_id + doi or title)
-      8. Default: explicit-create via title
+      7. Default: explicit-create via title
 
     Phase v2.7.0a2 enum/alias resolution:
       - `year` is the deprecated alias of `year_min` (one-release deprecation
@@ -235,21 +232,6 @@ async def dispatch_record_literature(
             lit_id=lit_id,
             annotations=annotations,
             summary=summary,
-            project_id=project_id,
-        )
-
-    if action == "validate_reference":
-        if not manuscript_id or (not doi and not title):
-            return _err(
-                "missing_field",
-                "action='validate_reference' requires manuscript_id + (doi or title)",
-            )
-        return await _legacy("rka_validate_reference")(
-            manuscript_id=manuscript_id,
-            doi=doi,
-            title=title,
-            author=author,
-            literature_id=literature_id,
             project_id=project_id,
         )
 
@@ -2088,7 +2070,6 @@ EXECUTE_OPERATIONS = (
     "enrich_doi",
     "link_literature_to_zotero",
     "process_paper",
-    "validate_reference",
     # mission lifecycle
     "create_mission",
     "update_mission",
@@ -2177,7 +2158,7 @@ async def dispatch_execute(
         (supersede_decision also reachable via dispatch_review for
         back-compat with the v2.7.0a2 surface).
       - record_literature, ingest_document, import_bibtex, enrich_doi,
-        link_literature_to_zotero, process_paper, validate_reference
+        link_literature_to_zotero, process_paper
             → dispatch_record_literature
       - create_mission, update_mission, update_mission_status,
         submit_report, advance_rq → dispatch_mission
@@ -2648,7 +2629,6 @@ async def dispatch_execute(
         "enrich_doi",
         "link_literature_to_zotero",
         "process_paper",
-        "validate_reference",
     ):
         # Map our v2.7.0a3 op name to the action= sub-mode that
         # dispatch_record_literature understands.
@@ -2658,7 +2638,6 @@ async def dispatch_execute(
             "enrich_doi": "enrich_doi",
             "link_literature_to_zotero": "link_zotero",
             "process_paper": "process_paper",
-            "validate_reference": "validate_reference",
         }
         return await dispatch_record_literature(
             project_id=project_id,  # type: ignore[arg-type]
@@ -2677,7 +2656,7 @@ async def dispatch_execute(
             related_decisions=kw.get("related_decisions"),
             action=action_map[op] or kw.get("action"),
             lit_id=kw.get("lit_id") or kw.get("id"),
-            manuscript_id=kw.get("manuscript_id"),
+            manuscript_id=None,
             zotero_key=kw.get("zotero_key"),
             pdf_path=kw.get("pdf_path"),
             annotations=kw.get("annotations"),
@@ -2686,8 +2665,6 @@ async def dispatch_execute(
             import_top_n=kw.get("import_top_n"),
             limit=kw.get("limit", 10),
             year=kw.get("year"),
-            author=kw.get("author"),
-            literature_id=kw.get("literature_id"),
         )
 
     # --- mission ops ---
@@ -2951,7 +2928,7 @@ def _coerce_result_to_str(result: Any) -> str:
     The ``rka_execute`` and ``rka_query`` MCP wrappers declare ``result:
     str`` in their outputSchema. Pre-v2.7.0.2, operations whose legacy
     tool returned a dict (``link_literature_to_zotero``, ``enrich_doi``,
-    ``process_paper``, ``validate_reference``) tripped FastMCP's output
+    ``process_paper``) tripped FastMCP's output
     validator and surfaced as client-side errors — even though the
     underlying DB writes had already landed. Programmatic callers saw
     every dict-returning success as a failure and had to re-query the

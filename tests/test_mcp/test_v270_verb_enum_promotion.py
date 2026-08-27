@@ -231,7 +231,7 @@ def test_rka_session_action_enum_includes(action: str) -> None:
 _LIT_ACTIONS = (
     "link_zotero", "import_bibtex", "enrich_doi",
     "search_semantic_scholar", "search_arxiv",
-    "process_paper", "validate_reference",
+    "process_paper",
 )
 
 

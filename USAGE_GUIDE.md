@@ -7,16 +7,16 @@ This guide walks PIs (researchers) through the full setup and research workflow,
 > | Tool | Purpose |
 > |---|---|
 > | `rka_query` | Dispatcher for **68 read operations** (`status`, `list_projects`, `search`, `research_map`, `semantic_patch_proposals`, `manuscript_spine`, `changes_since`, …). Call with `args={"operation": "…", ...}`. |
-> | `rka_execute` | Dispatcher for **84 write/lifecycle operations** (`record_note`, `record_decision`, `create_mission`, `create_semantic_patch_proposal`, `apply_semantic_patch_proposal`, `submit_report`, `submit_checkpoint`, …). Call with `args={"operation": "…", ...}`. |
-> | `rka_describe` | Introspect operation schemas. `rka_describe("")` returns the compact live operation index and counts; `rka_describe("record_decision")` returns the full typed schema with required fields, enums, and provenance constraints. |
+> | `rka_execute` | Dispatcher for typed write/lifecycle operations (`record_note`, `record_decision`, `create_mission`, `create_semantic_patch_proposal`, `apply_semantic_patch_proposal`, `submit_report`, `submit_checkpoint`, …). Call with `args={"operation": "…", ...}`. |
+> | `rka_describe` | Introspect operation schemas. `rka_describe("")` returns the operation index (<250 tokens); `rka_describe("record_decision")` returns the full typed schema with required fields, enums, and provenance constraints. |
 > | `rka_load_tools` | Escape hatch — surface deferred legacy tools (the v2.6.x 91-tool surface and the v2.7.0a2 verb surface live at `tier=deferred`). |
 > | `rka_help` | Escape hatch — list available operations or describe a single one (alias for `rka_describe`). |
 >
 > **Call shape.** The real dispatch tools take a single `args` object — e.g. `rka_query(args={"operation": "status", "project_id": "prj_…"})`. The worked examples below elide the `args={…}` wrapper for readability (`rka_query(operation="status", …)`); what matters is that the operation name and parameter names are correct.
 >
-> Every operation is backed by a typed Pydantic model — **152 models total** in the current source inventory. FastMCP renders them as `oneOf` branches with per-branch enum, required-field, and cross-field enforcement. Brain hallucinations like `confidence='confirmed'` or a `submit_checkpoint` call with neither canonical `description` nor legacy `content` are rejected at the inputSchema layer **before the LLM can ship the call**. See `docs/v2.6.x-v2.7.0-tool-surface-arc.md` for the historical dispatch-design narrative; use `rka_describe("")` as the runtime authority if the inventory changes.
+> Every operation is backed by a typed Pydantic model. FastMCP renders the catalog as `oneOf` branches with per-branch enum, required-field, and cross-field enforcement. Invalid values such as `confidence='confirmed'`, or a `submit_checkpoint` call with neither canonical `description` nor legacy `content`, are rejected at the inputSchema layer before dispatch. See `docs/v2.6.x-v2.7.0-tool-surface-arc.md` for the historical design narrative and use `rka_describe("")` as the current authority.
 >
-> Set `RKA_LEGACY_TOOLS=1` to restore the **v2.7.0a2 compatibility surface**; legacy tools otherwise stay at `tier=deferred`. This flag does **not** change which operations are reachable: all 152 current typed operations are available through the 3 dispatch tools. The orchestrator daemon's subprocess sets it to preserve per-tool dispatch granularity for the TWO-TAP autonomy-contract gate at `pi_decision_select`; ordinary PI sessions should leave it unset.
+> `RKA_LEGACY_TOOLS=1` restores the historical compatibility surface; legacy tools otherwise stay at `tier=deferred`. Ordinary PI sessions should leave this compatibility switch unset.
 
 > ### ⚠️ This guide requires the **Claude Desktop** native app — **NOT** the [claude.ai](https://claude.ai) website.
 >

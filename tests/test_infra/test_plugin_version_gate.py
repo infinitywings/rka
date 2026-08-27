@@ -55,13 +55,13 @@ class TestGateDirection:
     """The gate is a floor. Anything at or above the minimum must pass."""
 
     def test_minimum_is_accepted(self):
-        assert bridge.parse_version("2.7.0") >= bridge.MINIMUM_BACKEND_VERSION
+        assert bridge.parse_version("3.0.0") >= bridge.MINIMUM_BACKEND_VERSION
 
-    @pytest.mark.parametrize("raw", ["2.7.0", "2.8.3", "2.9.0", "2.10.0", "3.1.4"])
+    @pytest.mark.parametrize("raw", ["3.0.0", "3.1.4", "4.0.0"])
     def test_current_and_newer_backends_pass(self, raw):
         assert bridge.parse_version(raw) >= bridge.MINIMUM_BACKEND_VERSION
 
-    @pytest.mark.parametrize("raw", ["2.3.2", "2.6.9", "1.9.9"])
+    @pytest.mark.parametrize("raw", ["2.7.0", "2.9.99", "1.9.9"])
     def test_older_backends_are_refused(self, raw):
         assert bridge.parse_version(raw) < bridge.MINIMUM_BACKEND_VERSION
 
@@ -115,7 +115,7 @@ class TestEndToEnd:
         result = _run_bridge(tmp_path, "2.3.2")
         assert "integration.json" in result.stderr
 
-    @pytest.mark.parametrize("raw", ["2.9.0", "2.10.0", "2.99.0", "3.0.0"])
+    @pytest.mark.parametrize("raw", ["3.0.0", "3.1.0", "3.99.0", "4.0.0"])
     def test_newer_backend_runs(self, raw, tmp_path: Path):
         """A backend newer than the plugin must launch, not be refused.
 

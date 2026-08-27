@@ -19,10 +19,8 @@ def main():
 
 # Register the cred-vault subcommand group (Phase 1 — local-first creds).
 from rka.cli_cred import cred as _cred_group  # noqa: E402
-from rka.cli_writer import writer as _writer_group  # noqa: E402
 
 main.add_command(_cred_group)
-main.add_command(_writer_group)
 
 
 @main.command()

@@ -655,14 +655,13 @@ async def test_reference_validation_status_preserves_pending_envelope(
     ]
 
 
-def test_async_reference_validation_contract_is_described() -> None:
-    validate_schema = OPERATIONS_SCHEMA["validate_reference"]
+def test_historical_reference_validation_contract_is_described() -> None:
     status_schema = OPERATIONS_SCHEMA["reference_validation_status"]
 
-    assert "202" in validate_schema["notes"]
-    assert "not an immediate verdict" in validate_schema["notes"]
-    assert "reference_validation_status" in validate_schema["related_operations"]
+    assert "validate_reference" not in OPERATIONS_SCHEMA
     assert status_schema["tool"] == "rka_query"
+    assert "historical" in status_schema["summary"].lower()
+    assert "no longer initiates or executes" in status_schema["notes"]
     assert status_schema["required_fields"] == [
         "project_id",
         "manuscript_id",

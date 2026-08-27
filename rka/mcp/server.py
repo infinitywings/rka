@@ -19,13 +19,6 @@ from pydantic import Field
 import httpx
 
 from rka.models.mission import MissionTask
-from rka.models.reference_validation import (
-    MAX_REFERENCE_AUTHORS,
-    MAX_REFERENCE_DOI_CHARS,
-    MAX_REFERENCE_TITLE_CHARS,
-    ReferenceAuthor,
-    ReferenceValidationInput,
-)
 from rka.mcp._enums import (
     ChkTypeLit,
     ConfidenceLit,
@@ -146,7 +139,7 @@ IngestSourceLiteral = Annotated[
 # Skills are shipped as package data inside rka/skills/
 _SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 SkillNameLiteral = Annotated[
-    Literal["brain", "executor", "pi", "writer", "mcp-credentials"],
+    Literal["brain", "executor", "pi", "mcp-credentials"],
     Field(description="Packaged RKA skill name."),
 ]
 
@@ -168,12 +161,6 @@ _SKILL_ENTRYPOINTS: dict[str, dict[str, str]] = {
         "prompt": "pi_skill",
         "role": "human PI",
         "recommended_for": "supervision, checkpoint resolution, reviewing RKA state",
-    },
-    "writer": {
-        "path": "writer/SKILL.md",
-        "prompt": "",
-        "role": "manuscript Writer",
-        "recommended_for": "venue-aware manuscript drafting with provenance",
     },
     "mcp-credentials": {
         "path": "mcp-credentials/SKILL.md",
@@ -344,10 +331,10 @@ START of every session, call:
   returns the selected role's full skill guide plus a session checklist.
 Then follow the returned guide. Also available:
 - `rka_list_skills()` — list all packaged skill guides (brain, executor, pi,
-  writer, mcp-credentials).
+  mcp-credentials).
 - `rka_read_skill(name, reference=None)` — read a skill guide or one of its
-  referenced files, e.g. rka_read_skill(name="writer",
-  reference="references/workflows.md").
+  referenced files, e.g. rka_read_skill(name="brain",
+  reference="workflows.md").
 """
 
 mcp = FastMCP("Research Knowledge Agent", instructions=RKA_INSTRUCTIONS)
@@ -6838,7 +6825,7 @@ async def rka_register_manuscript(
     *,
     project_id: str,
 ) -> str:
-    """Compatibility-register a Writer manuscript.
+    """Compatibility-register a manuscript.
 
     Creates the legacy ``jrn_`` manifest and its canonical native ``man_``
     aggregate.  The response includes both IDs and marks the journal ID as
@@ -6950,7 +6937,7 @@ async def rka_get_manuscript_spine(
     *,
     project_id: str,
 ) -> str:
-    """Export the deterministic Writer projection of the native RKA spine."""
+    """Export the deterministic manuscript projection of the native RKA spine."""
     async with _client(project_id) as c:
         r = await c.get(f"/api/manuscripts/{manuscript_id}/spine")
         _raise_with_detail(r)
@@ -7309,75 +7296,16 @@ async def rka_get_reference_validation_status(
     *,
     project_id: str,
 ) -> str:
-    """Poll one project- and manuscript-scoped reference-validation job.
+    """Read one historical project- and manuscript-scoped validation job.
 
-    Use the ``job_id`` from ``validate_reference``. Pending and in-progress
-    responses contain job metadata; a completed response additionally carries
-    ``result``, while a failed response carries ``error``.
+    Pending and in-progress responses contain job metadata; a completed
+    response additionally carries ``result``, while a failed response carries
+    ``error``. Core no longer initiates or executes reference validation;
+    external Writer or client workflows may perform verification separately.
     """
     async with _client(project_id) as c:
         r = await c.get(
             f"/api/manuscripts/{manuscript_id}/reference-validations/{job_id}"
-        )
-        _raise_with_detail(r)
-        data = r.json()
-    return json.dumps(data, indent=2)
-
-
-@tool(category="literature")
-async def rka_validate_reference(
-    manuscript_id: str,
-    doi: Annotated[
-        str | None,
-        Field(default=None, min_length=1, max_length=MAX_REFERENCE_DOI_CHARS),
-    ] = None,
-    title: Annotated[
-        str | None,
-        Field(default=None, min_length=1, max_length=MAX_REFERENCE_TITLE_CHARS),
-    ] = None,
-    author: Annotated[
-        list[ReferenceAuthor] | None,
-        Field(default=None, max_length=MAX_REFERENCE_AUTHORS),
-    ] = None,
-    literature_id: str | None = None,
-    *,
-    project_id: str,
-) -> str:
-    """Queue one reference for asynchronous Writer Stage B-G validation.
-
-    The REST endpoint returns HTTP 202 with a ``pending`` job envelope,
-    including ``job_id``; this call does not return an immediate verdict.
-    Poll ``reference_validation_status`` with the same manuscript ID and
-    returned job ID. Only a completed job carries the immutable validation
-    result produced by the Writer pipeline.
-
-    Args:
-        manuscript_id: Canonical man_ id or compatibility jrn_ alias.
-        doi: Reference DOI; preferred identifier.
-        title: Reference title; fallback search key when DOI absent.
-        author: Optional CSL-JSON author list:
-            [{"family": "Smith", "given": "J"}, ...].
-        literature_id: Optional same-project lit_ record linked to the
-            immutable validation attestation.
-    """
-    try:
-        normalized = ReferenceValidationInput(
-            doi=doi,
-            title=title,
-            author=author,
-        )
-        payload: dict[str, object] = normalized.durable_dict()
-    except ValueError as exc:
-        return json.dumps({
-            "status": "error",
-            "message": str(exc),
-        }, indent=2)
-    if literature_id is not None:
-        payload["literature_id"] = literature_id
-    async with _client(project_id) as c:
-        r = await c.post(
-            f"/api/manuscripts/{manuscript_id}/validate-reference",
-            json=payload,
         )
         _raise_with_detail(r)
         data = r.json()
@@ -8620,7 +8548,7 @@ async def rka_session(
 # verbs:
 #   - rka_record_literature  (several modes: add | bibtex | search S2 |
 #                             search arXiv | enrich DOI | link_zotero |
-#                             process_paper | validate_reference)
+#                             process_paper)
 #   - rka_mission            (create | update | update_status |
 #                             submit_report | get_report | advance_rq)
 #   - rka_checkpoint         (submit | resolve | create_gate | evaluate_gate |
@@ -8665,7 +8593,7 @@ CheckpointActionLit = _Literal[
 LiteratureActionLit = _Literal[
     "link_zotero", "import_bibtex", "enrich_doi",
     "search_semantic_scholar", "search_arxiv",
-    "process_paper", "validate_reference",
+    "process_paper",
 ]
 
 LiteratureSearchSrcLit = _Literal["semantic_scholar", "arxiv"]
@@ -8723,7 +8651,6 @@ async def rka_record_literature(
         Field(description="Optional explicit mode discriminator."),
     ] = None,
     lit_id: str | None = None,
-    manuscript_id: str | None = None,
     zotero_key: str | None = None,
     pdf_path: str | None = None,
     annotations: list[dict] | None = None,
@@ -8742,8 +8669,6 @@ async def rka_record_literature(
     - action='link_zotero' + lit_id: resolve Zotero item key
     - action='enrich_doi' + lit_id: CrossRef enrichment
     - action='process_paper' + lit_id + annotations: reading-notes pipeline
-    - action='validate_reference' + manuscript_id + (doi | title): queue Writer
-      validation and return a pending job envelope
 
     For LIST reads use `rka_query(scope='literature')`. The verb
     accepts `add_to_library=True` on search modes to auto-create
@@ -8768,7 +8693,6 @@ async def rka_record_literature(
         action: Explicit mode discriminator; overrides kwarg-presence inference.
         lit_id: Existing literature ID — required by enrich_doi /
             link_zotero / process_paper.
-        manuscript_id: Required by validate_reference.
         zotero_key, pdf_path: Optional adapter kwargs.
         annotations: Reading-notes list for process_paper mode.
         summary: Overall paper summary for process_paper mode.
@@ -8797,7 +8721,7 @@ async def rka_record_literature(
         related_decisions=related_decisions,
         action=action,
         lit_id=lit_id,
-        manuscript_id=manuscript_id,
+        manuscript_id=None,
         zotero_key=zotero_key,
         pdf_path=pdf_path,
         annotations=annotations,
@@ -9167,11 +9091,9 @@ async def rka_read_skill(
     such as ChatGPT connectors that do not expose MCP prompts prominently.
 
     Args:
-        name: Skill package to read: brain, executor, pi, writer, or
-            mcp-credentials.
+        name: Skill package to read: brain, executor, pi, or mcp-credentials.
         reference: Optional path inside that skill directory, such as
-            `workflows.md` for brain/executor or
-            `references/workflows.md` for writer. Omit to read SKILL.md.
+            `workflows.md` for brain/executor. Omit to read SKILL.md.
 
     Returns:
         Markdown text for the requested skill file.
@@ -9208,8 +9130,7 @@ async def rka_start_session(
 
     Args:
         role: RKA role guide to load. Use `pi` for ChatGPT-as-PI cockpit,
-            `brain` for strategic analysis, `executor` for implementation,
-            or `writer` for manuscript drafting.
+            `brain` for strategic analysis, or `executor` for implementation.
         project_id: Optional project id to thread into the suggested calls.
 
     Returns:
@@ -9282,7 +9203,7 @@ async def rka_execute(args: _ExecuteArgsUnion) -> str:
 
     v2.7.0 NO-COMPROMISE typed-arg surface. The ``args`` parameter is a
     Pydantic discriminated union (keyed by ``operation``) covering all
-    84 write/lifecycle operations. FastMCP renders the union as JSON
+    83 write/lifecycle operations. FastMCP renders the union as JSON
     Schema ``oneOf`` with per-branch ``required`` arrays + per-branch
     ``enum`` constraints on every Literal-typed field. The LLM CANNOT
     emit ``confidence='confirmed'``, ``decided_by='SUPERVISOR'``,

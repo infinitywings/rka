@@ -18,8 +18,8 @@ The rka MCP server ships a **discriminated-union dispatch surface**. Its core to
 
 | Always-on tool | Purpose |
 |---|---|
-| `rka_query(args)` | Typed read operations (missions, context, experiments, interpretations, reports, search, etc.) |
-| `rka_execute(args)` | Typed write and lifecycle operations (notes, experiment evidence, checkpoints, reports, maintenance, etc.) |
+| `rka_query(args)` | Typed read operations (missions, context, experiments, interpretations, native manuscript records, reports, search, etc.) |
+| `rka_execute(args)` | Typed write and lifecycle operations (notes, experiment evidence, native manuscript records, checkpoints, reports, maintenance, etc.) |
 | `rka_describe(operation)` | Authoritative schema lookup + worked example; `rka_describe('')` returns the compact operation index |
 | `rka_load_tools(names)` | Escape hatch — brings deferred legacy tools online when you specifically need backwards-compat access |
 | `rka_help(name)` | Deprecated alias for `rka_describe` |

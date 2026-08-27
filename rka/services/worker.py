@@ -1,7 +1,7 @@
-"""Background worker for asynchronous embedding and validation jobs.
+"""Background worker for asynchronous embedding jobs.
 
-Processes local embedding jobs and worker-owned manuscript reference
-validation. LLM-dependent enrichment (auto-tag, auto-link, auto-summarize,
+Processes local embedding jobs. LLM-dependent enrichment (auto-tag, auto-link,
+auto-summarize,
 claim extraction, claim verification, theme synthesis, contradiction checks)
 has been removed — those tasks are handled by the Brain during maintenance
 sessions.
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 class EnrichmentWorker:
-    """Poll the durable queue for embeddings and reference validation."""
+    """Poll the durable queue for embedding and migration-drain jobs."""
 
     def __init__(
         self,
@@ -171,11 +171,7 @@ class EnrichmentWorker:
             result = await self._process_job(job)
         except Exception as exc:  # pragma: no cover - failure path tested via queue state
             logger.exception("Worker job %s failed", job["id"])
-            durable_error = (
-                f"{type(exc).__name__}: reference validation failed"
-                if job.get("job_type") == "reference_validate"
-                else str(exc)
-            )
+            durable_error = str(exc)
             try:
                 await self.queue.fail(job, durable_error)
             except JobLeaseLost:
@@ -236,15 +232,14 @@ class EnrichmentWorker:
             svc = LiteratureService(self.db, embeddings=self.embeddings, project_id=project_id)
             return await svc.process_embedding_job(entity_id)
 
-        # ── Slow, externally resolved reference validation ───────
+        # ── Pre-split Writer jobs ──────────────────────────────────
 
         if job_type == "reference_validate":
-            from rka.services.reference_validation import ReferenceValidationRunner
-
-            return await ReferenceValidationRunner(
-                self.db,
-                project_id=project_id,
-            ).run_job(job)
+            logger.info(
+                "Skipping pre-split Writer reference-validation job %s",
+                job["id"],
+            )
+            return {"outcome": "skipped", "reason": "writer_runtime_moved"}
 
         # ── Legacy LLM jobs — skip gracefully ────────────────────
         # These job types may still exist in the queue from before the migration.

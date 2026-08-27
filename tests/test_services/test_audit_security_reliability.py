@@ -350,7 +350,7 @@ async def test_knowledge_pack_reports_latest_migration_filename(db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_same_instant_reference_validation_is_stale(db) -> None:
+async def test_same_instant_historical_validation_is_not_current_or_blocking(db) -> None:
     service = NativeManuscriptService(db, project_id="proj_default")
     manuscript = await service.create(
         ManuscriptCreate(title="Strict freshness regression")
@@ -400,6 +400,6 @@ async def test_same_instant_reference_validation_is_stale(db) -> None:
         manuscript.id,
         target_phase="review",
     )
-    assert "REFERENCE_VALIDATION_STALE" in {
+    assert "REFERENCE_VALIDATION_STALE" not in {
         finding["code"] for finding in readiness["findings"]
     }

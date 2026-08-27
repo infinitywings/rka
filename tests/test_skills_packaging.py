@@ -7,7 +7,9 @@ The same skill content ships two ways:
 - ``plugin/skills/`` — served by the Claude Code plugin.
 
 These tests keep a fresh installation on any machine consistent:
-1. the two trees must stay byte-identical (modulo packaging artifacts), and
+1. active Core skills in the two trees must stay byte-identical (modulo
+   packaging artifacts and the temporarily wheel-only Writer compatibility
+   implementation), and
 2. every file under ``rka/skills/`` must be matched by a
    ``[tool.setuptools.package-data]`` glob so the wheel actually ships it
    (Python's glob does not match dot-prefixed names with wildcards, so hidden
@@ -34,6 +36,7 @@ PLUGIN_SKILLS = REPO_ROOT / "plugin" / "skills"
 _SKIP_NAMES = {".DS_Store", "__pycache__"}
 # Files that exist only on the packaged side by design.
 _PACKAGED_ONLY = {"SKILL.md"}  # top-level role index used by the MCP prompts
+_PACKAGED_ONLY_PREFIXES = ("writer/",)
 
 
 def _is_artifact(rel: Path) -> bool:
@@ -52,6 +55,8 @@ def _tree(root: Path) -> dict[str, bytes]:
         if _is_artifact(rel):
             continue
         if rel.as_posix() in _PACKAGED_ONLY:
+            continue
+        if rel.as_posix().startswith(_PACKAGED_ONLY_PREFIXES):
             continue
         out[rel.as_posix()] = p.read_bytes()
     return out

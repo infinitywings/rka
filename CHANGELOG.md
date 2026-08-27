@@ -5,17 +5,40 @@ All notable changes to RKA are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [3.0.0] — 2026-08-26 (RKA Core / Writer separation)
+
+### Changed
+
+- **RKA Core is now a focused research-record and retrieval system.** Core owns
+  durable journal, literature, decision, mission, claim, evidence, provenance,
+  lifecycle, and retrieval contracts. Manuscript drafting and revision are
+  provided by the separately installed
+  [`rka-writer`](https://github.com/infinitywings/rka-writer) project.
+- **Historical reference-validation state remains readable.** Existing,
+  project-scoped validation jobs and attestations remain available for audit.
+  Core no longer initiates or executes new validation runs; external Writer or
+  client workflows may verify references separately. Queued legacy jobs are
+  completed as skipped with reason
+  `writer_runtime_moved`.
+
+### Removed
+
+- The bundled Writer role skill, `/rka-start-manuscript` command, manuscript
+  workspace bootstrap, `rka-writer-tools` entry point, and `writer-tools`
+  optional dependency group.
+- Core REST and MCP operations that initiate reference validation. Historical
+  status reads are retained for compatibility and auditability.
+
+### Migration
+
+- Upgrade Core clients and reinstall the Core plugin because the Python package
+  is now **3.0.0** and the plugin manifest is now **2.0.0**.
+- Install `rka-writer` separately only in environments where manuscript work is
+  desired. It may consume Core's public MCP/REST evidence contract, but Core no
+  longer activates writing behavior implicitly.
+
 ### Added
 
-- **Writer discourse synthesis and plain academic style.** The Writer now
-  separates RKA's evidence graph from the manuscript's reader-facing discourse
-  graph. Section drafting compresses records into evidence bundles, builds a
-  logic ladder and paragraph plan, drafts clean prose, and attaches provenance
-  post-hoc. Lightweight style-profile and per-section discourse artifacts make
-  sample calibration, disclosure coverage, native-unit mapping, and fresh-
-  context review inspectable without adding a second knowledge base. A
-  structural validator enforces those handoffs without pretending to score
-  coherence, while the AI-tic linter remains a negative surface check.
 - **Typed academic-writing semantic core.** Manuscript units now separate pure
   outline depth from structural role and rhetorical move. Unit-evidence uses
   can state the supported proposition and authorial warrant; immutable claim
@@ -47,8 +70,8 @@ All notable changes to RKA are documented here. Format loosely follows
   condense, and reorder actions produce reviewable semantic proposals that
   preserve claim/evidence bindings and report downstream order impact. The
   REST, workbench, and typed MCP surfaces expose resumable outline state and a
-  separate explicit Outline checkpoint; the dispatch surface now contains 150
-  operations (67 reads + 83 writes). AI-authored outline proposals retain
+  separate explicit Outline checkpoint; the dispatch surface now contains 151
+  operations (68 reads + 83 writes). AI-authored outline proposals retain
   provider/context provenance and remain pending for PI/web review; Outline
   checkpoint fingerprints include typed claim/unit evidence bindings.
 

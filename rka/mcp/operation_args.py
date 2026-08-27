@@ -48,13 +48,6 @@ from typing import Annotated, Any, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rka.models.claim import ClaimScopeCondition
-from rka.models.reference_validation import (
-    MAX_REFERENCE_AUTHORS,
-    MAX_REFERENCE_DOI_CHARS,
-    MAX_REFERENCE_TITLE_CHARS,
-    ReferenceAuthor,
-    ReferenceValidationInput,
-)
 from rka.models.manuscript_native import ManuscriptReferenceMemberInput
 from rka.models.planning import (
     PlanningArtifactVersionAppend,
@@ -647,11 +640,11 @@ class QueryManuscriptArgs(ProjectScopedArgs):
 
 
 class QueryReferenceValidationStatusArgs(ProjectScopedArgs):
-    """[ANY] Poll one asynchronous manuscript-reference validation job.
+    """[ANY] Read one historical manuscript-reference validation job.
 
-    ``validate_reference`` returns an HTTP 202 pending job envelope rather
-    than an immediate verdict. Pass its ``job_id`` here with the same
-    manuscript scope to observe progress and retrieve the eventual result.
+    Core no longer initiates or executes reference validation. External Writer
+    or client workflows may verify separately. Core preserves this scoped
+    reader for jobs recorded before the split.
     """
 
     operation: Literal["reference_validation_status"] = "reference_validation_status"
@@ -669,7 +662,7 @@ class QueryReferenceValidationStatusArgs(ProjectScopedArgs):
         Field(
             min_length=1,
             max_length=128,
-            description="Reference-validation job id returned by validate_reference.",
+            description="Historical reference-validation job id.",
         ),
     ]
 
@@ -3811,7 +3804,7 @@ BatchDExecuteUnion = Annotated[
 
 
 # =============================================================================
-# Batch C — UPDATE / LIFECYCLE / SUBMIT operations (22 models)
+# Batch C — UPDATE / LIFECYCLE / SUBMIT operations (21 models)
 # =============================================================================
 #
 # Operations:
@@ -3820,7 +3813,7 @@ BatchDExecuteUnion = Annotated[
 #                      bulk_update, supersede_decision
 #   Decision lifecycle: present_decision, record_pi_selection, record_outcome
 #   Literature lifecycle: enrich_doi, link_literature_to_zotero,
-#                         process_paper, validate_reference
+#                         process_paper
 #   Mission lifecycle:  submit_report, advance_rq
 #   Checkpoint lifecycle: submit_checkpoint, resolve_checkpoint, evaluate_gate
 #   Session lifecycle:  reset_session, session_digest
@@ -4620,79 +4613,6 @@ class ProcessPaperArgs(ProjectScopedArgs):
         return self
 
 
-class ValidateReferenceArgs(ProjectScopedArgs):
-    """Queue an asynchronous manuscript-reference validation.
-
-    A successful request returns an HTTP 202 pending job envelope containing
-    ``job_id``; it does not return an immediate validation verdict. Poll
-    ``reference_validation_status`` with the same manuscript ID and job ID
-    for the eventual completed result or failure.
-    """
-
-    operation: Literal["validate_reference"] = "validate_reference"
-
-    manuscript_id: Annotated[
-        str,
-        Field(
-            min_length=1,
-            max_length=128,
-            description=(
-                "Canonical man_ id or compatibility jrn_ alias whose reference is being validated."
-            ),
-        ),
-    ]
-
-    doi: Annotated[
-        Optional[str],
-        Field(
-            default=None,
-            min_length=1,
-            max_length=MAX_REFERENCE_DOI_CHARS,
-            description="DOI to validate.",
-        ),
-    ] = None
-    title: Annotated[
-        Optional[str],
-        Field(
-            default=None,
-            min_length=1,
-            max_length=MAX_REFERENCE_TITLE_CHARS,
-            description="Title to validate.",
-        ),
-    ] = None
-    author: Annotated[
-        Optional[list[ReferenceAuthor]],
-        Field(
-            default=None,
-            max_length=MAX_REFERENCE_AUTHORS,
-            description=(
-                "Optional CSL-JSON author list. Supplying authors enables Stage E disambiguation."
-            ),
-        ),
-    ] = None
-    literature_id: Annotated[
-        Optional[str],
-        Field(
-            default=None,
-            min_length=1,
-            max_length=128,
-            description="Optional same-project lit_ record to bind to the attestation.",
-        ),
-    ] = None
-
-    @model_validator(mode="after")
-    def _require_doi_or_title(self) -> "ValidateReferenceArgs":
-        normalized = ReferenceValidationInput(
-            doi=self.doi,
-            title=self.title,
-            author=self.author,
-        )
-        self.doi = normalized.doi
-        self.title = normalized.title
-        self.author = normalized.author
-        return self
-
-
 # ---------------------------------------------------------------------------
 # MISSION LIFECYCLE (2)
 # ---------------------------------------------------------------------------
@@ -5065,7 +4985,6 @@ BatchCExecuteUnion = Annotated[
         EnrichDoiArgs,
         LinkLiteratureToZoteroArgs,
         ProcessPaperArgs,
-        ValidateReferenceArgs,
         # Mission lifecycle
         SubmitReportArgs,
         AdvanceRqArgs,
@@ -5082,7 +5001,7 @@ BatchCExecuteUnion = Annotated[
 
 
 # =============================================================================
-# Final ExecuteArgsUnion — composes B + C + D (77 models total)
+# Final ExecuteArgsUnion — composes B + C + D (83 models total)
 # =============================================================================
 #
 # Phase 3 assembly: the discriminated union for `rka_execute`. FastMCP
@@ -5156,7 +5075,6 @@ ExecuteArgsUnion = Annotated[
         EnrichDoiArgs,
         LinkLiteratureToZoteroArgs,
         ProcessPaperArgs,
-        ValidateReferenceArgs,
         SubmitReportArgs,
         AdvanceRqArgs,
         SubmitCheckpointArgs,
@@ -5341,7 +5259,6 @@ __all__ = [
     "EnrichDoiArgs",
     "LinkLiteratureToZoteroArgs",
     "ProcessPaperArgs",
-    "ValidateReferenceArgs",
     "SubmitReportArgs",
     "AdvanceRqArgs",
     "OrphanSupersedesArgs",

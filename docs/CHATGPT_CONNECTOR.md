@@ -41,15 +41,20 @@ which promotes three skill tools to always-on. ChatGPT then sees **8 tools**:
 | --- | --- |
 | `rka_query` | Typed read operations (`args={"operation": "...", ...}`) |
 | `rka_execute` | Typed write/lifecycle operations |
-| `rka_describe` | Operation schema lookup (`""` → live operation index and counts) |
+| `rka_describe` | Authoritative live operation index and schema lookup |
 | `rka_load_tools` | Load a deferred legacy tool by name |
 | `rka_help` | Deprecated alias for `rka_describe` |
-| `rka_start_session` | Load a role skill (`pi`/`brain`/`executor`/`writer`) + a session checklist |
+| `rka_start_session` | Load a Core role skill (`pi`/`brain`/`executor`) + a session checklist |
 | `rka_list_skills` | List the packaged role skill guides |
 | `rka_read_skill` | Read a skill guide or one of its referenced files |
 
 Without the flag the surface is the standard 5 dispatch tools — that is what
 local stdio clients keep, so local access is unaffected either way.
+
+The Core connector intentionally exposes only the `pi`, `brain`, and
+`executor` roles. Manuscript assistance is not a hidden connector role: install
+and invoke [`rka-writer`](https://github.com/infinitywings/rka-writer)
+separately when writing support is wanted.
 
 ## Prerequisites
 
@@ -134,15 +139,16 @@ know your project id, pass it: `rka_start_session(role="pi", project_id="prj_...
 
 - **Start every session** with `rka_start_session(role=...)` and follow the
   returned guide. Roles: `pi` (supervision/cockpit), `brain` (strategy),
-  `executor` (implementation), `writer` (manuscripts).
+  `executor` (implementation). Manuscript writing is provided by the separate,
+  explicit-only `rka-writer` plugin.
 - **Read** with `rka_query(args={"operation": "...", "project_id": "prj_...", ...})`
   — e.g. `status`, `context`, `research_map`, `search`.
 - **Write** with `rka_execute(args={"operation": "...", ...})`
   — e.g. `record_note`, `record_decision`, `create_mission`.
 - **Discover operations** with `rka_describe("")` (index) or
   `rka_describe("record_decision")` (one operation's schema).
-- **Read a skill's reference files** with
-  `rka_read_skill(name="writer", reference="references/workflows.md")`.
+- **Read a Core skill's reference files** with
+  `rka_read_skill(name="brain", reference="workflows.md")`.
   Absolute paths and `..` traversal are rejected — only files inside the
   selected skill directory are readable.
 
