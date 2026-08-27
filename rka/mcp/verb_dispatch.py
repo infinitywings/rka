@@ -1323,7 +1323,7 @@ async def dispatch_query(
         return await legacy(
             entity_id=id,
             direction=f.get("direction", "both"),
-            max_depth=f.get("max_depth", f.get("depth", 4)),
+            max_depth=f.get("max_depth", f.get("depth", 3)),
             project_id=project_id,
         )
 

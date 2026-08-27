@@ -10,7 +10,11 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from rka.mcp import server
-from rka.mcp.operation_args import ExecuteArgsUnion, QueryArgsUnion
+from rka.mcp.operation_args import (
+    ExecuteArgsUnion,
+    QueryArgsUnion,
+    RecordExperimentObservationArgs,
+)
 from rka.mcp.verb_dispatch import dispatch_execute_typed, dispatch_query_typed
 
 
@@ -154,3 +158,28 @@ def test_typed_evidence_review_requires_explicit_role() -> None:
                 "target_entity_id": "clm_01XYZ",
             }
         )
+
+
+@pytest.mark.asyncio
+async def test_observation_value_contract_is_visible_before_execution() -> None:
+    """Both typed JSON Schema and rka_describe must disclose value rules."""
+    typed_schema = RecordExperimentObservationArgs.model_json_schema()
+    properties = typed_schema["properties"]
+
+    assert "metric/comparison/test require one value" in properties["kind"][
+        "description"
+    ]
+    assert "Mutually exclusive with value_text" in properties["value_real"][
+        "description"
+    ]
+    assert "required for qualitative/failure" in properties["value_text"][
+        "description"
+    ]
+
+    described = json.loads(
+        await server.rka_describe(operation="record_experiment_observation")
+    )
+    assert "at most one of value_real and value_text" in described["notes"]
+    assert "metric, comparison, and test require one" in described["notes"]
+    assert "qualitative and failure require value_text" in described["notes"]
+    assert "REST/domain validator is authoritative" in described["notes"]

@@ -27,12 +27,45 @@ from v3.tracing.metrics import (  # noqa: E402
     score_story_response,
 )
 from v3.tracing.runner import (  # noqa: E402
+    ENTITY_ID_PATTERN,
     extract_entity_ids,
     load_corpus,
     resolved_entity_ids,
 )
 
 DEFAULT_ROLES = ("pi", "brain", "executor")
+PREVIEW_EVIDENCE_PREFIXES = frozenset(
+    {"exp", "epv", "run", "rue", "obs", "elc", "evr"}
+)
+GRAPH_ID_FIELDS = (
+    "cited_entity_ids",
+    "current_entity_ids",
+    "causal_chain",
+    "rejected_entity_ids",
+)
+
+# Only these typed experiment reads return authoritative preview-subsystem
+# records.  Each top-level record and named child collection is constrained to
+# the prefixes its response model actually owns.  In particular, arbitrary
+# config/environment/summary dictionaries are never walked for attestation.
+TYPED_EXPERIMENT_RECORD_LAYOUTS = {
+    "experiments": {
+        None: frozenset({"exp"}),
+        "current_plan": frozenset({"epv"}),
+        "plan_versions": frozenset({"epv"}),
+        "runs": frozenset({"run"}),
+    },
+    "experiment_runs": {
+        None: frozenset({"run"}),
+        "events": frozenset({"rue"}),
+        "observations": frozenset({"obs"}),
+    },
+    "experiment_observations": {
+        None: frozenset({"obs"}),
+        "locators": frozenset({"elc"}),
+        "claim_relations": frozenset({"evr"}),
+    },
+}
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -60,6 +93,124 @@ def canonical_record_sha256(record: dict[str, Any]) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def _normalize_trace_response(payload: Any, *, context: str) -> Any:
+    """Decode exact JSON captured as text without changing the raw trace.
+
+    Collectors may see either the JSON value returned by REST, its exact JSON
+    serialization, or the standard single-text MCP content envelope.  The
+    scorer consumes an in-memory decoded value while the caller's trace and
+    on-disk hash remain byte-for-byte raw.  Markdown fences and multi-content
+    envelopes are deliberately not guessed at.
+    """
+    candidate = payload
+    if isinstance(payload, dict):
+        content = payload.get("content")
+        if (
+            isinstance(content, list)
+            and len(content) == 1
+            and isinstance(content[0], dict)
+            and content[0].get("type") == "text"
+            and isinstance(content[0].get("text"), str)
+        ):
+            candidate = content[0]["text"]
+        else:
+            return payload
+    if not isinstance(candidate, str):
+        return payload
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        if candidate is not payload:
+            raise ValueError(
+                f"{context}: single MCP text content must contain one exact JSON value"
+            ) from None
+        return payload
+
+
+def _validate_response_id_arrays(
+    response: dict[str, Any],
+    key: tuple[str, str, str],
+) -> None:
+    rendered = ":".join(key)
+    for field in GRAPH_ID_FIELDS:
+        values = response.get(field, [])
+        if not isinstance(values, list) or any(
+            not isinstance(value, str) or ENTITY_ID_PATTERN.fullmatch(value) is None
+            for value in values
+        ):
+            raise ValueError(
+                f"response {field} must be a flat array of entity ID strings: {rendered}"
+            )
+        preview_ids = [
+            value for value in values if value.partition("_")[0] in PREVIEW_EVIDENCE_PREFIXES
+        ]
+        if preview_ids:
+            raise ValueError(
+                f"response {field} is graph/resolver-only; move preview IDs to "
+                f"preview_evidence_ids: {rendered}"
+            )
+
+    preview_ids = response.get("preview_evidence_ids", [])
+    if not isinstance(preview_ids, list) or any(
+        not isinstance(value, str)
+        or ENTITY_ID_PATTERN.fullmatch(value) is None
+        or value.partition("_")[0] not in PREVIEW_EVIDENCE_PREFIXES
+        for value in preview_ids
+    ):
+        raise ValueError(
+            "response preview_evidence_ids must be a flat array of "
+            "exp_/epv_/run_/rue_/obs_/elc_/evr_ "
+            f"IDs: {rendered}"
+        )
+
+
+def _direct_records(value: Any) -> list[dict[str, Any]]:
+    """Return direct structured records without recursively mining payloads."""
+    if isinstance(value, dict):
+        return [value]
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def _attested_preview_record_ids(
+    operation: str,
+    payload: Any,
+    expected_project_id: str,
+) -> set[str]:
+    """Return preview IDs backed by typed, same-project experiment records.
+
+    A broad string scan is intentionally insufficient: preview identifiers can
+    occur in search snippets, journal prose, relationship fields, or arbitrary
+    experiment config.  Attestation requires an exact ``id`` plus an exact
+    record-level ``project_id`` at a response location owned by the typed
+    experiment operation.
+    """
+    layout = TYPED_EXPERIMENT_RECORD_LAYOUTS.get(operation)
+    if layout is None:
+        return set()
+
+    found: set[str] = set()
+
+    def add_records(value: Any, allowed_prefixes: frozenset[str]) -> None:
+        for record in _direct_records(value):
+            record_id = record.get("id")
+            if (
+                isinstance(record_id, str)
+                and ENTITY_ID_PATTERN.fullmatch(record_id) is not None
+                and record_id.partition("_")[0] in allowed_prefixes
+                and record.get("project_id") == expected_project_id
+            ):
+                found.add(record_id)
+
+    add_records(payload, layout[None])
+    if isinstance(payload, dict):
+        for field, allowed_prefixes in layout.items():
+            if field is not None:
+                add_records(payload.get(field), allowed_prefixes)
+    return found
 
 
 def _artifact_key(record: dict[str, Any], label: str, index: int) -> tuple[str, str, str]:
@@ -152,6 +303,7 @@ def score_response_set(
             raise ValueError(
                 f"response contains independently owned fields ({fields}): {':'.join(key)}"
             )
+        _validate_response_id_arrays(response, key)
         supplied[key] = response
 
     missing = sorted(set(expected) - set(supplied))
@@ -185,6 +337,7 @@ def score_response_set(
 
         retrieved_ids: set[str] = set()
         resolved_ids: set[str] = set()
+        attested_preview_ids: set[str] = set()
         ordinals: list[int] = []
         for call_index, call in enumerate(calls, 1):
             if not isinstance(call, dict):
@@ -203,14 +356,37 @@ def score_response_set(
                 raise ValueError(f"trace call requires operation: {':'.join(key)}")
             if call.get("outcome") != "ok":
                 continue
-            response_payload = call.get("response")
+            response_payload = _normalize_trace_response(
+                call.get("response"),
+                context=f"trace call {call_index} response ({':'.join(key)})",
+            )
             retrieved_ids.update(extract_entity_ids(response_payload))
+            attested_preview_ids.update(
+                _attested_preview_record_ids(
+                    operation,
+                    response_payload,
+                    scenario["project_id"],
+                )
+            )
             if operation == "resolve_entities":
                 if not isinstance(response_payload, dict):
-                    raise ValueError(f"resolver response must be an object: {':'.join(key)}")
+                    raise ValueError(
+                        "resolver response must be an object, an exact JSON string, or a "
+                        f"single MCP text-content JSON envelope: {':'.join(key)}"
+                    )
                 resolved_ids.update(resolved_entity_ids(response_payload, scenario["project_id"]))
         if ordinals != list(range(1, len(calls) + 1)):
             raise ValueError(f"trace call ordinals must be contiguous: {':'.join(key)}")
+
+        missing_preview = sorted(
+            set(supplied[key].get("preview_evidence_ids", [])) - attested_preview_ids
+        )
+        if missing_preview:
+            raise ValueError(
+                "response preview evidence is not attested by a matching "
+                "same-project typed experiment record "
+                f"({', '.join(missing_preview)}): {':'.join(key)}"
+            )
 
         supplied_traces[key] = {
             **trace,

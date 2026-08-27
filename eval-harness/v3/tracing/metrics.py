@@ -554,6 +554,9 @@ def score_story_response(scenario: dict[str, Any], response: dict[str, Any]) -> 
         "verdict_match": verdict_match,
         "conclusion_checks": conclusion_checks,
         "conclusion_passed": conclusion_passed,
+        # Preview-subsystem evidence is trace-attested by the artifact scorer
+        # but deliberately excluded from graph citation/currentness metrics.
+        "preview_evidence_ids": list(response.get("preview_evidence_ids", [])),
         "distractors_cited": distractors_cited,
         "distractors_rejected": sorted(set(story.get("distractors", [])) & rejected),
         "hard_failures": hard_failures,

@@ -39,9 +39,9 @@ which promotes three skill tools to always-on. ChatGPT then sees **8 tools**:
 
 | Tool | Purpose |
 | --- | --- |
-| `rka_query` | 67 read operations (`args={"operation": "...", ...}`) |
-| `rka_execute` | 83 write/lifecycle operations |
-| `rka_describe` | Operation schema lookup (`""` → 150-operation index) |
+| `rka_query` | Typed read operations (`args={"operation": "...", ...}`) |
+| `rka_execute` | Typed write/lifecycle operations |
+| `rka_describe` | Operation schema lookup (`""` → live operation index and counts) |
 | `rka_load_tools` | Load a deferred legacy tool by name |
 | `rka_help` | Deprecated alias for `rka_describe` |
 | `rka_start_session` | Load a role skill (`pi`/`brain`/`executor`/`writer`) + a session checklist |

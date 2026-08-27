@@ -395,6 +395,308 @@ def test_trace_requires_raw_project_bound_calls_and_matching_session() -> None:
         assert scored["mechanical_pass"] is False
 
 
+def test_trace_normalizes_exact_json_strings_without_mutating_raw_calls() -> None:
+    traces = _all_traces()
+    raw_search = json.dumps(traces[0]["calls"][0]["response"])
+    raw_resolver = json.dumps(traces[0]["calls"][1]["response"])
+    traces[0]["calls"][0]["response"] = raw_search
+    traces[0]["calls"][1]["response"] = raw_resolver
+
+    result = score_response_set(
+        [SCENARIO],
+        _all_responses(),
+        traces,
+        run_id=RUN_ID,
+    )
+
+    scored = next(
+        item
+        for item in result["responses"]
+        if item["query_variant"] == "exact" and item["role"] == "pi"
+    )
+    assert scored["mechanical_pass"] is True
+    assert traces[0]["calls"][0]["response"] == raw_search
+    assert traces[0]["calls"][1]["response"] == raw_resolver
+
+
+def test_trace_normalizes_single_mcp_text_content_envelope() -> None:
+    traces = _all_traces()
+    for call in traces[0]["calls"]:
+        call["response"] = {
+            "content": [
+                {
+                    "type": "text",
+                    "text": json.dumps(call["response"]),
+                }
+            ]
+        }
+
+    result = score_response_set(
+        [SCENARIO],
+        _all_responses(),
+        traces,
+        run_id=RUN_ID,
+    )
+
+    scored = next(
+        item
+        for item in result["responses"]
+        if item["query_variant"] == "exact" and item["role"] == "pi"
+    )
+    assert scored["mechanical_pass"] is True
+
+
+def test_response_rejects_structured_causal_chain_with_actionable_error() -> None:
+    responses = _all_responses()
+    responses[0] = {
+        **responses[0],
+        "causal_chain": [
+            {
+                "source": "jrn_00000000000000000000000001",
+                "target": "dec_00000000000000000000000001",
+            }
+        ],
+    }
+    traces = _all_traces()
+    traces[0]["response_sha256"] = canonical_record_sha256(responses[0])
+
+    with pytest.raises(
+        ValueError,
+        match=r"causal_chain must be a flat array of entity ID strings",
+    ):
+        score_response_set(
+            [SCENARIO],
+            responses,
+            traces,
+            run_id=RUN_ID,
+        )
+
+
+def test_preview_evidence_is_separate_trace_attested_and_not_scored_as_graph_citation() -> None:
+    preview_id = "run_00000000000000000000000001"
+    responses = _all_responses()
+    responses[0] = {**responses[0], "preview_evidence_ids": [preview_id]}
+    traces = _all_traces()
+    traces[0]["response_sha256"] = canonical_record_sha256(responses[0])
+    traces[0]["calls"].append(
+        {
+            "ordinal": 3,
+            "operation": "experiment_runs",
+            "project_id": SCENARIO["project_id"],
+            "request": {
+                "project_id": SCENARIO["project_id"],
+                "id": preview_id,
+            },
+            "outcome": "ok",
+            "response": {
+                "id": preview_id,
+                "project_id": SCENARIO["project_id"],
+                "status": "succeeded",
+            },
+        }
+    )
+
+    result = score_response_set(
+        [SCENARIO],
+        responses,
+        traces,
+        run_id=RUN_ID,
+    )
+    scored = next(
+        item
+        for item in result["responses"]
+        if item["query_variant"] == "exact" and item["role"] == "pi"
+    )
+    assert scored["mechanical_pass"] is True
+    assert scored["preview_evidence_ids"] == [preview_id]
+
+    mixed = _all_responses()
+    mixed[0] = {
+        **mixed[0],
+        "cited_entity_ids": [*mixed[0]["cited_entity_ids"], preview_id],
+    }
+    mixed_traces = _all_traces()
+    mixed_traces[0]["response_sha256"] = canonical_record_sha256(mixed[0])
+    with pytest.raises(
+        ValueError,
+        match=r"move preview IDs to preview_evidence_ids",
+    ):
+        score_response_set(
+            [SCENARIO],
+            mixed,
+            mixed_traces,
+            run_id=RUN_ID,
+        )
+
+    unattested = _all_responses()
+    unattested[0] = {**unattested[0], "preview_evidence_ids": [preview_id]}
+    unattested_traces = _all_traces()
+    unattested_traces[0]["response_sha256"] = canonical_record_sha256(unattested[0])
+    with pytest.raises(
+        ValueError,
+        match=r"not attested by a matching same-project typed experiment record",
+    ):
+        score_response_set(
+            [SCENARIO],
+            unattested,
+            unattested_traces,
+            run_id=RUN_ID,
+        )
+
+
+@pytest.mark.parametrize(
+    ("operation", "payload"),
+    [
+        (
+            "search",
+            {
+                "summary": (
+                    "The journal happens to mention "
+                    "run_00000000000000000000000001 in prose."
+                )
+            },
+        ),
+        (
+            "experiment_observations",
+            {
+                "id": "run_00000000000000000000000001",
+                "project_id": SCENARIO["project_id"],
+                "summary": "A run-shaped ID returned by the wrong typed operation.",
+            },
+        ),
+        (
+            "experiment_runs",
+            {
+                "id": "run_00000000000000000000000001",
+                "project_id": "prj_00000000000000000000000099",
+                "status": "succeeded",
+            },
+        ),
+        (
+            "experiment_runs",
+            {
+                "id": "run_00000000000000000000000002",
+                "project_id": SCENARIO["project_id"],
+                "status": "succeeded",
+                "config": {
+                    "id": "run_00000000000000000000000001",
+                    "project_id": SCENARIO["project_id"],
+                },
+            },
+        ),
+    ],
+    ids=("incidental-text", "wrong-operation", "wrong-project", "forged-config"),
+)
+def test_preview_evidence_rejects_non_authoritative_mentions(
+    operation: str,
+    payload: dict,
+) -> None:
+    preview_id = "run_00000000000000000000000001"
+    responses = _all_responses()
+    responses[0] = {**responses[0], "preview_evidence_ids": [preview_id]}
+    traces = _all_traces()
+    traces[0]["response_sha256"] = canonical_record_sha256(responses[0])
+    traces[0]["calls"].append(
+        {
+            "ordinal": 3,
+            "operation": operation,
+            "project_id": SCENARIO["project_id"],
+            "request": {"project_id": SCENARIO["project_id"], "id": preview_id},
+            "outcome": "ok",
+            "response": payload,
+        }
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"not attested by a matching same-project typed experiment record",
+    ):
+        score_response_set(
+            [SCENARIO],
+            responses,
+            traces,
+            run_id=RUN_ID,
+        )
+
+
+def test_preview_evidence_accepts_only_typed_authoritative_record_locations() -> None:
+    preview_ids = [
+        "exp_00000000000000000000000001",
+        "epv_00000000000000000000000002",
+        "run_00000000000000000000000003",
+        "rue_00000000000000000000000004",
+        "obs_00000000000000000000000005",
+        "elc_00000000000000000000000006",
+        "evr_00000000000000000000000007",
+    ]
+    project_id = SCENARIO["project_id"]
+    responses = _all_responses()
+    responses[0] = {**responses[0], "preview_evidence_ids": preview_ids}
+    traces = _all_traces()
+    traces[0]["response_sha256"] = canonical_record_sha256(responses[0])
+    traces[0]["calls"].extend(
+        [
+            {
+                "ordinal": 3,
+                "operation": "experiments",
+                "project_id": project_id,
+                "request": {"project_id": project_id, "id": preview_ids[0]},
+                "outcome": "ok",
+                "response": {
+                    "id": preview_ids[0],
+                    "project_id": project_id,
+                    "current_plan": {"id": preview_ids[1], "project_id": project_id},
+                    "runs": [{"id": preview_ids[2], "project_id": project_id}],
+                },
+            },
+            {
+                "ordinal": 4,
+                "operation": "experiment_runs",
+                "project_id": project_id,
+                "request": {"project_id": project_id, "id": preview_ids[2]},
+                "outcome": "ok",
+                "response": {
+                    "id": preview_ids[2],
+                    "project_id": project_id,
+                    "events": [{"id": preview_ids[3], "project_id": project_id}],
+                    "observations": [
+                        {"id": preview_ids[4], "project_id": project_id}
+                    ],
+                },
+            },
+            {
+                "ordinal": 5,
+                "operation": "experiment_observations",
+                "project_id": project_id,
+                "request": {"project_id": project_id, "id": preview_ids[4]},
+                "outcome": "ok",
+                "response": {
+                    "id": preview_ids[4],
+                    "project_id": project_id,
+                    "locators": [{"id": preview_ids[5], "project_id": project_id}],
+                    "claim_relations": [
+                        {"id": preview_ids[6], "project_id": project_id}
+                    ],
+                },
+            },
+        ]
+    )
+
+    result = score_response_set(
+        [SCENARIO],
+        responses,
+        traces,
+        run_id=RUN_ID,
+    )
+    scored = next(
+        item
+        for item in result["responses"]
+        if item["query_variant"] == "exact" and item["role"] == "pi"
+    )
+    assert scored["preview_evidence_ids"] == preview_ids
+    assert scored["mechanical_pass"] is True
+
+
 def test_rating_is_bound_to_run_session_project_query_role_and_response_hash() -> None:
     mutations = {
         "run_id": "old-run",

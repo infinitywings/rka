@@ -1497,11 +1497,16 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "summary": "Trace the reasoning chain that produced an entity.",
         "signature": (
             "rka_query(operation='provenance', *, project_id, id, "
-            "filters={'direction': 'forward'|'backward'|'both', 'max_depth'})"
+            "filters={'direction': 'forward'|'backward'|'both', "
+            "'max_depth': 1..3})"
         ),
         "required_fields": ["project_id", "id"],
         "optional_fields": ["filters"],
-        "enums": {"direction": ["forward", "backward", "both"]},
+        "enums": {
+            "direction": [
+                "forward", "backward", "both", "downstream", "upstream"
+            ]
+        },
         "examples": [
             {
                 "description": "Trace what justifies a decision.",
@@ -1514,7 +1519,13 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": ["ego_graph", "entity"],
-        "notes": None,
+        "notes": (
+            "max_depth defaults to 3 and must be between 1 and 3. forward "
+            "means what this entity led to; backward means what led to it. "
+            "downstream and upstream are accepted as legacy aliases. Unknown "
+            "directions are rejected. Contradictions are shown separately as "
+            "non-causal context, never as before/after links."
+        ),
     },
     "multi_hop": {
         "operation": "multi_hop",
@@ -3498,7 +3509,10 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["mission", "update_mission_status", "report"],
         "notes": (
             "Canonical field is `summary` (the report's narrative body); "
-            "Phase-X²' adapter also accepts `content` as an alias."
+            "Phase-X²' adapter also accepts `content` as an alias. Report "
+            "submission does not infer task outcomes: reconcile tasks with "
+            "update_mission_status first. A completed mission with pending, "
+            "in-progress, or blocked tasks returns consistency_warnings."
         ),
     },
     "advance_rq": {
@@ -4079,7 +4093,13 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         }],
         "related_operations": ["experiment_observations", "add_evidence_locator"],
-        "notes": "Observations are append-only and do not update claim evidence status.",
+        "notes": (
+            "Observations are append-only and do not update claim evidence "
+            "status. Provide at most one of value_real and value_text. "
+            "metric, comparison, and test require one of those value fields; "
+            "qualitative and failure require value_text. The REST/domain "
+            "validator is authoritative."
+        ),
     },
     "add_evidence_locator": {
         "operation": "add_evidence_locator",

@@ -13,17 +13,17 @@ The PI sets direction, resolves escalations, and preserves original intent.
 
 ## Tool Surface
 
-The rka MCP server ships a **discriminated-union dispatch surface**. Five tools are always-on:
+The rka MCP server ships a **discriminated-union dispatch surface**. Its core tools are always-on:
 
 | Always-on tool | Purpose |
 |---|---|
-| `rka_query(args)` | All 67 read operations |
-| `rka_execute(args)` | All 83 write/lifecycle operations |
-| `rka_describe(operation)` | Schema lookup + worked example; `rka_describe('')` returns the <250-token index |
+| `rka_query(args)` | Typed read operations |
+| `rka_execute(args)` | Typed write and lifecycle operations |
+| `rka_describe(operation)` | Authoritative schema lookup + worked example; `rka_describe('')` returns the compact operation index |
 | `rka_load_tools(names)` | Escape hatch for explicit legacy-tool access |
 | `rka_help(name)` | Deprecated alias for `rka_describe` |
 
-`args` is a **typed Pydantic model** discriminated by `operation`. 150 models in `rka/mcp/operation_args.py` render as `inputSchema.oneOf` with per-branch enum + required-field constraints. **This is the no-compromise empirical proof** observed in the 2026-06-02 cockpit session: when the PI said "go ahead and ship", the cockpit attempted `confidence='confirmed'`, **caught the hallucination itself before emitting**, and quoted the allowed set (`['hypothesis', 'tested', 'verified', 'superseded', 'retracted']`) verbatim from the inputSchema branch. No wasted round-trip — the schema layer makes that entire class of error structurally impossible.
+`args` is a **typed Pydantic model** discriminated by `operation`. The live models render as `inputSchema.oneOf` with per-branch enum + required-field constraints, so invalid enum values and missing required fields are rejected before dispatch. Do not rely on a documented operation count; inspect the live index and describe unfamiliar operations.
 
 For PI cockpit work most ratification happens through the orchestrator tools (`orchestrator_inbox`, `orchestrator_accept` / `reject` / `correct` — unchanged by v2.7.0). When you manually bank a directive or note through the rka MCP, use `rka_execute(args={"operation": "record_note", ...})` etc.
 
@@ -68,23 +68,57 @@ rka_execute(args={"operation": "resolve_checkpoint",
 
 ## Retrieval Strategy
 
-You are the only role that will question whether a conclusion rests on a
-decision that has since been overturned. Three things make that checkable.
+You are the role that must question whether a conclusion rests on a decision
+that has since been overturned. Use these checks before endorsement.
 
 1. **Scope your searches by node type.** `search` ranks eight entity types in
    one list. Unscoped, a decision is found by its own question text only 25.8 %
    of the time; with `"filters": {"entity_types": ["decision"]}` it is 93.3 %
    (measured over all 392 decisions in this store, eval-v3 2026-08-23).
-2. **A search hit alone cannot tell you whether a decision is in force.** It
+2. **A search hit alone cannot authoritatively tell you whether a decision is in force.** It
    carries `status` / `superseded_by` where the source table has them, but the
    authoritative check is to reach the node through `ego_graph` / `multi_hop`
-   or fetch it with `operation="entity"`. If a decision is superseded, follow
-   `superseded_by` to the one that replaced it before endorsing anything.
+   or fetch it with `operation="entity"`. Fetch the candidate; while it is
+   superseded, fetch the exact `superseded_by` target with a visited-ID guard.
+   Stop on `active`, `abandoned`, `merged`, or `revisit`, or on a missing or
+   cyclic endpoint. `retracted` is not a decision status. Treat a superseded row
+   without a valid replacement as a gap. Never infer the current decision from
+   rank or timestamp.
 3. **Ask the record what changed.** `belief_as_of` reconstructs what the
    project believed at a past date — the right lens when reviewing work written
    weeks ago. `changes_since` pages what has happened since a cursor.
    `staleness_impact` shows what a retraction would invalidate downstream.
    `contradictions` surfaces conflicting evidence before you ratify.
+4. **Require a complete lifecycle story.** Connect the PI boundary or RQ and
+   design basis to the predecessor decision, trigger, terminal successor or
+   status, execution report, latest conclusion, and latest caveat. Only an
+   `active` terminal decision is in force; report an `abandoned`, `merged`, or
+   `revisit` endpoint explicitly. A formal report is not necessarily the
+   terminal interpretation; check records created after it.
+   If `exp_`, `run_`, or `obs_` evidence appears, inspect it through the typed
+   experiment queries; read nested `epv_` / `rue_` / `elc_` / `evr_` records
+   through the parent response rather than generic graph operations. Keep common-case retrieval to
+   at most 12 project reads; if a terminal conclusion or caveat remains absent,
+   identify that gap instead of endorsing a complete story.
+
+## Endorsement uncertainty checklist
+
+Before endorsing a conclusion, verify:
+
+- the framing and scope match the PI's current boundary, not an older intent;
+- every load-bearing decision resolves to its deterministic terminal status;
+- the latest conclusion and latest limiting condition are both present, or the
+  absence of either is stated explicitly;
+- experiment setup, conditions, units, denominator, failed runs, and negative
+  or inconclusive observations have not been lost in summary;
+- typed preview evidence is verified through its own query and connected to a
+  graph-backed mission, report, journal, or decision when available;
+- contradictions, retractions, staleness, and known unknowns are visible; and
+- the execution mission has terminal tasks, no closeout consistency warning,
+  and a report whose claims were read back from RKA.
+
+Endorse only the scope the record supports. PI approval sets direction; it does
+not raise source-grounding confidence or scientific evidence strength by itself.
 
 ## Guardrails
 

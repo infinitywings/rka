@@ -14,19 +14,19 @@ Your counterparts: the **Brain** (`skills/brain/SKILL.md`) handles strategy. The
 
 ## Tool Surface
 
-The rka MCP server ships a **discriminated-union dispatch surface**. Five tools are always-on; everything else is reached through them:
+The rka MCP server ships a **discriminated-union dispatch surface**. Its core tools are always-on; other capabilities are reached through them:
 
 | Always-on tool | Purpose |
 |---|---|
-| `rka_query(args)` | All 67 read operations (missions, status, context, experiments, planning branches, semantic proposals, interpretations, claim scope, native manuscripts, outlines, change impact, reports, search, etc.) |
-| `rka_execute(args)` | All 83 write/lifecycle operations (notes, experiment plans/runs/evidence, planning artifacts, semantic proposals, manuscript and outline updates, checkpoints, document ingest, interpretation staging, claim-scope review, etc.) |
-| `rka_describe(operation)` | Schema lookup + worked example; `rka_describe('')` returns the <250-token index |
+| `rka_query(args)` | Typed read operations (missions, context, experiments, interpretations, reports, search, etc.) |
+| `rka_execute(args)` | Typed write and lifecycle operations (notes, experiment evidence, checkpoints, reports, maintenance, etc.) |
+| `rka_describe(operation)` | Authoritative schema lookup + worked example; `rka_describe('')` returns the compact operation index |
 | `rka_load_tools(names)` | Escape hatch — brings deferred legacy tools online when you specifically need backwards-compat access |
 | `rka_help(name)` | Deprecated alias for `rka_describe` |
 
-`args` is a **typed Pydantic model** discriminated by `operation`. FastMCP renders the 150-model union as `inputSchema.oneOf` with per-branch enum + required-field constraints. The schema layer rejects wrong enum values, missing required fields, and missing provenance BEFORE the call is dispatched.
+`args` is a **typed Pydantic model** discriminated by `operation`. FastMCP renders the live union as `inputSchema.oneOf` with per-branch enum + required-field constraints. The schema layer rejects wrong enum values, missing required fields, and missing provenance BEFORE the call is dispatched. Do not rely on a documented operation count; inspect the live index and describe unfamiliar operations.
 
-> **Orchestrator subprocess note.** When this Executor instance is the LangGraph orchestrator's `claude-agent-sdk` subprocess (daemon under `orchestrator/docker-compose.yml`), it runs with `RKA_LEGACY_TOOLS=1`, restoring the v2.7.0a2 always-on surface (the 12-tool legacy baseline + the 8 v2.7.0a2 intent verbs) alongside the always-on dispatch tools (`rka_query` / `rka_execute` / `rka_describe`, which are never deferred); the remaining legacy tools stay `tier='deferred'` and are reachable via `rka_load_tools`. This preserves the parent-side TWO-TAP autonomy contract at `pi_decision_select` (per-tool ratification granularity in `WRITE_TOOLS`). Cockpit Executor sessions (Claude Desktop / Claude Code talking directly to the PI) see the typed dispatch surface described above.
+> **Orchestrator subprocess note.** When this Executor instance is the LangGraph orchestrator's `claude-agent-sdk` subprocess (daemon under `orchestrator/docker-compose.yml`), it may run with `RKA_LEGACY_TOOLS=1`, restoring the compatibility surface alongside the typed dispatch tools; other legacy tools remain deferred and are reachable via `rka_load_tools`. This preserves the parent-side TWO-TAP autonomy contract at `pi_decision_select` (per-tool ratification granularity in `WRITE_TOOLS`). Cockpit Executor sessions (Claude Desktop / Claude Code talking directly to the PI) use the typed dispatch surface described above. Inspect the live index instead of assuming a fixed tool count.
 
 ### Worked examples
 
@@ -77,7 +77,7 @@ rka_execute(args={"operation": "update_mission_status",
 
 # Schema lookup
 rka_describe(operation="submit_checkpoint")
-rka_describe(operation="")  # <250-token index of all operations
+rka_describe(operation="")  # compact index of current operations
 ```
 
 The typed-arg surface obviates `rka_load_tools` for normal Executor work; only use it for explicit legacy access. When a workflow below references a legacy tool name like `rka_submit_report`, treat it as a synonym for `rka_execute(args={"operation": "submit_report", ...})` — the mapping is in `rka_describe('')`.
@@ -147,6 +147,21 @@ Record as a journal note with `tags=["backbrief"]` and WAIT for Brain approval. 
 - Raise a checkpoint via `rka_execute(args={"operation": "submit_checkpoint", ...})` when strategy, ambiguity, or risk exceeds execution authority.
 - Submit a mission report via `rka_execute(args={"operation": "submit_report", ...})` when the assigned work is complete.
 
+### Mission closeout
+
+Before submitting a report, re-read the mission and reconcile its full task
+list. Preserve task descriptions and order; mark finished tasks `complete`, and
+use `skipped` only with the reason recorded in the report. Persist the complete
+task list with `update_mission_status` while retaining the current non-terminal
+mission status, then read the mission back. If a task is still pending,
+in-progress, or blocked, raise a checkpoint or use a non-complete mission state
+instead of submitting a final report.
+
+After `submit_report`, read both `mission` and `report`. Closeout is verified
+only when the mission is complete, every task is terminal, there are no task
+`consistency_warnings`, and the stored report matches the submitted findings,
+anomalies, questions, and codebase state.
+
 Structured report sections (`summary`, `findings`, `anomalies`, `questions`, `codebase_state`, `recommended_next`) and good/bad contrast: `workflows.md` § "Report Submission" and `examples.md`.
 
 ## Escalation Triggers
@@ -199,15 +214,38 @@ When a mission asks you to read a paper:
 
 ## Retrieval Strategy
 
-When mission context is incomplete, retrieve iteratively: 3–5 short (1–4 word) angle queries via `search`, then expand the best hits through `ego_graph` / `multi_hop`; for prose-described scopes use `collect_report_context` with angle_queries. One-shot paragraph search measured 0.32 recall vs 0.80–1.00 for this loop (eval-v3). Verify load-bearing entities by fetching full content before acting on them.
+When mission context is incomplete, retrieve iteratively with short, type-scoped
+angle queries, then expand the best hits through `ego_graph` / `multi_hop`; for
+prose-described scopes use `collect_report_context`. Verify load-bearing
+entities by fetching full content before acting on them.
 
 **Scope every search to the node type you want** — `"filters": {"entity_types": ["decision"]}` and friends. Unscoped, a decision is found by its own question text only 25.8 % of the time; scoped, 93.3 % (98.0 % with an ~8-word query). Measured over all 392 decisions in this store (eval-v3, 2026-08-23).
 
 **Check currency before acting on a decision.** Search hits carry `status` /
 `superseded_by` where the source table has them, but the authoritative read is
-through `ego_graph` / `multi_hop` or `operation="entity"`. If a decision is
-superseded, follow `superseded_by` to its replacement rather than working from
-the one you found.
+through `ego_graph` / `multi_hop` or `operation="entity"`. Fetch the candidate;
+while it is superseded, fetch the exact `superseded_by` target with a visited-ID
+guard. Stop on `active`, `abandoned`, `merged`, or `revisit`, or on a missing or
+cyclic endpoint. `retracted` is not a decision status. Treat a superseded row
+without a valid replacement as a gap; never choose the current decision by rank
+or timestamp.
+
+For cold lifecycle work, recover enough context to connect framing and design
+basis to the predecessor decision, trigger, terminal successor or status,
+execution record, latest conclusion, and latest caveat. Do not report the story
+as complete until the terminal decision status, conclusion, and limiting
+condition are verified or a targeted search establishes that one is absent.
+Only an `active` terminal decision is in force; report `abandoned`, `merged`, or
+`revisit` explicitly. Keep this to at most 12 project reads in the common case;
+return a partial story with named gaps rather than widening indefinitely.
+
+When the record names `exp_`, `run_`, or `obs_`, switch to the typed
+`experiments`, `experiment_runs`, or `experiment_observations` query. Read
+`epv_` plan versions, `rue_` run events, and `elc_` / `evr_` evidence links
+through the parent response. These
+preview IDs are evidence, not generic graph entities: do not send them to
+`entity`, graph traversal, or graph-only citation fields. Carry both the typed
+preview ID and its graph-backed mission/report/journal bridge in the handoff.
 
 **At mission pickup, call `mission_guard`** — it returns retracted findings and
 unresolved contradictions overlapping the objective, i.e. approaches already

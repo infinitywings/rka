@@ -157,14 +157,37 @@ gold manifest or attest its own retrieval trace:
   "cited_entity_ids": ["jrn_...", "dec_new", "mis_...", "jrn_result"],
   "current_entity_ids": ["dec_new"],
   "causal_chain": ["dec_old", "jrn_...", "dec_new", "mis_...", "jrn_result"],
+  "preview_evidence_ids": ["run_...", "obs_..."],
   "rejected_entity_ids": ["jrn_distractor"]
 }
 ```
+
+`cited_entity_ids`, `current_entity_ids`, `causal_chain`, and
+`rejected_entity_ids` are flat arrays of unified graph/resolver entity IDs.
+Experiment-preview records (`exp_`, `epv_`, `run_`, `rue_`, `obs_`, `elc_`,
+and `evr_`) belong only in the optional `preview_evidence_ids` array. They must
+be attested in the independently collected raw trace by an authoritative
+same-project record returned from the matching typed experiment read:
+`experiments` owns experiment, plan-version, and nested run records;
+`experiment_runs` owns run, event, and nested observation records; and
+`experiment_observations` owns observation, locator, and claim-relation
+records. An ID mentioned in arbitrary successful output, relationship text,
+or experiment config is not attestation. Preview evidence remains diagnostic
+and does not satisfy graph citation, causal-order, or currentness scoring.
 
 An independent collector saves a second JSONL file containing normalized raw
 RKA tool calls. Bare `retrieved_entity_ids` or `resolved_entity_ids` are
 rejected: the scorer extracts candidate IDs from call responses and recomputes
 resolved IDs from the project-attested resolver packet.
+
+The collector should preserve each raw response exactly. At ingestion, the
+scorer can read a native JSON value, its exact JSON-string serialization, or a
+single MCP `{\"content\":[{\"type\":\"text\",\"text\":...}]}` envelope whose text is
+one exact JSON value. It does not guess through Markdown fences or merge
+multiple content blocks, and normalization never rewrites the archived trace.
+Preview attestation examines only typed record locations and requires both the
+exact record `id` and the scenario's exact `project_id`; broad string-ID
+extraction is retained for trace diagnostics but cannot attest preview evidence.
 
 Trust boundary: the benchmark operator runs this collector outside the
 evaluated PI/Brain/Executor sessions and archives the raw file plus its SHA-256.

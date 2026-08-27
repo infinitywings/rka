@@ -35,6 +35,9 @@ import json
 from typing import Any
 
 import pytest
+from pydantic import TypeAdapter
+
+from rka.mcp.operation_args import ExecuteArgsUnion, QueryArgsUnion
 
 from rka.mcp.server import (
     _TIER_ALWAYS_ON,
@@ -156,6 +159,103 @@ def test_rka_instructions_does_not_direct_clients_to_call_set_project_at_session
             f"rka_set_project at session start ({phrase!r}); this is "
             f"the deprecated v2.5 contract"
         )
+
+
+def test_orientation_prompts_use_current_typed_provenance_and_checkpoint_shapes():
+    """Fallback prompts must not teach legacy names inside typed dispatch."""
+    instruction_text = RKA_INSTRUCTIONS
+    brain_text = brain_orientation()
+    executor_text = executor_orientation()
+
+    for text in (instruction_text, brain_text, executor_text):
+        assert '"operation": "trace_provenance"' not in text
+
+    assert '"operation": "provenance"' in instruction_text
+    assert '"filters": {"status": "open"}' in instruction_text
+    assert '"filters": {"status": "open"}' in brain_text
+
+
+def test_executor_orientation_examples_match_current_typed_contracts():
+    """The fallback must not strand clients on stale field or operation names."""
+    text = executor_orientation()
+
+    for stale in (
+        "68 read ops",
+        "84 write/lifecycle ops",
+        '"operation": "get"',
+        '"operation": "add_literature"',
+        '"findings": "..."',
+        '"title": "...", "description": "..."',
+        '"operation": "submit_report", ..., "related_decisions"',
+    ):
+        assert stale not in text
+
+    expected_fragments = (
+        '"operation": "update_mission_status", "project_id": "prj_...", '
+        '"mission_id": "mis_..."',
+        '"operation": "entity", "project_id": "prj_...", "id": "dec_..."',
+        '"provenance": {"related_mission": "mis_..."}',
+        '"mission_id": "mis_...", "type": "clarification"',
+        '"findings": ["..."]',
+        '"operation": "record_literature", "project_id": "prj_..."',
+    )
+    for fragment in expected_fragments:
+        assert fragment in text
+
+    # Pin the examples to the same discriminated unions the live tools expose.
+    query_adapter = TypeAdapter(QueryArgsUnion)
+    execute_adapter = TypeAdapter(ExecuteArgsUnion)
+    query_adapter.validate_python(
+        {
+            "operation": "entity",
+            "project_id": "prj_test",
+            "id": "dec_test",
+        }
+    )
+    execute_adapter.validate_python(
+        {
+            "operation": "update_mission_status",
+            "project_id": "prj_test",
+            "mission_id": "mis_test",
+            "status": "active",
+        }
+    )
+    execute_adapter.validate_python(
+        {
+            "operation": "record_note",
+            "project_id": "prj_test",
+            "content": "finding",
+            "type": "note",
+            "source": "executor",
+            "provenance": {"related_mission": "mis_test"},
+        }
+    )
+    execute_adapter.validate_python(
+        {
+            "operation": "submit_checkpoint",
+            "project_id": "prj_test",
+            "mission_id": "mis_test",
+            "type": "clarification",
+            "description": "Need input.",
+            "blocking": True,
+        }
+    )
+    execute_adapter.validate_python(
+        {
+            "operation": "submit_report",
+            "project_id": "prj_test",
+            "mission_id": "mis_test",
+            "summary": "done",
+            "findings": ["finding"],
+        }
+    )
+    execute_adapter.validate_python(
+        {
+            "operation": "record_literature",
+            "project_id": "prj_test",
+            "title": "Paper",
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
