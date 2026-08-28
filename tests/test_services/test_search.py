@@ -277,6 +277,66 @@ async def test_search_hits_expose_supersession(superseded_svc: SearchService) ->
     assert hits["dec_new"].superseded_by is None
 
 
+async def test_current_replacement_survives_a_limit_one_window(
+    superseded_svc: SearchService,
+) -> None:
+    hits = await superseded_svc.search("headline evaluation metric", limit=1)
+    assert [hit.entity_id for hit in hits] == ["dec_new"]
+
+
+async def test_current_replacement_survives_many_retired_exact_matches(
+    db: Database,
+) -> None:
+    svc = SearchService(db=db, embeddings=None)
+    await db.execute(
+        "INSERT INTO decisions (id, question, chosen, rationale, decided_by, phase,"
+        " status, project_id)"
+        " VALUES ('dec_current', ?, 'current', 'r', 'pi', 'p1', 'active',"
+        " 'proj_default')",
+        ["What is the repeated exact-match choice"],
+    )
+    for index in range(15):
+        decision_id = f"dec_retired_{index:02d}"
+        await db.execute(
+            "INSERT INTO decisions (id, question, chosen, rationale, decided_by, phase,"
+            " status, superseded_by, project_id)"
+            " VALUES (?, ?, 'retired', 'r', 'pi', 'p1', 'superseded',"
+            " 'dec_current', 'proj_default')",
+            [decision_id, "What is the repeated exact-match choice"],
+        )
+        await db.execute(
+            "INSERT INTO fts_decisions (id, question, rationale) VALUES (?, ?, 'r')",
+            [decision_id, "What is the repeated exact-match choice"],
+        )
+    await db.execute(
+        "INSERT INTO fts_decisions (id, question, rationale) "
+        "VALUES ('dec_current', ?, 'r')",
+        ["What is the repeated exact-match choice"],
+    )
+
+    hits = await svc.search("repeated exact match choice", limit=1)
+
+    assert [hit.entity_id for hit in hits] == ["dec_current"]
+
+
+async def test_foreign_tag_row_cannot_make_a_local_entity_match(
+    search_svc: SearchService,
+) -> None:
+    """A corrupt/migrated foreign tag must not influence local retrieval."""
+    await search_svc.db.execute(
+        "INSERT INTO projects (id, name, created_by) VALUES (?, ?, ?)",
+        ["prj_foreign_tag", "Foreign Tag", "system"],
+    )
+    await search_svc.db.execute(
+        "INSERT INTO tags (project_id, tag, entity_type, entity_id) VALUES (?, ?, ?, ?)",
+        ["prj_foreign_tag", "foreign-only-signal", "journal", "jrn_001"],
+    )
+
+    hits = await search_svc.search("foreign only signal", limit=10)
+
+    assert "jrn_001" not in {hit.entity_id for hit in hits}
+
+
 async def test_currency_absent_for_types_without_lifecycle(
     search_svc: SearchService,
 ) -> None:

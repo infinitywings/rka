@@ -59,6 +59,9 @@ async def generate(post: Transport, put: Transport) -> dict[str, Any]:
         "retractions": [],       # entity_id
         "chains": [],            # {name, path: [ids], link_types: [...]}
         "stories": [],           # complete causal stories for retrieval evaluation
+        "retrieval_tasks": [],   # frozen entity retrieval tasks for Core baselines
+        "linked_neighborhood_tasks": [],  # explicit-seed graph retrieval tasks
+        "currency_checks": {},   # current/superseded and stale filter fixtures
         "tag_cohorts": {},       # tag -> [ids]
         "counts": {},
     }
@@ -202,6 +205,13 @@ async def generate(post: Transport, put: Transport) -> dict[str, Any]:
         "question": "What is the clock speed and core of the target MCU "
                     "for the firmware-update study?",
         "answer_substr": "32 MHz", "entity_id": jrn["pi_constraint"]})
+    gt["retrieval_tasks"].append({
+        "task_id": "journal-target-hardware",
+        "entity_type": "journal",
+        "query": "target MCU clock speed and core",
+        "expected_ids": [jrn["pi_constraint"]],
+        "top_k": 10,
+    })
 
     # =====================================================================
     # PHASE 2 — threat model: decisions with options, supersede chains
@@ -214,6 +224,20 @@ async def generate(post: Transport, put: Transport) -> dict[str, Any]:
                      tags=["delta-updates", "related-work"])
     await literature("lit_kyber", "Post-Quantum Signatures on Cortex-M0: A Feasibility Study",
                      ["Tanaka, H."], 2025, "CHES", tags=["pqc", "related-work"])
+    gt["retrieval_tasks"].append({
+        "task_id": "literature-pqc-feasibility",
+        "entity_type": "literature",
+        "query": "post quantum signature feasibility Cortex M0",
+        "expected_ids": [lit["lit_kyber"]],
+        "top_k": 10,
+    })
+    gt["retrieval_tasks"].append({
+        "task_id": "literature-delta-updates",
+        "entity_type": "literature",
+        "query": "delta encoding constrained device OTA updates",
+        "expected_ids": [lit["lit_delta"]],
+        "top_k": 10,
+    })
 
     await note(
         "threat_enum",
@@ -287,6 +311,21 @@ async def generate(post: Transport, put: Transport) -> dict[str, Any]:
         "question": "What firmware-signature scheme is current, "
                     "and what was it changed from and why?",
         "answer_substr": "Dilithium2", "entity_id": dec["dec_sig_v2"]})
+    gt["retrieval_tasks"].append({
+        "task_id": "decision-current-signature",
+        "entity_type": "decision",
+        "query": "current firmware signature choice and reason for change",
+        "expected_ids": [dec["dec_sig_v2"]],
+        "top_k": 10,
+    })
+
+    stale_rollback_claim = await claim(
+        "rollback_v1",
+        "method",
+        "The rollback counter is stored in ordinary internal flash.",
+        0.4,
+    )
+    await put(f"/api/claims/{stale_rollback_claim}", {"stale": True})
 
     # =====================================================================
     # PHASE 3 — experiments: missions, reports, checkpoints, claims, clusters
@@ -317,6 +356,66 @@ async def generate(post: Transport, put: Transport) -> dict[str, Any]:
         "Dilithium2 verification validated on the target board.",
         ["61 ms median", "64 ms p95", "0 failures across 1,000 verifications"],
     )
+    signature_claim = await claim(
+        "sig_verify_result",
+        "result",
+        "Target-board Dilithium2 verification completed in 64 ms at the 95th percentile.",
+        0.9,
+    )
+    gt["retrieval_tasks"].append({
+        "task_id": "claim-signature-latency",
+        "entity_type": "claim",
+        "query": "target board signature verification 95th percentile latency",
+        "expected_ids": [signature_claim],
+        "top_k": 10,
+    })
+    gt["linked_neighborhood_tasks"].append({
+        "task_id": "signature-evidence-neighborhood",
+        "seed_id": dec["dec_sig_v2"],
+        "max_depth": 3,
+        "max_nodes": 30,
+        "expected_ids": [
+            dec["dec_sig_v2"],
+            lit["lit_kyber"],
+            mis["mis_signature_bench"],
+            jrn["sig_verify_result"],
+            signature_claim,
+        ],
+        "expected_edges": [
+            {
+                "source": dec["dec_sig_v2"],
+                "target": lit["lit_kyber"],
+                "link_types": ["cites", "informed_by"],
+                "direction": "either",
+            },
+            {
+                "source": dec["dec_sig_v2"],
+                "target": mis["mis_signature_bench"],
+                "link_types": ["motivated"],
+                "direction": "either",
+            },
+            {
+                "source": mis["mis_signature_bench"],
+                "target": jrn["sig_verify_result"],
+                "link_types": ["produced"],
+                "direction": "either",
+            },
+            {
+                "source": jrn["sig_verify_result"],
+                "target": signature_claim,
+                "link_types": ["derived_from"],
+                "direction": "either",
+            },
+        ],
+    })
+    gt["currency_checks"] = {
+        "current_decision": dec["dec_sig_v2"],
+        "superseded_decision": dec["dec_sig_v1"],
+        "current_journal": jrn["rollback_v2"],
+        "superseded_journal": jrn["rollback_v1"],
+        "current_claim": signature_claim,
+        "stale_claim": stale_rollback_claim,
+    }
     await note(
         "sig_distractor",
         "Unrelated pilot result: a Cortex-M4 host board verified Dilithium2 in "
@@ -365,8 +464,12 @@ async def generate(post: Transport, put: Transport) -> dict[str, Any]:
         tags=["experiment", "fragment-injection", "result"])
     await report("mis_fragments", "Fragment injection measured; per-fragment MIC eliminates it.",
                  ["73% acceptance without MIC", "0% with per-fragment MIC"])
-    await claim("frag_result", "result",
-                "Per-fragment MIC reduces malicious-fragment acceptance from 73% to 0%.", 0.9)
+    fragment_claim = await claim(
+        "frag_result",
+        "result",
+        "Per-fragment MIC reduces malicious-fragment acceptance from 73% to 0%.",
+        0.9,
+    )
 
     # NEEDLE 3 (single-fact with a near-miss distractor)
     gt["needles"].append({
@@ -374,6 +477,22 @@ async def generate(post: Transport, put: Transport) -> dict[str, Any]:
         "question": "What fraction of injected malicious fragments were accepted "
                     "in the baseline (no per-fragment MIC)?",
         "answer_substr": "73%", "entity_id": jrn["frag_result"]})
+    gt["retrieval_tasks"].extend([
+        {
+            "task_id": "journal-fragment-baseline",
+            "entity_type": "journal",
+            "query": "baseline malicious fragment acceptance rate without MIC",
+            "expected_ids": [jrn["frag_result"]],
+            "top_k": 10,
+        },
+        {
+            "task_id": "claim-fragment-mitigation",
+            "entity_type": "claim",
+            "query": "per fragment MIC reduction in malicious acceptance",
+            "expected_ids": [fragment_claim],
+            "top_k": 10,
+        },
+    ])
     # near-miss distractor: same vocabulary, different number, different mechanism
     await note(
         "frag_distractor",
@@ -457,6 +576,13 @@ async def generate(post: Transport, put: Transport) -> dict[str, Any]:
         "for safe FUOTA on constrained meters?", [("open", "research question")],
         "open", "Top-level integrity research question.", phase="experiments",
         tags=["research-question", "integrity"], kind="research_question")
+    gt["retrieval_tasks"].append({
+        "task_id": "decision-integrity-research-question",
+        "entity_type": "decision",
+        "query": "application layer integrity controls needed for safe FUOTA",
+        "expected_ids": [dec["rq_integrity"]],
+        "top_k": 10,
+    })
     cl = await post(
         "/api/clusters",
         {"research_question_id": dec["rq_integrity"],

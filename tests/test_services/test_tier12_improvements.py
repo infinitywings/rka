@@ -213,6 +213,18 @@ class TestTagSearch:
         assert any(h.entity_id == "jrn_tagged" for h in results)
 
     @pytest.mark.asyncio
+    async def test_legacy_null_tag_is_default_project_only(
+        self, svc_with_tagged_entity
+    ):
+        other = SearchService(
+            db=svc_with_tagged_entity.db,
+            embeddings=None,
+            project_id="proj_other",
+        )
+        hits = await other._tag_search("harness", ["journal"], limit=10)
+        assert not hits
+
+    @pytest.mark.asyncio
     async def test_other_project_entities_filtered(self, db: Database):
         await db.execute(
             "INSERT INTO journal (id, type, content, source, confidence, phase, project_id) "

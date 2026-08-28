@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from rka.infra.database import Database
 from rka.infra.ids import generate_id
+from rka.services.base import BaseService
 
 if TYPE_CHECKING:
     from rka.services.search import SearchService
@@ -15,6 +17,30 @@ if TYPE_CHECKING:
 class GraphService:
     """Queries the entity_links table and related entities to produce
     graph structures for the research map UI and MCP tools."""
+
+    _ENTITY_TABLES: dict[str, str] = {
+        # Reuse the write path's canonical link-endpoint registry so graph
+        # reads do not silently reject an entity type that add_link accepts.
+        **BaseService._LINK_ENTITY_TABLES,
+        "summary": "exploration_summaries",
+        "event": "events",
+        "review": "review_queue",
+    }
+    _CURRENTNESS_COLUMNS: dict[str, tuple[str, ...]] = {
+        "decision": ("status", "superseded_by"),
+        "mission": ("status",),
+        "journal": ("status", "confidence", "superseded_by"),
+        "literature": ("status",),
+        "checkpoint": ("status",),
+        "claim": ("stale", "valid_from", "valid_until", "staleness"),
+        "cluster": (
+            "confidence",
+            "needs_reprocessing",
+            "staleness",
+            "synthesis_valid_until",
+        ),
+        "review": ("status",),
+    }
 
     def __init__(self, db: Database):
         self.db = db
@@ -119,8 +145,16 @@ class GraphService:
         # Filter by type if requested
         if include_types:
             nodes = {k: v for k, v in nodes.items() if v["type"] in include_types}
-            valid_ids = set(nodes.keys())
-            edges = [e for e in edges if e["source"] in valid_ids and e["target"] in valid_ids]
+
+        # A malformed/imported edge may carry this project's project_id while
+        # pointing at a foreign or missing record. Hydration is the ownership
+        # boundary: never return an edge whose endpoint did not resolve here.
+        valid_ids = set(nodes)
+        edges = [
+            edge
+            for edge in edges
+            if edge["source"] in valid_ids and edge["target"] in valid_ids
+        ]
 
         return {"nodes": list(nodes.values()), "edges": edges}
 
@@ -276,10 +310,39 @@ class GraphService:
     # Ego graph (neighborhood of a single entity)
     # ------------------------------------------------------------------
 
+    async def _attest_project_entities(
+        self, entity_ids: list[str], *, project_id: str
+    ) -> list[str]:
+        """Return only explicit anchors that exist in the requested project.
+
+        Edge queries were already project-scoped, but an unverified foreign or
+        nonexistent seed survived as a placeholder node.  That fail-open
+        identity signal is misleading even when no foreign content is exposed.
+        """
+        grouped: dict[str, list[str]] = {}
+        for entity_id in dict.fromkeys(entity_ids):
+            entity_type = self._guess_type_from_id(entity_id)
+            if entity_type in self._ENTITY_TABLES:
+                grouped.setdefault(entity_type, []).append(entity_id)
+
+        found: set[str] = set()
+        for entity_type, ids in grouped.items():
+            table = self._ENTITY_TABLES[entity_type]
+            placeholders = ",".join("?" for _ in ids)
+            rows = await self.db.fetchall(
+                f"SELECT id FROM {table} "
+                f"WHERE project_id = ? AND id IN ({placeholders})",
+                [project_id, *ids],
+            )
+            found.update(row["id"] for row in rows)
+        return [entity_id for entity_id in entity_ids if entity_id in found]
+
     async def get_ego_graph(
         self, entity_id: str, depth: int = 1, project_id: str = "proj_default"
     ) -> dict[str, Any]:
         """Return the subgraph centered on entity_id up to `depth` hops."""
+        if not await self._attest_project_entities([entity_id], project_id=project_id):
+            return {"nodes": [], "edges": []}
         visited: set[str] = set()
         frontier: set[str] = {entity_id}
         all_edges: list[dict] = []
@@ -368,6 +431,12 @@ class GraphService:
 
         nodes: dict[str, dict] = {}
         await self._fill_missing_nodes(nodes, entity_ids, project_id=project_id)
+        valid_ids = set(nodes)
+        unique_edges = [
+            edge
+            for edge in unique_edges
+            if edge["source"] in valid_ids and edge["target"] in valid_ids
+        ]
 
         return {"nodes": list(nodes.values()), "edges": unique_edges}
 
@@ -441,6 +510,7 @@ class GraphService:
                 )
             hits = await search_service.with_project(project_id).search(query, limit=10)
             seeds = [h.entity_id for h in hits]
+        seeds = await self._attest_project_entities(seeds, project_id=project_id)
         if not seeds:
             return {"nodes": [], "edges": [], "query": query, "seeds": []}
 
@@ -562,8 +632,6 @@ class GraphService:
             key=lambda nid: scores[nid],
             reverse=True,
         )
-        ranked_set = set(ranked_ids)
-
         # Hydrate node metadata
         node_ids: dict[str, set[str]] = {}
         for nid in ranked_ids:
@@ -571,10 +639,12 @@ class GraphService:
             node_ids.setdefault(etype, set()).add(nid)
         nodes: dict[str, dict] = {}
         await self._fill_missing_nodes(nodes, node_ids, project_id=project_id)
+        ranked_ids = [node_id for node_id in ranked_ids if node_id in nodes]
+        ranked_set = set(ranked_ids)
 
         result_nodes = []
         for nid in ranked_ids:
-            n = nodes.get(nid, {"id": nid, "type": self._guess_type_from_id(nid), "label": nid})
+            n = nodes[nid]
             n["score"] = scores[nid]
             n["depth"] = depths[nid]
             result_nodes.append(n)
@@ -789,19 +859,28 @@ class GraphService:
             node_ids.setdefault(self._guess_type_from_id(nid), set()).add(nid)
         nodes: dict[str, dict] = {}
         await self._fill_missing_nodes(nodes, node_ids, project_id=project_id)
+        kept = [node_id for node_id in kept if node_id in nodes]
+        seeds_set.intersection_update(kept)
 
         tags_by_id: dict[str, list[str]] = {}
         if kept:
             placeholders = ",".join("?" for _ in kept)
+            project_clause = (
+                "(project_id = ? OR project_id IS NULL)"
+                if project_id == "proj_default"
+                else "project_id = ?"
+            )
             for row in await self.db.fetchall(
-                f"SELECT entity_id, tag FROM tags WHERE entity_id IN ({placeholders})",
-                kept,
+                f"SELECT entity_id, tag FROM tags "
+                f"WHERE {project_clause} "
+                f"AND entity_id IN ({placeholders})",
+                [project_id, *kept],
             ):
                 tags_by_id.setdefault(row["entity_id"], []).append(row["tag"])
 
         result_nodes = []
         for nid in kept:
-            n = nodes.get(nid, {"id": nid, "type": self._guess_type_from_id(nid), "label": nid})
+            n = nodes[nid]
             n["score"] = round(scores[nid], 4)
             n["depth"] = depths[nid]
             n["included_via"] = included_via[nid]
@@ -1004,6 +1083,12 @@ class GraphService:
             "literature": ("literature", "title", "status", False),
             "checkpoint": ("checkpoints", "description", "status", False),
             "claim": ("claims", "content", "claim_type", False),
+            "experiment_observation": (
+                "experiment_observations",
+                "summary",
+                "direction",
+                False,
+            ),
             "interpretation_candidate": (
                 "interpretation_candidates",
                 "statement",
@@ -1018,7 +1103,12 @@ class GraphService:
                 continue
             info = table_map.get(etype)
             if not info:
+                attested = set(
+                    await self._attest_project_entities(missing, project_id=project_id)
+                )
                 for eid in missing:
+                    if eid not in attested:
+                        continue
                     nodes[eid] = {
                         "id": eid,
                         "type": etype,
@@ -1054,20 +1144,55 @@ class GraphService:
                     "phase": r.get("phase", ""),
                     "created_at": r["created_at"],
                 }
-            # Any still missing get placeholder nodes
-            fetched = {r["id"] for r in rows}
-            for eid in missing:
-                if eid not in fetched:
-                    nodes[eid] = {
-                        "id": eid,
-                        "type": etype,
-                        "label": eid,
-                        "status": None,
-                        "phase": "",
-                        "created_at": "",
-                    }
-
         await self._augment_claim_scope_nodes(nodes, project_id)
+        await self._augment_node_currentness(nodes, project_id)
+
+    async def _augment_node_currentness(
+        self,
+        nodes: dict[str, dict],
+        project_id: str,
+    ) -> None:
+        """Attach the resolver's canonical lifecycle projection to graph nodes.
+
+        Graph labels historically overloaded ``status`` with confidence or
+        claim type.  Preserve that display field for compatibility and expose
+        lifecycle state separately so a linked-neighborhood consumer can
+        distinguish current, stale, superseded, and unresolved records.
+        """
+        if not nodes:
+            return
+        # Reuse the resolver's pure lifecycle rule without invoking the full
+        # entity-resolution packet (tags, normalized records, hashes, and
+        # contradiction closure). Graph reads need only a few lifecycle
+        # columns and should not hold a long read transaction over large text.
+        from rka.services.entity_resolver import _currentness
+
+        by_type: dict[str, list[str]] = {}
+        for entity_id, node in nodes.items():
+            entity_type = node.get("type") or self._guess_type_from_id(entity_id)
+            if entity_type in self._ENTITY_TABLES:
+                by_type.setdefault(entity_type, []).append(entity_id)
+
+        as_of = datetime.now(timezone.utc)
+        for entity_type, ids in by_type.items():
+            table = self._ENTITY_TABLES[entity_type]
+            columns = self._CURRENTNESS_COLUMNS.get(entity_type, ())
+            placeholders = ",".join("?" for _ in ids)
+            select = ", ".join(("id", *columns))
+            rows = await self.db.fetchall(
+                f"SELECT {select} FROM {table} "
+                f"WHERE project_id = ? AND id IN ({placeholders})",
+                [project_id, *ids],
+            )
+            for row in rows:
+                record = dict(row)
+                node = nodes[row["id"]]
+                node["currentness"] = _currentness(record, as_of=as_of)
+                node["lifecycle_status"] = record.get("status")
+                node["superseded_by"] = record.get("superseded_by")
+                node["stale"] = (
+                    bool(record.get("stale")) if "stale" in record else None
+                )
 
     async def _augment_claim_scope_nodes(
         self,
@@ -1290,6 +1415,8 @@ class GraphService:
             "lnk": "link",
             "clm": "claim",
             "ecl": "cluster",
+            "icd": "interpretation_candidate",
+            "obs": "experiment_observation",
             "ced": "claim_edge",
             "rev": "review",
         }

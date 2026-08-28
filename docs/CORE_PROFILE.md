@@ -78,6 +78,24 @@ The `rka migrate` command initializes both the base and Phase-2 schemas, so FTS
 and vector tables are established consistently with normal REST and worker
 startup.
 
+## Retrieval baseline gate
+
+The deterministic, provider-free retrieval baseline uses the fixed synthetic
+research corpus and an in-process REST transport. It records direct recall and
+latency for journals, claims, decisions, and literature; linked-neighborhood
+node/edge/currentness coverage; project isolation; and stale/superseded
+behavior:
+
+```bash
+.venv/bin/python eval-harness/v3/core_retrieval/runner.py \
+  --check --repeats 7 --warmups 1 \
+  --output /tmp/rka-core-retrieval.json
+```
+
+Its integration test is unmarked and therefore already runs inside the Core
+pytest profile. See [CORE_RETRIEVAL_BASELINE.md](CORE_RETRIEVAL_BASELINE.md)
+for the thresholds, environment boundary, and interpretation limits.
+
 ## Recovery smoke gate
 
 Use [`scripts/core_recovery_smoke.py`](../scripts/core_recovery_smoke.py) only
