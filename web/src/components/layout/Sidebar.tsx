@@ -127,9 +127,11 @@ export function Sidebar({
       {/* Logo / Project Name */}
       <div className="border-b px-4 py-3">
         <div className="flex items-center gap-2">
-          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground text-xs font-bold">
-            R
-          </div>
+          <img
+            src="/brand/rka-project-plugin-app-icon.svg"
+            alt=""
+            className="h-7 w-7 shrink-0 rounded-md"
+          />
           <div className="flex min-w-0 flex-col">
             <span className="max-w-[140px] truncate text-sm font-semibold">
               {project?.project_name ?? "RKA"}

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">RKA Project app icon</title>
+  <desc id="desc">RKA Project mark on a deep navy rounded-square background.</desc>
+  <defs>
+    <linearGradient id="background" x1="48" y1="36" x2="464" y2="480" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#071C46"/>
+      <stop offset="1" stop-color="#0B3C80"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="480" height="480" rx="108" fill="url(#background)"/>
+  <g fill="none" stroke-linecap="round" stroke-width="35">
+    <path d="M170 112V400" stroke="#F7F5EF"/>
+    <path d="M170 256L342 166" stroke="#16B3BB"/>
+    <path d="M170 256L342 346" stroke="#FFB21A"/>
+  </g>
+  <g fill="#F7F5EF">
+    <circle cx="170" cy="112" r="43"/>
+    <circle cx="170" cy="256" r="47"/>
+    <circle cx="170" cy="400" r="43"/>
+  </g>
+  <circle cx="342" cy="166" r="43" fill="#16B3BB"/>
+  <circle cx="342" cy="346" r="43" fill="#FFB21A"/>
+</svg>

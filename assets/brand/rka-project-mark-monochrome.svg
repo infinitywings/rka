@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc" color="#073566">
+  <title id="title">RKA Project monochrome mark</title>
+  <desc id="desc">A one-color research spine branching into two connected knowledge paths.</desc>
+  <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="44">
+    <path d="M160 88V424"/>
+    <path d="M160 256L352 152"/>
+    <path d="M160 256L352 360"/>
+  </g>
+  <g fill="currentColor">
+    <circle cx="160" cy="88" r="52"/>
+    <circle cx="160" cy="256" r="56"/>
+    <circle cx="160" cy="424" r="52"/>
+    <circle cx="352" cy="152" r="52"/>
+    <circle cx="352" cy="360" r="52"/>
+  </g>
+</svg>

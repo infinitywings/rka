@@ -261,6 +261,23 @@ def main() -> None:
                             f"web dashboard asset has unexpected content type: {content_type}"
                         )
 
+                    brand_icon = httpx.get(
+                        f"{base_url}/brand/rka-project-plugin-app-icon.svg",
+                        timeout=5,
+                    )
+                    brand_icon.raise_for_status()
+                    brand_content_type = brand_icon.headers.get("content-type", "")
+                    if "image/svg+xml" not in brand_content_type:
+                        raise RuntimeError(
+                            "web brand icon has unexpected content type: "
+                            f"{brand_content_type}"
+                        )
+                    if not brand_icon.text.lstrip().startswith("<svg"):
+                        raise RuntimeError(
+                            "web brand icon did not return SVG content; "
+                            "the SPA fallback may have masked a missing asset"
+                        )
+
                 asyncio.run(
                     asyncio.wait_for(
                         _probe_mcp(runtime_python, runtime_cwd, env, mcp_log),

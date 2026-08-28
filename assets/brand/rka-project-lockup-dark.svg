@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1800 560" role="img" aria-labelledby="title desc">
+  <title id="title">RKA Project dark lockup</title>
+  <desc id="desc">RKA Project mark and wordmark on a deep navy background.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1800" y2="560" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#061A40"/>
+      <stop offset="1" stop-color="#0A3572"/>
+    </linearGradient>
+  </defs>
+  <rect width="1800" height="560" rx="40" fill="url(#background)"/>
+  <g transform="translate(74 20)">
+    <g fill="none" stroke-linecap="round" stroke-width="34">
+      <path d="M140 96V416" stroke="#F7F5EF"/>
+      <path d="M140 256L318 160" stroke="#16B3BB"/>
+      <path d="M140 256L318 352" stroke="#FFB21A"/>
+    </g>
+    <g fill="#F7F5EF">
+      <circle cx="140" cy="96" r="43"/>
+      <circle cx="140" cy="256" r="47"/>
+      <circle cx="140" cy="416" r="43"/>
+    </g>
+    <circle cx="318" cy="160" r="43" fill="#16B3BB"/>
+    <circle cx="318" cy="352" r="43" fill="#FFB21A"/>
+  </g>
+  <text x="510" y="350" fill="#F7F5EF" font-family="Inter, SF Pro Display, Segoe UI, Arial, sans-serif" font-size="220" letter-spacing="-6">
+    <tspan font-weight="700">RKA</tspan><tspan dx="48" font-weight="400">Project</tspan>
+  </text>
+</svg>
