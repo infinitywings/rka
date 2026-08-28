@@ -7,6 +7,10 @@ All notable changes to RKA are documented here. Format loosely follows
 
 ### Added
 
+- The RKA Project visual identity now has canonical SVG masters, documented
+  color tokens, and mirrored Web/plugin assets. RKA Core's README and dashboard
+  use the new mark, and the Core startup smoke verifies the deployed icon is
+  actual SVG content rather than a masked SPA fallback.
 - A clean-wheel CI gate now installs the built `rka-core` artifact outside the
   checkout and verifies migrations, SQLite/FTS retrieval, REST health, the
   worker, and the five-tool MCP surface.

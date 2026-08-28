@@ -1,4 +1,8 @@
-# RKA — Research Knowledge Agent
+<p align="center">
+  <img src="https://raw.githubusercontent.com/infinitywings/rka/main/assets/brand/rka-project-plugin-app-icon.svg" alt="RKA Project mark" width="112">
+</p>
+
+# RKA Core — Research Knowledge Agent
 
 [![pytest](https://github.com/infinitywings/rka/actions/workflows/pytest.yml/badge.svg?branch=main)](https://github.com/infinitywings/rka/actions/workflows/pytest.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1700 520" role="img" aria-labelledby="title desc">
+  <title id="title">RKA Project</title>
+  <desc id="desc">RKA Project color mark and horizontal wordmark.</desc>
+  <g transform="translate(18 4)">
+    <g fill="none" stroke-linecap="round" stroke-width="36">
+      <path d="M140 92V420" stroke="#073566"/>
+      <path d="M140 256L322 158" stroke="#0799A3"/>
+      <path d="M140 256L322 354" stroke="#F2A516"/>
+    </g>
+    <g fill="#073566">
+      <circle cx="140" cy="92" r="44"/>
+      <circle cx="140" cy="256" r="48"/>
+      <circle cx="140" cy="420" r="44"/>
+    </g>
+    <circle cx="322" cy="158" r="44" fill="#0799A3"/>
+    <circle cx="322" cy="354" r="44" fill="#F2A516"/>
+  </g>
+  <text x="440" y="327" fill="#073566" font-family="Inter, SF Pro Display, Segoe UI, Arial, sans-serif" font-size="205" letter-spacing="-5">
+    <tspan font-weight="700">RKA</tspan><tspan dx="44" font-weight="400">Project</tspan>
+  </text>
+</svg>

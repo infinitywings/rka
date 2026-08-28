@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/rka-project-plugin-app-icon.svg" alt="RKA Project mark" width="96">
+</p>
+
 # rka — Claude Code plugin for the Research Knowledge Agent
 
 This is the official Claude Code plugin for [RKA](https://github.com/infinitywings/rka). It lives inside the upstream RKA repository at `plugin/`, distributed via the local marketplace at `.claude-plugin/marketplace.json` in the repo root.
