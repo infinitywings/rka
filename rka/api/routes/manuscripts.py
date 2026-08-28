@@ -1,9 +1,8 @@
-"""Canonical manuscript, argument-spine, and validation REST endpoints.
+"""Canonical manuscript and argument-spine REST endpoints.
 
 The compatibility register/read routes accept legacy ``jrn_`` aliases while
-native operations resolve to authoritative ``man_`` aggregates.  Reference
-validation is durable and asynchronous: POST enqueues worker-owned Stage B-G
-work and the nested GET endpoint reports project-scoped job status.
+native operations resolve to authoritative ``man_`` aggregates. Historical
+reference-validation job status remains readable for migration and audit.
 """
 
 from __future__ import annotations
@@ -33,7 +32,6 @@ from rka.models.manuscript_native import (
     ManuscriptUpdate,
 )
 from rka.models.outline import OutlineProposalRequest
-from rka.models.reference_validation import ReferenceValidationInput
 from rka.models.semantic_patch import (
     SemanticPatchProposalCreate,
     SemanticPatchProposalTransition,
@@ -68,17 +66,6 @@ class ManuscriptRegisterRequest(BaseModel):
     title: str = Field(..., description="Manuscript title (PI authored)")
     abstract: str | None = Field(default=None, description="Manuscript abstract (PI authored)")
     sections: list[str] | None = Field(default=None, description="Initial section ids; outlined status by default")
-
-
-class ReferenceValidationRequest(ReferenceValidationInput):
-    """Inputs to POST /api/manuscripts/{id}/validate-reference."""
-
-    literature_id: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=128,
-        description="Optional same-project lit_ record linked to this validation.",
-    )
 
 
 class ArgumentSpineUpsertRequest(BaseModel):
@@ -618,50 +605,6 @@ async def record_manuscript_verification_attestation(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-@router.post(
-    "/manuscripts/{manuscript_id}/validate-reference",
-    status_code=202,
-)
-async def validate_reference(
-    manuscript_id: str,
-    data: ReferenceValidationRequest,
-    actor: str = Depends(get_transport_actor),
-    svc: ReferenceValidationService = Depends(
-        get_scoped_reference_validation_service
-    ),
-    native: NativeManuscriptService = Depends(
-        get_scoped_native_manuscript_service
-    ),
-) -> dict[str, Any]:
-    """Queue a single Writer Stage B-G validation attempt.
-
-    The request path performs no subprocess or external resolution.  Poll the
-    returned job through the nested status endpoint; only a completed job
-    carries an immutable validation attestation.
-    """
-    if await native.resolve_id(manuscript_id) is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Manuscript {manuscript_id} not found",
-        )
-    reference_dict = data.model_dump(exclude_none=True, by_alias=True)
-    literature_id = reference_dict.pop("literature_id", None)
-    if not reference_dict.get("DOI") and not reference_dict.get("title"):
-        raise HTTPException(
-            status_code=422,
-            detail="Reference must carry at least DOI or title.",
-    )
-    try:
-        return await svc.enqueue(
-            reference_dict,
-            manuscript_id=manuscript_id,
-            literature_id=literature_id,
-            actor=actor,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-
 @router.get(
     "/manuscripts/{manuscript_id}/reference-validations/{job_id}",
 )
@@ -672,7 +615,7 @@ async def get_reference_validation_status(
         get_scoped_reference_validation_service
     ),
 ) -> dict[str, Any]:
-    """Return project- and manuscript-scoped validation job status."""
+    """Return project- and manuscript-scoped status for a historical job."""
     result = await svc.get_status(manuscript_id, job_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Reference validation job not found")

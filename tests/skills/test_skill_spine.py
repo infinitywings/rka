@@ -1,8 +1,8 @@
-"""The four role skills must share a spine and agree with the tool surface.
+"""The three Core role skills must share a spine and agree with the tool surface.
 
 Two drift classes this locks down, both observed on 2026-08-23:
 
-1. **Structural drift.** The four skills had *no* H2 heading in common —
+1. **Structural drift.** The role skills had *no* H2 heading in common —
    not because content was missing but because the same concept was titled
    differently in each ("Tool Surface (v2.7.0+) — No-Compromise Typed-Arg
    Dispatch" vs "Tool Surface", "Retrieval Strategy — Drive RKA…" vs
@@ -27,7 +27,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SKILLS = REPO_ROOT / "rka" / "skills"
-ROLES = ("brain", "executor", "pi", "writer")
+ROLES = ("brain", "executor", "pi")
 
 # Concepts every role skill must carry, under exactly this heading.
 REQUIRED_SECTIONS = ("Tool Surface", "Session Start")
@@ -48,7 +48,7 @@ def test_every_role_skill_carries_the_shared_spine(role: str, section: str) -> N
 
 
 def test_retrieval_guidance_exists_for_every_role() -> None:
-    """Every role must say how to retrieve — the Writer may delegate to Brain."""
+    """Every Core role must say how to retrieve."""
     for role in ROLES:
         text = (SKILLS / role / "SKILL.md").read_text(encoding="utf-8")
         assert "Retrieval Strategy" in text or "collect_report_context" in text, role

@@ -1,7 +1,7 @@
 {
   "name": "rka",
-  "version": "1.0.0",
-  "description": "Research Knowledge Agent (RKA) integration for Claude Code. Connects Claude to a local RKA backend for provenance-tracked research workflows: journal entries, decisions, literature, missions, claims, evidence clusters, and a research graph shared across four role skills (Brain in Claude Desktop or Code, Executor in Claude Code, PI human researcher, Writer for manuscript drafting in per-manuscript VSCode workspaces). Activates on RKA, research notes, knowledge graph, decisions, missions, journal entries, evidence clusters, literature management, citing literature, organizing research, tracking provenance, knowledge base, manuscript drafting, LaTeX, venue selection.",
+  "version": "2.0.0",
+  "description": "Research Knowledge Agent (RKA) Core integration for Claude Code. Connects Claude to a local RKA backend for provenance-tracked research workflows: journal entries, decisions, literature, missions, claims, evidence clusters, and a research graph shared across Brain, Executor, and PI roles. Optional downstream extensions are installed separately.",
   "author": {
     "name": "Chenglong Fu",
     "email": "cfu6@charlotte.edu"
@@ -18,10 +18,7 @@
     "literature",
     "decisions",
     "missions",
-    "rka",
-    "writer",
-    "manuscript",
-    "latex"
+    "rka"
   ],
   "hooks": {
     "SessionStart": [

@@ -3,7 +3,7 @@ dispatch returns.
 
 Pre-v2.7.0.2 the wrappers declared `result: str` but operations whose
 legacy tool returned a dict (link_literature_to_zotero, enrich_doi,
-process_paper, validate_reference, …) propagated the dict through
+process_paper, …) propagated the dict through
 unchanged. FastMCP's output validator rejected it as a string-type
 mismatch — AFTER the underlying DB write had already landed. The PI
 cockpit saw every dict-returning success as a client-side error.

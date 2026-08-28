@@ -828,7 +828,7 @@ async def test_reference_manifest_replacement_is_atomic_and_historical(
 
 
 @pytest.mark.asyncio
-async def test_reference_readiness_uses_latest_exact_bound_validation(
+async def test_reference_readiness_requires_manifest_but_not_legacy_validation(
     db_with_project,
 ) -> None:
     service = NativeManuscriptService(db_with_project, project_id="proj_default")
@@ -851,7 +851,15 @@ async def test_reference_readiness_uses_latest_exact_bound_validation(
         ),
     )
     missing = await service.get_readiness(manuscript.id, target_phase="review")
-    assert "REFERENCE_VALIDATION_MISSING" in {finding["code"] for finding in missing["findings"]}
+    missing_codes = {finding["code"] for finding in missing["findings"]}
+    assert "REFERENCE_MANIFEST_REQUIRED" not in missing_codes
+    assert not {
+        "REFERENCE_VALIDATION_MISSING",
+        "REFERENCE_NOT_VERIFIED",
+        "REFERENCE_IDENTITY_MISMATCH",
+        "REFERENCE_RETRACTION_CHECK_INCOMPLETE",
+        "REFERENCE_VALIDATION_STALE",
+    } & missing_codes
 
     verified_id = await _seed_reference_validation(
         db_with_project,
@@ -878,7 +886,9 @@ async def test_reference_readiness_uses_latest_exact_bound_validation(
         manuscript.id,
         target_phase="review",
     )
-    assert "REFERENCE_NOT_VERIFIED" in {finding["code"] for finding in failed_readiness["findings"]}
+    assert "REFERENCE_NOT_VERIFIED" not in {
+        finding["code"] for finding in failed_readiness["findings"]
+    }
 
     mismatched_id = await _seed_reference_validation(
         db_with_project,
@@ -895,8 +905,18 @@ async def test_reference_readiness_uses_latest_exact_bound_validation(
         manuscript.id,
         target_phase="review",
     )
-    assert "REFERENCE_IDENTITY_MISMATCH" in {
+    assert "REFERENCE_IDENTITY_MISMATCH" not in {
         finding["code"] for finding in mismatch_readiness["findings"]
+    }
+
+    await db_with_project.execute(
+        "UPDATE literature SET status = 'excluded' WHERE id = ?",
+        [literature_id],
+    )
+    await db_with_project.commit()
+    excluded = await service.get_readiness(manuscript.id, target_phase="review")
+    assert "REFERENCE_LITERATURE_EXCLUDED" in {
+        finding["code"] for finding in excluded["findings"]
     }
 
 

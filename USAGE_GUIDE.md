@@ -7,16 +7,16 @@ This guide walks PIs (researchers) through the full setup and research workflow,
 > | Tool | Purpose |
 > |---|---|
 > | `rka_query` | Dispatcher for **68 read operations** (`status`, `list_projects`, `search`, `research_map`, `semantic_patch_proposals`, `manuscript_spine`, `changes_since`, …). Call with `args={"operation": "…", ...}`. |
-> | `rka_execute` | Dispatcher for **84 write/lifecycle operations** (`record_note`, `record_decision`, `create_mission`, `create_semantic_patch_proposal`, `apply_semantic_patch_proposal`, `submit_report`, `submit_checkpoint`, …). Call with `args={"operation": "…", ...}`. |
-> | `rka_describe` | Introspect operation schemas. `rka_describe("")` returns the compact live operation index and counts; `rka_describe("record_decision")` returns the full typed schema with required fields, enums, and provenance constraints. |
+> | `rka_execute` | Dispatcher for typed write/lifecycle operations (`record_note`, `record_decision`, `create_mission`, `create_semantic_patch_proposal`, `apply_semantic_patch_proposal`, `submit_report`, `submit_checkpoint`, …). Call with `args={"operation": "…", ...}`. |
+> | `rka_describe` | Introspect operation schemas. `rka_describe("")` returns the operation index (<250 tokens); `rka_describe("record_decision")` returns the full typed schema with required fields, enums, and provenance constraints. |
 > | `rka_load_tools` | Escape hatch — surface deferred legacy tools (the v2.6.x 91-tool surface and the v2.7.0a2 verb surface live at `tier=deferred`). |
 > | `rka_help` | Escape hatch — list available operations or describe a single one (alias for `rka_describe`). |
 >
 > **Call shape.** The real dispatch tools take a single `args` object — e.g. `rka_query(args={"operation": "status", "project_id": "prj_…"})`. The worked examples below elide the `args={…}` wrapper for readability (`rka_query(operation="status", …)`); what matters is that the operation name and parameter names are correct.
 >
-> Every operation is backed by a typed Pydantic model — **152 models total** in the current source inventory. FastMCP renders them as `oneOf` branches with per-branch enum, required-field, and cross-field enforcement. Brain hallucinations like `confidence='confirmed'` or a `submit_checkpoint` call with neither canonical `description` nor legacy `content` are rejected at the inputSchema layer **before the LLM can ship the call**. See `docs/v2.6.x-v2.7.0-tool-surface-arc.md` for the historical dispatch-design narrative; use `rka_describe("")` as the runtime authority if the inventory changes.
+> Every operation is backed by a typed Pydantic model. FastMCP renders the catalog as `oneOf` branches with per-branch enum, required-field, and cross-field enforcement. Invalid values such as `confidence='confirmed'`, or a `submit_checkpoint` call with neither canonical `description` nor legacy `content`, are rejected at the inputSchema layer before dispatch. See `docs/v2.6.x-v2.7.0-tool-surface-arc.md` for the historical design narrative and use `rka_describe("")` as the current authority.
 >
-> Set `RKA_LEGACY_TOOLS=1` to restore the **v2.7.0a2 compatibility surface**; legacy tools otherwise stay at `tier=deferred`. This flag does **not** change which operations are reachable: all 152 current typed operations are available through the 3 dispatch tools. The orchestrator daemon's subprocess sets it to preserve per-tool dispatch granularity for the TWO-TAP autonomy-contract gate at `pi_decision_select`; ordinary PI sessions should leave it unset.
+> `RKA_LEGACY_TOOLS=1` restores the historical compatibility surface; legacy tools otherwise stay at `tier=deferred`. Ordinary PI sessions should leave this compatibility switch unset.
 
 > ### ⚠️ This guide requires the **Claude Desktop** native app — **NOT** the [claude.ai](https://claude.ai) website.
 >
@@ -289,7 +289,12 @@ Prefer to drive RKA from ChatGPT instead of (or alongside) Claude? RKA ships a r
 
 ---
 
-## Cockpit reference
+## Historical Agentic cockpit reference — unsupported
+
+> **Shelved on 2026-08-27.** This section records the former Agentic cockpit
+> evaluation and is not current RKA Core guidance. For supported clients, use
+> the typed Core MCP surface and the Brain/Executor/PI role guides described
+> above. Do not install or operate the orchestrator described below.
 
 Brain and Executor remain distinct roles, but for the **human-PI cockpit seat** (the surface where you supervise, ratify, and respond to parked interrupts) the recommendation as of 2026-06-03 is **Claude Code as the primary cockpit, Claude Desktop reserved for two specific Phase O onboarding steps**.
 
@@ -898,9 +903,12 @@ If the build fails on macOS with errors about `._*` files (AppleDouble metadata 
 
 ---
 
-## Agentic Distribution — Orchestrator Workflows
+## Historical Agentic Distribution — unsupported
 
-> Everything above describes the **main-branch** workflow (Brain in Claude Desktop, Executor in Claude Code, PI ratifies in chat). The **agentic branch** ships an additional orchestrator that runs Brain⇄Executor⇄PI as a **LangGraph workflow**, with the PI driving from any Claude Code or Claude Desktop session via MCP tools. This section covers the agentic-branch additions.
+> **Shelved on 2026-08-27. Do not use this section as current setup or usage
+> guidance.** It is preserved as a historical operating record. RKA Core and
+> RKA Writer do not require or support the Agentic runtime. See
+> [ADR 0013](docs/adr/0013-shelve-agentic-and-focus-core-writer.md).
 
 ### When to use the orchestrator
 

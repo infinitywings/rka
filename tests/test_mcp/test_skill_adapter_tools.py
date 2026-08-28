@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+from typing import get_args
 
 import rka.mcp.server as server
 
@@ -76,7 +77,14 @@ def test_skill_adapter_tools_always_on_with_skill_flag() -> None:
 async def test_list_skills_returns_packaged_role_guides() -> None:
     payload = json.loads(await server.rka_list_skills())
     names = {entry["name"] for entry in payload["skills"]}
-    assert {"brain", "executor", "pi", "writer", "mcp-credentials"} <= names
+    assert names == {"brain", "executor", "pi", "mcp-credentials"}
+    assert "writer" not in names
+
+
+def test_writer_is_not_a_valid_core_session_role() -> None:
+    literal = get_args(server.SkillNameLiteral)[0]
+    assert set(get_args(literal)) == {"brain", "executor", "pi", "mcp-credentials"}
+    assert "writer" not in server._SKILL_ENTRYPOINTS
 
 
 async def test_read_skill_returns_markdown_for_pi_role() -> None:

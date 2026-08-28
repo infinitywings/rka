@@ -18,8 +18,8 @@ The rka MCP server ships a **discriminated-union dispatch surface**. Its core to
 
 | Always-on tool | Purpose |
 |---|---|
-| `rka_query(args)` | Typed read operations (status, context, journal, research map, planning, experiments, manuscripts, reports, search, etc.) |
-| `rka_execute(args)` | Typed write and lifecycle operations (notes, decisions, missions, experiments, checkpoints, maintenance, etc.) |
+| `rka_query(args)` | Typed read operations (status, context, journal, research map, planning, experiments, native manuscript records, reports, search, etc.) |
+| `rka_execute(args)` | Typed write and lifecycle operations (notes, decisions, missions, experiments, native manuscript records, checkpoints, maintenance, etc.) |
 | `rka_describe(operation)` | Authoritative schema lookup + worked example; `rka_describe('')` returns the compact operation index |
 | `rka_load_tools(names)` | Escape hatch — brings deferred legacy tools online when you specifically need backwards-compat access |
 | `rka_help(name)` | Deprecated alias for `rka_describe`; retained always-on for cockpits that learned the v2.6.3 navigator vocabulary |
@@ -57,7 +57,7 @@ rka_describe(operation="record_decision")  # signature + example + enums
 rka_describe(operation="")                 # compact index of current operations
 ```
 
-When a workflow below references a legacy tool name like `rka_add_decision`, treat it as a synonym for `rka_execute(args={"operation": "record_decision", ...})`. The mapping is in `rka_describe('')`. The typed-arg surface obviates `rka_load_tools` for normal work; only use it for explicit legacy access (e.g., orchestrator subprocess running with `RKA_LEGACY_TOOLS=1`).
+When a workflow below references a legacy tool name like `rka_add_decision`, treat it as a synonym for `rka_execute(args={"operation": "record_decision", ...})`. The mapping is in `rka_describe('')`. The typed-arg surface obviates `rka_load_tools` for normal work; only use it for explicit legacy access.
 
 ## Supplementary references (load on demand)
 
@@ -227,7 +227,7 @@ When the paper isn't in Zotero, emit this verbatim — the PI parses it to fetch
 > Paper: `[Author, Year, "Title"]`
 > DOI/URL: `[if known]`
 > Why I need it: `[the specific claim or RQ it would advance]`
-> Where to save: project's Zotero collection (`orchestrator_get_zotero_collection(project_id)` → use the collection name)
+> Where to save: the project's Zotero collection (use the project's configured collection or ask the PI for the collection name)
 > Until then: I'm capping confidence on related claims at 0.65.
 
 Batch multiple papers in a single block when possible — the PI captures them in one browser session and replies "ready" when done. After the PI confirms, re-invoke `rka_execute(args={"operation": "link_literature_to_zotero", ...})` on each entry to persist the keys.
@@ -281,13 +281,13 @@ Procedures for `rka_check_freshness`, `rka_flag_stale`, `rka_detect_contradictio
 
 The three-level hierarchy is RQ → Cluster → Claim. `rka_query(args={"operation": "research_map", "project_id": <pinned>})` is the canonical navigation call. Cluster confidence (`emerging` → `moderate` → `strong` → `contested` → `refuted`) summarizes the state of the evidence, not the Brain's endorsement.
 
-Do not promote noisy journal material directly into a paper argument. Follow
-the Record → Extract → Ground → Assess → Synthesize → Answer → Write funnel
+Do not promote noisy journal material directly into a downstream argument.
+Follow the Record → Extract → Ground → Assess → Synthesize → Answer → Serve funnel
 in `architecture.md` § "Evidence promotion funnel (noise control)." In
 particular, `verified` is source-grounding fidelity only. Set
 `evidence_status` explicitly with `review_claims` after comparing current
 support, qualifiers, and counterevidence; an unassessed claim cannot become
-paper-ready merely because its cluster is strong.
+reusable merely because its cluster is strong.
 
 Full navigation command catalogue + advancement heuristics: `workflows.md` § "Research Map Navigation".
 
@@ -404,7 +404,7 @@ falsified. Call it *before* planning work, not after it fails.
 5. **DON'T** issue one long, unscoped `search` and treat the top hits as the answer. (Long queries do *not* return empty — that earlier claim was wrong; a 24-word query returns a full page of hits. The problem is that they return the *wrong* ones.) Unscoped full-sentence search surfaces the decision you are after only ~26 % of the time; scope `entity_types` and trim to ~4–8 content words — see "Retrieval Strategy".
 6. **DON'T** create clusters without `research_question_id` — they become orphans in the map.
 7. **DON'T** bundle independent tasks into one mission — parse into separate missions.
-8. **DON'T** let generated summaries (the v2.4-removed `ask` / `generate_summary` LLM features) become canonical knowledge — when re-wired through the orchestrator they will remain disposable.
+8. **DON'T** let generated summaries (the v2.4-removed `ask` / `generate_summary` LLM features) become canonical knowledge — generated synthesis is disposable unless the PI records and attributes it through a supported Core write.
 9. **DON'T** assume the Executor understands context — always include file paths, decision links, and journal references in missions.
 10. **DON'T** forget to verify Executor work — always check mission reports against live data before marking complete.
 11. **DON'T** proceed on significant PI direction without a Confirmation Brief — restate your understanding and wait for PI correction first.
@@ -414,7 +414,7 @@ falsified. Call it *before* planning work, not after it fails.
 15. **DON'T** upgrade RKA without exporting first — use the dashboard export or `GET /api/projects/export` (or explicitly load legacy `rka_export`), inspect the pack, then run `rka_query(args={"operation": "integrity", "project_id": <pinned>})` after import to verify no data was lost.
 16. **DON'T** treat `verified=true`, a high numeric confidence, or a strong
     cluster as scientific support — only an explicit current
-    `evidence_status` assessment can promote a claim toward a manuscript.
+    `evidence_status` assessment can make a claim eligible for downstream use.
 
 ---
 

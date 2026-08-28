@@ -99,8 +99,6 @@ After persistence:
 
 If `mcpServers.zotero` doesn't exist yet, the user hasn't installed the `zotero-mcp` server — surface that. The credentials alone don't give Claude Desktop the tools; they need the server entry too. Point them at https://github.com/54yyyu/zotero-mcp for install instructions, then re-run this walkthrough.
 
-The orchestrator daemon **also** uses these env vars (for the `link_literature_to_zotero` operation on `rka_execute`). If RKA is installed, additionally persist to **`orchestrator/.env`**.
-
 ## Restart instruction
 
 ```
@@ -109,14 +107,8 @@ The orchestrator daemon **also** uses these env vars (for the `link_literature_t
 To activate in Claude Desktop:
   Fully quit (Cmd+Q) and reopen.
 
-To activate in the RKA orchestrator daemon:
-  docker compose -f docker-compose.yml \
-                 -f orchestrator/docker-compose.yml \
-                 up -d --force-recreate rka-orchestrator
-
 Verify by asking me to "list recent items in my Zotero library"
-(Claude Desktop will call zotero_get_recent), or by checking the
-orchestrator's `/health` endpoint then trying a literature
+(Claude Desktop will call zotero_get_recent), then try an RKA literature
 linkage.
 ```
 

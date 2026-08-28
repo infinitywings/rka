@@ -4,10 +4,9 @@ Quick-reference table for every credential this skill knows how to set up. When 
 
 | Service | Env var(s) | Target | Validation regex | Walkthrough |
 |---|---|---|---|---|
-| Claude OAuth (RKA orchestrator) | `CLAUDE_CODE_OAUTH_TOKEN` | `orchestrator/.env` | `^sk-ant-oat01-[A-Za-z0-9_-]{80,200}$` | [claude-oauth](walkthroughs/claude-oauth.md) |
 | Zotero | `ZOTERO_API_KEY`, `ZOTERO_LIBRARY_ID`, `ZOTERO_LIBRARY_TYPE` | `mcpServers.zotero.env` in `claude_desktop_config.json` | key: `^[A-Za-z0-9]{24}$`; id: `^\d+$`; type: `user\|group` | [zotero](walkthroughs/zotero.md) |
-| Semantic Scholar | `SEMANTIC_SCHOLAR_API_KEY` | `mcpServers.rka.env` in `claude_desktop_config.json` AND `orchestrator/.env` | `^[A-Za-z0-9]{32,48}$` (s2k-prefix common but not required) | [semantic-scholar](walkthroughs/semantic-scholar.md) |
-| SerpAPI | `SERPAPI_KEY` | `mcpServers.rka.env` AND `orchestrator/.env` | `^[a-f0-9]{64}$` (lowercase hex, 64 chars) | [serpapi](walkthroughs/serpapi.md) |
+| Semantic Scholar | `SEMANTIC_SCHOLAR_API_KEY` | `mcpServers.rka.env` in `claude_desktop_config.json` | `^[A-Za-z0-9]{32,48}$` (s2k-prefix common but not required) | [semantic-scholar](walkthroughs/semantic-scholar.md) |
+| SerpAPI | `SERPAPI_KEY` | `mcpServers.rka.env` | `^[a-f0-9]{64}$` (lowercase hex, 64 chars) | [serpapi](walkthroughs/serpapi.md) |
 | OpenAlex | `OPENALEX_MAILTO` | `mcpServers.rka.env` (and/or any OpenAlex-aware server's env) | RFC 5322 email | [openalex](walkthroughs/openalex.md) |
 
 ## Target file paths
@@ -26,12 +25,6 @@ Quick-reference table for every credential this skill knows how to set up. When 
 |---|---|
 | All | `~/.claude.json` (per-user, all-projects) OR `<repo>/.claude/mcp.json` (per-repo) |
 
-### RKA orchestrator daemon
-
-| File | Purpose |
-|---|---|
-| `<rka-repo>/orchestrator/.env` | Used by the orchestrator daemon's Docker container (loaded via Compose `env_file:`). Gitignored. |
-
 ## Standard env-var → MCP server mapping
 
 When you persist a credential, route the env var to the right server block based on this table:
@@ -42,10 +35,9 @@ When you persist a credential, route the env var to the right server block based
 | `SEMANTIC_SCHOLAR_API_KEY` | `rka` (the rka MCP server) | Read by `rka_search_semantic_scholar` |
 | `SERPAPI_KEY` | `rka` (the rka MCP server) | Used by deep-research augmentation if installed |
 | `OPENALEX_MAILTO` | `rka` (the rka MCP server) AND any OpenAlex-aware server | Polite-pool email, harmless to set broadly |
-| `CLAUDE_CODE_OAUTH_TOKEN` | NOT in MCP config — goes in `orchestrator/.env` | Used by the orchestrator daemon's subprocess, not by a Claude-Desktop-launched MCP child |
 
 ## Service-availability check
 
 Before suggesting a service, you can verify the corresponding MCP server is actually installed by reading the user's `claude_desktop_config.json` and checking for the `mcpServers.<service>` block. If absent, the credential won't help — point the user at the MCP server's own install docs first.
 
-The exception is `rka` — assume it's installed (this skill ships inside RKA's own repo). The `orchestrator/.env` target is also RKA-internal; the user controls that file directly.
+The exception is `rka` — assume it is installed because this skill ships inside RKA's own repository.

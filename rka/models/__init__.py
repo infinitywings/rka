@@ -54,10 +54,6 @@ from rka.models.manuscript_native import (
     ManuscriptClaimVerificationAttestation,
     ManuscriptClaimVerificationAttestationCreate,
 )
-from rka.models.reference_validation import (
-    ReferenceAuthor,
-    ReferenceValidationInput,
-)
 from rka.models.experiment import (
     Experiment,
     ExperimentCreate,
@@ -107,7 +103,6 @@ __all__ = [
     "ManuscriptCheckpointResolve",
     "ManuscriptClaimVerificationAttestation",
     "ManuscriptClaimVerificationAttestationCreate",
-    "ReferenceAuthor", "ReferenceValidationInput",
     "Experiment", "ExperimentCreate", "ExperimentDetail",
     "ExperimentPlanAppend", "ExperimentPlanVersion", "ExperimentTransition",
     "ExperimentRun", "ExperimentRunCreate", "ExperimentRunDetail",

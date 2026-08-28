@@ -1,12 +1,18 @@
 # ADR 0012: RKA ecosystem repository and authority boundaries
 
-- Status: accepted for E0 boundary freeze
+- Status: accepted for E0 boundary freeze; Agentic portions superseded by
+  [ADR 0013](0013-shelve-agentic-and-focus-core-writer.md)
 - Date: 2026-08-25
 - Decision owner: Chenglong Fu
 - Scope: repository ownership, data authority, integration contracts, migration,
   packaging, and release sequencing for RKA Core, RKA Writer, and RKA Agentic
 - Detailed execution plan:
   [`2026-08-25-rka-ecosystem-repository-separation.md`](../superpowers/plans/2026-08-25-rka-ecosystem-repository-separation.md)
+
+> **2026-08-27 amendment:** the active ecosystem is Core + Writer. The proposed
+> Agentic repository and extraction milestone are shelved. The Agentic text
+> below is retained as the historical decision record, not as an active
+> implementation or installation plan.
 
 ## Context
 

@@ -34,7 +34,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Oldest RKA backend this plugin can drive. The check is a *minimum*, not an
+# Oldest RKA Core backend this plugin can drive. Plugin 2.x intentionally
+# requires the post-split Core 3.x surface so an older backend cannot
+# reactivate the bundled Writer surface removed by this release. The check is
+# still a *minimum*, not an
 # allowlist of releases: a backend newer than the plugin is the normal state of
 # affairs (the backend ships far more often than the plugin), and rejecting it
 # strands a working install.
@@ -43,7 +46,7 @@ from pathlib import Path
 # hand on every minor release, which is exactly the kind of edit that gets
 # forgotten — and was: the tuple still read ("2.7", "2.8") after the backend
 # reached 2.9.0, so a correctly-reported 2.9.0 was refused by its own plugin.
-MINIMUM_BACKEND_VERSION = (2, 7)
+MINIMUM_BACKEND_VERSION = (3, 0)
 
 
 def parse_version(version: str) -> tuple[int, ...] | None:

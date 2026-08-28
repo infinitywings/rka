@@ -3,7 +3,7 @@
 [![pytest](https://github.com/infinitywings/rka/actions/workflows/pytest.yml/badge.svg?branch=main)](https://github.com/infinitywings/rka/actions/workflows/pytest.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**A local-first research operating system for turning day-to-day research activity into auditable knowledge and publication-ready arguments.**
+**A local-first research operating system for turning day-to-day research activity into durable, auditable knowledge.**
 
 AI-assisted research produces valuable observations, experiments, decisions, and failures, but that reasoning is often scattered across conversations, repositories, notes, and terminal logs. RKA maintains a persistent, provenance-aware research record and helps researchers progressively transform it into claims, evidence clusters, research questions, and defensible publication structures.
 
@@ -13,8 +13,9 @@ With RKA, researchers can:
 - preserve why decisions were made and what evidence supports them;
 - separate tentative observations from reviewed claims;
 - supervise AI collaborators through explicit missions and decision gates;
-- connect manuscript arguments to auditable research records; and
-- prepare multiple research outputs from the same knowledge substrate.
+- expose auditable research records to downstream tools; and
+- support multiple research outputs from the same knowledge substrate without
+  coupling those tools to Core.
 
 RKA is built for research workflows in computer science, AI, cybersecurity, IoT, and cyber-physical systems. The core is usable today; the interactive manuscript workbench and Agent-Native Research Artifact interoperability described below are active roadmap directions.
 
@@ -44,7 +45,10 @@ flowchart LR
     style Outputs fill:#E1F5EE,stroke:#0F6E56,color:#04342C
 ```
 
-The early stages of this pipeline are operational in RKA today. Manuscript development is supported through the Writer skill, while the visual drafting workbench and ARA materialization layer remain under active design and implementation.
+RKA Core owns the early stages of this pipeline: durable research records,
+retrieval, provenance, and reviewed knowledge. Manuscript development is an
+independent downstream capability in `rka-writer`; it is not activated by the
+Core distribution.
 
 ## How it works
 
@@ -126,7 +130,7 @@ Zotero, repositories, notebooks, and experimental platforms remain important sou
 - **Brain–Executor workflows** with scoped missions, acceptance criteria, backbriefs, checkpoints, and reports.
 - **Hybrid retrieval and graph navigation** using FTS5, optional vector embeddings, typed links, and multi-hop context assembly.
 - **Researcher-facing dashboard** for browsing projects, journals, decisions, missions, research maps, provenance, and audit history.
-- **Role-specific skills** for strategic research management, execution, PI supervision, and manuscript writing.
+- **Role-specific skills** for strategic research management, execution, and PI supervision.
 - **MCP, REST, CLI, and knowledge-pack interfaces** for local and connected workflows.
 
 Detailed feature and workflow documentation lives in the [User Manual](docs/USER_MANUAL.md) and [Usage Guide](USAGE_GUIDE.md).
@@ -135,7 +139,7 @@ Detailed feature and workflow documentation lives in the [User Manual](docs/USER
 
 RKA's publication direction is based on a simple principle: researchers should not have to reconstruct their scientific reasoning separately for every output.
 
-The planned manuscript workbench will guide a researcher from an initial insight through problem scoping, related-work positioning, gap analysis, challenges, innovations, research questions, contributions, evaluation design, claim spine, outline, and full draft. Throughout that process, proposed text remains linked to RKA claims, evidence, decisions, and source records.
+The separately developed manuscript workbench will guide a researcher from an initial insight through problem scoping, related-work positioning, gap analysis, challenges, innovations, research questions, contributions, evaluation design, claim spine, outline, and full draft. Throughout that process, proposed text remains linked to RKA claims, evidence, decisions, and source records through Core's public contract.
 
 This creates a natural interoperability point with the [Agent-Native Research Artifact](https://github.com/ARA-Labs/Agent-Native-Research-Artifact) project:
 
@@ -180,11 +184,11 @@ For a complete first-project walkthrough, see [USAGE_GUIDE.md](USAGE_GUIDE.md).
 | Interface | Best for | Documentation |
 |---|---|---|
 | **Web dashboard** | Browsing, reviewing, navigating, and direct editing | [User Manual](docs/USER_MANUAL.md) |
-| **MCP** | AI-assisted research, writing, and execution workflows | [Installation](INSTALL.md), [Technical Reference](docs/TECHNICAL_REFERENCE.md) |
+| **MCP** | AI-assisted research retrieval, maintenance, and execution workflows | [Installation](INSTALL.md), [Technical Reference](docs/TECHNICAL_REFERENCE.md) |
 | **CLI** | Starting services, status, backup, credentials, and workspace bootstrap | [Technical Reference](docs/TECHNICAL_REFERENCE.md) |
 | **REST API** | Custom integrations and application development | [Technical Reference](docs/TECHNICAL_REFERENCE.md), live `/docs` |
 | **ChatGPT connector** | Authenticated access from ChatGPT to a local RKA instance | [Connector Guide](docs/CHATGPT_CONNECTOR.md) |
-| **Writer skill** | Evidence-grounded manuscript framing, drafting, review, and revision | [`rka/skills/writer/`](rka/skills/writer/) |
+| **Writer (separate project)** | Explicitly invoked manuscript assistance using RKA's public contract | [`infinitywings/rka-writer`](https://github.com/infinitywings/rka-writer) |
 
 ## Architecture
 
@@ -195,19 +199,20 @@ See [Architecture](docs/ARCHITECTURE.md) for the runtime model, data layers, pro
 ## Roadmap
 
 The immediate priority is to harden RKA as an independently usable research-
-knowledge core. Optional products will then move to separate repositories under
-one RKA Ecosystem project:
+knowledge core. Writer remains a separate downstream product under the same
+RKA Ecosystem project:
 
 1. **Core reliability** — harden journal correctness, provenance, project
    isolation, retrieval, claim edges, migrations, export/import, and recovery.
 2. **Stable integration contract** — freeze the supported REST/MCP surface and
    provide version, capability, and compatibility discovery.
-3. **RKA Agentic extraction** — move Brain/Executor orchestration and runtime
-   state to `infinitywings/rka-agentic`.
-4. **RKA Writer extraction** — move the Writer skill, manuscript semantics,
+3. **RKA Writer extraction** — move the Writer skill, manuscript semantics,
    academic-writing tools, and Workbench to `infinitywings/rka-writer`.
-5. **Core 3.0 and ecosystem validation** — slim the Core distribution only
+4. **Core 3.0 and ecosystem validation** — slim the Core distribution only
    after legacy-state migration and downstream compatibility tests pass.
+
+The earlier Agentic repository/extraction proposal is shelved. Its history is
+preserved, but it is not an active product, dependency, or installation path.
 
 The Workbench, ARA interoperability, and dual-output evaluation remain planned
 Writer/ecosystem work; they are not the immediate Core implementation target.
@@ -227,7 +232,7 @@ RKA is being developed for research workflows at UNC Charlotte. Feedback, compar
 
 | Document | Purpose |
 |---|---|
-| [Installation](INSTALL.md) | Complete local, MCP-client, Writer, and connector setup |
+| [Installation](INSTALL.md) | Complete local, MCP-client, and connector setup |
 | [Usage Guide](USAGE_GUIDE.md) | End-to-end Brain, Executor, PI, and research workflows |
 | [User Manual](docs/USER_MANUAL.md) | Concepts, dashboard operation, and researcher-facing reference |
 | [Architecture](docs/ARCHITECTURE.md) | Design rationale, components, data model, and knowledge lifecycle |

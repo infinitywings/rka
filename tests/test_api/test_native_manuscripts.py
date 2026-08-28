@@ -326,22 +326,12 @@ async def test_native_mutations_record_transport_actor(
     assert proxied_audit.status_code == 200
     assert {entry["actor"] for entry in proxied_audit.json()} == {"executor"}
 
-    queued = await api_client.post(
+    removed_validation = await api_client.post(
         f"/api/manuscripts/{proxied.json()['id']}/validate-reference",
         headers=mcp_headers,
         json={"title": "Transport-attributed reference"},
     )
-    assert queued.status_code == 202
-    queued_audit = await api_client.get(
-        "/api/audit",
-        headers=DEFAULT_HEADERS,
-        params={
-            "entity_type": "reference_validation_job",
-            "entity_id": queued.json()["job_id"],
-        },
-    )
-    assert queued_audit.status_code == 200
-    assert {entry["actor"] for entry in queued_audit.json()} == {"executor"}
+    assert removed_validation.status_code in {404, 405}
 
     rejected = await api_client.post(
         "/api/manuscripts/native",

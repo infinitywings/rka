@@ -1,3 +1,0 @@
-# styles/ : vendored venue templates (acmart, acl-style-files, etc.).
-# Populated by scripts/fetch_template.py (Phase 2) or by PI manually per
-# references/template_registry.md install_command.

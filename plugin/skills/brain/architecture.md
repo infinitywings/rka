@@ -75,8 +75,8 @@ are not legal `entity_links` values.
 - **`qualifies`** — one claim narrows or conditions another claim.
 - **`supersedes`** — a newer claim replaces an older claim.
 
-Writer may consume these relations when checking support and disagreement, but
-must not encode them as cross-entity provenance links.
+Downstream clients may consume these relations when checking support and
+disagreement, but must not encode them as cross-entity provenance links.
 
 ### Legacy / deprecated (may exist in old rows, don't emit new ones)
 
@@ -117,7 +117,7 @@ Research Question (dec_, kind=research_question)
 Journal entries are an intentionally inclusive research record; they may contain
 failed attempts, transient observations, duplicated notes, or preliminary
 interpretations. Do not make the journal less useful by pretending every entry
-is paper-ready evidence. Promote information through explicit gates instead:
+is reusable evidence. Promote information through explicit gates instead:
 
 1. **Record.** Preserve the source `jrn_` with its exact conditions, mission,
    timestamps, and uncertainty. Raw records remain immutable evidence even when
@@ -138,14 +138,14 @@ is paper-ready evidence. Promote information through explicit gates instead:
 6. **Answer.** Bind the cluster to one explicit research-question `dec_` and
    advance the RQ only from current assessed claims. Mixed evidence produces a
    partial, reframed, or contested answer rather than a smoothed consensus.
-7. **Write.** `rka writer assist` may propose only grounded `supported` or
-   `partially_supported` claims. Its output is still a candidate. Exact PI
-   ratification, manuscript scope, qualifiers, counterevidence, result units,
-   and claim-spine validation are required before drafting.
+7. **Serve.** Expose current claims, qualifiers, counterevidence, and their
+   provenance through the public retrieval contract. Any downstream drafting
+   or presentation layer remains responsible for its own explicit selection
+   and author review.
 
 This funnel is monotone in accountability, not in certainty: later evidence may
 move a claim to `inconclusive` or `contradicted`, which must propagate to its
-cluster, RQ conclusion, and manuscript spine instead of being averaged away.
+cluster and RQ conclusion instead of being averaged away.
 
 ## The Maintenance Manifest
 

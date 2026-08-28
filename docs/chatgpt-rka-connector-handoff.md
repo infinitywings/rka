@@ -4,6 +4,13 @@ Date: 2026-07-06
 
 This document summarizes the conversation, decisions, implementation work, current repo state, and remaining steps for wiring local RKA into ChatGPT as a secure MCP connector.
 
+> **Core 3.0 migration note (2026-08-26).** This is primarily a historical
+> deployment handoff. Current RKA Core packages only the `brain`, `executor`,
+> and `pi` role skills plus `mcp-credentials`. Writer guidance, reference
+> validation, and manuscript tooling moved to the separately installed
+> [`rka-writer`](https://github.com/infinitywings/rka-writer) project. The Core
+> connector does not expose or auto-activate a `writer` role.
+
 > **2026-07-06 continuation — deployment completed + always-on skill surface.**
 > See the "Continuation (2026-07-06, later session)" section at the end for
 > what has since been done. Summary: the CLI was reinstalled (via the /tmp
@@ -119,7 +126,7 @@ RKA_MCP_PUBLIC_BASE_URL=https://<current-ngrok-host>
 Added deferred ChatGPT skill adapter tools:
 
 - `rka_list_skills()`
-  - Lists packaged RKA skill guides: `brain`, `executor`, `pi`, `writer`, `mcp-credentials`.
+  - Lists packaged RKA Core skill guides: `brain`, `executor`, `pi`, `mcp-credentials`.
 - `rka_read_skill(name, reference=None)`
   - Reads a packaged skill `SKILL.md` or a referenced file inside that skill directory.
   - Rejects absolute paths and `..` traversal.
@@ -245,17 +252,10 @@ or, with a known project id:
 rka_start_session(role="pi", project_id="prj_...")
 ```
 
-For writer guidance:
-
-```text
-rka_read_skill(name="writer")
-```
-
-For a referenced writer file:
-
-```text
-rka_read_skill(name="writer", reference="references/workflows.md")
-```
+For manuscript guidance, install and invoke the separate
+[`rka-writer`](https://github.com/infinitywings/rka-writer) plugin. A Core call
+such as `rka_read_skill(name="writer")` is intentionally unsupported after the
+3.0 split.
 
 Only request files inside the selected skill directory. Absolute paths and `..` traversal are intentionally rejected.
 

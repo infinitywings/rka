@@ -1106,7 +1106,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ],
         "related_operations": [
             "replace_manuscript_reference_manifest",
-            "validate_reference",
             "manuscript_readiness",
         ],
         "notes": (
@@ -1121,7 +1120,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "tool": "rka_query",
         "category": "literature",
         "role_tag": "ANY",
-        "summary": "Poll one asynchronous manuscript-reference validation job.",
+        "summary": "Read one historical manuscript-reference validation job.",
         "signature": (
             "rka_query(operation='reference_validation_status', *, project_id, "
             "manuscript_id, job_id)"
@@ -1131,7 +1130,7 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "enums": {},
         "examples": [
             {
-                "description": "Poll the job returned by validate_reference.",
+                "description": "Read a validation job recorded before the Writer split.",
                 "call": {
                     "operation": "reference_validation_status",
                     "project_id": "prj_01ABC...",
@@ -1140,11 +1139,13 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
                 },
             },
         ],
-        "related_operations": ["validate_reference", "manuscript"],
+        "related_operations": ["manuscript", "manuscript_reference_manifest"],
         "notes": (
             "The job is project- and manuscript-scoped. Completed responses "
             "carry `result`; failed responses carry `error`. Unknown or "
-            "cross-scope jobs return 404."
+            "cross-scope jobs return 404. Core no longer initiates or executes "
+            "reference validation; external Writer or client workflows may "
+            "perform verification separately."
         ),
     },
     "resolve_entities": {
@@ -2718,43 +2719,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["update_literature", "extract_claims"],
         "notes": None,
     },
-    "validate_reference": {
-        "operation": "validate_reference",
-        "tool": "rka_execute",
-        "category": "literature",
-        "role_tag": "ANY",
-        "summary": "Queue asynchronous validation of a manuscript reference.",
-        "signature": (
-            "rka_execute(operation='validate_reference', *, project_id, "
-            "manuscript_id, doi=None, title=None, author=None, "
-            "literature_id=None)"
-        ),
-        "required_fields": ["project_id", "manuscript_id"],
-        "optional_fields": ["doi", "title", "author", "literature_id"],
-        "enums": {},
-        "examples": [
-            {
-                "description": "Queue validation by DOI; save the returned job_id.",
-                "call": {
-                    "operation": "validate_reference",
-                    "project_id": "prj_01ABC...",
-                    "manuscript_id": "jrn_01XYZ...",
-                    "doi": "10.48550/arXiv.1706.03762",
-                },
-            },
-        ],
-        "related_operations": [
-            "reference_validation_status",
-            "register_manuscript",
-            "record_literature",
-        ],
-        "notes": (
-            "At least one of `doi` or `title` is required. Success returns an "
-            "HTTP 202 pending job envelope, not an immediate verdict. Poll "
-            "`reference_validation_status` with the returned `job_id`; only "
-            "a completed job carries the immutable validation result."
-        ),
-    },
     "batch_import": {
         "operation": "batch_import",
         "tool": "rka_execute",
@@ -2811,7 +2775,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": [
             "manuscript",
             "create_manuscript",
-            "validate_reference",
         ],
         "notes": (
             "Compatibility operation. The response contains deprecated jrn_ "
@@ -3036,7 +2999,6 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         ],
         "related_operations": [
             "manuscript_reference_manifest",
-            "validate_reference",
             "manuscript_readiness",
         ],
         "notes": (
@@ -5573,7 +5535,7 @@ def list_operations_grouped() -> dict[str, list[dict[str, Any]]]:
 # deliberately ahead of use, but listing them alongside the core operations
 # means ~41% of what an agent reads while choosing is unreachable in practice.
 # Derived from category (plus a few named operations) rather than stamped on
-# all 150 entries, so the rule stays auditable and one edit re-classifies a
+# all 151 entries, so the rule stays auditable and one edit re-classifies a
 # subsystem once it starts carrying data.
 PREVIEW_CATEGORIES: frozenset[str] = frozenset({
     "manuscript",           # 3 manuscripts, 0 units / 0 claims / 0 bindings

@@ -1,4 +1,4 @@
-"""REST request contract for reference-validation attestations."""
+"""REST compatibility for historical reference-validation jobs."""
 
 from __future__ import annotations
 
@@ -10,10 +10,11 @@ import pytest_asyncio
 
 from rka.api.app import create_app
 from rka.config import RKAConfig
+from rka.services.jobs import JobQueue
 
 
 @pytest_asyncio.fixture
-async def api_client(tmp_path: Path):
+async def api_context(tmp_path: Path):
     config = RKAConfig(
         project_dir=tmp_path,
         db_path=Path("reference-validation.db"),
@@ -28,97 +29,51 @@ async def api_client(tmp_path: Path):
         async with httpx.AsyncClient(
             transport=transport,
             base_url="http://testserver",
-            # Scoped endpoints no longer fall back to a default project.
             headers={"X-RKA-Project": "proj_default"},
         ) as client:
-            yield client
+            yield client, app
     finally:
         await lifespan.__aexit__(None, None, None)
 
 
 @pytest.mark.asyncio
-async def test_route_queues_authors_and_literature_id(api_client) -> None:
-    registered = await api_client.post(
-        "/api/manuscripts",
-        json={"venue": "CHI", "title": "Route test"},
+async def test_validation_initiation_route_is_removed(api_context) -> None:
+    client, _app = api_context
+    manuscript = await client.post(
+        "/api/manuscripts/native",
+        json={"title": "No Core validation"},
     )
-    assert registered.status_code == 201
-    manuscript_id = registered.json()["id"]
-    literature = await api_client.post(
-        "/api/literature",
-        json={"title": "A paper", "doi": "10.1234/route"},
+    response = await client.post(
+        f"/api/manuscripts/{manuscript.json()['id']}/validate-reference",
+        json={"title": "A paper"},
     )
-    assert literature.status_code == 201
-    response = await api_client.post(
-        f"/api/manuscripts/{manuscript_id}/validate-reference",
-        json={
-            "DOI": "10.1234/route",
-            "title": "A paper",
-            "author": [{"family": "Smith", "given": "J"}],
-            "literature_id": literature.json()["id"],
-        },
-    )
-    assert response.status_code == 202
-    pending = response.json()
-    assert pending["status"] == "pending"
-    assert pending["job_id"].startswith("job_")
-    assert pending["requested_manuscript_id"] == manuscript_id
-    assert pending["canonical_manuscript_id"] == registered.json()["canonical_id"]
+    assert response.status_code in {404, 405}
 
-    status = await api_client.get(
-        f"/api/manuscripts/{manuscript_id}/reference-validations/"
-        f"{pending['job_id']}"
+
+@pytest.mark.asyncio
+async def test_status_route_reads_historical_job_and_hides_other_manuscript(
+    api_context,
+) -> None:
+    client, app = api_context
+    first = await client.post("/api/manuscripts/native", json={"title": "First"})
+    second = await client.post("/api/manuscripts/native", json={"title": "Second"})
+    first_id = first.json()["id"]
+    job_id = await JobQueue(app.state.db).enqueue(
+        "reference_validate",
+        project_id="proj_default",
+        entity_type="manuscript",
+        entity_id=first_id,
+        payload={"requested_manuscript_id": first_id},
+    )
+
+    status = await client.get(
+        f"/api/manuscripts/{first_id}/reference-validations/{job_id}"
     )
     assert status.status_code == 200
-    assert status.json() == pending
+    assert status.json()["status"] == "pending"
+    assert status.json()["job_id"] == job_id
 
-
-@pytest.mark.asyncio
-async def test_status_route_hides_job_from_other_manuscript(api_client) -> None:
-    first = await api_client.post(
-        "/api/manuscripts/native",
-        json={"title": "First"},
-    )
-    second = await api_client.post(
-        "/api/manuscripts/native",
-        json={"title": "Second"},
-    )
-    queued = await api_client.post(
-        f"/api/manuscripts/{first.json()['id']}/validate-reference",
-        json={"title": "Scoped paper"},
-    )
-    hidden = await api_client.get(
-        f"/api/manuscripts/{second.json()['id']}/reference-validations/"
-        f"{queued.json()['job_id']}"
+    hidden = await client.get(
+        f"/api/manuscripts/{second.json()['id']}/reference-validations/{job_id}"
     )
     assert hidden.status_code == 404
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {"title": "x" * 2_001},
-        {"title": "Bounded", "unexpected": {"provider": "blob"}},
-        {
-            "title": "Bounded",
-            "author": [{"family": "Smith", "credential": "secret"}],
-        },
-        {"title": "Bounded", "author": [{"given": "Missing identity"}]},
-        {"title": "Bounded", "author": [{"family": "Smith"}] * 101},
-        {"DOI": "   ", "title": "   "},
-    ],
-)
-async def test_route_rejects_unbounded_or_open_reference_payloads(
-    api_client,
-    payload,
-) -> None:
-    manuscript = await api_client.post(
-        "/api/manuscripts/native",
-        json={"title": "Input bounds"},
-    )
-    response = await api_client.post(
-        f"/api/manuscripts/{manuscript.json()['id']}/validate-reference",
-        json=payload,
-    )
-    assert response.status_code == 422

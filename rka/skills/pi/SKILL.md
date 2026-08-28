@@ -25,7 +25,10 @@ The rka MCP server ships a **discriminated-union dispatch surface**. Its core to
 
 `args` is a **typed Pydantic model** discriminated by `operation`. The live models render as `inputSchema.oneOf` with per-branch enum + required-field constraints, so invalid enum values and missing required fields are rejected before dispatch. Do not rely on a documented operation count; inspect the live index and describe unfamiliar operations.
 
-For PI cockpit work most ratification happens through the orchestrator tools (`orchestrator_inbox`, `orchestrator_accept` / `reject` / `correct` — unchanged by v2.7.0). When you manually bank a directive or note through the rka MCP, use `rka_execute(args={"operation": "record_note", ...})` etc.
+For PI work, review the relevant Core records and explicitly approve, reject,
+or correct proposed direction in the conversation. Bank directives and notes
+through `rka_execute(args={"operation": "record_note", ...})` with verbatim PI
+attribution.
 
 ### Worked PI examples
 

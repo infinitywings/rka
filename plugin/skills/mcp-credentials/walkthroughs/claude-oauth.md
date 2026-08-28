@@ -1,5 +1,8 @@
 # Claude OAuth — `CLAUDE_CODE_OAUTH_TOKEN`
 
+> **Unsupported historical reference.** Agentic was shelved on 2026-08-27.
+> Do not provision or persist this token for RKA Core or RKA Writer.
+
 The RKA orchestrator daemon spawns a `claude-agent-sdk` subprocess (the Brain + Executor LLM). That subprocess needs Claude Max credentials. Inside the Docker container, the host's `~/.claude/.credentials.json` and macOS Keychain are NOT accessible — the only working auth path is a long-lived OAuth token in the env, exposed via `orchestrator/.env`.
 
 This walkthrough is unique: the credential goes in **`orchestrator/.env`** (not a Claude Desktop MCP config), and the user mints it via the `claude` CLI on the host (NOT via the web).

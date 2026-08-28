@@ -1333,66 +1333,19 @@ class NativeManuscriptService(BaseService):
                     "REFERENCE_MANIFEST_REQUIRED",
                     "review readiness requires an explicit authoritative citation-key manifest",
                 )
+            # Core 3.0 has no reference-validation initiation or execution
+            # path. Historical attestations remain visible in the manifest,
+            # but cannot be a gate that new manuscripts have no way to clear.
+            # Replacement already enforces same-project literature identity;
+            # explicitly excluded literature remains a reachable Core gate.
             for member in reference_members:
                 citation_key = member.get("citation_key")
                 literature_id = member.get("literature_id")
-                validation = member.get("validation") or {}
-                if not validation.get("id"):
-                    add(
-                        "BLOCK",
-                        "REFERENCE_VALIDATION_MISSING",
-                        "active citation has no validation attestation bound to "
-                        "this manuscript and literature record",
-                        citation_key=citation_key,
-                        literature_id=literature_id,
-                    )
-                    continue
-                if validation.get("status") != "VERIFIED":
-                    add(
-                        "BLOCK",
-                        "REFERENCE_NOT_VERIFIED",
-                        "the latest validation attempt for this active citation is not VERIFIED",
-                        citation_key=citation_key,
-                        literature_id=literature_id,
-                    )
-                if validation.get("identity_matches") is not True:
-                    add(
-                        "BLOCK",
-                        "REFERENCE_IDENTITY_MISMATCH",
-                        "the latest validation input does not match the "
-                        "current bound literature identity",
-                        citation_key=citation_key,
-                        literature_id=literature_id,
-                    )
-                if (
-                    validation.get("retraction_check_enabled") == 1
-                    and validation.get("retraction_checked") != 1
-                ):
-                    add(
-                        "BLOCK",
-                        "REFERENCE_RETRACTION_CHECK_INCOMPLETE",
-                        "a requested retraction check did not complete",
-                        citation_key=citation_key,
-                        literature_id=literature_id,
-                    )
                 if member.get("literature_status") == "excluded":
                     add(
                         "BLOCK",
                         "REFERENCE_LITERATURE_EXCLUDED",
                         "active citation points to excluded literature",
-                        citation_key=citation_key,
-                        literature_id=literature_id,
-                    )
-                literature_updated = member.get("literature_updated_at")
-                completed_at = validation.get("completed_at")
-                if literature_updated and not _timestamp_is_strictly_after(
-                    completed_at,
-                    literature_updated,
-                ):
-                    add(
-                        "BLOCK",
-                        "REFERENCE_VALIDATION_STALE",
-                        "literature metadata changed after reference validation",
                         citation_key=citation_key,
                         literature_id=literature_id,
                     )

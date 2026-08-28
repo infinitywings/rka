@@ -44,8 +44,6 @@ If the response includes `X-Polite-Pool: true`, you're in. (As of late 2025 this
 
 Target: **`claude_desktop_config.json` → `mcpServers.rka.env`** (the rka MCP server passes mailto on every OpenAlex call when set).
 
-If the orchestrator daemon is installed, **also** persist to **`orchestrator/.env`**.
-
 If any other MCP server is OpenAlex-aware (e.g., a future literature-search server), set it in that server's env block too. Setting `OPENALEX_MAILTO` broadly is harmless — it's not a secret.
 
 ```json
@@ -68,10 +66,6 @@ If any other MCP server is OpenAlex-aware (e.g., a future literature-search serv
 ✓ OPENALEX_MAILTO persisted.
 
 Claude Desktop: fully quit (Cmd+Q) and reopen.
-RKA orchestrator: docker compose -f docker-compose.yml \
-                                 -f orchestrator/docker-compose.yml \
-                                 up -d --force-recreate
-
 There's no live-API test for this one — the only observable
 effect is a higher rate limit, which you'd only notice if you
 were doing batch queries. If OpenAlex queries through Claude

@@ -784,7 +784,7 @@ The web dashboard at `http://localhost:9712` provides a visual interface for bro
 | **Knowledge Graph** | `/graph` | Entity relationship network (low-level debugging view) |
 | **Research Map** | `/research-map` | Three-level drill-down: RQs → clusters → claims |
 | **Interpretation Review** | `/interpretations` | Review source-located `icd_` candidates before canonical promotion |
-| **Claim Scope Review** | `/claim-scopes` | Append and audit canonical `csc_` applicability contracts; resolve Writer scope blockers |
+| **Claim Scope Review** | `/claim-scopes` | Append and audit canonical `csc_` applicability contracts; resolve manuscript scope blockers |
 | **Manuscript Workbench** | `/workbench` | Navigate canonical manuscript evidence and create, fork, select, compare, archive, or resume provisional planning branches |
 | **Notebook** | `/notebook` | (historical) Q&A chat and summary generation — the LLM-backed Q&A/summary features were removed in v2.4.0 |
 | **Audit Log** | `/audit` | System audit trail with action/entity/actor filters |
@@ -944,11 +944,12 @@ Packs intentionally exclude `change_events`, `jobs`,
 `manuscript_migration_issues`, and
 `reference_validation_migration_issues`. Change cursors, migration
 diagnostics, and worker leases/retries are installation-local; importing the
-semantic rows emits a fresh target-local change ledger, and pending external
-validation must be requested again. Completed validation attestations are
-semantic history and are included. Any attestation-to-worker-job link is
-cleared on import because the producing job does not exist on the target
-installation.
+semantic rows emits a fresh target-local change ledger. Core does not restart
+pending reference-validation work after import; an external client may verify
+references separately if desired. Completed validation attestations are
+historical semantic records and are included. Any attestation-to-worker-job
+link is cleared on import because the producing job does not exist on the
+target installation.
 
 Legacy `jrn_` manuscript bindings remain supported and are remapped together
 with their native `man_` aliases. When an accepted format-v1 or format-v2 pack

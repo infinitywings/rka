@@ -1,19 +1,19 @@
 ---
 name: mcp-credentials
-description: Set up credentials for MCP servers (Zotero, Semantic Scholar, Claude OAuth, SerpAPI, OpenAlex) by walking the user through key issuance and editing their Claude Desktop / Claude Code MCP config file. Load when the user asks "set up Zotero" or "add Semantic Scholar credentials" or "configure my MCP servers" or any similar credential-provisioning request.
+description: Set up credentials for MCP servers (Zotero, Semantic Scholar, SerpAPI, OpenAlex) by walking the user through key issuance and editing their Claude Desktop / Claude Code MCP config file. Load when the user asks "set up Zotero" or "add Semantic Scholar credentials" or "configure my MCP servers" or any similar credential-provisioning request.
 version: 1.0.0
 ---
 
 # MCP Credentials Setup
 
-You are configuring an MCP server's credentials for a Claude Desktop or Claude Code install. Most cross-project MCP servers (Zotero, Semantic Scholar, Claude OAuth for the orchestrator's SDK, SerpAPI, OpenAlex) need credentials that the user obtains once and then reuses across every project.
+You are configuring an MCP server's credentials for a Claude Desktop or Claude Code install. Most cross-project MCP servers (Zotero, Semantic Scholar, SerpAPI, OpenAlex) need credentials that the user obtains once and then reuses across every project.
 
 This skill walks you through:
 
 1. **Identifying** which service(s) the user wants to set up.
 2. **Issuing** the credential (you guide the user to the right URL with the right form fields).
 3. **Validating** the credential format (and optionally testing it against the live API).
-4. **Persisting** the credential to `claude_desktop_config.json` (and/or `~/.claude.json` for Claude Code, and/or `orchestrator/.env` for the RKA orchestrator daemon).
+4. **Persisting** the credential to `claude_desktop_config.json` and/or `~/.claude.json` for Claude Code.
 5. **Telling the user to restart** the Claude app so the new MCP server entries load.
 
 ## Operating principles
@@ -26,7 +26,6 @@ This skill walks you through:
 
 ## Available walkthroughs (load on demand)
 
-- [`walkthroughs/claude-oauth.md`](walkthroughs/claude-oauth.md) — `CLAUDE_CODE_OAUTH_TOKEN` for the RKA orchestrator daemon's claude-agent-sdk subprocess. Long-lived (~1 year). Mint via `claude setup-token` on the host.
 - [`walkthroughs/zotero.md`](walkthroughs/zotero.md) — `ZOTERO_API_KEY` + `ZOTERO_LIBRARY_ID` + `ZOTERO_LIBRARY_TYPE` for the zotero-mcp server. Per-user library, scope-restrictable.
 - [`walkthroughs/semantic-scholar.md`](walkthroughs/semantic-scholar.md) — `SEMANTIC_SCHOLAR_API_KEY` for the rka MCP server's Semantic Scholar search backend (legacy tool `rka_search_semantic_scholar`, deferred on the v2.7.0+ surface — load via `rka_load_tools`; the `rka_record_literature` verb's `search_source='semantic_scholar'` mode delegates to the same code, so the key applies regardless of surface). Raises the rate limit from 100 req/5min to 1 req/sec.
 - [`walkthroughs/serpapi.md`](walkthroughs/serpapi.md) — `SERPAPI_KEY` for the rka MCP server's deep-research augmentation. 250 free searches/month.
@@ -45,7 +44,7 @@ When the user asks you to set up one or more credentials, do this:
 
 Ask which service(s) the user wants if not stated. Surface the available walkthroughs so they know what's supported.
 
-> *"Which credentials would you like to set up? I can walk you through Zotero, Semantic Scholar, Claude OAuth (for the RKA orchestrator), SerpAPI, or OpenAlex. You can do one or several."*
+> *"Which credentials would you like to set up? I can walk you through Zotero, Semantic Scholar, SerpAPI, or OpenAlex. You can do one or several."*
 
 ### Step 2 — Walkthrough (per service)
 
@@ -67,8 +66,8 @@ If the walkthrough card has a `Sanity check` block, run the curl command via Bas
 
 Use the procedure in [`config-ops.md`](config-ops.md):
 
-1. Read `claude_desktop_config.json` (or `~/.claude.json` for Claude Code, or `orchestrator/.env` for the orchestrator — the walkthrough card tells you which).
-2. Parse as JSON (skip for `.env` — it's KEY=VALUE).
+1. Read `claude_desktop_config.json` or `~/.claude.json` for Claude Code — the walkthrough card tells you which.
+2. Parse as JSON.
 3. Deep-merge the new env entries into the target MCP server block.
 4. Backup the original to `<file>.bak.<ISO-timestamp>`.
 5. Write the new content atomically (temp file → validate parse → move).

@@ -81,9 +81,15 @@ RKA separates the durable activity record from interpretations built over it.
 - Research questions organize clusters into a research map.
 - Freshness state identifies knowledge affected by superseded sources or invalidated assumptions.
 
-### Publication layer
+### Downstream publication layer (separate project)
 
-The Writer workflow uses claims, clusters, research questions, literature, decisions, and evidence to construct a claim spine and draft. The planned manuscript workbench will expose this layer directly through an interactive editing and audit surface.
+The standalone [`rka-writer`](https://github.com/infinitywings/rka-writer)
+project can use claims, clusters, research questions, literature, decisions,
+and evidence through Core's public contract to construct a claim spine and
+draft. Its manuscript workbench is a separately installed editing and audit
+surface. Core neither bundles nor auto-activates writing instructions, so
+clients that only need research records and retrieval remain unaffected by
+Writer behavior.
 
 ## Provenance graph
 

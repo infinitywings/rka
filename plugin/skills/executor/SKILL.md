@@ -18,15 +18,18 @@ The rka MCP server ships a **discriminated-union dispatch surface**. Its core to
 
 | Always-on tool | Purpose |
 |---|---|
-| `rka_query(args)` | Typed read operations (missions, context, experiments, interpretations, reports, search, etc.) |
-| `rka_execute(args)` | Typed write and lifecycle operations (notes, experiment evidence, checkpoints, reports, maintenance, etc.) |
+| `rka_query(args)` | Typed read operations (missions, context, experiments, interpretations, native manuscript records, reports, search, etc.) |
+| `rka_execute(args)` | Typed write and lifecycle operations (notes, experiment evidence, native manuscript records, checkpoints, reports, maintenance, etc.) |
 | `rka_describe(operation)` | Authoritative schema lookup + worked example; `rka_describe('')` returns the compact operation index |
 | `rka_load_tools(names)` | Escape hatch — brings deferred legacy tools online when you specifically need backwards-compat access |
 | `rka_help(name)` | Deprecated alias for `rka_describe` |
 
 `args` is a **typed Pydantic model** discriminated by `operation`. FastMCP renders the live union as `inputSchema.oneOf` with per-branch enum + required-field constraints. The schema layer rejects wrong enum values, missing required fields, and missing provenance BEFORE the call is dispatched. Do not rely on a documented operation count; inspect the live index and describe unfamiliar operations.
 
-> **Orchestrator subprocess note.** When this Executor instance is the LangGraph orchestrator's `claude-agent-sdk` subprocess (daemon under `orchestrator/docker-compose.yml`), it may run with `RKA_LEGACY_TOOLS=1`, restoring the compatibility surface alongside the typed dispatch tools; other legacy tools remain deferred and are reachable via `rka_load_tools`. This preserves the parent-side TWO-TAP autonomy contract at `pi_decision_select` (per-tool ratification granularity in `WRITE_TOOLS`). Cockpit Executor sessions (Claude Desktop / Claude Code talking directly to the PI) use the typed dispatch surface described above. Inspect the live index instead of assuming a fixed tool count.
+`RKA_LEGACY_TOOLS=1` is a historical compatibility switch, not the normal
+Executor surface. Do not enable it unless the PI explicitly needs a legacy
+caller. Use the typed dispatch tools above and inspect the live index instead
+of assuming a fixed tool count.
 
 ### Worked examples
 

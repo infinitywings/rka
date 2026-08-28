@@ -40,8 +40,6 @@ Expected: JSON with `total` and `data` fields. 401 means the key is wrong; 429 m
 
 Target: **`claude_desktop_config.json` → `mcpServers.rka.env`** (the rka MCP server reads this).
 
-If the orchestrator daemon is installed, **also** persist to **`orchestrator/.env`**. The daemon's SDK subprocess passes this env to the `rka mcp` child it spawns; without it the Brain's Semantic Scholar searches (via the deferred legacy `rka_search_semantic_scholar` tool, loaded through `rka_load_tools`) fall back to anonymous rate limits.
-
 ```json
 {
   "mcpServers": {
@@ -62,10 +60,6 @@ If the orchestrator daemon is installed, **also** persist to **`orchestrator/.en
 ✓ SEMANTIC_SCHOLAR_API_KEY persisted.
 
 Claude Desktop: fully quit (Cmd+Q) and reopen.
-RKA orchestrator: docker compose -f docker-compose.yml \
-                                 -f orchestrator/docker-compose.yml \
-                                 up -d --force-recreate
-
 Verify in a Claude Desktop conversation by asking:
   "Search Semantic Scholar for 'graph neural networks on protein structures'"
 
@@ -78,4 +72,3 @@ effect — restart wasn't picked up.
 
 - **Key approval pending** — the form turnaround is variable. If you're walking the user through this and they don't have a key yet, defer the persist step until they receive one. There's no point setting a placeholder.
 - **Multiple keys** — Semantic Scholar allows multiple keys per user but doesn't surface them on a dashboard. If the user has issued keys previously and lost track, the cleanest fix is requesting a new one (the old ones don't auto-revoke; that's a Semantic Scholar limitation).
-- **Used by both `claude_desktop_config.json` AND `orchestrator/.env`** — easy to set in one and forget the other, leading to "it works in Claude Desktop but the orchestrator's Brain still gets rate-limited". Always set both if RKA is installed.
