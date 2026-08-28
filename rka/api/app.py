@@ -269,7 +269,20 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
     # description, fix_action). Severity field is populated by Affordance
     # E so consumers can distinguish critical vs warning without knowing
     # the category list.
+    from rka.services.base import EntityLinkValidationError
     from rka.services.knowledge_pack import KnowledgePackIntegrityError
+
+    @app.exception_handler(EntityLinkValidationError)
+    async def entity_link_validation_handler(
+        request: Request, exc: EntityLinkValidationError,
+    ):
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": "invalid_entity_link",
+                "detail": str(exc),
+            },
+        )
 
     @app.exception_handler(KnowledgePackIntegrityError)
     async def knowledge_pack_integrity_handler(

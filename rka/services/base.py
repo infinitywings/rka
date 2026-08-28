@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from rka.constants import DEFAULT_PROJECT_ID
 from rka.infra.database import Database
@@ -17,6 +17,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 VALID_ACTORS = frozenset({"brain", "executor", "pi", "llm", "web_ui", "system"})
+
+
+class EntityLinkValidationError(ValueError):
+    """Raised when a typed provenance edge names an invalid project endpoint."""
 
 
 def _now() -> str:
@@ -303,25 +307,87 @@ class BaseService:
         created_by: str = "system",
         project_id: str | None = None,
     ) -> None:
-        """Record a typed edge in entity_links (idempotent — skips duplicates)."""
-        link_id = generate_id("link")
+        """Record a project-local typed edge (idempotent — skips duplicates)."""
         resolved_project_id = self._resolve_project_id(project_id)
-        await self.db.execute(
-            """INSERT OR IGNORE INTO entity_links
-               (id, source_type, source_id, link_type, target_type, target_id, created_by, project_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            [link_id, source_type, source_id, link_type, target_type, target_id, created_by, resolved_project_id],
+        async with self.db.transaction():
+            await self._require_link_entity(
+                source_type,
+                source_id,
+                project_id=resolved_project_id,
+            )
+            await self._require_link_entity(
+                target_type,
+                target_id,
+                project_id=resolved_project_id,
+            )
+            await self.db.execute(
+                """INSERT OR IGNORE INTO entity_links
+                   (id, source_type, source_id, link_type, target_type, target_id, created_by, project_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    generate_id("link"),
+                    source_type,
+                    source_id,
+                    link_type,
+                    target_type,
+                    target_id,
+                    created_by,
+                    resolved_project_id,
+                ],
+            )
+
+    _LINK_ENTITY_TABLES: ClassVar[dict[str, str]] = {
+        "artifact": "artifacts",
+        "checkpoint": "checkpoints",
+        "claim": "claims",
+        "cluster": "evidence_clusters",
+        "decision": "decisions",
+        "experiment_observation": "experiment_observations",
+        "figure": "figures",
+        "interpretation_candidate": "interpretation_candidates",
+        "journal": "journal",
+        "literature": "literature",
+        "mission": "missions",
+    }
+
+    async def _require_link_entity(
+        self,
+        entity_type: str,
+        entity_id: str,
+        *,
+        project_id: str,
+    ) -> None:
+        """Require a typed edge endpoint to exist in the active project."""
+        table = self._LINK_ENTITY_TABLES.get(entity_type)
+        if table is None:
+            raise EntityLinkValidationError(
+                f"unsupported entity link type {entity_type!r}"
+            )
+        row = await self.db.fetchone(
+            f"SELECT id FROM {table} WHERE id = ? AND project_id = ?",
+            [entity_id, project_id],
         )
-        await self.db.commit()
+        if row is None:
+            raise EntityLinkValidationError(
+                f"{entity_type} {entity_id!r} not found in project {project_id}"
+            )
 
     @staticmethod
-    def _normalized_link_ids(entity_ids: list[str] | None) -> set[str]:
-        """Return a de-duplicated set of non-blank entity IDs."""
-        return {
-            entity_id.strip()
-            for entity_id in (entity_ids or [])
-            if entity_id and entity_id.strip()
-        }
+    def _canonical_link_ids(entity_ids: list[str] | None) -> list[str]:
+        """Trim and de-duplicate entity IDs while retaining caller order."""
+        canonical: list[str] = []
+        seen: set[str] = set()
+        for raw_id in entity_ids or []:
+            entity_id = raw_id.strip() if raw_id else ""
+            if entity_id and entity_id not in seen:
+                canonical.append(entity_id)
+                seen.add(entity_id)
+        return canonical
+
+    @classmethod
+    def _normalized_link_ids(cls, entity_ids: list[str] | None) -> set[str]:
+        """Return the canonical IDs as a set for edge replacement."""
+        return set(cls._canonical_link_ids(entity_ids))
 
     async def _replace_outgoing_links(
         self,
@@ -344,6 +410,17 @@ class BaseService:
         resolved_project_id = self._resolve_project_id(project_id)
         desired = self._normalized_link_ids(target_ids)
         async with self.db.transaction():
+            await self._require_link_entity(
+                source_type,
+                source_id,
+                project_id=resolved_project_id,
+            )
+            for target_id in sorted(desired):
+                await self._require_link_entity(
+                    target_type,
+                    target_id,
+                    project_id=resolved_project_id,
+                )
             rows = await self.db.fetchall(
                 """SELECT target_id
                    FROM entity_links
@@ -400,6 +477,17 @@ class BaseService:
         resolved_project_id = self._resolve_project_id(project_id)
         desired = self._normalized_link_ids(source_ids)
         async with self.db.transaction():
+            await self._require_link_entity(
+                target_type,
+                target_id,
+                project_id=resolved_project_id,
+            )
+            for source_id in sorted(desired):
+                await self._require_link_entity(
+                    source_type,
+                    source_id,
+                    project_id=resolved_project_id,
+                )
             rows = await self.db.fetchall(
                 """SELECT source_id
                    FROM entity_links

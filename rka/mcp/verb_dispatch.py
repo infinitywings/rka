@@ -547,6 +547,7 @@ async def dispatch_review(target: str, *, project_id: str, payload: dict[str, An
         return await _legacy("rka_update_note")(
             id=p["id"],
             content=p.get("content"),
+            summary=p.get("summary"),
             type=p.get("type"),
             confidence=p.get("confidence"),
             importance=p.get("importance"),

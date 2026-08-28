@@ -154,6 +154,15 @@ class TestTheSummaryIsSearchable:
             "record_note could write summary and update_note could not fix it"
         )
 
+    def test_update_note_accepts_summary_only(self):
+        args = UpdateNoteArgs(
+            operation="update_note",
+            project_id="prj_x",
+            id="jrn_x",
+            summary="A corrected summary.",
+        )
+        assert args.summary == "A corrected summary."
+
     def test_the_advertised_schema_agrees(self):
         from rka.mcp.operations_schema import OPERATIONS_SCHEMA
 

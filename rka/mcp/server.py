@@ -822,6 +822,7 @@ async def rka_add_note(
 async def rka_update_note(
     id: str,
     content: str | None = None,
+    summary: str | None = None,
     type: str | None = None,
     confidence: str | None = None,
     importance: str | None = None,
@@ -841,6 +842,7 @@ async def rka_update_note(
     Args:
         id: The note ID to update (PRIMARY FIELD — required addressing key)
         content: New content (the canonical body field for the update)
+        summary: New short summary
         type: New type — note | log | directive
         confidence: New confidence level — hypothesis | tested | verified | superseded | retracted
         importance: New importance level — critical | high | normal | low
@@ -854,7 +856,8 @@ async def rka_update_note(
     """
     async with _client(project_id) as c:
         body = {
-            "content": content, "type": type, "confidence": confidence,
+            "content": content, "summary": summary, "type": type,
+            "confidence": confidence,
             "importance": importance, "verbatim_input": verbatim_input,
             "related_decisions": related_decisions,
             "related_literature": related_literature,
