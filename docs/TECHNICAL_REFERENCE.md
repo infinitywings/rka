@@ -29,7 +29,10 @@ docker compose up -d --build
 | Command | Purpose |
 |---|---|
 | `rka init <name>` | Initialize a workspace and project. |
-| `rka serve` | Start the REST API, dashboard, and worker outside Docker. |
+| `rka serve` | Start the REST API (and dashboard when its built assets are present). |
+| `rka worker` | Run background indexing and embedding jobs. |
+| `rka start-all` | Start the REST API and worker as Dockerless background processes. |
+| `rka stop-all` | Stop processes created by `rka start-all`. |
 | `rka mcp` | Start the default stdio MCP adapter. |
 | `rka mcp --transport http --host 127.0.0.1 --port 9713` | Start local Streamable HTTP MCP. |
 | `rka status` | Show current project status. |
@@ -39,13 +42,15 @@ docker compose up -d --build
 | `rka bootstrap ingest <folder>` | Ingest an approved workspace scan. |
 | `rka cred ...` | Initialize, inspect, and propagate the credential vault. |
 
-Use `rka --help` and `rka <command> --help` for the installed version's complete option set.
+`python -m rka` is equivalent to the `rka` console command and is the stable
+entry point for launchers that do not rely on shell `PATH`. Use `rka --help`
+and `rka <command> --help` for the installed version's complete option set.
 See [CORE_RECOVERY.md](CORE_RECOVERY.md) for the disposable upgrade,
 knowledge-pack, and pinned-runtime rollback procedure.
 
 ## MCP
 
-The MCP binary is a thin proxy to the REST API configured by `RKA_API_URL`, which defaults to `http://localhost:9712`.
+The MCP binary is a thin proxy to the REST API configured by `RKA_API_URL`, which defaults to `http://127.0.0.1:9712`.
 
 ### Default dispatch tools
 
@@ -84,10 +89,12 @@ Core runtime settings use the `RKA_` prefix. Common settings include:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `RKA_API_URL` | `http://localhost:9712` | REST target used by MCP. |
+| `RKA_API_URL` | `http://127.0.0.1:9712` | REST target used by MCP. |
 | `RKA_HOST` | `127.0.0.1` | API bind address outside Docker. |
 | `RKA_PORT` | `9712` | API port. |
-| `RKA_DB_PATH` | `rka.db` | Database path outside the default Docker deployment. |
+| `RKA_DATA_DIR` | `~/.rka` | Persistent data root outside Docker; Docker sets `/data`. |
+| `RKA_DB_PATH` | `<RKA_DATA_DIR>/rka.db` | Explicit database override; relative values use `RKA_PROJECT_DIR`. |
+| `RKA_EMBEDDINGS_ENABLED` | `false` | Enable optional embedding generation; Docker sets `true`. |
 | `RKA_MANUSCRIPT_WORKSPACE_ROOTS` | empty | `os.pathsep`-separated allowlist for local Markdown/LaTeX source access; an empty value disables source synchronization. |
 | `RKA_MANUSCRIPT_SOURCE_MAX_BYTES` | `2097152` | Maximum UTF-8 bytes accepted for one synchronized manuscript source file. |
 | `RKA_SKILL_TOOLS` | unset | Promote ChatGPT skill-adapter tools on the connector surface. |

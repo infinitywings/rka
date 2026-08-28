@@ -6,17 +6,17 @@ developed Writer product or the shelved Agentic runtime.
 
 ## Dependency boundary
 
-The supported Core runtime installs:
+The full local retrieval profile installs:
 
 ```bash
 python -m pip install -e ".[embeddings,academic,workspace]"
 ```
 
-`embeddings` contains the Core retrieval dependencies `fastembed` and
+The base `rka-core` distribution provides SQLite/FTS retrieval and defaults
+embeddings off. `embeddings` adds the local vector-retrieval dependencies `fastembed` and
 `sqlite-vec`. The `llm` extra contains only frozen legacy provider-client
 compatibility (`litellm` and `instructor`) and is not installed by the Docker
-image or Core CI. A base `pip install .` remains importable but does not provide
-the supported local vector-search backend.
+image or Core CI. Docker explicitly installs and enables the embeddings profile.
 
 The production Docker image follows the supported Core profile automatically:
 
@@ -71,7 +71,7 @@ when requested, the built dashboard:
 ```bash
 npm --prefix web ci
 npm --prefix web run build
-.venv/bin/python scripts/core_startup_smoke.py --require-web
+.venv/bin/python scripts/core_startup_smoke.py --require-web --require-vec
 ```
 
 The `rka migrate` command initializes both the base and Phase-2 schemas, so FTS
@@ -110,6 +110,9 @@ container replacement is implied by this gate.
 
 The `pytest` workflow installs no LLM-provider SDK. Its Core job restores the
 frontend bundle produced by the web build, runs the Core marker expression,
-and executes the startup smoke gate. A separate Docker job builds the production
-image and verifies the same dependency boundary inside it. The existing
-`pytest` job name is retained for branch-protection compatibility.
+and executes the full-profile startup smoke gate. The separate `wheel-smoke`
+job builds `rka-core`, installs only that artifact into a fresh environment,
+and runs it from outside the checkout with the base feature profile. A Docker
+job builds the production image and verifies the dependency boundary inside
+it. The existing `pytest` job name is retained for branch-protection
+compatibility.

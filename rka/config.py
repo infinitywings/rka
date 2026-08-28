@@ -4,22 +4,23 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def _resolve_data_dir() -> Path:
-    """Pick the data directory: env var > Docker /data > ~/.rka."""
+    """Pick the local data directory: explicit override, then ``~/.rka``.
+
+    Docker sets ``RKA_DATA_DIR=/data`` explicitly. The mere presence of a
+    host ``/data`` directory is not a reliable signal that RKA is running in
+    a container.
+    """
     import os
+
     explicit = os.environ.get("RKA_DATA_DIR")
     if explicit:
-        return Path(explicit)
-    docker_data = Path("/data")
-    if docker_data.is_dir():
-        return docker_data
-    home_data = Path.home() / ".rka"
-    home_data.mkdir(parents=True, exist_ok=True)
-    return home_data
+        return Path(explicit).expanduser()
+    return Path.home().expanduser() / ".rka"
 
 
 class RKAConfig(BaseSettings):
@@ -34,17 +35,38 @@ class RKAConfig(BaseSettings):
 
     # Project
     project_dir: Path = Field(default=Path("."), description="Project root directory")
-    db_path: Path = Field(default=Path("rka.db"), description="SQLite database path")
+    db_path: Path | None = Field(
+        default=None,
+        description=(
+            "Optional SQLite database override. When unset, the path is resolved "
+            "under data_dir; an explicit relative value remains relative to "
+            "project_dir for legacy project-local deployments."
+        ),
+    )
     # Persistent data directory. Houses `rka.db`, `embedding_config.json`,
     # and other persistent state. Tests override via `RKAConfig(data_dir=tmp_path)`.
     # Resolution:
     #   1. RKA_DATA_DIR env var (explicit override)
-    #   2. /data (if it exists — Docker volume mount)
-    #   3. ~/.rka (Dockerless fallback — created on first use)
+    #   2. ~/.rka (Dockerless fallback — created on first use)
+    # Docker explicitly supplies RKA_DATA_DIR=/data.
     data_dir: Path = Field(
         default_factory=lambda: _resolve_data_dir(),
+        validate_default=True,
         description="Persistent data directory",
     )
+
+    @field_validator("data_dir", mode="after")
+    @classmethod
+    def _prepare_data_dir(cls, value: Path) -> Path:
+        """Normalize and create the private persistent-state directory."""
+        path = value.expanduser()
+        if not path.is_absolute():
+            raise ValueError("RKA_DATA_DIR must be an absolute path")
+        try:
+            path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        except OSError as exc:
+            raise ValueError(f"cannot create RKA_DATA_DIR {path}: {exc}") from exc
+        return path.resolve()
 
     # Server
     host: str = Field(default="127.0.0.1", description="API server host")
@@ -101,14 +123,13 @@ class RKAConfig(BaseSettings):
         description="Maximum UTF-8 bytes in one synchronized manuscript source file",
     )
 
-    # Embeddings — v2.4.0 (Mission D) flips the default to ON. Persistent
-    # backend config lives at /data/embedding_config.json; this env var
-    # remains the master enable/disable switch for the in-process
-    # EmbeddingService.
+    # Embeddings are optional in the base Python distribution. Docker and a
+    # future full-profile installer explicitly enable them after installing
+    # the embeddings extra. Persistent backend config lives under data_dir.
     embedding_model: str = Field(
         default="nomic-ai/nomic-embed-text-v1.5", description="FastEmbed model"
     )
-    embeddings_enabled: bool = Field(default=True, description="Enable embedding generation")
+    embeddings_enabled: bool = Field(default=False, description="Enable embedding generation")
 
     # Context Engine — v2.4 (dec_01KQQPD6Y6B362T3K08368BDMP) removed temperature
     # bucketing and token-budget arithmetic. Ranking is SQL-time importance ×
@@ -122,7 +143,16 @@ class RKAConfig(BaseSettings):
 
     @property
     def database_url(self) -> str:
-        """Resolve database path relative to project dir."""
+        """Return the one authoritative SQLite path for this configuration.
+
+        An absent ``RKA_DB_PATH`` uses ``data_dir/rka.db`` so commands launched
+        from different working directories see the same Core. Explicit
+        relative paths preserve the legacy ``project_dir`` behavior used by
+        ``rka init`` and existing project-local ``.env`` files.
+        """
+        if self.db_path is None:
+            return str(self.data_dir / "rka.db")
+
         db = self.db_path
         if not db.is_absolute():
             db = self.project_dir / db

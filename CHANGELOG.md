@@ -5,6 +5,21 @@ All notable changes to RKA are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- A clean-wheel CI gate now installs the built `rka-core` artifact outside the
+  checkout and verifies migrations, SQLite/FTS retrieval, REST health, the
+  worker, and the five-tool MCP surface.
+- `python -m rka` is now a supported entry point alongside the `rka` command.
+
+### Changed
+
+- The Python distribution is named `rka-core` while retaining the stable
+  `rka` import package and CLI.
+- Dockerless state now defaults consistently to `~/.rka/rka.db`, independent
+  of the current working directory. The base wheel defaults optional
+  embeddings off; the Docker/full profile enables them explicitly.
+
 ## [3.0.0] — 2026-08-26 (RKA Core / Writer separation)
 
 ### Changed

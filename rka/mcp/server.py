@@ -338,7 +338,7 @@ Then follow the returned guide. Also available:
 """
 
 mcp = FastMCP("Research Knowledge Agent", instructions=RKA_INSTRUCTIONS)
-API_URL = os.environ.get("RKA_API_URL", "http://localhost:9712")
+API_URL = os.environ.get("RKA_API_URL", "http://127.0.0.1:9712")
 API_TIMEOUT = httpx.Timeout(connect=30.0, read=120.0, write=120.0, pool=30.0)
 
 

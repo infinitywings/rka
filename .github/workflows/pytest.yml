@@ -79,7 +79,35 @@ jobs:
           -m "not writer and not agentic"
 
       - name: Smoke-test Core startup surfaces
-        run: python scripts/core_startup_smoke.py --require-web
+        run: python scripts/core_startup_smoke.py --require-web --require-vec
+
+  wheel-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Build the Core wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel
+
+      - name: Install only the built artifact in a clean environment
+        run: |
+          python -m venv /tmp/rka-wheel-smoke-venv
+          /tmp/rka-wheel-smoke-venv/bin/python -m pip install dist/rka_core-*.whl
+
+      - name: Exercise the installed wheel outside the checkout
+        run: >-
+          /tmp/rka-wheel-smoke-venv/bin/python scripts/core_startup_smoke.py
+          --python /tmp/rka-wheel-smoke-venv/bin/python
+          --cwd /tmp/rka-wheel-smoke-cwd
 
   docker-core:
     runs-on: ubuntu-latest

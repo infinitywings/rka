@@ -36,6 +36,19 @@ class Database:
 
     async def connect(self) -> None:
         """Open database connection and apply PRAGMAs."""
+        db_file: Path | None = None
+        if self.db_path != ":memory:" and not self.db_path.startswith("file:"):
+            db_file = Path(self.db_path).expanduser()
+            try:
+                db_file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                fd = os.open(db_file, os.O_CREAT | os.O_RDWR, 0o600)
+                os.close(fd)
+                os.chmod(db_file, 0o600)
+            except OSError as exc:
+                raise sqlite3.OperationalError(
+                    f"cannot prepare private RKA database at {db_file}: {exc}"
+                ) from exc
+
         # Standalone statements run in SQLite autocommit mode. Multi-statement
         # mutations must opt into ``transaction()`` explicitly; otherwise an
         # implicit transaction could outlive the calling request and an
@@ -50,6 +63,12 @@ class Database:
         await self._conn.execute("PRAGMA journal_mode = WAL")
         await self._conn.execute("PRAGMA foreign_keys = ON")
         await self._conn.execute("PRAGMA busy_timeout = 5000")
+        if db_file is not None:
+            for candidate in (db_file, Path(f"{db_file}-wal"), Path(f"{db_file}-shm")):
+                try:
+                    os.chmod(candidate, 0o600)
+                except FileNotFoundError:
+                    pass
         # Allow extension loading for sqlite-vec (must run on aiosqlite's thread)
         try:
             await self._conn._execute(self._conn._conn.enable_load_extension, True)
