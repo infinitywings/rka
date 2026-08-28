@@ -38,7 +38,7 @@ Brain: rka_get_changelog(since="2026-04-10")
   → 12 new journal entries, 3 new decisions, 2 literature added
 Brain: rka_get_pending_maintenance()
   → 12 items: 3 decisions without justified_by, 2 unassigned clusters, 7 entries without tags
-Brain: [silently processes top-priority items, budget=10]
+Brain: [silently processes the highest-priority items that fit this session]
   - For each decision_without_justified_by: rka_update_decision(id, related_journal=[...])
   - For each unassigned_cluster: rka_review_cluster(id, confidence=..., synthesis=..., research_question_id=...)  # review_cluster requires confidence + synthesis
 Brain: rka_get_research_map()
@@ -46,7 +46,26 @@ Brain: rka_get_research_map()
 Brain: "Hi! I've caught up on the project. The research map has 5 active research questions…"
 ```
 
-**Why the order matters**: changelog before maintenance so the Brain knows what's new before deciding what to fix. Maintenance before the research map so the map view is coherent. The user sees none of the fix-up calls — narrating maintenance to the PI is noise.
+**Why the order matters**: changelog before maintenance so the Brain knows what's new before deciding what to fix. Maintenance before the research map so the map view is coherent. For a read-only query, audit, or evaluation, inspect maintenance but do not execute fix-up writes; preserve those findings for a separately authorized pass.
+
+### Cold lifecycle question after catch-up
+
+For a question such as “why did we change this design?” or “what do we now
+conclude?”, the session-start snapshot is only orientation. Apply `SKILL.md`'s
+cold lifecycle contract:
+
+- recover the framing/basis, predecessor decision, trigger, terminal successor
+  or status, execution record, latest conclusion, and latest caveat;
+- follow `superseded_by` target by target with a visited-ID guard;
+- read `exp_` / `run_` / `obs_` evidence through typed experiment queries, and
+  read nested `epv_` / `rue_` / `elc_` / `evr_` records through their parent
+  response;
+- stop only when the terminal conclusion and caveat are verified or explicitly
+  reported absent after a targeted search.
+
+Use no more than 12 project reads in the common case. If the evidence remains
+incomplete at that point, answer with the verified partial chain and the exact
+missing slots instead of widening indefinitely.
 
 ## Research Protocol — Gate 0 (Project Start / Major Pivot)
 
@@ -269,9 +288,15 @@ If misalignment exists, correct it NOW — before implementation. A two-minute c
 After `rka_submit_report`:
 1. Read the report with `rka_get_report(mission_id)`.
 2. Verify each acceptance criterion against live data.
-3. Check for anomalies the Executor flagged.
-4. Answer any questions the Executor raised.
-5. Mark the mission complete or create follow-up missions.
+3. Re-read the mission. Confirm every task is terminal (`complete` or an
+   explicitly justified `skipped`) and treat any `consistency_warnings` as an
+   open closeout defect.
+4. Check for anomalies the Executor flagged.
+5. Answer any questions the Executor raised.
+6. Before endorsing a research conclusion, apply the lifecycle completion gate:
+   verify the terminal decision status (and whether it yields an active
+   in-force decision), post-report conclusion, and limiting caveat.
+7. Accept the closeout or create follow-up missions.
 
 ## Research Map Navigation
 
@@ -304,7 +329,7 @@ rka_get_research_map()
 
 ### Changelog — Efficient Session Catch-Up
 
-`rka_get_changelog(since="2026-04-10")` returns all created and modified entities across every type (journal, decisions, literature, claims, clusters, missions) with counts and short labels. Use at session start instead of calling `rka_get_journal`, `rka_get_literature`, `rka_get_decision_tree` separately. Combined with `rka_get_research_map()`, that's two calls for a complete picture instead of seven.
+`rka_get_changelog(since="2026-04-10")` returns created and modified entities across journal, decisions, literature, claims, clusters, and missions with counts and short labels. Use it with the Research Map as a cheap structural baseline. It is not a complete lifecycle account: a topic question still requires scoped retrieval, supersession traversal, and terminal conclusion/caveat checks.
 
 ## Evidence Assembly — Producing Research Outputs
 

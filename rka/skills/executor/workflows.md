@@ -16,7 +16,7 @@ Procedural reference for the Executor skill. Loaded on demand when `SKILL.md` po
 > | `rka_ingest_document(...)` | `rka_execute(args={"operation": "ingest_document", "project_id": <pinned>, ...})` |
 > | `rka_link_literature_to_zotero(lit_id=...)` | `rka_execute(args={"operation": "link_literature_to_zotero", "project_id": <pinned>, "lit_id": "..."})` |
 >
-> When this Executor runs as the orchestrator's `claude-agent-sdk` subprocess with `RKA_LEGACY_TOOLS=1`, the v2.7.0a2 baseline (core legacy tools, intent verbs, navigators) is restored to always-on and the 3 typed dispatch tools also remain always-on. Legacy names outside that baseline (e.g. `rka_submit_report`, `rka_get_mission`, `rka_submit_checkpoint`) stay deferred and must be loaded via `rka_load_tools` — or simply use the dispatch shape, which works in every mode. When running directly in Claude Desktop / Claude Code, the dispatch shape is the live surface. The discipline is identical either way. Index of operations: `rka_describe(operation="")`.
+> When this Executor runs as the orchestrator's `claude-agent-sdk` subprocess with `RKA_LEGACY_TOOLS=1`, the compatibility baseline (core legacy tools, intent verbs, navigators) is restored alongside the typed dispatch tools. Legacy names outside that baseline (e.g. `rka_submit_report`, `rka_get_mission`, `rka_submit_checkpoint`) stay deferred and must be loaded via `rka_load_tools` — or simply use the dispatch shape, which works in every mode. When running directly in Claude Desktop / Claude Code, the dispatch shape is the live surface. The discipline is identical either way. Index of operations: `rka_describe(operation="")`.
 
 ---
 
@@ -64,6 +64,25 @@ Use `rka_submit_report` with structured sections:
 - **`recommended_next`** — suggested next steps as a single string.
 
 Write the summary as you'd write a PR description: what changed, what you found, how you verified it. The structured sections are for scanning; the summary is for deep reading.
+
+### Closeout preflight and readback
+
+1. Fetch the mission immediately before closeout. Preserve the complete task
+   list, including descriptions and order.
+2. Mark finished tasks `complete`. Mark a task `skipped` only when the report
+   explains why it was unnecessary or out of scope. If any task remains
+   `pending`, `in_progress`, or `blocked`, checkpoint or use a non-complete
+   mission state instead of submitting a final report.
+3. Persist the reconciled tasks with `update_mission_status`, retaining the
+   mission's current non-terminal status, and fetch the mission again to verify
+   the stored task states.
+4. Submit the structured report.
+5. Fetch both `mission` and `report`. Verify status `complete`, terminal tasks,
+   no task `consistency_warnings`, and exact persistence of the report's
+   load-bearing findings, anomalies, questions, and codebase state.
+
+The report operation closes the mission, but it does not infer task outcomes.
+Closeout is therefore a write-then-readback workflow, not a single report call.
 
 Good/bad report contrast: `examples.md` § "Reports — Good vs Bad".
 

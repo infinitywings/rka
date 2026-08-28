@@ -1,0 +1,161 @@
+{
+  "meta": {
+    "corpus": "scenarios.traceguard-core.jsonl",
+    "corpus_sha256": "c86ef3b8e82f02c05c968243e5f14898ff7a57add924a7bbb6a35e0216456029",
+    "rka_url": "http://localhost:9712",
+    "project_filter": "prj_01M100GW2EVPA8T6Q4CSZ5GPFA"
+  },
+  "aggregate": null,
+  "story_aggregate": {
+    "n_variants": 5,
+    "story_success_rate": 1.0,
+    "role_coverage_mean": 1.0,
+    "required_edge_coverage_mean": 1.0,
+    "fact_coverage_mean": 1.0,
+    "currentness_accuracy_mean": 1.0,
+    "precision_mean": 0.4747,
+    "anchor_mrr": 0.9,
+    "anchor_hit_rate": 1.0,
+    "anchor_k_values": [
+      20
+    ],
+    "hard_failures": {
+      "currentness": 0,
+      "forbidden_entity": 0,
+      "foreign_project": 0,
+      "precision": 0,
+      "resolution_incomplete": 0,
+      "resolution_missing": 0,
+      "resolution_project_scope": 0,
+      "stale_only": 0
+    },
+    "variants_with_divergences": [],
+    "by_style": {
+      "colloquial": {
+        "n_variants": 1,
+        "story_success_rate": 1.0,
+        "role_coverage_mean": 1.0,
+        "required_edge_coverage_mean": 1.0,
+        "fact_coverage_mean": 1.0,
+        "currentness_accuracy_mean": 1.0,
+        "precision_mean": 0.4138,
+        "anchor_mrr": 0.5,
+        "anchor_hit_rate": 1.0,
+        "anchor_k_values": [
+          20
+        ],
+        "hard_failures": {
+          "currentness": 0,
+          "forbidden_entity": 0,
+          "foreign_project": 0,
+          "precision": 0,
+          "resolution_incomplete": 0,
+          "resolution_missing": 0,
+          "resolution_project_scope": 0,
+          "stale_only": 0
+        },
+        "variants_with_divergences": []
+      },
+      "exact": {
+        "n_variants": 1,
+        "story_success_rate": 1.0,
+        "role_coverage_mean": 1.0,
+        "required_edge_coverage_mean": 1.0,
+        "fact_coverage_mean": 1.0,
+        "currentness_accuracy_mean": 1.0,
+        "precision_mean": 0.5,
+        "anchor_mrr": 1.0,
+        "anchor_hit_rate": 1.0,
+        "anchor_k_values": [
+          20
+        ],
+        "hard_failures": {
+          "currentness": 0,
+          "forbidden_entity": 0,
+          "foreign_project": 0,
+          "precision": 0,
+          "resolution_incomplete": 0,
+          "resolution_missing": 0,
+          "resolution_project_scope": 0,
+          "stale_only": 0
+        },
+        "variants_with_divergences": []
+      },
+      "paraphrase": {
+        "n_variants": 1,
+        "story_success_rate": 1.0,
+        "role_coverage_mean": 1.0,
+        "required_edge_coverage_mean": 1.0,
+        "fact_coverage_mean": 1.0,
+        "currentness_accuracy_mean": 1.0,
+        "precision_mean": 0.48,
+        "anchor_mrr": 1.0,
+        "anchor_hit_rate": 1.0,
+        "anchor_k_values": [
+          20
+        ],
+        "hard_failures": {
+          "currentness": 0,
+          "forbidden_entity": 0,
+          "foreign_project": 0,
+          "precision": 0,
+          "resolution_incomplete": 0,
+          "resolution_missing": 0,
+          "resolution_project_scope": 0,
+          "stale_only": 0
+        },
+        "variants_with_divergences": []
+      },
+      "status-aware": {
+        "n_variants": 1,
+        "story_success_rate": 1.0,
+        "role_coverage_mean": 1.0,
+        "required_edge_coverage_mean": 1.0,
+        "fact_coverage_mean": 1.0,
+        "currentness_accuracy_mean": 1.0,
+        "precision_mean": 0.4898,
+        "anchor_mrr": 1.0,
+        "anchor_hit_rate": 1.0,
+        "anchor_k_values": [
+          20
+        ],
+        "hard_failures": {
+          "currentness": 0,
+          "forbidden_entity": 0,
+          "foreign_project": 0,
+          "precision": 0,
+          "resolution_incomplete": 0,
+          "resolution_missing": 0,
+          "resolution_project_scope": 0,
+          "stale_only": 0
+        },
+        "variants_with_divergences": []
+      },
+      "underspecified": {
+        "n_variants": 1,
+        "story_success_rate": 1.0,
+        "role_coverage_mean": 1.0,
+        "required_edge_coverage_mean": 1.0,
+        "fact_coverage_mean": 1.0,
+        "currentness_accuracy_mean": 1.0,
+        "precision_mean": 0.4898,
+        "anchor_mrr": 1.0,
+        "anchor_hit_rate": 1.0,
+        "anchor_k_values": [
+          20
+        ],
+        "hard_failures": {
+          "currentness": 0,
+          "forbidden_entity": 0,
+          "foreign_project": 0,
+          "precision": 0,
+          "resolution_incomplete": 0,
+          "resolution_missing": 0,
+          "resolution_project_scope": 0,
+          "stale_only": 0
+        },
+        "variants_with_divergences": []
+      }
+    }
+  }
+}

@@ -19,6 +19,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -30,6 +31,12 @@ from rka.api.app import create_app
 from rka.config import RKAConfig
 from rka.services.reindex import reindex_fts
 
+_EVAL_HARNESS_DIR = Path(__file__).resolve().parent.parent / "eval-harness"
+if str(_EVAL_HARNESS_DIR) not in sys.path:
+    sys.path.insert(0, str(_EVAL_HARNESS_DIR))
+
+from v3.tracing.metrics import story_scores  # noqa: E402
+
 # eval-harness/ has a hyphen (not an importable package name); load the
 # corpus generator by file path instead.
 _CORPUS_PATH = (
@@ -40,7 +47,7 @@ assert _spec is not None and _spec.loader is not None
 corpus = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(corpus)
 
-ID_RE = re.compile(r"(?:jrn|dec|lit|mis|clm|ecl|chk)_[0-9A-Z]{26}")
+ID_RE = re.compile(r"[a-z]{2,3}_[0-9A-Z]{26}")
 
 # Report-context probe (copied from stress_test.py test_report_context).
 REPORT_DESCRIPTION = (
@@ -110,11 +117,67 @@ async def harness(tmp_path_factory: pytest.TempPathFactory):
 
             gt = await corpus.generate(post, put)
 
+            # A same-vocabulary, opposite-conclusion shadow project makes
+            # cross-project leakage an explicit hard gate for story retrieval.
+            shadow_project = await client.post(
+                "/api/projects",
+                json={
+                    "name": "lorawan_fw_security_shadow",
+                    "description": "Decoy corpus for project-isolation tests",
+                },
+            )
+            shadow_project.raise_for_status()
+            shadow_id = shadow_project.json()["id"]
+            shadow_headers = {"X-RKA-Project": shadow_id}
+            shadow_note = await client.post(
+                "/api/notes",
+                headers=shadow_headers,
+                json={
+                    "content": (
+                        "Shadow conclusion: Dilithium2 is too slow for the target and "
+                        "the FUOTA signature direction must remain Ed25519. The fragment "
+                        "experiment is unrelated to the signature decision."
+                    ),
+                    "type": "note",
+                    "source": "brain",
+                    "phase": "threat-model",
+                    "importance": "high",
+                    "confidence": "tested",
+                    "tags": ["signatures", "fragment-injection", "shadow"],
+                },
+            )
+            shadow_note.raise_for_status()
+            shadow_decision = await client.post(
+                "/api/decisions",
+                headers=shadow_headers,
+                json={
+                    "question": "Which firmware-signature scheme should FUOTA use?",
+                    "options": [
+                        {"label": "Ed25519", "description": "shadow choice"},
+                        {"label": "Dilithium2", "description": "shadow rejection"},
+                    ],
+                    "chosen": "Ed25519",
+                    "rationale": "Shadow project reaches the opposite conclusion.",
+                    "phase": "threat-model",
+                    "decided_by": "brain",
+                    "kind": "decision",
+                    "related_journal": [shadow_note.json()["id"]],
+                    "tags": ["signatures", "shadow"],
+                },
+            )
+            shadow_decision.raise_for_status()
+            gt["shadow_project_id"] = shadow_id
+            foreign_ids = [shadow_note.json()["id"], shadow_decision.json()["id"]]
+            for story in gt["stories"]:
+                story["story"]["foreign_must_exclude"] = foreign_ids
+
             # Rebuild the FTS indexes from source tables (exercises the
             # v2.7.0.7 recovery path and guarantees index/source parity
             # before grading retrieval).
             report = await reindex_fts(app.state.db, project_id=gt["project_id"])
             assert report.ok, f"reindex_fts failures: {report.failures}"
+            shadow_report = await reindex_fts(app.state.db, project_id=shadow_id)
+            assert shadow_report.ok, f"shadow reindex failures: {shadow_report.failures}"
 
             yield SimpleNamespace(
                 app=app, client=client, gt=gt,
@@ -132,6 +195,17 @@ async def _search(h, query: str, limit: int = 10) -> list[str]:
 def _ids_in(obj) -> set[str]:
     """All entity ids mentioned anywhere in a JSON-serializable response."""
     return set(ID_RE.findall(json.dumps(obj)))
+
+
+def _edges_in(obj) -> list[dict[str, str]]:
+    edges = []
+    for edge in obj.get("edges", []) + obj.get("entity_links", []):
+        source = edge.get("source") or edge.get("source_id")
+        target = edge.get("target") or edge.get("target_id")
+        link_type = edge.get("link_type") or edge.get("relation")
+        if source and target and link_type:
+            edges.append({"source": source, "target": target, "link_type": link_type})
+    return edges
 
 
 async def test_write_path_integrity(harness):
@@ -258,6 +332,83 @@ async def test_report_context_collection(harness):
     assert recall >= 0.85, (
         f"writeup-arc cohort recall {recall:.2f} < 0.85; missed: {sorted(cohort - got)}"
     )
+
+
+async def test_story_retrieval_recovers_causal_substrate_without_project_leakage(
+    harness,
+):
+    """Natural-language probes recover a story, not only an oracle anchor trace."""
+    scenario = harness.gt["stories"][0]
+    variant_scores = []
+    for variant in scenario["query_variants"]:
+        search = await harness.post("/api/search", {"query": variant["query"], "limit": 10})
+        multi_hop = await harness.post(
+            "/api/graph/multi-hop",
+            {"query": variant["query"], "max_nodes": 25, "max_depth": 3},
+        )
+        report_context = await harness.post(
+            "/api/graph/report-context",
+            {
+                "description": variant["query"],
+                "max_nodes": 25,
+                "max_depth": 3,
+                "seed_limit": 4,
+            },
+        )
+        candidate_ids = _ids_in(search) | _ids_in(multi_hop) | _ids_in(report_context)
+        resolved = await harness.post(
+            "/api/entities/resolve",
+            {
+                "ids": sorted(candidate_ids),
+                "include_sources": True,
+                "include_edges": True,
+            },
+        )
+        score = story_scores(
+            scenario["story"],
+            candidate_ids
+            | {entity_id for entity_id, entity in resolved["entities"].items() if entity["found"]},
+            _edges_in(multi_hop) + _edges_in(resolved),
+            resolved,
+        )
+        variant_scores.append((variant["variant_id"], score))
+
+    assert all(not score["hard_failures"]["foreign_project"] for _variant, score in variant_scores)
+    assert all(score["currentness_accuracy"] == 1.0 for _variant, score in variant_scores)
+    assert all(score["story_success"] for _variant, score in variant_scores), variant_scores
+    assert min(score["precision"] for _variant, score in variant_scores) >= 0.25, variant_scores
+
+    # Oracle ceiling remains a diagnostic: if this fails, the problem is the
+    # stored graph rather than natural-language candidate generation/ranking.
+    oracle = await harness.post(
+        "/api/graph/multi-hop",
+        {
+            "seeds": [scenario["anchor_decision"]],
+            "max_nodes": 80,
+            "max_depth": 3,
+        },
+    )
+    oracle_ids = _ids_in(oracle)
+    oracle_resolved = await harness.post(
+        "/api/entities/resolve",
+        {
+            "ids": sorted(oracle_ids),
+            "include_sources": True,
+            "include_edges": True,
+        },
+    )
+    oracle_score = story_scores(
+        scenario["story"],
+        oracle_ids
+        | {
+            entity_id
+            for entity_id, entity in oracle_resolved["entities"].items()
+            if entity["found"]
+        },
+        _edges_in(oracle) + _edges_in(oracle_resolved),
+        oracle_resolved,
+    )
+    assert oracle_score["story_success"], oracle_score
 
 
 async def test_context_bundle_pinning(harness):

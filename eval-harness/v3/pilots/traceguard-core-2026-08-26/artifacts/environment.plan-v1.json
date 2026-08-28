@@ -1,0 +1,1 @@
+{"command":"python3 traceguard_smoke.py --output-dir artifacts","platform_machine":"arm64","platform_system":"Darwin","python_implementation":"CPython","python_version":"3.12.9","standard_library_only":true}

@@ -89,7 +89,9 @@ def build(conn: sqlite3.Connection, project_id: str, limit: int) -> list[dict]:
     edges: dict[str, dict[str, set[str]]] = {}
     for row in conn.execute(
         "SELECT source_type, source_id, link_type, target_type, target_id"
-        " FROM entity_links WHERE source_type = 'decision' OR target_type = 'decision'"
+        " FROM entity_links WHERE project_id = ?"
+        " AND (source_type = 'decision' OR target_type = 'decision')",
+        (project_id,),
     ):
         if row["source_type"] == "decision":
             edges.setdefault(row["source_id"], {}).setdefault(
@@ -109,9 +111,37 @@ def build(conn: sqlite3.Connection, project_id: str, limit: int) -> list[dict]:
             (project_id,),
         )
     )
-    by_id = {d["id"]: d for d in decisions}
+    decision_ids = {
+        row["id"]
+        for row in conn.execute("SELECT id FROM decisions WHERE project_id = ?", (project_id,))
+    }
+
+    def project_ids(table: str) -> set[str]:
+        try:
+            return {
+                row["id"]
+                for row in conn.execute(
+                    f"SELECT id FROM {table} WHERE project_id = ?", (project_id,)
+                )
+            }
+        except sqlite3.OperationalError as exc:
+            # Older snapshots may legitimately predate an optional entity
+            # table.  Do not mask malformed schemas, bad columns, locking, or
+            # other operational failures as an empty ground-truth relation.
+            if "no such table:" in str(exc).casefold():
+                return set()
+            raise
+
+    valid_ids = {
+        "journal": set(journals),
+        "decision": decision_ids,
+        "literature": project_ids("literature"),
+        "mission": project_ids("missions"),
+        "cluster": project_ids("evidence_clusters"),
+        "claim": {claim for claims in claims_by_entry.values() for claim in claims},
+    }
     supersedes_of: dict[str, str] = {
-        d["superseded_by"]: d["id"] for d in decisions if d["superseded_by"]
+        d["superseded_by"]: d["id"] for d in decisions if d["superseded_by"] in decision_ids
     }
 
     scenarios: list[dict] = []
@@ -121,6 +151,8 @@ def build(conn: sqlite3.Connection, project_id: str, limit: int) -> list[dict]:
 
         def add(entity_id: str, entity_type: str, relation: str, importance: str) -> None:
             if not entity_id or entity_id in seen or entity_id == dec["id"]:
+                return
+            if entity_id not in valid_ids.get(entity_type, set()):
                 return
             seen.add(entity_id)
             trace.append(
@@ -145,11 +177,11 @@ def build(conn: sqlite3.Connection, project_id: str, limit: int) -> list[dict]:
                 relation = "directive"
             add(jid, "journal", relation, "critical")
 
-        if dec["parent_id"] and dec["parent_id"] in by_id:
+        if dec["parent_id"] and dec["parent_id"] in decision_ids:
             add(dec["parent_id"], "decision", "parent_decision", "critical")
 
         pivot = None
-        if dec["superseded_by"]:
+        if dec["superseded_by"] in decision_ids:
             add(dec["superseded_by"], "decision", "superseded_alternative", "critical")
             pivot = {
                 "superseded_decision_id": dec["id"],

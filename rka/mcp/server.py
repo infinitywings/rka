@@ -264,20 +264,20 @@ Detailed operating guidance is available via MCP prompts:
 Use these prompts to load role-specific guidance at session start.
 
 ## Tool Surface (v2.7.0+) — Typed Dispatch Architecture
-RKA ships 5 always-on tools: 3 dispatch tools that route to 152 typed
-operations, plus 2 escape hatches into the legacy surface.
+RKA ships 5 always-on tools: 3 typed dispatch tools plus 2 escape hatches into
+the legacy surface.
 
-`rka_describe("")` lists 87 of those by default and reports how many it
-withheld. The remainder belong to subsystems that carry no production data
-yet; they stay callable, they are just kept out of the default browse index
-so the choice space matches what is actually in use.
+`rka_describe("")` returns the live default operation index and reports how
+many preview operations it withheld. Preview operations remain callable; they
+are kept out of the default browse index so the choice space matches what is
+actually in use.
 
 - **Dispatch (always-on):**
-- `rka_query(args={"operation": ..., "project_id": ..., ...})` — 68 read
-    operations (status, context, journal, decisions, missions, literature,
+- `rka_query(args={"operation": ..., "project_id": ..., ...})` — typed reads
+    (status, context, journal, decisions, missions, literature,
     research map, etc.). Returns structured data.
-- `rka_execute(args={"operation": ..., "project_id": ..., ...})` — 84
-    write/lifecycle operations (record_note, record_decision, create_mission,
+- `rka_execute(args={"operation": ..., "project_id": ..., ...})` — typed
+    writes and lifecycle operations (record_note, record_decision, create_mission,
     submit_report, submit_checkpoint, etc.). Returns the created/updated entity.
   - `rka_describe(operation="" | "<op_name>")` — schema lookup. With no
     argument, returns the operations index (<250 tokens). With an operation
@@ -288,8 +288,8 @@ so the choice space matches what is actually in use.
     the live tool surface. Useful only for back-compat with old transcripts.
   - `rka_help(name=...)` — deprecated alias for `rka_describe`.
 
-The 152 operations are typed Pydantic models with per-branch enum constraints
-and required-field enforcement at the FastMCP schema layer — illegal values
+The operations use typed Pydantic models with per-branch enum constraints and
+required-field enforcement at the FastMCP schema layer — illegal values
 (e.g. `confidence="confirmed"`) are rejected at the inputSchema boundary
 before the call goes out.
 
@@ -305,7 +305,7 @@ subprocess sets this flag to preserve TWO-TAP gate granularity at
    focus, blockers
 3. `rka_query(args={"operation": "pending_maintenance", "project_id": "prj_..."})`
    — provenance gaps and stale knowledge
-4. `rka_query(args={"operation": "checkpoints", "project_id": "prj_...", "status": "open"})`
+4. `rka_query(args={"operation": "checkpoints", "project_id": "prj_...", "filters": {"status": "open"}})`
    — unresolved blockers
 
 To discover available operations call `rka_describe("")`; to inspect one
@@ -319,12 +319,12 @@ operation's full schema call `rka_describe("record_decision")`.
 
 ## High-Value Operations
 - Recording: `rka_execute(args={"operation": "record_note", ...})`,
-  `record_decision`, `add_literature`
+  `record_decision`, `record_literature`
 - Execution: `create_mission`, `submit_checkpoint`, `submit_report`
 - Research map: `review_cluster`, `resolve_contradiction`,
   `rka_query(args={"operation": "research_map", ...})`
-- Retrieval: `rka_query(args={"operation": "search" | "journal" |
-  "trace_provenance", ...})`
+- Retrieval: `rka_query(args={"operation": "search", ...})`, `journal`, or
+  `rka_query(args={"operation": "provenance", "project_id": "prj_...", "id": "dec_..."})`
 
 ## Project Scoping
 Every project-scoped operation requires `project_id` as a kwarg on every
@@ -1959,6 +1959,11 @@ async def rka_submit_report(
             field" pattern from rka_add_note still succeed. Collision
             rule: explicit `summary` wins; supplying both with
             different values raises 400.
+
+    Returns:
+        The stored Mission JSON returned by the API. This readback includes
+        the persisted report and any ``consistency_warnings`` caused by
+        non-terminal task rows.
     """
     # v2.6.1 — additive `content` alias for `summary`.
     if summary is None and content is not None:
@@ -1997,7 +2002,7 @@ async def rka_submit_report(
             json=body,
         )
         _raise_with_detail(r)
-        return f"Report submitted for mission {mission_id}"
+        return json.dumps(r.json(), indent=2, default=str)
 
 
 @tool(category="mission")
@@ -5549,24 +5554,244 @@ async def rka_supersede_decision(
     return json.dumps(result, indent=2, default=str)
 
 
+# Which stored endpoint depends on the other endpoint for provenance purposes.
+# RKA's link arrows are intentionally not a single causal convention:
+# ``decision --justified_by--> journal`` stores the dependent at ``source``,
+# while ``decision --motivated--> mission`` stores it at ``target``.  Raw
+# source/target traversal therefore reverses part of every real lifecycle.
+_PROVENANCE_DEPENDENT_ENDPOINT: dict[str, Literal["source", "target"]] = {
+    # The source record rests on, cites, replaces, or is scoped by the target.
+    "justified_by": "source",
+    "derived_from": "source",
+    "cites": "source",
+    "references": "source",
+    "answers": "source",
+    "builds_on": "source",
+    "supersedes": "source",
+    # The target record follows from or is supported by the source.
+    "informed_by": "target",
+    "motivated": "target",
+    "produced": "target",
+    "triggered": "target",
+    "resolved_as": "target",
+    "evidence_for": "target",
+    "supports": "target",
+    "qualifies": "target",
+    "member_of": "target",
+}
+
+
+def _provenance_endpoint_type(
+    edge: dict,
+    endpoint: Literal["source", "target"],
+    nodes: dict[str, dict] | None,
+) -> str | None:
+    """Resolve an endpoint type from the edge, ego nodes, or stable ID prefix."""
+    explicit_type = edge.get(f"{endpoint}_type")
+    if isinstance(explicit_type, str):
+        return explicit_type
+
+    entity_id = edge.get(endpoint)
+    if not isinstance(entity_id, str):
+        return None
+    node = (nodes or {}).get(entity_id, {})
+    node_type = node.get("type") if isinstance(node, dict) else None
+    if isinstance(node_type, str):
+        return node_type
+
+    prefix_types = {
+        "jrn": "journal",
+        "lit": "literature",
+        "dec": "decision",
+    }
+    return prefix_types.get(entity_id.partition("_")[0])
+
+
+def _provenance_dependent_endpoint(
+    edge: dict,
+    nodes: dict[str, dict] | None,
+) -> Literal["source", "target"] | None:
+    """Return the causal dependent endpoint, including typed legacy variants."""
+    relation = edge.get("link_type")
+    dependent_endpoint = _PROVENANCE_DEPENDENT_ENDPOINT.get(relation)
+    if relation != "informed_by":
+        return dependent_endpoint
+
+    # Canonical decision provenance is literature -> decision, so the target
+    # depends on the source.  The still-supported process_paper aggregate has
+    # historically stored reading-note provenance as journal -> literature
+    # using the same relation name; in that typed shape the source depends on
+    # the target.  Preserve both stores without guessing from arrow direction.
+    source_type = _provenance_endpoint_type(edge, "source", nodes)
+    target_type = _provenance_endpoint_type(edge, "target", nodes)
+    if (source_type, target_type) == ("journal", "literature"):
+        return "source"
+    return dependent_endpoint
+
+
+def _provenance_neighbor(
+    edge: dict,
+    current_id: str,
+    *,
+    direction: Literal["backward", "forward"],
+    nodes: dict[str, dict] | None = None,
+) -> str | None:
+    """Return the next causal node for one stored edge, if traversable."""
+    source = edge.get("source")
+    target = edge.get("target")
+    dependent_endpoint = _provenance_dependent_endpoint(edge, nodes)
+    if not isinstance(source, str) or not isinstance(target, str):
+        return None
+    if dependent_endpoint == "source":
+        dependent, dependency = source, target
+    elif dependent_endpoint == "target":
+        dependent, dependency = target, source
+    else:
+        # The database constrains current relation names.  If a future
+        # migration adds one, omit it until its causal semantics are explicit
+        # instead of silently guessing from physical edge orientation.
+        return None
+    if direction == "backward" and current_id == dependent:
+        return dependency
+    if direction == "forward" and current_id == dependency:
+        return dependent
+    return None
+
+
+def _walk_provenance_edges(
+    entity_id: str,
+    edges: list[dict],
+    *,
+    direction: Literal["backward", "forward"],
+    max_depth: int,
+    nodes: dict[str, dict] | None = None,
+) -> list[dict[str, str | int]]:
+    """Directed BFS that emits every relation while expanding each node once."""
+    ordered_edges = sorted(
+        edges,
+        key=lambda edge: (
+            str(edge.get("link_type", "")),
+            str(edge.get("source", "")),
+            str(edge.get("target", "")),
+        ),
+    )
+    visited = {entity_id}
+    emitted_edges: set[tuple[str, str, str, str, str]] = set()
+    frontier = [entity_id]
+    steps: list[dict[str, str | int]] = []
+    for depth in range(1, max_depth + 1):
+        next_frontier: list[str] = []
+        for current_id in frontier:
+            for edge in ordered_edges:
+                neighbor = _provenance_neighbor(
+                    edge,
+                    current_id,
+                    direction=direction,
+                    nodes=nodes,
+                )
+                if neighbor is None:
+                    continue
+                edge_key = (
+                    current_id,
+                    neighbor,
+                    str(edge.get("link_type", "?")),
+                    str(edge.get("source", "")),
+                    str(edge.get("target", "")),
+                )
+                if edge_key in emitted_edges:
+                    continue
+                emitted_edges.add(edge_key)
+                steps.append(
+                    {
+                        "entity_id": neighbor,
+                        "from_id": current_id,
+                        "link_type": str(edge.get("link_type", "?")),
+                        "depth": depth,
+                    }
+                )
+                # A node may be reached by parallel relations, converging
+                # paths, or a cycle.  Emit every distinct edge above, but only
+                # enqueue a newly discovered node so traversal stays finite.
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    next_frontier.append(neighbor)
+        if not next_frontier:
+            break
+        frontier = next_frontier
+    return steps
+
+
+def _provenance_disagreements(
+    entity_ids: set[str],
+    edges: list[dict],
+) -> list[dict]:
+    """Return unique contradiction edges touching the rendered causal story."""
+    disagreements: list[dict] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    for edge in sorted(
+        edges,
+        key=lambda item: (
+            str(item.get("source", "")),
+            str(item.get("target", "")),
+        ),
+    ):
+        if edge.get("link_type") != "contradicts":
+            continue
+        source = edge.get("source")
+        target = edge.get("target")
+        if not isinstance(source, str) or not isinstance(target, str):
+            continue
+        if source not in entity_ids and target not in entity_ids:
+            continue
+        pair = tuple(sorted((source, target)))
+        if pair in seen_pairs:
+            continue
+        seen_pairs.add(pair)
+        disagreements.append(edge)
+    return disagreements
+
+
 @tool(category="claims")
 async def rka_trace_provenance(
     entity_id: str,
     direction: str = "both",
-    max_depth: int = 4,
+    max_depth: int = 3,
     *,
     project_id: str,
 ) -> str:
     """Trace the full reasoning chain behind any entity.
 
-    Follows typed entity links (informed_by, justified_by, motivated, produced,
+    Follows typed causal links (informed_by, justified_by, motivated, produced,
     derived_from, cites, references, supersedes) to show why something exists.
+    Contradictions remain visible in a separate non-causal disagreement section.
 
     Args:
         entity_id: The entity ID to trace from (any type: jrn_, dec_, clm_, etc.)
-        direction: upstream (what led to this), downstream (what this led to), or both
-        max_depth: Maximum hops to traverse (default 4)
+        direction: backward (what led to this), forward (what this led to),
+            or both. Legacy aliases upstream (backward) and downstream
+            (forward) are accepted.
+        max_depth: Maximum hops to traverse (default 3; endpoint range 1-3)
     """
+    direction_aliases = {
+        "backward": "upstream",
+        "forward": "downstream",
+        "upstream": "upstream",
+        "downstream": "downstream",
+        "both": "both",
+    }
+    normalized_direction = direction_aliases.get(direction)
+    if normalized_direction is None:
+        raise ValueError(
+            "direction must be one of: backward, forward, both "
+            "(legacy aliases: upstream, downstream)"
+        )
+    if (
+        isinstance(max_depth, bool)
+        or not isinstance(max_depth, int)
+        or not 1 <= max_depth <= 3
+    ):
+        raise ValueError("max_depth must be an integer between 1 and 3")
+
     async with _client(project_id) as c:
         r = await c.get(f"/api/graph/ego/{entity_id}", params={"depth": max_depth})
         _raise_with_detail(r)
@@ -5575,23 +5800,66 @@ async def rka_trace_provenance(
     edges = data.get("edges", [])
 
     lines = [f"Provenance for {entity_id}:"]
+    rendered_entity_ids = {entity_id}
 
-    if direction in ("upstream", "both"):
+    if normalized_direction in ("upstream", "both"):
         lines.append("\n  Upstream (what led to this):")
-        for e in edges:
-            if e.get("target") == entity_id or (direction == "both" and entity_id in (e.get("source", ""), e.get("target", ""))):
-                src = nodes.get(e.get("source", ""), {})
-                lines.append(f"    ← {e.get('link_type', '?')} {e.get('source', '?')} [{src.get('type', '?')}] {src.get('label', '')[:80]}")
+        upstream = _walk_provenance_edges(
+            entity_id,
+            edges,
+            direction="backward",
+            max_depth=max_depth,
+            nodes=nodes,
+        )
+        if not upstream:
+            lines.append("    (none)")
+        for step in upstream:
+            rendered_entity_ids.add(str(step["entity_id"]))
+            node = nodes.get(step["entity_id"], {})
+            indent = "    " + "  " * (step["depth"] - 1)
+            lines.append(
+                f"{indent}← {step['link_type']} {step['entity_id']} "
+                f"[{node.get('type', '?')}] {node.get('label', '')[:80]} "
+                f"(depth={step['depth']}, from={step['from_id']})"
+            )
 
-    if direction in ("downstream", "both"):
+    if normalized_direction in ("downstream", "both"):
         lines.append("\n  Downstream (what this led to):")
-        for e in edges:
-            if e.get("source") == entity_id:
-                tgt = nodes.get(e.get("target", ""), {})
-                lines.append(f"    → {e.get('link_type', '?')} {e.get('target', '?')} [{tgt.get('type', '?')}] {tgt.get('label', '')[:80]}")
+        downstream = _walk_provenance_edges(
+            entity_id,
+            edges,
+            direction="forward",
+            max_depth=max_depth,
+            nodes=nodes,
+        )
+        if not downstream:
+            lines.append("    (none)")
+        for step in downstream:
+            rendered_entity_ids.add(str(step["entity_id"]))
+            node = nodes.get(step["entity_id"], {})
+            indent = "    " + "  " * (step["depth"] - 1)
+            lines.append(
+                f"{indent}→ {step['link_type']} {step['entity_id']} "
+                f"[{node.get('type', '?')}] {node.get('label', '')[:80]} "
+                f"(depth={step['depth']}, from={step['from_id']})"
+            )
 
-    if len(lines) <= 3:
-        lines.append("  (no links found)")
+    disagreements = _provenance_disagreements(rendered_entity_ids, edges)
+    if disagreements:
+        lines.append("\n  Contextual disagreements (non-causal):")
+        for edge in disagreements:
+            source_id = edge["source"]
+            target_id = edge["target"]
+            source_node = nodes.get(source_id, {})
+            target_node = nodes.get(target_id, {})
+            lines.append(
+                f"    ↔ contradicts {source_id} "
+                f"[{source_node.get('type', '?')}] "
+                f"{source_node.get('label', '')[:60]} ↔ {target_id} "
+                f"[{target_node.get('type', '?')}] "
+                f"{target_node.get('label', '')[:60]}"
+            )
+
     return "\n".join(lines)
 
 
@@ -8962,7 +9230,7 @@ async def rka_start_session(
 3. Load current context:
    `rka_query(args={{"operation": "context", "project_id": "{project_hint}"}})`
 4. Check open blockers:
-   `rka_query(args={{"operation": "checkpoints", "project_id": "{project_hint}", "status": "open"}})`
+   `rka_query(args={{"operation": "checkpoints", "project_id": "{project_hint}", "filters": {{"status": "open"}}}})`
 5. Check maintenance:
    `rka_query(args={{"operation": "pending_maintenance", "project_id": "{project_hint}"}})`
 
@@ -9162,24 +9430,25 @@ support; the Skill is authoritative.
 Always begin a session by loading context:
 
 0. **Tool surface (v2.7.0+ typed dispatch).** RKA ships 3 always-on dispatch
-   tools — `rka_query` (68 read ops), `rka_execute` (84 write/lifecycle ops),
-   and `rka_describe` (schema lookup) — plus 2 escape hatches (`rka_load_tools`
+   tools — `rka_query` (reads), `rka_execute` (writes/lifecycle), and
+   `rka_describe` (schema lookup) — plus 2 escape hatches (`rka_load_tools`
    for legacy compat and `rka_help` as a deprecated alias of `rka_describe`).
    No activation step is required: every operation is reachable from
-   `rka_query` / `rka_execute` on the first call. To browse the 139 operations
-   call `rka_describe("")`; for one operation's full schema call
+   `rka_query` / `rka_execute` on the first call. To browse the live operation
+   index and counts, call `rka_describe("")`; for one operation's full schema call
    `rka_describe("record_decision")`. Per-branch enum + required-field
    enforcement at the FastMCP schema layer guarantees values like
    `confidence` are rejected before the call is sent.
 1. **Pin the project at the start of every conversation.** v2.6+: every project-scoped operation requires `project_id` as a kwarg on every call — there is no "active project" session state. Call `rka_query(args={"operation": "list_projects"})` to discover available project_ids, ask the PI which project this conversation is about (or recall it from the conversation pin), and pass `project_id="prj_…"` to every subsequent `rka_query` / `rka_execute` call. If you omit `project_id`, the tool errors immediately with a clear message — that's by design (it replaces the pre-v2.6 silent-fallback-to-`proj_default` failure mode). Keep the project_id in your working memory; do not assume default fallback. `rka_set_project` is a deprecated no-op since v2.6.
 2. `rka_query(args={"operation": "context", "project_id": "prj_..."})` — full project state (phase, open missions, recent notes, decisions)
 3. `rka_query(args={"operation": "pending_maintenance", "project_id": "prj_..."})` — check for provenance gaps
-4. `rka_query(args={"operation": "checkpoints", "project_id": "prj_...", "status": "open"})` — check for unresolved Executor blockers
+4. `rka_query(args={"operation": "checkpoints", "project_id": "prj_...", "filters": {"status": "open"}})` — check for unresolved Executor blockers
 
-**Maintenance Protocol**: If maintenance items exist, silently process up to 10
-before greeting the user. Priority: decisions_without_justified_by > missions_without_motivated_by
-> unassigned_clusters > entries_missing_cross_refs. Do not mention maintenance work
-to the user unless they ask.
+**Maintenance Protocol**: If maintenance items exist, process the highest-priority
+items that fit the session before greeting the user. Priority:
+decisions_without_justified_by > missions_without_motivated_by >
+unassigned_clusters > entries_missing_cross_refs. For a read-only query, audit,
+or evaluation, inspect maintenance but do not execute fix-up writes.
 
 If there are open checkpoints, resolve them before continuing new work.
 
@@ -9229,8 +9498,8 @@ Example: `rka_execute(args={"operation": "record_note", "project_id": "prj_...",
 You are responsible for maintaining provenance discipline. ALWAYS:
 - `rka_execute(args={"operation": "record_decision", ..., "related_journal": ["jrn_01...", "jrn_02..."]})` — what findings justify this
 - `rka_execute(args={"operation": "create_mission", ..., "motivated_by_decision": "dec_01..."})` — what decision triggers this work
-- `rka_execute(args={"operation": "record_note", ..., "related_decisions": ["dec_01..."], "related_mission": "mis_01..."})` — link context
-- `rka_query(args={"operation": "trace_provenance", ..., "entity_id": "...", "direction": "upstream"})` — understand why something exists
+- `rka_execute(args={"operation": "record_note", ..., "provenance": {"related_decisions": ["dec_01..."], "related_mission": "mis_01..."}})` — link context
+- `rka_query(args={"operation": "provenance", ..., "id": "...", "filters": {"direction": "backward"}})` — understand why something exists
 
 Orphaned entities (no links) degrade the knowledge graph. Fix them during maintenance.
 
@@ -9310,8 +9579,8 @@ Skill is authoritative.
 ## Session Start Protocol
 
 0. **Tool surface (v2.7.0+ typed dispatch).** RKA ships 3 always-on dispatch
-   tools — `rka_query` (68 read ops), `rka_execute` (84 write/lifecycle ops),
-   and `rka_describe` (schema lookup) — plus 2 escape hatches (`rka_load_tools`
+   tools — `rka_query` (reads), `rka_execute` (writes/lifecycle), and
+   `rka_describe` (schema lookup) — plus 2 escape hatches (`rka_load_tools`
    for legacy compat and `rka_help` as a deprecated alias of `rka_describe`).
    No activation step is required: every operation is reachable from
    `rka_query` / `rka_execute` on the first call. Call `rka_describe("")` for
@@ -9324,9 +9593,9 @@ Skill is authoritative.
 1. **Pin the project at the start of every conversation.** v2.6+: every project-scoped operation requires `project_id` as a kwarg on every call — there is no "active project" session state in the MCP server. Call `rka_query(args={"operation": "list_projects"})` to discover available project_ids, confirm which project the PI is asking you to work on, and pass `project_id="prj_…"` to every subsequent `rka_query` / `rka_execute` call. Omitting `project_id` fails fast with a clear error — this replaces the pre-v2.6 silent-fallback-to-`proj_default` failure mode. The discipline: keep the project_id in your working memory for the whole conversation; pass it on every call. `rka_set_project` is a deprecated no-op since v2.6.
 2. `rka_query(args={"operation": "context", "project_id": "prj_..."})` — load current project state
 3. `rka_query(args={"operation": "mission", "project_id": "prj_..."})` — finds the active or most recent pending mission automatically
-4. If a pending mission is found, call `rka_execute(args={"operation": "update_mission_status", "project_id": "prj_...", "id": "mis_...", "status": "active"})` to claim it
+4. If a pending mission is found, call `rka_execute(args={"operation": "update_mission_status", "project_id": "prj_...", "mission_id": "mis_...", "status": "active"})` to claim it
 5. Read the mission's `objective`, `tasks`, and **context** carefully before starting
-6. If the mission has `motivated_by_decision`, read that decision with `rka_query(args={"operation": "get", "project_id": "prj_...", "id": "dec_..."})` for full context
+6. If the mission has `motivated_by_decision`, read that decision with `rka_query(args={"operation": "entity", "project_id": "prj_...", "id": "dec_..."})` for full context
 
 If no mission exists, ask the Brain or PI for direction before starting.
 
@@ -9345,22 +9614,22 @@ All operations dispatch through `rka_query` (reads) or `rka_execute`
 inputSchema layer.
 
 ### During Implementation
-- `rka_execute(args={"operation": "record_note", "project_id": "prj_...", "content": "...", "type": "note", "source": "executor", "related_mission": "mis_..."})` — record results, observations, analyses
-- `rka_execute(args={"operation": "record_note", "project_id": "prj_...", "content": "...", "type": "log", "source": "executor", "related_mission": "mis_..."})` — document procedure steps
+- `rka_execute(args={"operation": "record_note", "project_id": "prj_...", "content": "...", "type": "note", "source": "executor", "provenance": {"related_mission": "mis_..."}})` — record results, observations, analyses
+- `rka_execute(args={"operation": "record_note", "project_id": "prj_...", "content": "...", "type": "log", "source": "executor", "provenance": {"related_mission": "mis_..."}})` — document procedure steps
 - `rka_execute(args={"operation": "ingest_document", "project_id": "prj_...", "path": "..."})` — import new files (PDFs, scripts, data files) into the knowledge base
 
 ### When Blocked
-- `rka_execute(args={"operation": "submit_checkpoint", "project_id": "prj_...", "title": "...", "description": "...", "context": "...", "blocking": True})` — IMMEDIATELY when you need Brain/PI input
+- `rka_execute(args={"operation": "submit_checkpoint", "project_id": "prj_...", "mission_id": "mis_...", "type": "clarification", "description": "...", "context": "...", "blocking": True})` — IMMEDIATELY when you need Brain/PI input
 - Do not continue past a blocking decision; wait for the Brain to resolve the checkpoint
 
 ### On Completion
-- `rka_execute(args={"operation": "submit_report", "project_id": "prj_...", "mission_id": "mis_...", "summary": "...", "findings": "...", "anomalies": "...", "questions": "...", "codebase_state": "...", "recommended_next": "..."})` — required at mission end
-- `summary`: full narrative report. `findings`/`anomalies`/`questions`: one item per line. `codebase_state`/`recommended_next`: plain strings.
+- `rka_execute(args={"operation": "submit_report", "project_id": "prj_...", "mission_id": "mis_...", "summary": "...", "findings": ["..."], "anomalies": ["..."], "questions": ["..."], "codebase_state": "...", "recommended_next": "..."})` — required at mission end
+- `summary`: full narrative report. `findings`/`anomalies`/`questions`: lists of strings. `codebase_state`/`recommended_next`: plain strings.
 - Include concrete findings, not just "task completed"
 
 ### Literature (when relevant)
-- `rka_execute(args={"operation": "add_literature", "title": "...", ...})` or `rka_execute(args={"operation": "enrich_doi", "doi": "..."})` — if you encounter a paper worth tracking
-- `rka_query(args={"operation": "search_semantic_scholar" | "search_arxiv", "query": "..."})` — background literature search
+- `rka_execute(args={"operation": "record_literature", "project_id": "prj_...", "title": "..."})` or `rka_execute(args={"operation": "enrich_doi", "project_id": "prj_...", "doi": "..."})` — if you encounter a paper worth tracking
+- `rka_query(args={"operation": "search_semantic_scholar", "project_id": "prj_...", "query": "..."})` — background literature search
 
 ---
 
@@ -9379,9 +9648,9 @@ Old types (finding, insight, methodology, etc.) are accepted but mapped to these
 ### Cross-References — ALWAYS Link Your Work
 
 Every note and report MUST be linked to its context:
-- `rka_execute(args={"operation": "record_note", ..., "related_mission": "mis_01..."})` — link to active mission (MANDATORY)
-- `rka_execute(args={"operation": "record_note", ..., "related_decisions": ["dec_01..."]})` — link to relevant decisions (MANDATORY when applicable)
-- `rka_execute(args={"operation": "submit_report", ..., "related_decisions": ["dec_01..."]})` — link findings to decisions they bear on
+- `rka_execute(args={"operation": "record_note", ..., "provenance": {"related_mission": "mis_01..."}})` — link to the active mission (MANDATORY)
+- `rka_execute(args={"operation": "record_note", ..., "provenance": {"related_mission": "mis_01...", "related_decisions": ["dec_01..."]}})` — link findings to relevant decisions when applicable
+- `submit_report` is linked to its mission by `mission_id`; record a separate provenance-linked note when a report finding bears on a decision.
 
 Orphaned entries (no related_mission, no related_decisions, no entity_links) are flagged
 by `rka_query(args={"operation": "pending_maintenance", ...})` and create work for the Brain. Prevent this by linking as you go.
@@ -9394,7 +9663,7 @@ by `rka_query(args={"operation": "pending_maintenance", ...})` and create work f
 
 ### Provenance
 
-- `rka_query(args={"operation": "trace_provenance", "project_id": "prj_...", "entity_id": "..."})` — trace the reasoning chain behind any entity
+- `rka_query(args={"operation": "provenance", "project_id": "prj_...", "id": "..."})` — trace the reasoning chain behind any entity
 - Use this when you need to understand why a decision was made before implementing
 
 ---

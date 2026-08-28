@@ -449,6 +449,25 @@ class MissionService(BaseService):
             except Exception:
                 pass
 
+        consistency_warnings: list[str] = []
+        if row["status"] == "complete" and tasks:
+            open_statuses = {"pending", "in_progress", "blocked"}
+            open_tasks = [task for task in tasks if task.status in open_statuses]
+            if open_tasks:
+                counts = {
+                    status: sum(task.status == status for task in open_tasks)
+                    for status in sorted(open_statuses)
+                    if any(task.status == status for task in open_tasks)
+                }
+                rendered_counts = ", ".join(
+                    f"{status}={count}" for status, count in counts.items()
+                )
+                consistency_warnings.append(
+                    "Mission is complete but has non-terminal task rows "
+                    f"({rendered_counts}); reconcile task status before treating "
+                    "the report as a fully closed execution record."
+                )
+
         return Mission(
             id=row["id"],
             project_id=row["project_id"],
@@ -466,6 +485,7 @@ class MissionService(BaseService):
             parent_mission_id=row.get("parent_mission_id"),
             motivated_by_decision=row.get("motivated_by_decision"),
             tags=tags,
+            consistency_warnings=consistency_warnings,
             enrichment_status=enrichment_status,
             created_at=row.get("created_at"),
             completed_at=row.get("completed_at"),

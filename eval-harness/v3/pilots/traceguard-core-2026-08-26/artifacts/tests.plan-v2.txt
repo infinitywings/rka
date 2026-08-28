@@ -1,0 +1,3 @@
+command: python3 -m unittest -v test_traceguard_smoke.py test_traceguard_plan_v2.py
+exit_code: 0
+result: 8 tests passed

@@ -662,8 +662,8 @@ class GraphService:
 
         desc_terms = [
             t
-            for t in _re.findall(r"[a-zA-Z0-9][a-zA-Z0-9_-]+", description.lower())
-            if t not in self._REPORT_STOPWORDS and len(t) > 2
+            for t in _re.findall(r"[a-zA-Z0-9][a-zA-Z0-9_-]*", description.lower())
+            if t not in self._REPORT_STOPWORDS and (len(t) > 2 or t.isdigit())
         ]
         queries: list[str] = []
         for q in angle_queries or []:

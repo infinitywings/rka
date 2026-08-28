@@ -882,7 +882,10 @@ class QueryProvenanceArgs(ProjectScopedArgs):
     """[ANY] Trace the reasoning chain that produced an entity.
 
     Filter keys: ``direction`` (``forward`` | ``backward`` | ``both``),
-    ``max_depth``.
+    ``max_depth`` (integer 1-3, default 3). ``forward`` follows what the
+    entity led to; ``backward`` follows what led to the entity. Legacy
+    ``downstream`` / ``upstream`` direction aliases remain accepted.
+    Contradictions are returned separately as non-causal context.
     """
 
     operation: Literal["provenance"] = "provenance"
@@ -893,7 +896,14 @@ class QueryProvenanceArgs(ProjectScopedArgs):
     ]
     filters: Annotated[
         Optional[dict[str, Any]],
-        Field(default=None, description="Optional filters."),
+        Field(
+            default=None,
+            description=(
+                "Optional filters: direction is forward, backward, or both "
+                "(legacy downstream/upstream aliases accepted); max_depth is "
+                "an integer from 1 through 3 and defaults to 3."
+            ),
+        ),
     ] = None
 
 
@@ -2665,19 +2675,53 @@ class TransitionExperimentRunArgs(ProjectScopedArgs):
 
 
 class RecordExperimentObservationArgs(ProjectScopedArgs):
-    """[EXECUTOR/BRAIN/PI] Record one immutable observation from a run."""
+    """[EXECUTOR/BRAIN/PI] Record one immutable observation from a run.
+
+    Value shape is enforced authoritatively by the experiment domain model:
+    provide at most one of ``value_real`` and ``value_text``. ``metric``,
+    ``comparison``, and ``test`` observations require one of them;
+    ``qualitative`` and ``failure`` observations require ``value_text``.
+    """
 
     operation: Literal["record_experiment_observation"] = "record_experiment_observation"
     run_id: Annotated[str, Field(description="Canonical run_ id.")]
     name: Annotated[str, Field(min_length=1, max_length=1000)]
-    kind: Annotated[ExperimentObservationKindLit, Field(description="Observation shape.")]
+    kind: Annotated[
+        ExperimentObservationKindLit,
+        Field(
+            description=(
+                "Observation shape. metric/comparison/test require one value; "
+                "qualitative/failure require value_text."
+            )
+        ),
+    ]
     direction: Annotated[
         ExperimentObservationDirectionLit,
         Field(description="Observed direction; independent from run success."),
     ]
     summary: Annotated[str, Field(min_length=1, max_length=50_000)]
-    value_real: Optional[float] = None
-    value_text: Annotated[Optional[str], Field(default=None, max_length=100_000)] = None
+    value_real: Annotated[
+        Optional[float],
+        Field(
+            default=None,
+            description=(
+                "Numeric value. Mutually exclusive with value_text; required "
+                "as one of the two value fields for metric/comparison/test."
+            ),
+        ),
+    ] = None
+    value_text: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            max_length=100_000,
+            description=(
+                "Text value. Mutually exclusive with value_real; required for "
+                "qualitative/failure and accepted as the value for "
+                "metric/comparison/test."
+            ),
+        ),
+    ] = None
     unit: Annotated[Optional[str], Field(default=None, max_length=256)] = None
     sample_size: Annotated[Optional[int], Field(default=None, ge=0)] = None
     uncertainty_note: Annotated[Optional[str], Field(default=None, max_length=20_000)] = None
@@ -4656,6 +4700,10 @@ class ValidateReferenceArgs(ProjectScopedArgs):
 
 class SubmitReportArgs(ProjectScopedArgs):
     """Submit a mission's final report (closes the mission).
+
+    Report submission does not infer or rewrite task outcomes. Reconcile the
+    full task list with ``update_mission_status`` first; a completed mission
+    returned with non-terminal task rows carries ``consistency_warnings``.
 
     Phase-X²' alias rule: canonical body field is ``summary``; legacy
     callers using ``content`` are accepted. Both None -> raise.

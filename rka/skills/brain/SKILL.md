@@ -14,17 +14,17 @@ Your counterparts: the **Executor** (`skills/executor/SKILL.md`) handles impleme
 
 ## Tool Surface
 
-The rka MCP server ships a **discriminated-union dispatch surface**. Five tools are always-on; everything else is reached through them:
+The rka MCP server ships a **discriminated-union dispatch surface**. Its core tools are always-on; other capabilities are reached through them:
 
 | Always-on tool | Purpose |
 |---|---|
-| `rka_query(args)` | All 67 read operations (status, context, journal, research map, planning branches, semantic proposals, claim scope, experiments, native manuscripts, outlines, change impact, etc.) |
-| `rka_execute(args)` | All 83 write/lifecycle operations (notes, decisions, missions, planning artifacts, semantic proposals, interpretation promotion, experiment evidence, claim-scope review, manuscript outlines, checkpoints, maintenance) |
-| `rka_describe(operation)` | Schema lookup + worked example for any operation; `rka_describe('')` returns the <250-token index |
+| `rka_query(args)` | Typed read operations (status, context, journal, research map, planning, experiments, manuscripts, reports, search, etc.) |
+| `rka_execute(args)` | Typed write and lifecycle operations (notes, decisions, missions, experiments, checkpoints, maintenance, etc.) |
+| `rka_describe(operation)` | Authoritative schema lookup + worked example; `rka_describe('')` returns the compact operation index |
 | `rka_load_tools(names)` | Escape hatch — brings deferred legacy tools online when you specifically need backwards-compat access |
 | `rka_help(name)` | Deprecated alias for `rka_describe`; retained always-on for cockpits that learned the v2.6.3 navigator vocabulary |
 
-`args` is a **typed Pydantic model** discriminated by `operation`. There are 150 models in `rka/mcp/operation_args.py`. FastMCP renders them as `inputSchema.oneOf` with per-branch enum constraints + required-field arrays. **The schema layer rejects wrong enum values, missing required fields, and missing provenance BEFORE the call is dispatched** — the historical `confidence='confirmed'` hallucination class is structurally impossible at the inputSchema level.
+`args` is a **typed Pydantic model** discriminated by `operation`. FastMCP renders the live models as `inputSchema.oneOf` with per-branch enum constraints + required-field arrays. **The schema layer rejects wrong enum values, missing required fields, and missing provenance BEFORE the call is dispatched** — the historical `confidence='confirmed'` hallucination class is structurally impossible at the inputSchema level. Do not rely on a documented operation count; inspect the live index and describe unfamiliar operations.
 
 ### Worked examples
 
@@ -54,7 +54,7 @@ rka_execute(args={"operation": "record_decision", "project_id": "prj_01...",
 
 # Schema lookup
 rka_describe(operation="record_decision")  # signature + example + enums
-rka_describe(operation="")                 # compact index of all 150 ops
+rka_describe(operation="")                 # compact index of current operations
 ```
 
 When a workflow below references a legacy tool name like `rka_add_decision`, treat it as a synonym for `rka_execute(args={"operation": "record_decision", ...})`. The mapping is in `rka_describe('')`. The typed-arg surface obviates `rka_load_tools` for normal work; only use it for explicit legacy access (e.g., orchestrator subprocess running with `RKA_LEGACY_TOOLS=1`).
@@ -76,8 +76,10 @@ When a workflow below references a legacy tool name like `rka_add_decision`, tre
 2. `rka_query(args={"operation": "status", "project_id": <pinned>})` — current state of the pinned project.
 3. `rka_query(args={"operation": "changelog", "project_id": <pinned>, "filters": {"since": "<last session date>"}})` — what changed.
 4. `rka_query(args={"operation": "pending_maintenance", "project_id": <pinned>})` — provenance gaps.
-5. Process up to 10 maintenance items silently. Priority:
+5. Process the highest-priority maintenance items that fit the current session budget. Priority:
    `decisions_without_justified_by` > `missions_without_motivated_by` > `unassigned_clusters` > `entries_missing_cross_refs` > `entries_without_tags`.
+   If the PI asked for a read-only query, audit, or evaluation, do not perform
+   maintenance writes; keep the findings separate for a later authorized pass.
 6. `rka_query(args={"operation": "research_map", "project_id": <pinned>})` — structural overview.
 7. Greet the user — now begin the actual conversation.
 
@@ -295,6 +297,47 @@ Full navigation command catalogue + advancement heuristics: `workflows.md` § "R
 
 A single search call is not a retrieval strategy. Measured on the rka_development corpus (eval-v3, 2026-06-11): one paragraph-shaped query reached 0.32 mean recall of report-relevant nodes; the iterative strategy below reached 0.80–1.00. Assume you must drive RKA through several calls.
 
+### Cold lifecycle retrieval contract
+
+Use this contract when the PI asks *why* something changed, *what led to* a
+result, or *what the project currently concludes*. Recover a lifecycle story,
+not a pile of top-ranked nodes:
+
+1. Identify the load-bearing slots: PI boundary or RQ; literature/design basis;
+   prior decision; triggering observation or experiment; replacement or other
+   terminal decision state; execution mission/report; latest conclusion; and
+   latest caveat or limiting condition. Skip slots that are genuinely
+   irrelevant, not merely hard to find.
+2. Start with topic-scoped context or `collect_report_context`, then use short,
+   type-scoped searches only for thin slots. Expand from strong hits and fetch
+   every entity that carries the answer.
+3. Resolve each decision chain deterministically. Fetch the candidate; while
+   its authoritative status is `superseded`, fetch the exact `superseded_by`
+   target. Track visited IDs and stop on `active`, `abandoned`, `merged`, or
+   `revisit`, or on a missing or cyclic endpoint. `retracted` is a journal
+   confidence value, not a decision status. Treat a superseded decision with a
+   missing replacement as a provenance gap. Never infer the current decision
+   from timestamps or rank.
+4. If the story names `exp_`, `run_`, or `obs_` records, hand off to the typed
+   `experiments`, `experiment_runs`, or `experiment_observations` query.
+   `epv_` plan versions and `rue_` run events are read through their parent
+   experiment or run; `elc_` locators and `evr_` evidence relations are read
+   through their parent observation. These preview IDs are valid evidence but
+   are not generic graph entities; do not pass them to `entity`, `ego_graph`,
+   or a graph-only citation field. Link them to the graph-backed mission,
+   report, journal, or decision when one exists.
+
+**Completion gate:** do not call a lifecycle story complete until you have
+verified the terminal decision status, the latest load-bearing conclusion, and
+the latest caveat or limiting condition, including records created after the
+formal report. An `active` endpoint is the in-force decision; an `abandoned`,
+`merged`, or `revisit` endpoint means this chain does not establish an active
+replacement and must be reported as such. If a targeted search confirms that a
+conclusion or caveat is not recorded, say that explicitly instead of inventing
+one. Keep the common-case evidence acquisition to at most 12 project reads; if
+the gate is still open, return the verified partial story and name the missing
+slots.
+
 1. **Scope the search to the node type you want — the largest single lever.** `search` ranks eight entity types in one list, and the node you are after loses to whichever type carries the most text. Measured on all 392 decisions in this store (eval-v3, 2026-08-23) by querying each decision with *its own question text* — the weakest possible test, which a working index should never fail: **unscoped, only 25.8 % rank in the top 20** (MRR 0.043). Adding `"filters": {"entity_types": ["decision"]}` lifts it to **93.3 %**, and to **98.0 %** when the query is also trimmed to ~8 content words. It costs nothing and is reversible.
 
    | you are looking for | scope to | self-retrieval hit@20 |
@@ -309,7 +352,13 @@ A single search call is not a retrieval strategy. Measured on the rka_developmen
 
 2. **Short queries, many angles.** FTS works best with 1–4 keyword queries. Decompose the information need into 3–5 angle queries (component names, bug/fix vocabulary, decision subjects, evaluation terms) and search each one. Length matters independently of scoping: unscoped, trimming a full question to its first 4 words moved hit@20 from 25.8 % to 64.0 %. Scoped, ~8 words maximises recall (98.0 %) and ~4 words maximises rank quality (MRR 0.443).
 3. **Expand from the best hits, not from the query.** Take the strongest 2–3 hits and traverse the graph: `ego_graph` for the linked neighborhood, `multi_hop` for ranked expansion. Typed links reach nodes whose wording shares nothing with your query — a fix-mission's produced journals, a decision's justifying evidence (+10 to +24 recall points over flat search in eval-v3).
-4. **Judge currency on the graph, never on a search hit.** A `search` result carries only `entity_type, entity_id, title, snippet, score` — **there is no `status` field**, so a superseded decision looks exactly like a current one. `ego_graph` / `multi_hop` nodes and `rka_query(args={"operation": "entity", ...})` *do* carry `status`, so expand or fetch before acting on any decision as if it were in force. This is the concrete mechanism by which a session chases its own tail. Measured on 15 real supersede chains (eval-v3, 2026-08-23): the current decision outranks its superseded predecessor 73 % of the time — but the predecessor is usually *also* in the result set at ranks 12–20, with nothing to distinguish it, and in 1 of 15 only the superseded one came back.
+4. **Judge currency from an authoritative entity read, never from rank.** A
+   `search` hit includes `status` / `superseded_by` when its source table
+   supports those fields, but the full entity or graph node is authoritative.
+   Fetch before acting, then follow the exact `superseded_by` chain as specified
+   in the cold lifecycle contract. Measured on 15 real supersede chains
+   (eval-v3, 2026-08-23), both current and superseded decisions often appear in
+   one result set; ranking alone cannot establish which one is in force.
 5. **For report-scoped collection, call `collect_report_context`** with the PI's prose description plus your angle queries. It runs seed-union + provenance-weighted graph expansion with seed protection server-side, and every returned node carries `included_via` (which query or link reached it) so you can audit the bundle.
 6. **Verify before you rely.** Fetch the full entity for anything load-bearing or borderline; never cite from a snippet alone.
 7. **Re-search thin dimensions.** If one aspect of the need came back sparse, treat it as a missing-angle signal, not proof of absence — try synonyms, and pivot through a relevant node's tags (tags name the cohort vocabulary).

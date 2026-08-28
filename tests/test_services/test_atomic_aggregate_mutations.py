@@ -11,7 +11,12 @@ from rka.models.checkpoint import CheckpointCreate, CheckpointResolve
 from rka.models.decision import DecisionCreate, DecisionUpdate
 from rka.models.journal import JournalEntryCreate, JournalEntryUpdate
 from rka.models.literature import LiteratureCreate, LiteratureUpdate
-from rka.models.mission import MissionCreate, MissionReportCreate, MissionUpdate
+from rka.models.mission import (
+    MissionCreate,
+    MissionReportCreate,
+    MissionTask,
+    MissionUpdate,
+)
 from rka.models.project import ProjectCreate
 from rka.services.checkpoints import CheckpointNotFoundError, CheckpointService
 from rka.services.decisions import DecisionService
@@ -629,3 +634,58 @@ async def test_report_materialization_failure_rolls_back_whole_report(
     assert await db.fetchone(
         "SELECT id FROM fts_journal WHERE fts_journal MATCH 'reportfirsttoken'"
     ) is None
+
+
+@pytest.mark.asyncio
+async def test_submit_report_surfaces_open_task_consistency_warning(
+    db_with_project: Database,
+) -> None:
+    service = MissionService(db_with_project, project_id=PROJECT_ID)
+    mission = await service.create(
+        MissionCreate(
+            phase="execution",
+            objective="report task consistency",
+            tasks=[
+                MissionTask(description="done", status="complete"),
+                MissionTask(description="still running", status="in_progress"),
+                MissionTask(description="not started", status="pending"),
+            ],
+        )
+    )
+
+    completed = await service.submit_report(
+        mission.id,
+        MissionReportCreate(summary="execution report exists"),
+    )
+
+    assert completed.status == "complete"
+    assert completed.consistency_warnings == [
+        "Mission is complete but has non-terminal task rows "
+        "(in_progress=1, pending=1); reconcile task status before treating "
+        "the report as a fully closed execution record."
+    ]
+
+
+@pytest.mark.asyncio
+async def test_submit_report_accepts_terminal_task_rows_without_warning(
+    db_with_project: Database,
+) -> None:
+    service = MissionService(db_with_project, project_id=PROJECT_ID)
+    mission = await service.create(
+        MissionCreate(
+            phase="execution",
+            objective="terminal report tasks",
+            tasks=[
+                MissionTask(description="done", status="complete"),
+                MissionTask(description="intentionally omitted", status="skipped"),
+            ],
+        )
+    )
+
+    completed = await service.submit_report(
+        mission.id,
+        MissionReportCreate(summary="terminal task report"),
+    )
+
+    assert completed.status == "complete"
+    assert completed.consistency_warnings == []

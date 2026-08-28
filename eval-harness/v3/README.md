@@ -8,7 +8,7 @@ does not fade away as context grows.**
 | Component | Question | Entry point |
 |---|---|---|
 | [`self_study/`](self_study/README.md) | Is the record itself healthy? Provenance coverage, research-debt trajectory, mission-cycle friction, pipeline-stage flow. | `compute_metrics.py --db <snapshot>` |
-| [`tracing/`](tracing/schema.md) | Can complex decisions be retrieved with their rationale, evidence, literature, and directives via back-tracing — and does retrieval survive pivots (superseded plans)? | `runner.py --corpus … --rka-url …` |
+| [`tracing/`](tracing/schema.md) | Can complex decisions be retrieved as complete, current research stories — rationale, evidence, literature, execution, results, and pivots? | `runner.py --corpus … --rka-url …`; `score_story_responses.py --corpus … --run-id … --responses … --traces …` |
 | [`retention/`](retention/schema.md) | Do planted directives and evidence survive context growth? Retention curve per arm: RKA retrieval vs plain long-context vs naive RAG. | `runner.py --corpus … --arms …` |
 | [`writer/`](writer/protocol.md) | Do the saved evidence and knowledge graph produce better-grounded manuscript drafts? Grounding + evidence-utilization deltas vs a flat-dump baseline. | `score_drafts.py --scenario …` |
 

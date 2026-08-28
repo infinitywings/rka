@@ -175,6 +175,27 @@ async def test_dispatch_query_threads_project_id(
     assert captured_kw.get("project_id") == "prj_specific_test"
 
 
+async def test_dispatch_query_provenance_uses_endpoint_safe_depth_default(
+    recorder: _Recorder,
+) -> None:
+    """Typed provenance dispatch must not exceed the ego endpoint's max depth."""
+    await verb_dispatch.dispatch_query(
+        "provenance",
+        id="dec_01XYZ",
+        project_id="prj_test",
+    )
+
+    assert recorder.calls[-1] == (
+        "rka_trace_provenance",
+        {
+            "entity_id": "dec_01XYZ",
+            "direction": "both",
+            "max_depth": 3,
+            "project_id": "prj_test",
+        },
+    )
+
+
 async def test_dispatch_interpretation_staging_threads_typed_review_fields(
     recorder: _Recorder,
 ) -> None:

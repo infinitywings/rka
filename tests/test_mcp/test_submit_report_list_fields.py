@@ -19,7 +19,9 @@ each layer was internally consistent.
 from __future__ import annotations
 
 import inspect
+import json
 
+import httpx
 import pytest
 
 from rka.mcp import server
@@ -90,3 +92,64 @@ class TestDocumentedExample:
             findings=findings,
         )
         MissionReportCreate(summary="done", findings=_report_lines(findings))
+
+
+@pytest.mark.asyncio
+async def test_typed_submit_report_returns_mission_consistency_readback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warning = (
+        "Mission is complete but has non-terminal task rows (pending=1); "
+        "reconcile task status before treating the report as a fully closed "
+        "execution record."
+    )
+    captured: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(
+            {
+                "path": request.url.path,
+                "body": json.loads(request.content),
+            }
+        )
+        return httpx.Response(
+            200,
+            json={
+                "id": "mis_01TEST",
+                "project_id": "prj_01TEST",
+                "status": "complete",
+                "tasks": [{"description": "unfinished", "status": "pending"}],
+                "report": {"mission_id": "mis_01TEST", "summary": "done"},
+                "consistency_warnings": [warning],
+            },
+        )
+
+    def client(_project_id: str | None = None) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            base_url="http://testserver",
+        )
+
+    monkeypatch.setattr(server, "_client", client)
+    result = await server.rka_execute(
+        SubmitReportArgs(
+            operation="submit_report",
+            project_id="prj_01TEST",
+            mission_id="mis_01TEST",
+            summary="done",
+        )
+    )
+    payload = json.loads(result)
+
+    assert payload["status"] == "complete"
+    assert payload["report"]["summary"] == "done"
+    assert payload["consistency_warnings"] == [warning]
+    report_request = next(
+        request
+        for request in captured
+        if request["path"] == "/api/missions/mis_01TEST/report"
+    )
+    assert report_request["body"] == {
+        "summary": "done",
+        "tasks_completed": ["done"],
+    }
