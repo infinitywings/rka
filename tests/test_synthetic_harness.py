@@ -35,6 +35,10 @@ _EVAL_HARNESS_DIR = Path(__file__).resolve().parent.parent / "eval-harness"
 if str(_EVAL_HARNESS_DIR) not in sys.path:
     sys.path.insert(0, str(_EVAL_HARNESS_DIR))
 
+from v3.core_retrieval.runner import (  # noqa: E402
+    _plant_cross_project_edge,
+    measure_baseline,
+)
 from v3.tracing.metrics import story_scores  # noqa: E402
 
 # eval-harness/ has a hyphen (not an importable package name); load the
@@ -166,8 +170,43 @@ async def harness(tmp_path_factory: pytest.TempPathFactory):
                 },
             )
             shadow_decision.raise_for_status()
+            shadow_literature = await client.post(
+                "/api/literature",
+                headers=shadow_headers,
+                json={
+                    "title": "Shadow FUOTA signatures and fragment integrity",
+                    "abstract": "Opposite-project decoy with overlapping vocabulary.",
+                    "status": "read",
+                },
+            )
+            shadow_literature.raise_for_status()
+            shadow_claim = await client.post(
+                "/api/claims",
+                headers=shadow_headers,
+                json={
+                    "source_entry_id": shadow_note.json()["id"],
+                    "claim_type": "result",
+                    "content": (
+                        "Shadow result for signature latency and fragment acceptance."
+                    ),
+                    "confidence": 0.5,
+                },
+            )
+            shadow_claim.raise_for_status()
             gt["shadow_project_id"] = shadow_id
-            foreign_ids = [shadow_note.json()["id"], shadow_decision.json()["id"]]
+            foreign_ids = [
+                shadow_note.json()["id"],
+                shadow_literature.json()["id"],
+                shadow_decision.json()["id"],
+                shadow_claim.json()["id"],
+            ]
+            gt["foreign_ids"] = foreign_ids
+            await _plant_cross_project_edge(
+                app.state.db,
+                local_project_id=gt["project_id"],
+                local_source_id=gt["currency_checks"]["current_decision"],
+                foreign_target_id=shadow_decision.json()["id"],
+            )
             for story in gt["stories"]:
                 story["story"]["foreign_must_exclude"] = foreign_ids
 
@@ -261,6 +300,27 @@ async def test_needle_retrieval(harness):
         if n["entity_id"] not in got:
             missed.append(f"{n['qid']} ({n['category']}): {n['question'][:60]}")
     assert not missed, f"needle recall@10 < 1.0; missed: {missed}"
+
+
+async def test_core_retrieval_quality_and_latency_gate(harness):
+    """E1.6: one provider-free gate records every supported retrieval class."""
+    result = await measure_baseline(
+        harness.client,
+        project_id=harness.gt["project_id"],
+        ground_truth=harness.gt,
+        foreign_ids=harness.gt["foreign_ids"],
+        repeats=3,
+        warmups=1,
+    )
+
+    assert {task["entity_type"] for task in result["tasks"]} == {
+        "journal",
+        "claim",
+        "decision",
+        "literature",
+    }
+    assert result["linked_neighborhoods"]
+    assert result["gates"]["pass"], result
 
 
 async def test_supersession_correctness(harness):

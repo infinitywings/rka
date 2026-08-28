@@ -16,6 +16,7 @@ from rka.infra.database import Database
 from rka.models.project import ProjectCreate
 from rka.services.graph import GraphService
 from rka.services.project import ProjectService
+from rka.services.search import SearchHit
 
 PROJECT_ID = "proj_test_multi_hop"
 
@@ -94,11 +95,190 @@ async def small_graph(db: Database):
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             [f"lnk_{src_id}_{tgt_id}", src_t, src_id, link, tgt_t, tgt_id, PROJECT_ID],
         )
+    await db.execute(
+        "UPDATE decisions SET status = 'superseded', superseded_by = ? WHERE id = ?",
+        ["dec_seed", "dec_old"],
+    )
     await db.commit()
     return db
 
 
 class TestMultiHopRetrieval:
+    async def test_local_stamped_cross_project_edge_is_pruned(self, small_graph):
+        await small_graph.execute(
+            "INSERT INTO projects (id, name, created_by) VALUES (?, ?, ?)",
+            ["proj_foreign_edge", "Foreign Edge", "system"],
+        )
+        await small_graph.execute(
+            "INSERT INTO decisions (id, phase, question, decided_by, project_id) "
+            "VALUES (?, 'design', ?, 'pi', ?)",
+            ["dec_foreign_endpoint", "Foreign endpoint", "proj_foreign_edge"],
+        )
+        await small_graph.execute(
+            """INSERT INTO entity_links
+               (id, source_type, source_id, link_type, target_type, target_id,
+                project_id)
+               VALUES (?, 'decision', 'dec_seed', 'references', 'decision', ?, ?)""",
+            ["lnk_dirty_cross_project", "dec_foreign_endpoint", PROJECT_ID],
+        )
+
+        svc = GraphService(small_graph)
+        multi = await svc.multi_hop_retrieval(
+            query="ignored",
+            seeds=["dec_seed"],
+            max_depth=2,
+            max_nodes=20,
+            project_id=PROJECT_ID,
+        )
+        ego = await svc.get_ego_graph("dec_seed", depth=2, project_id=PROJECT_ID)
+
+        for result in (multi, ego):
+            assert "dec_foreign_endpoint" not in {
+                node["id"] for node in result["nodes"]
+            }
+            assert all(
+                "dec_foreign_endpoint" not in {edge["source"], edge["target"]}
+                for edge in result["edges"]
+            )
+
+    async def test_valid_interpretation_and_observation_anchors_survive(
+        self, small_graph
+    ):
+        await small_graph.execute(
+            """INSERT INTO interpretation_candidates
+               (id, project_id, source_type, source_id, locator_kind,
+                locator_value, statement, epistemic_kind, created_by,
+                extraction_tool)
+               VALUES ('icd_graph_anchor', ?, 'journal', 'jrn_a', 'record',
+                       'full_record', 'Candidate graph anchor', 'inference',
+                       'brain', 'test')""",
+            [PROJECT_ID],
+        )
+        await small_graph.execute(
+            """INSERT INTO experiments
+               (id, project_id, title, created_by)
+               VALUES ('exp_graph_anchor', ?, 'Graph anchor experiment', 'pi')""",
+            [PROJECT_ID],
+        )
+        await small_graph.execute(
+            """INSERT INTO experiment_plan_versions
+               (id, experiment_id, project_id, version, objective, protocol,
+                created_by, reason)
+               VALUES ('epv_graph_anchor', 'exp_graph_anchor', ?, 1,
+                       'Test graph anchors', 'Run once', 'pi', 'test')""",
+            [PROJECT_ID],
+        )
+        await small_graph.execute(
+            """INSERT INTO experiment_runs
+               (id, experiment_id, project_id, plan_version, label, runner,
+                created_by)
+               VALUES ('run_graph_anchor', 'exp_graph_anchor', ?, 1,
+                       'Graph anchor run', 'manual', 'executor')""",
+            [PROJECT_ID],
+        )
+        await small_graph.execute(
+            """INSERT INTO experiment_observations
+               (id, run_id, project_id, name, kind, direction, summary,
+                value_real, observed_at, recorded_by)
+               VALUES ('obs_graph_anchor', 'run_graph_anchor', ?, 'Anchor metric',
+                       'metric', 'positive', 'Observation graph anchor', 1.0,
+                       '2026-08-28T00:00:00Z', 'executor')""",
+            [PROJECT_ID],
+        )
+
+        svc = GraphService(small_graph)
+        for entity_id in ("icd_graph_anchor", "obs_graph_anchor"):
+            result = await svc.multi_hop_retrieval(
+                query="ignored",
+                seeds=[entity_id],
+                max_depth=0,
+                max_nodes=5,
+                project_id=PROJECT_ID,
+            )
+            assert [node["id"] for node in result["nodes"]] == [entity_id]
+
+    async def test_report_context_does_not_attach_a_foreign_tag(self, small_graph):
+        await small_graph.execute(
+            "INSERT INTO projects (id, name, created_by) VALUES (?, ?, ?)",
+            ["proj_foreign_context_tag", "Foreign Context Tag", "system"],
+        )
+        await small_graph.execute(
+            "INSERT INTO tags (project_id, tag, entity_type, entity_id) "
+            "VALUES (?, ?, ?, ?)",
+            ["proj_foreign_context_tag", "foreign-only", "decision", "dec_seed"],
+        )
+
+        class _SeedSearch:
+            def with_project(self, _project_id: str):
+                return self
+
+            async def search(self, _query: str, limit: int = 20):
+                return [SearchHit("decision", "dec_seed", "seed", "seed")][:limit]
+
+        result = await GraphService(small_graph).collect_report_context(
+            "seed",
+            angle_queries=["seed"],
+            max_depth=0,
+            max_nodes=10,
+            project_id=PROJECT_ID,
+            search_service=_SeedSearch(),
+        )
+
+        node = next(node for node in result["nodes"] if node["id"] == "dec_seed")
+        assert "foreign-only" not in node["tags"]
+
+    async def test_foreign_or_missing_explicit_seed_is_not_a_placeholder(
+        self, small_graph
+    ):
+        await small_graph.execute(
+            "INSERT INTO projects (id, name, created_by) VALUES (?, ?, ?)",
+            ["proj_foreign_graph", "Foreign Graph", "system"],
+        )
+        await small_graph.execute(
+            "INSERT INTO decisions (id, phase, question, decided_by, project_id) "
+            "VALUES (?, 'design', ?, 'pi', ?)",
+            ["dec_foreign_seed", "Foreign seed", "proj_foreign_graph"],
+        )
+        svc = GraphService(small_graph)
+
+        foreign = await svc.multi_hop_retrieval(
+            query="ignored",
+            seeds=["dec_foreign_seed"],
+            max_depth=2,
+            max_nodes=20,
+            project_id=PROJECT_ID,
+        )
+        missing = await svc.multi_hop_retrieval(
+            query="ignored",
+            seeds=["dec_missing_seed"],
+            max_depth=2,
+            max_nodes=20,
+            project_id=PROJECT_ID,
+        )
+
+        assert foreign["nodes"] == []
+        assert foreign["seeds"] == []
+        assert missing["nodes"] == []
+        assert missing["seeds"] == []
+
+    async def test_foreign_ego_root_returns_an_empty_graph(self, small_graph):
+        await small_graph.execute(
+            "INSERT INTO projects (id, name, created_by) VALUES (?, ?, ?)",
+            ["proj_foreign_ego", "Foreign Ego", "system"],
+        )
+        await small_graph.execute(
+            "INSERT INTO decisions (id, phase, question, decided_by, project_id) "
+            "VALUES (?, 'design', ?, 'pi', ?)",
+            ["dec_foreign_ego", "Foreign ego", "proj_foreign_ego"],
+        )
+        svc = GraphService(small_graph)
+
+        result = await svc.get_ego_graph(
+            "dec_foreign_ego", depth=2, project_id=PROJECT_ID
+        )
+
+        assert result == {"nodes": [], "edges": []}
+
     async def test_seeds_appear_first_with_max_score(self, small_graph):
         svc = GraphService(small_graph)
         result = await svc.multi_hop_retrieval(
@@ -133,6 +313,22 @@ class TestMultiHopRetrieval:
             f"motivated (w=1.0) should outrank supersedes (w=0.3); got mis_a={scores['mis_a']}, "
             f"dec_old={scores['dec_old']}"
         )
+
+    async def test_nodes_expose_canonical_currentness(self, small_graph):
+        svc = GraphService(small_graph)
+        result = await svc.multi_hop_retrieval(
+            query="ignored",
+            seeds=["dec_seed"],
+            max_depth=1,
+            max_nodes=20,
+            project_id=PROJECT_ID,
+        )
+        nodes = {node["id"]: node for node in result["nodes"]}
+
+        assert nodes["dec_seed"]["currentness"]["is_current"] is True
+        assert nodes["dec_old"]["currentness"]["is_current"] is False
+        assert nodes["dec_old"]["superseded_by"] == "dec_seed"
+        assert "status:superseded" in nodes["dec_old"]["currentness"]["reasons"]
 
     async def test_max_nodes_cap_truncates_result(self, small_graph):
         svc = GraphService(small_graph)

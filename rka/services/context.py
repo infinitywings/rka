@@ -31,8 +31,6 @@ import logging
 import math
 import os
 from datetime import datetime, timezone
-from typing import Literal
-
 from rka.infra.database import Database
 from rka.infra.llm import LLMClient
 from rka.models.context import ContextPackage
@@ -99,6 +97,24 @@ _DEFAULT_PI_SOURCE_LIFT_NORMALIZED = 0.125
 # to whether a language model happened to be configured. 400 was the
 # fallback that applied whenever it was not.
 _EVIDENCE_BLOCK_LIMIT = 400
+
+_CONTEXT_ENTITY_TABLES = {
+    "journal": "journal",
+    "decision": "decisions",
+    "literature": "literature",
+    "mission": "missions",
+    "claim": "claims",
+    "cluster": "evidence_clusters",
+}
+
+_CONTEXT_ID_PREFIX_TO_TYPE = {
+    "jrn_": "journal",
+    "dec_": "decision",
+    "lit_": "literature",
+    "mis_": "mission",
+    "clm_": "claim",
+    "ecl_": "cluster",
+}
 
 # 1/(1+days) shape exactly). Operator override via RKA_CTX_RECENCY_SHAPE_N
 # preserved for Phase-3.2 candidate-set experimentation.
@@ -345,10 +361,31 @@ class ContextEngine:
         head = candidates[:k]
         head_ids = {e["id"] for e in head}
         extras: list[dict] = []
-        union_ids = set(anchor_aware_ids or ()) | pinned_ids
+        requested_anchor_ids = list(dict.fromkeys(anchor_aware_ids or ()))
+        union_ids = set(requested_anchor_ids) | pinned_ids
         if union_ids:
             for entry in candidates[k:]:
                 if entry["id"] in union_ids and entry["id"] not in head_ids:
+                    extras.append(entry)
+                    head_ids.add(entry["id"])
+
+        # Anchor-aware tools may surface an entity outside the overview/search
+        # candidate window (for example, the journal overview query is capped
+        # at 50 rows).  The public contract says those explicit IDs survive the
+        # bundle cap, so hydrate any still-missing IDs directly.  The lookup is
+        # project-scoped: a foreign-project ID is ignored rather than leaked.
+        missing_anchor_ids = [
+            entity_id
+            for entity_id in requested_anchor_ids
+            if entity_id not in head_ids
+        ]
+        if missing_anchor_ids:
+            direct_extras = await self._hydrate_context_ids(
+                missing_anchor_ids,
+                project_id=project_id,
+            )
+            for entry in direct_extras:
+                if entry["id"] not in head_ids:
                     extras.append(entry)
                     head_ids.add(entry["id"])
         candidates = head + extras
@@ -512,17 +549,9 @@ class ContextEngine:
         Extension is symmetric with the existing render path: SELECT * gated
         on (id, project_id) plus an entity_type annotation.
         """
-        table_map = {
-            "journal": "journal",
-            "decision": "decisions",
-            "literature": "literature",
-            "mission": "missions",
-            "claim": "claims",
-            "cluster": "evidence_clusters",
-        }
         results = []
         for hit in hits:
-            table = table_map.get(hit.entity_type)
+            table = _CONTEXT_ENTITY_TABLES.get(hit.entity_type)
             if not table:
                 continue
             row = await self.db.fetchone(
@@ -531,6 +560,35 @@ class ContextEngine:
             )
             if row:
                 row["entity_type"] = hit.entity_type
+                results.append(row)
+        return results
+
+    async def _hydrate_context_ids(
+        self,
+        entity_ids: list[str],
+        *,
+        project_id: str,
+    ) -> list[dict]:
+        """Hydrate explicit context IDs in caller order and project scope."""
+        results: list[dict] = []
+        for entity_id in entity_ids:
+            entity_type = next(
+                (
+                    candidate_type
+                    for prefix, candidate_type in _CONTEXT_ID_PREFIX_TO_TYPE.items()
+                    if entity_id.startswith(prefix)
+                ),
+                None,
+            )
+            if entity_type is None:
+                continue
+            table = _CONTEXT_ENTITY_TABLES[entity_type]
+            row = await self.db.fetchone(
+                f"SELECT * FROM {table} WHERE id = ? AND project_id = ?",
+                [entity_id, project_id],
+            )
+            if row:
+                row["entity_type"] = entity_type
                 results.append(row)
         return results
 

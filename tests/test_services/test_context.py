@@ -804,21 +804,22 @@ class TestPhase3_1T2BundleTruncation:
         monkeypatch: pytest.MonkeyPatch,
     ):
         """Anchor-aware-tool outputs UNION through the top-K cap regardless
-        of weighted-sum rank. With K=30 and the SQL-LIMITed 50 candidates,
-        IDs at rank [30..49] are normally truncated; passing them via
-        anchor_aware_ids restores them.
-
-        (Note: the journal SQL has LIMIT 50, so candidates max out at 50
-        even when the fixture has 70 entries. Testing UNION with K=30
-        keeps the candidate count above K while leaving room for protected
-        entries that would otherwise be truncated.)"""
+        of weighted-sum rank or the SQL candidate window.  The deliberately
+        old anchor below is outside the journal query's LIMIT 50; passing it
+        via anchor_aware_ids must hydrate and restore it."""
         monkeypatch.setenv("RKA_CTX_BUNDLE_K", "30")
 
-        # The fixture inserts i=0..69; SQL LIMIT 50 + ORDER BY created_at
-        # DESC + ROWID-tiebreak → candidates ≈ jrn_d4_000..049 (the first
-        # 50 inserted, sharing the same created_at). jrn_d4_049 is at
-        # rank ~49, well outside K=30.
-        outside_top_k_id = "jrn_d4_049"
+        outside_top_k_id = "jrn_d4_anchor"
+        await engine_with_many_entries.db.execute(
+            """INSERT INTO journal
+                   (id, type, content, source, confidence, importance, phase,
+                    project_id, created_at, updated_at)
+               VALUES (?, 'note', 'Explicit old anchor', 'executor',
+                       'verified', 'normal', 'phase_1', 'proj_default',
+                       '2000-01-01T00:00:00Z', '2000-01-01T00:00:00Z')""",
+            [outside_top_k_id],
+        )
+        await engine_with_many_entries.db.commit()
 
         pkg = await engine_with_many_entries.get_context(
             anchor_aware_ids=[outside_top_k_id],
@@ -834,6 +835,56 @@ class TestPhase3_1T2BundleTruncation:
             f"Bundle size: top-K=30 + 1 UNION extra = 31; got "
             f"{len(pkg.sources)}."
         )
+
+    async def test_anchor_aware_foreign_project_id_is_not_hydrated(
+        self,
+        engine_with_many_entries: ContextEngine,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Direct anchor hydration must retain project isolation."""
+        monkeypatch.setenv("RKA_CTX_BUNDLE_K", "30")
+        foreign_id = "jrn_d4_foreign"
+        await engine_with_many_entries.db.execute(
+            """INSERT INTO journal
+                   (id, type, content, source, confidence, importance, phase,
+                    project_id, created_at, updated_at)
+               VALUES (?, 'note', 'Foreign anchor', 'executor', 'verified',
+                       'normal', 'phase_1', 'proj_foreign',
+                       '2000-01-01T00:00:00Z', '2000-01-01T00:00:00Z')""",
+            [foreign_id],
+        )
+        await engine_with_many_entries.db.commit()
+
+        pkg = await engine_with_many_entries.get_context(
+            project_id="proj_default",
+            anchor_aware_ids=[foreign_id],
+        )
+
+        assert foreign_id not in pkg.sources
+        assert len(pkg.sources) == 30
+
+    async def test_anchor_aware_cluster_outside_overview_is_hydrated(
+        self,
+        engine_with_many_entries: ContextEngine,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Canonical ecl_ cluster anchors bypass the overview type window."""
+        monkeypatch.setenv("RKA_CTX_BUNDLE_K", "30")
+        cluster_id = "ecl_d4_anchor"
+        await engine_with_many_entries.db.execute(
+            """INSERT INTO evidence_clusters (id, label, project_id)
+               VALUES (?, 'Explicit cluster anchor', 'proj_default')""",
+            [cluster_id],
+        )
+        await engine_with_many_entries.db.commit()
+
+        pkg = await engine_with_many_entries.get_context(
+            anchor_aware_ids=[cluster_id],
+        )
+
+        assert cluster_id in pkg.sources
+        assert len(pkg.sources) == 31
+        assert any("[cluster|" in entry for entry in pkg.entries)
 
     async def test_anchor_aware_present_no_longer_gates_truncation(
         self, engine_with_many_entries: ContextEngine

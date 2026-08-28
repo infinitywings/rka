@@ -1,0 +1,184 @@
+{
+  "corpus_source_sha256": "0e640d7dd837c41fd0a9ba5cc4add6ea44f354fd9084268e4e35df50a375789f",
+  "currency": {
+    "claim_currency_visible": true,
+    "decision_currency_visible": true,
+    "decision_current_first": true,
+    "decision_current_rank": 0,
+    "decision_superseded_rank": 9,
+    "journal_currency_visible": true,
+    "stale_claim_filtered": true,
+    "superseded_journal_filtered": true
+  },
+  "environment": {
+    "ci": false,
+    "database": "temporary SQLite WAL",
+    "embedding_mode": "disabled",
+    "llm_mode": "disabled",
+    "machine": "arm64",
+    "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+    "python": "3.13.11",
+    "sqlite": "3.50.4",
+    "transport": "in-process ASGI",
+    "writer_dependency": false
+  },
+  "gates": {
+    "checks": {
+      "claim_currency_visible": true,
+      "decision_currency_visible": true,
+      "decision_current_first": true,
+      "direct_task_coverage": true,
+      "entity_recall": true,
+      "foreign_anchor_rejected": true,
+      "journal_currency_visible": true,
+      "linked_currentness_coverage": true,
+      "linked_edge_recall": true,
+      "linked_neighborhood_latency": true,
+      "linked_node_recall": true,
+      "linked_task_coverage": true,
+      "project_isolation": true,
+      "search_latency": true,
+      "stale_claim_filtered": true,
+      "superseded_journal_filtered": true
+    },
+    "pass": true
+  },
+  "generated_at": "2026-08-28T16:12:52.643259+00:00",
+  "isolation": {
+    "foreign_anchor_nodes": 0,
+    "foreign_edge_endpoint_ids": [],
+    "foreign_edge_endpoints": 0,
+    "foreign_hit_ids": [],
+    "foreign_hits": 0
+  },
+  "linked_neighborhoods": [
+    {
+      "currentness_coverage": 1.0,
+      "edge_recall": 1.0,
+      "expected_edge_count": 4,
+      "expected_node_count": 5,
+      "max_ms": 2.123,
+      "node_recall": 1.0,
+      "p50_ms": 1.956,
+      "p95_ms": 2.123,
+      "task_id": "signature-evidence-neighborhood"
+    }
+  ],
+  "protocol": {
+    "repetitions_per_task": 7,
+    "timed_region": "REST request only; corpus build, migrations, and FTS rebuild excluded",
+    "warmups_per_task": 1
+  },
+  "schema_version": 1,
+  "source": {
+    "commit": "ad08ac40f522786f658c623fee3d4733cfcf62db",
+    "dirty": false
+  },
+  "tasks": [
+    {
+      "entity_type": "journal",
+      "expected_count": 1,
+      "last_result_count": 4,
+      "max_ms": 1.459,
+      "mrr": 1.0,
+      "p50_ms": 1.241,
+      "p95_ms": 1.459,
+      "recall_at_k": 1.0,
+      "task_id": "journal-target-hardware",
+      "top_k": 10
+    },
+    {
+      "entity_type": "literature",
+      "expected_count": 1,
+      "last_result_count": 1,
+      "max_ms": 1.193,
+      "mrr": 1.0,
+      "p50_ms": 1.167,
+      "p95_ms": 1.193,
+      "recall_at_k": 1.0,
+      "task_id": "literature-pqc-feasibility",
+      "top_k": 10
+    },
+    {
+      "entity_type": "literature",
+      "expected_count": 1,
+      "last_result_count": 2,
+      "max_ms": 1.649,
+      "mrr": 1.0,
+      "p50_ms": 1.3,
+      "p95_ms": 1.649,
+      "recall_at_k": 1.0,
+      "task_id": "literature-delta-updates",
+      "top_k": 10
+    },
+    {
+      "entity_type": "decision",
+      "expected_count": 1,
+      "last_result_count": 8,
+      "max_ms": 1.379,
+      "mrr": 1.0,
+      "p50_ms": 1.348,
+      "p95_ms": 1.379,
+      "recall_at_k": 1.0,
+      "task_id": "decision-current-signature",
+      "top_k": 10
+    },
+    {
+      "entity_type": "claim",
+      "expected_count": 1,
+      "last_result_count": 1,
+      "max_ms": 1.472,
+      "mrr": 1.0,
+      "p50_ms": 1.306,
+      "p95_ms": 1.472,
+      "recall_at_k": 1.0,
+      "task_id": "claim-signature-latency",
+      "top_k": 10
+    },
+    {
+      "entity_type": "journal",
+      "expected_count": 1,
+      "last_result_count": 10,
+      "max_ms": 1.701,
+      "mrr": 1.0,
+      "p50_ms": 1.56,
+      "p95_ms": 1.701,
+      "recall_at_k": 1.0,
+      "task_id": "journal-fragment-baseline",
+      "top_k": 10
+    },
+    {
+      "entity_type": "claim",
+      "expected_count": 1,
+      "last_result_count": 1,
+      "max_ms": 1.199,
+      "mrr": 1.0,
+      "p50_ms": 1.174,
+      "p95_ms": 1.199,
+      "recall_at_k": 1.0,
+      "task_id": "claim-fragment-mitigation",
+      "top_k": 10
+    },
+    {
+      "entity_type": "decision",
+      "expected_count": 1,
+      "last_result_count": 10,
+      "max_ms": 1.763,
+      "mrr": 1.0,
+      "p50_ms": 1.532,
+      "p95_ms": 1.763,
+      "recall_at_k": 1.0,
+      "task_id": "decision-integrity-research-question",
+      "top_k": 10
+    }
+  ],
+  "thresholds": {
+    "entity_recall_at_k_min": 1.0,
+    "foreign_hits_max": 0,
+    "linked_currentness_coverage_min": 1.0,
+    "linked_edge_recall_min": 1.0,
+    "linked_neighborhood_p95_ms_max": 1000.0,
+    "linked_node_recall_min": 1.0,
+    "search_p95_ms_max": 500.0
+  }
+}

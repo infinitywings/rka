@@ -186,7 +186,7 @@ class SearchService:
         return stripped.strip(), constraints
 
     async def _apply_constraints(
-        self, hits: list[SearchHit], constraints: dict, limit: int
+        self, hits: list[SearchHit], constraints: dict
     ) -> list[SearchHit]:
         """Filter candidate hits by interpreted metadata constraints.
 
@@ -223,7 +223,7 @@ class SearchService:
                 f"SELECT id FROM {table} WHERE {' AND '.join(conds)}", params
             )
             keep_ids.update(r["id"] for r in rows)
-        return [h for h in hits if h.entity_id in keep_ids][:limit]
+        return [h for h in hits if h.entity_id in keep_ids]
 
     async def search(
         self,
@@ -252,19 +252,69 @@ class SearchService:
             if constraints.get("source") and entity_types is None:
                 types = ["journal"]
             inner = stripped_query if _tokens_remain(stripped_query) else query
-            hits = await self._search_unconstrained(
-                inner, types, limit * 4, keyword_weight, semantic_weight
+            return await self._search_current_first_window(
+                inner,
+                types,
+                limit,
+                keyword_weight,
+                semantic_weight,
+                constraints=constraints,
             )
-            if not hits and constraints.get("source"):
-                # Pure-anchor query ("PI directives this week"): fall back to
-                # a metadata-only listing of matching journal entries.
-                hits = await self._metadata_only_journal(constraints, limit * 4)
-            constrained = await self._apply_constraints(hits, constraints, limit)
-            return self._current_first(await self._attach_currency(constrained))
-        plain = await self._search_unconstrained(
-            query, types, limit, keyword_weight, semantic_weight
+        return await self._search_current_first_window(
+            query,
+            types,
+            limit,
+            keyword_weight,
+            semantic_weight,
         )
-        return self._current_first(await self._attach_currency(plain))
+
+    async def _search_current_first_window(
+        self,
+        query: str,
+        types: list[str],
+        limit: int,
+        keyword_weight: float,
+        semantic_weight: float,
+        *,
+        constraints: dict | None = None,
+    ) -> list[SearchHit]:
+        """Expand candidates until current-first ranking is conclusive.
+
+        A fixed overfetch factor fails when an arbitrarily long run of retired
+        exact matches precedes a live replacement. Expansion stops as soon as
+        the requested number of live hits is present, or when the retrieval
+        sources return fewer rows than requested and are therefore exhausted.
+        """
+        candidate_limit = max(limit * 2, limit + 10)
+        while True:
+            plain = await self._search_unconstrained(
+                query,
+                types,
+                candidate_limit,
+                keyword_weight,
+                semantic_weight,
+            )
+            candidates = plain
+            if constraints:
+                if not candidates and constraints.get("source"):
+                    candidates = await self._metadata_only_journal(
+                        constraints, candidate_limit
+                    )
+                candidates = await self._apply_constraints(candidates, constraints)
+            annotated = await self._attach_currency(candidates)
+            ordered = self._current_first(annotated)
+            live_count = sum(not self._is_retired(hit) for hit in ordered)
+            if live_count >= max(limit, 0) or len(plain) < candidate_limit:
+                return ordered[:limit]
+            candidate_limit *= 2
+
+    @staticmethod
+    def _is_retired(hit: SearchHit) -> bool:
+        return bool(
+            hit.status == "superseded"
+            or hit.superseded_by
+            or hit.stale
+        )
 
     @staticmethod
     def _current_first(hits: list[SearchHit]) -> list[SearchHit]:
@@ -280,14 +330,7 @@ class SearchService:
         fusion produced, so this decides only the current-vs-retired tie and
         leaves every other ranking alone.
         """
-        def retired(h: SearchHit) -> bool:
-            return bool(
-                h.status == "superseded"
-                or h.superseded_by
-                or h.stale
-            )
-
-        return sorted(hits, key=retired)
+        return sorted(hits, key=SearchService._is_retired)
 
     async def _attach_currency(self, hits: list[SearchHit]) -> list[SearchHit]:
         """Fill status / superseded_by / stale on every hit that has one.
@@ -611,14 +654,20 @@ class SearchService:
 
         matched: dict[tuple[str, str], set[str]] = {}
         matched_tags: dict[tuple[str, str], set[str]] = {}
+        project_clause = (
+            "(project_id = ? OR project_id IS NULL)"
+            if self.project_id == "proj_default"
+            else "project_id = ?"
+        )
         for tok in sorted(tokens)[:12]:
             rows = await self.db.fetchall(
-                """SELECT tag, entity_type, entity_id FROM tags
-                   WHERE tag = ?
-                      OR tag LIKE ? || '-%'
-                      OR tag LIKE '%-' || ?
-                      OR tag LIKE '%-' || ? || '-%'""",
-                [tok, tok, tok, tok],
+                f"""SELECT tag, entity_type, entity_id FROM tags
+                   WHERE {project_clause} AND (
+                          tag = ?
+                       OR tag LIKE ? || '-%'
+                       OR tag LIKE '%-' || ?
+                       OR tag LIKE '%-' || ? || '-%')""",
+                [self.project_id, tok, tok, tok, tok],
             )
             for r in rows:
                 if r["entity_type"] not in types:
