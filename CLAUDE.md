@@ -27,6 +27,19 @@ When working here you are modifying the tool itself, not using it for research.
 - **v2.7.0+ tool surface (MCP)**: 3 always-on dispatch tools (`rka_query` / `rka_execute` / `rka_describe`) + 2 escape hatches (`rka_load_tools` / `rka_help`) = 5 broadcast tools. Typed Pydantic operation models in `rka/mcp/operation_args.py` provide per-branch enum + required-field enforcement at the FastMCP `inputSchema` layer (`oneOf` with `discriminator='operation'`). Use `rka_describe("")` for the live operation index and counts instead of copying a static total into agent guidance. The legacy tools and v2.7.0a2 verbs remain at `tier='deferred'`, callable via `rka_load_tools`; `RKA_LEGACY_TOOLS=1` is retained only for historical callers and is not the normal surface. Setting `RKA_SKILL_TOOLS=1` promotes the three ChatGPT skill-adapter tools (`rka_list_skills` / `rka_read_skill` / `rka_start_session`) to always-on (8-tool surface); this is used only by the ChatGPT HTTP MCP deployment on :9713 (see [`docs/chatgpt-rka-connector-handoff.md`](docs/chatgpt-rka-connector-handoff.md)), while local stdio clients leave it unset. The historical design arc is documented in [`docs/v2.6.x-v2.7.0-tool-surface-arc.md`](docs/v2.6.x-v2.7.0-tool-surface-arc.md) and `CHANGELOG.md`.
 - **Credential management**: use `rka cred` subcommands (`init` / `set` / `get` / `env` / `propagate` / `check`) — vault lives at `~/.config/rka/creds.env` (XDG-compliant, mode 0600). Never commit creds to any repo or `.env` tracked by git. Full reference: [`docs/CRED_VAULT.md`](docs/CRED_VAULT.md).
 
+## Active product boundary
+
+- RKA Core owns durable research records, provenance, integrity, retrieval,
+  migrations, and public REST/MCP contracts.
+- New manuscript, Writer, or Workbench behavior belongs in
+  [`infinitywings/rka-writer`](https://github.com/infinitywings/rka-writer), not
+  this repository. Legacy manuscript/Workbench surfaces in Core are frozen;
+  change them only for correctness, security, migration, or compatibility.
+- Agentic orchestration is shelved and unsupported. Do not add new Agentic
+  runtime, packaging, installation, or feature work without a new explicit PI
+  decision; see [ADR 0013](docs/adr/0013-shelve-agentic-and-focus-core-writer.md).
+- Core must install, start, and test without either downstream product.
+
 ## Running (Docker only)
 
 ```bash
