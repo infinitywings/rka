@@ -834,6 +834,15 @@ The Settings page shows API health status, database statistics, embedding backen
 | `RKA_DB_PATH` | `rka.db` | SQLite database file path |
 | `RKA_HOST` | `127.0.0.1` | API server bind address |
 | `RKA_PORT` | `9712` | API server port |
+| `RKA_MIGRATION_LOCK_TIMEOUT_MS` | `60000` | Bounded wait for startup schema and sqlite-vec migration locks |
+| `RKA_PHASE2_LOCK_PATH` | `<RKA_DB_PATH>.phase2.lock` | Optional shared sidecar-lock path for custom multi-process deployments |
+
+The default Docker Compose deployment intentionally keeps the server, worker,
+database, and Phase-2 sidecar lock on the same `rka-data` named volume. Do not
+replace it with a Docker Desktop host bind mount in a multi-container setup:
+cross-container `flock` is not reliably propagated there. A custom deployment
+must place the database and sidecar on a shared filesystem with working advisory
+locks, or set `RKA_PHASE2_LOCK_PATH` to such a location for every RKA process.
 
 ### 18.2 — Embedding Settings
 

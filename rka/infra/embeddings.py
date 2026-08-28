@@ -186,31 +186,41 @@ class EmbeddingService:
             # self-healed: every later edit raised and was swallowed again.
             #
             # DELETE-then-INSERT is the form already proven in
-            # embedding_backfill.py. Both statements share the commit below,
-            # so a failed INSERT cannot leave the entity with no vector at all
-            # — which would be worse than a stale one.
-            await self.db.execute(
-                f"DELETE FROM {table} WHERE id = ?",
-                [entity_id],
-            )
-            await self.db.execute(
-                f"INSERT INTO {table} (id, embedding) VALUES (?, ?)",
-                [entity_id, vec_blob],
-            )
-            await self.db.execute(
-                """INSERT OR REPLACE INTO embedding_metadata
-                   (project_id, entity_type, entity_id, content_hash, model_name, dimensions)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                [
-                    project_id,
-                    entity_type,
-                    entity_id,
-                    self.content_hash(text),
-                    self.model_name,
-                    self._backend.dim,
-                ],
-            )
-            await self.db.commit()
+            # embedding_backfill.py. The managed transaction also covers the
+            # metadata row, so a failed INSERT cannot leave the entity with no
+            # vector at all — which would be worse than a stale one.
+            async with self.db.transaction():
+                await self.db.execute(
+                    f"DELETE FROM {table} WHERE id = ?",
+                    [entity_id],
+                )
+                if table == "vec_artifacts":
+                    await self.db.execute(
+                        f"INSERT INTO {table} "
+                        "(id, project_id, entity_type, embedding) "
+                        "VALUES (?, ?, ?, ?)",
+                        [entity_id, project_id, entity_type, vec_blob],
+                    )
+                else:
+                    await self.db.execute(
+                        f"INSERT INTO {table} "
+                        "(id, project_id, embedding) VALUES (?, ?, ?)",
+                        [entity_id, project_id, vec_blob],
+                    )
+                await self.db.execute(
+                    """INSERT OR REPLACE INTO embedding_metadata
+                       (project_id, entity_type, entity_id, content_hash,
+                        model_name, dimensions)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    [
+                        project_id,
+                        entity_type,
+                        entity_id,
+                        self.content_hash(text),
+                        self.model_name,
+                        self._backend.dim,
+                    ],
+                )
 
     async def embed_and_store(
         self,

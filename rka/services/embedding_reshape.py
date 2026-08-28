@@ -22,8 +22,8 @@ Pending-signal per entity type:
 
   - `claim` keeps the v2.4 `claims.embedding_pending` flag — existing
     tests + backfill cursor depend on it.
-  - the other five (`journal | decision | literature | mission |
-    artifact`) use the `embedding_metadata`-absence signal: reshape
+  - the other six (`journal | decision | literature | mission |
+    artifact | figure`) use the `embedding_metadata`-absence signal: reshape
     DELETEs metadata rows for that entity_type so v2.5.5's 3-tuple
     `needs_reembed` (model_name + dimensions + content_hash) returns
     True until backfill repopulates them.
@@ -46,19 +46,22 @@ logger = logging.getLogger(__name__)
 _VEC_DIM_RX = re.compile(r"embedding\s+float\[(\d+)\]", re.IGNORECASE)
 
 
-# vec_table → (entity_type, entity_table). entity_type is the canonical
-# `embedding_metadata.entity_type` string; entity_table is the SQL table
-# that holds the source rows.
-_TABLE_TO_ENTITY: dict[str, tuple[str, str]] = {
-    "vec_claims":    ("claim",      "claims"),
-    "vec_journal":   ("journal",    "journal"),
-    "vec_decisions": ("decision",   "decisions"),
-    "vec_literature":("literature", "literature"),
-    "vec_missions":  ("mission",    "missions"),
-    "vec_artifacts": ("artifact",   "artifacts"),
+# vec_table → ((entity_type, entity_table), ...). Most vec tables hold one
+# entity type. vec_artifacts is intentionally shared by artifacts and figures,
+# so every lifecycle operation must account for both.
+_TABLE_TO_ENTITIES: dict[str, tuple[tuple[str, str], ...]] = {
+    "vec_claims": (("claim", "claims"),),
+    "vec_journal": (("journal", "journal"),),
+    "vec_decisions": (("decision", "decisions"),),
+    "vec_literature": (("literature", "literature"),),
+    "vec_missions": (("mission", "missions"),),
+    "vec_artifacts": (("artifact", "artifacts"), ("figure", "figures")),
 }
 
-_VEC_TABLE_NAMES: tuple[str, ...] = tuple(_TABLE_TO_ENTITY.keys())
+_VEC_TABLE_NAMES: tuple[str, ...] = tuple(_TABLE_TO_ENTITIES.keys())
+_ORPHAN_PROJECT_ID = "__orphan__"
+_ORPHAN_ENTITY_TYPE = "__orphan__"
+_PROJECT_FILTER_UPGRADE_NAME = "053_vec_project_filters_v1"
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +95,229 @@ async def current_vec_claims_dim(db: Any) -> int | None:
     return await current_vec_table_dim(db, "vec_claims")
 
 
+async def _vec_table_sql(db: Any, table_name: str) -> str:
+    row = await db.fetchone(
+        "SELECT sql FROM sqlite_master WHERE name = ?", [table_name]
+    )
+    return str((row or {}).get("sql") or "")
+
+
+def _has_text_column(sql: str, column: str) -> bool:
+    normalized = " ".join(sql.lower().split())
+    return bool(
+        re.search(
+            rf"(?:\(|,\s*){re.escape(column.lower())}\s+text(?:\s+partition\s+key)?\s*(?:,|\))",
+            normalized,
+        )
+    )
+
+
+def _has_metadata_filter(sql: str, column: str) -> bool:
+    """Return True for ordinary sqlite-vec metadata, not a partition key.
+
+    Project ids are sparse in RKA. sqlite-vec partition keys allocate at least
+    one full vector chunk per distinct value, which expanded an 18-project,
+    2560-d production copy from 187 MB to 912 MB. Ordinary metadata columns
+    still participate in the vec0 KNN WHERE clause before ``k`` without
+    over-sharding the index.
+    """
+    normalized = " ".join(sql.lower().split())
+    return bool(
+        re.search(
+            rf"(?:\(|,\s*){re.escape(column.lower())}\s+text\s*(?:,|\))",
+            normalized,
+        )
+    )
+
+
+def _metadata_filters_ready(sql: str, table_name: str) -> bool:
+    return bool(
+        sql
+        and _has_metadata_filter(sql, "project_id")
+        and (
+            table_name != "vec_artifacts"
+            or _has_metadata_filter(sql, "entity_type")
+        )
+    )
+
+
+def _create_vec_sql(table_name: str, dim: int) -> str:
+    columns = ["id TEXT PRIMARY KEY", "project_id TEXT"]
+    if table_name == "vec_artifacts":
+        columns.append("entity_type TEXT")
+    columns.append(f"embedding float[{dim}]")
+    return f"CREATE VIRTUAL TABLE {table_name} USING vec0({', '.join(columns)})"
+
+
+async def ensure_vec_table_partitions(db: Any) -> dict[str, bool]:
+    """Upgrade legacy vec tables to project-filtered schemas in place.
+
+    The public name is retained for compatibility with the E1.2 implementation
+    that first introduced this runtime upgrade.
+
+    Existing vector BLOBs are staged in an ordinary temporary table, enriched
+    from their source entity, and copied back inside one managed transaction.
+    ``project_id`` and the shared artifact/figure ``entity_type`` are ordinary
+    filterable vec0 metadata columns. They constrain KNN results before ``k``
+    without the severe sparse-project chunk amplification caused by sqlite-vec
+    partition keys. Orphan vectors are retained under explicit sentinel values
+    so this structural migration never silently discards research data. The
+    function is idempotent and does not re-embed content.
+
+    Cross-process startup callers must invoke this through
+    ``Database.initialize_phase2_schema()``. Its sidecar lock is acquired
+    before sqlite-vec loads; the SQLite transaction below provides atomic
+    rollback but cannot by itself protect an already-loaded peer connection
+    from virtual-table schema invalidation.
+    """
+    results = {table_name: False for table_name in _VEC_TABLE_NAMES}
+    if not getattr(db, "vec_available", False):
+        return results
+
+    marker_table = await db.fetchone(
+        "SELECT 1 AS present FROM sqlite_master "
+        "WHERE type = 'table' AND name = 'runtime_schema_upgrades'"
+    )
+    marker = None
+    if marker_table:
+        marker = await db.fetchone(
+            "SELECT 1 AS present FROM runtime_schema_upgrades WHERE name = ?",
+            [_PROJECT_FILTER_UPGRADE_NAME],
+        )
+    if marker:
+        return results
+
+    # sqlite-vec virtual-table DDL from two startup processes must not
+    # interleave across tables. Hold one cross-process writer lock for the
+    # complete six-table upgrade and completion marker. A per-table lock lets
+    # the processes alternate DROP/CREATE operations and can corrupt SQLite's
+    # virtual-table shadow schema. Do not even inspect a vec table before this
+    # lock: a waiting sqlite-vec connection can retain the old virtual-table
+    # schema while the lock owner rebuilds it. The durable completion marker is
+    # therefore the only unlocked fast path.
+    async with db.transaction(migration_lock=True):
+        # Another startup process may have completed the full upgrade while
+        # this connection waited. Re-read the durable marker under the lock
+        # before touching any sqlite-vec schema.
+        locked_marker_table = await db.fetchone(
+            "SELECT 1 AS present FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'runtime_schema_upgrades'"
+        )
+        if locked_marker_table:
+            locked_marker = await db.fetchone(
+                "SELECT 1 AS present FROM runtime_schema_upgrades WHERE name = ?",
+                [_PROJECT_FILTER_UPGRADE_NAME],
+            )
+            if locked_marker:
+                return results
+
+        for table_name in _VEC_TABLE_NAMES:
+            sql = await _vec_table_sql(db, table_name)
+            dim = await current_vec_table_dim(db, table_name)
+            if not sql or dim is None or _metadata_filters_ready(sql, table_name):
+                continue
+
+            stage = f"_stage_{table_name}_partition_upgrade"
+            has_project_column = _has_text_column(sql, "project_id")
+            has_entity_type_column = _has_text_column(sql, "entity_type")
+            await db.execute(f"DROP TABLE IF EXISTS temp.{stage}")
+            if table_name == "vec_artifacts":
+                await db.execute(
+                    f"CREATE TEMP TABLE {stage}("
+                    "id TEXT PRIMARY KEY, project_id TEXT NOT NULL, "
+                    "entity_type TEXT NOT NULL, embedding BLOB NOT NULL)"
+                )
+                existing_project = (
+                    ", v.project_id" if has_project_column else ""
+                )
+                existing_type = (
+                    ", v.entity_type" if has_entity_type_column else ""
+                )
+                await db.execute(
+                    f"""INSERT INTO {stage}
+                        (id, project_id, entity_type, embedding)
+                        SELECT v.id,
+                               COALESCE(a.project_id, f.project_id
+                                        {existing_project}, ?),
+                               COALESCE(CASE WHEN a.id IS NOT NULL THEN 'artifact'
+                                             WHEN f.id IS NOT NULL THEN 'figure'
+                                        END{existing_type}, ?),
+                               v.embedding
+                        FROM {table_name} v
+                        LEFT JOIN artifacts a ON a.id = v.id
+                        LEFT JOIN figures f ON f.id = v.id""",
+                    [_ORPHAN_PROJECT_ID, _ORPHAN_ENTITY_TYPE],
+                )
+            else:
+                _entity_type, source_table = _TABLE_TO_ENTITIES[table_name][0]
+                await db.execute(
+                    f"CREATE TEMP TABLE {stage}("
+                    "id TEXT PRIMARY KEY, project_id TEXT NOT NULL, "
+                    "embedding BLOB NOT NULL)"
+                )
+                existing_project = (
+                    ", v.project_id" if has_project_column else ""
+                )
+                await db.execute(
+                    f"""INSERT INTO {stage} (id, project_id, embedding)
+                        SELECT v.id,
+                               COALESCE(s.project_id{existing_project}, ?),
+                               v.embedding
+                        FROM {table_name} v
+                        LEFT JOIN {source_table} s ON s.id = v.id""",
+                    [_ORPHAN_PROJECT_ID],
+                )
+
+            await db.execute(f"DROP TABLE {table_name}")
+            await db.execute(_create_vec_sql(table_name, dim))
+            if table_name == "vec_artifacts":
+                await db.execute(
+                    f"""INSERT INTO {table_name}
+                        (id, project_id, entity_type, embedding)
+                        SELECT id, project_id, entity_type, embedding FROM {stage}"""
+                )
+            else:
+                await db.execute(
+                    f"""INSERT INTO {table_name} (id, project_id, embedding)
+                        SELECT id, project_id, embedding FROM {stage}"""
+                )
+            await db.execute(f"DROP TABLE {stage}")
+            results[table_name] = True
+
+        locked_schemas = {
+            table_name: await _vec_table_sql(db, table_name)
+            for table_name in _VEC_TABLE_NAMES
+        }
+        locked_filters_ready = all(
+            _metadata_filters_ready(sql, table_name)
+            for table_name, sql in locked_schemas.items()
+        )
+        locked_marker_table = await db.fetchone(
+            "SELECT 1 AS present FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'runtime_schema_upgrades'"
+        )
+        if locked_marker_table and locked_filters_ready:
+            await db.execute(
+                """INSERT OR IGNORE INTO runtime_schema_upgrades
+                   (name, details) VALUES (?, ?)""",
+                [
+                    _PROJECT_FILTER_UPGRADE_NAME,
+                    (
+                        "project_id KNN metadata filters on all vec tables; "
+                        "entity_type filter on vec_artifacts"
+                    ),
+                ],
+            )
+
+    for table_name, upgraded in results.items():
+        if upgraded:
+            logger.info(
+                "upgraded %s to project-filtered vector schema", table_name
+            )
+
+    return results
+
+
 # ---------------------------------------------------------------------------
 # Reshape (generic)
 # ---------------------------------------------------------------------------
@@ -117,27 +343,27 @@ async def reshape_vec_table(db: Any, table_name: str, *, dim: int) -> int:
     """
     if dim <= 0:
         raise ValueError(f"reshape_vec_table: dim must be positive (got {dim})")
-    if table_name not in _TABLE_TO_ENTITY:
+    if table_name not in _TABLE_TO_ENTITIES:
         raise ValueError(
             f"reshape_vec_table: unknown table {table_name!r}; "
             f"expected one of {_VEC_TABLE_NAMES}"
         )
-    entity_type, entity_table = _TABLE_TO_ENTITY[table_name]
+    entities = _TABLE_TO_ENTITIES[table_name]
 
     if not getattr(db, "vec_available", False):
         # No sqlite-vec → no vec_* table to reshape. Still flag pending
         # so the moment vec loads (e.g. via a config update or extension
         # install), backfill picks the work up.
-        await _mark_pending(db, table_name, entity_type, entity_table)
+        await _mark_pending(db, table_name, entities)
         await db.commit()
-        return await _count_entity_rows(db, entity_table)
+        return await _count_entity_rows(db, entities)
 
     existing_dim = await current_vec_table_dim(db, table_name)
     if existing_dim == dim:
         logger.info(
             "reshape_vec_table: %s already at dim=%d; no-op", table_name, dim
         )
-        return await _count_pending(db, table_name, entity_type, entity_table)
+        return await _count_pending(db, table_name, entities)
 
     logger.info(
         "reshape_vec_table: dropping %s (was dim=%s) and recreating at dim=%d",
@@ -151,12 +377,9 @@ async def reshape_vec_table(db: Any, table_name: str, *, dim: int) -> int:
     # COMMIT rolls the DROP back and the old table survives intact.
     async with db.transaction():
         await db.execute(f"DROP TABLE IF EXISTS {table_name}")
-        await db.execute(
-            f"CREATE VIRTUAL TABLE {table_name} USING vec0("
-            f"id TEXT PRIMARY KEY, embedding float[{dim}])"
-        )
-        await _mark_pending(db, table_name, entity_type, entity_table)
-    return await _count_entity_rows(db, entity_table)
+        await db.execute(_create_vec_sql(table_name, dim))
+        await _mark_pending(db, table_name, entities)
+    return await _count_entity_rows(db, entities)
 
 
 async def reshape_all_vec_tables_if_needed(
@@ -170,10 +393,10 @@ async def reshape_all_vec_tables_if_needed(
     """
     out: dict[str, tuple[bool, int]] = {}
     for tbl in _VEC_TABLE_NAMES:
-        entity_type, entity_table = _TABLE_TO_ENTITY[tbl]
+        entities = _TABLE_TO_ENTITIES[tbl]
         existing_dim = await current_vec_table_dim(db, tbl)
         if existing_dim == dim:
-            pending = await _count_pending(db, tbl, entity_type, entity_table)
+            pending = await _count_pending(db, tbl, entities)
             out[tbl] = (False, pending)
         else:
             pending = await reshape_vec_table(db, tbl, dim=dim)
@@ -199,7 +422,9 @@ async def reshape_vec_claims_if_needed(db: Any, *, dim: int) -> tuple[bool, int]
     """
     existing_dim = await current_vec_table_dim(db, "vec_claims")
     if existing_dim == dim:
-        return (False, await _count_pending(db, "vec_claims", "claim", "claims"))
+        return (False, await _count_pending(
+            db, "vec_claims", _TABLE_TO_ENTITIES["vec_claims"]
+        ))
     pending = await reshape_vec_table(db, "vec_claims", dim=dim)
     return (True, pending)
 
@@ -210,55 +435,74 @@ async def reshape_vec_claims_if_needed(db: Any, *, dim: int) -> tuple[bool, int]
 
 
 async def _mark_pending(
-    db: Any, table_name: str, entity_type: str, entity_table: str
+    db: Any,
+    table_name: str,
+    entities: tuple[tuple[str, str], ...],
 ) -> None:
     """Flip the pending signal for every entity of this type.
 
     `vec_claims` keeps the v2.4 `embedding_pending` flag pattern (the
-    BackfillService cursor reads it directly); the other five use
+    BackfillService cursor reads it directly); the other six use
     metadata-absence as the signal.
     """
     if table_name == "vec_claims":
+        _entity_type, entity_table = entities[0]
         await db.execute(f"UPDATE {entity_table} SET embedding_pending = 1")
     else:
-        await db.execute(
-            "DELETE FROM embedding_metadata WHERE entity_type = ?",
-            [entity_type],
-        )
+        for entity_type, _entity_table in entities:
+            await db.execute(
+                "DELETE FROM embedding_metadata WHERE entity_type = ?",
+                [entity_type],
+            )
 
 
-async def _count_entity_rows(db: Any, entity_table: str) -> int:
-    row = await db.fetchone(f"SELECT COUNT(*) AS n FROM {entity_table}")
-    return int((row or {}).get("n") or 0)
+async def _count_entity_rows(
+    db: Any, entities: tuple[tuple[str, str], ...]
+) -> int:
+    total = 0
+    for _entity_type, entity_table in entities:
+        row = await db.fetchone(f"SELECT COUNT(*) AS n FROM {entity_table}")
+        total += int((row or {}).get("n") or 0)
+    return total
 
 
 async def _count_pending(
-    db: Any, table_name: str, entity_type: str, entity_table: str
+    db: Any,
+    table_name: str,
+    entities: tuple[tuple[str, str], ...],
 ) -> int:
     """Post-op pending count, using the appropriate signal per table."""
     if table_name == "vec_claims":
+        _entity_type, entity_table = entities[0]
         row = await db.fetchone(
             f"SELECT COUNT(*) AS n FROM {entity_table} WHERE embedding_pending = 1"
         )
-    else:
+        return int((row or {}).get("n") or 0)
+
+    total = 0
+    for entity_type, entity_table in entities:
         row = await db.fetchone(
             f"""
             SELECT COUNT(*) AS n FROM {entity_table} e
             WHERE NOT EXISTS (
                 SELECT 1 FROM embedding_metadata m
                 WHERE m.entity_type = ? AND m.entity_id = e.id
+                  AND m.project_id = e.project_id
             )
             """,
             [entity_type],
         )
-    return int((row or {}).get("n") or 0)
+        total += int((row or {}).get("n") or 0)
+    return total
 
 
 async def _count_claims(db: Any) -> int:
     """Backward-compat: kept because external code may import it."""
-    return await _count_entity_rows(db, "claims")
+    return await _count_entity_rows(db, _TABLE_TO_ENTITIES["vec_claims"])
 
 
 async def _count_claims_pending(db: Any) -> int:
     """Backward-compat: kept because external code may import it."""
-    return await _count_pending(db, "vec_claims", "claim", "claims")
+    return await _count_pending(
+        db, "vec_claims", _TABLE_TO_ENTITIES["vec_claims"]
+    )

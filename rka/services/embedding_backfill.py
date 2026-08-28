@@ -6,8 +6,8 @@ no Redis/Celery; runs in the API container's process). The PUT
 immediately and the actual loop runs via FastAPI BackgroundTask.
 
 v2.5.5 (mis_01KS1RFNM2T1HTB077G507T1FR Bug 3): the loop is generalized
-over all six entity types backed by a vec_* table — claim, journal,
-decision, literature, mission, artifact. The v2.4 implementation hit
+over all entity types backed by a vec_* table — claim, journal,
+decision, literature, mission, artifact, and figure. The v2.4 implementation hit
 only `claims WHERE embedding_pending=1`, leaving the other five vec_*
 tables empty after a config change because nothing else ever ran a
 backfill cursor against them.
@@ -15,7 +15,7 @@ backfill cursor against them.
 Pending-signal per entity type:
   - `claim` uses the v2.4 `claims.embedding_pending` flag (the cursor
     filters on it; we clear it post-embed).
-  - the other five use `embedding_metadata` absence — `reshape_vec_table`
+  - the other six use `embedding_metadata` absence — `reshape_vec_table`
     (T1) DELETEs metadata rows on dim change, and the cursor here picks
     up entities without a metadata row.
 
@@ -177,10 +177,21 @@ def _build_artifact_text_from_row(r: Mapping[str, Any]) -> str:
     )
 
 
+def _build_figure_text_from_row(r: Mapping[str, Any]) -> str:
+    # Imported lazily to avoid an import cycle with rka.services.artifacts.
+    from rka.services.artifacts import build_figure_text
+
+    return build_figure_text(
+        caption=r.get("caption"),
+        summary=r.get("summary"),
+        claims=r.get("claims"),
+    )
+
+
 # Cursor templates: each non-claims template uses an anti-join against
 # embedding_metadata so we only pull entities that lack a matching row.
 # Combined with T1's DELETE-on-reshape and T3's 3-tuple needs_reembed
-# gate, this is the v2.5.5 pending signal for the five new types.
+# gate, this is the pending signal for every non-claim type.
 
 
 _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
@@ -201,6 +212,7 @@ _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM embedding_metadata m "
             "  WHERE m.entity_type = 'claim' AND m.entity_id = c.id"
+            "    AND m.project_id = c.project_id"
             "    AND m.model_name = ? AND m.dimensions = ?"
             ") AND c.id > ? "
             "ORDER BY c.id LIMIT ?"
@@ -210,6 +222,7 @@ _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM embedding_metadata m "
             "  WHERE m.entity_type = 'claim' AND m.entity_id = c.id"
+            "    AND m.project_id = c.project_id"
             "    AND m.model_name = ? AND m.dimensions = ?"
             ")"
         ),
@@ -225,6 +238,7 @@ _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM embedding_metadata m "
             "  WHERE m.entity_type = 'journal' AND m.entity_id = j.id"
+            "    AND m.project_id = j.project_id"
             "    AND m.model_name = ? AND m.dimensions = ?"
             ") AND j.id > ? "
             "ORDER BY j.id LIMIT ?"
@@ -234,6 +248,7 @@ _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM embedding_metadata m "
             "  WHERE m.entity_type = 'journal' AND m.entity_id = j.id"
+            "    AND m.project_id = j.project_id"
             "    AND m.model_name = ? AND m.dimensions = ?"
             ")"
         ),
@@ -248,6 +263,7 @@ _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM embedding_metadata m "
             "  WHERE m.entity_type = 'decision' AND m.entity_id = d.id"
+            "    AND m.project_id = d.project_id"
             "    AND m.model_name = ? AND m.dimensions = ?"
             ") AND d.id > ? "
             "ORDER BY d.id LIMIT ?"
@@ -257,6 +273,7 @@ _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM embedding_metadata m "
             "  WHERE m.entity_type = 'decision' AND m.entity_id = d.id"
+            "    AND m.project_id = d.project_id"
             "    AND m.model_name = ? AND m.dimensions = ?"
             ")"
         ),
@@ -271,6 +288,7 @@ _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM embedding_metadata m "
             "  WHERE m.entity_type = 'literature' AND m.entity_id = l.id"
+            "    AND m.project_id = l.project_id"
             "    AND m.model_name = ? AND m.dimensions = ?"
             ") AND l.id > ? "
             "ORDER BY l.id LIMIT ?"
@@ -280,6 +298,7 @@ _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM embedding_metadata m "
             "  WHERE m.entity_type = 'literature' AND m.entity_id = l.id"
+            "    AND m.project_id = l.project_id"
             "    AND m.model_name = ? AND m.dimensions = ?"
             ")"
         ),
@@ -295,6 +314,7 @@ _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM embedding_metadata m "
             "  WHERE m.entity_type = 'mission' AND m.entity_id = mi.id"
+            "    AND m.project_id = mi.project_id"
             "    AND m.model_name = ? AND m.dimensions = ?"
             ") AND mi.id > ? "
             "ORDER BY mi.id LIMIT ?"
@@ -304,6 +324,7 @@ _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM embedding_metadata m "
             "  WHERE m.entity_type = 'mission' AND m.entity_id = mi.id"
+            "    AND m.project_id = mi.project_id"
             "    AND m.model_name = ? AND m.dimensions = ?"
             ")"
         ),
@@ -319,6 +340,7 @@ _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM embedding_metadata m "
             "  WHERE m.entity_type = 'artifact' AND m.entity_id = a.id"
+            "    AND m.project_id = a.project_id"
             "    AND m.model_name = ? AND m.dimensions = ?"
             ") AND a.id > ? "
             "ORDER BY a.id LIMIT ?"
@@ -328,6 +350,33 @@ _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM embedding_metadata m "
             "  WHERE m.entity_type = 'artifact' AND m.entity_id = a.id"
+            "    AND m.project_id = a.project_id"
+            "    AND m.model_name = ? AND m.dimensions = ?"
+            ")"
+        ),
+    ),
+    "figure": _EntityBackfillConfig(
+        entity_type="figure",
+        source_table="figures",
+        vec_table="vec_artifacts",
+        compose_text=_build_figure_text_from_row,
+        pending_cursor_sql=(
+            "SELECT f.id, f.caption, f.summary, f.claims, f.project_id "
+            "FROM figures f "
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM embedding_metadata m "
+            "  WHERE m.entity_type = 'figure' AND m.entity_id = f.id"
+            "    AND m.project_id = f.project_id"
+            "    AND m.model_name = ? AND m.dimensions = ?"
+            ") AND f.id > ? "
+            "ORDER BY f.id LIMIT ?"
+        ),
+        pending_count_sql=(
+            "SELECT COUNT(*) AS n FROM figures f "
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM embedding_metadata m "
+            "  WHERE m.entity_type = 'figure' AND m.entity_id = f.id"
+            "    AND m.project_id = f.project_id"
             "    AND m.model_name = ? AND m.dimensions = ?"
             ")"
         ),
@@ -358,9 +407,9 @@ class BackfillService:
     """Iterates one or more entity types and (re-)embeds them.
 
       - `run_backfill(status, progress_callback=None, entity_types=None)`
-        is async. With `entity_types=None` it processes all six known
+        is async. With `entity_types=None` it processes all seven known
         types in stable order (claim → journal → decision → literature
-        → mission → artifact).
+        → mission → artifact → figure).
       - Default `batch_size = 8` (v2.4.1: lowered from 32 so local
         8B-class embedding backends don't time out on a single batch).
       - Per-row write failures get logged + the row is left "pending"
@@ -554,11 +603,24 @@ class BackfillService:
                                 f"DELETE FROM {cfg.vec_table} WHERE id = ?",
                                 [entity_id],
                             )
-                            await self._db.execute(
-                                f"INSERT INTO {cfg.vec_table} "
-                                "(id, embedding) VALUES (?, ?)",
-                                [entity_id, vec_blob],
-                            )
+                            if cfg.vec_table == "vec_artifacts":
+                                await self._db.execute(
+                                    f"INSERT INTO {cfg.vec_table} "
+                                    "(id, project_id, entity_type, embedding) "
+                                    "VALUES (?, ?, ?, ?)",
+                                    [
+                                        entity_id,
+                                        project_id,
+                                        cfg.entity_type,
+                                        vec_blob,
+                                    ],
+                                )
+                            else:
+                                await self._db.execute(
+                                    f"INSERT INTO {cfg.vec_table} "
+                                    "(id, project_id, embedding) VALUES (?, ?, ?)",
+                                    [entity_id, project_id, vec_blob],
+                                )
                             await self._db.execute(
                                 """INSERT OR REPLACE INTO embedding_metadata
                                    (project_id, entity_type, entity_id,

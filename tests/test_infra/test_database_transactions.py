@@ -327,6 +327,50 @@ async def test_write_transaction_reserves_lock_before_snapshot(
 
 
 @pytest.mark.asyncio
+async def test_migration_waits_for_runtime_upgrade_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+    (migrations / "001_runtime_ledger.sql").write_text(
+        "CREATE TABLE runtime_schema_upgrades ("
+        "name TEXT PRIMARY KEY, completed_at TEXT, details TEXT);\n",
+        encoding="utf-8",
+    )
+    (migrations / "002_partition_dependent.sql").write_text(
+        "-- requires-runtime-upgrade: 053_vec_project_filters_v1\n"
+        "CREATE TABLE partition_dependent (id INTEGER PRIMARY KEY);\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        Database, "_migrations_directory", staticmethod(lambda: migrations)
+    )
+
+    database = Database(str(tmp_path / "runtime-prerequisite.db"))
+    await database.connect()
+    try:
+        assert await database.run_migrations() == 1
+        assert await database.fetchone(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'partition_dependent'"
+        ) is None
+
+        await database.execute(
+            "INSERT INTO runtime_schema_upgrades (name) VALUES (?)",
+            ["053_vec_project_filters_v1"],
+        )
+        await database.commit()
+
+        assert await database.run_migrations() == 1
+        assert await database.fetchone(
+            "SELECT 1 AS present FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'partition_dependent'"
+        ) == {"present": 1}
+    finally:
+        await database.close()
+
+
+@pytest.mark.asyncio
 async def test_migration_failure_rolls_back_schema_and_ledger_then_retries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
