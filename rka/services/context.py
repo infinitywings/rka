@@ -31,8 +31,6 @@ import logging
 import math
 import os
 from datetime import datetime, timezone
-from typing import Literal
-
 from rka.infra.database import Database
 from rka.infra.llm import LLMClient
 from rka.models.context import ContextPackage
@@ -345,10 +343,31 @@ class ContextEngine:
         head = candidates[:k]
         head_ids = {e["id"] for e in head}
         extras: list[dict] = []
-        union_ids = set(anchor_aware_ids or ()) | pinned_ids
+        requested_anchor_ids = list(dict.fromkeys(anchor_aware_ids or ()))
+        union_ids = set(requested_anchor_ids) | pinned_ids
         if union_ids:
             for entry in candidates[k:]:
                 if entry["id"] in union_ids and entry["id"] not in head_ids:
+                    extras.append(entry)
+                    head_ids.add(entry["id"])
+
+        # Anchor-aware tools may surface an entity outside the overview/search
+        # candidate window (for example, the journal overview query is capped
+        # at 50 rows).  The public contract says those explicit IDs survive the
+        # bundle cap, so hydrate any still-missing IDs directly.  The lookup is
+        # project-scoped: a foreign-project ID is ignored rather than leaked.
+        missing_anchor_ids = [
+            entity_id
+            for entity_id in requested_anchor_ids
+            if entity_id not in head_ids
+        ]
+        if missing_anchor_ids:
+            direct_extras = await self._hydrate_context_ids(
+                missing_anchor_ids,
+                project_id=project_id,
+            )
+            for entry in direct_extras:
+                if entry["id"] not in head_ids:
                     extras.append(entry)
                     head_ids.add(entry["id"])
         candidates = head + extras
@@ -531,6 +550,43 @@ class ContextEngine:
             )
             if row:
                 row["entity_type"] = hit.entity_type
+                results.append(row)
+        return results
+
+    async def _hydrate_context_ids(
+        self,
+        entity_ids: list[str],
+        *,
+        project_id: str,
+    ) -> list[dict]:
+        """Hydrate explicit context IDs in caller order and project scope."""
+        prefix_map = {
+            "jrn_": ("journal", "journal"),
+            "dec_": ("decision", "decisions"),
+            "lit_": ("literature", "literature"),
+            "mis_": ("mission", "missions"),
+            "clm_": ("claim", "claims"),
+            "clu_": ("cluster", "evidence_clusters"),
+        }
+        results: list[dict] = []
+        for entity_id in entity_ids:
+            mapping = next(
+                (
+                    entity_mapping
+                    for prefix, entity_mapping in prefix_map.items()
+                    if entity_id.startswith(prefix)
+                ),
+                None,
+            )
+            if mapping is None:
+                continue
+            entity_type, table = mapping
+            row = await self.db.fetchone(
+                f"SELECT * FROM {table} WHERE id = ? AND project_id = ?",
+                [entity_id, project_id],
+            )
+            if row:
+                row["entity_type"] = entity_type
                 results.append(row)
         return results
 
