@@ -44,6 +44,16 @@ class NoteService(BaseService):
         """Create a new journal entry."""
         entry_id = generate_id("journal")
         source = actor or data.source
+        related_decisions = (
+            None
+            if data.related_decisions is None
+            else self._canonical_link_ids(data.related_decisions)
+        )
+        related_literature = (
+            None
+            if data.related_literature is None
+            else self._canonical_link_ids(data.related_literature)
+        )
 
         async with self.db.transaction():
             await self.db.execute(
@@ -60,8 +70,8 @@ class NoteService(BaseService):
                     source,
                     data.phase,
                     data.verbatim_input,
-                    self._json_dumps(data.related_decisions),
-                    self._json_dumps(data.related_literature),
+                    self._json_dumps(related_decisions),
+                    self._json_dumps(related_literature),
                     data.related_mission,
                     data.supersedes,
                     data.confidence,
@@ -95,7 +105,7 @@ class NoteService(BaseService):
                 source_id=entry_id,
                 link_type="references",
                 target_type="decision",
-                target_ids=data.related_decisions,
+                target_ids=related_decisions,
                 created_by=source or "system",
             )
             await self._replace_outgoing_links(
@@ -103,7 +113,7 @@ class NoteService(BaseService):
                 source_id=entry_id,
                 link_type="cites",
                 target_type="literature",
-                target_ids=data.related_literature,
+                target_ids=related_literature,
                 created_by=source or "system",
             )
             await self._replace_incoming_links(
@@ -250,6 +260,14 @@ class NoteService(BaseService):
         replace_related_decisions = "related_decisions" in dump
         replace_related_literature = "related_literature" in dump
         replace_related_mission = "related_mission" in dump
+        if replace_related_decisions:
+            dump["related_decisions"] = self._canonical_link_ids(
+                dump["related_decisions"]
+            )
+        if replace_related_literature:
+            dump["related_literature"] = self._canonical_link_ids(
+                dump["related_literature"]
+            )
 
         updates = {}
         for field, value in dump.items():
@@ -297,7 +315,7 @@ class NoteService(BaseService):
                     source_id=entry_id,
                     link_type="references",
                     target_type="decision",
-                    target_ids=data.related_decisions,
+                    target_ids=dump["related_decisions"],
                 )
             if replace_related_literature:
                 await self._replace_outgoing_links(
@@ -305,7 +323,7 @@ class NoteService(BaseService):
                     source_id=entry_id,
                     link_type="cites",
                     target_type="literature",
-                    target_ids=data.related_literature,
+                    target_ids=dump["related_literature"],
                 )
             if replace_related_mission:
                 await self._replace_incoming_links(

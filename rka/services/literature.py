@@ -40,6 +40,11 @@ class LiteratureService(BaseService):
         """Create a new literature entry."""
         lit_id = generate_id("literature")
         source = actor or data.added_by
+        related_decisions = (
+            None
+            if data.related_decisions is None
+            else self._canonical_link_ids(data.related_decisions)
+        )
 
         async with self.db.transaction():
             await self.db.execute(
@@ -65,7 +70,7 @@ class LiteratureService(BaseService):
                     data.methodology_notes,
                     data.relevance,
                     data.relevance_score,
-                    self._json_dumps(data.related_decisions),
+                    self._json_dumps(related_decisions),
                     data.added_by,
                     data.notes,
                     data.zotero_item_key,
@@ -82,7 +87,7 @@ class LiteratureService(BaseService):
                 source_id=lit_id,
                 link_type="informed_by",
                 target_type="decision",
-                target_ids=data.related_decisions,
+                target_ids=related_decisions,
                 created_by=source,
             )
             await self._sync_fts(
@@ -164,6 +169,10 @@ class LiteratureService(BaseService):
         dump = data.model_dump(exclude_none=True)
         tags = dump.pop("tags", None)
         replace_related_decisions = "related_decisions" in dump
+        if replace_related_decisions:
+            dump["related_decisions"] = self._canonical_link_ids(
+                dump["related_decisions"]
+            )
 
         updates = {}
         for field, value in dump.items():
@@ -211,7 +220,7 @@ class LiteratureService(BaseService):
                     source_id=lit_id,
                     link_type="informed_by",
                     target_type="decision",
-                    target_ids=data.related_decisions,
+                    target_ids=dump["related_decisions"],
                     created_by=actor,
                 )
 

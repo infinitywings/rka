@@ -50,6 +50,21 @@ class DecisionService(BaseService):
         """Create a new decision node."""
         dec_id = generate_id("decision")
         actor_val = actor or data.decided_by
+        related_journal = (
+            None
+            if data.related_journal is None
+            else self._canonical_link_ids(data.related_journal)
+        )
+        related_literature = (
+            None
+            if data.related_literature is None
+            else self._canonical_link_ids(data.related_literature)
+        )
+        related_missions = (
+            None
+            if data.related_missions is None
+            else self._canonical_link_ids(data.related_missions)
+        )
 
         options_json = None
         if data.options:
@@ -72,9 +87,9 @@ class DecisionService(BaseService):
                     data.rationale,
                     data.decided_by,
                     data.status,
-                    self._json_dumps(data.related_missions),
-                    self._json_dumps(data.related_literature),
-                    self._json_dumps(data.related_journal),
+                    self._json_dumps(related_missions),
+                    self._json_dumps(related_literature),
+                    self._json_dumps(related_journal),
                     data.kind,
                     self._json_dumps(data.assumptions),
                     self.project_id,
@@ -89,7 +104,7 @@ class DecisionService(BaseService):
                 source_id=dec_id,
                 link_type="justified_by",
                 target_type="journal",
-                target_ids=data.related_journal,
+                target_ids=related_journal,
                 created_by=actor_val,
             )
             await self._replace_incoming_links(
@@ -97,7 +112,7 @@ class DecisionService(BaseService):
                 target_id=dec_id,
                 link_type="informed_by",
                 source_type="literature",
-                source_ids=data.related_literature,
+                source_ids=related_literature,
                 created_by=actor_val,
             )
             await self._replace_outgoing_links(
@@ -105,7 +120,7 @@ class DecisionService(BaseService):
                 source_id=dec_id,
                 link_type="triggered",
                 target_type="mission",
-                target_ids=data.related_missions,
+                target_ids=related_missions,
                 created_by=actor_val,
             )
             await self._replace_incoming_links(
@@ -191,6 +206,13 @@ class DecisionService(BaseService):
         replace_related_literature = "related_literature" in dump
         replace_related_journal = "related_journal" in dump
         replace_parent = "parent_id" in dump
+        for field in (
+            "related_missions",
+            "related_literature",
+            "related_journal",
+        ):
+            if field in dump:
+                dump[field] = self._canonical_link_ids(dump[field])
 
         updates = {}
         for field, value in dump.items():
@@ -258,7 +280,7 @@ class DecisionService(BaseService):
                     source_id=dec_id,
                     link_type="justified_by",
                     target_type="journal",
-                    target_ids=data.related_journal,
+                    target_ids=dump["related_journal"],
                     created_by=actor,
                 )
             if replace_related_literature:
@@ -267,7 +289,7 @@ class DecisionService(BaseService):
                     target_id=dec_id,
                     link_type="informed_by",
                     source_type="literature",
-                    source_ids=data.related_literature,
+                    source_ids=dump["related_literature"],
                     created_by=actor,
                 )
             if replace_related_missions:
@@ -276,7 +298,7 @@ class DecisionService(BaseService):
                     source_id=dec_id,
                     link_type="triggered",
                     target_type="mission",
-                    target_ids=data.related_missions,
+                    target_ids=dump["related_missions"],
                     created_by=actor,
                 )
             if replace_parent:

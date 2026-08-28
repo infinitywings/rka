@@ -3915,6 +3915,7 @@ class UpdateNoteArgs(ProjectScopedArgs):
     def _enforce_non_empty_update(self) -> "UpdateNoteArgs":
         mutable_fields = (
             self.content,
+            self.summary,
             self.type,
             self.confidence,
             self.importance,
@@ -3929,7 +3930,7 @@ class UpdateNoteArgs(ProjectScopedArgs):
         if all(f is None for f in mutable_fields):
             raise ValueError(
                 "update_note: at least one mutable field must be non-None "
-                "(content, type, confidence, importance, tags, phase, "
+                "(content, summary, type, confidence, importance, tags, phase, "
                 "verbatim_input, source, related_decisions, related_literature, "
                 "related_mission)."
             )
