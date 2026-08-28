@@ -238,7 +238,7 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
 
     app = FastAPI(
         title="Research Knowledge Agent",
-        description="REST API for AI-assisted research orchestration",
+        description="REST API for provenance-aware research records and retrieval",
         version=__version__,
         lifespan=lifespan,
     )

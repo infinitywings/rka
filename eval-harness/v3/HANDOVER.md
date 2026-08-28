@@ -35,7 +35,7 @@ replace with real ones before quoting any number.
 ### 0. Preflight
 - `git fetch && git checkout claude/rka-performance-eval-mtyuqz`
 - `docker compose up -d` then check `curl localhost:9712/api/health`
-- `pip install -e ".[llm,academic,workspace,dev]"` in a venv (or use existing), then
+- `pip install -e ".[embeddings,llm,academic,workspace,dev]"` in a venv (or use existing), then
   `python -m pytest eval-harness/v3/tests/ -q` — should be 34 passed.
 - List the local projects: `curl localhost:9712/api/projects` — pick which
   knowledge projects to evaluate (per the PI there are several running ones).

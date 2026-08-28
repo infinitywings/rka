@@ -236,6 +236,7 @@ async def test_one_failing_arm_does_not_stop_the_others() -> None:
     assert results[1]["divergences"] == []
 
 
+@pytest.mark.agentic
 def test_completer_timeout_is_configurable() -> None:
     """The timeout knob exists and prefers explicit > env > default."""
     import os

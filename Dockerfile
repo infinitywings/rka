@@ -45,7 +45,7 @@ COPY pyproject.toml .
 COPY rka/ rka/
 COPY --from=web-builder /build/dist/ web/dist/
 COPY --from=vec-builder /tmp/sqlite-vec/vec0.so /usr/local/lib/vec0.so
-RUN pip install --no-cache-dir ".[llm,academic,workspace]"
+RUN pip install --no-cache-dir ".[embeddings,academic,workspace]"
 
 # Data volume
 RUN mkdir -p /data

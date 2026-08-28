@@ -28,6 +28,11 @@ You are running on a machine that already has Docker and a coding agent. Your jo
 | **Claude Desktop (Brain)** | Typed RKA tool surface via the `mcpServers.rka` entry in `claude_desktop_config.json`. Wrapper-based config gives version checking; every scoped operation still requires an explicit project id. Skills and slash commands are Claude Code only (Claude Desktop's plugin format is separate). |
 | **ChatGPT (optional remote connector)** | RKA reachable from ChatGPT as a custom MCP connector over an OAuth-protected ngrok tunnel — an 8-tool surface (5 dispatch + 3 skill tools). Opt-in; set up in **Step 6** (§3). The web UI is never exposed. |
 
+For contributor installs, dependency ownership, the Core-only pytest selector,
+and the disposable startup gate, see
+[`docs/CORE_PROFILE.md`](docs/CORE_PROFILE.md). The production Docker image uses
+that Core dependency profile and does not install legacy LLM-provider SDKs.
+
 ### 1.1 Core tool surface (v3.x)
 
 In Claude Desktop and Claude Code, you'll see **5 always-on `rka` tools** at session start:

@@ -237,6 +237,7 @@ RKA is being developed for research workflows at UNC Charlotte. Feedback, compar
 | [User Manual](docs/USER_MANUAL.md) | Concepts, dashboard operation, and researcher-facing reference |
 | [Architecture](docs/ARCHITECTURE.md) | Design rationale, components, data model, and knowledge lifecycle |
 | [Technical Reference](docs/TECHNICAL_REFERENCE.md) | CLI, MCP, REST, configuration, and development entry points |
+| [Core Profile](docs/CORE_PROFILE.md) | Supported Core dependencies, test boundary, and startup smoke gate |
 | [Roadmap](ROADMAP.md) | Dependency-ordered milestones for the epistemic pipeline, workbench, and ARA interoperability |
 | [Embedding Backends](docs/embedding_backends.md) | Local and OpenAI-compatible embedding configuration |
 | [Credential Vault](docs/CRED_VAULT.md) | Secure credential storage and propagation |
@@ -247,11 +248,16 @@ RKA is being developed for research workflows at UNC Charlotte. Feedback, compar
 
 RKA is a Python, FastAPI, SQLite, and React project. The repository's authoritative contributor instructions are in [CLAUDE.md](CLAUDE.md) and apply to any coding agent or human contributor.
 
-Run the test suite through Docker:
+Install the Core development profile and run its independent release gate:
 
 ```bash
-docker compose exec rka pytest
+python -m pip install -e ".[embeddings,academic,workspace,dev]"
+python -m pytest -q --tb=short --strict-markers \
+  -m "not writer and not agentic"
 ```
+
+See [Core Profile](docs/CORE_PROFILE.md) for the startup smoke test and retained
+Writer/Agentic compatibility-test commands.
 
 Please preserve explicit project scoping, provenance links, actor attribution, service-layer boundaries, and the distinction between raw research records and revisable interpretations.
 

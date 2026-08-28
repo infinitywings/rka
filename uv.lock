@@ -2394,11 +2394,13 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "ruff" },
 ]
-llm = [
+embeddings = [
     { name = "fastembed" },
+    { name = "sqlite-vec" },
+]
+llm = [
     { name = "instructor" },
     { name = "litellm" },
-    { name = "sqlite-vec" },
 ]
 workspace = [
     { name = "pymupdf" },
@@ -2412,7 +2414,7 @@ requires-dist = [
     { name = "bibtexparser", marker = "extra == 'academic'", specifier = ">=2.0.0b7" },
     { name = "click", specifier = ">=8.1" },
     { name = "fastapi", specifier = ">=0.115" },
-    { name = "fastembed", marker = "extra == 'llm'", specifier = ">=0.5" },
+    { name = "fastembed", marker = "extra == 'embeddings'", specifier = ">=0.5" },
     { name = "habanero", marker = "extra == 'academic'", specifier = ">=1.2" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "instructor", marker = "extra == 'llm'", specifier = ">=1.7" },
@@ -2428,10 +2430,10 @@ requires-dist = [
     { name = "python-ulid", specifier = ">=3.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
     { name = "semanticscholar", marker = "extra == 'academic'", specifier = ">=0.11" },
-    { name = "sqlite-vec", marker = "extra == 'llm'", specifier = ">=0.1.6" },
+    { name = "sqlite-vec", marker = "extra == 'embeddings'", specifier = "==0.1.6" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
 ]
-provides-extras = ["llm", "academic", "workspace", "dev"]
+provides-extras = ["embeddings", "llm", "academic", "workspace", "dev"]
 
 [[package]]
 name = "rpds-py"
