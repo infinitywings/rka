@@ -98,6 +98,24 @@ _DEFAULT_PI_SOURCE_LIFT_NORMALIZED = 0.125
 # fallback that applied whenever it was not.
 _EVIDENCE_BLOCK_LIMIT = 400
 
+_CONTEXT_ENTITY_TABLES = {
+    "journal": "journal",
+    "decision": "decisions",
+    "literature": "literature",
+    "mission": "missions",
+    "claim": "claims",
+    "cluster": "evidence_clusters",
+}
+
+_CONTEXT_ID_PREFIX_TO_TYPE = {
+    "jrn_": "journal",
+    "dec_": "decision",
+    "lit_": "literature",
+    "mis_": "mission",
+    "clm_": "claim",
+    "ecl_": "cluster",
+}
+
 # 1/(1+days) shape exactly). Operator override via RKA_CTX_RECENCY_SHAPE_N
 # preserved for Phase-3.2 candidate-set experimentation.
 _DEFAULT_RECENCY_SHAPE_N = 1.0
@@ -531,17 +549,9 @@ class ContextEngine:
         Extension is symmetric with the existing render path: SELECT * gated
         on (id, project_id) plus an entity_type annotation.
         """
-        table_map = {
-            "journal": "journal",
-            "decision": "decisions",
-            "literature": "literature",
-            "mission": "missions",
-            "claim": "claims",
-            "cluster": "evidence_clusters",
-        }
         results = []
         for hit in hits:
-            table = table_map.get(hit.entity_type)
+            table = _CONTEXT_ENTITY_TABLES.get(hit.entity_type)
             if not table:
                 continue
             row = await self.db.fetchone(
@@ -560,27 +570,19 @@ class ContextEngine:
         project_id: str,
     ) -> list[dict]:
         """Hydrate explicit context IDs in caller order and project scope."""
-        prefix_map = {
-            "jrn_": ("journal", "journal"),
-            "dec_": ("decision", "decisions"),
-            "lit_": ("literature", "literature"),
-            "mis_": ("mission", "missions"),
-            "clm_": ("claim", "claims"),
-            "clu_": ("cluster", "evidence_clusters"),
-        }
         results: list[dict] = []
         for entity_id in entity_ids:
-            mapping = next(
+            entity_type = next(
                 (
-                    entity_mapping
-                    for prefix, entity_mapping in prefix_map.items()
+                    candidate_type
+                    for prefix, candidate_type in _CONTEXT_ID_PREFIX_TO_TYPE.items()
                     if entity_id.startswith(prefix)
                 ),
                 None,
             )
-            if mapping is None:
+            if entity_type is None:
                 continue
-            entity_type, table = mapping
+            table = _CONTEXT_ENTITY_TABLES[entity_type]
             row = await self.db.fetchone(
                 f"SELECT * FROM {table} WHERE id = ? AND project_id = ?",
                 [entity_id, project_id],

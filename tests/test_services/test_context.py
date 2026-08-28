@@ -863,6 +863,29 @@ class TestPhase3_1T2BundleTruncation:
         assert foreign_id not in pkg.sources
         assert len(pkg.sources) == 30
 
+    async def test_anchor_aware_cluster_outside_overview_is_hydrated(
+        self,
+        engine_with_many_entries: ContextEngine,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Canonical ecl_ cluster anchors bypass the overview type window."""
+        monkeypatch.setenv("RKA_CTX_BUNDLE_K", "30")
+        cluster_id = "ecl_d4_anchor"
+        await engine_with_many_entries.db.execute(
+            """INSERT INTO evidence_clusters (id, label, project_id)
+               VALUES (?, 'Explicit cluster anchor', 'proj_default')""",
+            [cluster_id],
+        )
+        await engine_with_many_entries.db.commit()
+
+        pkg = await engine_with_many_entries.get_context(
+            anchor_aware_ids=[cluster_id],
+        )
+
+        assert cluster_id in pkg.sources
+        assert len(pkg.sources) == 31
+        assert any("[cluster|" in entry for entry in pkg.entries)
+
     async def test_anchor_aware_present_no_longer_gates_truncation(
         self, engine_with_many_entries: ContextEngine
     ):
