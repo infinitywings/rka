@@ -40,7 +40,12 @@ def build_artifact_text(
         parts.append(f"mime: {mime}")
     if metadata:
         if isinstance(metadata, str):
-            metadata_text = metadata
+            try:
+                parsed_metadata = json.loads(metadata)
+            except (json.JSONDecodeError, TypeError):
+                metadata_text = metadata
+            else:
+                metadata_text = json.dumps(parsed_metadata, sort_keys=True)
         else:
             metadata_text = json.dumps(metadata, sort_keys=True)
         parts.append(f"metadata: {metadata_text}")
@@ -425,7 +430,7 @@ class ArtifactService(BaseService):
                 project_id=self.project_id,
             )
         except Exception as exc:
-            logger.debug("Embedding sync failed for artifact %s: %s", artifact_id, exc)
+            logger.warning("Embedding sync failed for artifact %s: %s", artifact_id, exc)
 
     async def _embed_figure(
         self,
@@ -448,4 +453,4 @@ class ArtifactService(BaseService):
                 project_id=self.project_id,
             )
         except Exception as exc:
-            logger.debug("Embedding sync failed for figure %s: %s", figure_id, exc)
+            logger.warning("Embedding sync failed for figure %s: %s", figure_id, exc)

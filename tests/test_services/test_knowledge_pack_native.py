@@ -1013,6 +1013,9 @@ def _rewrite_pack_manifest(source: str, destination: Path, mutate) -> None:
         entries = {name: archive.read(name) for name in archive.namelist()}
     manifest = json.loads(entries["manifest.json"])
     mutate(manifest["tables"])
+    manifest["table_counts"] = {
+        table: len(rows) for table, rows in manifest["tables"].items()
+    }
     entries["manifest.json"] = json.dumps(manifest, indent=2, sort_keys=True).encode()
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for name, payload in entries.items():

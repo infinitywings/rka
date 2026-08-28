@@ -18,6 +18,7 @@ from rka.infra.ids import generate_id
 from rka.models.knowledge_pack import KnowledgePackImportResult
 from rka.models.planning import validate_planning_payload
 from rka.models.semantic_patch import SemanticPatchProposalCreate
+from rka.services.artifacts import ArtifactService
 from rka.services.base import BaseService, _now
 from rka.services.outline_integrity import validate_unit_hierarchy
 
@@ -700,7 +701,14 @@ _EMBEDDED_ID_RE = re.compile(r"\b[a-z][a-z_]{1,30}_[0-9A-HJKMNP-TV-Z]{16,32}\b")
 _PROSE_TEXT_COLUMNS: dict[str, tuple[str, ...]] = {
     "journal": ("content", "summary", "verbatim_input"),
     "decisions": ("question", "rationale", "chosen", "abandonment_reason", "options"),
-    "missions": ("objective", "context", "tasks", "acceptance_criteria"),
+    "missions": (
+        "objective",
+        "context",
+        "tasks",
+        "acceptance_criteria",
+        "checkpoint_triggers",
+        "report",
+    ),
     "literature": ("abstract", "notes"),
     "claims": ("content", "staleness_resolution"),
     "claim_scope_versions": (
@@ -1472,14 +1480,72 @@ class KnowledgePackService(BaseService):
             raise ValueError("Knowledge pack is missing manifest.json") from exc
         try:
             manifest = json.loads(raw_manifest.decode("utf-8"))
-        except json.JSONDecodeError as exc:
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError("Knowledge pack manifest is not valid JSON") from exc
+        if not isinstance(manifest, dict):
+            raise ValueError("Knowledge pack manifest must be an object")
 
-        pack_format = manifest.get("pack_format_version") or manifest.get("schema_version")
-        if pack_format not in range(1, PACK_SCHEMA_VERSION + 1):
+        pack_format = (
+            manifest["pack_format_version"]
+            if "pack_format_version" in manifest
+            else manifest.get("schema_version")
+        )
+        if (
+            isinstance(pack_format, bool)
+            or not isinstance(pack_format, int)
+            or pack_format not in range(1, PACK_SCHEMA_VERSION + 1)
+        ):
             raise ValueError(f"Unsupported knowledge pack format version: {pack_format}")
-        if not manifest.get("project"):
+        project = manifest.get("project")
+        if not isinstance(project, dict) or not project:
             raise ValueError("Knowledge pack manifest is missing project metadata")
+        if not isinstance(project.get("id"), str) or not project["id"].strip():
+            raise ValueError("Knowledge pack project metadata requires a non-empty ID")
+        if manifest.get("project_state") is not None and not isinstance(
+            manifest["project_state"],
+            dict,
+        ):
+            raise ValueError("Knowledge pack project_state must be an object or null")
+        tables = manifest.get("tables")
+        if not isinstance(tables, dict):
+            raise ValueError("Knowledge pack manifest tables must be an object")
+        for table, rows in tables.items():
+            if not isinstance(table, str) or not isinstance(rows, list):
+                raise ValueError(
+                    "Knowledge pack manifest table payloads must be arrays"
+                )
+            for index, row in enumerate(rows):
+                if not isinstance(row, dict):
+                    raise ValueError(
+                        f"Knowledge pack {table}[{index}] must be an object"
+                    )
+        table_counts = manifest.get("table_counts")
+        if pack_format == PACK_SCHEMA_VERSION and table_counts is None:
+            raise ValueError(
+                f"Knowledge pack format {PACK_SCHEMA_VERSION} requires table_counts"
+            )
+        if table_counts is not None:
+            if not isinstance(table_counts, dict):
+                raise ValueError("Knowledge pack table_counts must be an object")
+            if set(table_counts) != set(tables):
+                raise ValueError(
+                    "Knowledge pack table_counts keys must match tables exactly"
+                )
+            for table, expected_count in table_counts.items():
+                if (
+                    isinstance(expected_count, bool)
+                    or not isinstance(expected_count, int)
+                    or expected_count < 0
+                ):
+                    raise ValueError(
+                        f"Knowledge pack table_counts[{table!r}] must be a non-negative integer"
+                    )
+                actual_count = len(tables.get(table, []))
+                if actual_count != expected_count:
+                    raise ValueError(
+                        f"Knowledge pack table count mismatch for {table!r}: "
+                        f"manifest={expected_count}, payload={actual_count}"
+                    )
         return manifest
 
     async def _assert_target_project_available(self, project_id: str, project_name: str) -> None:
@@ -1608,7 +1674,49 @@ class KnowledgePackService(BaseService):
                 )
                 for row in tables.get(table, [])
             ]
+        self._refresh_remapped_claim_scope_hashes(tables, remapped)
         return remapped
+
+    @staticmethod
+    def _refresh_remapped_claim_scope_hashes(
+        source_tables: dict[str, list[dict[str, Any]]],
+        remapped_tables: dict[str, list[dict[str, Any]]],
+    ) -> None:
+        """Keep current scope contracts current when claim prose is re-keyed.
+
+        Entity IDs embedded in claim prose are intentionally rewritten during
+        import. Recompute a scope hash only when it matched the source claim;
+        an intentionally stale historical scope must remain stale.
+        """
+
+        source_claims = {
+            str(row["id"]): row
+            for row in source_tables.get("claims", [])
+            if row.get("id")
+        }
+        remapped_claims = {
+            str(row["id"]): row
+            for row in remapped_tables.get("claims", [])
+            if row.get("id")
+        }
+        source_scopes = source_tables.get("claim_scope_versions", [])
+        remapped_scopes = remapped_tables.get("claim_scope_versions", [])
+        for source_scope, remapped_scope in zip(source_scopes, remapped_scopes, strict=True):
+            source_claim = source_claims.get(str(source_scope.get("claim_id") or ""))
+            remapped_claim = remapped_claims.get(str(remapped_scope.get("claim_id") or ""))
+            if source_claim is None or remapped_claim is None:
+                continue
+            source_hash = KnowledgePackService._claim_scope_content_hash(source_claim)
+            if source_scope.get("claim_content_hash") != source_hash:
+                continue
+            remapped_scope["claim_content_hash"] = (
+                KnowledgePackService._claim_scope_content_hash(remapped_claim)
+            )
+
+    @staticmethod
+    def _claim_scope_content_hash(claim: dict[str, Any]) -> str:
+        material = f"{claim.get('claim_type', '')}\0{claim.get('content', '')}".encode()
+        return hashlib.sha256(material).hexdigest()
 
     def _build_id_map(self, tables: dict[str, list[dict[str, Any]]]) -> dict[str, str]:
         id_map: dict[str, str] = {}
@@ -1679,7 +1787,12 @@ class KnowledgePackService(BaseService):
             value = remapped.get(column)
             if isinstance(value, str) and value:
                 remapped[column] = _EMBEDDED_ID_RE.sub(
-                    lambda m: id_map.get(m.group(0), m.group(0)), value
+                    lambda match: (
+                        target_project_id
+                        if match.group(0) == source_project_id
+                        else id_map.get(match.group(0), match.group(0))
+                    ),
+                    value,
                 )
 
         if table == "manuscript_checkpoints" and remapped.get("dependency_snapshot"):
@@ -2128,6 +2241,11 @@ class KnowledgePackService(BaseService):
         "mission": ("missions", ["id", "objective", "context"]),
         "claim": ("claims", ["id", "content"]),
         "cluster": ("evidence_clusters", ["id", "label", "synthesis"]),
+        "artifact": (
+            "artifacts",
+            ["id", "filename", "filetype", "mime", "metadata"],
+        ),
+        "figure": ("figures", ["id", "caption", "summary", "claims"]),
     }
 
     async def count_indexable(self, project_id: str) -> int:
@@ -2163,6 +2281,11 @@ class KnowledgePackService(BaseService):
         unembeddable row should not strand the remaining thousands.
         """
         indexer = BaseService(self.db, embeddings=self.embeddings, project_id=project_id)
+        artifact_indexer = ArtifactService(
+            self.db,
+            embeddings=self.embeddings,
+            project_id=project_id,
+        )
         done = 0
         for etype, (table, cols) in self._INDEXABLE.items():
             rows = await self.db.fetchall(
@@ -2171,7 +2294,12 @@ class KnowledgePackService(BaseService):
             )
             for row in rows:
                 try:
-                    await indexer._sync_indexes(etype, row["id"], dict(row))
+                    await self._sync_indexable_row(
+                        indexer,
+                        artifact_indexer,
+                        etype,
+                        dict(row),
+                    )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         "index_project: %s %s failed (skipped): %s",
@@ -2196,23 +2324,47 @@ class KnowledgePackService(BaseService):
             embeddings=self.embeddings,
             project_id=target_project_id,
         )
-        for row in tables.get("journal", []):
-            await scoped_indexer._sync_indexes("journal", row["id"], row)
-        for row in tables.get("decisions", []):
-            await scoped_indexer._sync_indexes("decision", row["id"], row)
-        for row in tables.get("literature", []):
-            await scoped_indexer._sync_indexes("literature", row["id"], row)
-        for row in tables.get("missions", []):
-            await scoped_indexer._sync_indexes("mission", row["id"], row)
-        # Defect 3 (mis_01KR1Z28QW9WYXG4VV8PGYWD8G T5): pre-v2.3.4 the iteration
-        # stopped at missions, so imported claims and clusters were invisible
-        # to FTS / vec search until a manual reindex. _sync_indexes routes via
-        # _FTS_CONFIG (claim + cluster present) and _EMBED_TEXT_MAP (claim
-        # present; cluster vectors parked).
-        for row in tables.get("claims", []):
-            await scoped_indexer._sync_indexes("claim", row["id"], row)
-        for row in tables.get("evidence_clusters", []):
-            await scoped_indexer._sync_indexes("cluster", row["id"], row)
+        artifact_indexer = ArtifactService(
+            self.db,
+            embeddings=self.embeddings,
+            project_id=target_project_id,
+        )
+        for entity_type, (table, _columns) in self._INDEXABLE.items():
+            for row in tables.get(table, []):
+                await self._sync_indexable_row(
+                    scoped_indexer,
+                    artifact_indexer,
+                    entity_type,
+                    row,
+                )
+
+    @staticmethod
+    async def _sync_indexable_row(
+        indexer: BaseService,
+        artifact_indexer: ArtifactService,
+        entity_type: str,
+        row: dict[str, Any],
+    ) -> None:
+        """Rebuild one imported entity with its canonical indexing text."""
+
+        if entity_type == "artifact":
+            await artifact_indexer._embed_artifact(
+                artifact_id=row["id"],
+                filename=row["filename"],
+                filetype=row.get("filetype"),
+                mime=row.get("mime"),
+                metadata=row.get("metadata"),
+            )
+            return
+        if entity_type == "figure":
+            await artifact_indexer._embed_figure(
+                figure_id=row["id"],
+                caption=row.get("caption"),
+                summary=row.get("summary"),
+                claims=row.get("claims"),
+            )
+            return
+        await indexer._sync_indexes(entity_type, row["id"], row)
 
     @staticmethod
     def _copy_and_hash(src: BinaryIO, dst: BinaryIO) -> str:
