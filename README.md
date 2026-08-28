@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/infinitywings/rka/main/assets/brand/rka-project-plugin-app-icon.svg" alt="RKA Project mark" width="112">
+  <img src="https://raw.githubusercontent.com/rka-project/rka-core/main/assets/brand/rka-project-plugin-app-icon.svg" alt="RKA Project mark" width="112">
 </p>
 
 # RKA Core — Research Knowledge Agent
 
-[![pytest](https://github.com/infinitywings/rka/actions/workflows/pytest.yml/badge.svg?branch=main)](https://github.com/infinitywings/rka/actions/workflows/pytest.yml)
+[![pytest](https://github.com/rka-project/rka-core/actions/workflows/pytest.yml/badge.svg?branch=main)](https://github.com/rka-project/rka-core/actions/workflows/pytest.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **A local-first research operating system for turning day-to-day research activity into durable, auditable knowledge.**
@@ -160,8 +160,8 @@ The intended integration is an explicit, testable crosswalk—not a lossy text e
 Prerequisite: [Docker Desktop](https://www.docker.com/products/docker-desktop/).
 
 ```bash
-git clone https://github.com/infinitywings/rka.git
-cd rka
+git clone https://github.com/rka-project/rka-core.git
+cd rka-core
 docker compose up -d
 ```
 
@@ -192,7 +192,7 @@ For a complete first-project walkthrough, see [USAGE_GUIDE.md](USAGE_GUIDE.md).
 | **CLI** | Starting services, status, backup, credentials, and workspace bootstrap | [Technical Reference](docs/TECHNICAL_REFERENCE.md) |
 | **REST API** | Custom integrations and application development | [Technical Reference](docs/TECHNICAL_REFERENCE.md), live `/docs` |
 | **ChatGPT connector** | Authenticated access from ChatGPT to a local RKA instance | [Connector Guide](docs/CHATGPT_CONNECTOR.md) |
-| **Writer (separate project)** | Explicitly invoked manuscript assistance using RKA's public contract | [`infinitywings/rka-writer`](https://github.com/infinitywings/rka-writer) |
+| **Writer (separate project)** | Explicitly invoked manuscript assistance using RKA's public contract | [`rka-project/rka-writer`](https://github.com/rka-project/rka-writer) |
 
 ## Architecture
 
@@ -211,7 +211,7 @@ RKA Ecosystem project:
 2. **Stable integration contract** — freeze the supported REST/MCP surface and
    provide version, capability, and compatibility discovery.
 3. **RKA Writer extraction** — move the Writer skill, manuscript semantics,
-   academic-writing tools, and Workbench to `infinitywings/rka-writer`.
+   academic-writing tools, and Workbench to `rka-project/rka-writer`.
 4. **Core 3.0 and ecosystem validation** — slim the Core distribution only
    after legacy-state migration and downstream compatibility tests pass.
 
@@ -222,7 +222,7 @@ The Workbench, ARA interoperability, and dual-output evaluation remain planned
 Writer/ecosystem work; they are not the immediate Core implementation target.
 
 The dependency-ordered plan lives in the repository [Roadmap](ROADMAP.md), with
-active work tracked through [GitHub milestones](https://github.com/infinitywings/rka/milestones).
+active work tracked through [GitHub milestones](https://github.com/rka-project/rka-core/milestones).
 Roadmap items describe direction and should not be interpreted as released
 features.
 

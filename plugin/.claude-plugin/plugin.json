@@ -6,8 +6,8 @@
     "name": "Chenglong Fu",
     "email": "cfu6@charlotte.edu"
   },
-  "homepage": "https://github.com/infinitywings/rka",
-  "repository": "https://github.com/infinitywings/rka",
+  "homepage": "https://github.com/rka-project/rka-core",
+  "repository": "https://github.com/rka-project/rka-core",
   "license": "MIT",
   "keywords": [
     "research",

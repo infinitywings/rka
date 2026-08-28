@@ -24,7 +24,7 @@ You are running on a machine that already has Docker and a coding agent. Your jo
 |---|---|
 | **RKA backend** | FastAPI + worker + SQLite + FTS5 + sqlite-vec running in Docker on `localhost:9712`. Web dashboard at the same URL. |
 | **Claude Code (Executor)** | Core plugin: 3 role skills (`rka:rka-brain`, `rka:rka-executor`, `rka:rka-pi`), the credential setup utility, 5 slash commands (`/rka-status`, `/rka-search`, `/rka-pending`, `/rka-set-project`, `/rka-setup-claude-desktop`), a SessionStart backend check, and the typed MCP dispatch surface. |
-| **Writer (optional, separate)** | Install the explicit-only [`rka-writer`](https://github.com/infinitywings/rka-writer) plugin only when manuscript drafting or revision is wanted. It is not included in or activated by RKA Core. |
+| **Writer (optional, separate)** | Install the explicit-only [`rka-writer`](https://github.com/rka-project/rka-writer) plugin only when manuscript drafting or revision is wanted. It is not included in or activated by RKA Core. |
 | **Claude Desktop (Brain)** | Typed RKA tool surface via the `mcpServers.rka` entry in `claude_desktop_config.json`. Wrapper-based config gives version checking; every scoped operation still requires an explicit project id. Skills and slash commands are Claude Code only (Claude Desktop's plugin format is separate). |
 | **ChatGPT (optional remote connector)** | RKA reachable from ChatGPT as a custom MCP connector over an OAuth-protected ngrok tunnel — an 8-tool surface (5 dispatch + 3 skill tools). Opt-in; set up in **Step 6** (§3). The web UI is never exposed. |
 
@@ -104,7 +104,7 @@ Everyone runs **Step 1** (the backend). Then run only the steps their chosen sur
 
 **Pre-check**: Docker Desktop must be running before `docker compose up -d` will work. Confirm with `docker info` (non-zero exit means Docker isn't running — launch Docker Desktop and wait until the whale icon says "running", then retry).
 
-**🟡 Precondition (clone location)**: ask the user where they want the repo cloned (default: `~/Code` on macOS/Linux, `%USERPROFILE%\Code` on Windows). `cd` into that parent, so the repo lands at `<parent>/rka`. **Record the absolute `<parent>/rka` path** — Step 2 needs it as the marketplace path. Don't clone into an unstated cwd; if the user has no preference, state the default you're using and proceed.
+**🟡 Precondition (clone location)**: ask the user where they want the repo cloned (default: `~/Code` on macOS/Linux, `%USERPROFILE%\Code` on Windows). `cd` into that parent, so the repo lands at `<parent>/rka-core`. **Record the absolute `<parent>/rka-core` path** — Step 2 needs it as the marketplace path. Don't clone into an unstated cwd; if the user has no preference, state the default you're using and proceed.
 
 > **⚠️ Windows: do not clone into a OneDrive-synced folder.** On most Windows installs `Desktop` and `Documents` are backed up by OneDrive. OneDrive's Files On-Demand will silently dehydrate untouched repo files into cloud placeholders, and Docker BuildKit then refuses to send them in the build context — a later `docker compose up -d --build` fails with `invalid file request <path>`. The clone works fine; the breakage appears weeks later on the first rebuild. `%USERPROFILE%\Code` (the default above) is outside OneDrive and is the safe choice. If the repo is already in a synced folder, see [§9 Windows: rebuilding and updating](#windows-rebuilding-and-updating-an-existing-install) for the recovery procedure.
 
@@ -113,8 +113,8 @@ Everyone runs **Step 1** (the backend). Then run only the steps their chosen sur
 mkdir -p ~/Code && cd ~/Code              # macOS/Linux
 # Windows (PowerShell): New-Item -ItemType Directory -Force "$env:USERPROFILE\Code" | Set-Location
 
-git clone https://github.com/infinitywings/rka.git
-cd rka
+git clone https://github.com/rka-project/rka-core.git
+cd rka-core
 docker compose up -d
 ```
 
@@ -171,10 +171,10 @@ The marketplace lives inside the cloned RKA repo (at `.claude-plugin/marketplace
 In any Claude Code chat window (in VSCode), run:
 
 ```
-/plugin marketplace add /absolute/path/to/your/cloned/rka
+/plugin marketplace add /absolute/path/to/your/cloned/rka-core
 ```
 
-Replace `/absolute/path/to/your/cloned/rka` with the actual path where you cloned the repo in Step 1 (e.g., `/Users/<you>/Code/rka` on macOS, `C:\Users\<you>\Code\rka` on Windows). Use the absolute path, not `~`.
+Replace `/absolute/path/to/your/cloned/rka-core` with the actual path where you cloned the repo in Step 1 (e.g., `/Users/<you>/Code/rka-core` on macOS, `C:\Users\<you>\Code\rka-core` on Windows). Use the absolute path, not `~`.
 
 **Success signal**: Claude Code prints "Marketplace 'rka' added" (or equivalent confirmation).
 
@@ -217,7 +217,7 @@ If anything fails at any step, the original config is restored from the backup a
 ### Step 4.5 (optional) — Install the standalone Writer plugin
 
 Manuscript drafting is intentionally outside this repository. If it is wanted,
-install [`rka-writer`](https://github.com/infinitywings/rka-writer) by following
+install [`rka-writer`](https://github.com/rka-project/rka-writer) by following
 that repository's README. Writer is explicit-only and may use this Core MCP as
 an evidence source, but Core does not install Writer tools, commands, hooks, or
 dependencies.
@@ -689,8 +689,8 @@ Use this path if:
 ### 8.1 — Install the RKA stdio binary
 
 ```bash
-git clone https://github.com/infinitywings/rka.git
-cd rka
+git clone https://github.com/rka-project/rka-core.git
+cd rka-core
 UV_CACHE_DIR=/tmp/uv-cache uv tool install --force --reinstall .
 # Binary lands at ~/.local/bin/rka (macOS/Linux) or %USERPROFILE%\.local\bin\rka.exe (Windows)
 ```
@@ -913,7 +913,7 @@ Install the orchestrator if you want to:
 ### Step 11.1 — Switch to the agentic branch
 
 ```bash
-cd <your-clone-dir>/rka
+cd <your-clone-dir>/rka-core
 git checkout agentic
 ```
 
@@ -985,7 +985,7 @@ The file holds a long-lived OAuth token and (optionally) API keys — it must no
 The Compose overlay adds a third container (`rka-orchestrator`) alongside `rka-server` and `rka-worker` without modifying the root `docker-compose.yml`:
 
 ```bash
-cd <your-clone-dir>/rka
+cd <your-clone-dir>/rka-core
 docker compose -f docker-compose.yml \
                -f orchestrator/docker-compose.yml up -d --build
 ```
@@ -1061,7 +1061,7 @@ See [`USAGE_GUIDE.md`](USAGE_GUIDE.md#agentic-distribution--orchestrator-workflo
 
 ### Workspace bind mount — `HOST_WORKSPACE_ROOT`
 
-For non-`$HOME` workspace roots (external drives, `/Volumes/...`, etc.), set `HOST_WORKSPACE_ROOT` in the **repo-root `.env`** (i.e., `<your-clone-dir>/rka/.env`), **NOT** in `orchestrator/.env`. Docker Compose reads `.env` from the directory of the first `-f` file (the repo root) for YAML `${VAR}` interpolation; the `env_file:` directive only populates env vars inside the running container and does not feed interpolation.
+For non-`$HOME` workspace roots (external drives, `/Volumes/...`, etc.), set `HOST_WORKSPACE_ROOT` in the **repo-root `.env`** (i.e., `<your-clone-dir>/rka-core/.env`), **NOT** in `orchestrator/.env`. Docker Compose reads `.env` from the directory of the first `-f` file (the repo root) for YAML `${VAR}` interpolation; the `env_file:` directive only populates env vars inside the running container and does not feed interpolation.
 
 If you put `HOST_WORKSPACE_ROOT` in `orchestrator/.env`, the bind mount falls back to `${HOME}` and the workspace appears empty inside the container — a silent failure.
 
@@ -1071,7 +1071,7 @@ If you put `HOST_WORKSPACE_ROOT` in `orchestrator/.env`, the bind mount falls ba
 |---|---|
 | Docker volume `orchestrator-data` | `/data/orchestrator.db` (parked-interrupt queue + workflow_runs) + `/data/orchestrator-saver.db` (LangGraph checkpointer) |
 | `orchestrator/.env` (gitignored, mode 0600) | `CLAUDE_CODE_OAUTH_TOKEN`, optional API keys, and `RKA_LEGACY_TOOLS=1` propagated to the subprocess |
-| `<your-clone-dir>/rka/.env` (gitignored, repo-root) | `HOST_WORKSPACE_ROOT` for non-`$HOME` workspace roots — fed to Compose YAML `${VAR}` interpolation for the workspace bind mount |
+| `<your-clone-dir>/rka-core/.env` (gitignored, repo-root) | `HOST_WORKSPACE_ROOT` for non-`$HOME` workspace roots — fed to Compose YAML `${VAR}` interpolation for the workspace bind mount |
 | `~/.claude.json` (mounted read-only) | Host's Claude CLI global config |
 | `~/rka-projects/{project_id}/` (Phase D MVP convention) | Per-project `tools.json` + `.env` template after onboarding |
 
@@ -1090,15 +1090,15 @@ docker compose -f docker-compose.yml -f orchestrator/docker-compose.yml down
 
 | Location | What |
 |---|---|
-| `<your-clone-dir>/rka/` | The cloned RKA source repo (only docker-compose.yml is needed at runtime; rest is for development) |
+| `<your-clone-dir>/rka-core/` | The cloned RKA Core source repo (only docker-compose.yml is needed at runtime; rest is for development) |
 | Docker volume `rka-data` (managed by Docker Desktop) | The SQLite database `/data/rka.db` and any project artifacts |
 | `~/.claude/plugins/cache/rka/rka/<version>/` (macOS/Linux) or `%USERPROFILE%\.claude\plugins\cache\rka\rka\<version>\` (Windows) | The installed plugin: skills, commands, hooks, wrapper script |
 | `~/Library/Application Support/RKA/integration.json` (macOS) or `%APPDATA%\RKA\integration.json` (Windows) | Plugin-written config telling the wrapper which RKA backend to bridge to |
 | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows) | Claude Desktop's MCP config with the `rka` entry; backups of any prior version live alongside it as `*.backup-YYYYMMDD-HHMMSS` |
 | `~/.claude/plugins/installed_plugins.json` | Claude Code's registry of installed plugins (includes `rka@rka` entry after install) |
-| `~/.claude/plugins/known_marketplaces.json` | Claude Code's registry of marketplace sources (includes the `infinitywings/rka` GitHub source after `/plugin marketplace add`) |
+| `~/.claude/plugins/known_marketplaces.json` | Claude Code's registry of marketplace sources (includes the `rka-project/rka-core` GitHub source after `/plugin marketplace add`) |
 | Docker volume `orchestrator-data` *(agentic only)* | `/data/orchestrator.db` (parked-interrupt queue + workflow_runs) and `/data/orchestrator-saver.db` (LangGraph checkpointer) |
-| `<your-clone-dir>/rka/orchestrator/.env` *(agentic only, mode 0600)* | `CLAUDE_CODE_OAUTH_TOKEN`, `RKA_LEGACY_TOOLS=1`, and optional API keys |
-| `<your-clone-dir>/rka/.env` *(agentic only, optional)* | `HOST_WORKSPACE_ROOT` for non-`$HOME` workspace bind mount (see §11 Workspace bind mount) |
+| `<your-clone-dir>/rka-core/orchestrator/.env` *(agentic only, mode 0600)* | `CLAUDE_CODE_OAUTH_TOKEN`, `RKA_LEGACY_TOOLS=1`, and optional API keys |
+| `<your-clone-dir>/rka-core/.env` *(agentic only, optional)* | `HOST_WORKSPACE_ROOT` for non-`$HOME` workspace bind mount (see §11 Workspace bind mount) |
 | `~/.claude.json` *(agentic only, mounted read-only into container)* | Host's Claude CLI global config consumed by the orchestrator daemon's SDK subprocess |
 | [`docs/v2.6.x-v2.7.0-tool-surface-arc.md`](docs/v2.6.x-v2.7.0-tool-surface-arc.md) | Canonical narrative of the v2.6 → v2.7.0 tool-surface migration (project_id discipline → dispatch + 91 typed Pydantic operations) |

@@ -83,7 +83,7 @@ RKA separates the durable activity record from interpretations built over it.
 
 ### Downstream publication layer (separate project)
 
-The standalone [`rka-writer`](https://github.com/infinitywings/rka-writer)
+The standalone [`rka-writer`](https://github.com/rka-project/rka-writer)
 project can use claims, clusters, research questions, literature, decisions,
 and evidence through Core's public contract to construct a claim spine and
 draft. Its manuscript workbench is a separately installed editing and audit

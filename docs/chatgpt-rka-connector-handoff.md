@@ -8,7 +8,7 @@ This document summarizes the conversation, decisions, implementation work, curre
 > deployment handoff. Current RKA Core packages only the `brain`, `executor`,
 > and `pi` role skills plus `mcp-credentials`. Writer guidance, reference
 > validation, and manuscript tooling moved to the separately installed
-> [`rka-writer`](https://github.com/infinitywings/rka-writer) project. The Core
+> [`rka-writer`](https://github.com/rka-project/rka-writer) project. The Core
 > connector does not expose or auto-activate a `writer` role.
 
 > **2026-07-06 continuation — deployment completed + always-on skill surface.**
@@ -253,7 +253,7 @@ rka_start_session(role="pi", project_id="prj_...")
 ```
 
 For manuscript guidance, install and invoke the separate
-[`rka-writer`](https://github.com/infinitywings/rka-writer) plugin. A Core call
+[`rka-writer`](https://github.com/rka-project/rka-writer) plugin. A Core call
 such as `rka_read_skill(name="writer")` is intentionally unsupported after the
 3.0 split.
 

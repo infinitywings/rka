@@ -53,7 +53,7 @@ local stdio clients keep, so local access is unaffected either way.
 
 The Core connector intentionally exposes only the `pi`, `brain`, and
 `executor` roles. Manuscript assistance is not a hidden connector role: install
-and invoke [`rka-writer`](https://github.com/infinitywings/rka-writer)
+and invoke [`rka-writer`](https://github.com/rka-project/rka-writer)
 separately when writing support is wanted.
 
 ## Prerequisites

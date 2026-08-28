@@ -32,7 +32,7 @@ All notable changes to RKA are documented here. Format loosely follows
   durable journal, literature, decision, mission, claim, evidence, provenance,
   lifecycle, and retrieval contracts. Manuscript drafting and revision are
   provided by the separately installed
-  [`rka-writer`](https://github.com/infinitywings/rka-writer) project.
+  [`rka-writer`](https://github.com/rka-project/rka-writer) project.
 - **Historical reference-validation state remains readable.** Existing,
   project-scoped validation jobs and attestations remain available for audit.
   Core no longer initiates or executes new validation runs; external Writer or
