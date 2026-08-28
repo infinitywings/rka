@@ -196,7 +196,8 @@ class ProjectScopedArgs(BaseModel):
 class UnscopedArgs(BaseModel):
     """Base for operations that don't require a project_id.
 
-    Used by ``list_projects``, ``health``, ``create_project``, ``reset_session``.
+    Used by ``list_projects``, ``capabilities``, ``health``, ``create_project``,
+    and ``reset_session``.
     """
 
     model_config = ConfigDict(extra="forbid", use_enum_values=True)
@@ -1256,7 +1257,7 @@ class QueryWorkspaceScanArgs(ProjectScopedArgs):
 
 
 # ---------------------------------------------------------------------------
-# Unscoped session operations (list_projects / health)
+# Unscoped session operations (list_projects / capabilities / health)
 # ---------------------------------------------------------------------------
 
 
@@ -1264,6 +1265,28 @@ class QueryListProjectsArgs(UnscopedArgs):
     """[ANY] List all available projects (UNSCOPED — does not require project_id)."""
 
     operation: Literal["list_projects"] = "list_projects"
+
+
+class QueryCapabilitiesArgs(UnscopedArgs):
+    """[ANY] Discover Core and interface contracts (UNSCOPED)."""
+
+    operation: Literal["capabilities"] = "capabilities"
+    required_contract: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description="Optional Core contract required by the caller.",
+        ),
+    ] = None
+    required_capabilities: Annotated[
+        Optional[list[str]],
+        Field(
+            default=None,
+            description=(
+                "Optional runtime capabilities that must be available (rest, mcp, embedding)."
+            ),
+        ),
+    ] = None
 
 
 class QueryHealthArgs(UnscopedArgs):
@@ -1355,6 +1378,7 @@ QueryArgsUnion = Annotated[
         QueryWorkspaceScanArgs,
         # Unscoped session
         QueryListProjectsArgs,
+        QueryCapabilitiesArgs,
         QueryHealthArgs,
     ],
     Field(discriminator="operation"),
@@ -5175,6 +5199,7 @@ __all__ = [
     "QueryWorkspaceTreeArgs",
     "QueryWorkspaceScanArgs",
     "QueryListProjectsArgs",
+    "QueryCapabilitiesArgs",
     "QueryHealthArgs",
     # Union
     "QueryArgsUnion",

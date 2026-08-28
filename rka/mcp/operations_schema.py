@@ -2004,6 +2004,39 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "related_operations": ["status", "create_project"],
         "notes": "UNSCOPED — does not require project_id.",
     },
+    "capabilities": {
+        "operation": "capabilities",
+        "tool": "rka_query",
+        "category": "session",
+        "role_tag": "ANY",
+        "summary": "Discover Core, REST, MCP, and runtime capability contracts (UNSCOPED).",
+        "signature": (
+            "rka_query(operation='capabilities', required_contract=None, "
+            "required_capabilities=None)"
+        ),
+        "required_fields": [],
+        "optional_fields": ["required_contract", "required_capabilities"],
+        "enums": {},
+        "examples": [
+            {
+                "description": "Discover versions and stable interface contracts.",
+                "call": {"operation": "capabilities"},
+            },
+            {
+                "description": "Require a compatible Core contract and embedding runtime.",
+                "call": {
+                    "operation": "capabilities",
+                    "required_contract": "rka-core/v1",
+                    "required_capabilities": ["embedding"],
+                },
+            },
+        ],
+        "related_operations": ["health", "list_projects"],
+        "notes": (
+            "UNSCOPED. Unsupported contract/capability requirements return "
+            "a structured actionable error without mutating Core state."
+        ),
+    },
     "health": {
         "operation": "health",
         "tool": "rka_query",
@@ -5560,6 +5593,25 @@ PREVIEW_OPERATIONS: frozenset[str] = frozenset({
 })
 
 
+# Explicit operation deprecations are a public compatibility signal, not a
+# proxy for production usage. Keep them separate from ``operation_maturity``:
+# one operation can be both usage-preview and deprecated. Broader frozen
+# Writer/Workbench compatibility classification belongs to E2.4.
+DEPRECATED_OPERATIONS: dict[str, dict[str, Any]] = {
+    "upsert_argument_spine": {
+        "reason": (
+            "Agent-direct argument-spine replacement is disabled; use an "
+            "attributed semantic proposal and separate PI/web apply transition."
+        ),
+        "replacement_operations": [
+            "prepare_semantic_patch_context",
+            "create_semantic_patch_proposal",
+            "apply_semantic_patch_proposal",
+        ],
+    },
+}
+
+
 def operation_maturity(op_name: str) -> str:
     """``'stable'`` or ``'preview'`` for one operation."""
     entry = OPERATIONS_SCHEMA.get(op_name)
@@ -5568,6 +5620,12 @@ def operation_maturity(op_name: str) -> str:
     if op_name in PREVIEW_OPERATIONS or entry.get("category") in PREVIEW_CATEGORIES:
         return "preview"
     return "stable"
+
+
+def operation_deprecation(op_name: str) -> dict[str, Any] | None:
+    """Return explicit compatibility guidance for a deprecated operation."""
+
+    return DEPRECATED_OPERATIONS.get(op_name)
 
 
 def suggest_operations(query: str, *, top_n: int = 5) -> list[str]:
@@ -5598,7 +5656,10 @@ def list_operations_compact(*, include_preview: bool = False) -> dict[str, list[
     """
     out: dict[str, list[str]] = {"rka_query": [], "rka_execute": []}
     for op_name, entry in OPERATIONS_SCHEMA.items():
-        if not include_preview and operation_maturity(op_name) == "preview":
+        if not include_preview and (
+            operation_maturity(op_name) == "preview"
+            or operation_deprecation(op_name) is not None
+        ):
             continue
         tool = entry["tool"]
         out.setdefault(tool, []).append(op_name)
@@ -5638,16 +5699,22 @@ async def dispatch_describe(
                 "rka_describe('<op>') for schema; rka_query/_execute "
                 "inputSchema already carries per-branch enums."
             ),
+            "deprecated_operations": sorted(DEPRECATED_OPERATIONS),
         }
         if not include_preview:
-            hidden = len(OPERATIONS_SCHEMA) - listed
-            payload["preview_hidden"] = hidden
+            preview_hidden = sum(
+                operation_maturity(op_name) == "preview"
+                and operation_deprecation(op_name) is None
+                for op_name in OPERATIONS_SCHEMA
+            )
+            payload["preview_hidden"] = preview_hidden
             payload["preview_hint"] = (
-                f"{hidden} preview operations are omitted — subsystems with no "
+                f"{preview_hidden} preview operations are omitted — subsystems with no "
                 "production data yet (manuscript, planning, experiments, "
                 "semantic-patches, hooks, interpretation staging, claim scope). "
                 "Pass include_preview=True to see them."
             )
+            payload["deprecated_hidden"] = len(DEPRECATED_OPERATIONS)
         return json.dumps(payload, indent=2)
 
     op = operation.strip()
@@ -5666,15 +5733,25 @@ async def dispatch_describe(
             indent=2,
         )
 
-    return json.dumps({**entry, "maturity": operation_maturity(op)}, indent=2)
+    deprecation = operation_deprecation(op)
+    payload = {
+        **entry,
+        "maturity": operation_maturity(op),
+        "deprecated": deprecation is not None,
+    }
+    if deprecation is not None:
+        payload["deprecation"] = deprecation
+    return json.dumps(payload, indent=2)
 
 
 __all__ = [
     "OPERATIONS_SCHEMA",
+    "DEPRECATED_OPERATIONS",
     "PREVIEW_CATEGORIES",
     "PREVIEW_OPERATIONS",
     "dispatch_describe",
     "operation_maturity",
+    "operation_deprecation",
     "get_operation_schema",
     "list_operations_grouped",
     "list_operations_compact",

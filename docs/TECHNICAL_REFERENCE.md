@@ -62,9 +62,24 @@ The MCP binary is a thin proxy to the REST API configured by `RKA_API_URL`, whic
 | `rka_load_tools` | Load deferred compatibility tools when required. |
 | `rka_help` | Discovery and help alias. |
 
-Use `rka_describe("")` for the operation index and `rka_describe("<operation>")` for exact required fields, enums, and provenance constraints. This runtime description is authoritative and should be preferred over copied operation lists.
+Use `rka_query(args={"operation": "capabilities"})` to discover the connector and
+Core versions, the supported `rka-core/v1` contract, REST/MCP interface
+contracts, runtime capabilities, and connector/backend compatibility. Optional
+`required_contract` and `required_capabilities` fields fail with structured
+guidance when the current runtime cannot satisfy them.
 
-Project-scoped operations require an explicit `project_id`. `list_projects` and `create_project` are intentionally unscoped.
+Use `rka_describe("")` for the default operation index and
+`rka_describe("<operation>")` for exact required fields, enums, usage-readiness
+maturity, and deprecation guidance. The historical `stable`/`preview` maturity
+axis reflects current production use, not a versioned compatibility promise;
+explicit deprecation is reported separately. Pass `include_preview=true` only
+when intentionally exploring preview or compatibility operations. This runtime
+description is authoritative and should be preferred over copied operation
+lists.
+
+Project-scoped operations require an explicit `project_id`. `list_projects`,
+`capabilities`, `health`, `create_project`, and `reset_session` are intentionally
+unscoped.
 
 ### Transport modes
 
@@ -78,8 +93,16 @@ The HTTP transport does not provide authentication by itself. Bind it to loopbac
 - Base URL: `http://localhost:9712/api`
 - OpenAPI UI: `http://localhost:9712/docs`
 - Health: `http://localhost:9712/api/health`
+- Capability discovery: `http://localhost:9712/api/capabilities`
 
 Most endpoints are project-scoped. Pass the project identifier through the documented header or query parameter. Use the live OpenAPI schema for exact request and response models.
+
+`GET /api/capabilities` is additive and versioned by
+`schema_version=rka.core-capabilities/v1`. It preserves the historical top-level
+`embedding` block and keeps the removed `llm` field absent. Repeat the
+`required_capability` query parameter to require multiple runtime capabilities;
+unsupported contracts or combinations return HTTP 409 with the supported
+contract/capability set and a recovery hint.
 
 Major route families include projects, status, notes, decisions, literature, missions, checkpoints, claims, clusters, research maps, freshness, search, context, graphs, artifacts, workspace ingestion, audit history, and knowledge-pack import/export.
 

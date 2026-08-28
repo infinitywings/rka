@@ -56,6 +56,8 @@ import json
 import logging
 from typing import Any
 
+import httpx
+
 logger = logging.getLogger(__name__)
 
 
@@ -2962,6 +2964,114 @@ def _coerce_result_to_str(result: Any) -> str:
         return repr(result)
 
 
+async def _dispatch_capabilities_typed(args: "BaseModel") -> str:  # type: ignore[name-defined]  # noqa: F821
+    """Proxy versioned discovery while keeping connector/backend drift visible."""
+
+    from rka import __version__
+    from rka.mcp.server import _client
+    from rka.services.capabilities import CORE_CONTRACT
+
+    required_contract = getattr(args, "required_contract", None)
+    required_capabilities = getattr(args, "required_capabilities", None) or []
+    params: list[tuple[str, str]] = []
+    if required_contract:
+        params.append(("required_contract", required_contract))
+    params.extend(("required_capability", capability) for capability in required_capabilities)
+
+    try:
+        async with _client() as client:
+            response = await client.get(
+                "/api/capabilities",
+                params=params or None,
+            )
+    except httpx.RequestError as exc:
+        detail = str(exc) or f"{type(exc).__name__} (no message)"
+        return _err(
+            "backend_unavailable",
+            "The MCP connector could not reach the RKA Core capability endpoint.",
+            connector_version=__version__,
+            required_contract=required_contract or CORE_CONTRACT,
+            detail=detail,
+            hint=(
+                "Start or rebuild the Core backend, verify RKA_API_URL, and "
+                "keep the local connector and backend installations synchronized."
+            ),
+        )
+
+    try:
+        body = response.json()
+    except Exception:  # noqa: BLE001 - compatibility path may return HTML/text
+        body = None
+
+    if response.status_code in {404, 405}:
+        return _err(
+            "incompatible_backend",
+            "The Core backend does not expose the E2 capability contract.",
+            connector_version=__version__,
+            rest_status_code=response.status_code,
+            required_contract=required_contract or CORE_CONTRACT,
+            hint=(
+                "Upgrade/rebuild the Core backend or reinstall the connector "
+                "so both provide rka-core/v1 discovery."
+            ),
+        )
+
+    backend_version = None
+    supported_contracts: list[str] = []
+    if isinstance(body, dict):
+        backend_version = body.get("core", {}).get("version") or body.get("core_version")
+        supported_contracts = body.get("core", {}).get("supported_contracts") or body.get(
+            "supported_contracts", []
+        )
+    connector = {
+        "name": "rka-mcp",
+        "version": __version__,
+        "backend_version": backend_version,
+        "version_match": backend_version == __version__,
+        "compatible": CORE_CONTRACT in supported_contracts,
+    }
+
+    if not response.is_success:
+        if isinstance(body, dict):
+            body["connector"] = connector
+            return json.dumps(body, indent=2)
+        return _err(
+            "backend_error",
+            "The Core backend rejected capability discovery.",
+            connector=connector,
+            rest_status_code=response.status_code,
+            detail=response.text[:500],
+            hint="Inspect the backend response and synchronize connector/backend versions.",
+        )
+
+    if not isinstance(body, dict) or body.get("schema_version") != "rka.core-capabilities/v1":
+        return _err(
+            "incompatible_backend",
+            "The Core backend returned a pre-E2 or malformed capability document.",
+            connector=connector,
+            required_contract=required_contract or CORE_CONTRACT,
+            observed_payload=body,
+            hint=(
+                "Upgrade/rebuild the Core backend or reinstall the connector "
+                "so both provide rka.core-capabilities/v1."
+            ),
+        )
+
+    compatible = CORE_CONTRACT in supported_contracts
+    connector["compatible"] = compatible
+    body["connector"] = connector
+    if not compatible:
+        return _err(
+            "incompatible_backend",
+            f"The connector requires {CORE_CONTRACT}.",
+            connector=connector,
+            backend_capabilities=body,
+            required_contract=CORE_CONTRACT,
+            hint="Synchronize the connector and Core backend before writes.",
+        )
+    return json.dumps(body, indent=2)
+
+
 async def dispatch_query_typed(args: "BaseModel") -> str:  # type: ignore[name-defined]  # noqa: F821
     """v2.7.0 typed-query dispatch.
 
@@ -2981,9 +3091,11 @@ async def dispatch_query_typed(args: "BaseModel") -> str:  # type: ignore[name-d
     op = args.operation  # type: ignore[attr-defined]
     pid = getattr(args, "project_id", None)
 
-    # Unscoped reads — list_projects + health.
+    # Unscoped reads — list_projects + capabilities + health.
     if op == "list_projects":
         return _coerce_result_to_str(await dispatch_session("list_projects"))
+    if op == "capabilities":
+        return await _dispatch_capabilities_typed(args)
     if op == "health":
         return _coerce_result_to_str(await dispatch_session("health"))
 

@@ -157,6 +157,16 @@ The default MCP interface exposes a compact dispatch surface rather than broadca
 
 Each dispatched operation has a typed argument model with operation-specific required fields and enums. `rka_describe` is the authoritative runtime catalog; this avoids maintaining a brittle duplicate list in the README.
 
+Core publishes an additive, versioned capability manifest at
+`GET /api/capabilities`; the same document is available through the unscoped
+`rka_query(args={"operation": "capabilities"})` dispatch. Product versions and public
+contract versions are separate. MCP reports connector and backend versions
+independently so version drift remains visible, while explicit deprecation
+metadata remains distinct from the historical usage-derived stable/preview
+signal. Capability documents label that signal as `usage-readiness`; only the
+REST and MCP interface contracts are declared stable at this stage.
+`/api/health` remains a liveness endpoint rather than a negotiation contract.
+
 ## Local-first boundary
 
 The core database and dashboard run locally. Embeddings may remain fully local or use a configured compatible backend. MCP stdio also remains local. Remote access must be mediated through an authenticated connector; the raw HTTP MCP port should not be exposed directly.

@@ -5,10 +5,11 @@ the endpoint. Mission D (v2.4.0 / mis_01KRNYPVB8N3HDMZ9HK9HM3TB0) is a
 BREAKING-IN-MINOR change: the `llm` field is removed entirely per PI
 directive jrn_01KRNZBS50K250HHHHEC58E4GC.
 
-Verified states (post-Mission-D):
-  - Response is exactly {"embedding": {available, reason_unavailable}}
+Verified states (E2.1, additive over Mission D):
+  - The embedding block remains {available, reason_unavailable}
+  - Core/interface versions and contract discovery are explicit
+  - Unsupported requirements return an actionable 409 response
   - `llm` field is ABSENT (not null, not {available: false} — gone)
-  - embedding block shape preserved per Mission B Affordance C
 """
 
 from __future__ import annotations
@@ -20,7 +21,9 @@ import pytest
 import pytest_asyncio
 
 from rka.api.app import create_app
+from rka import __version__
 from rka.config import RKAConfig
+from rka.mcp.operations_schema import DEPRECATED_OPERATIONS, OPERATIONS_SCHEMA
 
 
 @pytest_asyncio.fixture
@@ -49,16 +52,36 @@ async def api_client(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_capabilities_endpoint_returns_only_embedding(api_client: httpx.AsyncClient):
-    """Mission D BREAKING-IN-MINOR regression lock: `llm` is gone."""
+async def test_capabilities_endpoint_is_versioned_and_additive(api_client: httpx.AsyncClient):
     r = await api_client.get("/api/capabilities")
     assert r.status_code == 200
     body = r.json()
-    # Only `embedding` is allowed at the top level.
-    assert set(body.keys()) == {"embedding"}, (
-        f"capabilities response should contain only 'embedding' after Mission D; "
-        f"got keys: {sorted(body.keys())}"
+    assert set(body) >= {
+        "schema_version",
+        "core",
+        "interfaces",
+        "supported_capabilities",
+        "available_capabilities",
+        "embedding",
+    }
+    assert body["schema_version"] == "rka.core-capabilities/v1"
+    assert body["core"] == {
+        "name": "rka-core",
+        "version": __version__,
+        "contract": "rka-core/v1",
+        "supported_contracts": ["rka-core/v1"],
+    }
+    assert body["interfaces"]["rest"]["contract"] == "rka-rest/v1"
+    assert body["interfaces"]["mcp"]["contract"] == "rka-mcp/v1"
+    mcp = body["interfaces"]["mcp"]
+    assert mcp["operation_maturity_basis"] == "usage-readiness"
+    assert (
+        mcp["default_operation_count"]
+        + mcp["usage_preview_operation_count"]
+        + mcp["deprecated_operation_count"]
+        == len(OPERATIONS_SCHEMA)
     )
+    assert mcp["deprecated_operation_count"] == len(DEPRECATED_OPERATIONS)
 
 
 @pytest.mark.asyncio
@@ -98,3 +121,77 @@ async def test_capabilities_embedding_disabled_carries_reason(api_client: httpx.
     emb = body["embedding"]
     assert emb["available"] is False
     assert "disabled" in emb["reason_unavailable"].lower()
+
+
+@pytest.mark.asyncio
+async def test_supported_contract_and_capability_requirements_succeed(
+    api_client: httpx.AsyncClient,
+):
+    r = await api_client.get(
+        "/api/capabilities",
+        params=[
+            ("required_contract", "rka-core/v1"),
+            ("required_capability", "rest"),
+            ("required_capability", "mcp"),
+        ],
+    )
+    assert r.status_code == 200
+    assert r.json()["available_capabilities"] == ["rest", "mcp"]
+
+
+@pytest.mark.asyncio
+async def test_unsupported_contract_is_actionable(api_client: httpx.AsyncClient):
+    r = await api_client.get(
+        "/api/capabilities",
+        params={"required_contract": "rka-core/v99"},
+    )
+    assert r.status_code == 409
+    body = r.json()
+    assert body["error"] == "unsupported_core_contract"
+    assert body["requested_contract"] == "rka-core/v99"
+    assert body["supported_contracts"] == ["rka-core/v1"]
+    assert body["issues"][0]["requirement"] == "rka-core/v99"
+    assert "rka-core/v1" in body["hint"]
+
+
+@pytest.mark.asyncio
+async def test_unsupported_contract_with_satisfied_capability_keeps_contract_error(
+    api_client: httpx.AsyncClient,
+):
+    r = await api_client.get(
+        "/api/capabilities",
+        params=[
+            ("required_contract", "rka-core/v99"),
+            ("required_capability", "rest"),
+        ],
+    )
+    assert r.status_code == 409
+    body = r.json()
+    assert body["error"] == "unsupported_core_contract"
+    assert [issue["requirement"] for issue in body["issues"]] == ["rka-core/v99"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("required_capability", "status", "reason_fragment"),
+    [
+        ("embedding", "unavailable", "disabled"),
+        ("writer", "unsupported", "unknown capability"),
+    ],
+)
+async def test_unsupported_capability_combination_is_actionable(
+    api_client: httpx.AsyncClient,
+    required_capability: str,
+    status: str,
+    reason_fragment: str,
+):
+    r = await api_client.get(
+        "/api/capabilities",
+        params={"required_capability": required_capability},
+    )
+    assert r.status_code == 409
+    body = r.json()
+    assert body["error"] == "unsupported_capability_combination"
+    assert body["required_capabilities"] == [required_capability]
+    assert body["issues"][0]["status"] == status
+    assert reason_fragment in body["issues"][0]["reason"].lower()

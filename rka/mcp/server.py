@@ -18,6 +18,7 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 import httpx
 
+from rka import __version__
 from rka.models.mission import MissionTask
 from rka.mcp._enums import (
     ChkTypeLit,
@@ -338,6 +339,11 @@ Then follow the returned guide. Also available:
 """
 
 mcp = FastMCP("Research Knowledge Agent", instructions=RKA_INSTRUCTIONS)
+# FastMCP otherwise leaves this unset and the initialize handshake falls back
+# to the MCP SDK version, which makes a stale connector look like the backend's
+# product version. E2 discovery reports connector/backend versions separately;
+# the handshake should identify this connector build too.
+mcp._mcp_server.version = __version__
 API_URL = os.environ.get("RKA_API_URL", "http://127.0.0.1:9712")
 API_TIMEOUT = httpx.Timeout(connect=30.0, read=120.0, write=120.0, pool=30.0)
 
@@ -7720,14 +7726,14 @@ async def rka_query(args: _QueryArgsUnion) -> str:
     context", "manuscript readiness", "manuscript spine", "changes since",
     "what changed", "manuscript impact", "reference validation status",
     "review queue", "open checkpoints", "pending maintenance",
-    "list projects", "health check".
+    "list projects", "capability discovery", "health check".
 
     Args:
         args: One of the typed ``Query*Args`` models from
               ``rka.mcp.operation_args``. The model's ``operation`` field
               is the discriminator. Project-scoped operations require
-              ``project_id``; the only unscoped reads are
-              ``list_projects`` and ``health``.
+              ``project_id``; the unscoped reads are ``list_projects``,
+              ``capabilities``, and ``health``.
 
     Returns:
         JSON-string payload from the underlying REST endpoint, or a
@@ -9013,13 +9019,13 @@ async def rka_describe(operation: str = "", include_preview: bool = False) -> st
     Modes:
       - operation='<name>'   -> full schema (signature, required/optional
                                 fields, enum value sets, 1-2 examples,
-                                related_operations, role_tag, notes).
+                                related_operations, role_tag, notes, maturity,
+                                and explicit deprecation guidance when present).
       - operation=''         -> operations index grouped by tool
                                 (rka_query / rka_execute); use this when you
-                                want to BROWSE. Preview operations are omitted
-                                by default — subsystems that carry no
-                                production data yet — and the response reports
-                                how many were hidden. Pass
+                                want to BROWSE. Preview and deprecated
+                                operations are omitted by default and reported
+                                separately. Pass
                                 include_preview=True to see the whole surface.
       - unknown operation    -> {error: 'unknown_operation', did_you_mean: [...]}.
 
@@ -9028,16 +9034,16 @@ async def rka_describe(operation: str = "", include_preview: bool = False) -> st
             rka_query(args={"operation": ...}) or
             rka_execute(args={"operation": ...})).
             Pass '' to browse the index.
-        include_preview: include operations whose subsystem has no production
-            data yet. Default False keeps the browse index to what is actually
-            in use.
+        include_preview: include preview and deprecated compatibility
+            operations. Default False keeps the browse index to the default
+            usage-tested surface.
 
     Returns:
         JSON. For a known operation: {operation, tool, category,
         summary, signature, required_fields, optional_fields, enums,
-        examples, related_operations, role_tag, notes}. For an unknown
-        name: {error, operation, did_you_mean, hint}. For empty: the
-        operations index.
+        examples, related_operations, role_tag, notes, maturity, deprecated,
+        deprecation?}. For an unknown name: {error, operation,
+        did_you_mean, hint}. For empty: the operations index.
     """
     return await _dispatch_describe(operation, include_preview=include_preview)
 
