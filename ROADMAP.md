@@ -2,7 +2,7 @@
 
 This roadmap prioritizes a reliable, independently usable RKA research-
 knowledge core. Writer/Workbench is the only active downstream product and is
-released separately as `infinitywings/rka-writer`. Agentic orchestration is
+released separately as `rka-project/rka-writer`. Agentic orchestration is
 shelved: its existing history is preserved, but no `rka-agentic` repository or
 runtime extraction is planned unless the PI explicitly reactivates it.
 
@@ -68,7 +68,7 @@ roadmap.
 | **E1** | **Core reliability baseline** | Harden journal, provenance, project isolation, retrieval, claim edges, migrations, export/import, and recovery. | Core-only install/tests pass; no cross-project leakage; real backup upgrade and integrity pass. |
 | **E2** | **Stable external contract** | Freeze supported REST/MCP behavior and provide capability/version discovery plus legacy Writer export. | Public-contract-only clients complete core workflows and legacy Writer export round-trips. |
 | **E3** | **Agentic work shelved** | Preserve the historical branch and design record without creating or operating a separate Agentic product. | Active docs and packaging do not direct users to install Agentic; reactivation requires a new PI decision. |
-| **E4** | **Writer repository extraction** | Create `infinitywings/rka-writer`, migrate Writer state, and move Workbench ownership. | Writer runs independently, imports legacy state, and detects stale Core references. |
+| **E4** | **Writer repository extraction** | Establish `rka-project/rka-writer`, migrate Writer state, and move Workbench ownership. | Writer runs independently, imports legacy state, and detects stale Core references. |
 | **E5** | **RKA Core 3.0** | Remove active Writer execution code from Core while preserving compatibility export and migration history. | Core and Writer compatibility suites pass without destructive database changes. |
 | **E6** | **Ecosystem integration** | Maintain Core and Writer releases under one GitHub Project and compatibility matrix. | Core-only and Core+Writer deployments have reproducible smoke tests. |
 

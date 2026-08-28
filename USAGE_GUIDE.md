@@ -134,8 +134,8 @@ Both should print version numbers without errors.
 ### Step 2. Clone and start RKA
 
 ```bash
-git clone https://github.com/infinitywings/rka.git
-cd rka
+git clone https://github.com/rka-project/rka-core.git
+cd rka-core
 docker compose up -d
 ```
 

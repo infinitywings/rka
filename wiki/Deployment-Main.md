@@ -184,17 +184,17 @@ echo $PATH | tr ':' '\n' | grep -q "$HOME/.local/bin" && echo "OK" || \
 
 ### 1.5 AppleDouble pre-check (skip if cloning under `~/`)
 
-If you clone into `~/Code/rka` or `~/Documents/rka` on the boot APFS volume, skip this. If you clone onto **`/Volumes/*`**, OneDrive, Dropbox, iCloud, or an SMB/AFP mount, macOS will create `._*` AppleDouble files that break both `docker compose build` (`failed to xattr ... operation not permitted`) and `uv tool install` (`No such file or directory: '._requires.txt'`).
+If you clone into `~/Code/rka-core` or `~/Documents/rka-core` on the boot APFS volume, skip this. If you clone onto **`/Volumes/*`**, OneDrive, Dropbox, iCloud, or an SMB/AFP mount, macOS will create `._*` AppleDouble files that break both `docker compose build` (`failed to xattr ... operation not permitted`) and `uv tool install` (`No such file or directory: '._requires.txt'`).
 
-**Recommendation:** clone into `~/Code/rka`. If you must use an external volume, see [§ 7.4 AppleDouble fix](#74-appledouble-blocks-docker-build--uv-tool-install).
+**Recommendation:** clone into `~/Code/rka-core`. If you must use an external volume, see [§ 7.4 AppleDouble fix](#74-appledouble-blocks-docker-build--uv-tool-install).
 
 ---
 
 ## 2. Clone the repo + pin a reference
 
 ```bash
-git clone https://github.com/infinitywings/rka.git
-cd rka
+git clone https://github.com/rka-project/rka-core.git
+cd rka-core
 git branch --show-current
 ```
 
@@ -601,7 +601,7 @@ D1–D3 (host binary install) are **optional** smoke-test rows — the docker-ex
 | **A2** | `xcode-select -p && git --version` | Non-empty path + `git version 2.x` | `xcode-select --install` |
 | **A3** | `python3 --version` | `Python 3.9.x` or higher | `brew install python` (only needed if stock `/usr/bin/python3` is missing) |
 | **A4** | `uv --version` (only required if running D1–D3) | `uv 0.x` or newer | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
-| **B1** | `git clone https://github.com/infinitywings/rka.git && cd rka && git branch --show-current` | Prints `main` | `git fetch origin main && git checkout main` |
+| **B1** | `git clone https://github.com/rka-project/rka-core.git && cd rka-core && git branch --show-current` | Prints `main` | `git fetch origin main && git checkout main` |
 | **B1a** | `git rev-parse HEAD > .deployed-sha; cat .deployed-sha` | 40-char SHA recorded | Capture for deployment log; or `git checkout v2.5.12` for a pinned reference |
 | **B2** | `find . -name '._*' -not -path './.git/*' -not -path './.venv/*' -not -path './node_modules/*' \| wc -l` | Prints `0` | Re-run with `-delete` |
 | **C1** | `docker compose up -d --build` | Exits 0; ends with `Started` lines | See [§ 7](#7-troubleshooting) by error class |

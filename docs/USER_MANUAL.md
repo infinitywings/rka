@@ -251,8 +251,8 @@ Docker is the simplest way to run RKA. It requires no Python environment, no Nod
 **Prerequisites:** Docker Desktop ([docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/))
 
 ```bash
-git clone https://github.com/infinitywings/rka.git
-cd rka
+git clone https://github.com/rka-project/rka-core.git
+cd rka-core
 docker compose up -d
 ```
 
@@ -965,4 +965,4 @@ Click the trash icon next to the project selector in the sidebar. A confirmation
 
 *RKA v2.3.2 — Research Knowledge Agent*
 *UNC Charlotte, CS / IoT / CPS Security Research*
-*https://github.com/infinitywings/rka*
+*https://github.com/rka-project/rka-core*

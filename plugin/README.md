@@ -4,7 +4,7 @@
 
 # rka — Claude Code plugin for the Research Knowledge Agent
 
-This is the official Claude Code plugin for [RKA](https://github.com/infinitywings/rka). It lives inside the upstream RKA repository at `plugin/`, distributed via the local marketplace at `.claude-plugin/marketplace.json` in the repo root.
+This is the official Claude Code plugin for [RKA](https://github.com/rka-project/rka-core). It lives inside the upstream RKA Core repository at `plugin/`, distributed via the local marketplace at `.claude-plugin/marketplace.json` in the repo root.
 
 > **Quick install** — see [INSTALL.md at the repo root](../INSTALL.md). The TL;DR: clone the rka repo, `docker compose up -d`, then in Claude Code: `/plugin marketplace add /path/to/cloned/rka` followed by `/plugin install rka@rka`.
 
@@ -102,4 +102,4 @@ For Claude Desktop, the wrapper picks up changes automatically (no install step)
 
 This plugin was scaffolded as part of the empirical-verification probe for plugin architecture (mission `mis_01KQNN8YZG7A4ZAGDCQ8ZVA97Z`, decision `dec_01KQNPC7A683HK0KRX1PAGNNED` — Option B: wrapper exec's local stdio binary, no HTTP MCP bridge). The probe's findings shape the v1.0 design; future v2.4 RKA.app will automate the setup currently handled by `/rka-setup-claude-desktop`. Both ids are RKA knowledge-base entities; query them via any RKA tool (e.g., `mcp__plugin_rka_rka__rka_get(id="dec_01KQNPC7A683HK0KRX1PAGNNED")` from a Claude session, or visit the corresponding entity in the web dashboard at `http://localhost:9712`).
 
-Upstream RKA: [github.com/infinitywings/rka](https://github.com/infinitywings/rka)
+Upstream RKA Core: [github.com/rka-project/rka-core](https://github.com/rka-project/rka-core)

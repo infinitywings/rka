@@ -32,7 +32,7 @@ When working here you are modifying the tool itself, not using it for research.
 - RKA Core owns durable research records, provenance, integrity, retrieval,
   migrations, and public REST/MCP contracts.
 - New manuscript, Writer, or Workbench behavior belongs in
-  [`infinitywings/rka-writer`](https://github.com/infinitywings/rka-writer), not
+  [`rka-project/rka-writer`](https://github.com/rka-project/rka-writer), not
   this repository. Legacy manuscript/Workbench surfaces in Core are frozen;
   change them only for correctness, security, migration, or compatibility.
 - Agentic orchestration is shelved and unsupported. Do not add new Agentic

@@ -66,7 +66,7 @@ def test_readmes_keep_accessible_text_with_the_mark() -> None:
 
     assert "# RKA Core — Research Knowledge Agent" in root_readme
     assert (
-        "https://raw.githubusercontent.com/infinitywings/rka/main/"
+        "https://raw.githubusercontent.com/rka-project/rka-core/main/"
         "assets/brand/rka-project-plugin-app-icon.svg"
     ) in root_readme
     assert "# rka — Claude Code plugin for the Research Knowledge Agent" in plugin_readme
