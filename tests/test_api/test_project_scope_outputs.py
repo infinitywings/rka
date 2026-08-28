@@ -102,6 +102,7 @@ async def test_decision_outputs_attested_project_and_rejects_cross_project_looku
 
 
 @pytest.mark.asyncio
+@pytest.mark.writer
 async def test_manuscript_registration_outputs_attested_project(
     api_client: httpx.AsyncClient,
 ) -> None:

@@ -271,15 +271,23 @@ def migrate():
     async def _migrate():
         db = Database(config.database_url)
         await db.connect()
-        # initialize_schema runs the base schema + migrations;
-        # run_migrations() returns 0 if already applied (idempotent)
-        await db.initialize_schema()
-        count = await db.run_migrations()
-        await db.close()
-        return count
+        try:
+            # Core uses both the base schema and Phase-2 FTS/vector schema.
+            # The latter also replays migrations that are intentionally
+            # deferred until sqlite-vec or Phase-2 tables are available.
+            await db.initialize_schema()
+            await db.initialize_phase2_schema()
+            # Return the result of one final idempotent sweep. Initialization
+            # above may already have applied every pending migration.
+            return await db.run_migrations()
+        finally:
+            await db.close()
 
     count = asyncio.run(_migrate())
-    click.echo(f"Applied {count} migration(s).")
+    click.echo(
+        "Migration initialization complete (base + Phase 2); "
+        f"final sweep applied {count} migration(s)."
+    )
 
 
 @main.command("start-all")

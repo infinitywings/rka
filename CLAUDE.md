@@ -23,7 +23,7 @@ When working here you are modifying the tool itself, not using it for research.
 - **MCP tools**: all prefixed `rka_`, defined in `server.py` via `@mcp.tool()`
 - **MCP prompts**: defined at end of `server.py` via `@mcp.prompt()`
 - **API routes**: thin adapters only — no business logic, always delegate to service layer
-- **Tests**: `tests/` using pytest; run with `docker compose exec rka pytest`
+- **Tests**: Core is `python -m pytest --strict-markers -m "not writer and not agentic"`; see [`docs/CORE_PROFILE.md`](docs/CORE_PROFILE.md)
 - **v2.7.0+ tool surface (MCP)**: 3 always-on dispatch tools (`rka_query` / `rka_execute` / `rka_describe`) + 2 escape hatches (`rka_load_tools` / `rka_help`) = 5 broadcast tools. Typed Pydantic operation models in `rka/mcp/operation_args.py` provide per-branch enum + required-field enforcement at the FastMCP `inputSchema` layer (`oneOf` with `discriminator='operation'`). Use `rka_describe("")` for the live operation index and counts instead of copying a static total into agent guidance. The legacy tools and v2.7.0a2 verbs remain at `tier='deferred'`, callable via `rka_load_tools`; `RKA_LEGACY_TOOLS=1` is retained only for historical callers and is not the normal surface. Setting `RKA_SKILL_TOOLS=1` promotes the three ChatGPT skill-adapter tools (`rka_list_skills` / `rka_read_skill` / `rka_start_session`) to always-on (8-tool surface); this is used only by the ChatGPT HTTP MCP deployment on :9713 (see [`docs/chatgpt-rka-connector-handoff.md`](docs/chatgpt-rka-connector-handoff.md)), while local stdio clients leave it unset. The historical design arc is documented in [`docs/v2.6.x-v2.7.0-tool-surface-arc.md`](docs/v2.6.x-v2.7.0-tool-surface-arc.md) and `CHANGELOG.md`.
 - **Credential management**: use `rka cred` subcommands (`init` / `set` / `get` / `env` / `propagate` / `check`) — vault lives at `~/.config/rka/creds.env` (XDG-compliant, mode 0600). Never commit creds to any repo or `.env` tracked by git. Full reference: [`docs/CRED_VAULT.md`](docs/CRED_VAULT.md).
 
@@ -40,7 +40,7 @@ When working here you are modifying the tool itself, not using it for research.
   decision; see [ADR 0013](docs/adr/0013-shelve-agentic-and-focus-core-writer.md).
 - Core must install, start, and test without either downstream product.
 
-## Running (Docker only)
+## Running and verification
 
 ```bash
 # Start all services (API + web dashboard + background worker)
@@ -52,8 +52,12 @@ docker compose logs -f rka
 # Rebuild after code changes
 docker compose up -d --build
 
-# Run tests
-docker compose exec rka pytest
+# Run the Core test gate from a development environment
+python -m pytest -q --tb=short --strict-markers \
+  -m "not writer and not agentic"
+
+# Verify migrations, REST, MCP, worker, sqlite-vec, and built dashboard
+python scripts/core_startup_smoke.py --require-web
 
 # Rebuild web UI after frontend changes (done automatically during docker build)
 # For local iteration: cd web && npm run build, then rebuild container

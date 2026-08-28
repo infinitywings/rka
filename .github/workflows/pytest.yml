@@ -1,10 +1,9 @@
 name: pytest
 
-# CI runs pytest outside Docker against a fresh venv, per v2.2 Phase 0 design
-# (dec_01KPE5V4EXMWR9MGGPKA1R2VGH). The runtime Dockerfile installs only
-# .[llm,academic,workspace] — keeping production images slim. GitHub Actions
-# installs .[llm,academic,workspace,dev] directly into the runner, so each CI
-# job gets a fresh in-memory/migrated test DB via pytest's tmp_path fixtures.
+# CI runs the independently selectable Core profile outside Docker against a
+# fresh venv. Core installs embeddings, academic, and workspace support but no
+# legacy LLM-provider SDKs. Frozen Writer/Workbench and Agentic compatibility
+# tests remain in the repository under explicit ownership markers.
 
 on:
   push:
@@ -43,7 +42,15 @@ jobs:
       - name: Type-check and build the production frontend
         run: npm run build
 
+      - name: Preserve the dashboard bundle for Core startup smoke
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-web-dist
+          path: web/dist
+          retention-days: 1
+
   pytest:
+    needs: web-build
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -55,10 +62,40 @@ jobs:
           python-version: "3.13"
           cache: pip
 
-      - name: Install project with runtime + dev extras
+      - name: Install Core with runtime + dev extras
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[llm,academic,workspace,dev]"
+          pip install -e ".[embeddings,academic,workspace,dev]"
 
-      - name: Run pytest
-        run: python -m pytest -q --tb=short
+      - name: Restore the dashboard bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: core-web-dist
+          path: web/dist
+
+      - name: Run Core pytest profile
+        run: >-
+          python -m pytest -q --tb=short --strict-markers
+          -m "not writer and not agentic"
+
+      - name: Smoke-test Core startup surfaces
+        run: python scripts/core_startup_smoke.py --require-web
+
+  docker-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the production Core image
+        run: docker build -t rka-core:ci .
+
+      - name: Verify the image dependency boundary
+        run: >-
+          docker run --rm rka-core:ci python -c
+          "import importlib.util;
+          found={name: importlib.util.find_spec(name) is not None
+          for name in ('fastembed','sqlite_vec','litellm','instructor')};
+          print(found);
+          assert found == {'fastembed': True, 'sqlite_vec': True,
+          'litellm': False, 'instructor': False}"

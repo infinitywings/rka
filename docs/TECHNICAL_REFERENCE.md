@@ -120,11 +120,16 @@ Projects can be exported and imported as portable knowledge packs. Import create
 
 ## Development
 
-Run tests in the Docker environment:
+Run the independently selectable Core profile from a development environment:
 
 ```bash
-docker compose exec rka pytest
+python -m pip install -e ".[embeddings,academic,workspace,dev]"
+python -m pytest -q --tb=short --strict-markers \
+  -m "not writer and not agentic"
 ```
+
+The exact dependency, ownership, full-compatibility, and startup-smoke commands
+are documented in [RKA Core install and test profile](CORE_PROFILE.md).
 
 The principal source directories are:
 

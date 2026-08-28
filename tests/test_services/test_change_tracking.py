@@ -180,6 +180,7 @@ async def test_change_cursor_is_monotonic_project_scoped_and_tracks_tag_edges(
 
 
 @pytest.mark.asyncio
+@pytest.mark.writer
 async def test_tag_and_claim_edge_changes_map_to_writer_claim_and_file(db) -> None:
     project_id = "prj_impact"
     await _seed_project(db, project_id)
@@ -258,6 +259,7 @@ async def test_tag_and_claim_edge_changes_map_to_writer_claim_and_file(db) -> No
 
 
 @pytest.mark.asyncio
+@pytest.mark.writer
 async def test_canonical_reference_attestation_is_manuscript_wide(db) -> None:
     project_id = "prj_reference_impact"
     await _seed_project(db, project_id)
@@ -298,6 +300,7 @@ async def test_canonical_reference_attestation_is_manuscript_wide(db) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.writer
 async def test_typed_citation_change_maps_to_exact_unit_and_adjacent_claim(db) -> None:
     project_id = "prj_citation_impact"
     await _seed_project(db, project_id)
@@ -352,6 +355,7 @@ async def test_typed_citation_change_maps_to_exact_unit_and_adjacent_claim(db) -
 
 
 @pytest.mark.asyncio
+@pytest.mark.writer
 async def test_active_reference_literature_change_is_manuscript_wide(db) -> None:
     project_id = "prj_reference_literature_impact"
     await _seed_project(db, project_id)
@@ -408,6 +412,7 @@ async def test_active_reference_literature_change_is_manuscript_wide(db) -> None
 
 
 @pytest.mark.asyncio
+@pytest.mark.writer
 async def test_native_unit_and_decision_changes_map_through_current_topology(db) -> None:
     project_id = "prj_native_impact"
     await _seed_project(db, project_id)
@@ -480,6 +485,12 @@ async def test_cursor_arguments_fail_closed(db) -> None:
         await service.changes_since(-1)
     with pytest.raises(ValueError, match="between"):
         await service.changes_since(0, limit=0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.writer
+async def test_manuscript_impact_missing_id_fails_closed(db) -> None:
+    service = ChangeTrackingService(db, project_id="proj_default")
     with pytest.raises(ManuscriptNotFoundError, match="not found"):
         await service.get_manuscript_impact("man_missing")
 
@@ -508,6 +519,7 @@ async def test_change_event_rolls_back_with_owning_semantic_write(db) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.writer
 async def test_unrelated_changes_do_not_leak_into_manuscript_changed_sources(db) -> None:
     project_id = "prj_unrelated_impact"
     await _seed_project(db, project_id)
@@ -541,6 +553,7 @@ async def test_unrelated_changes_do_not_leak_into_manuscript_changed_sources(db)
 
 
 @pytest.mark.asyncio
+@pytest.mark.writer
 async def test_experiment_locator_change_maps_through_reviewed_claim_to_writer(db) -> None:
     project_id = "prj_experiment_impact"
     await _seed_project(db, project_id)

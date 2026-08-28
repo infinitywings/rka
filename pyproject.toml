@@ -1,7 +1,7 @@
 [project]
 name = "rka"
 version = "3.0.0"
-description = "Research Knowledge Agent — MCP server + REST API for AI-assisted research orchestration"
+description = "Local-first research knowledge core with provenance-aware storage, retrieval, REST, and MCP"
 requires-python = ">=3.11"
 dependencies = [
     "mcp>=1.26.0,<2",
@@ -17,11 +17,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Core retrieval dependencies. Kept separate from legacy provider clients so
+# the supported Core runtime never needs an LLM SDK.
+embeddings = [
+    "fastembed>=0.5",
+    "sqlite-vec==0.1.6",
+]
+# Compatibility only: retained for frozen legacy Agentic/LLM contracts.
 llm = [
     "litellm>=1.60",
     "instructor>=1.7",
-    "fastembed>=0.5",
-    "sqlite-vec>=0.1.6",
 ]
 academic = [
     "bibtexparser>=2.0.0b7",
@@ -80,3 +85,7 @@ target-version = "py311"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = [
+    "writer: frozen Writer/Workbench compatibility tests excluded from the Core gate",
+    "agentic: frozen Agentic/LLM-provider compatibility tests excluded from the Core gate",
+]
