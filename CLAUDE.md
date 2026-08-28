@@ -57,7 +57,7 @@ python -m pytest -q --tb=short --strict-markers \
   -m "not writer and not agentic"
 
 # Verify migrations, REST, MCP, worker, sqlite-vec, and built dashboard
-python scripts/core_startup_smoke.py --require-web
+python scripts/core_startup_smoke.py --require-web --require-vec
 
 # Rebuild web UI after frontend changes (done automatically during docker build)
 # For local iteration: cd web && npm run build, then rebuild container

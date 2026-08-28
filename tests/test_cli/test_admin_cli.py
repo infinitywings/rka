@@ -21,6 +21,16 @@ from rka.services import admin_repair as admin_repair_mod
 from rka.services.admin_repair import PairReport, StepReport
 
 
+@pytest.fixture(autouse=True)
+def isolated_rka_data(monkeypatch, tmp_path):
+    """CLI parsing tests must never connect to a developer's real Core DB."""
+    data_dir = tmp_path / "rka-data"
+    data_dir.mkdir()
+    monkeypatch.setenv("RKA_DATA_DIR", str(data_dir))
+    monkeypatch.delenv("RKA_DB_PATH", raising=False)
+    monkeypatch.delenv("RKA_PROJECT_DIR", raising=False)
+
+
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------

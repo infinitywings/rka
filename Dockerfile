@@ -42,6 +42,7 @@ WORKDIR /app
 
 # Install Python dependencies
 COPY pyproject.toml .
+COPY README.md LICENSE ./
 COPY rka/ rka/
 COPY --from=web-builder /build/dist/ web/dist/
 COPY --from=vec-builder /tmp/sqlite-vec/vec0.so /usr/local/lib/vec0.so
@@ -52,7 +53,9 @@ RUN mkdir -p /data
 VOLUME /data
 
 # Default environment
-ENV RKA_DB_PATH=/data/rka.db \
+ENV RKA_DATA_DIR=/data \
+    RKA_DB_PATH=/data/rka.db \
+    RKA_EMBEDDINGS_ENABLED=true \
     RKA_HOST=0.0.0.0 \
     RKA_PORT=9712 \
     RKA_LLM_ENABLED=false \

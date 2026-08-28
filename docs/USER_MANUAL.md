@@ -831,7 +831,8 @@ The Settings page shows API health status, database statistics, embedding backen
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `RKA_DB_PATH` | `rka.db` | SQLite database file path |
+| `RKA_DATA_DIR` | `~/.rka` | Persistent data directory outside Docker; Docker sets `/data` |
+| `RKA_DB_PATH` | `<RKA_DATA_DIR>/rka.db` | Optional SQLite override; a relative value uses `RKA_PROJECT_DIR` |
 | `RKA_HOST` | `127.0.0.1` | API server bind address |
 | `RKA_PORT` | `9712` | API server port |
 | `RKA_MIGRATION_LOCK_TIMEOUT_MS` | `60000` | Bounded wait for startup schema and sqlite-vec migration locks |
