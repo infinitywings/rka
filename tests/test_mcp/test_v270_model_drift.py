@@ -238,7 +238,13 @@ def test_each_literal_field_uses_enums_alias(model: type[BaseModel]) -> None:
 # ----------------------------------------------------------------------
 
 
-_UNSCOPED_OPS = {"list_projects", "health", "create_project", "reset_session"}
+_UNSCOPED_OPS = {
+    "list_projects",
+    "capabilities",
+    "health",
+    "create_project",
+    "reset_session",
+}
 
 
 @pytest.mark.parametrize("model", _union_members(QueryArgsUnion) + _union_members(ExecuteArgsUnion))
@@ -426,7 +432,9 @@ def test_preview_operations_are_hidden_from_the_browse_index():
     full = json.loads(asyncio.run(dispatch_describe("", include_preview=True)))
 
     assert default["listed"] < default["total"]
-    assert default["preview_hidden"] == default["total"] - default["listed"]
+    assert default["preview_hidden"] + default["deprecated_hidden"] == (
+        default["total"] - default["listed"]
+    )
     assert full["listed"] == len(OPERATIONS_SCHEMA)
     # the hidden set must be discoverable, not silently dropped
     assert "include_preview" in default["preview_hint"]
@@ -468,3 +476,38 @@ def test_every_operation_is_classified():
 
     for op in OPERATIONS_SCHEMA:
         assert operation_maturity(op) in {"stable", "preview"}, op
+
+
+def test_explicit_deprecation_is_distinct_from_usage_maturity():
+    """A compatibility deprecation must be machine-readable without
+    pretending the historical usage-derived maturity axis is a contract."""
+    import asyncio
+    import json
+
+    from rka.mcp.operations_schema import (
+        DEPRECATED_OPERATIONS,
+        dispatch_describe,
+        operation_maturity,
+    )
+
+    assert set(DEPRECATED_OPERATIONS) == {"upsert_argument_spine"}
+    assert operation_maturity("upsert_argument_spine") == "preview"
+
+    exact = json.loads(asyncio.run(dispatch_describe("upsert_argument_spine")))
+    assert exact["deprecated"] is True
+    assert exact["deprecation"]["replacement_operations"] == [
+        "prepare_semantic_patch_context",
+        "create_semantic_patch_proposal",
+        "apply_semantic_patch_proposal",
+    ]
+
+    default = json.loads(asyncio.run(dispatch_describe("")))
+    assert "upsert_argument_spine" not in default["rka_execute"].split(", ")
+    assert default["deprecated_operations"] == ["upsert_argument_spine"]
+    assert default["deprecated_hidden"] == 1
+    assert (
+        default["listed"]
+        + default["preview_hidden"]
+        + default["deprecated_hidden"]
+        == default["total"]
+    )

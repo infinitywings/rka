@@ -27,6 +27,7 @@ from rka.api.deps import (
     get_knowledge_pack_service,
     require_project,
 )
+from rka.models.capabilities import CapabilityNegotiationError, CoreCapabilities
 from rka.models.knowledge_pack import KnowledgePackImportResult
 from rka.models.project import ProjectCreate, ProjectInfo, ProjectState, ProjectStateUpdate
 # Aliased: this module already defines a route handler called `get_status`
@@ -37,6 +38,10 @@ from rka.services.embedding_backfill import (
     get_status as get_job_status,
     latest_status as latest_job_status,
     register_job,
+)
+from rka.services.capabilities import (
+    build_core_capabilities,
+    validate_capability_requirements,
 )
 from rka.services.knowledge_pack import KnowledgePackService
 from rka.services.project import ProjectService
@@ -98,10 +103,17 @@ async def update_status(
     return await svc.update(data, actor=actor, project_id=project_id)
 
 
-@router.get("/capabilities")
-async def get_capabilities(request: Request):
-    """Return embedding availability so consumers (rka_get_status,
-    rka_search) can adapt their output when the capability is degraded.
+@router.get(
+    "/capabilities",
+    response_model=CoreCapabilities,
+    responses={409: {"model": CapabilityNegotiationError}},
+)
+async def get_capabilities(
+    request: Request,
+    required_contract: str | None = Query(default=None),
+    required_capability: list[str] | None = Query(default=None),
+):
+    """Return Core/interface versions plus runtime capability availability.
 
     Affordance C (Mission B / mis_01KR209WY4M6WQFEXRH79KC2ZF). Pure
     runtime introspection — no DB write, no schema change.
@@ -131,7 +143,18 @@ async def get_capabilities(request: Request):
             "reason_unavailable": "sqlite-vec extension not loaded",
         }
 
-    return {"embedding": emb_block}
+    document = build_core_capabilities(
+        embedding_available=emb_block["available"],
+        embedding_reason=emb_block["reason_unavailable"],
+    )
+    error = validate_capability_requirements(
+        document,
+        required_contract=required_contract,
+        required_capabilities=required_capability,
+    )
+    if error is not None:
+        return JSONResponse(status_code=409, content=error.model_dump(mode="json"))
+    return document
 
 
 @router.delete("/projects/{project_id}")

@@ -7,6 +7,14 @@ All notable changes to RKA are documented here. Format loosely follows
 
 ### Added
 
+- Versioned Core capability discovery now exposes the package and public
+  contract versions through REST and the existing five-tool MCP dispatch
+  surface. Clients can require a Core contract or runtime capability and
+  receive a structured, actionable compatibility error when it is unavailable.
+- MCP operation discovery now reports explicit deprecation metadata separately
+  from the existing usage-derived stable/preview signal. The disabled
+  `upsert_argument_spine` compatibility operation identifies its supported
+  semantic-proposal replacements.
 - The RKA Project visual identity now has canonical SVG masters, documented
   color tokens, and mirrored Web/plugin assets. RKA Core's README and dashboard
   use the new mark, and the Core startup smoke verifies the deployed icon is
