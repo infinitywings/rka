@@ -243,9 +243,11 @@ def status():
 @main.command()
 @click.option("--output", "-o", default=None, help="Output file path")
 def backup(output: str | None):
-    """Backup the database to a file."""
-    import shutil
+    """Create a consistent, integrity-checked database backup."""
+    import sqlite3
+
     from rka.config import RKAConfig
+    from rka.infra.sqlite_backup import backup_sqlite_database
 
     config = RKAConfig()
     src = Path(config.database_url)
@@ -256,8 +258,17 @@ def backup(output: str | None):
     from datetime import datetime
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     dst = Path(output) if output else src.parent / f"rka_backup_{timestamp}.db"
-    shutil.copy2(src, dst)
-    click.echo(f"✅ Backed up to {dst}")
+    try:
+        result = backup_sqlite_database(src, dst)
+    except (OSError, sqlite3.DatabaseError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"✅ Backed up to {result.path}")
+    click.echo(f"   SHA-256: {result.sha256}")
+    if result.foreign_key_violations:
+        click.echo(
+            "⚠️  Backup preserved "
+            f"{result.foreign_key_violations} pre-existing foreign-key violation(s)."
+        )
 
 
 @main.command()

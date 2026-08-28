@@ -78,6 +78,16 @@ The `rka migrate` command initializes both the base and Phase-2 schemas, so FTS
 and vector tables are established consistently with normal REST and worker
 startup.
 
+## Recovery smoke gate
+
+Use [`scripts/core_recovery_smoke.py`](../scripts/core_recovery_smoke.py) only
+against a real source through its read-only online-backup boundary. The script
+upgrades temporary copies, checks table/ID/link/revision digests, validates
+selected knowledge packs under intentional ID re-keying, and restores an exact
+rollback copy. The separate pinned-previous-image step remains manual and is
+documented in [CORE_RECOVERY.md](CORE_RECOVERY.md); no live migration or
+container replacement is implied by this gate.
+
 ## CI contract
 
 The `pytest` workflow installs no LLM-provider SDK. Its Core job restores the

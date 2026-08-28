@@ -12,6 +12,8 @@ import pytest
 
 from rka import __version__
 from rka.infra.database import Database
+from rka.infra.embeddings import EmbeddingService
+from rka.models.claim import ClaimCreate, ClaimScopeCondition, ClaimScopeWrite
 from rka.models.decision import DecisionCreate, DecisionOption
 from rka.models.journal import JournalEntryCreate
 from rka.models.interpretation import InterpretationCandidateCreate, InterpretationTriage
@@ -27,6 +29,25 @@ from rka.services.missions import MissionService
 from rka.services.notes import NoteService
 from rka.services.interpretation import InterpretationService
 from rka.services.project import ProjectService
+from rka.services.search import SearchService
+
+
+class DeterministicEmbeddings(EmbeddingService):
+    """Local embedding stub that never downloads or calls a provider."""
+
+    def __init__(self, db: Database):
+        super().__init__(model_name="knowledge-pack-test", db=db)
+
+    @staticmethod
+    def _vector(text: str) -> list[float]:
+        digest = hashlib.sha256(text.encode()).digest()
+        return [digest[index % len(digest)] / 255.0 for index in range(768)]
+
+    async def embed(self, text: str) -> list[float]:
+        return self._vector(text)
+
+    async def embed_document(self, text: str) -> list[float]:
+        return self._vector(text)
 
 
 async def _make_db(path: Path) -> Database:
@@ -72,6 +93,233 @@ async def test_prepare_claim_edges_deduplicates_legacy_memberships(db) -> None:
 
     assert [row["id"] for row in prepared] == ["ced_first", "ced_supports"]
     assert {row["project_id"] for row in prepared} == {"prj_target"}
+
+
+def test_load_manifest_rejects_table_count_mismatch(tmp_path: Path) -> None:
+    pack_path = tmp_path / "bad-count.rka-pack.zip"
+    manifest = {
+        "pack_format_version": PACK_SCHEMA_VERSION,
+        "schema_version": 53,
+        "project": {"id": "proj_source", "name": "Source"},
+        "tables": {"journal": []},
+        "table_counts": {"journal": 1},
+    }
+    with zipfile.ZipFile(pack_path, "w") as archive:
+        archive.writestr("manifest.json", json.dumps(manifest))
+
+    with zipfile.ZipFile(pack_path) as archive:
+        with pytest.raises(ValueError, match="table count mismatch.*journal"):
+            service = KnowledgePackService.__new__(KnowledgePackService)
+            service._load_manifest(archive)
+
+
+@pytest.mark.parametrize(
+    ("tables", "table_counts", "message"),
+    [
+        ({"journal": 1}, {"journal": 0}, "table payloads must be arrays"),
+        ({"journal": [1]}, {"journal": 1}, r"journal\[0\] must be an object"),
+        ({"journal": []}, {"journal": True}, "non-negative integer"),
+        ({"journal": []}, {}, "keys must match tables exactly"),
+    ],
+)
+def test_load_manifest_rejects_invalid_table_count_contract(
+    tmp_path: Path,
+    tables: dict,
+    table_counts: dict,
+    message: str,
+) -> None:
+    pack_path = tmp_path / "bad-table-contract.rka-pack.zip"
+    manifest = {
+        "pack_format_version": PACK_SCHEMA_VERSION,
+        "schema_version": 53,
+        "project": {"id": "proj_source", "name": "Source"},
+        "tables": tables,
+        "table_counts": table_counts,
+    }
+    with zipfile.ZipFile(pack_path, "w") as archive:
+        archive.writestr("manifest.json", json.dumps(manifest))
+
+    with zipfile.ZipFile(pack_path) as archive:
+        with pytest.raises(ValueError, match=message):
+            service = KnowledgePackService.__new__(KnowledgePackService)
+            service._load_manifest(archive)
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"project": "proj_source"}, "missing project metadata"),
+        ({"project": {"name": "Source"}}, "requires a non-empty ID"),
+        ({"project_state": []}, "project_state must be an object or null"),
+        ({"table_counts": None}, "format 7 requires table_counts"),
+    ],
+)
+def test_load_manifest_rejects_invalid_project_contract(
+    tmp_path: Path,
+    override: dict,
+    message: str,
+) -> None:
+    pack_path = tmp_path / "bad-project-contract.rka-pack.zip"
+    manifest = {
+        "pack_format_version": PACK_SCHEMA_VERSION,
+        "schema_version": 53,
+        "project": {"id": "proj_source", "name": "Source"},
+        "project_state": None,
+        "tables": {},
+        "table_counts": {},
+        **override,
+    }
+    with zipfile.ZipFile(pack_path, "w") as archive:
+        archive.writestr("manifest.json", json.dumps(manifest))
+
+    with zipfile.ZipFile(pack_path) as archive:
+        with pytest.raises(ValueError, match=message):
+            service = KnowledgePackService.__new__(KnowledgePackService)
+            service._load_manifest(archive)
+
+
+@pytest.mark.parametrize(
+    ("manifest", "message"),
+    [
+        ([], "manifest must be an object"),
+        (
+            {
+                "pack_format_version": True,
+                "project": {"id": "proj_source", "name": "Source"},
+                "tables": {},
+            },
+            "Unsupported knowledge pack format version",
+        ),
+        (
+            {
+                "pack_format_version": 1.0,
+                "project": {"id": "proj_source", "name": "Source"},
+                "tables": {},
+            },
+            "Unsupported knowledge pack format version",
+        ),
+        (
+            {
+                "pack_format_version": False,
+                "schema_version": 7,
+                "project": {"id": "proj_source", "name": "Source"},
+                "tables": {},
+            },
+            "Unsupported knowledge pack format version",
+        ),
+        (
+            {
+                "pack_format_version": 0,
+                "schema_version": 7,
+                "project": {"id": "proj_source", "name": "Source"},
+                "tables": {},
+            },
+            "Unsupported knowledge pack format version",
+        ),
+        (
+            {
+                "pack_format_version": "",
+                "schema_version": 7,
+                "project": {"id": "proj_source", "name": "Source"},
+                "tables": {},
+            },
+            "Unsupported knowledge pack format version",
+        ),
+    ],
+)
+def test_load_manifest_rejects_invalid_top_level_contract(
+    tmp_path: Path,
+    manifest: object,
+    message: str,
+) -> None:
+    pack_path = tmp_path / "bad-top-level-contract.rka-pack.zip"
+    with zipfile.ZipFile(pack_path, "w") as archive:
+        archive.writestr("manifest.json", json.dumps(manifest))
+
+    with zipfile.ZipFile(pack_path) as archive:
+        with pytest.raises(ValueError, match=message):
+            service = KnowledgePackService.__new__(KnowledgePackService)
+            service._load_manifest(archive)
+
+
+def test_load_manifest_rejects_non_utf8_payload(tmp_path: Path) -> None:
+    pack_path = tmp_path / "non-utf8.rka-pack.zip"
+    with zipfile.ZipFile(pack_path, "w") as archive:
+        archive.writestr("manifest.json", b"\xff\xfe")
+
+    with zipfile.ZipFile(pack_path) as archive:
+        with pytest.raises(ValueError, match="not valid JSON"):
+            service = KnowledgePackService.__new__(KnowledgePackService)
+            service._load_manifest(archive)
+
+
+def test_scope_hash_remap_preserves_intentionally_stale_scope() -> None:
+    stale_hash = "0" * 64
+    source = {
+        "claims": [
+            {"id": "clm_source", "claim_type": "result", "content": "current content"}
+        ],
+        "claim_scope_versions": [
+            {
+                "id": "csc_source",
+                "claim_id": "clm_source",
+                "claim_content_hash": stale_hash,
+            }
+        ],
+    }
+    remapped = {
+        "claims": [
+            {"id": "clm_target", "claim_type": "result", "content": "rewritten content"}
+        ],
+        "claim_scope_versions": [
+            {
+                "id": "csc_target",
+                "claim_id": "clm_target",
+                "claim_content_hash": stale_hash,
+            }
+        ],
+    }
+
+    KnowledgePackService._refresh_remapped_claim_scope_hashes(source, remapped)
+
+    assert remapped["claim_scope_versions"][0]["claim_content_hash"] == stale_hash
+
+
+def test_remap_rekeys_project_and_entity_ids_in_core_provenance_text() -> None:
+    service = KnowledgePackService.__new__(KnowledgePackService)
+    source_project = "prj_01M100GW2EVPA8T6Q4CSZ5GPFA"
+    target_project = "recovery_pack_001"
+    source_journal = "jrn_01M147SEKP7F5RQ3351PG3SKD9"
+    target_journal = "jrn_01M20000000000000000000000"
+    id_map = {source_journal: target_journal}
+
+    mission = service._remap_row(
+        "missions",
+        {
+            "project_id": source_project,
+            "checkpoint_triggers": f"Review {source_project}",
+            "report": f"Evidence is recorded in {source_journal}",
+        },
+        id_map=id_map,
+        source_project_id=source_project,
+        target_project_id=target_project,
+    )
+    journal = service._remap_row(
+        "journal",
+        {
+            "project_id": source_project,
+            "verbatim_input": f"Inspect {source_project} and {source_journal}",
+        },
+        id_map=id_map,
+        source_project_id=source_project,
+        target_project_id=target_project,
+    )
+
+    assert mission["checkpoint_triggers"] == f"Review {target_project}"
+    assert mission["report"] == f"Evidence is recorded in {target_journal}"
+    assert journal["verbatim_input"] == (
+        f"Inspect {target_project} and {target_journal}"
+    )
 
 
 @pytest.mark.asyncio
@@ -338,6 +586,97 @@ async def test_knowledge_pack_round_trip_preserves_interpretation_promotion_line
         assert imported_scope.current.conditions[0].value == "configured workload"
         assert imported_scope.current.falsifier_status == "applicable"
         assert await db.fetchall("PRAGMA foreign_key_check") == []
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_pack_rekey_keeps_current_claim_scope_hash_current(tmp_path: Path) -> None:
+    db = await _make_db(tmp_path / "scope-hash-rekey.db")
+    try:
+        await ProjectService(db).create_project(
+            ProjectCreate(id="proj_scope_source", name="Scope Source"),
+            actor="system",
+        )
+        note = await NoteService(db, project_id="proj_scope_source").create(
+            JournalEntryCreate(
+                content="Measured the effect in the isolated test environment.",
+                type="finding",
+                source="executor",
+                confidence="tested",
+            ),
+            actor="executor",
+        )
+        claims = ClaimService(db, project_id="proj_scope_source")
+        claim = await claims.create(
+            ClaimCreate(
+                source_entry_id=note.id,
+                claim_type="result",
+                content=f"The result recorded in {note.id} holds in the isolated test.",
+                confidence=0.8,
+                verified=True,
+            ),
+            actor="executor",
+        )
+        source_scope = await claims.append_scope(
+            claim.id,
+            ClaimScopeWrite(
+                expected_revision=0,
+                actor="brain",
+                reason="Reviewed against the source entry.",
+                conditions=[
+                    ClaimScopeCondition(
+                        kind="environment",
+                        key="test_environment",
+                        operator="equals",
+                        value="isolated",
+                    )
+                ],
+                uncertainty="low",
+                extension_policy="exact_only",
+                prohibited_extensions=["production deployment"],
+                falsifier_status="applicable",
+                falsifier="A repeated isolated test does not reproduce the result.",
+                review_status="reviewed",
+            ),
+        )
+        assert source_scope.scope_readiness == "ready"
+
+        pack_path, _ = await KnowledgePackService(
+            db,
+            project_id="proj_scope_source",
+        ).export_pack()
+        with Path(pack_path).open("rb") as pack_file:
+            await KnowledgePackService(db).import_pack(
+                pack_file,
+                project_id="proj_scope_target",
+                project_name="Scope Target",
+                defer_indexing=True,
+            )
+
+        imported_claim_row = await db.fetchone(
+            "SELECT id, content FROM claims WHERE project_id = ?",
+            ["proj_scope_target"],
+        )
+        imported_note_row = await db.fetchone(
+            "SELECT id FROM journal WHERE project_id = ?",
+            ["proj_scope_target"],
+        )
+        assert imported_claim_row is not None
+        assert imported_note_row is not None
+        assert note.id not in imported_claim_row["content"]
+        assert imported_note_row["id"] in imported_claim_row["content"]
+
+        imported_scope = await ClaimService(
+            db,
+            project_id="proj_scope_target",
+        ).get_scope_history(imported_claim_row["id"])
+        assert imported_scope is not None
+        assert imported_scope.scope_readiness == "ready"
+        assert all(
+            finding.code != "CLAIM_SCOPE_STALE"
+            for finding in imported_scope.findings
+        )
     finally:
         await db.close()
 
@@ -812,6 +1151,114 @@ async def test_import_embedding_sync_uses_explicit_target_project_scope(
         )
         assert imported is not None
         assert embeddings.calls[0]["entity_id"] == imported["id"]
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("defer_indexing", [False, True], ids=["inline", "background"])
+async def test_pack_import_rebuilds_searchable_artifact_and_figure_vectors(
+    tmp_path: Path,
+    defer_indexing: bool,
+) -> None:
+    db = await _make_db(tmp_path / "artifact-figure-indexes.db")
+    artifact_path = tmp_path / "packet-loss.png"
+    artifact_path.write_bytes(b"deterministic image fixture")
+    try:
+        await ProjectService(db).create_project(
+            ProjectCreate(id="proj_media_source", name="Media Source"),
+            actor="system",
+        )
+        source_artifacts = ArtifactService(db, project_id="proj_media_source")
+        artifact = await source_artifacts.register(
+            filepath=str(artifact_path),
+            created_by="system",
+            metadata={"topic": "packet loss"},
+        )
+        figure = await source_artifacts._store_figure(
+            artifact_id=artifact["id"],
+            page=1,
+            caption="Packet loss over time",
+            caption_confidence=0.95,
+            summary="Packet loss decreases after tuning.",
+            claims=[{"claim": "Tuning reduces packet loss", "confidence": 0.9}],
+        )
+        embeddings = DeterministicEmbeddings(db)
+        background_indexer = KnowledgePackService(db, embeddings=embeddings)
+        assert await background_indexer.count_indexable("proj_media_source") == 2
+        assert await background_indexer.index_project("proj_media_source") == 2
+        pack_path, _ = await KnowledgePackService(
+            db,
+            project_id="proj_media_source",
+        ).export_pack()
+
+        importer = KnowledgePackService(db, embeddings=embeddings)
+        with Path(pack_path).open("rb") as pack_file:
+            await importer.import_pack(
+                pack_file,
+                project_id="proj_media_target",
+                project_name="Media Target",
+                defer_indexing=defer_indexing,
+            )
+
+        if defer_indexing:
+            assert await db.fetchall(
+                "SELECT id FROM vec_artifacts WHERE project_id = ?",
+                ["proj_media_target"],
+            ) == []
+            assert await importer.index_project("proj_media_target") == 2
+
+        imported_artifact = await db.fetchone(
+            "SELECT id FROM artifacts WHERE project_id = ?",
+            ["proj_media_target"],
+        )
+        imported_figure = await db.fetchone(
+            "SELECT id FROM figures WHERE project_id = ?",
+            ["proj_media_target"],
+        )
+        assert imported_artifact is not None
+        assert imported_figure is not None
+        assert imported_artifact["id"] != artifact["id"]
+        assert imported_figure["id"] != figure["id"]
+
+        assert await importer.count_indexable("proj_media_target") == 2
+        vector_rows = await db.fetchall(
+            """SELECT id, project_id, entity_type
+               FROM vec_artifacts
+               WHERE project_id = ?
+               ORDER BY entity_type""",
+            ["proj_media_target"],
+        )
+        assert vector_rows == [
+            {
+                "id": imported_artifact["id"],
+                "project_id": "proj_media_target",
+                "entity_type": "artifact",
+            },
+            {
+                "id": imported_figure["id"],
+                "project_id": "proj_media_target",
+                "entity_type": "figure",
+            },
+        ]
+
+        search = SearchService(
+            db,
+            embeddings=embeddings,
+            project_id="proj_media_target",
+        )
+        artifact_hits = await search.search(
+            "packet-loss.png",
+            entity_types=["artifact"],
+            limit=5,
+        )
+        figure_hits = await search.search(
+            "packet loss after tuning",
+            entity_types=["figure"],
+            limit=5,
+        )
+        assert [hit.entity_id for hit in artifact_hits] == [imported_artifact["id"]]
+        assert [hit.entity_id for hit in figure_hits] == [imported_figure["id"]]
     finally:
         await db.close()
 

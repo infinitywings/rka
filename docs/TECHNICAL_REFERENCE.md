@@ -33,13 +33,15 @@ docker compose up -d --build
 | `rka mcp` | Start the default stdio MCP adapter. |
 | `rka mcp --transport http --host 127.0.0.1 --port 9713` | Start local Streamable HTTP MCP. |
 | `rka status` | Show current project status. |
-| `rka backup` | Create a database backup. |
+| `rka backup` | Create an online, integrity-checked SQLite backup. |
 | `rka migrate` | Run pending migrations. |
 | `rka bootstrap scan <folder>` | Inspect a workspace before ingestion. |
 | `rka bootstrap ingest <folder>` | Ingest an approved workspace scan. |
 | `rka cred ...` | Initialize, inspect, and propagate the credential vault. |
 
 Use `rka --help` and `rka <command> --help` for the installed version's complete option set.
+See [CORE_RECOVERY.md](CORE_RECOVERY.md) for the disposable upgrade,
+knowledge-pack, and pinned-runtime rollback procedure.
 
 ## MCP
 

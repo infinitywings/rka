@@ -6,7 +6,16 @@ from pathlib import Path
 
 import pytest
 
-from rka.services.artifacts import ArtifactService
+from rka.services.artifacts import ArtifactService, build_artifact_text
+
+
+def test_artifact_embedding_text_canonicalizes_stored_json_metadata() -> None:
+    metadata = {"z": 1, "a": 2}
+
+    assert build_artifact_text("result.json", metadata=metadata) == build_artifact_text(
+        "result.json",
+        metadata='{"z": 1, "a": 2}',
+    )
 
 
 @pytest.mark.asyncio
