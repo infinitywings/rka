@@ -2,7 +2,7 @@
 
 > **How to read this guide**
 > - **Humans**: read top-to-bottom; the quick install path is §3.
-> - **A coding agent (Claude Code, Codex, or similar) asked to "install RKA" / "finish my RKA setup"**: this file is your runbook. Execute §3 in order; §6 (Claude Desktop wiring), §7 (diagnosis), and §11 (orchestrator, agentic branch only) are procedures to run when the relevant step calls for them. Follow the **execution contract** in §0 before you start.
+> - **A coding agent (Claude Code, Codex, or similar) asked to "install RKA" / "finish my RKA setup"**: this file is your runbook. Execute §3 in order; §6 (Claude Desktop wiring) and §7 (diagnosis) are procedures to run when the relevant step calls for them. Follow the **execution contract** in §0 before you start. §11 is retained only as an unsupported historical reference; do not install it.
 
 ## 0. Execution contract (read first if you are the installing agent)
 
@@ -60,14 +60,13 @@ The typed Pydantic operations under `rka_query` / `rka_execute` carry per-branch
 
 ### Required API keys (one-time, used by every project)
 
-Set these once in `claude_desktop_config.json` env blocks and (if you use the agentic orchestrator) `orchestrator/.env`:
+Set these once in `claude_desktop_config.json` env blocks:
 
 | Key | Source | Why |
 |---|---|---|
 | `SEMANTIC_SCHOLAR_API_KEY` | [semanticscholar.org/product/api](https://www.semanticscholar.org/product/api#api-key-form) | Free; lifts S2 rate limits. Used by RKA literature integrations and paper-search; external reference-checking clients may also use it. |
-| `ZOTERO_API_KEY` + `ZOTERO_LIBRARY_ID` | [zotero.org/settings/keys](https://www.zotero.org/settings/keys) | Generate a "Save to Server" + "Full library access" key. Library ID is the 7-digit userID on the same page. Used by zotero-mcp + the orchestrator (to auto-create per-project collections). |
+| `ZOTERO_API_KEY` + `ZOTERO_LIBRARY_ID` | [zotero.org/settings/keys](https://www.zotero.org/settings/keys) | Generate a "Save to Server" + "Full library access" key. Library ID is the 7-digit userID on the same page. Used by Zotero integrations. |
 | `PAPER_SEARCH_MCP_UNPAYWALL_EMAIL` | Your institutional email | Used for rate-limit identification (not authentication). |
-| `CLAUDE_CODE_OAUTH_TOKEN` *(agentic only)* | Run `claude setup-token` on the host | Required for the orchestrator daemon's Claude SDK subprocesses. |
 
 Optional:
 | Key | Use |
@@ -91,11 +90,10 @@ Before installing anything, ask the user which surfaces they want. Their answer 
 | **Claude Code (Executor)** | The full plugin — skills, slash commands, hook — in VSCode/Claude Code | Steps 1–3 (+ Step 4 wires Desktop) |
 | **Codex or another MCP client** | RKA's stdio MCP surface in a non-Claude client | Step 1 + the **Manual install** in §8 (Codex uses its own MCP config, not the Claude plugin) |
 | **ChatGPT (remote connector)** | RKA reachable from ChatGPT over an OAuth tunnel | Steps 1 + **Step 6** (needs ngrok; you will ask for a token and passphrase there) |
-| **Agentic orchestrator** | LangGraph Brain⇄Executor⇄PI engine (agentic branch only) | §11 |
 
 Also ask whether they have any of the **optional API keys** in §2 (Semantic Scholar, Zotero, Unpaywall email, SerpAPI). You'll wire those in at Step 5.5 — RKA runs without them, but literature features are richer with them.
 
-Everyone runs **Step 1** (the backend). Then run only the steps their chosen surfaces need. If the user just says "install RKA" without specifics, the sensible default is Claude Desktop + Claude Code (Steps 1–5); confirm that read-back with them before proceeding, and mention ChatGPT/orchestrator are available as add-ons.
+Everyone runs **Step 1** (the backend). Then run only the steps their chosen surfaces need. If the user just says "install RKA" without specifics, the sensible default is Claude Desktop + Claude Code (Steps 1–5); confirm that read-back with them before proceeding, and mention ChatGPT is available as an add-on.
 
 ### Step 1 — Start the RKA backend
 
@@ -889,9 +887,13 @@ The path in the command line is the copy in use. If it points at the cache, refr
 
 ---
 
-## 11. Agentic distribution — Orchestrator (optional, agentic branch only)
+## 11. Historical Agentic distribution — unsupported
 
-> Main-branch users can stop at §10. This section is for users on the `agentic` long-lived fork.
+> **Shelved on 2026-08-27. Do not follow these installation steps.** The
+> section is retained only to preserve the historical operating record. RKA
+> Core and RKA Writer do not require or support this runtime. Reactivation
+> requires a new explicit PI decision; see
+> [ADR 0013](docs/adr/0013-shelve-agentic-and-focus-core-writer.md).
 
 If you're on the `agentic` branch, you also have access to the **RKA Orchestrator** — a LangGraph-driven Brain⇄Executor⇄PI workflow engine with a Claude-Code-native PI surface (no stdin terminal needed). This is **optional** — the core main-branch RKA setup above works without it. If you only need the knowledge base + Brain in Claude Desktop + Executor in Claude Code, skip this section.
 

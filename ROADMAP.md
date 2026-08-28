@@ -1,12 +1,15 @@
 # RKA Roadmap
 
-This roadmap now prioritizes a reliable, independently usable RKA research-
-knowledge core. Writer/Workbench and Agentic orchestration continue as related
-products, but will move to separately released repositories under the same
-RKA Ecosystem project.
+This roadmap prioritizes a reliable, independently usable RKA research-
+knowledge core. Writer/Workbench is the only active downstream product and is
+released separately as `infinitywings/rka-writer`. Agentic orchestration is
+shelved: its existing history is preserved, but no `rka-agentic` repository or
+runtime extraction is planned unless the PI explicitly reactivates it.
 
-The repository and authority decision is recorded in
-[ADR 0012](docs/adr/0012-rka-ecosystem-repository-boundaries.md). The active
+The original repository and authority decision is recorded in
+[ADR 0012](docs/adr/0012-rka-ecosystem-repository-boundaries.md), with the
+Agentic portion superseded by
+[ADR 0013](docs/adr/0013-shelve-agentic-and-focus-core-writer.md). The active
 execution source is the
 [RKA Ecosystem Repository Separation Plan](docs/superpowers/plans/2026-08-25-rka-ecosystem-repository-separation.md).
 The proposed repository-local milestones, cross-repository Project fields,
@@ -56,17 +59,18 @@ milestone must satisfy its exit gate before dependent work is treated as ready.
 
 RKA Core reliability comes first. No new Writer/Workbench or autonomous
 orchestration capability should be added to Core while the boundaries and
-public contracts are being stabilized.
+public contracts are being stabilized. Agentic work is outside the active
+roadmap.
 
 | Order | Ecosystem milestone | Outcome | Exit gate summary |
 |---|---|---|---|
 | **E0** | **Boundary freeze and inventory** | Fix authority, repository, API, plugin, and migration ownership before moving code. | Every table, route, MCP operation, skill, and major directory has one owner or explicit legacy disposition. |
 | **E1** | **Core reliability baseline** | Harden journal, provenance, project isolation, retrieval, claim edges, migrations, export/import, and recovery. | Core-only install/tests pass; no cross-project leakage; real backup upgrade and integrity pass. |
 | **E2** | **Stable external contract** | Freeze supported REST/MCP behavior and provide capability/version discovery plus legacy Writer export. | Public-contract-only clients complete core workflows and legacy Writer export round-trips. |
-| **E3** | **Agentic repository extraction** | Create `infinitywings/rka-agentic` from preserved history. | Agentic runs only through public Core contracts and tests independently. |
+| **E3** | **Agentic work shelved** | Preserve the historical branch and design record without creating or operating a separate Agentic product. | Active docs and packaging do not direct users to install Agentic; reactivation requires a new PI decision. |
 | **E4** | **Writer repository extraction** | Create `infinitywings/rka-writer`, migrate Writer state, and move Workbench ownership. | Writer runs independently, imports legacy state, and detects stale Core references. |
-| **E5** | **RKA Core 3.0** | Remove active Writer/Agentic code from Core while preserving compatibility export and migration history. | Core and both downstream compatibility suites pass without destructive database changes. |
-| **E6** | **Ecosystem integration** | Maintain independent releases under one GitHub Project and compatibility matrix. | Core-only and supported combined deployments have reproducible smoke tests. |
+| **E5** | **RKA Core 3.0** | Remove active Writer execution code from Core while preserving compatibility export and migration history. | Core and Writer compatibility suites pass without destructive database changes. |
+| **E6** | **Ecosystem integration** | Maintain Core and Writer releases under one GitHub Project and compatibility matrix. | Core-only and Core+Writer deployments have reproducible smoke tests. |
 
 The detailed deliverables, rollback paths, and decision checkpoints for E0-E6
 are in the active execution plan linked above.

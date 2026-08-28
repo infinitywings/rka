@@ -16,7 +16,10 @@ Procedural reference for the Executor skill. Loaded on demand when `SKILL.md` po
 > | `rka_ingest_document(...)` | `rka_execute(args={"operation": "ingest_document", "project_id": <pinned>, ...})` |
 > | `rka_link_literature_to_zotero(lit_id=...)` | `rka_execute(args={"operation": "link_literature_to_zotero", "project_id": <pinned>, "lit_id": "..."})` |
 >
-> When this Executor runs as the orchestrator's `claude-agent-sdk` subprocess with `RKA_LEGACY_TOOLS=1`, the compatibility baseline (core legacy tools, intent verbs, navigators) is restored alongside the typed dispatch tools. Legacy names outside that baseline (e.g. `rka_submit_report`, `rka_get_mission`, `rka_submit_checkpoint`) stay deferred and must be loaded via `rka_load_tools` — or simply use the dispatch shape, which works in every mode. When running directly in Claude Desktop / Claude Code, the dispatch shape is the live surface. The discipline is identical either way. Index of operations: `rka_describe(operation="")`.
+> `RKA_LEGACY_TOOLS=1` is retained only for historical callers. Legacy names
+> remain deferred and may be loaded explicitly with `rka_load_tools`, but the
+> typed dispatch shape is the supported surface. Index of operations:
+> `rka_describe(operation="")`.
 
 ---
 

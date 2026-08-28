@@ -2,13 +2,16 @@
 
 This guide walks a fresh macOS install from "Docker Desktop installed, nothing else done" to a running Research Knowledge Agent (RKA) instance integrated with Claude Desktop and Claude Code. It covers the **`main` branch only**: the core RKA (FastAPI REST API + SQLite/FTS5/sqlite-vec + React web UI + stdio MCP binary), brought up via Docker Compose, and wired into Claude as an MCP server. The PI drives the Brain/Executor/PI workflow themselves by loading skill prompts in a Claude session — there is no long-running orchestrator daemon.
 
-**This covers the main branch (core RKA). For the agentic branch (RKA + orchestrator daemon), see [CLAUDE.md](CLAUDE.md) — the "Agentic Branch + Orchestrator Package" section is where the long-running daemon surface is currently documented.**
+This is the supported deployment. The former Agentic runtime is shelved and
+is not an alternative installation path.
 
 ---
 
 ## Which doc do I need?
 
-Pick **this doc (main)** if you want a research knowledge base + MCP-tool integration with Claude Desktop / Claude Code, and you're happy driving the Brain/Executor/PI loop yourself by loading skills in a chat. Pick the **"Agentic Branch + Orchestrator Package" section of [CLAUDE.md](CLAUDE.md)** if you also want the LangGraph orchestrator daemon that runs missions autonomously (Brain ⇄ Executor ⇄ PI with parked interrupts, mid-session ratification, and a second MCP binary). The agentic surface is a strict superset of this one — start here if you're unsure.
+Use this guide for the research knowledge base and MCP integration with Claude
+Desktop, Claude Code, Codex, or another compatible client. The Brain/Executor/PI
+roles are human-driven operating guidance over the same Core records.
 
 ---
 

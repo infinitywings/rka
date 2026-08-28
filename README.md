@@ -199,19 +199,20 @@ See [Architecture](docs/ARCHITECTURE.md) for the runtime model, data layers, pro
 ## Roadmap
 
 The immediate priority is to harden RKA as an independently usable research-
-knowledge core. Optional products will then move to separate repositories under
-one RKA Ecosystem project:
+knowledge core. Writer remains a separate downstream product under the same
+RKA Ecosystem project:
 
 1. **Core reliability** — harden journal correctness, provenance, project
    isolation, retrieval, claim edges, migrations, export/import, and recovery.
 2. **Stable integration contract** — freeze the supported REST/MCP surface and
    provide version, capability, and compatibility discovery.
-3. **RKA Agentic extraction** — move Brain/Executor orchestration and runtime
-   state to `infinitywings/rka-agentic`.
-4. **RKA Writer extraction** — move the Writer skill, manuscript semantics,
+3. **RKA Writer extraction** — move the Writer skill, manuscript semantics,
    academic-writing tools, and Workbench to `infinitywings/rka-writer`.
-5. **Core 3.0 and ecosystem validation** — slim the Core distribution only
+4. **Core 3.0 and ecosystem validation** — slim the Core distribution only
    after legacy-state migration and downstream compatibility tests pass.
+
+The earlier Agentic repository/extraction proposal is shelved. Its history is
+preserved, but it is not an active product, dependency, or installation path.
 
 The Workbench, ARA interoperability, and dual-output evaluation remain planned
 Writer/ecosystem work; they are not the immediate Core implementation target.

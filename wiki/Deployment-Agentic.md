@@ -1,5 +1,11 @@
 # Deployment from scratch - RKA orchestrator on a fresh Mac
 
+> **Historical and unsupported.** The Agentic runtime was shelved on
+> 2026-08-27. Do not use this page as an installation runbook. It is retained
+> only for provenance; supported deployment guidance is in
+> [Deployment-Main](Deployment-Main.md) and the decision is recorded in
+> [ADR 0013](../blob/main/docs/adr/0013-shelve-agentic-and-focus-core-writer.md).
+
 This runbook brings a fresh macOS host from "Docker Desktop, Claude Desktop, Claude Code installed" to a fully running RKA orchestrator: REST API + worker + LangGraph daemon + two MCP stdio binaries wired into both Claude clients, ready to onboard a project and execute a Brain ⇄ Executor ⇄ PI mission. It synthesizes empirical hardening from Phase A through Phase D2.4 (commits `ada81d0..81b7e05`) — AppleDouble mitigation, workspace mount safety, OAuth-token-only auth, async-resume endpoints, substring-routing exploit fixes, Gap 5 non-root user. Dual-audience: humans copy-paste through §§1–10; an autonomous agent (Claude Code) follows [§11](#11-for-autonomous-code-agents), which restates every step with grep-able pass/fail signals. Every command block is followed by an "Expected" or "Verify"; every named failure has one canonical entry in [§10 Troubleshooting](#10-troubleshooting).
 
 Numbering: §§1–10 canonical procedure; §11 agent restatement (targets §§3–10 by number, appears after); §12 non-goals; §13 versioning. Hardcoded paths: `/Volumes/base/workspace/rka` appears ~30 times. If you cloned elsewhere (e.g. `$HOME/Code/rka`), find/replace globally — see [§4.1](#41-clone-check-out-agentic).

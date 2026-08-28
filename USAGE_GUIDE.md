@@ -289,7 +289,12 @@ Prefer to drive RKA from ChatGPT instead of (or alongside) Claude? RKA ships a r
 
 ---
 
-## Cockpit reference
+## Historical Agentic cockpit reference — unsupported
+
+> **Shelved on 2026-08-27.** This section records the former Agentic cockpit
+> evaluation and is not current RKA Core guidance. For supported clients, use
+> the typed Core MCP surface and the Brain/Executor/PI role guides described
+> above. Do not install or operate the orchestrator described below.
 
 Brain and Executor remain distinct roles, but for the **human-PI cockpit seat** (the surface where you supervise, ratify, and respond to parked interrupts) the recommendation as of 2026-06-03 is **Claude Code as the primary cockpit, Claude Desktop reserved for two specific Phase O onboarding steps**.
 
@@ -898,9 +903,12 @@ If the build fails on macOS with errors about `._*` files (AppleDouble metadata 
 
 ---
 
-## Agentic Distribution — Orchestrator Workflows
+## Historical Agentic Distribution — unsupported
 
-> Everything above describes the **main-branch** workflow (Brain in Claude Desktop, Executor in Claude Code, PI ratifies in chat). The **agentic branch** ships an additional orchestrator that runs Brain⇄Executor⇄PI as a **LangGraph workflow**, with the PI driving from any Claude Code or Claude Desktop session via MCP tools. This section covers the agentic-branch additions.
+> **Shelved on 2026-08-27. Do not use this section as current setup or usage
+> guidance.** It is preserved as a historical operating record. RKA Core and
+> RKA Writer do not require or support the Agentic runtime. See
+> [ADR 0013](docs/adr/0013-shelve-agentic-and-focus-core-writer.md).
 
 ### When to use the orchestrator
 

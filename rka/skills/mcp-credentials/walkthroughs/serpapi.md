@@ -1,6 +1,6 @@
 # SerpAPI — `SERPAPI_KEY`
 
-SerpAPI proxies Google / Bing / Scholar / News searches into a clean JSON API. The RKA orchestrator's research-toolkit nodes use it to augment web research without scraping. Free tier: 250 searches/month. Paid tiers start at $50/month for 5,000 searches.
+SerpAPI proxies Google / Bing / Scholar / News searches into a clean JSON API. Optional research clients may use it to augment web research without scraping. Free tier: 250 searches/month. Paid tiers start at $50/month for 5,000 searches.
 
 ## What you need
 
@@ -53,8 +53,6 @@ Same end-effect; the key doesn't appear in `ps aux` mid-call.
 
 Target: **`claude_desktop_config.json` → `mcpServers.rka.env`** (the rka MCP server's deep-research path uses it).
 
-If the orchestrator daemon is installed, **also** persist to **`orchestrator/.env`**.
-
 ```json
 {
   "mcpServers": {
@@ -75,10 +73,6 @@ If the orchestrator daemon is installed, **also** persist to **`orchestrator/.en
 ✓ SERPAPI_KEY persisted.
 
 Claude Desktop: fully quit (Cmd+Q) and reopen.
-RKA orchestrator: docker compose -f docker-compose.yml \
-                                 -f orchestrator/docker-compose.yml \
-                                 up -d --force-recreate
-
 Verify by asking me to run a deep-research query that hits
 SerpAPI under the hood. You should see results within a few
 seconds and the SerpAPI dashboard's "Searches Used This
@@ -93,4 +87,3 @@ remaining at https://serpapi.com/manage-api-key
 - **Free-tier limit consumed silently** — once you hit 250, calls return `error` in the JSON body but with HTTP 200. The user might think the key works while it actually doesn't return data. Watch for the dashboard's monthly counter.
 - **Two separate accounts** — if the user has both a free SerpAPI account and a paid one (e.g., personal + work), confirm which one they're using. Different keys; different budgets.
 - **Key rotation** — SerpAPI lets you regenerate keys via the dashboard. The old key is revoked instantly. If the user rotates, this walkthrough has to re-run for both targets.
-- **EROFS in orchestrator/.env line concat (historical)** — a prior session-bug where the .env was written without a trailing newline glued `SERPAPI_KEY=…` to the next env var. The config-ops procedure's atomic-write discipline (always end with `\n`) prevents recurrence — but if the user's existing `.env` shows the glued state, repair before adding new keys.

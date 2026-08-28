@@ -57,7 +57,7 @@ rka_describe(operation="record_decision")  # signature + example + enums
 rka_describe(operation="")                 # compact index of current operations
 ```
 
-When a workflow below references a legacy tool name like `rka_add_decision`, treat it as a synonym for `rka_execute(args={"operation": "record_decision", ...})`. The mapping is in `rka_describe('')`. The typed-arg surface obviates `rka_load_tools` for normal work; only use it for explicit legacy access (e.g., orchestrator subprocess running with `RKA_LEGACY_TOOLS=1`).
+When a workflow below references a legacy tool name like `rka_add_decision`, treat it as a synonym for `rka_execute(args={"operation": "record_decision", ...})`. The mapping is in `rka_describe('')`. The typed-arg surface obviates `rka_load_tools` for normal work; only use it for explicit legacy access.
 
 ## Supplementary references (load on demand)
 
@@ -227,7 +227,7 @@ When the paper isn't in Zotero, emit this verbatim — the PI parses it to fetch
 > Paper: `[Author, Year, "Title"]`
 > DOI/URL: `[if known]`
 > Why I need it: `[the specific claim or RQ it would advance]`
-> Where to save: project's Zotero collection (`orchestrator_get_zotero_collection(project_id)` → use the collection name)
+> Where to save: the project's Zotero collection (use the project's configured collection or ask the PI for the collection name)
 > Until then: I'm capping confidence on related claims at 0.65.
 
 Batch multiple papers in a single block when possible — the PI captures them in one browser session and replies "ready" when done. After the PI confirms, re-invoke `rka_execute(args={"operation": "link_literature_to_zotero", ...})` on each entry to persist the keys.
@@ -404,7 +404,7 @@ falsified. Call it *before* planning work, not after it fails.
 5. **DON'T** issue one long, unscoped `search` and treat the top hits as the answer. (Long queries do *not* return empty — that earlier claim was wrong; a 24-word query returns a full page of hits. The problem is that they return the *wrong* ones.) Unscoped full-sentence search surfaces the decision you are after only ~26 % of the time; scope `entity_types` and trim to ~4–8 content words — see "Retrieval Strategy".
 6. **DON'T** create clusters without `research_question_id` — they become orphans in the map.
 7. **DON'T** bundle independent tasks into one mission — parse into separate missions.
-8. **DON'T** let generated summaries (the v2.4-removed `ask` / `generate_summary` LLM features) become canonical knowledge — when re-wired through the orchestrator they will remain disposable.
+8. **DON'T** let generated summaries (the v2.4-removed `ask` / `generate_summary` LLM features) become canonical knowledge — generated synthesis is disposable unless the PI records and attributes it through a supported Core write.
 9. **DON'T** assume the Executor understands context — always include file paths, decision links, and journal references in missions.
 10. **DON'T** forget to verify Executor work — always check mission reports against live data before marking complete.
 11. **DON'T** proceed on significant PI direction without a Confirmation Brief — restate your understanding and wait for PI correction first.
