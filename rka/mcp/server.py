@@ -7708,8 +7708,43 @@ def _timeout_error(exc: httpx.TimeoutException) -> str:
     }, indent=2)
 
 
+async def _warn_if_deprecated_operation(
+    args: object,
+    ctx: _MCPContext | None,
+) -> None:
+    """Send a compatibility notice without changing a tool result payload."""
+
+    if ctx is None:
+        return
+    operation = getattr(args, "operation", None)
+    if not isinstance(operation, str):
+        return
+
+    from rka.mcp.operations_schema import operation_deprecation
+
+    notice = operation_deprecation(operation)
+    if notice is None:
+        return
+    await ctx.warning(json.dumps({
+        "event": "rka.compatibility.deprecated_operation",
+        "message": (
+            f"RKA Core compatibility notice: '{operation}' is deprecated. "
+            "Its current behavior is preserved for legacy audit and migration; "
+            "use the standalone RKA Writer project for new authoring work."
+        ),
+        "operation": operation,
+        "owner": notice.get("owner"),
+        "migration_target": notice.get("migration_target"),
+        "removal_milestone": notice.get("removal_milestone"),
+        "removal_version": notice.get("removal_version"),
+    }, sort_keys=True))
+
+
 @tool(tier=_TIER_ALWAYS_ON, category="dispatch", always_load=True)
-async def rka_query(args: _QueryArgsUnion) -> str:
+async def rka_query(
+    args: _QueryArgsUnion,
+    ctx: _MCPContext = None,  # type: ignore[assignment]
+) -> str:
     """[ANY] READ from the project knowledge base. ALL reads flow through this verb.
 
     v2.7.0 NO-COMPROMISE typed-arg surface. The ``args`` parameter is a
@@ -7722,11 +7757,14 @@ async def rka_query(args: _QueryArgsUnion) -> str:
     Trigger phrases: "what's the status", "what's blocked", "search for",
     "show me decisions", "list literature", "fetch entity", "context",
     "research map", "decision tree", "ego graph", "trace provenance",
-    "multi-hop", "claims", "clusters", "resolve entities", "manuscript
-    context", "manuscript readiness", "manuscript spine", "changes since",
-    "what changed", "manuscript impact", "reference validation status",
-    "review queue", "open checkpoints", "pending maintenance",
+    "multi-hop", "claims", "clusters", "resolve entities", "changes since",
+    "what changed", "review queue", "open checkpoints", "pending maintenance",
     "list projects", "capability discovery", "health check".
+
+    Frozen Writer/Workbench compatibility branches remain callable but are not
+    part of Core's default operation index. Use ``rka_describe('<operation>')``
+    for their migration notice; use the standalone RKA Writer project for new
+    authoring development.
 
     Args:
         args: One of the typed ``Query*Args`` models from
@@ -7744,6 +7782,7 @@ async def rka_query(args: _QueryArgsUnion) -> str:
     of v2.7.0 compromise #3) or ``rka_describe('<op_name>')`` for
     full per-operation schema + examples.
     """
+    await _warn_if_deprecated_operation(args, ctx)
     try:
         return await _dispatch_query_typed(args)
     except httpx.TimeoutException as exc:
@@ -9207,7 +9246,10 @@ ExecuteOpLit = _Literal[tuple(_EXECUTE_OPERATIONS)]  # type: ignore[valid-type]
 
 
 @tool(tier=_TIER_ALWAYS_ON, category="dispatch", always_load=True)
-async def rka_execute(args: _ExecuteArgsUnion) -> str:
+async def rka_execute(
+    args: _ExecuteArgsUnion,
+    ctx: _MCPContext = None,  # type: ignore[assignment]
+) -> str:
     """[BRAIN/EXECUTOR/PI] WRITE / lifecycle operations on RKA. ALL writes flow through this verb.
 
     v2.7.0 NO-COMPROMISE typed-arg surface. The ``args`` parameter is a
@@ -9235,10 +9277,15 @@ async def rka_execute(args: _ExecuteArgsUnion) -> str:
     "extract claims", "create cluster", "merge clusters",
     "resolve contradiction", "flag stale", "evict knowledge",
     "scan workspace", "bootstrap workspace", "create project",
-    "reset session", "register manuscript", "update mission status",
+    "reset session", "update mission status",
     "submit report", "advance RQ", "record PI selection",
     "record outcome", "present decision", "add hook", "enable hook",
     "clear notifications".
+
+    Frozen Writer/Workbench compatibility branches remain callable but are not
+    part of Core's default operation index. Use ``rka_describe('<operation>')``
+    for their migration notice; use the standalone RKA Writer project for new
+    authoring development.
 
     Args:
         args: One of the typed ``*Args`` models from
@@ -9258,6 +9305,7 @@ async def rka_execute(args: _ExecuteArgsUnion) -> str:
     of v2.7.0 compromise #3) or ``rka_describe('<op_name>')`` for
     full per-operation schema + examples.
     """
+    await _warn_if_deprecated_operation(args, ctx)
     try:
         return await _dispatch_execute_typed(args)
     except httpx.TimeoutException as exc:

@@ -35,7 +35,7 @@ async def changes_since(
     return await service.changes_since(cursor, limit=limit)
 
 
-@router.get("/manuscripts/{manuscript_id}/impact")
+@router.get("/manuscripts/{manuscript_id}/impact", deprecated=True)
 async def get_manuscript_impact(
     manuscript_id: str,
     service: Annotated[

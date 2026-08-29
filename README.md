@@ -212,8 +212,9 @@ RKA Ecosystem project:
    provide version, capability, and compatibility discovery.
 3. **RKA Writer extraction** — move the Writer skill, manuscript semantics,
    academic-writing tools, and Workbench to `rka-project/rka-writer`.
-4. **Core 3.0 and ecosystem validation** — slim the Core distribution only
-   after legacy-state migration and downstream compatibility tests pass.
+4. **Future Core slimming and ecosystem validation** — slim the Core
+   distribution only in an explicitly approved breaking release, after
+   legacy-state migration and downstream compatibility tests pass.
 
 The earlier Agentic repository/extraction proposal is shelved. Its history is
 preserved, but it is not an active product, dependency, or installation path.

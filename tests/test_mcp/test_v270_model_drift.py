@@ -486,12 +486,36 @@ def test_explicit_deprecation_is_distinct_from_usage_maturity():
 
     from rka.mcp.operations_schema import (
         DEPRECATED_OPERATIONS,
+        OPERATIONS_SCHEMA,
+        WRITER_COMPATIBILITY_CATEGORIES,
+        WRITER_COMPATIBILITY_OPERATIONS,
         dispatch_describe,
         operation_maturity,
     )
 
-    assert set(DEPRECATED_OPERATIONS) == {"upsert_argument_spine"}
+    expected_writer_operations = {
+        op_name
+        for op_name, entry in OPERATIONS_SCHEMA.items()
+        if entry["category"] in WRITER_COMPATIBILITY_CATEGORIES
+        or op_name == "reference_validation_status"
+    }
+    assert WRITER_COMPATIBILITY_OPERATIONS == expected_writer_operations
+    assert len(WRITER_COMPATIBILITY_OPERATIONS) == 43
+    assert set(DEPRECATED_OPERATIONS) == WRITER_COMPATIBILITY_OPERATIONS
+    assert set(DEPRECATED_OPERATIONS) <= set(OPERATIONS_SCHEMA)
     assert operation_maturity("upsert_argument_spine") == "preview"
+    assert operation_maturity("reference_validation_status") == "stable"
+
+    for operation in WRITER_COMPATIBILITY_OPERATIONS:
+        notice = DEPRECATED_OPERATIONS[operation]
+        assert notice["status"] == "deprecated_compatibility"
+        assert notice["owner"] == "rka-writer"
+        assert notice["compatibility"] == "behavior_preserved"
+        assert notice["removal_milestone"] == "E5"
+        assert notice["removal_version"] == "not_scheduled"
+        assert notice["migration_target"] == (
+            "https://github.com/rka-project/rka-writer"
+        )
 
     exact = json.loads(asyncio.run(dispatch_describe("upsert_argument_spine")))
     assert exact["deprecated"] is True
@@ -502,9 +526,24 @@ def test_explicit_deprecation_is_distinct_from_usage_maturity():
     ]
 
     default = json.loads(asyncio.run(dispatch_describe("")))
-    assert "upsert_argument_spine" not in default["rka_execute"].split(", ")
-    assert default["deprecated_operations"] == ["upsert_argument_spine"]
-    assert default["deprecated_hidden"] == 1
+    full = json.loads(asyncio.run(dispatch_describe("", include_preview=True)))
+    default_operations = set(default["rka_query"].split(", ")) | set(
+        default["rka_execute"].split(", ")
+    )
+    full_operations = set(full["rka_query"].split(", ")) | set(
+        full["rka_execute"].split(", ")
+    )
+    assert WRITER_COMPATIBILITY_OPERATIONS.isdisjoint(default_operations)
+    assert WRITER_COMPATIBILITY_OPERATIONS <= full_operations
+    assert default["deprecated_operations"] == sorted(
+        WRITER_COMPATIBILITY_OPERATIONS
+    )
+    assert full["deprecated_operations"] == sorted(
+        WRITER_COMPATIBILITY_OPERATIONS
+    )
+    assert default["deprecated_hidden"] == 43
+    assert "rka-writer" in exact["deprecation"]["migration_target"]
+    assert "Writer compatibility" in default["deprecated_hint"]
     assert (
         default["listed"]
         + default["preview_hidden"]

@@ -5595,21 +5595,66 @@ PREVIEW_OPERATIONS: frozenset[str] = frozenset({
 
 # Explicit operation deprecations are a public compatibility signal, not a
 # proxy for production usage. Keep them separate from ``operation_maturity``:
-# one operation can be both usage-preview and deprecated. Broader frozen
-# Writer/Workbench compatibility classification belongs to E2.4.
-DEPRECATED_OPERATIONS: dict[str, dict[str, Any]] = {
-    "upsert_argument_spine": {
+# one operation can be both usage-preview and deprecated.
+#
+# E2.4 freezes the still-present Writer/Workbench branches as compatibility
+# adapters. They remain callable so existing projects can read, audit, and
+# migrate legacy state, but new authoring work belongs in the standalone Writer
+# project. Derive the set from the ownership categories so a future operation
+# cannot accidentally look like a supported Core feature merely because a
+# developer forgot to add it to another hand-maintained list. The exact current
+# membership is locked in tests.
+WRITER_COMPATIBILITY_CATEGORIES: frozenset[str] = frozenset({
+    "manuscript",
+    "manuscript_planning",
+    "semantic_patches",
+})
+WRITER_COMPATIBILITY_OPERATIONS: frozenset[str] = frozenset(
+    op_name
+    for op_name, entry in OPERATIONS_SCHEMA.items()
+    if entry.get("category") in WRITER_COMPATIBILITY_CATEGORIES
+    or op_name == "reference_validation_status"
+)
+
+
+def _writer_compatibility_deprecation() -> dict[str, Any]:
+    """Return fresh metadata for one frozen Writer compatibility operation."""
+
+    return {
+        "status": "deprecated_compatibility",
         "reason": (
-            "Agent-direct argument-spine replacement is disabled; use an "
-            "attributed semantic proposal and separate PI/web apply transition."
+            "This manuscript/Workbench operation is retained only for legacy "
+            "RKA Core compatibility, audit, and migration. New authoring "
+            "development belongs in the standalone RKA Writer project."
+        ),
+        "owner": "rka-writer",
+        "migration_target": "https://github.com/rka-project/rka-writer",
+        "migration_issue": "https://github.com/rka-project/rka-core/issues/129",
+        "compatibility": "behavior_preserved",
+        "removal_milestone": "E5",
+        "removal_version": "not_scheduled",
+    }
+
+
+DEPRECATED_OPERATIONS: dict[str, dict[str, Any]] = {
+    op_name: _writer_compatibility_deprecation()
+    for op_name in WRITER_COMPATIBILITY_OPERATIONS
+}
+DEPRECATED_OPERATIONS["upsert_argument_spine"].update(
+    {
+        "reason": (
+            "Agent-direct argument-spine replacement is disabled. Existing "
+            "Core callers may use the attributed semantic-proposal transition "
+            "during the compatibility window; new authoring development "
+            "belongs in the standalone RKA Writer project."
         ),
         "replacement_operations": [
             "prepare_semantic_patch_context",
             "create_semantic_patch_proposal",
             "apply_semantic_patch_proposal",
         ],
-    },
-}
+    }
+)
 
 
 def operation_maturity(op_name: str) -> str:
@@ -5695,11 +5740,13 @@ async def dispatch_describe(
             "rka_execute": ", ".join(compact.get("rka_execute", [])),
             "listed": listed,
             "total": len(OPERATIONS_SCHEMA),
+            # Preserve the pre-E2.4 discovery field for existing callers.
+            # Deprecated names are separate from the stable tool indexes.
+            "deprecated_operations": sorted(DEPRECATED_OPERATIONS),
             "hint": (
                 "rka_describe('<op>') for schema; rka_query/_execute "
                 "inputSchema already carries per-branch enums."
             ),
-            "deprecated_operations": sorted(DEPRECATED_OPERATIONS),
         }
         if not include_preview:
             preview_hidden = sum(
@@ -5709,12 +5756,16 @@ async def dispatch_describe(
             )
             payload["preview_hidden"] = preview_hidden
             payload["preview_hint"] = (
-                f"{preview_hidden} preview operations are omitted — subsystems with no "
-                "production data yet (manuscript, planning, experiments, "
-                "semantic-patches, hooks, interpretation staging, claim scope). "
-                "Pass include_preview=True to see them."
+                f"{preview_hidden} usage-preview operations are omitted "
+                "(experiments, hooks, interpretation staging, claim scope, "
+                "and the summary stub). Pass include_preview=True to see them."
             )
             payload["deprecated_hidden"] = len(DEPRECATED_OPERATIONS)
+            payload["deprecated_hint"] = (
+                f"{len(DEPRECATED_OPERATIONS)} frozen Writer compatibility "
+                "operations are omitted from the stable tool indexes and "
+                "listed separately. Use exact describe for migration guidance."
+            )
         return json.dumps(payload, indent=2)
 
     op = operation.strip()
@@ -5749,6 +5800,8 @@ __all__ = [
     "DEPRECATED_OPERATIONS",
     "PREVIEW_CATEGORIES",
     "PREVIEW_OPERATIONS",
+    "WRITER_COMPATIBILITY_CATEGORIES",
+    "WRITER_COMPATIBILITY_OPERATIONS",
     "dispatch_describe",
     "operation_maturity",
     "operation_deprecation",

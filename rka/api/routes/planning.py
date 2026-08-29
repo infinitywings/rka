@@ -25,7 +25,7 @@ from rka.services.planning import (
 )
 
 
-router = APIRouter()
+router = APIRouter(deprecated=True)
 
 
 def _raise_planning_error(exc: Exception) -> None:

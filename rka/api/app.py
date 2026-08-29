@@ -62,6 +62,23 @@ from rka.services.search import SearchService
 
 logger = logging.getLogger(__name__)
 
+_WRITER_COMPATIBILITY_PATH_PREFIXES = (
+    "/api/manuscripts",
+    "/api/manuscript-source-proposals",
+    "/api/planning",
+    "/api/semantic-patches",
+)
+_WRITER_MIGRATION_TARGET = "https://github.com/rka-project/rka-writer"
+
+
+def _is_writer_compatibility_path(path: str) -> bool:
+    """Return whether one REST path belongs to frozen Writer compatibility."""
+
+    return any(
+        path == prefix or path.startswith(f"{prefix}/")
+        for prefix in _WRITER_COMPATIBILITY_PATH_PREFIXES
+    )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -298,6 +315,19 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
             },
         )
 
+    @app.middleware("http")
+    async def writer_compatibility_notice(request: Request, call_next):
+        """Add an out-of-band notice without changing legacy response bodies."""
+
+        response = await call_next(request)
+        if _is_writer_compatibility_path(request.url.path):
+            response.headers["X-RKA-Compatibility-Status"] = "deprecated"
+            response.headers["X-RKA-Removal-Milestone"] = "E5"
+            response.headers["Link"] = (
+                f"<{_WRITER_MIGRATION_TARGET}>; rel=\"successor-version\""
+            )
+        return response
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[
@@ -307,6 +337,11 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
         ],
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=[
+            "X-RKA-Compatibility-Status",
+            "X-RKA-Removal-Milestone",
+            "Link",
+        ],
     )
 
     app.include_router(project_routes.router, prefix="/api", tags=["project"])

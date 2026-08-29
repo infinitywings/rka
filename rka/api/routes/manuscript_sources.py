@@ -19,7 +19,7 @@ from rka.services.manuscript_source import (
 )
 
 
-router = APIRouter()
+router = APIRouter(deprecated=True)
 
 
 def _require_web_actor(actor: str) -> None:

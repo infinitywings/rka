@@ -22,7 +22,7 @@ Recommended Project fields:
 
 | Field | Values |
 |---|---|
-| Ecosystem phase | E0 Boundary; E1 Core reliability; E2 Contract; E3 Agentic extraction; E4 Writer extraction; E5 Core 3.0; E6 Integration |
+| Ecosystem phase | E0 Boundary; E1 Core reliability; E2 Contract; E3 Agentic extraction; E4 Writer extraction; E5 Future Core slimming; E6 Integration |
 | Component | Core; Writer; Agentic; Integration |
 | Status | Backlog; Ready; In progress; Review; Blocked; Done |
 | Release gate | Not started; Partial; Passed |
@@ -57,7 +57,7 @@ Create after the documentation branch is reviewed:
 1. **E0 — Core boundary freeze**
 2. **E1 — Core reliability baseline**
 3. **E2 — Stable external contract**
-4. **E5 — RKA Core 3.0**
+4. **E5 — Future Core slimming**
 
 ### Future `infinitywings/rka-agentic`
 
@@ -283,7 +283,8 @@ Acceptance:
 - manuscript/Workbench operations are hidden from the default stable index;
 - documentation points new development to Writer;
 - existing callers receive a compatibility notice rather than data loss;
-- removal is deferred to E5/Core 3.0.
+- removal is deferred to E5 and a future explicitly approved breaking release;
+  the already-released Core 3.0.0 does not remove these surfaces.
 
 Labels: `roadmap`, `area: core`, `breaking-change`.
 
@@ -308,7 +309,7 @@ Create these in the RKA Ecosystem Project now and move them into
 4. Move Workbench services, UI, source synchronization, and provider adapters.
 5. Pass real-project claim-to-draft and stale-reference tests.
 
-### E5 — RKA Core 3.0
+### E5 — Future Core slimming
 
 #### E5.1 Remove active Writer and Agentic code from Core
 
@@ -333,7 +334,7 @@ Acceptance:
 
 Labels: `roadmap`, `area: integration`, `breaking-change`.
 
-#### E5.3 Publish the Core 3.0 migration and recovery guide
+#### E5.3 Publish the future Core migration and recovery guide
 
 Acceptance:
 

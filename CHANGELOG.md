@@ -28,6 +28,12 @@ All notable changes to RKA are documented here. Format loosely follows
 
 - The Python distribution is named `rka-core` while retaining the stable
   `rka` import package and CLI.
+- The 43 Writer-owned manuscript, planning, semantic-patch, and historical
+  reference-validation MCP operations are now explicit deprecated
+  compatibility surfaces and are omitted from the default stable tool index.
+  Their 53 REST operations remain callable and are marked deprecated in
+  OpenAPI. New authoring work belongs in `rka-project/rka-writer`; no legacy
+  data, route, typed branch, or response payload is removed by this change.
 - Dockerless state now defaults consistently to `~/.rka/rka.db`, independent
   of the current working directory. The base wheel defaults optional
   embeddings off; the Docker/full profile enables them explicitly.
