@@ -6126,48 +6126,7 @@
         },
         "type": "object"
       },
-      "ScanManifest-Input": {
-        "properties": {
-          "capabilities": {
-            "$ref": "#/components/schemas/ScanCapabilities"
-          },
-          "files": {
-            "items": {
-              "$ref": "#/components/schemas/ScannedFile"
-            },
-            "type": "array"
-          },
-          "root_path": {
-            "type": "string"
-          },
-          "scan_id": {
-            "type": "string"
-          },
-          "summary": {
-            "$ref": "#/components/schemas/ScanSummary"
-          },
-          "total_files_found": {
-            "type": "integer"
-          },
-          "total_files_scanned": {
-            "type": "integer"
-          },
-          "warnings": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "scan_id",
-          "root_path",
-          "total_files_found",
-          "total_files_scanned"
-        ],
-        "type": "object"
-      },
-      "ScanManifest-Output": {
+      "ScanManifest": {
         "properties": {
           "capabilities": {
             "$ref": "#/components/schemas/ScanCapabilities"
@@ -6670,7 +6629,7 @@
             "type": "boolean"
           },
           "manifest": {
-            "$ref": "#/components/schemas/ScanManifest-Input"
+            "$ref": "#/components/schemas/ScanManifest"
           },
           "override_tags": {
             "items": {
@@ -16873,7 +16832,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScanManifest-Output"
+                  "$ref": "#/components/schemas/ScanManifest"
                 }
               }
             },
@@ -16945,7 +16904,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScanManifest-Output"
+                  "$ref": "#/components/schemas/ScanManifest"
                 }
               }
             },

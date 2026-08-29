@@ -122,6 +122,9 @@ def test_mcp_v1_surface_and_dispositions_are_locked() -> None:
 
 def test_contract_normalization_preserves_fields_named_like_schema_metadata() -> None:
     rest = _snapshot(REST_SNAPSHOT)
+    assert "ScanManifest" in rest["components"]["schemas"]
+    assert "ScanManifest-Input" not in rest["components"]["schemas"]
+    assert "ScanManifest-Output" not in rest["components"]["schemas"]
     literature_create = rest["components"]["schemas"]["LiteratureCreate"]
     assert "title" in literature_create["properties"]
     assert "title" in literature_create["required"]

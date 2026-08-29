@@ -77,6 +77,58 @@ def _normalize(value: Any, *, named_map: bool = False) -> Any:
     return value
 
 
+def _rewrite_component_refs(value: Any, aliases: dict[str, str]) -> None:
+    """Rewrite schema refs in place after equivalent aliases are collapsed."""
+
+    if isinstance(value, dict):
+        ref = value.get("$ref")
+        prefix = "#/components/schemas/"
+        if isinstance(ref, str) and ref.startswith(prefix):
+            name = ref[len(prefix) :]
+            if name in aliases:
+                value["$ref"] = f"{prefix}{aliases[name]}"
+        for item in value.values():
+            _rewrite_component_refs(item, aliases)
+    elif isinstance(value, list):
+        for item in value:
+            _rewrite_component_refs(item, aliases)
+
+
+def _canonicalize_openapi_io_schemas(openapi: dict[str, Any]) -> dict[str, Any]:
+    """Collapse equivalent Pydantic ``-Input``/``-Output`` schema aliases.
+
+    FastAPI/Pydantic releases differ in whether an identical request/response
+    model is emitted once as ``Model`` or twice as ``Model-Input`` and
+    ``Model-Output``. This is generator noise rather than a wire-contract
+    difference. Only byte-equivalent normalized pairs are collapsed.
+    """
+
+    canonical = copy.deepcopy(openapi)
+    schemas = canonical.get("components", {}).get("schemas", {})
+    aliases: dict[str, str] = {}
+    for name in tuple(schemas):
+        if not name.endswith("-Input"):
+            continue
+        base = name.removesuffix("-Input")
+        output_name = f"{base}-Output"
+        if output_name not in schemas:
+            continue
+        input_schema = schemas[name]
+        output_schema = schemas[output_name]
+        if _normalize(input_schema) != _normalize(output_schema):
+            continue
+        if base in schemas and _normalize(schemas[base]) != _normalize(input_schema):
+            continue
+        schemas.setdefault(base, input_schema)
+        aliases[name] = base
+        aliases[output_name] = base
+        del schemas[name]
+        del schemas[output_name]
+    if aliases:
+        _rewrite_component_refs(canonical, aliases)
+    return canonical
+
+
 def _collect_schema_refs(value: Any) -> set[str]:
     refs: set[str] = set()
     if isinstance(value, dict):
@@ -131,7 +183,7 @@ def _ensure_response_descriptions(paths: dict[str, Any]) -> None:
 
 
 def build_rest_snapshot() -> dict[str, Any]:
-    openapi = create_app().openapi()
+    openapi = _canonicalize_openapi_io_schemas(create_app().openapi())
     stable_paths: dict[str, dict[str, Any]] = {}
     inventory: dict[str, list[dict[str, str]]] = {
         "core-preview": [],
