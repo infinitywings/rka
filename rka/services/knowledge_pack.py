@@ -21,10 +21,14 @@ from rka.models.semantic_patch import SemanticPatchProposalCreate
 from rka.services.artifacts import ArtifactService
 from rka.services.base import BaseService, _now
 from rka.services.outline_integrity import validate_unit_hierarchy
+from rka.services.sources import (
+    SourceRegistrationError,
+    verify_registered_source_artifact,
+)
 
 logger = logging.getLogger(__name__)
 
-PACK_SCHEMA_VERSION = 7
+PACK_SCHEMA_VERSION = 8
 PACK_FILE_SUFFIX = ".rka-pack.zip"
 _IMPORT_PROJECT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
@@ -100,6 +104,8 @@ _CRITICAL_INTEGRITY_CATEGORIES: frozenset[str] = frozenset(
         "semantic_patch_provider_event_chain_invalid",
         "semantic_patch_payload_invalid",
         "outline_hierarchy_invalid",
+        "registered_source_artifact_invalid",
+        "source_admission_invalid",
     }
 )
 
@@ -132,6 +138,8 @@ _TABLE_CATEGORIES: dict[str, list[str]] = {
         "interpretation_candidates",
         "interpretation_candidate_hints",
         "interpretation_review_events",
+        "registered_sources",
+        "source_admissions",
         "experiments",
         "experiment_plan_versions",
         "experiment_runs",
@@ -231,6 +239,8 @@ _INSERT_ORDER = (
     "journal",
     "reference_validation_attestations",
     "checkpoints",
+    "artifacts",
+    "registered_sources",
     "evidence_clusters",
     "experiments",
     "experiment_plan_versions",
@@ -246,6 +256,7 @@ _INSERT_ORDER = (
     "claim_evidence_relations",
     "claim_edges",
     "entity_links",
+    "source_admissions",
     "tags",
     "calibration_outcomes",
     "hooks",
@@ -284,7 +295,6 @@ _INSERT_ORDER = (
     "context_snapshots",
     "keynodes",
     "graph_views",
-    "artifacts",
     "evidence_locators",
     "figures",
     "bootstrap_log",
@@ -334,6 +344,8 @@ _ID_ENTITY_TYPES = {
     "interpretation_candidate_hints": "interpretation_hint",
     "interpretation_review_events": "interpretation_review",
     "interpretation_promotions": "interpretation_promotion",
+    "registered_sources": "registered_source",
+    "source_admissions": "source_admission",
     "experiments": "experiment",
     "experiment_plan_versions": "experiment_plan_version",
     "experiment_runs": "experiment_run",
@@ -412,6 +424,13 @@ _DIRECT_ID_COLUMNS = {
         "target_id",
     ),
     "interpretation_promotions": ("id", "candidate_id", "claim_id"),
+    "registered_sources": ("id", "artifact_id"),
+    "source_admissions": (
+        "id",
+        "source_id",
+        "candidate_id",
+        "target_id",
+    ),
     "experiments": ("id",),
     "experiment_plan_versions": (
         "id",
@@ -588,6 +607,8 @@ _FK_COLUMNS: dict[str, set[str]] = {
     },
     "interpretation_review_events": {"candidate_id"},
     "interpretation_promotions": {"candidate_id", "claim_id"},
+    "registered_sources": {"artifact_id"},
+    "source_admissions": {"source_id", "candidate_id"},
     "experiment_plan_versions": {"experiment_id", "supersedes_plan_id"},
     "experiment_runs": {"experiment_id"},
     "experiment_run_events": {"run_id"},
@@ -725,6 +746,7 @@ _PROSE_TEXT_COLUMNS: dict[str, tuple[str, ...]] = {
     ),
     "interpretation_candidate_hints": ("rationale",),
     "interpretation_review_events": ("reason",),
+    "source_admissions": ("reason",),
     "interpretation_promotions": ("promotion_reason", "revocation_reason"),
     "experiment_plan_versions": (
         "objective",
@@ -1170,7 +1192,10 @@ class KnowledgePackService(BaseService):
 
                     # The integrity gate runs inside the managed transaction so
                     # critical issues roll back the complete imported graph.
-                    integrity_issues = await self.check_integrity(target_project_id)
+                    integrity_issues = await self.check_integrity(
+                        target_project_id,
+                        verify_managed_files=False,
+                    )
                     critical = [i for i in integrity_issues if i.get("severity") == "critical"]
                     if critical:
                         raise KnowledgePackIntegrityError(critical)
@@ -1183,6 +1208,22 @@ class KnowledgePackService(BaseService):
                             )
                         staging_project_root.replace(artifact_project_root)
                         published_project_root = True
+
+                    # Artifact rows point at their final managed paths. Verify
+                    # the exact published bytes while the database transaction
+                    # is still reversible; failure removes the published tree
+                    # in the surrounding exception handler.
+                    integrity_issues = await self.check_integrity(
+                        target_project_id,
+                        verify_managed_files=True,
+                    )
+                    critical = [
+                        issue
+                        for issue in integrity_issues
+                        if issue.get("severity") == "critical"
+                    ]
+                    if critical:
+                        raise KnowledgePackIntegrityError(critical)
             except BaseException:
                 if staging_project_root is not None and staging_project_root.exists():
                     shutil.rmtree(staging_project_root, ignore_errors=True)
@@ -1653,6 +1694,150 @@ class KnowledgePackService(BaseService):
                     "Knowledge pack outline profile parent belongs to a different manuscript: "
                     f"{parent_id!r}"
                 )
+
+        artifacts = {
+            str(row["id"]): row
+            for row in tables.get("artifacts", [])
+            if row.get("id") and row.get("project_id") == project_id
+        }
+        for source in tables.get("registered_sources", []):
+            if source.get("project_id") != project_id:
+                raise ValueError(
+                    "Knowledge pack registered source is outside the exported project: "
+                    f"{source.get('id')!r}"
+                )
+        registered_sources = {
+            str(row["id"]): row
+            for row in tables.get("registered_sources", [])
+            if row.get("id") and row.get("project_id") == project_id
+        }
+        for source_id, source in registered_sources.items():
+            artifact = artifacts.get(str(source.get("artifact_id") or ""))
+            if artifact is None:
+                raise ValueError(
+                    f"Knowledge pack registered source {source_id!r} has no project artifact"
+                )
+            if source.get("content_hash") != artifact.get("content_hash"):
+                raise ValueError(
+                    f"Knowledge pack registered source {source_id!r} content hash "
+                    "does not match its artifact"
+                )
+            expected_manifest_hash = KnowledgePackService._registered_source_manifest_hash(
+                source
+            )
+            if source.get("manifest_hash") != expected_manifest_hash:
+                raise ValueError(
+                    f"Knowledge pack registered source {source_id!r} has an invalid manifest hash"
+                )
+
+        candidates = {
+            str(row["id"]): row
+            for row in tables.get("interpretation_candidates", [])
+            if row.get("id") and row.get("project_id") == project_id
+        }
+        target_ids = {
+            "journal": {
+                str(row["id"])
+                for row in tables.get("journal", [])
+                if row.get("id") and row.get("project_id") == project_id
+            },
+            "claim": {
+                str(row["id"])
+                for row in tables.get("claims", [])
+                if row.get("id") and row.get("project_id") == project_id
+            },
+            "decision": {
+                str(row["id"])
+                for row in tables.get("decisions", [])
+                if row.get("id") and row.get("project_id") == project_id
+            },
+        }
+        provenance_links = {
+            (
+                str(row.get("source_type") or ""),
+                str(row.get("source_id") or ""),
+                str(row.get("target_type") or ""),
+                str(row.get("target_id") or ""),
+            )
+            for row in tables.get("entity_links", [])
+            if row.get("project_id") == project_id and row.get("link_type") == "derived_from"
+        }
+        for admission in tables.get("source_admissions", []):
+            admission_id = str(admission.get("id") or "")
+            if admission.get("project_id") != project_id:
+                raise ValueError(
+                    "Knowledge pack source admission is outside the exported project: "
+                    f"{admission_id!r}"
+                )
+            source = registered_sources.get(str(admission.get("source_id") or ""))
+            candidate = candidates.get(str(admission.get("candidate_id") or ""))
+            target_type = str(admission.get("target_type") or "")
+            target_id = str(admission.get("target_id") or "")
+            if source is None or candidate is None:
+                raise ValueError(
+                    f"Knowledge pack source admission {admission_id!r} lacks source/candidate"
+                )
+            if target_id not in target_ids.get(target_type, set()):
+                raise ValueError(
+                    f"Knowledge pack source admission {admission_id!r} has no project target"
+                )
+            if (
+                candidate.get("source_type") != "artifact"
+                or candidate.get("source_id") != source.get("artifact_id")
+                or candidate.get("review_status") != "resolved"
+                or candidate.get("disposition") != "promoted"
+                or candidate.get("disposition_target_type") != target_type
+                or candidate.get("disposition_target_id") != target_id
+                or int(candidate.get("revision") or 0)
+                != int(admission.get("candidate_revision") or -1)
+                or admission.get("source_manifest_hash") != source.get("manifest_hash")
+                or int(admission.get("grounding_verified") or 0) != 1
+            ):
+                raise ValueError(
+                    f"Knowledge pack source admission {admission_id!r} is inconsistent"
+                )
+            if (
+                target_type,
+                target_id,
+                "interpretation_candidate",
+                str(candidate.get("id") or ""),
+            ) not in provenance_links:
+                raise ValueError(
+                    f"Knowledge pack source admission {admission_id!r} lacks provenance edge"
+                )
+
+    @staticmethod
+    def _registered_source_manifest_hash(source: dict[str, Any]) -> str:
+        raw_provenance = source.get("provenance") or "{}"
+        try:
+            provenance = (
+                json.loads(raw_provenance)
+                if isinstance(raw_provenance, str)
+                else raw_provenance
+            )
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ValueError("registered source provenance is not valid JSON") from exc
+        if not isinstance(provenance, dict):
+            raise ValueError("registered source provenance must be an object")
+        payload = {
+            "schema_version": "rka.registered-source/v1",
+            "source_kind": source.get("source_kind"),
+            "content_mode": source.get("content_mode"),
+            "title": source.get("title"),
+            "stable_locator": source.get("stable_locator"),
+            "content_hash": source.get("content_hash"),
+            "ownership_kind": source.get("ownership_kind"),
+            "ownership_note": source.get("ownership_note"),
+            "provenance": provenance,
+        }
+        encoded = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
     def _remap_tables(
         self,
@@ -2512,6 +2697,8 @@ class KnowledgePackService(BaseService):
         "semantic_patch_provider_event_chain_invalid": "critical",
         "semantic_patch_payload_invalid": "critical",
         "outline_hierarchy_invalid": "critical",
+        "registered_source_artifact_invalid": "critical",
+        "source_admission_invalid": "critical",
         "claim_count_mismatch": "warning",
     }
 
@@ -2582,7 +2769,12 @@ class KnowledgePackService(BaseService):
             }
         ]
 
-    async def check_integrity(self, project_id: str | None = None) -> list[dict]:
+    async def check_integrity(
+        self,
+        project_id: str | None = None,
+        *,
+        verify_managed_files: bool = True,
+    ) -> list[dict]:
         """Verify knowledge base integrity — check for orphaned edges, missing refs, count mismatches.
 
         Each issue dict carries a `severity` field (`critical | warning`) so
@@ -2592,6 +2784,132 @@ class KnowledgePackService(BaseService):
         pid = project_id or self.project_id
         issues: list[dict] = []
         issues.extend(await self._outline_hierarchy_integrity_issues(pid))
+
+        source_rows = await self.db.fetchall(
+            """SELECT source.*, artifact.content_hash AS artifact_content_hash,
+                      artifact.id AS resolved_artifact_id,
+                      artifact.filepath AS artifact_filepath
+               FROM registered_sources AS source
+               LEFT JOIN artifacts AS artifact
+                 ON artifact.id = source.artifact_id
+                AND artifact.project_id = source.project_id
+               WHERE source.project_id = ?
+               ORDER BY source.id""",
+            [pid],
+        )
+        bad_sources: list[str] = []
+        managed_project_root = (
+            self._artifact_import_root(pid).parent if verify_managed_files else None
+        )
+        for source in source_rows:
+            try:
+                manifest_hash = self._registered_source_manifest_hash(dict(source))
+            except ValueError:
+                manifest_hash = ""
+            invalid = (
+                source.get("resolved_artifact_id") is None
+                or source.get("content_hash") != source.get("artifact_content_hash")
+                or source.get("manifest_hash") != manifest_hash
+            )
+            if not invalid and verify_managed_files:
+                artifact = {
+                    "id": source.get("resolved_artifact_id"),
+                    "content_hash": source.get("artifact_content_hash"),
+                    "filepath": source.get("artifact_filepath"),
+                }
+                try:
+                    verify_registered_source_artifact(
+                        source,
+                        artifact,
+                        project_root=managed_project_root,
+                    )
+                except SourceRegistrationError:
+                    invalid = True
+            if invalid:
+                bad_sources.append(str(source["id"]))
+        if bad_sources:
+            cat = "registered_source_artifact_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_sources),
+                    "ids": bad_sources[:10],
+                    "description": (
+                        "registered sources whose artifact, content hash, or provenance "
+                        "manifest is inconsistent"
+                    ),
+                    "fix_action": "Restore the exact artifact/provenance envelope from a trusted pack",
+                }
+            )
+
+        bad_admissions = await self.db.fetchall(
+            """SELECT admission.id
+               FROM source_admissions AS admission
+               LEFT JOIN registered_sources AS source
+                 ON source.id = admission.source_id
+                AND source.project_id = admission.project_id
+               LEFT JOIN interpretation_candidates AS candidate
+                 ON candidate.id = admission.candidate_id
+                AND candidate.project_id = admission.project_id
+               WHERE admission.project_id = ?
+                 AND (
+                    source.id IS NULL
+                    OR candidate.id IS NULL
+                    OR candidate.source_type <> 'artifact'
+                    OR candidate.source_id <> source.artifact_id
+                    OR candidate.review_status <> 'resolved'
+                    OR candidate.disposition <> 'promoted'
+                    OR candidate.disposition_target_type <> admission.target_type
+                    OR candidate.disposition_target_id <> admission.target_id
+                    OR candidate.revision <> admission.candidate_revision
+                    OR admission.source_manifest_hash <> source.manifest_hash
+                    OR admission.grounding_verified <> 1
+                    OR NOT (
+                        (admission.target_type = 'journal' AND EXISTS (
+                            SELECT 1 FROM journal AS target
+                            WHERE target.id = admission.target_id
+                              AND target.project_id = admission.project_id
+                        ))
+                        OR (admission.target_type = 'claim' AND EXISTS (
+                            SELECT 1 FROM claims AS target
+                            WHERE target.id = admission.target_id
+                              AND target.project_id = admission.project_id
+                        ))
+                        OR (admission.target_type = 'decision' AND EXISTS (
+                            SELECT 1 FROM decisions AS target
+                            WHERE target.id = admission.target_id
+                              AND target.project_id = admission.project_id
+                        ))
+                    )
+                    OR NOT EXISTS (
+                        SELECT 1 FROM entity_links AS link
+                        WHERE link.project_id = admission.project_id
+                          AND link.source_type = admission.target_type
+                          AND link.source_id = admission.target_id
+                          AND link.link_type = 'derived_from'
+                          AND link.target_type = 'interpretation_candidate'
+                          AND link.target_id = admission.candidate_id
+                    )
+                 )
+               ORDER BY admission.id LIMIT 50""",
+            [pid],
+        )
+        if bad_admissions:
+            cat = "source_admission_invalid"
+            issues.append(
+                {
+                    "category": cat,
+                    "severity": self._severity_for(cat),
+                    "count": len(bad_admissions),
+                    "ids": [row["id"] for row in bad_admissions[:10]],
+                    "description": (
+                        "source admissions inconsistent with their source, candidate, "
+                        "canonical target, or provenance edge"
+                    ),
+                    "fix_action": "Restore the immutable admission graph from a trusted pack",
+                }
+            )
 
         source_exists = self._typed_entity_link_endpoint_sql(
             type_column="source_type", id_column="source_id"

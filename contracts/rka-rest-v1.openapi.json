@@ -5865,6 +5865,397 @@
         ],
         "type": "object"
       },
+      "RegisterSourceRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "content_base64": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expected_content_hash": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "filename": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "filepath": {
+            "anyOf": [
+              {
+                "maxLength": 8192,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mime": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ownership_kind": {
+            "default": "unknown",
+            "enum": [
+              "researcher",
+              "institution",
+              "third_party",
+              "public_domain",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "ownership_note": {
+            "anyOf": [
+              {
+                "maxLength": 10000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pasted_text": {
+            "anyOf": [
+              {
+                "maxLength": 10000000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provenance": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "registered_by": {
+            "enum": [
+              "pi",
+              "brain",
+              "executor",
+              "web_ui",
+              "llm",
+              "import",
+              "system"
+            ],
+            "type": "string"
+          },
+          "source_kind": {
+            "enum": [
+              "file",
+              "pasted_text",
+              "url",
+              "repository",
+              "zotero"
+            ],
+            "type": "string"
+          },
+          "stable_locator": {
+            "anyOf": [
+              {
+                "maxLength": 8192,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "source_kind",
+          "registered_by"
+        ],
+        "type": "object"
+      },
+      "RegisterSourceResult": {
+        "properties": {
+          "duplicate": {
+            "type": "boolean"
+          },
+          "source": {
+            "$ref": "#/components/schemas/RegisteredSource"
+          }
+        },
+        "required": [
+          "source",
+          "duplicate"
+        ],
+        "type": "object"
+      },
+      "RegisteredSource": {
+        "properties": {
+          "artifact_id": {
+            "type": "string"
+          },
+          "content_hash": {
+            "type": "string"
+          },
+          "content_mode": {
+            "enum": [
+              "bytes",
+              "locator_manifest"
+            ],
+            "type": "string"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "manifest_hash": {
+            "type": "string"
+          },
+          "ownership_kind": {
+            "enum": [
+              "researcher",
+              "institution",
+              "third_party",
+              "public_domain",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "ownership_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "provenance": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "registered_by": {
+            "enum": [
+              "pi",
+              "brain",
+              "executor",
+              "web_ui",
+              "llm",
+              "import",
+              "system"
+            ],
+            "type": "string"
+          },
+          "source_kind": {
+            "enum": [
+              "file",
+              "pasted_text",
+              "url",
+              "repository",
+              "zotero"
+            ],
+            "type": "string"
+          },
+          "stable_locator": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "artifact_id",
+          "source_kind",
+          "content_mode",
+          "title",
+          "content_hash",
+          "manifest_hash",
+          "ownership_kind",
+          "registered_by"
+        ],
+        "type": "object"
+      },
+      "RegisteredSourceDetail": {
+        "properties": {
+          "admissions": {
+            "items": {
+              "$ref": "#/components/schemas/SourceAdmission"
+            },
+            "type": "array"
+          },
+          "artifact": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "artifact_id": {
+            "type": "string"
+          },
+          "content_hash": {
+            "type": "string"
+          },
+          "content_mode": {
+            "enum": [
+              "bytes",
+              "locator_manifest"
+            ],
+            "type": "string"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "interpretation_candidate_count": {
+            "default": 0,
+            "type": "integer"
+          },
+          "manifest_hash": {
+            "type": "string"
+          },
+          "ownership_kind": {
+            "enum": [
+              "researcher",
+              "institution",
+              "third_party",
+              "public_domain",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "ownership_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "provenance": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "registered_by": {
+            "enum": [
+              "pi",
+              "brain",
+              "executor",
+              "web_ui",
+              "llm",
+              "import",
+              "system"
+            ],
+            "type": "string"
+          },
+          "source_kind": {
+            "enum": [
+              "file",
+              "pasted_text",
+              "url",
+              "repository",
+              "zotero"
+            ],
+            "type": "string"
+          },
+          "stable_locator": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "artifact_id",
+          "source_kind",
+          "content_mode",
+          "title",
+          "content_hash",
+          "manifest_hash",
+          "ownership_kind",
+          "registered_by",
+          "artifact"
+        ],
+        "type": "object"
+      },
       "ReportContextRequest": {
         "properties": {
           "angle_queries": {
@@ -6373,6 +6764,133 @@
           "entity_id",
           "title",
           "snippet"
+        ],
+        "type": "object"
+      },
+      "SourceAdmission": {
+        "properties": {
+          "actor": {
+            "enum": [
+              "pi",
+              "brain",
+              "executor",
+              "web_ui"
+            ],
+            "type": "string"
+          },
+          "candidate_id": {
+            "type": "string"
+          },
+          "candidate_revision": {
+            "type": "integer"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "grounding_verified": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "source_manifest_hash": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": "string"
+          },
+          "target_type": {
+            "enum": [
+              "journal",
+              "claim",
+              "decision"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "source_id",
+          "candidate_id",
+          "candidate_revision",
+          "target_type",
+          "target_id",
+          "source_manifest_hash",
+          "actor",
+          "reason",
+          "grounding_verified"
+        ],
+        "type": "object"
+      },
+      "SourceAdmissionCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "enum": [
+              "pi",
+              "brain",
+              "executor",
+              "web_ui"
+            ],
+            "type": "string"
+          },
+          "candidate_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 1.0,
+            "type": "integer"
+          },
+          "grounding_verified": {
+            "const": true,
+            "type": "boolean"
+          },
+          "reason": {
+            "maxLength": 10000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "target_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "target_type": {
+            "enum": [
+              "journal",
+              "claim",
+              "decision"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "candidate_id",
+          "expected_revision",
+          "target_type",
+          "target_id",
+          "actor",
+          "reason",
+          "grounding_verified"
         ],
         "type": "object"
       },
@@ -15763,6 +16281,356 @@
         ]
       }
     },
+    "/api/sources": {
+      "get": {
+        "operationId": "list_sources_api_sources_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "source_kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "file",
+                    "pasted_text",
+                    "url",
+                    "repository",
+                    "zotero"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "ownership_kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "researcher",
+                    "institution",
+                    "third_party",
+                    "public_domain",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "project_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-RKA-Project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RegisteredSource"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Response"
+          }
+        },
+        "tags": [
+          "sources"
+        ]
+      },
+      "post": {
+        "operationId": "register_source_api_sources_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "project_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-RKA-Project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterSourceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterSourceResult"
+                }
+              }
+            },
+            "description": "Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Response"
+          }
+        },
+        "tags": [
+          "sources"
+        ]
+      }
+    },
+    "/api/sources/{source_id}": {
+      "get": {
+        "operationId": "get_source_api_sources__source_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "project_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-RKA-Project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisteredSourceDetail"
+                }
+              }
+            },
+            "description": "Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Response"
+          }
+        },
+        "tags": [
+          "sources"
+        ]
+      }
+    },
+    "/api/sources/{source_id}/admissions": {
+      "post": {
+        "operationId": "admit_source_interpretation_api_sources__source_id__admissions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "project_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-RKA-Project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceAdmissionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceAdmission"
+                }
+              }
+            },
+            "description": "Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Response"
+          }
+        },
+        "tags": [
+          "sources"
+        ]
+      }
+    },
     "/api/status": {
       "get": {
         "operationId": "get_status_api_status_get",
@@ -17426,11 +18294,11 @@
   "x-rka-operation-counts": {
     "core_maturity": {
       "preview": 28,
-      "stable": 133
+      "stable": 137
     },
     "ownership": {
       "agentic-unsupported": 10,
-      "core": 161,
+      "core": 165,
       "core-legacy": 6,
       "writer-compatibility": 53
     }

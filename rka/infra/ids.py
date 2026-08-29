@@ -16,6 +16,8 @@ _PREFIXES = {
     "scan": "scn",
     "link": "lnk",
     "artifact": "art",
+    "registered_source": "src",
+    "source_admission": "sad",
     "figure": "fig",
     "summary": "sum",
     "qa_session": "qas",

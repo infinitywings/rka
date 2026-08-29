@@ -13,9 +13,15 @@ import difflib
 import json
 import copy
 import os
+import sys
 from collections import Counter
 from pathlib import Path
 from typing import Annotated, Any, get_args, get_origin
+
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 # Keep the default five-tool transport deterministic even when a developer has
@@ -40,7 +46,6 @@ from rka.mcp.operations_schema import (  # noqa: E402
 from rka.mcp.server import mcp  # noqa: E402
 
 
-ROOT = Path(__file__).resolve().parents[1]
 REST_SNAPSHOT = ROOT / "contracts" / "rka-rest-v1.openapi.json"
 MCP_SNAPSHOT = ROOT / "contracts" / "rka-mcp-v1.json"
 HTTP_METHODS = frozenset({"get", "put", "post", "delete", "options", "head", "patch", "trace"})

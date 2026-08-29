@@ -71,7 +71,7 @@ async def test_pack_v7_rekeys_proposal_manifest_and_provider_events(
             project_id="proj_semantic_patch_import",
             project_name="Semantic Patch Import",
         )
-    assert PACK_SCHEMA_VERSION == 7
+    assert PACK_SCHEMA_VERSION == 8
     assert result.imported_counts["semantic_patch_context_manifests"] == 1
     assert result.imported_counts["semantic_patch_proposals"] == 1
     assert result.imported_counts["semantic_patch_proposal_events"] == 1

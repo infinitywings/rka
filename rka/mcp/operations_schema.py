@@ -30,7 +30,7 @@ Design choices (decision #3 in the project locked-decisions list):
   hints, and the Phase-X²' canonical-field-name lessons (e.g. the
   `description=` vs `content=` checkpoint pitfall from the 2026-06-01
   hyperscaler-auditing PA-2 bug).
-- Single dict, one entry per operation. Total 139 entries.
+- Single dict, one entry per operation.
 - Enum value-sets reference rka.mcp._enums for drift-detection — the
   enums dict here cites the values directly (mirror of _enums.py) so
   consumers don't need to import _enums. The lock-test in
@@ -215,6 +215,15 @@ _ENUMS = {
         "classify_evidence",
         "revoke_evidence",
     ],
+    "registered_source_kind": ["file", "pasted_text", "url", "repository", "zotero"],
+    "registered_source_ownership": [
+        "researcher", "institution", "third_party", "public_domain", "unknown"
+    ],
+    "registered_source_actor": [
+        "pi", "brain", "executor", "web_ui", "llm", "import", "system"
+    ],
+    "source_admission_target": ["journal", "claim", "decision"],
+    "source_admission_actor": ["pi", "brain", "executor", "web_ui"],
     "experiment_actor": ["pi", "brain", "executor", "web_ui", "llm", "import"],
     "experiment_status": ["planned", "active", "completed", "abandoned"],
     "working_tree_state": ["clean", "dirty", "unknown"],
@@ -979,6 +988,36 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "claims",
         ],
         "notes": "Candidates are not canonical claims or scientific support.",
+    },
+    "sources": {
+        "operation": "sources",
+        "tool": "rka_query",
+        "category": "sources",
+        "role_tag": "ANY",
+        "summary": "List registered sources or inspect one provenance envelope.",
+        "signature": (
+            "rka_query(operation='sources', *, project_id, id=None, limit=50, "
+            "filters={'source_kind', 'ownership_kind'})"
+        ),
+        "required_fields": ["project_id"],
+        "optional_fields": ["limit", "filters", "id"],
+        "enums": _e("registered_source_kind", "registered_source_ownership"),
+        "examples": [
+            {
+                "description": "Inspect one source, its artifact, and explicit admissions.",
+                "call": {
+                    "operation": "sources",
+                    "project_id": "prj_01ABC...",
+                    "id": "src_01XYZ...",
+                },
+            }
+        ],
+        "related_operations": [
+            "register_source",
+            "create_interpretation_candidate",
+            "admit_source_interpretation",
+        ],
+        "notes": "A registered source is non-canonical until explicit admission.",
     },
     "experiments": {
         "operation": "experiments",
@@ -3733,6 +3772,102 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "not clm_ records; explicit reviewed promotion is required."
         ),
     },
+    "register_source": {
+        "operation": "register_source",
+        "tool": "rka_execute",
+        "category": "sources",
+        "role_tag": "ANY",
+        "summary": "Register local bytes or a stable locator with hashes and provenance.",
+        "signature": (
+            "rka_execute(operation='register_source', *, project_id, source_kind, "
+            "registered_by, filepath=None, pasted_text=None, stable_locator=None, ...)"
+        ),
+        "required_fields": ["project_id", "source_kind", "registered_by"],
+        "optional_fields": [
+            "title",
+            "filepath",
+            "pasted_text",
+            "stable_locator",
+            "mime",
+            "expected_content_hash",
+            "ownership_kind",
+            "ownership_note",
+            "provenance",
+        ],
+        "enums": _e(
+            "registered_source_kind",
+            "registered_source_ownership",
+            "registered_source_actor",
+        ),
+        "examples": [
+            {
+                "description": "Register pasted research notes without admitting them.",
+                "call": {
+                    "operation": "register_source",
+                    "project_id": "prj_01ABC...",
+                    "source_kind": "pasted_text",
+                    "pasted_text": "Observed behavior to review.",
+                    "registered_by": "pi",
+                    "ownership_kind": "researcher",
+                    "provenance": {"collection": "lab notes"},
+                },
+            }
+        ],
+        "related_operations": ["sources", "create_interpretation_candidate"],
+        "notes": (
+            "Never fetches a URL, clones a repository, calls an LLM, or writes "
+            "journal/claim/decision records. MCP filepath inputs are read on the host "
+            "and transferred as bounded bytes; Docker needs no host-path mount. The "
+            "result includes artifact_id for staging."
+        ),
+    },
+    "admit_source_interpretation": {
+        "operation": "admit_source_interpretation",
+        "tool": "rka_execute",
+        "category": "sources",
+        "role_tag": "BRAIN",
+        "summary": "Explicitly admit a grounded artifact interpretation to an existing target.",
+        "signature": (
+            "rka_execute(operation='admit_source_interpretation', *, project_id, "
+            "source_id, candidate_id, expected_revision, target_type, target_id, "
+            "actor, reason, grounding_verified=true)"
+        ),
+        "required_fields": [
+            "project_id",
+            "source_id",
+            "candidate_id",
+            "expected_revision",
+            "target_type",
+            "target_id",
+            "actor",
+            "reason",
+            "grounding_verified",
+        ],
+        "optional_fields": [],
+        "enums": _e("source_admission_target", "source_admission_actor"),
+        "examples": [
+            {
+                "description": "Admit a reviewed source statement to an existing journal entry.",
+                "call": {
+                    "operation": "admit_source_interpretation",
+                    "project_id": "prj_01ABC...",
+                    "source_id": "src_01SOURCE...",
+                    "candidate_id": "icd_01CANDIDATE...",
+                    "expected_revision": 1,
+                    "target_type": "journal",
+                    "target_id": "jrn_01TARGET...",
+                    "actor": "pi",
+                    "reason": "Verified against the registered bytes.",
+                    "grounding_verified": True,
+                },
+            }
+        ],
+        "related_operations": ["sources", "create_interpretation_candidate"],
+        "notes": (
+            "The target must already exist. Admission is revision guarded and auditable; "
+            "it never generates canonical prose automatically."
+        ),
+    },
     "create_interpretation_candidate": {
         "operation": "create_interpretation_candidate",
         "tool": "rka_execute",
@@ -5575,7 +5710,7 @@ def list_operations_grouped() -> dict[str, list[dict[str, Any]]]:
 # deliberately ahead of use, but listing them alongside the core operations
 # means ~41% of what an agent reads while choosing is unreachable in practice.
 # Derived from category (plus a few named operations) rather than stamped on
-# all 151 entries, so the rule stays auditable and one edit re-classifies a
+# all entries, so the rule stays auditable and one edit re-classifies a
 # subsystem once it starts carrying data.
 PREVIEW_CATEGORIES: frozenset[str] = frozenset({
     "manuscript",           # 3 manuscripts, 0 units / 0 claims / 0 bindings

@@ -41,6 +41,20 @@ from __future__ import annotations
 from typing import Literal
 
 
+# Safe external-source registration and explicit interpretation admission.
+RegisteredSourceKindLit = Literal[
+    "file", "pasted_text", "url", "repository", "zotero"
+]
+RegisteredSourceOwnershipLit = Literal[
+    "researcher", "institution", "third_party", "public_domain", "unknown"
+]
+RegisteredSourceActorLit = Literal[
+    "pi", "brain", "executor", "web_ui", "llm", "import", "system"
+]
+SourceAdmissionTargetLit = Literal["journal", "claim", "decision"]
+SourceAdmissionActorLit = Literal["pi", "brain", "executor", "web_ui"]
+
+
 # ---------------------------------------------------------------------------
 # Journal entries (rka_record_note / rka_add_note / rka_update_note)
 # ---------------------------------------------------------------------------

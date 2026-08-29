@@ -132,6 +132,11 @@ from rka.mcp._enums import (  # noqa: E402, F811
     SemanticPatchActorLit,
     SemanticPatchReviewerLit,
     SemanticPatchStatusLit,
+    RegisteredSourceActorLit,
+    RegisteredSourceKindLit,
+    RegisteredSourceOwnershipLit,
+    SourceAdmissionActorLit,
+    SourceAdmissionTargetLit,
 )
 
 # Batch C imports — Update/Lifecycle/Submit enums.
@@ -512,6 +517,16 @@ class QueryInterpretationCandidatesArgs(ProjectScopedArgs, PaginatedFiltersMixin
     id: Annotated[
         Optional[str],
         Field(default=None, description="Optional icd_ id for detailed history."),
+    ] = None
+
+
+class QuerySourcesArgs(ProjectScopedArgs, PaginatedFiltersMixin):
+    """[ANY] List registered sources or fetch one provenance detail."""
+
+    operation: Literal["sources"] = "sources"
+    id: Annotated[
+        Optional[str],
+        Field(default=None, description="Optional src_ id for provenance detail."),
     ] = None
 
 
@@ -1327,6 +1342,7 @@ QueryArgsUnion = Annotated[
         QueryClaimsArgs,
         QueryClaimScopeArgs,
         QueryInterpretationCandidatesArgs,
+        QuerySourcesArgs,
         QueryExperimentsArgs,
         QueryExperimentRunsArgs,
         QueryExperimentObservationsArgs,
@@ -2565,6 +2581,60 @@ class CreateInterpretationCandidateArgs(ProjectScopedArgs):
         return self
 
 
+class RegisterSourceArgs(ProjectScopedArgs):
+    """[ANY] Register local bytes or a stable locator without canonical admission."""
+
+    operation: Literal["register_source"] = "register_source"
+    source_kind: Annotated[RegisteredSourceKindLit, Field(description="Source class.")]
+    registered_by: Annotated[RegisteredSourceActorLit, Field(description="Registration actor.")]
+    title: Annotated[Optional[str], Field(default=None, max_length=1000)] = None
+    filepath: Annotated[Optional[str], Field(default=None, max_length=8192)] = None
+    pasted_text: Annotated[Optional[str], Field(default=None, max_length=10_000_000)] = None
+    stable_locator: Annotated[Optional[str], Field(default=None, max_length=8192)] = None
+    mime: Annotated[Optional[str], Field(default=None, max_length=256)] = None
+    expected_content_hash: Annotated[Optional[str], Field(default=None, max_length=64)] = None
+    ownership_kind: Annotated[
+        RegisteredSourceOwnershipLit, Field(default="unknown")
+    ] = "unknown"
+    ownership_note: Annotated[Optional[str], Field(default=None, max_length=10_000)] = None
+    provenance: Annotated[Optional[dict[str, Any]], Field(default=None)] = None
+
+    @model_validator(mode="after")
+    def _validate_source_input(self) -> "RegisterSourceArgs":
+        supplied = int(self.filepath is not None) + int(self.pasted_text is not None)
+        if supplied > 1:
+            raise ValueError("provide at most one of filepath and pasted_text")
+        if self.source_kind == "file" and not self.filepath:
+            raise ValueError("file sources require filepath")
+        if self.source_kind == "pasted_text" and self.pasted_text is None:
+            raise ValueError("pasted_text sources require pasted_text")
+        if self.pasted_text is not None and self.source_kind != "pasted_text":
+            raise ValueError(
+                "pasted_text bytes are only valid for source_kind='pasted_text'"
+            )
+        if self.source_kind in {"url", "repository", "zotero"} and not self.stable_locator:
+            raise ValueError(f"{self.source_kind} sources require stable_locator")
+        if supplied == 0 and not self.stable_locator:
+            raise ValueError("a source requires bytes or a stable_locator")
+        return self
+
+
+class AdmitSourceInterpretationArgs(ProjectScopedArgs):
+    """[BRAIN/PI] Admit one grounded source interpretation to an existing target."""
+
+    operation: Literal["admit_source_interpretation"] = "admit_source_interpretation"
+    source_id: Annotated[str, Field(description="Registered src_ source id.")]
+    candidate_id: Annotated[str, Field(description="Artifact-backed icd_ candidate id.")]
+    expected_revision: Annotated[int, Field(ge=1)]
+    target_type: Annotated[SourceAdmissionTargetLit, Field(description="Canonical target type.")]
+    target_id: Annotated[str, Field(description="Existing canonical target id.")]
+    actor: Annotated[SourceAdmissionActorLit, Field(description="Reviewing actor.")]
+    reason: Annotated[str, Field(min_length=1, max_length=10_000)]
+    grounding_verified: Annotated[
+        Literal[True], Field(description="Must be true after source review.")
+    ]
+
+
 class AddInterpretationHintArgs(ProjectScopedArgs):
     """[BRAIN/PI] Attach a duplicate/conflict review hint."""
 
@@ -3150,6 +3220,8 @@ BatchBExecuteUnion = Annotated[
         HookAddArgs,
         ExtractClaimsArgs,
         CreateInterpretationCandidateArgs,
+        RegisterSourceArgs,
+        AdmitSourceInterpretationArgs,
         AddInterpretationHintArgs,
         TriageInterpretationCandidateArgs,
         SetClaimScopeArgs,
@@ -5060,6 +5132,8 @@ ExecuteArgsUnion = Annotated[
         HookAddArgs,
         ExtractClaimsArgs,
         CreateInterpretationCandidateArgs,
+        RegisterSourceArgs,
+        AdmitSourceInterpretationArgs,
         AddInterpretationHintArgs,
         TriageInterpretationCandidateArgs,
         SetClaimScopeArgs,
@@ -5153,6 +5227,7 @@ __all__ = [
     "QueryClaimsArgs",
     "QueryClaimScopeArgs",
     "QueryInterpretationCandidatesArgs",
+    "QuerySourcesArgs",
     "QueryExperimentsArgs",
     "QueryExperimentRunsArgs",
     "QueryExperimentObservationsArgs",
@@ -5227,6 +5302,8 @@ __all__ = [
     "HookAddArgs",
     "ExtractClaimsArgs",
     "CreateInterpretationCandidateArgs",
+    "RegisterSourceArgs",
+    "AdmitSourceInterpretationArgs",
     "AddInterpretationHintArgs",
     "TriageInterpretationCandidateArgs",
     "SetClaimScopeArgs",

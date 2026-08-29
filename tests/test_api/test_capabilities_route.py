@@ -84,9 +84,9 @@ async def test_capabilities_endpoint_is_versioned_and_additive(api_client: httpx
     ] == len(OPERATIONS_SCHEMA)
     assert mcp["deprecated_operation_count"] == len(DEPRECATED_OPERATIONS)
     listed_by_default = sum(len(items) for items in list_operations_compact().values())
-    assert mcp["default_operation_count"] == listed_by_default == 81
-    assert mcp["supported_operation_count"] == 103
-    assert mcp["supported_usage_stable_operation_count"] == 81
+    assert mcp["default_operation_count"] == listed_by_default == 84
+    assert mcp["supported_operation_count"] == 106
+    assert mcp["supported_usage_stable_operation_count"] == 84
     assert mcp["default_operation_count"] == mcp["supported_usage_stable_operation_count"]
     assert mcp["supported_usage_preview_operation_count"] == 22
     assert mcp["unsupported_operation_count"] == 5
