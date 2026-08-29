@@ -271,6 +271,47 @@ def backup(output: str | None):
         )
 
 
+@main.command("export-writer")
+@click.option("--project-id", required=True, help="Exact RKA project ID to export.")
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(path_type=Path, dir_okay=False, resolve_path=True),
+    required=True,
+    help="Destination .rka-writer-export.zip file.",
+)
+def export_writer(project_id: str, output: Path):
+    """Export frozen legacy Writer state through a disposable backup."""
+    import sqlite3
+    import tempfile
+
+    from rka.config import RKAConfig
+    from rka.infra.sqlite_backup import backup_sqlite_database
+    from rka.services.legacy_writer_export import (
+        LegacyWriterExportError,
+        export_legacy_writer_bundle,
+    )
+
+    try:
+        source = Path(RKAConfig().database_url)
+        if not source.is_file():
+            raise LegacyWriterExportError(f"SQLite database not found: {source}")
+        with tempfile.TemporaryDirectory(prefix="rka-writer-export-") as directory:
+            snapshot = Path(directory) / "source-backup.db"
+            backup_sqlite_database(source, snapshot)
+            result = export_legacy_writer_bundle(snapshot, project_id, output)
+    except (LegacyWriterExportError, OSError, sqlite3.DatabaseError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(f"✅ Exported legacy Writer state to {result.path}")
+    click.echo(f"   Project: {result.project_id}")
+    click.echo(f"   Tables: {result.table_count}; rows: {result.row_count}")
+    click.echo(f"   Tables SHA-256: {result.tables_sha256}")
+    click.echo(f"   Semantic root: {result.semantic_root_sha256}")
+    click.echo(f"   Bundle SHA-256: {result.sha256}")
+    click.echo("   Authority: rka-writer staging only (not switched)")
+
+
 @main.command()
 def migrate():
     """Run pending database migrations."""
