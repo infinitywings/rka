@@ -77,6 +77,21 @@ when intentionally exploring preview or compatibility operations. This runtime
 description is authoritative and should be preferred over copied operation
 lists.
 
+### Legacy Writer compatibility
+
+The manuscript, planning, semantic-patch, and historical reference-validation
+operations retained in Core are frozen compatibility surfaces. They remain
+callable so existing projects can read, audit, and migrate legacy Writer state,
+but they are deprecated, omitted from the default stable MCP tool listings,
+and marked `deprecated: true` in OpenAPI. Calls also receive an out-of-band
+notice through MCP logging or the REST `X-RKA-Compatibility-Status`,
+`X-RKA-Removal-Milestone`, and `Link` headers; response bodies are unchanged.
+New manuscript and Workbench development belongs in
+[`rka-project/rka-writer`](https://github.com/rka-project/rka-writer).
+Removal is not part of E2.4: it is gated on E2.3 export verification, downstream
+readiness, the E5 slimming milestone, and a future explicitly approved breaking
+release. No removal version or date is currently scheduled.
+
 Project-scoped operations require an explicit `project_id`. `list_projects`,
 `capabilities`, `health`, `create_project`, and `reset_session` are intentionally
 unscoped.

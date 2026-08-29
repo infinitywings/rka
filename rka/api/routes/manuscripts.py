@@ -50,7 +50,7 @@ from rka.services.semantic_patch import (
     SemanticPatchService,
 )
 
-router = APIRouter()
+router = APIRouter(deprecated=True)
 
 
 # Small transport-only request wrappers stay next to the routes; native domain

@@ -29,7 +29,7 @@ from rka.services.semantic_patch import (
 )
 
 
-router = APIRouter()
+router = APIRouter(deprecated=True)
 
 
 def _raise_error(exc: Exception) -> None:

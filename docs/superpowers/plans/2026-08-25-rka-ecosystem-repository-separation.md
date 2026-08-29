@@ -236,7 +236,7 @@ Exit gate:
 Rollback: switch back to the legacy Core Writer surface; do not delete either
 copy until the compatibility window ends.
 
-### E5: Core 3.0 slimming
+### E5: Future Core slimming
 
 Scope:
 
@@ -254,8 +254,9 @@ Exit gate:
 - Writer and Agentic compatibility suites pass against the release candidate;
 - existing databases open without destructive schema changes.
 
-Rollback: remain on the final 2.x compatibility release. Core 3.0 is not
-published until downstream suites pass.
+Rollback: remain on the current compatibility release. No future breaking
+release is scheduled until downstream suites pass and removal is explicitly
+approved.
 
 ### E6: Ecosystem integration and release discipline
 
@@ -281,7 +282,8 @@ Exit gate:
    Writer export.
 2. RKA Agentic 1.0: public-contract-only orchestrator.
 3. RKA Writer 1.0: public-contract-only Writer and verified legacy import.
-4. RKA Core 3.0: active optional-layer code removed after downstream gates.
+4. Future Core breaking release: active optional-layer code removed only after
+   downstream gates and explicit approval.
 
 The releases are independent. Each downstream repository publishes the Core
 major versions it supports.
@@ -325,7 +327,7 @@ Do not start today:
 - remote repository creation;
 - live Writer-state migration;
 - deletion of manuscript tables or routes;
-- Core 3.0 removal work;
+- future Core removal work;
 - installed plugin/runtime replacement;
 - merging unrelated dirty-root changes.
 
@@ -336,5 +338,5 @@ Human confirmation is required before:
 - creating the two new GitHub repositories;
 - switching legacy manuscript authority from Core to Writer;
 - running a long live re-embedding or irreversible data migration;
-- publishing RKA Core 3.0;
+- publishing a future Core breaking release;
 - deleting any legacy branch, table, compatibility code, or remote artifact.

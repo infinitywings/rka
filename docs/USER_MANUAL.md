@@ -575,6 +575,14 @@ The Brain processes up to 10 maintenance items per session, prioritized by impor
 
 # Part V — Reference
 
+> **Legacy Writer compatibility:** Sections 15.3–15.4 describe frozen Core
+> interfaces retained so existing manuscript projects can be inspected and
+> migrated without data loss. They are not the path for new authoring work.
+> Install and develop against
+> [`rka-project/rka-writer`](https://github.com/rka-project/rka-writer) instead.
+> Core will keep these compatibility interfaces through E2; any later removal
+> requires verified export and an explicitly approved breaking release.
+
 ### 15.3 — Reviewing manuscript edit proposals
 
 Workbench edits do not change planning or manuscript state immediately. A
@@ -785,7 +793,7 @@ The web dashboard at `http://localhost:9712` provides a visual interface for bro
 | **Research Map** | `/research-map` | Three-level drill-down: RQs → clusters → claims |
 | **Interpretation Review** | `/interpretations` | Review source-located `icd_` candidates before canonical promotion |
 | **Claim Scope Review** | `/claim-scopes` | Append and audit canonical `csc_` applicability contracts; resolve manuscript scope blockers |
-| **Manuscript Workbench** | `/workbench` | Navigate canonical manuscript evidence and create, fork, select, compare, archive, or resume provisional planning branches |
+| **Manuscript Workbench (legacy compatibility)** | `/workbench` | Inspect and migrate existing Core-hosted manuscript state; use the separate `rka-writer` project for new authoring work |
 | **Notebook** | `/notebook` | (historical) Q&A chat and summary generation — the LLM-backed Q&A/summary features were removed in v2.4.0 |
 | **Audit Log** | `/audit` | System audit trail with action/entity/actor filters |
 | **Context Inspector** | `/context` | Generate and inspect context packages |

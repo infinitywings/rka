@@ -165,7 +165,7 @@ The active milestone sequence is:
 3. E2 stable external contracts and legacy Writer export;
 4. E3 Agentic repository extraction;
 5. E4 Writer repository extraction and state migration;
-6. E5 Core 3.0 slimming;
+6. E5 future Core slimming in an explicitly approved breaking release;
 7. E6 ecosystem compatibility and integration validation.
 
 No repository extraction starts before E1 and E2 pass their exit gates.
