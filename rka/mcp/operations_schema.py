@@ -49,6 +49,13 @@ import difflib
 import json
 from typing import Any
 
+from rka.contracts import (
+    AGENTIC_UNSUPPORTED,
+    CORE,
+    CORE_LEGACY,
+    mcp_operation_disposition,
+)
+
 
 # ---------------------------------------------------------------------------
 # Enum value sets — kept in sync with rka/mcp/_enums.py
@@ -5673,6 +5680,17 @@ def operation_deprecation(op_name: str) -> dict[str, Any] | None:
     return DEPRECATED_OPERATIONS.get(op_name)
 
 
+def operation_contract_disposition(op_name: str) -> str:
+    """Return product ownership independently of usage maturity."""
+
+    if op_name not in OPERATIONS_SCHEMA:
+        return "unknown"
+    return mcp_operation_disposition(
+        op_name,
+        writer_operations=WRITER_COMPATIBILITY_OPERATIONS,
+    )
+
+
 def suggest_operations(query: str, *, top_n: int = 5) -> list[str]:
     """Return up to ``top_n`` best fuzzy matches for an unknown operation."""
     if not query:
@@ -5703,7 +5721,7 @@ def list_operations_compact(*, include_preview: bool = False) -> dict[str, list[
     for op_name, entry in OPERATIONS_SCHEMA.items():
         if not include_preview and (
             operation_maturity(op_name) == "preview"
-            or operation_deprecation(op_name) is not None
+            or operation_contract_disposition(op_name) != CORE
         ):
             continue
         tool = entry["tool"]
@@ -5743,6 +5761,16 @@ async def dispatch_describe(
             # Preserve the pre-E2.4 discovery field for existing callers.
             # Deprecated names are separate from the stable tool indexes.
             "deprecated_operations": sorted(DEPRECATED_OPERATIONS),
+            "unsupported_operations": sorted(
+                op_name
+                for op_name in OPERATIONS_SCHEMA
+                if operation_contract_disposition(op_name) == AGENTIC_UNSUPPORTED
+            ),
+            "legacy_operations": sorted(
+                op_name
+                for op_name in OPERATIONS_SCHEMA
+                if operation_contract_disposition(op_name) == CORE_LEGACY
+            ),
             "hint": (
                 "rka_describe('<op>') for schema; rka_query/_execute "
                 "inputSchema already carries per-branch enums."
@@ -5751,14 +5779,14 @@ async def dispatch_describe(
         if not include_preview:
             preview_hidden = sum(
                 operation_maturity(op_name) == "preview"
-                and operation_deprecation(op_name) is None
+                and operation_contract_disposition(op_name) == CORE
                 for op_name in OPERATIONS_SCHEMA
             )
             payload["preview_hidden"] = preview_hidden
             payload["preview_hint"] = (
                 f"{preview_hidden} usage-preview operations are omitted "
-                "(experiments, hooks, interpretation staging, claim scope, "
-                "and the summary stub). Pass include_preview=True to see them."
+                "(experiments, hooks, interpretation staging, and claim "
+                "scope). Pass include_preview=True to see them."
             )
             payload["deprecated_hidden"] = len(DEPRECATED_OPERATIONS)
             payload["deprecated_hint"] = (
@@ -5766,6 +5794,13 @@ async def dispatch_describe(
                 "operations are omitted from the stable tool indexes and "
                 "listed separately. Use exact describe for migration guidance."
             )
+            payload["unsupported_hidden"] = len(payload["unsupported_operations"])
+            payload["unsupported_hint"] = (
+                "Shelved Agentic operations are omitted from the stable Core "
+                "index; exact describe remains available for compatibility."
+            )
+            payload["legacy_hidden"] = len(payload["legacy_operations"])
+            payload["legacy_hint"] = "Core-legacy operations are omitted from rka-mcp/v1."
         return json.dumps(payload, indent=2)
 
     op = operation.strip()
@@ -5785,11 +5820,14 @@ async def dispatch_describe(
         )
 
     deprecation = operation_deprecation(op)
+    disposition = operation_contract_disposition(op)
     payload = {
         **entry,
         "maturity": operation_maturity(op),
         "deprecated": deprecation is not None,
     }
+    if disposition != CORE:
+        payload["contract_disposition"] = disposition
     if deprecation is not None:
         payload["deprecation"] = deprecation
     return json.dumps(payload, indent=2)
@@ -5804,6 +5842,7 @@ __all__ = [
     "WRITER_COMPATIBILITY_OPERATIONS",
     "dispatch_describe",
     "operation_maturity",
+    "operation_contract_disposition",
     "operation_deprecation",
     "get_operation_schema",
     "list_operations_grouped",

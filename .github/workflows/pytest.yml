@@ -73,6 +73,9 @@ jobs:
           name: core-web-dist
           path: web/dist
 
+      - name: Verify the public REST and MCP contract snapshots
+        run: python scripts/update_contract_snapshots.py
+
       - name: Run Core pytest profile
         run: >-
           python -m pytest -q --tb=short --strict-markers

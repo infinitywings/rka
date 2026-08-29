@@ -38,9 +38,48 @@ class McpInterfaceCapability(BaseModel):
     contract: str
     discovery: str = "rka_describe"
     operation_maturity_basis: Literal["usage-readiness"] = "usage-readiness"
-    default_operation_count: int = Field(ge=0)
-    usage_preview_operation_count: int = Field(ge=0)
-    deprecated_operation_count: int = Field(ge=0)
+    default_operation_count: int = Field(
+        ge=0,
+        description="Core-owned operations listed by default in rka_describe.",
+    )
+    usage_stable_operation_count: int = Field(
+        ge=0,
+        description=(
+            "Usage-stable count across all non-deprecated operations, including "
+            "unsupported and legacy compatibility branches."
+        ),
+    )
+    usage_preview_operation_count: int = Field(
+        ge=0,
+        description=(
+            "Historical usage-preview count across all non-deprecated operations; "
+            "use supported_usage_preview_operation_count for the Core-owned count."
+        ),
+    )
+    deprecated_operation_count: int = Field(
+        ge=0,
+        description="Frozen Writer compatibility operation count.",
+    )
+    supported_operation_count: int = Field(
+        ge=0,
+        description="Core-owned typed operations, stable and preview combined.",
+    )
+    supported_usage_stable_operation_count: int = Field(
+        ge=0,
+        description="Core-owned operations currently marked usage-stable.",
+    )
+    supported_usage_preview_operation_count: int = Field(
+        ge=0,
+        description="Core-owned operations currently marked usage-preview.",
+    )
+    unsupported_operation_count: int = Field(
+        ge=0,
+        description="Still-exposed operations owned by the shelved Agentic layer.",
+    )
+    legacy_operation_count: int = Field(
+        ge=0,
+        description="Still-exposed Core legacy operations outside rka-mcp/v1.",
+    )
 
 
 class InterfaceCapabilities(BaseModel):
