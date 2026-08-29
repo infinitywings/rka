@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import zipfile
 from datetime import timedelta
 from pathlib import Path
 from typing import TextIO
@@ -65,6 +66,142 @@ def _wait_for_health(base_url: str, server: subprocess.Popen[str]) -> dict:
             last_error = exc
             time.sleep(0.2)
     raise RuntimeError(f"REST health did not become ready: {last_error}")
+
+
+def _probe_public_rest_contract(base_url: str) -> None:
+    """Complete the E2 workflow using HTTP only, with no Core imports."""
+
+    project_id = "prj_public_contract_smoke"
+    headers = {"X-RKA-Project": project_id}
+    with httpx.Client(base_url=base_url, timeout=10) as client:
+        capabilities = client.get(
+            "/api/capabilities",
+            params={"required_contract": "rka-core/v1"},
+        )
+        capabilities.raise_for_status()
+        if capabilities.json().get("core", {}).get("contract") != "rka-core/v1":
+            raise RuntimeError("public capability discovery omitted rka-core/v1")
+
+        project = client.post(
+            "/api/projects",
+            json={
+                "id": project_id,
+                "name": "Public contract smoke",
+                "description": "Disposable installed-wheel E2 workflow.",
+            },
+        )
+        project.raise_for_status()
+
+        unscoped = client.post(
+            "/api/notes",
+            json={"content": "Unscoped calls must fail.", "type": "note"},
+        )
+        if unscoped.status_code != 422:
+            raise RuntimeError(
+                f"project-scoped public call returned {unscoped.status_code}, expected 422"
+            )
+
+        note = client.post(
+            "/api/notes",
+            headers=headers,
+            json={
+                "content": "The disposable run observed a 12 percent improvement.",
+                "type": "note",
+                "source": "executor",
+            },
+        )
+        note.raise_for_status()
+        note_payload = note.json()
+        note_read = client.get(f"/api/notes/{note_payload['id']}", headers=headers)
+        note_read.raise_for_status()
+        if note_read.json().get("content") != note_payload["content"]:
+            raise RuntimeError("public note read did not preserve exact content")
+
+        rq = client.post(
+            "/api/decisions",
+            headers=headers,
+            json={
+                "question": "Does the fixture method improve the measured outcome?",
+                "phase": "framing",
+                "decided_by": "brain",
+                "kind": "research_question",
+                "status": "active",
+                "related_journal": [note_payload["id"]],
+            },
+        )
+        rq.raise_for_status()
+        claim = client.post(
+            "/api/claims",
+            headers=headers,
+            json={
+                "source_entry_id": note_payload["id"],
+                "claim_type": "evidence",
+                "content": "The fixture method improved the measured outcome by 12 percent.",
+                "confidence": 0.85,
+                "verified": True,
+                "evidence_status": "supported",
+            },
+        )
+        claim.raise_for_status()
+        cluster = client.post(
+            "/api/clusters",
+            headers=headers,
+            json={
+                "research_question_id": rq.json()["id"],
+                "label": "Observed improvement",
+                "confidence": "moderate",
+            },
+        )
+        cluster.raise_for_status()
+        edge_input = {
+            "source_claim_id": claim.json()["id"],
+            "cluster_id": cluster.json()["id"],
+            "relation": "member_of",
+            "confidence": 1.0,
+        }
+        edge = client.post("/api/claims/edges", headers=headers, json=edge_input)
+        edge.raise_for_status()
+        repeated = client.post("/api/claims/edges", headers=headers, json=edge_input)
+        repeated.raise_for_status()
+        if repeated.json().get("id") != edge.json().get("id"):
+            raise RuntimeError("public natural-key retry created a duplicate claim edge")
+
+        evidence = client.get(
+            "/api/assemble-evidence",
+            headers=headers,
+            params={"research_question_id": rq.json()["id"], "format": "progress_report"},
+        )
+        evidence.raise_for_status()
+        if "12 percent" not in evidence.json().get("content", ""):
+            raise RuntimeError("public evidence assembly omitted the supported observation")
+        research_map = client.get("/api/research-map", headers=headers)
+        research_map.raise_for_status()
+        if not any(
+            item.get("id") == rq.json()["id"]
+            for item in research_map.json().get("research_questions", [])
+        ):
+            raise RuntimeError("public research map omitted the created research question")
+        changes = client.get(
+            "/api/changes",
+            headers=headers,
+            params={"cursor": 0, "limit": 100},
+        )
+        changes.raise_for_status()
+        if int(changes.json().get("next_cursor", 0)) <= 0:
+            raise RuntimeError("public change feed did not advance its cursor")
+
+
+def _assert_writer_export_bundle(path: Path) -> None:
+    with zipfile.ZipFile(path) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+    if manifest.get("contract") != "rka-legacy-writer-export/v1":
+        raise RuntimeError("installed Writer exporter emitted an unsupported contract")
+    if manifest.get("table_count") != 29 or len(manifest.get("tables", {})) != 29:
+        raise RuntimeError("installed Writer exporter omitted frozen Writer tables")
+    if manifest.get("authority", {}).get("authority_switched") is not False:
+        raise RuntimeError("Writer compatibility export incorrectly switched authority")
+    if not manifest.get("semantic_root_sha256"):
+        raise RuntimeError("Writer compatibility export omitted its semantic root")
 
 
 def _assert_migration_state(db_path: Path, *, require_vec: bool) -> None:
@@ -240,6 +377,21 @@ def main() -> None:
                     raise RuntimeError(f"unexpected REST health payload: {health}")
                 if args.require_vec and health.get("vec_available") is not True:
                     raise RuntimeError(f"sqlite-vec unavailable: {health}")
+                _probe_public_rest_contract(base_url)
+                writer_bundle = data_dir / "public-contract.rka-writer-export.zip"
+                _run_cli(
+                    cli,
+                    [
+                        "export-writer",
+                        "--project-id",
+                        "prj_public_contract_smoke",
+                        "--output",
+                        str(writer_bundle),
+                    ],
+                    env,
+                    runtime_cwd,
+                )
+                _assert_writer_export_bundle(writer_bundle)
 
                 web_index = ROOT / "web" / "dist" / "index.html"
                 if args.require_web and not web_index.is_file():
@@ -302,7 +454,8 @@ def main() -> None:
                         server.wait(timeout=5)
 
         print(
-            "Core startup smoke passed: installed entry point, migrations, REST, MCP, worker"
+            "Core startup smoke passed: installed entry point, migrations, "
+            "public REST workflow, MCP, worker"
             + (", sqlite-vec" if args.require_vec else "")
             + (", and web dashboard." if args.require_web else ".")
         )
