@@ -138,6 +138,8 @@ RKA stores research knowledge in seven entity types. Each has a type-prefixed UL
 | **Mission** | `mis_` | Task packages assigned to the Executor with objectives and acceptance criteria. |
 | **Checkpoint** | `chk_` | Escalation points where the Executor needs Brain/PI input. |
 | **Interpretation Candidate** | `icd_` | Reviewable, source-located interpretation that is not yet canonical knowledge. |
+| **Registered Source** | `src_` | Immutable bytes-or-locator provenance envelope; never canonical by registration alone. |
+| **Source Admission** | `sad_` | Explicit grounded review connecting one source interpretation to an existing journal/claim/decision. |
 | **Claim** | `clm_` | Atomic, source-grounded statement explicitly promoted from a reviewed candidate or intentionally recorded through the canonical claim API. |
 | **Claim Scope Version** | `csc_` | Immutable research-level applicability boundary for a canonical claim, including typed conditions, uncertainty, extension limits, and falsifier/disconfirmation information. |
 | **Evidence Cluster** | `ecl_` | Groups of related claims with a Brain-written synthesis. |
@@ -743,6 +745,28 @@ planning context and is never inserted into public source automatically.
 | `record_experiment_observation` | `rka_execute` | Record an immutable result without inferring claim support |
 | `add_evidence_locator` | `rka_execute` | Attach an exact artifact or repository-content locator |
 
+### Registered sources
+
+Use `register_source` to copy a local file or pasted text into private managed
+artifact storage, or to preserve a stable URL/repository/Zotero locator as a
+canonical JSON manifest. Registration records a content hash, ownership,
+provenance, and actor but does not create any journal entry, claim, or decision.
+When called through MCP, `filepath` is read by the host-side connector and the
+bounded bytes are transferred to Core, so Docker does not need a host-directory
+mount. Direct REST callers may use `content_base64` plus `filename`; REST
+`filepath` always means a path visible to the REST service itself.
+The returned `artifact_id` can be passed to `create_interpretation_candidate`
+with `source_type="artifact"`. After reviewing that candidate, use
+`admit_source_interpretation` with an exact revision, an existing canonical
+target, a reason, and `grounding_verified=true`. RKA never fetches a remote
+locator or automatically writes the canonical target.
+
+| Operation | Tool | Purpose |
+|---|---|---|
+| `sources` | `rka_query` | List sources or inspect hashes, artifact, and admissions |
+| `register_source` | `rka_execute` | Preserve local bytes or a locator provenance manifest |
+| `admit_source_interpretation` | `rka_execute` | Explicitly link a reviewed candidate to an existing canonical target |
+
 Use Interpretation Review to classify an observation candidate as `support`,
 `qualifier`, `counterevidence`, or `context` for a claim. This reviewed relation
 does not automatically change the claim's evidence status.
@@ -880,6 +904,7 @@ Studio model for a schema-constrained, unapplied semantic proposal:
 | `RKA_WORKBENCH_LM_STUDIO_TIMEOUT` | `120` | Request timeout in seconds (1–600) |
 | `RKA_MANUSCRIPT_WORKSPACE_ROOTS` | empty (source access disabled) | `os.pathsep`-separated allowlist of local manuscript workspace roots |
 | `RKA_MANUSCRIPT_SOURCE_MAX_BYTES` | `2097152` | Maximum UTF-8 bytes per synchronized source file (up to 20 MiB) |
+| `RKA_REGISTERED_SOURCE_MAX_BYTES` | `52428800` | Maximum bytes copied for one registered source (up to 500 MiB) |
 
 This adapter is not a background enrichment engine. It receives an explicit
 context manifest, records provider-call provenance, cannot use credentials or

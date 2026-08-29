@@ -23,7 +23,7 @@ from rka.models.project import ProjectCreate
 from rka.services.artifacts import ArtifactService
 from rka.services.claims import ClaimService
 from rka.services.decisions import DecisionService
-from rka.services.knowledge_pack import KnowledgePackService
+from rka.services.knowledge_pack import KnowledgePackService, PACK_SCHEMA_VERSION
 from rka.services.literature import LiteratureService
 from rka.services.missions import MissionService
 from rka.services.notes import NoteService
@@ -151,7 +151,7 @@ def test_load_manifest_rejects_invalid_table_count_contract(
         ({"project": "proj_source"}, "missing project metadata"),
         ({"project": {"name": "Source"}}, "requires a non-empty ID"),
         ({"project_state": []}, "project_state must be an object or null"),
-        ({"table_counts": None}, "format 7 requires table_counts"),
+        ({"table_counts": None}, rf"format {PACK_SCHEMA_VERSION} requires table_counts"),
     ],
 )
 def test_load_manifest_rejects_invalid_project_contract(

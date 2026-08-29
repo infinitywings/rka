@@ -103,3 +103,9 @@ JSON diff. CI runs the check independently and fails if runtime schemas and the
 checked-in snapshots differ. Prose-only schema descriptions, examples, build
 timestamps, and package patch versions are removed from the baseline so the
 diff remains focused on wire behavior.
+
+Knowledge Pack format v8 also transports immutable `src_` registered-source
+envelopes, `sad_` explicit admissions, and the exact artifact bytes they hash.
+Import fails closed when the source manifest, artifact hash, candidate revision,
+canonical target, or provenance edge does not agree. Source registration alone
+never grants canonical journal/claim/decision status.

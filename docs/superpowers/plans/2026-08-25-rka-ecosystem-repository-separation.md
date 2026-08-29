@@ -169,6 +169,8 @@ Scope:
 - snapshot the OpenAPI and MCP contracts in tests;
 - classify optional operations as preview/deprecated;
 - add legacy Writer-state export with counts, versions, and checksums;
+- register external sources as non-canonical, hash-verified artifacts and make
+  interpretation admission explicit;
 - document compatibility errors and supported version ranges.
 
 Exit gate:
@@ -177,7 +179,9 @@ Exit gate:
   claim/cluster/RQ/evidence workflow;
 - mock Writer and Agentic clients contain no imports from `rka.services`,
   `rka.models`, or `rka.db`;
-- legacy Writer export round-trips on a disposable database copy.
+- legacy Writer export round-trips on a disposable database copy;
+- registered bytes, provenance, and explicit admissions round-trip, while
+  missing or modified managed bytes fail closed.
 
 Rollback: consumers continue using the prior Core version; no authority switch
 occurs in E2.

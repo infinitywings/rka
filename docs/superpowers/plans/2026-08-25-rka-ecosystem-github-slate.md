@@ -288,6 +288,20 @@ Acceptance:
 
 Labels: `roadmap`, `area: core`, `breaking-change`.
 
+#### E2.5 Register sources safely with hashing and provenance
+
+Acceptance:
+
+- registration is project-scoped, idempotent, and preserves exact bytes or a
+  stable locator with ownership and provenance;
+- unreviewed sources remain outside canonical journal, claim, and decision
+  records;
+- admission is explicit, revision-guarded, hash-verified, and auditable;
+- source envelopes, admissions, hashes, provenance, and artifact bytes
+  round-trip through Knowledge Packs and fail closed on tampering.
+
+Labels: `roadmap`, `area: core`, `type: contract`.
+
 ### E3 — Agentic extraction draft items
 
 Create these in the RKA Ecosystem Project now and move them into

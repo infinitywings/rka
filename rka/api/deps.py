@@ -41,6 +41,7 @@ from rka.services.experiments import ExperimentService
 from rka.services.planning import ManuscriptPlanningService
 from rka.services.semantic_patch import SemanticPatchService
 from rka.services.manuscript_source import ManuscriptSourceService
+from rka.services.sources import SourceService
 
 logger = logging.getLogger(__name__)
 
@@ -417,6 +418,18 @@ def get_scoped_artifact_service(
     embeddings: EmbeddingService | None = Depends(get_embeddings),
 ) -> ArtifactService:
     return ArtifactService(db, llm=llm, embeddings=embeddings, project_id=project_id)
+
+
+def get_scoped_source_service(
+    project_id: str = Depends(require_project),
+    db: Database = Depends(get_db),
+    config: RKAConfig = Depends(get_config),
+) -> SourceService:
+    return SourceService(
+        db,
+        project_id=project_id,
+        max_bytes=config.registered_source_max_bytes,
+    )
 
 
 def get_knowledge_pack_service(

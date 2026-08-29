@@ -119,7 +119,7 @@ Most endpoints are project-scoped. Pass the project identifier through the docum
 unsupported contracts or combinations return HTTP 409 with the supported
 contract/capability set and a recovery hint.
 
-Major route families include projects, status, notes, decisions, literature, missions, checkpoints, claims, clusters, research maps, freshness, search, context, graphs, artifacts, workspace ingestion, audit history, and knowledge-pack import/export.
+Major route families include projects, status, notes, decisions, literature, missions, checkpoints, claims, clusters, research maps, freshness, search, context, graphs, artifacts, registered sources, workspace ingestion, audit history, and knowledge-pack import/export. Registered-source routes preserve bytes or locator manifests under `/api/sources`; only the separate admission route can connect a reviewed artifact interpretation to an existing canonical target.
 
 ## Configuration
 
@@ -135,6 +135,7 @@ Core runtime settings use the `RKA_` prefix. Common settings include:
 | `RKA_EMBEDDINGS_ENABLED` | `false` | Enable optional embedding generation; Docker sets `true`. |
 | `RKA_MANUSCRIPT_WORKSPACE_ROOTS` | empty | `os.pathsep`-separated allowlist for local Markdown/LaTeX source access; an empty value disables source synchronization. |
 | `RKA_MANUSCRIPT_SOURCE_MAX_BYTES` | `2097152` | Maximum UTF-8 bytes accepted for one synchronized manuscript source file. |
+| `RKA_REGISTERED_SOURCE_MAX_BYTES` | `52428800` | Maximum bytes copied into one registered source artifact (hard cap 500 MiB). |
 | `RKA_SKILL_TOOLS` | unset | Promote ChatGPT skill-adapter tools on the connector surface. |
 | `RKA_LEGACY_TOOLS` | unset | Restore the compatibility always-on tool surface when required. |
 

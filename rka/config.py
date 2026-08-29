@@ -123,6 +123,13 @@ class RKAConfig(BaseSettings):
         description="Maximum UTF-8 bytes in one synchronized manuscript source file",
     )
 
+    registered_source_max_bytes: int = Field(
+        default=50 * 1024 * 1024,
+        ge=1,
+        le=500 * 1024 * 1024,
+        description="Maximum bytes copied into one registered source artifact",
+    )
+
     # Embeddings are optional in the base Python distribution. Docker and a
     # future full-profile installer explicitly enable them after installing
     # the embeddings extra. Persistent backend config lives under data_dir.

@@ -130,7 +130,7 @@ async def test_pack_v7_round_trip_preserves_frozen_planning_lineage(
             project_name="Imported Planning Workbench",
         )
 
-    assert PACK_SCHEMA_VERSION == 7
+    assert PACK_SCHEMA_VERSION == 8
     for table in (
         "manuscript_planning_branches",
         "manuscript_planning_branch_events",

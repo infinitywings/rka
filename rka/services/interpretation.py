@@ -272,6 +272,15 @@ class InterpretationService(BaseService):
                 await self._revoke_evidence(row, data)
             elif data.action == "reopen":
                 self._require_status(row, {"resolved"}, data.action)
+                admitted = await self.db.fetchone(
+                    """SELECT id FROM source_admissions
+                       WHERE candidate_id = ? AND project_id = ?""",
+                    [row["id"], self.project_id],
+                )
+                if admitted is not None:
+                    raise InterpretationConflictError(
+                        "an admitted registered-source interpretation is final and cannot be reopened"
+                    )
                 if row["disposition"] == "classified_evidence":
                     raise InterpretationConflictError(
                         "classified evidence must use revoke_evidence before reopening"

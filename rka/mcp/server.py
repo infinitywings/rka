@@ -6,8 +6,12 @@ The server keeps lightweight per-session state for session digest.
 
 from __future__ import annotations
 
-import os
+import asyncio
+import base64
+import hashlib
 import json
+import os
+import stat
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import wraps
@@ -4604,6 +4608,179 @@ async def rka_get_interpretation_candidates(
     return json.dumps(response.json(), indent=2)
 
 
+@tool(category="artifacts")
+async def rka_get_sources(
+    source_id: str | None = None,
+    source_kind: str | None = None,
+    ownership_kind: str | None = None,
+    limit: int = 50,
+    *,
+    project_id: str,
+) -> str:
+    """List registered sources or fetch one source's provenance and admissions."""
+    async with _client(project_id) as c:
+        if source_id:
+            response = await c.get(f"/api/sources/{source_id}")
+        else:
+            response = await c.get(
+                "/api/sources",
+                params=_strip_none(
+                    {
+                        "source_kind": source_kind,
+                        "ownership_kind": ownership_kind,
+                        "limit": limit,
+                    }
+                ),
+            )
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2, ensure_ascii=False)
+
+
+def _read_registered_source_file(filepath: str) -> tuple[str, str, str]:
+    """Read one host-local regular file for transport to the REST service."""
+
+    raw_limit = os.environ.get(
+        "RKA_REGISTERED_SOURCE_MAX_BYTES",
+        str(50 * 1024 * 1024),
+    )
+    try:
+        max_bytes = int(raw_limit)
+    except ValueError as exc:
+        raise ValueError("RKA_REGISTERED_SOURCE_MAX_BYTES must be an integer") from exc
+    if not 1 <= max_bytes <= 500 * 1024 * 1024:
+        raise ValueError(
+            "RKA_REGISTERED_SOURCE_MAX_BYTES must be between 1 and 524288000"
+        )
+
+    source_path = Path(filepath).expanduser()
+    try:
+        source_lstat = source_path.lstat()
+    except OSError as exc:
+        raise ValueError(f"source file is unavailable: {source_path}") from exc
+    if stat.S_ISLNK(source_lstat.st_mode):
+        raise ValueError("source filepath must not be a symlink")
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    digest = hashlib.sha256()
+    payload = bytearray()
+    try:
+        source_fd = os.open(source_path, flags)
+        with os.fdopen(source_fd, "rb") as source_file:
+            opened_stat = os.fstat(source_file.fileno())
+            if not stat.S_ISREG(opened_stat.st_mode):
+                raise ValueError("source filepath must name a regular file")
+            while chunk := source_file.read(1024 * 1024):
+                payload.extend(chunk)
+                if len(payload) > max_bytes:
+                    raise ValueError(
+                        f"source exceeds maximum size of {max_bytes} bytes"
+                    )
+                digest.update(chunk)
+    except ValueError:
+        raise
+    except OSError as exc:
+        raise ValueError(f"source file cannot be read: {source_path}") from exc
+    return (
+        base64.b64encode(payload).decode("ascii"),
+        source_path.name or "source.bin",
+        digest.hexdigest(),
+    )
+
+
+@tool(category="artifacts")
+async def rka_register_source(
+    source_kind: str,
+    registered_by: str,
+    title: str | None = None,
+    filepath: str | None = None,
+    pasted_text: str | None = None,
+    stable_locator: str | None = None,
+    mime: str | None = None,
+    expected_content_hash: str | None = None,
+    ownership_kind: str = "unknown",
+    ownership_note: str | None = None,
+    provenance: dict | None = None,
+    *,
+    project_id: str,
+) -> str:
+    """Register local bytes or a locator; never fetch or create canonical knowledge.
+
+    ``filepath`` is read by this host-side MCP process, then sent to Core as
+    bounded base64 bytes. The Docker REST service never needs access to the
+    host path.
+    """
+    content_base64: str | None = None
+    filename: str | None = None
+    if filepath is not None:
+        content_base64, filename, actual_hash = await asyncio.to_thread(
+            _read_registered_source_file,
+            filepath,
+        )
+        if (
+            expected_content_hash is not None
+            and expected_content_hash.strip().lower() != actual_hash
+        ):
+            raise ValueError(
+                "source content hash does not match expected_content_hash"
+            )
+        expected_content_hash = actual_hash
+        filepath = None
+    payload = _strip_none(
+        {
+            "source_kind": source_kind,
+            "registered_by": registered_by,
+            "title": title,
+            "filepath": filepath,
+            "pasted_text": pasted_text,
+            "content_base64": content_base64,
+            "filename": filename,
+            "stable_locator": stable_locator,
+            "mime": mime,
+            "expected_content_hash": expected_content_hash,
+            "ownership_kind": ownership_kind,
+            "ownership_note": ownership_note,
+            "provenance": provenance or {},
+        }
+    )
+    async with _client(project_id) as c:
+        response = await c.post("/api/sources", json=payload)
+        _raise_with_detail(response)
+    result = response.json()
+    source = result.get("source") or {}
+    if source.get("id"):
+        _record_entity("registered_source", source["id"], source.get("title", "")[:80])
+    return json.dumps(result, indent=2, ensure_ascii=False)
+
+
+@tool(category="artifacts")
+async def rka_admit_source_interpretation(
+    source_id: str,
+    candidate_id: str,
+    expected_revision: int,
+    target_type: str,
+    target_id: str,
+    actor: str,
+    reason: str,
+    grounding_verified: bool,
+    *,
+    project_id: str,
+) -> str:
+    """Explicitly admit one grounded candidate to an existing canonical target."""
+    payload = {
+        "candidate_id": candidate_id,
+        "expected_revision": expected_revision,
+        "target_type": target_type,
+        "target_id": target_id,
+        "actor": actor,
+        "reason": reason,
+        "grounding_verified": grounding_verified,
+    }
+    async with _client(project_id) as c:
+        response = await c.post(f"/api/sources/{source_id}/admissions", json=payload)
+        _raise_with_detail(response)
+    return json.dumps(response.json(), indent=2, ensure_ascii=False)
+
+
 @tool(category="claims")
 async def rka_create_interpretation_candidate(
     source_type: str,
@@ -7614,7 +7791,7 @@ QueryScopeLit = _Literal[
     "status", "context", "search", "entity", "journal", "literature",
     "mission", "report", "checkpoints", "decision_tree", "calibration_metrics",
     "hooks", "hook_executions", "brain_notifications", "research_map",
-    "review_queue", "clusters", "claims", "interpretation_candidates",
+    "review_queue", "clusters", "claims", "interpretation_candidates", "sources",
     "experiments", "experiment_runs", "experiment_observations", "manuscript",
     "resolve_entities", "changes_since", "manuscript_context",
     "manuscript_reference_manifest",

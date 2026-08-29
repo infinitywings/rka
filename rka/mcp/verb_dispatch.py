@@ -904,6 +904,7 @@ _QUERY_DISPATCH: dict[str, str] = {
     "claims": "rka_get_claims",
     "claim_scope": "rka_get_claim_scope",
     "interpretation_candidates": "rka_get_interpretation_candidates",
+    "sources": "rka_get_sources",
     "experiments": "rka_get_experiments",
     "experiment_runs": "rka_get_experiment_runs",
     "experiment_observations": "rka_get_experiment_observations",
@@ -1211,6 +1212,15 @@ async def dispatch_query(
             epistemic_kind=f.get("epistemic_kind"),
             source_type=f.get("source_type"),
             source_id=f.get("source_id"),
+            limit=limit or f.get("limit", 50),
+            project_id=project_id,
+        )
+
+    if scope == "sources":
+        return await legacy(
+            source_id=id,
+            source_kind=f.get("source_kind"),
+            ownership_kind=f.get("ownership_kind"),
             limit=limit or f.get("limit", 50),
             project_id=project_id,
         )
@@ -2033,6 +2043,8 @@ EXECUTE_OPERATIONS = (
     "record_verification_attestation",
     # interpretation staging
     "create_interpretation_candidate",
+    "register_source",
+    "admit_source_interpretation",
     "add_interpretation_hint",
     "triage_interpretation_candidate",
     "set_claim_scope",
@@ -2214,6 +2226,35 @@ async def dispatch_execute(
             created_by=kw.get("created_by"),
             extraction_tool=kw.get("extraction_tool"),
             extraction_model=kw.get("extraction_model"),
+            project_id=project_id,
+        )
+
+    if op == "register_source":
+        return await _legacy("rka_register_source")(
+            source_kind=kw.get("source_kind"),
+            registered_by=kw.get("registered_by"),
+            title=kw.get("title"),
+            filepath=kw.get("filepath"),
+            pasted_text=kw.get("pasted_text"),
+            stable_locator=kw.get("stable_locator"),
+            mime=kw.get("mime"),
+            expected_content_hash=kw.get("expected_content_hash"),
+            ownership_kind=kw.get("ownership_kind", "unknown"),
+            ownership_note=kw.get("ownership_note"),
+            provenance=kw.get("provenance"),
+            project_id=project_id,
+        )
+
+    if op == "admit_source_interpretation":
+        return await _legacy("rka_admit_source_interpretation")(
+            source_id=kw.get("source_id"),
+            candidate_id=kw.get("candidate_id"),
+            expected_revision=kw.get("expected_revision"),
+            target_type=kw.get("target_type"),
+            target_id=kw.get("target_id"),
+            actor=kw.get("actor"),
+            reason=kw.get("reason"),
+            grounding_verified=kw.get("grounding_verified", False),
             project_id=project_id,
         )
 

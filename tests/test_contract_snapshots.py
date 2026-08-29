@@ -59,16 +59,16 @@ def test_rest_v1_surface_and_dispositions_are_locked() -> None:
     assert snapshot["x-rka-operation-counts"] == {
         "ownership": {
             "agentic-unsupported": 10,
-            "core": 161,
+            "core": 165,
             "core-legacy": 6,
             "writer-compatibility": 53,
         },
-        "core_maturity": {"preview": 28, "stable": 133},
+        "core_maturity": {"preview": 28, "stable": 137},
     }
     assert len(AGENTIC_REST_OPERATIONS) == 10
     assert len(CORE_LEGACY_REST_OPERATIONS) == 6
     methods = {"get", "put", "post", "delete", "options", "head", "patch", "trace"}
-    assert sum(1 for item in snapshot["paths"].values() for key in item if key in methods) == 133
+    assert sum(1 for item in snapshot["paths"].values() for key in item if key in methods) == 137
     snapshotted_operations = {
         (method.upper(), path)
         for path, item in snapshot["paths"].items()
@@ -99,15 +99,15 @@ def test_mcp_v1_surface_and_dispositions_are_locked() -> None:
     assert snapshot["operation_counts"] == {
         "ownership": {
             "agentic-unsupported": 5,
-            "core": 103,
+            "core": 106,
             "core-legacy": 1,
             "writer-compatibility": 43,
         },
-        "core_maturity": {"preview": 22, "stable": 81},
+        "core_maturity": {"preview": 22, "stable": 84},
     }
-    assert len(snapshot["operations"]) == 81
+    assert len(snapshot["operations"]) == 84
     assert tuple(snapshot["transport_tools"]) == tuple(sorted(MCP_TRANSPORT_TOOLS))
-    assert len(OPERATIONS_SCHEMA) == 152
+    assert len(OPERATIONS_SCHEMA) == 155
     assert len(WRITER_COMPATIBILITY_OPERATIONS) == 43
     assert len(AGENTIC_MCP_OPERATIONS) == 5
     assert len(CORE_LEGACY_MCP_OPERATIONS) == 1

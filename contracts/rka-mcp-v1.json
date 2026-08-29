@@ -369,16 +369,84 @@
   "operation_counts": {
     "core_maturity": {
       "preview": 22,
-      "stable": 81
+      "stable": 84
     },
     "ownership": {
       "agentic-unsupported": 5,
-      "core": 103,
+      "core": 106,
       "core-legacy": 1,
       "writer-compatibility": 43
     }
   },
   "operations": {
+    "admit_source_interpretation": {
+      "category": "sources",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "enum": [
+              "pi",
+              "brain",
+              "executor",
+              "web_ui"
+            ],
+            "type": "string"
+          },
+          "candidate_id": {
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "grounding_verified": {
+            "const": true,
+            "type": "boolean"
+          },
+          "operation": {
+            "const": "admit_source_interpretation",
+            "default": "admit_source_interpretation",
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 10000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": "string"
+          },
+          "target_type": {
+            "enum": [
+              "journal",
+              "claim",
+              "decision"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "source_id",
+          "candidate_id",
+          "expected_revision",
+          "target_type",
+          "target_id",
+          "actor",
+          "reason",
+          "grounding_verified"
+        ],
+        "type": "object"
+      },
+      "tool": "rka_execute"
+    },
     "advance_rq": {
       "category": "mission",
       "input_schema": {
@@ -3304,6 +3372,158 @@
       },
       "tool": "rka_execute"
     },
+    "register_source": {
+      "category": "sources",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_content_hash": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "filepath": {
+            "anyOf": [
+              {
+                "maxLength": 8192,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "mime": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "operation": {
+            "const": "register_source",
+            "default": "register_source",
+            "type": "string"
+          },
+          "ownership_kind": {
+            "default": "unknown",
+            "enum": [
+              "researcher",
+              "institution",
+              "third_party",
+              "public_domain",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "ownership_note": {
+            "anyOf": [
+              {
+                "maxLength": 10000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "pasted_text": {
+            "anyOf": [
+              {
+                "maxLength": 10000000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "registered_by": {
+            "enum": [
+              "pi",
+              "brain",
+              "executor",
+              "web_ui",
+              "llm",
+              "import",
+              "system"
+            ],
+            "type": "string"
+          },
+          "source_kind": {
+            "enum": [
+              "file",
+              "pasted_text",
+              "url",
+              "repository",
+              "zotero"
+            ],
+            "type": "string"
+          },
+          "stable_locator": {
+            "anyOf": [
+              {
+                "maxLength": 8192,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "project_id",
+          "source_kind",
+          "registered_by"
+        ],
+        "type": "object"
+      },
+      "tool": "rka_execute"
+    },
     "report": {
       "category": "mission",
       "input_schema": {
@@ -3788,6 +4008,61 @@
         "required": [
           "project_id",
           "query"
+        ],
+        "type": "object"
+      },
+      "tool": "rka_query"
+    },
+    "sources": {
+      "category": "sources",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "filters": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "operation": {
+            "const": "sources",
+            "default": "sources",
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id"
         ],
         "type": "object"
       },
@@ -5219,6 +5494,70 @@
     "rka_execute": {
       "input_schema": {
         "$defs": {
+          "AdmitSourceInterpretationArgs": {
+            "additionalProperties": false,
+            "properties": {
+              "actor": {
+                "enum": [
+                  "pi",
+                  "brain",
+                  "executor",
+                  "web_ui"
+                ],
+                "type": "string"
+              },
+              "candidate_id": {
+                "type": "string"
+              },
+              "expected_revision": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "grounding_verified": {
+                "const": true,
+                "type": "boolean"
+              },
+              "operation": {
+                "const": "admit_source_interpretation",
+                "default": "admit_source_interpretation",
+                "type": "string"
+              },
+              "project_id": {
+                "type": "string"
+              },
+              "reason": {
+                "maxLength": 10000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "source_id": {
+                "type": "string"
+              },
+              "target_id": {
+                "type": "string"
+              },
+              "target_type": {
+                "enum": [
+                  "journal",
+                  "claim",
+                  "decision"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_id",
+              "source_id",
+              "candidate_id",
+              "expected_revision",
+              "target_type",
+              "target_id",
+              "actor",
+              "reason",
+              "grounding_verified"
+            ],
+            "type": "object"
+          },
           "AdvanceRqArgs": {
             "additionalProperties": false,
             "properties": {
@@ -6778,6 +7117,154 @@
             "required": [
               "project_id",
               "decision_id"
+            ],
+            "type": "object"
+          },
+          "RegisterSourceArgs": {
+            "additionalProperties": false,
+            "properties": {
+              "expected_content_hash": {
+                "anyOf": [
+                  {
+                    "maxLength": 64,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "filepath": {
+                "anyOf": [
+                  {
+                    "maxLength": 8192,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "mime": {
+                "anyOf": [
+                  {
+                    "maxLength": 256,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "operation": {
+                "const": "register_source",
+                "default": "register_source",
+                "type": "string"
+              },
+              "ownership_kind": {
+                "default": "unknown",
+                "enum": [
+                  "researcher",
+                  "institution",
+                  "third_party",
+                  "public_domain",
+                  "unknown"
+                ],
+                "type": "string"
+              },
+              "ownership_note": {
+                "anyOf": [
+                  {
+                    "maxLength": 10000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "pasted_text": {
+                "anyOf": [
+                  {
+                    "maxLength": 10000000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "project_id": {
+                "type": "string"
+              },
+              "provenance": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "registered_by": {
+                "enum": [
+                  "pi",
+                  "brain",
+                  "executor",
+                  "web_ui",
+                  "llm",
+                  "import",
+                  "system"
+                ],
+                "type": "string"
+              },
+              "source_kind": {
+                "enum": [
+                  "file",
+                  "pasted_text",
+                  "url",
+                  "repository",
+                  "zotero"
+                ],
+                "type": "string"
+              },
+              "stable_locator": {
+                "anyOf": [
+                  {
+                    "maxLength": 8192,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "title": {
+                "anyOf": [
+                  {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "required": [
+              "project_id",
+              "source_kind",
+              "registered_by"
             ],
             "type": "object"
           },
@@ -8458,6 +8945,7 @@
           "args": {
             "discriminator": {
               "mapping": {
+                "admit_source_interpretation": "#/$defs/AdmitSourceInterpretationArgs",
                 "advance_rq": "#/$defs/AdvanceRqArgs",
                 "assign_claims_to_cluster": "#/$defs/AssignClaimsToClusterArgs",
                 "batch_import": "#/$defs/BatchImportArgs",
@@ -8484,6 +8972,7 @@
                 "record_note": "#/$defs/RecordNoteArgs",
                 "record_outcome": "#/$defs/RecordOutcomeArgs",
                 "record_pi_selection": "#/$defs/RecordPiSelectionArgs",
+                "register_source": "#/$defs/RegisterSourceArgs",
                 "resolve_checkpoint": "#/$defs/ResolveCheckpointArgs",
                 "resolve_contradiction": "#/$defs/ResolveContradictionArgs",
                 "review_claims": "#/$defs/ReviewClaimsArgs",
@@ -8535,6 +9024,12 @@
               },
               {
                 "$ref": "#/$defs/ExtractClaimsArgs"
+              },
+              {
+                "$ref": "#/$defs/RegisterSourceArgs"
+              },
+              {
+                "$ref": "#/$defs/AdmitSourceInterpretationArgs"
               },
               {
                 "$ref": "#/$defs/UpdateNoteArgs"
@@ -9714,6 +10209,57 @@
             ],
             "type": "object"
           },
+          "QuerySourcesArgs": {
+            "additionalProperties": false,
+            "properties": {
+              "filters": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "limit": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "operation": {
+                "const": "sources",
+                "default": "sources",
+                "type": "string"
+              },
+              "project_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_id"
+            ],
+            "type": "object"
+          },
           "QueryStalenessImpactArgs": {
             "additionalProperties": false,
             "properties": {
@@ -9930,6 +10476,7 @@
                 "resolve_entities": "#/$defs/ResolveEntitiesArgs",
                 "review_queue": "#/$defs/QueryReviewQueueArgs",
                 "search": "#/$defs/QuerySearchArgs",
+                "sources": "#/$defs/QuerySourcesArgs",
                 "staleness_impact": "#/$defs/QueryStalenessImpactArgs",
                 "status": "#/$defs/QueryStatusArgs",
                 "workspace_scan": "#/$defs/QueryWorkspaceScanArgs",
@@ -9985,6 +10532,9 @@
               },
               {
                 "$ref": "#/$defs/QueryClaimsArgs"
+              },
+              {
+                "$ref": "#/$defs/QuerySourcesArgs"
               },
               {
                 "$ref": "#/$defs/ResolveEntitiesArgs"
