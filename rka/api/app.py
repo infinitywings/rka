@@ -54,6 +54,7 @@ from rka.api.routes import (
     zotero_config as zotero_config_routes,
 )
 from rka.config import RKAConfig
+from rka.contracts import is_writer_compatibility_path as _is_writer_compatibility_path
 from rka.infra.database import Database
 from rka.infra.embeddings import EmbeddingService
 from rka.infra.llm import LLMClient
@@ -62,22 +63,7 @@ from rka.services.search import SearchService
 
 logger = logging.getLogger(__name__)
 
-_WRITER_COMPATIBILITY_PATH_PREFIXES = (
-    "/api/manuscripts",
-    "/api/manuscript-source-proposals",
-    "/api/planning",
-    "/api/semantic-patches",
-)
 _WRITER_MIGRATION_TARGET = "https://github.com/rka-project/rka-writer"
-
-
-def _is_writer_compatibility_path(path: str) -> bool:
-    """Return whether one REST path belongs to frozen Writer compatibility."""
-
-    return any(
-        path == prefix or path.startswith(f"{prefix}/")
-        for prefix in _WRITER_COMPATIBILITY_PATH_PREFIXES
-    )
 
 
 @asynccontextmanager
@@ -99,18 +85,24 @@ async def lifespan(app: FastAPI):
     llm: LLMClient | None = None
     if config.llm_enabled:
         llm = LLMClient(config)
-        logger.info("LLM enabled (model=%s, base=%s)", config.llm_model, config.llm_api_base or "default")
+        logger.info(
+            "LLM enabled (model=%s, base=%s)", config.llm_model, config.llm_api_base or "default"
+        )
 
         async def _probe_llm() -> None:
             max_attempts = 6
             for attempt in range(1, max_attempts + 1):
                 try:
                     if await llm.is_available():
-                        logger.info("LLM health check passed on attempt %d/%d", attempt, max_attempts)
+                        logger.info(
+                            "LLM health check passed on attempt %d/%d", attempt, max_attempts
+                        )
                         if config.llm_api_base and config.llm_context_window <= 4096:
                             from rka.api.routes.llm import _detect_context_window
 
-                            ctx = await _detect_context_window(config.llm_api_base, config.llm_model)
+                            ctx = await _detect_context_window(
+                                config.llm_api_base, config.llm_model
+                            )
                             if ctx:
                                 config.llm_context_window = ctx
                                 logger.info("Auto-detected context window: %d tokens", ctx)
@@ -198,12 +190,8 @@ async def lifespan(app: FastAPI):
             # other five hardcoded float[768] tables were stuck at the old
             # dim and their embedding_metadata kept the stale model_name.
             target_dim = int(embedding_cfg.config.get("dim") or embeddings.dim or 768)
-            reshape_results = await reshape_all_vec_tables_if_needed(
-                db, dim=target_dim
-            )
-            reshaped = [
-                (t, p) for t, (did, p) in reshape_results.items() if did
-            ]
+            reshape_results = await reshape_all_vec_tables_if_needed(db, dim=target_dim)
+            reshaped = [(t, p) for t, (did, p) in reshape_results.items() if did]
             if reshaped:
                 logger.info(
                     "vec tables reshaped at startup (dim=%d): %s",
@@ -291,7 +279,8 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
 
     @app.exception_handler(EntityLinkValidationError)
     async def entity_link_validation_handler(
-        request: Request, exc: EntityLinkValidationError,
+        request: Request,
+        exc: EntityLinkValidationError,
     ):
         return JSONResponse(
             status_code=422,
@@ -303,7 +292,8 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
 
     @app.exception_handler(KnowledgePackIntegrityError)
     async def knowledge_pack_integrity_handler(
-        request: Request, exc: KnowledgePackIntegrityError,
+        request: Request,
+        exc: KnowledgePackIntegrityError,
     ):
         return JSONResponse(
             status_code=422,
@@ -323,9 +313,7 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
         if _is_writer_compatibility_path(request.url.path):
             response.headers["X-RKA-Compatibility-Status"] = "deprecated"
             response.headers["X-RKA-Removal-Milestone"] = "E5"
-            response.headers["Link"] = (
-                f"<{_WRITER_MIGRATION_TARGET}>; rel=\"successor-version\""
-            )
+            response.headers["Link"] = f'<{_WRITER_MIGRATION_TARGET}>; rel="successor-version"'
         return response
 
     app.add_middleware(
@@ -446,7 +434,10 @@ def create_app(config: RKAConfig | None = None) -> FastAPI:
 
         logger.info("Web UI served from %s", _web_dist)
     else:
-        logger.info("No web UI build found (run 'cd web && npm run build'). Searched: %s", [str(p) for p in _candidates])
+        logger.info(
+            "No web UI build found (run 'cd web && npm run build'). Searched: %s",
+            [str(p) for p in _candidates],
+        )
 
     return app
 

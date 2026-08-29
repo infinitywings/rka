@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 from rka import __version__
+from rka.contracts import (
+    AGENTIC_UNSUPPORTED,
+    CORE,
+    CORE_LEGACY,
+    mcp_operation_disposition,
+)
 from rka.mcp.operations_schema import (
     DEPRECATED_OPERATIONS,
     OPERATIONS_SCHEMA,
+    WRITER_COMPATIBILITY_OPERATIONS,
     operation_maturity,
 )
 from rka.models.capabilities import (
@@ -37,12 +44,33 @@ def _operation_counts() -> dict[str, int]:
     operation registry.
     """
 
-    counts = {"stable": 0, "preview": 0, "deprecated": 0}
+    counts = {
+        "stable": 0,
+        "preview": 0,
+        "deprecated": 0,
+        "supported": 0,
+        "supported_stable": 0,
+        "supported_preview": 0,
+        "unsupported": 0,
+        "legacy": 0,
+    }
     for operation in OPERATIONS_SCHEMA:
         if operation in DEPRECATED_OPERATIONS:
             counts["deprecated"] += 1
         else:
             counts[operation_maturity(operation)] += 1
+        disposition = mcp_operation_disposition(
+            operation,
+            writer_operations=WRITER_COMPATIBILITY_OPERATIONS,
+        )
+        if disposition == CORE:
+            maturity = operation_maturity(operation)
+            counts["supported"] += 1
+            counts[f"supported_{maturity}"] += 1
+        elif disposition == AGENTIC_UNSUPPORTED:
+            counts["unsupported"] += 1
+        elif disposition == CORE_LEGACY:
+            counts["legacy"] += 1
     return counts
 
 
@@ -71,9 +99,15 @@ def build_core_capabilities(
             rest=RestInterfaceCapability(contract=REST_CONTRACT),
             mcp=McpInterfaceCapability(
                 contract=MCP_CONTRACT,
-                default_operation_count=counts["stable"],
+                default_operation_count=counts["supported_stable"],
+                usage_stable_operation_count=counts["stable"],
                 usage_preview_operation_count=counts["preview"],
                 deprecated_operation_count=counts["deprecated"],
+                supported_operation_count=counts["supported"],
+                supported_usage_stable_operation_count=counts["supported_stable"],
+                supported_usage_preview_operation_count=counts["supported_preview"],
+                unsupported_operation_count=counts["unsupported"],
+                legacy_operation_count=counts["legacy"],
             ),
         ),
         supported_capabilities=list(SUPPORTED_CAPABILITIES),
@@ -130,9 +164,7 @@ def validate_capability_requirements(
     if not issues:
         return None
 
-    capability_issue_requirements = {issue.requirement for issue in issues} & set(
-        requirements
-    )
+    capability_issue_requirements = {issue.requirement for issue in issues} & set(requirements)
     contract_only = bool(required_contract) and not capability_issue_requirements
     error_code = (
         "unsupported_core_contract" if contract_only else "unsupported_capability_combination"

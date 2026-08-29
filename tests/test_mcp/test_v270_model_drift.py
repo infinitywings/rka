@@ -64,9 +64,7 @@ def _operation_literal(model: type[BaseModel]) -> str:
 def test_query_union_member_count_matches_schema_reads() -> None:
     """Every read op in OPERATIONS_SCHEMA must have a model in QueryArgsUnion."""
     typed_ops = {_operation_literal(m) for m in _union_members(QueryArgsUnion)}
-    schema_reads = {
-        op for op, entry in OPERATIONS_SCHEMA.items() if entry["tool"] == "rka_query"
-    }
+    schema_reads = {op for op, entry in OPERATIONS_SCHEMA.items() if entry["tool"] == "rka_query"}
     assert typed_ops == schema_reads, (
         f"Drift: typed-query union vs OPERATIONS_SCHEMA reads.\n"
         f"  typed only: {typed_ops - schema_reads}\n"
@@ -105,9 +103,7 @@ def test_no_model_appears_in_both_unions() -> None:
     q = {_operation_literal(m) for m in _union_members(QueryArgsUnion)}
     e = {_operation_literal(m) for m in _union_members(ExecuteArgsUnion)}
     overlap = q & e
-    assert not overlap, (
-        f"Drift: {len(overlap)} model(s) in both unions: {overlap}"
-    )
+    assert not overlap, f"Drift: {len(overlap)} model(s) in both unions: {overlap}"
 
 
 # ----------------------------------------------------------------------
@@ -141,8 +137,7 @@ def test_each_model_forbids_extras(model: type[BaseModel]) -> None:
     """
     cfg = model.model_config
     assert cfg.get("extra") == "forbid", (
-        f"{model.__name__}: model_config['extra'] must be 'forbid' "
-        f"(got {cfg.get('extra')!r})"
+        f"{model.__name__}: model_config['extra'] must be 'forbid' (got {cfg.get('extra')!r})"
     )
 
 
@@ -432,8 +427,12 @@ def test_preview_operations_are_hidden_from_the_browse_index():
     full = json.loads(asyncio.run(dispatch_describe("", include_preview=True)))
 
     assert default["listed"] < default["total"]
-    assert default["preview_hidden"] + default["deprecated_hidden"] == (
-        default["total"] - default["listed"]
+    assert (
+        default["preview_hidden"]
+        + default["deprecated_hidden"]
+        + default["unsupported_hidden"]
+        + default["legacy_hidden"]
+        == default["total"] - default["listed"]
     )
     assert full["listed"] == len(OPERATIONS_SCHEMA)
     # the hidden set must be discoverable, not silently dropped
@@ -445,12 +444,30 @@ def test_core_research_loop_stays_stable():
     from rka.mcp.operations_schema import operation_maturity
 
     for op in (
-        "status", "context", "search", "entity", "journal", "literature",
-        "record_note", "record_decision", "record_literature",
-        "create_mission", "submit_report", "submit_checkpoint",
-        "research_map", "clusters", "claims", "decision_tree",
-        "ego_graph", "multi_hop", "provenance", "collect_report_context",
-        "belief_as_of", "staleness_impact", "changes_since", "contradictions",
+        "status",
+        "context",
+        "search",
+        "entity",
+        "journal",
+        "literature",
+        "record_note",
+        "record_decision",
+        "record_literature",
+        "create_mission",
+        "submit_report",
+        "submit_checkpoint",
+        "research_map",
+        "clusters",
+        "claims",
+        "decision_tree",
+        "ego_graph",
+        "multi_hop",
+        "provenance",
+        "collect_report_context",
+        "belief_as_of",
+        "staleness_impact",
+        "changes_since",
+        "contradictions",
     ):
         assert operation_maturity(op) == "stable", op
 
@@ -459,13 +476,21 @@ def test_zero_usage_subsystems_are_preview():
     from rka.mcp.operations_schema import operation_maturity
 
     for op in (
-        "create_experiment", "experiment_runs", "record_experiment_observation",
-        "create_planning_branch", "planning_branches",
-        "create_semantic_patch_proposal", "semantic_patch_proposals",
-        "hook_add", "hooks",
-        "create_interpretation_candidate", "interpretation_candidates",
-        "set_claim_scope", "claim_scope",
-        "create_manuscript", "manuscript_context",
+        "create_experiment",
+        "experiment_runs",
+        "record_experiment_observation",
+        "create_planning_branch",
+        "planning_branches",
+        "create_semantic_patch_proposal",
+        "semantic_patch_proposals",
+        "hook_add",
+        "hooks",
+        "create_interpretation_candidate",
+        "interpretation_candidates",
+        "set_claim_scope",
+        "claim_scope",
+        "create_manuscript",
+        "manuscript_context",
     ):
         assert operation_maturity(op) == "preview", op
 
@@ -513,12 +538,11 @@ def test_explicit_deprecation_is_distinct_from_usage_maturity():
         assert notice["compatibility"] == "behavior_preserved"
         assert notice["removal_milestone"] == "E5"
         assert notice["removal_version"] == "not_scheduled"
-        assert notice["migration_target"] == (
-            "https://github.com/rka-project/rka-writer"
-        )
+        assert notice["migration_target"] == ("https://github.com/rka-project/rka-writer")
 
     exact = json.loads(asyncio.run(dispatch_describe("upsert_argument_spine")))
     assert exact["deprecated"] is True
+    assert exact["contract_disposition"] == "writer-compatibility"
     assert exact["deprecation"]["replacement_operations"] == [
         "prepare_semantic_patch_context",
         "create_semantic_patch_proposal",
@@ -530,23 +554,23 @@ def test_explicit_deprecation_is_distinct_from_usage_maturity():
     default_operations = set(default["rka_query"].split(", ")) | set(
         default["rka_execute"].split(", ")
     )
-    full_operations = set(full["rka_query"].split(", ")) | set(
-        full["rka_execute"].split(", ")
-    )
+    full_operations = set(full["rka_query"].split(", ")) | set(full["rka_execute"].split(", "))
     assert WRITER_COMPATIBILITY_OPERATIONS.isdisjoint(default_operations)
     assert WRITER_COMPATIBILITY_OPERATIONS <= full_operations
-    assert default["deprecated_operations"] == sorted(
-        WRITER_COMPATIBILITY_OPERATIONS
-    )
-    assert full["deprecated_operations"] == sorted(
-        WRITER_COMPATIBILITY_OPERATIONS
-    )
+    assert set(default["unsupported_operations"]).isdisjoint(default_operations)
+    assert set(default["legacy_operations"]).isdisjoint(default_operations)
+    assert default["deprecated_operations"] == sorted(WRITER_COMPATIBILITY_OPERATIONS)
+    assert full["deprecated_operations"] == sorted(WRITER_COMPATIBILITY_OPERATIONS)
     assert default["deprecated_hidden"] == 43
+    assert default["unsupported_hidden"] == 5
+    assert default["legacy_hidden"] == 1
     assert "rka-writer" in exact["deprecation"]["migration_target"]
     assert "Writer compatibility" in default["deprecated_hint"]
     assert (
         default["listed"]
         + default["preview_hidden"]
         + default["deprecated_hidden"]
+        + default["unsupported_hidden"]
+        + default["legacy_hidden"]
         == default["total"]
     )
